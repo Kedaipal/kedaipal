@@ -436,6 +436,10 @@ export default defineSchema({
 		// alphabet), NEVER the slug; rotating replaces it and kills old posters.
 		// See docs/counter-checkout.md (store QR poster, 86ey5m35w).
 		counterQrToken: v.optional(v.string()),
+		// Secret ICS calendar-feed token (booking S6, 86eyn4kf2) — the whole
+		// capability for GET /cal/<token>.ics, counterQrToken posture: high
+		// entropy, rotatable (rotation kills the old URL; Settings warns).
+		calendarFeedToken: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -443,6 +447,7 @@ export default defineSchema({
 		.index("by_slug", ["slug"])
 		// Inbound `KPS-<token>` poster scans resolve the store by token.
 		.index("by_counterQrToken", ["counterQrToken"])
+		.index("by_calendarFeedToken", ["calendarFeedToken"])
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.

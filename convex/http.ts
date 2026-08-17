@@ -342,4 +342,39 @@ http.route({
 	}),
 });
 
+/**
+ * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google
+ * (or any calendar app) polls this URL on its own schedule. The token in the
+ * path is the whole capability (/track posture); unknown tokens 404 with no
+ * detail. Read-only by construction, so a feed failure can never touch an
+ * order (locked posture).
+ */
+http.route({
+	pathPrefix: "/cal/",
+	method: "GET",
+	handler: httpAction(async (ctx, req) => {
+		const path = new URL(req.url).pathname;
+		let token = path.slice("/cal/".length);
+		if (token.endsWith(".ics")) token = token.slice(0, -".ics".length);
+		// Tokens are generated alphanumerics — anything else can't match.
+		if (!/^[A-Za-z0-9]{10,}$/.test(token)) {
+			return new Response("Not found", { status: 404 });
+		}
+		const feed = await ctx.runQuery(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) return new Response("Not found", { status: 404 });
+		return new Response(feed, {
+			status: 200,
+			headers: {
+				"Content-Type": "text/calendar; charset=utf-8",
+				// Calendar apps poll on long intervals anyway; a short shared
+				// max-age just absorbs double-fetches.
+				"Cache-Control": "private, max-age=300",
+				"Content-Disposition": 'inline; filename="kedaipal-bookings.ics"',
+			},
+		});
+	}),
+});
+
 export default http;

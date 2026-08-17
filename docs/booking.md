@@ -376,8 +376,9 @@ all / unblock restores + rebooks + is idempotent, `sellerCalendar` shapes
   already on them handles that stay on the order (decline/cancel has the
   reason + notification machinery; a block silently killing a paid stay
   would be indefensible).
-- **No ICS feed** — the Google-Calendar one-way sync is S6 (`86eyn4kf2`),
-  which reads the same bookings + blocks this slice renders.
+- **No ICS feed here** — the Google-Calendar one-way sync shipped as S6
+  (`86eyn4kf2`, below), reading the same bookings + blocks this slice
+  renders.
 - No drag-to-select (two-tap, mobile-first), no week/agenda view, no
   recurring blocks (a season is one ≤366-day block).
 
@@ -459,6 +460,68 @@ and both outcomes; depositless refusal. `convex/products.test.ts`: stored in
 sen, 0-clears, ceiling refusals. `convex/lib/insights.test.ts`: earned /
 trend / collected / payment slices all net of deposit.
 `convex/lib/orderCsv.test.ts`: the column + 0.00 default.
+
+## S6 — ICS calendar feed + Settings connect card (`86eyn4kf2`)
+
+The vendor's Google Calendar view — **one-way ICS subscribe, locked 12 Aug**
+(OAuth push deferred; revival trigger = a seller concretely complains the
+GCal copy is stale; two-way sync out until a real double-booking). Failure
+posture is structural: the route only ever reads, so a feed problem can never
+touch an order.
+
+### Token + route
+
+- **`retailers.calendarFeedToken`** (+ `by_calendarFeedToken` index) — the
+  whole capability, `/track` posture: high-entropy, secret, **rotatable**
+  (counter-QR precedent — rotating kills the old URL, the card warns first).
+  `calendarFeed.ensureCalendarFeedToken` is idempotent (rendering the card
+  can never rotate by accident); `rotateCalendarFeedToken` always re-mints.
+- **`GET /cal/<token>.ics`** (Convex HTTP action on the `.convex.site`
+  domain): shape-checks the token, resolves via the index, 404s unknown with
+  no detail. `text/calendar; charset=utf-8`, small shared max-age.
+- **`calendarFeed.feedByToken`** assembles the document: window = 90 days
+  back → 210 forward, per-listing indexed scans on `by_booking_product`
+  (the availability module's bound) + `loadBlocksForWindow`.
+
+### The event set
+
+- **Approved stays only** — status past `booking_requested`, not
+  `cancelled`. Requests are deliberately excluded: they live on a 24 h clock
+  while Google refreshes on a ~daily one, so most would render already-dead
+  noise — the live Kedaipal calendar is the request-time truth (the card
+  says exactly this). Title = **guest name — listing**; **no phone numbers
+  anywhere in the feed** (a feed URL can be forwarded; pinned by test).
+- **Blocks as all-day "Blocked" events** (the seller made them, they belong
+  on his calendar) — listing name when scoped, note in parentheses.
+- **`convex/lib/icsFeed.ts`** (pure, tested): RFC 5545 escaping, 75-octet
+  folding, MYT all-day `VALUE=DATE` mapping (floating dates — "the 25th"
+  means the seller's 25th), **exclusive `bookingCheckOut` maps 1:1 onto
+  ICS's exclusive DTEND** (a 25→27 stay paints the 25th + 26th), inclusive
+  block ends get +1 day, **stable UIDs** (`booking-<shortId>` /
+  `block-<id>` @kedaipal.com) + stable DTSTAMPs (row `createdAt`) + stable
+  sort, so an unchanged dataset is byte-identical across fetches and Google
+  updates in place instead of duplicating.
+
+### Settings → Bookings (new tab)
+
+`BookingsTab` (`bookings-tab.tsx`), registered between Fulfilment and Order
+status in the Selling group — **filtered out of both navs for non-booking
+stores** (`hasBookingListings`; a direct `?tab=bookings` deep link still
+renders, showing the create-a-listing empty state). The card: auto-provisions
+the token on first view (one-shot ref guard), copy-URL pill, the 3-step
+Google walkthrough (Other calendars + → From URL → Add), the **freshness
+caveat in-card** ("Google refreshes on its own schedule — usually within a
+day; your Kedaipal calendar is always live"), and the rotate link behind a
+confirm dialog that names the consequence (old URL dies, GCal shows the feed
+unreachable until re-subscribed).
+
+### S6 tests
+
+`convex/lib/icsFeed.test.ts` (escaping, MYT date mapping, folding round-trip,
+exclusive-end document shape, CRLF discipline); `convex/calendarFeed.test.ts`
+(ensure idempotent, rotate kills the old token + stranger refusal,
+`getCalendarFeed` shape, feed includes approved stay + scoped block and
+excludes request/declined/every phone number, unknown token → null).
 
 ### What S2 deliberately does NOT do
 

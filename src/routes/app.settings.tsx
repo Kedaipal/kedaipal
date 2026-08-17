@@ -42,10 +42,11 @@ import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
+import { BookingsTab } from "../components/settings/bookings-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
-import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
+import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -57,11 +58,9 @@ import {
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
-import { cn } from "../lib/utils";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../lib/format";
-import { normalizeMyDigits, toMyNationalInput } from "../lib/phone";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -73,12 +72,14 @@ import {
 	STAGE_LABEL_MAX_LENGTH,
 	type StageAnchor,
 } from "../lib/orderStatus";
+import { normalizeMyDigits, toMyNationalInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
 import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
 import { hasFeature, tierPill } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
@@ -105,6 +106,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
+	| "bookings"
 	| "order-status";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
@@ -152,6 +154,14 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Delivery & self-collect options",
 		icon: <MapPinned className="size-4" />,
 	},
+	// Booking stores only (filtered out of both navs otherwise) — the Google
+	// Calendar feed lives here, beside the other how-you-sell surfaces.
+	{
+		id: "bookings",
+		label: "Bookings",
+		description: "Google Calendar feed for your listings",
+		icon: <CalendarRange className="size-4" />,
+	},
 	{
 		id: "order-status",
 		label: "Order status",
@@ -173,7 +183,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: ["whatsapp", "payments", "fulfilment", "order-status"],
+		tabs: ["whatsapp", "payments", "fulfilment", "bookings", "order-status"],
 	},
 ];
 
@@ -312,6 +322,24 @@ function SettingsRoute() {
 	// mobile; desktop always shows a section (defaulting to Store).
 	const { tab } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
+	// The Bookings tab exists only for stores selling the booking kind — a
+	// non-booking store never sees a calendar-feed section it has nothing to
+	// put in (a direct ?tab=bookings deep link still renders; the tab content
+	// explains itself). Filters BOTH navs below.
+	const hasBookingListings =
+		useQuery(
+			convexQuery(
+				api.bookingBlocks.hasBookingListings,
+				retailer ? { retailerId: retailer._id } : "skip",
+			),
+		).data === true;
+	const visibleTabs = SETTINGS_TABS.filter(
+		(t) => t.id !== "bookings" || hasBookingListings,
+	);
+	const visibleGroups = SETTINGS_GROUPS.map((g) => ({
+		...g,
+		tabs: g.tabs.filter((id) => id !== "bookings" || hasBookingListings),
+	}));
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
 	const backToIndex = () => navigate({ search: { tab: undefined } });
@@ -424,7 +452,7 @@ function SettingsRoute() {
 						/>
 					</div>
 
-					{SETTINGS_GROUPS.map((group) => (
+					{visibleGroups.map((group) => (
 						<div key={group.label} className="flex flex-col gap-1.5">
 							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
 								{group.label}
@@ -540,7 +568,7 @@ function SettingsRoute() {
 
 			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
 			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
-				{SETTINGS_TABS.map((t) => (
+				{visibleTabs.map((t) => (
 					<button
 						key={t.id}
 						type="button"
@@ -730,6 +758,12 @@ function SettingsRoute() {
 						minOrderValue={retailer.minOrderValue}
 						subscription={retailer.subscription}
 					/>
+				) : null}
+
+				{activeTab === "bookings" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<BookingsTab retailerId={retailer._id} />
+					</div>
 				) : null}
 
 				{activeTab === "order-status" ? (
