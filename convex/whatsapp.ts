@@ -517,8 +517,8 @@ export const handleInbound = internalAction({
 
 		if (intent.kind === "unknown") {
 			console.log("WA inbound unknown intent → fallback", {
-			fromPhone: redactPhone(fromPhone),
-		});
+				fromPhone: redactPhone(fromPhone),
+			});
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
@@ -1470,12 +1470,14 @@ export const sendTestRetailerAlert = internalAction({
 				kind: "text",
 				body: `Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
 			});
+			// Redacted like every other log (PR #189 review): a seller's number is
+			// still personal data, and storeName already identifies the store.
 			console.log(
-				`Diagnostic alert sent (storeName=${retailer.storeName}, to=${retailer.waPhone})`,
+				`Diagnostic alert sent (storeName=${retailer.storeName}, to=${redactPhone(retailer.waPhone)})`,
 			);
 		} catch (err) {
 			console.error(
-				`Diagnostic alert failed (storeName=${retailer.storeName}, to=${retailer.waPhone}): ${
+				`Diagnostic alert failed (storeName=${retailer.storeName}, to=${redactPhone(retailer.waPhone)}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
