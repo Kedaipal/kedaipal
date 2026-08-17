@@ -12,6 +12,7 @@ import type * as admin from "../admin.js";
 import type * as analytics from "../analytics.js";
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
+import type * as bookingBlocks from "../bookingBlocks.js";
 import type * as bookings from "../bookings.js";
 import type * as categories from "../categories.js";
 import type * as contact from "../contact.js";
@@ -107,6 +108,7 @@ declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
   billing: typeof billing;
   billingEmail: typeof billingEmail;
+  bookingBlocks: typeof bookingBlocks;
   bookings: typeof bookings;
   categories: typeof categories;
   contact: typeof contact;

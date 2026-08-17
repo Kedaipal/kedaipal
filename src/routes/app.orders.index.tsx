@@ -53,6 +53,7 @@ import {
 	type OrderStatus,
 	StatusBadge,
 } from "../components/dashboard/status-badge";
+import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
@@ -286,6 +287,16 @@ function OrdersRoute() {
 		actingAsAdmin: retailer?.actingAsAdmin,
 		amIAdmin,
 	});
+
+	// Booking stores get the Inbox · Calendar view toggle (S4). Deliberately
+	// outside the inboxEnabled gate — the calendar is all-tier like booking
+	// itself, so a Starter booking store still reaches it.
+	const hasBookingListings = useQuery(
+		convexQuery(
+			api.bookingBlocks.hasBookingListings,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 
 	const result = useQuery(
 		convexQuery(
@@ -584,7 +595,12 @@ function OrdersRoute() {
 				subtitle={
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
-				actions={inboxEnabled ? headerActions : undefined}
+				actions={
+					<>
+						{hasBookingListings ? <OrdersViewToggle active="inbox" /> : null}
+						{inboxEnabled ? headerActions : null}
+					</>
+				}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -596,6 +612,7 @@ function OrdersRoute() {
 					</p>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
+					{hasBookingListings ? <OrdersViewToggle active="inbox" /> : null}
 					{inboxEnabled ? headerActions : null}
 				</div>
 			</div>

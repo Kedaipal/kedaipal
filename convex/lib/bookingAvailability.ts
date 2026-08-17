@@ -145,21 +145,76 @@ export async function countBookedPerNight(
 	return counts;
 }
 
+/** Longest single block (a season-long renovation) — also the block scan's
+ * look-back bound, the MAX_BOOKING_NIGHTS role for the blocks table. */
+export const MAX_BLOCK_DAYS = 366;
+
 /**
- * The nights of [checkIn, checkOut) that are already at capacity for this
- * listing — empty array = the whole stay fits. The authoritative check
- * `requestBooking` runs inside its transaction (Convex serializes mutations,
- * so two buyers racing for the last spot can't both pass).
+ * The retailer's blocks that could touch [from, to) — store-level and
+ * per-listing rows together (the caller filters by product). Indexed range
+ * read on `by_retailer_start`, bounded by the max block length.
+ */
+export async function loadBlocksForWindow(
+	ctx: QueryCtx | MutationCtx,
+	retailerId: Id<"retailers">,
+	from: number,
+	to: number,
+): Promise<Doc<"bookingBlocks">[]> {
+	const scanFrom = from - MAX_BLOCK_DAYS * DAY_MS;
+	const rows = await ctx.db
+		.query("bookingBlocks")
+		.withIndex("by_retailer_start", (q) =>
+			q
+				.eq("retailerId", retailerId)
+				.gte("startDate", scanFrom)
+				.lt("startDate", to),
+		)
+		.collect();
+	// endDate is INCLUSIVE (schema comment) — a block reaches the window when
+	// its last covered night is at or past `from`.
+	return rows.filter((block) => block.endDate >= from);
+}
+
+/** Is this night blocked for this listing? Store-level blocks cover every
+ * listing; per-listing blocks only their own. endDate inclusive. */
+export function isNightBlocked(
+	blocks: ReadonlyArray<
+		Pick<Doc<"bookingBlocks">, "productId" | "startDate" | "endDate">
+	>,
+	night: number,
+	productId: Id<"products">,
+): boolean {
+	return blocks.some(
+		(block) =>
+			(block.productId === undefined || block.productId === productId) &&
+			night >= block.startDate &&
+			night <= block.endDate,
+	);
+}
+
+/**
+ * The nights of [checkIn, checkOut) this listing can NOT take another booking
+ * on — at capacity OR seller-blocked, evaluated in ONE place (86eyj70z1
+ * decision 8) so `requestBooking`, the buyer calendar and the seller calendar
+ * can never disagree, and so buyers can never tell blocked from full. Empty
+ * array = the whole stay fits. The authoritative check `requestBooking` runs
+ * inside its transaction (Convex serializes mutations, so two buyers racing
+ * for the last spot — or racing a seller's block — can't slip through).
  */
 export async function findFullNights(
 	ctx: QueryCtx | MutationCtx,
-	product: Pick<Doc<"products">, "_id" | "booking">,
+	product: Pick<Doc<"products">, "_id" | "retailerId" | "booking">,
 	checkIn: number,
 	checkOut: number,
 ): Promise<number[]> {
 	const capacity = product.booking?.capacityPerNight ?? 1;
-	const counts = await countBookedPerNight(ctx, product._id, checkIn, checkOut);
+	const [counts, blocks] = await Promise.all([
+		countBookedPerNight(ctx, product._id, checkIn, checkOut),
+		loadBlocksForWindow(ctx, product.retailerId, checkIn, checkOut),
+	]);
 	return eachNight(checkIn, checkOut).filter(
-		(night) => (counts.get(night) ?? 0) >= capacity,
+		(night) =>
+			(counts.get(night) ?? 0) >= capacity ||
+			isNightBlocked(blocks, night, product._id),
 	);
 }

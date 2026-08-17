@@ -287,6 +287,100 @@ resolution stamps + released nights + already-declined refusal; expiry stamps
 the resolution + hour-25 approve names it; bookingContext on the seller read
 only.
 
+## S4 — seller calendar + block days (`86eyn4kdb`)
+
+The seller's month view, and the calendar's ONE write: block/unblock. The
+calendar is a **lens over the orders** (design §3) — every day taps through
+to its bookings and each row opens the order; managing a booking (approve,
+decline, cancel, advance) only ever happens there.
+
+### Blocks join the one availability authority
+
+New table **`bookingBlocks`** (`retailerId`, optional `productId` — unset =
+whole store, `startDate`/`endDate` MYT midnights **end-INCLUSIVE** (a single
+blocked day is `start === end`; contrast `bookingCheckOut`, which is
+exclusive because it's a leaving morning — a block has no morning), optional
+note ≤200 chars, index `by_retailer_start`). `findFullNights` now unions
+**capacity-full OR seller-blocked** (`loadBlocksForWindow` — indexed scan
+bounded by `MAX_BLOCK_DAYS` 366, the blocks' `MAX_BOOKING_NIGHTS` role —
++ `isNightBlocked`), so all three consumers — `requestBooking`'s atomic gate,
+the public buyer calendar, and the seller month view — get the same answer by
+construction, and **blocked ≡ full is structural**: the public payload stays
+a binary `unavailable[]`, a buyer can never tell "someone booked it" from
+"the seller closed it" (spec decision, pinned by test). Blocking stops **new
+requests only** — existing bookings on those nights are untouched (the seller
+card manages those); overlapping block rows are tolerated and unioned at read
+(merging at write would make unblock ambiguous).
+
+### `convex/bookingBlocks.ts`
+
+- **`blockDays`** (owner-or-admin, soft-locked, act-as audited): validates
+  midnight alignment, order, ≤366 days, note length, and that a
+  `productId` scope is one of the store's booking listings. No overlap
+  merging.
+- **`unblock`**: deletes the row; **idempotent** (already-gone = no-op) so a
+  double-tap or stale sheet never errors.
+- **`sellerCalendar`** (≤92-day windows, the availability bound): per-day
+  `{date, booked, blocked}` + the raw block rows (the unblock sheet needs ids
+  and notes) + the store's booking listings (the filter chips).
+  **`capacityPerNight` is returned only when listing-scoped** — the honest
+  denominator; the all-listings view shows bare counts because summing
+  capacity across different products is fake math (design decision).
+- **`dayBookings`**: the tapped night's stays (`checkIn ≤ night < checkOut`,
+  non-cancelled), each row `shortId`/name/range/status — the tap-through.
+- **`hasBookingListings`**: does this store sell the booking kind at all —
+  gates the Orders-header toggle so non-booking stores never see a calendar
+  they have nothing to put on.
+
+### Seller surfaces
+
+- **`/app/orders/calendar`** (`app.orders.calendar.tsx`) +
+  **`OrdersViewToggle`** — an Inbox · Calendar segmented control (Links, so
+  back/refresh/deep-links work) in the Orders header on both breakpoints,
+  rendered only when `hasBookingListings`. Deliberately **outside the
+  `inboxEnabled` Pro gate**: booking is all-tier, so a Starter booking store
+  still reaches its calendar. Deep-linking with zero booking listings gets a
+  what-this-is empty state + "Create a booking listing", never a blank grid.
+- **`SellerBookingCalendar`** (`seller-booking-calendar.tsx`): Monday-start
+  month grid (design cell variant A — count pills `N/M` listing-scoped, bare
+  `N` on all-listings), blocked cells striped + `Ban` icon, today ringed,
+  past dimmed; month nav bounded −12/+6 months; listing filter chips (a
+  single-listing store auto-scopes so the honest denominator shows without a
+  tap); a legend line names both markers. **Two-tap blocking** (same
+  interaction as the buyer calendar — drag fights scroll on mobile): "Block
+  days…" arms → first tap = start, later tap = end (earlier tap restarts,
+  same day = one night) → confirm sheet with scope (whole store vs the
+  filtered listing — scope choice only exists when a listing chip is
+  active), optional note, and the consequence line ("stops **new** requests
+  only — existing bookings stay, buyers just see the dates as unavailable").
+  Tapping any day outside block mode opens the **day sheet**: covering
+  blocks (scope + note + one-tap Unblock, per-listing blocks name the
+  listing) + that night's bookings (rows → order page) + a "Block this
+  night" shortcut when unblocked.
+
+### S4 tests
+
+`convex/bookingBlocks.test.ts`: validation sweep (alignment / order / length
+/ note / non-booking listing / stranger), blocked-≡-full in the public
+window, blocked night refuses a NEW request with the same "no longer
+available" copy while the existing stay survives (and stays listed in
+`dayBookings`), per-listing scope leaves siblings open / store scope covers
+all / unblock restores + rebooks + is idempotent, `sellerCalendar` shapes
+(counts, scoped-only capacity, blocks + listings, window bound), and
+`hasBookingListings` by kind.
+
+### What S4 deliberately does NOT do
+
+- **No buyer-visible "blocked" state** — blocked ≡ full, locked (above).
+- **Blocks never cancel bookings** — a seller closing dates with a stay
+  already on them handles that stay on the order (decline/cancel has the
+  reason + notification machinery; a block silently killing a paid stay
+  would be indefensible).
+- **No ICS feed** — the Google-Calendar one-way sync is S6 (`86eyn4kf2`),
+  which reads the same bookings + blocks this slice renders.
+- No drag-to-select (two-tap, mobile-first), no week/agenda view, no
+  recurring blocks (a season is one ≤366-day block).
+
 ### What S2 deliberately does NOT do
 
 The seller's Approve/Decline surfaces, tracking-page request states and every

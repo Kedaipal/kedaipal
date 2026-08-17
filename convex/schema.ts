@@ -454,6 +454,34 @@ export default defineSchema({
 		expiresAt: v.number(),
 	}).index("by_old_slug", ["oldSlug"]),
 
+	/**
+	 * Seller-blocked nights (86eyj70z1 decision 8) — the Airbnb host primitive:
+	 * maintenance, private events, family weekends. `productId` unset = the
+	 * whole store, set = one listing; one table gives both granularities.
+	 * `startDate`/`endDate` are MYT midnights and END-INCLUSIVE per the spec
+	 * (single-day = start === end) — the availability seam converts to the
+	 * stay model's exclusive nights at read. Blocks only stop NEW requests:
+	 * nights with confirmed bookings can still be blocked (stops further
+	 * stacking on multi-capacity listings) and existing orders are untouched —
+	 * removing one is the order's own cancel flow, deliberately separate.
+	 * Overlapping/duplicate blocks are tolerated and unioned at read (spec
+	 * recommendation) — the seller unblocks rows one at a time.
+	 */
+	bookingBlocks: defineTable({
+		retailerId: v.id("retailers"),
+		productId: v.optional(v.id("products")),
+		startDate: v.number(),
+		endDate: v.number(),
+		// Private seller note ("Maintenance — river deck repair"). Never shown
+		// to buyers (blocked renders exactly like full, locked).
+		note: v.optional(v.string()),
+		createdAt: v.number(),
+	})
+		// Range scans for both calendars: blocks whose window could reach the
+		// queried month. startDate is the range key; the look-back bound is the
+		// max block length (see MAX_BLOCK_DAYS in bookingBlocks.ts).
+		.index("by_retailer_start", ["retailerId", "startDate"]),
+
 	products: defineTable({
 		retailerId: v.id("retailers"),
 		// DEPRECATED — moved to productVariants. Kept optional during the

@@ -30,8 +30,6 @@ import {
 	assertValidBookingRange,
 	BOOKING_HORIZON_DAYS,
 	BOOKING_REQUEST_TTL_MS,
-	countBookedPerNight,
-	eachNight,
 	findFullNights,
 	MAX_AVAILABILITY_WINDOW_DAYS,
 	MAX_BOOKING_NIGHTS,
@@ -124,15 +122,13 @@ export const availability = query({
 		const retailer = await ctx.db.get(product.retailerId);
 		if (!retailer) return null;
 
-		const capacity = product.booking?.capacityPerNight ?? 1;
-		const counts = await countBookedPerNight(
+		// One evaluator with the create-time check (capacity full OR blocked,
+		// never distinguished) — the calendar and `requestBooking` can't disagree.
+		const unavailable = await findFullNights(
 			ctx,
-			product._id,
+			product,
 			args.from,
 			args.to,
-		);
-		const unavailable = eachNight(args.from, args.to).filter(
-			(night) => (counts.get(night) ?? 0) >= capacity,
 		);
 		return {
 			unavailable,
