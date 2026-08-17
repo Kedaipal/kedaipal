@@ -10,9 +10,14 @@
 // `logAdminAction` stamping an `adminAuditLog` row on each admin-on-behalf write.
 
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { adminUserIds, requireAdmin } from "./lib/auth";
+import {
+	ADMIN_AUDIT_LOG_RETENTION_MS,
+	LOG_PURGE_PAGE_SIZE,
+} from "./lib/retention";
 import { loadSubscription } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -137,5 +142,34 @@ export const startActAsSession = mutation({
 			action: "actAs.sessionStart",
 			ts: Date.now(),
 		});
+	},
+});
+
+/**
+ * Log retention (ClickUp 86eyetzt7, docs/data-retention.md): purge
+ * adminAuditLog rows past the 24-month compliance window — old enough that the
+ * trail has outlived any plausible dispute or PDPA access request. Window
+ * lives in convex/lib/retention.ts; daily cron in convex/crons.ts. Paginated
+ * self-chaining (counterCheckout.purgeStaleSessions house pattern) over the
+ * `by_ts` index — a bounded range read, never a full scan.
+ */
+export const purgeExpiredAdminAudit = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const cutoff = Date.now() - ADMIN_AUDIT_LOG_RETENTION_MS;
+		const page = await ctx.db
+			.query("adminAuditLog")
+			.withIndex("by_ts", (q) => q.lt("ts", cutoff))
+			.take(LOG_PURGE_PAGE_SIZE);
+		for (const row of page) {
+			await ctx.db.delete(row._id);
+		}
+		if (page.length === LOG_PURGE_PAGE_SIZE) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.admin.purgeExpiredAdminAudit,
+				{},
+			);
+		}
 	},
 });

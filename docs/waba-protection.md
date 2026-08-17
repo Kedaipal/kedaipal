@@ -145,9 +145,15 @@ npx convex run wabaProtection:listRecentOutbound '{"retailerId":"<id>"}'
 
 ## Schema (`convex/schema.ts`)
 
-`optOuts` (global, by_phone) · `wabaHealth` (history, by_observed) ·
+`optOuts` (global, by_phone + by_created) · `wabaHealth` (history, by_observed) ·
 `retailerSendingLimits` (kill switch + cap overrides, by_retailer) ·
-`outboundMessageLog` (audit, by_retailer_sent + by_phone_sent).
+`outboundMessageLog` (audit, by_retailer_sent + by_phone_sent + by_sent) ·
+`messageLogRollups` (permanent monthly cost-ledger aggregates).
+
+**Retention:** `outboundMessageLog` and `wabaHealth` are purged on a 90-day
+window (the outbound log rolls up into `messageLogRollups` first; the newest
+health row is always kept); `optOuts` is **never** purged — see
+[`docs/data-retention.md`](./data-retention.md) for the full policy table.
 
 ## Env vars
 

@@ -1609,6 +1609,9 @@ export default defineSchema({
 	// retailer. An active opt-out is a row with `reactivatedAt` unset; START/MULA
 	// stamps `reactivatedAt` to re-opt-in. Transactional order messages are NOT
 	// suppressed (a buyer mid-order must still get order updates) — see canSend.
+	// NEVER purged — an opt-out is the buyer's standing legal instruction
+	// (convex/lib/retention.ts, docs/data-retention.md); reads must stay indexed
+	// + bounded (`by_created` serves the admin 30-day stats window).
 	optOuts: defineTable({
 		waPhone: v.string(),
 		source: v.union(
@@ -1623,13 +1626,17 @@ export default defineSchema({
 		triggeredByRetailerId: v.optional(v.id("retailers")),
 		reactivatedAt: v.optional(v.number()),
 		createdAt: v.number(),
-	}).index("by_phone", ["waPhone"]),
+	})
+		.index("by_phone", ["waPhone"])
+		.index("by_created", ["createdAt"]),
 
 	// WABA quality-rating history, one row per Meta health webhook
 	// (phone_number_quality_update / account_update). The gateway reads the LATEST
 	// row (by_observed desc) to auto-throttle: LOW → pause all but transactional;
 	// MEDIUM/UNKNOWN → pause marketing only. History (not a singleton) so we can
-	// see trend + implement sustained-recovery later.
+	// see trend + implement sustained-recovery later. Retention: 90 days, but the
+	// newest row is ALWAYS kept regardless of age — purging it would fail the
+	// gateway open to HIGH (convex/lib/retention.ts).
 	wabaHealth: defineTable({
 		qualityRating: v.union(
 			v.literal("HIGH"),
@@ -1661,7 +1668,10 @@ export default defineSchema({
 	// cost/abuse attribution ("who sent what, when, blocked why"). `retailerId`
 	// optional for system replies to an unknown inbound sender. delivered/read are
 	// reserved for a future Meta message-status webhook; today we log sent/failed/
-	// blocked_* at send time.
+	// blocked_* at send time. The fastest-growing table in the schema — raw rows
+	// are purged after 90 days, rolled up into `messageLogRollups` first so the
+	// cost ledger survives in aggregate (`by_sent` drives the purge cron's range
+	// read). See convex/lib/retention.ts + docs/data-retention.md.
 	outboundMessageLog: defineTable({
 		retailerId: v.optional(v.id("retailers")),
 		toWaPhone: v.string(),
@@ -1686,7 +1696,47 @@ export default defineSchema({
 		sentAt: v.number(),
 	})
 		.index("by_retailer_sent", ["retailerId", "sentAt"])
-		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
+		.index("by_phone_sent", ["toWaPhone", "sentAt"])
+		.index("by_sent", ["sentAt"]),
+
+	// Monthly rollups of PURGED outboundMessageLog rows — the WhatsApp cost
+	// ledger's permanent aggregate memory (ClickUp 86eyetzt7). Before the purge
+	// cron deletes an expired log row it folds the row into its
+	// (retailer × MYT month × category × status) bucket here, in the SAME
+	// transaction, so per-retailer volume/cost accounting (Meta bills per-send
+	// from Oct 2026) survives the raw rows. Deliberately drops `templateName` +
+	// `toWaPhone`: per-template/per-recipient detail is a 90-day view on the raw
+	// log; this is the forever ledger. Row count is bounded by construction:
+	// retailers × months × 4 categories × 8 statuses. `retailerId` optional to
+	// mirror outboundMessageLog (system replies to an unknown sender carry none).
+	messageLogRollups: defineTable({
+		retailerId: v.optional(v.id("retailers")),
+		/** MYT calendar month, "YYYY-MM" (lib/retention.ts mytMonthKey). */
+		month: v.string(),
+		category: v.union(
+			v.literal("transactional"),
+			v.literal("utility_template"),
+			v.literal("marketing_template"),
+			v.literal("session_message"),
+		),
+		status: v.union(
+			v.literal("sent"),
+			v.literal("delivered"),
+			v.literal("read"),
+			v.literal("failed"),
+			v.literal("blocked_optout"),
+			v.literal("blocked_capreached"),
+			v.literal("blocked_quality"),
+			v.literal("blocked_retailer_paused"),
+		),
+		count: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_month_category_status", [
+		"retailerId",
+		"month",
+		"category",
+		"status",
+	]),
 
 	// --- Admin console audit trail (ClickUp 86ey25er1, docs/admin-console.md) --
 	// One row per admin-on-behalf ("act-as") write during white-glove onboarding.
@@ -1694,7 +1744,8 @@ export default defineSchema({
 	// in convex/lib/auth.ts); every write they make on a store they don't own is
 	// stamped here so edits are attributable to a person. Owner writes are NOT
 	// logged — only the admin exception. `targetId` is the affected doc id when
-	// known at write time (updates/deletes); omitted for creates.
+	// known at write time (updates/deletes); omitted for creates. Retention:
+	// 24 months (`by_ts` drives the purge cron) — see convex/lib/retention.ts.
 	adminAuditLog: defineTable({
 		adminUserId: v.string(), // Clerk subject of the acting admin
 		retailerId: v.id("retailers"), // store acted upon
@@ -1703,5 +1754,6 @@ export default defineSchema({
 		ts: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_admin", ["adminUserId"]),
+		.index("by_admin", ["adminUserId"])
+		.index("by_ts", ["ts"]),
 });
