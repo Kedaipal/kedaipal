@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
@@ -214,7 +215,9 @@ function StorefrontSkeleton() {
 function StorefrontRoute() {
 	const { slug } = Route.useParams();
 	// Live query keeps the catalog reactive after the SSR'd loader response.
-	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
+	const result = useQuery(
+		convexQuery(api.retailers.getRetailerBySlug, { slug }),
+	).data;
 	const cart = useCart(
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);

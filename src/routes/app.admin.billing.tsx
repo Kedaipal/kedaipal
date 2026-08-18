@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	Award,
 	Banknote,
@@ -45,7 +47,7 @@ export const Route = createFileRoute("/app/admin/billing")({
 });
 
 function AdminBillingRoute() {
-	const isAdmin = useQuery(api.billing.amIAdmin);
+	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 
 	if (isAdmin === undefined) {
 		return (
@@ -192,8 +194,10 @@ function AdminSectionHeading({
 }
 
 function AdminBillingOverview() {
-	const invoices = useQuery(api.invoices.listPending, {});
-	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
+	const spotsRemaining = useQuery(
+		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
+	).data;
 	const pendingTotal = invoices?.reduce((sum, inv) => sum + inv.total, 0) ?? 0;
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
@@ -271,7 +275,9 @@ function OnboardClientCard() {
 	const [founding, setFounding] = useState(false);
 	const [copied, setCopied] = useState(false);
 
-	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const spotsRemaining = useQuery(
+		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
+	).data;
 	const foundingAvailable = (spotsRemaining ?? 0) > 0;
 
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
@@ -289,9 +295,11 @@ function OnboardClientCard() {
 	}, [email]);
 	const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(debouncedEmail);
 	const emailCheck = useQuery(
-		api.retailers.checkEmailHasStore,
-		emailLooksValid ? { email: debouncedEmail } : "skip",
-	);
+		convexQuery(
+			api.retailers.checkEmailHasStore,
+			emailLooksValid ? { email: debouncedEmail } : "skip",
+		),
+	).data;
 	const emailTaken = emailCheck?.exists === true;
 
 	const ready =
@@ -493,8 +501,12 @@ function retailerOptionLabel(r: {
  * derived from plan + cycle + founding; the due date defaults to +14 days.
  */
 function IssueInvoiceForm() {
-	const retailers = useQuery(api.invoices.listRetailersForAdmin, {});
-	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const retailers = useQuery(
+		convexQuery(api.invoices.listRetailersForAdmin, {}),
+	).data;
+	const spotsRemaining = useQuery(
+		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
+	).data;
 	const issue = useMutation(api.invoices.issueInvoice);
 
 	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
@@ -681,7 +693,7 @@ function IssueInvoiceForm() {
 }
 
 function PendingInvoices() {
-	const invoices = useQuery(api.invoices.listPending, {});
+	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
 	const markPaid = useMutation(api.invoices.markPaid);
 	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	const [confirming, setConfirming] = useState<
@@ -911,8 +923,12 @@ function foundingStatus(m: { status?: string; paid: boolean }): {
 }
 
 function FoundingMembersList() {
-	const members = useQuery(api.foundingMembers.listForAdmin, {});
-	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const members = useQuery(
+		convexQuery(api.foundingMembers.listForAdmin, {}),
+	).data;
+	const spotsRemaining = useQuery(
+		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
+	).data;
 
 	return (
 		<AdminCard>
@@ -972,7 +988,7 @@ function FoundingMembersList() {
 }
 
 function PaymentConfigForm() {
-	const config = useQuery(api.billing.getBillingConfig, {});
+	const config = useQuery(convexQuery(api.billing.getBillingConfig, {})).data;
 	const update = useMutation(api.billing.updateBillingConfig);
 	const generateQrUploadUrl = useMutation(api.billing.generateQrUploadUrl);
 

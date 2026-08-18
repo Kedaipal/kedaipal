@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { Award, ChevronRight, ShieldCheck, ShieldX, Store } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -15,7 +17,7 @@ export const Route = createFileRoute("/app/admin/sellers")({
 
 function AdminSellersRoute() {
 	// Client gate is cosmetic — `listSellersForAdmin` is `requireAdmin` server-side.
-	const isAdmin = useQuery(api.billing.amIAdmin);
+	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 
 	if (isAdmin === undefined) {
 		return (
@@ -42,7 +44,7 @@ function AdminSellersRoute() {
 }
 
 function AdminSellersContent() {
-	const sellers = useQuery(api.admin.listSellersForAdmin);
+	const sellers = useQuery(convexQuery(api.admin.listSellersForAdmin, {})).data;
 	const [term, setTerm] = useState("");
 
 	const filtered =

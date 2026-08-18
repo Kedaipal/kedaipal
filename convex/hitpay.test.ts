@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { decryptSecret, isEncrypted } from "./lib/credentialCrypto";
 import { computeHitpayHmac } from "./lib/hitpay";
 import { capsForPlan, featuresForPlan, type Plan } from "./lib/plans";
 import schema from "./schema";
@@ -1226,5 +1227,102 @@ describe("unapplied gateway payments are surfaced, not silent", () => {
 			currency: "MYR",
 		});
 		expect(result).toEqual({ applied: false, reason: "gone" });
+	});
+});
+
+describe("credentials encrypted at rest (86eyn25gk)", () => {
+	test("connect → scheduled action encrypts; summary + signed webhook still work end-to-end", async () => {
+		// Fake timers must be on BEFORE the convexTest instance exists, or
+		// scheduled internalActions that call ctx.runQuery crash with
+		// "Transaction not started" (the whatsapp.test.ts gotcha).
+		vi.useFakeTimers();
+		vi.stubEnv(
+			"CREDENTIALS_ENCRYPTION_KEY",
+			btoa("0123456789abcdef0123456789abcdef"),
+		);
+		// The flush below also runs the connect probe — feed it a happy echo.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					id: "req_probe",
+					url: "https://checkout.sandbox.hit-pay.com/probe",
+					payment_methods: ["duitnow"],
+				}),
+			),
+		);
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await connectHitpay(t, USER_A);
+
+		// Run the scheduled encrypt action (+ probe).
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		// At rest: ciphertext only, hint + mode stamped from the plaintext.
+		const row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.hitpay?.apiKey && isEncrypted(row.hitpay.apiKey)).toBe(true);
+		expect(row?.hitpay?.salt && isEncrypted(row.hitpay.salt)).toBe(true);
+		expect(row?.hitpay?.apiKey).not.toContain(SANDBOX_KEY);
+		expect(await decryptSecret(row?.hitpay?.salt ?? "")).toBe(SALT);
+		expect(row?.hitpay?.apiKeyHint).toBe(SANDBOX_KEY.slice(-4));
+		expect(row?.hitpay?.mode).toBe("sandbox");
+
+		// The owner summary still reads true — from the STORED hint/mode, since
+		// a query can't derive either from ciphertext.
+		const mine = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.retailers.getMyRetailer);
+		expect(mine?.hitpay).toMatchObject({
+			hasCredentials: true,
+			mode: "sandbox",
+			apiKeyHint: SANDBOX_KEY.slice(-4),
+		});
+		expect(JSON.stringify(mine)).not.toContain(SANDBOX_KEY);
+		expect(JSON.stringify(mine)).not.toContain(SALT);
+
+		// The money E2E: HitPay signs webhooks with the PLAINTEXT salt — the
+		// route must decrypt the stored ciphertext before verifying.
+		const order = await seedOrder(t, retailer._id, productId);
+		await stampRequest(t, order.orderId, { amount: order.total });
+		const res = await t.fetch("/webhook/hitpay", {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: await signedWebhookBody(
+				webhookFields("req_0001", {
+					amount: (order.total / 100).toFixed(2),
+				}),
+			),
+		});
+		expect(res.status).toBe(200);
+		const paid = await t.run(async (ctx) => ctx.db.get(order.orderId));
+		expect(paid?.paymentStatus).toBe("received");
+		vi.useRealTimers();
+	});
+
+	test("without the env key, saves keep plaintext and everything behaves as before", async () => {
+		vi.useFakeTimers();
+		// The flush runs the connect probe — keep it off the real network.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					id: "req_probe",
+					url: "https://checkout.sandbox.hit-pay.com/probe",
+					payment_methods: ["duitnow"],
+				}),
+			),
+		);
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await connectHitpay(t, USER_A);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		const row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		// encryptSecret passthrough — the plaintext era, byte-identical.
+		expect(row?.hitpay?.apiKey).toBe(SANDBOX_KEY);
+		expect(row?.hitpay?.salt).toBe(SALT);
+		expect(row?.hitpay?.apiKeyHint).toBe(SANDBOX_KEY.slice(-4));
+		expect(row?.hitpay?.mode).toBe("sandbox");
+		vi.useRealTimers();
 	});
 });

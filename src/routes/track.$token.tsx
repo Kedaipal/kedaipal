@@ -1,5 +1,8 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import {
 	BadgeCheck,
 	CalendarDays,
@@ -31,8 +34,8 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
-import { isMockupGateClosed } from "../../convex/lib/order";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
+import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -45,7 +48,6 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
-import { ssrRead } from "../lib/ssr-read";
 import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
@@ -63,6 +65,7 @@ import {
 	stageDescription,
 	stageLabel,
 } from "../lib/orderStatus";
+import { ssrRead } from "../lib/ssr-read";
 import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
@@ -344,7 +347,7 @@ function TrackingRoute() {
 		reference: returnReference,
 	} = Route.useSearch();
 	const navigate = Route.useNavigate();
-	const order = useQuery(api.orders.get, { token });
+	const order = useQuery(convexQuery(api.orders.get, { token })).data;
 	// Only subscribe to payment methods when the "How to pay" section can actually
 	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
 	// second order+retailer read+subscription on this hot public path. (Kept a
@@ -357,9 +360,11 @@ function TrackingRoute() {
 		!isMockupGateClosed(order) &&
 		order.deliveryFeePending !== true;
 	const paymentInfo = useQuery(
-		api.orders.getPaymentMethods,
-		showPaymentSection ? { token } : "skip",
-	);
+		convexQuery(
+			api.orders.getPaymentMethods,
+			showPaymentSection ? { token } : "skip",
+		),
+	).data;
 	const paymentMethods = paymentInfo?.methods ?? [];
 	// The seller's HitPay checkout can take THIS order's payment right now
 	// (86eyb6z3a) — connection on, price holds clear, payment still open.
@@ -806,9 +811,8 @@ function TrackingRoute() {
 									Pay now · {formatPrice(order.total, order.currency)}
 								</Button>
 								<p className="text-xs opacity-80">
-									Bank transfer or QR — pay in your banking app, then attach
-									the receipt so {order.storeName || "the store"} can confirm
-									it.
+									Bank transfer or QR — pay in your banking app, then attach the
+									receipt so {order.storeName || "the store"} can confirm it.
 								</p>
 							</>
 						)
@@ -1377,7 +1381,7 @@ function PickupNavButtons({
 	snapshot,
 }: {
 	snapshot: NonNullable<
-		ReturnType<typeof useQuery<typeof api.orders.get>>
+		FunctionReturnType<typeof api.orders.get>
 	>["pickupSnapshot"];
 }) {
 	if (!snapshot) return null;
@@ -1446,9 +1450,7 @@ function PickupNavButtons({
 	return null;
 }
 
-type TrackedOrder = NonNullable<
-	ReturnType<typeof useQuery<typeof api.orders.get>>
->;
+type TrackedOrder = NonNullable<FunctionReturnType<typeof api.orders.get>>;
 
 /**
  * Fresh-arrival success state for the confirmation-push flow (86eyf1rck): the
@@ -1914,7 +1916,9 @@ function MockupReview({
 	const approve = useMutation(api.orders.approveMockup);
 	const requestChanges = useMutation(api.orders.requestMockupChanges);
 	const declineItem = useMutation(api.orders.declineMockupItem);
-	const mockupUrls = useQuery(api.orders.getMockupUrls, { token });
+	const mockupUrls = useQuery(
+		convexQuery(api.orders.getMockupUrls, { token }),
+	).data;
 	const [note, setNote] = useState("");
 	const [showNote, setShowNote] = useState(false);
 	const [confirmDecline, setConfirmDecline] = useState(false);

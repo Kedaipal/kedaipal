@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../../convex/_generated/api";
 import { useActAsRetailerId } from "./useActAs";
 
@@ -27,13 +28,17 @@ export { useActAsRetailerId } from "./useActAs";
  */
 export function useDashboardRetailer() {
 	const actAsRetailerId = useActAsRetailerId();
+	// `.data` is unwrapped HERE so the hook keeps its `Retailer | null | undefined`
+	// contract — every route consumer's `if (!retailer)` / `retailer ? … : "skip"`
+	// stays unchanged. (loading → undefined, no-store → null.)
 	const own = useQuery(
-		api.retailers.getMyRetailer,
-		actAsRetailerId ? "skip" : {},
-	);
+		convexQuery(api.retailers.getMyRetailer, actAsRetailerId ? "skip" : {}),
+	).data;
 	const asAdmin = useQuery(
-		api.retailers.getRetailerForAdmin,
-		actAsRetailerId ? { retailerId: actAsRetailerId } : "skip",
-	);
+		convexQuery(
+			api.retailers.getRetailerForAdmin,
+			actAsRetailerId ? { retailerId: actAsRetailerId } : "skip",
+		),
+	).data;
 	return actAsRetailerId ? asAdmin : own;
 }

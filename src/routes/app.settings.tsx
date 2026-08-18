@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	ArrowLeft,
 	ChevronDown,
@@ -283,7 +285,7 @@ function SettingsRoute() {
 	const retailer = useDashboardRetailer();
 	// Admins get an "Admin" group on the mobile settings index — the natural home
 	// for the console entry (the desktop sidebar already carries an Admin group).
-	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
+	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
 	// A Kedaipal admin on their OWN store reads "Admin" on the tier pill + billing
 	// row (never a trial/plan countdown) — same treatment as the sidebar/header.
 	// While acting-as a seller we keep the seller's real subscription state visible.

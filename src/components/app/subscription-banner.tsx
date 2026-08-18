@@ -1,8 +1,11 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 import { formatPrice } from "../../lib/format";
 import {
 	resolveBannerState,
@@ -34,14 +37,8 @@ export function SubscriptionBanner({
 	const skipInvoice =
 		!subscription || subscription.comped || subscription.status === "past_due";
 	const pending = useQuery(
-		api.invoices.myNextDueInvoice,
-		skipInvoice ? "skip" : {},
-	);
-	// WA "message us to pay" CTA only needed on the past-due banner.
-	const instructions = useQuery(
-		api.billing.paymentInstructions,
-		subscription?.status === "past_due" ? {} : "skip",
-	);
+		convexQuery(api.invoices.myNextDueInvoice, skipInvoice ? "skip" : {}),
+	).data;
 
 	const now = Date.now();
 	const state = resolveBannerState(
@@ -63,6 +60,9 @@ export function SubscriptionBanner({
 					? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
 					: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
+	// Read above the early returns — the past-due CTA that uses it is built inside
+	// a branch, where a hook can't go.
+	const supportWa = useSupportWaNumber();
 
 	if (state.kind === "none") return null;
 
@@ -103,12 +103,10 @@ export function SubscriptionBanner({
 	}
 
 	if (state.kind === "pastDue") {
-		const phone = instructions?.whatsappPhone;
-		const waUrl = phone
-			? `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(
-					`Hi, I'd like to settle my Kedaipal subscription for my store (/${slug}).`,
-				)}`
-			: undefined;
+		const waUrl = buildWaContactLink(
+			`Hi, I'd like to settle my Kedaipal subscription for my store (/${slug}).`,
+			supportWa,
+		);
 		return (
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
 				<p className="text-sm text-foreground/90">
@@ -124,16 +122,14 @@ export function SubscriptionBanner({
 					>
 						View billing
 					</Link>
-					{waUrl ? (
-						<a
-							href={waUrl}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="inline-flex h-9 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-						>
-							Message us to pay
-						</a>
-					) : null}
+					<a
+						href={waUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="inline-flex h-9 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+					>
+						Message us to pay
+					</a>
 				</div>
 			</div>
 		);

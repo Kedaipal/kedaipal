@@ -305,25 +305,71 @@ checks `identity.subject` against `ADMIN_USER_IDS` (comma-separated Clerk subs).
 Fails closed when unset. Server check mandatory; client hiding cosmetic.
 **Dev setup:** `npx convex env set ADMIN_USER_IDS <your-clerk-sub>`.
 
+## Support WhatsApp number (`SUPPORT_WA_PHONE`) — ClickUp `86eyjuvyu`
+
+Every **seller→Kedaipal** CTA — billing support, Starter→Pro upgrade, "I've
+paid", choose/renew plan, the past-due and sending-paused banners, the Pro
+feature wall, the white-glove call, the first-order testimonial, and the
+landing/pricing/cost founding CTAs — opens a `wa.me` chat on **one** number,
+served by the public query **`contact.supportWhatsapp`**.
+
+**It is deliberately NOT `WHATSAPP_CHECKOUT_PHONE`.** That env var is the shared
+WABA sender that talks to *buyers*; a seller messaging it reaches the order bot,
+not a human. Until Aug 2026 the billing CTAs read it (via
+`billing.paymentInstructions.whatsappPhone`) and every one of them pointed at
+the wrong number — that field is now gone, and `paymentInstructions` carries
+bank/DuitNow/QR details only.
+
+**To change the number** (no deploy, takes effect on the next query):
+
+```bash
+npx convex env set SUPPORT_WA_PHONE "018-473 5095"
+```
+
+- Any Malaysian spelling is accepted (`018…`, `18…`, `+60 18-473 5095`) and
+  normalized to the wa.me form by `resolveSupportWaNumber`
+  (`convex/lib/contact.ts`).
+- A value that isn't a MY mobile is **rejected, logged, and ignored** in favour
+  of `DEFAULT_SUPPORT_WA_NUMBER` — a typo must never leave a seller with a dead
+  link. Check the Convex logs for `SUPPORT_WA_PHONE is not a valid…` after
+  setting it.
+- Unset ⇒ the same default, so a deployment that never sets it still works.
+- The query is **unauthenticated** (landing/pricing render to signed-out
+  visitors) and the number is public by nature — it's printed on those pages.
+
+**When the number changes for good, also update `DEFAULT_SUPPORT_WA_NUMBER`** in
+the next PR: SSR and the first client paint use the constant until the query
+resolves, so server-rendered HTML would otherwise carry the old number for a
+few hundred ms. The env var is the instant lever; the constant is the
+deploy-time floor.
+
 ## Pricing / caps — single source of truth
 
 `convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale RM299; founding Pro RM104
-(Scale RM209, unreachable at launch). Annual = 10 months charged. Caps per
-CLAUDE.md: Starter 100/1/0, Pro 500/2/100, Scale 2000/5/500 — all finite since
-Arif's 2026-06-28 decision dropped Scale's "unlimited" (kept an upsell ceiling for
-a future Enterprise tier and stopped contradicting Scale's ~1,300/mo tagline). The
+(Scale RM209, unreachable at launch). Caps per CLAUDE.md: Starter 100/1/0, Pro
+500/2/100, Scale 2000/5/500 — all finite since Arif's 2026-06-28 decision dropped
+Scale's "unlimited" (kept an upsell ceiling for a future Enterprise tier). The
 `UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
 plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
 **no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
 
-> **Display ≠ backend cap (ClickUp 86ey4gaju).** The public pricing surface was
-> repositioned so Scale reads as the **supplier/distributor** tier: it shows
-> **"from RM299"** with an active-reseller band table (299 / 499 / 799 / custom)
-> and **"Unlimited orders / broadcasts"** in the copy. This is presentation only —
-> `PLAN_CAPS.scale` stays **2000/5/500** here until the separate Scale build
-> (active-reseller counting + banded billing) ships and flips Scale from "Coming
-> soon" to purchasable. The billing amount (`PLAN_MONTHLY_PRICE.scale = 29900`)
-> equals the lowest band. See [`pricing.md`](./pricing.md).
+> **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
+> The public pricing surface shows Scale as the **multi-outlet / high-volume** tier
+> at **RM299/mo flat** (no bands, no metering; the reseller band table was removed
+> after the 1 Jul ICP audit). Scale stays "Coming soon" — not purchasable — until
+> the separate Scale build (multi-outlet management, outlet counting, RM49/mo
+> additional-outlet billing) ships. See [`pricing.md`](./pricing.md).
+
+> **Display order allowances ≠ backend cap (ClickUp 86eye2ccu).** The pricing page
+> advertises the *decided* monthly allowances **Starter 100 / Pro 200 / Scale ~400**
+> ahead of enforcement (Arif, 9 Aug 2026: copy first, so the page never advertises a
+> number the business can't hold). `PLAN_CAPS` still reads **Pro 500 / Scale 2,000**
+> until `86eye2ccu` ships the lower caps — and that constant is the denominator the
+> **billing-tab order meter** renders — so until then a Pro seller reads "200
+> orders/mo" on `/pricing` but "N of 500" in Settings → Billing. Both Pro (500→200)
+> and Scale (2,000→400) diverge; `86eye2ccu` must drop both. Annual billing is hidden
+> on the page until recurring billing (`86eyb6z4r`) ships. See
+> [`pricing.md`](./pricing.md).
 
 ## `PaymentProvider` seam
 
@@ -383,13 +429,13 @@ backfill no longer mints comped subscriptions.
   `wa.me`. Pure decision in `resolveBannerState`), Billing settings tab
   (`billing-tab.tsx` — plan/status, pending invoice + how-to-pay, founding ribbon,
   history, **+ an always-on "Questions about billing?" support card** — WhatsApp
-  (`billing.paymentInstructions.whatsappPhone`) + email (`hello@kedaipal.com`) —
+  (`contact.supportWhatsapp`) + email (`hello@kedaipal.com`) —
   rendered for **every** retailer regardless of plan/tier/status so they can
   always reach us). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
   the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment
   (the day-14 pay nudge is already covered by the banner).
   **Payment details are admin-editable in the UI** (not env) — see Phase 4.
-  Only the WA number stays env (`WHATSAPP_CHECKOUT_PHONE`).
+  The support WA number is **`SUPPORT_WA_PHONE`** — see below.
 - **Phase 4 (in progress):** **`billingConfig`** singleton table + `convex/billing.ts`
   (`paymentInstructions` reads the table + resolves the QR from Convex storage;
   admin `getBillingConfig`/`updateBillingConfig`/`generateQrUploadUrl`; `amIAdmin`

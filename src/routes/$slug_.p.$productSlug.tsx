@@ -1,10 +1,11 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
 	notFound,
 	redirect,
 } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { ProductPageView } from "../components/storefront/product-page";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
@@ -250,12 +251,16 @@ function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
-	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
+	const result = useQuery(
+		convexQuery(api.retailers.getRetailerBySlug, { slug }),
+	).data;
 	const retailer = result?.status === "ok" ? result.retailer : undefined;
 	const product = useQuery(
-		api.products.getPublicBySlug,
-		retailer ? { retailerId: retailer._id, slug: productSlug } : "skip",
-	);
+		convexQuery(
+			api.products.getPublicBySlug,
+			retailer ? { retailerId: retailer._id, slug: productSlug } : "skip",
+		),
+	).data;
 	// Same per-retailer cart as every storefront surface.
 	const cart = useCart(retailer?._id);
 

@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { Check, EyeOff, FolderOpen } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -37,7 +38,9 @@ export function CategoryPicker({
 	 * card (the product form's "Where it appears"). */
 	embedded?: boolean;
 }) {
-	const categories = useQuery(api.categories.listForRetailer, { retailerId });
+	const categories = useQuery(
+		convexQuery(api.categories.listForRetailer, { retailerId }),
+	).data;
 	const active = categories?.filter((c) => c.active);
 	const selected = new Set(selectedIds);
 	const atCap = selectedIds.length >= MAX_CATEGORIES;

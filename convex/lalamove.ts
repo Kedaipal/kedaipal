@@ -34,6 +34,7 @@ import {
 	parseOrderResponse,
 	parsePodImages,
 	parseQuotationResponse,
+	decryptLalamoveCredentials,
 	resolveLalamoveCredentials,
 	resolveScheduleAt,
 	toLalamoveMyPhone,
@@ -56,23 +57,27 @@ export class LalamoveApiError extends Error {
 	}
 }
 
-/** Signed fetch against the Lalamove REST API. */
+/** Signed fetch against the Lalamove REST API. The single decrypt-at-use
+ * choke point (86eyn25gk): credentials arrive from internal queries possibly
+ * still carrying ciphertext, and the env must come from the PLAINTEXT key —
+ * decrypting here fixes every caller at once. */
 async function callLalamove(
 	credentials: LalamoveCredentials,
 	method: "GET" | "POST" | "DELETE" | "PATCH",
 	path: string,
 	body?: { data: Record<string, unknown> },
 ): Promise<unknown> {
+	const live = await decryptLalamoveCredentials(credentials);
 	const bodyStr = body ? JSON.stringify(body) : "";
 	const headers = await buildLalamoveHeaders({
-		credentials,
+		credentials: live,
 		method,
 		path,
 		body: bodyStr,
 		timestamp: Date.now(),
 		requestId: crypto.randomUUID(),
 	});
-	const res = await fetch(`${LALAMOVE_BASE_URL[credentials.env]}${path}`, {
+	const res = await fetch(`${LALAMOVE_BASE_URL[live.env]}${path}`, {
 		method,
 		headers,
 		...(body ? { body: bodyStr } : {}),
@@ -1684,7 +1689,12 @@ export const devProbeScheduleAt = internalAction({
 			retailerId,
 		});
 		if (!probe) return { error: "no retailer with Lalamove credentials" };
-		if (probe.credentials.env !== "sandbox") {
+		// Judge sandbox-ness on the PLAINTEXT key — the stored value may be
+		// ciphertext, whose pre-decrypt env always reads "production".
+		const probeCredentials = await decryptLalamoveCredentials(
+			probe.credentials,
+		);
+		if (probeCredentials.env !== "sandbox") {
 			return { error: "refusing: not a sandbox key pair" };
 		}
 		const out: Record<string, string> = {};

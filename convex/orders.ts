@@ -45,12 +45,12 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { orderBucket } from "./lib/orderBuckets";
+import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
+import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
 	manualReminderEligibility,
 } from "./lib/paymentReminder";
-import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	buildInboxPredicate,
 	compareInboxOrder,
@@ -79,6 +79,7 @@ import {
 import {
 	CHECKOUT_QUOTE_MAX_AGE_MS,
 	isActiveJobStatus,
+	isRiderManagedTransition,
 } from "./lib/lalamove";
 import { resolveShipmentFields } from "./lib/couriers";
 import {
@@ -1190,14 +1191,29 @@ export const create = mutation({
 });
 
 /**
- * Returns the count of pending and confirmed orders for the retailer's dashboard tab indicators.
+ * Counts for the retailer's dashboard chrome.
+ *
+ * `newOrders` is what the nav badge renders: the same "New" definition the
+ * inbox chip and the Home tile use (`orderBucket` → "new") — `pending` plus a
+ * confirmation-push order the seller hasn't opened yet. It's a NOTIFICATION
+ * count, so working through the orders drives it to zero; `pending + confirmed`
+ * (what the badge used to show) counts orders the seller is actively working
+ * and therefore only ever climbs. See docs/order-inbox.md.
+ *
+ * `pending`/`confirmed` stay on the payload as raw status counts — the order
+ * toasts (src/hooks/useOrderToastNotifications.ts) announce on their deltas.
  */
 export const countActionable = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{ pending: number; confirmed: number; mockupPending: number }> => {
+	): Promise<{
+		newOrders: number;
+		pending: number;
+		confirmed: number;
+		mockupPending: number;
+	}> => {
 		await requireRetailerAccess(ctx, retailerId);
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
@@ -1229,6 +1245,9 @@ export const countActionable = query({
 		]);
 
 		return {
+			// Unseen push-path orders are a subset of `confirmedRows`, already in
+			// memory — no extra read to add the badge's count.
+			newOrders: pendingRows.length + confirmedRows.filter(isUnseenOrder).length,
 			pending: pendingRows.length,
 			confirmed: confirmedRows.length,
 			mockupPending: mockupRows.length,
@@ -2150,6 +2169,63 @@ async function reverseCancellationEffects(
 	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 }
 
+/**
+ * Whether a live Lalamove rider — not the seller — owns this advance.
+ *
+ * True only when the order has an ACTIVE job whose webhook has demonstrably
+ * fired (`lastEventAt` set) AND the target anchor is one the webhook drives
+ * (shipped at pickup, delivered at drop-off). Webhook-less sellers keep manual
+ * control; that degraded path is documented in docs/delivery-lalamove.md.
+ *
+ * The damage this prevents is PERMANENT, not cosmetic: `applyStatusTransition`
+ * WhatsApps the buyer immediately, and the webhook's own guards
+ * (`SHIPPABLE_FROM` = confirmed|packed) skip the real pickup event once the
+ * order already reads "shipped" — so an early manual advance means the buyer
+ * gets a shipped notice with NO live-tracking link, and the rider's later
+ * pickup can never heal it.
+ *
+ * Mirrors the client-side gate in app.orders.$shortId.tsx, which is a UX
+ * affordance only — the inbox bulk bar reaches the same transitions with no
+ * gate at all, so this is the authoritative one.
+ */
+async function riderOwnsTransition(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
+): Promise<boolean> {
+	if (!isRiderManagedTransition(targetAnchor, order.status)) return false;
+	// Collection orders (86eyg0n8e): the rider drives the FRONT of the flow —
+	// the webhook moves the JOB only, and the order stays the seller's to
+	// advance by hand throughout — so this gate would both lie ("it updates
+	// itself" never comes true) and strand. Read from the ORDER's frozen
+	// direction, never the store's live setting, mirroring the client: a mode
+	// switch must not re-gate (or un-gate) in-flight orders.
+	if (order.deliveryDirection === "collection") return false;
+	// An order can hold SEVERAL job rows: a failed booking's released row is kept
+	// on purpose (it doubles as the amber "failed" card) and `reserveBooking`
+	// then lets the seller rebook, so a live rider is routinely NOT the oldest
+	// row. `by_order` is indexed on orderId alone, so `.first()` would return the
+	// oldest and fail open on exactly the rebooked orders most likely to reach
+	// for the manual button. Pick the ACTIVE row, like every other by_order
+	// reader (dispatchContextForOrder, reserveBooking, the cancel resolver).
+	const jobs = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	// Gated from the moment of BOOKING, not from the first webhook event — the
+	// same rule as the client (86eyg0n8e): requiring `lastEventAt` left the gate
+	// off during exactly the window it matters most, between placing the booking
+	// and the first event landing. The confirm-gated override is what protects
+	// the webhook-less seller instead, and cancelling the booking lifts the gate
+	// outright, so neither can be stranded.
+	return jobs.some((j) => isActiveJobStatus(j.status));
+}
+
+/** Seller-facing message for a blocked manual advance. The order-detail
+ * stepper offers an explicit "Update manually" confirm that overrides it. */
+const RIDER_GATE_MESSAGE =
+	"A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
+
 // Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
 // rider picked up → shipped, completed → delivered ride the SAME path as a
 // seller tap, so WhatsApp notify, stage vocabulary, activation stamping and
@@ -2277,10 +2353,21 @@ export const updateStatus = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// Deliberate override of the rider gate below — the seller confirmed the
+		// automatic update never arrived (dead/unregistered webhook).
+		overrideRiderGate: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, status, note, carrierTrackingUrl, courierName, trackingNo },
+		{
+			orderId,
+			status,
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+			overrideRiderGate,
+		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 
@@ -2295,7 +2382,8 @@ export const updateStatus = mutation({
 
 		// Collection gate (86eyg0n8e) — the goods are still with the buyer, so no
 		// production status can be true. Cancelling stays open (same posture as
-		// the mockup gate above).
+		// the mockup gate above). Checked before the rider gate so a collection
+		// order's active trip always gets THIS message, never the rider one.
 		if (
 			status !== "cancelled" &&
 			anchorOrdinal(status) >= anchorOrdinal("packed") &&
@@ -2304,6 +2392,18 @@ export const updateStatus = mutation({
 			throw new ConvexError(
 				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
 			);
+		}
+
+		// Rider gate: a live Lalamove booking drives shipped/delivered. Cancelling
+		// is never gated (not a rider-managed anchor). Sits before the transition
+		// so the manual courier fields above can't land on an order a rider
+		// already owns.
+		if (
+			!overrideRiderGate &&
+			status !== "cancelled" &&
+			(await riderOwnsTransition(ctx, order, status))
+		) {
+			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
 		await applyStatusTransition(ctx, order, status, {
@@ -2338,15 +2438,25 @@ export const bulkUpdateStatus = mutation({
 		 * with the buyer — the one skip reason the seller can act on, so the
 		 * toast can name it instead of leaving a silent no-op. */
 		skippedAwaitingCollection: number;
+		/** Of `skipped`, how many had a live Lalamove rider driving the order —
+		 * named for the same reason: a silent skip is hidden behaviour, and the
+		 * fix (wait for the rider, or override from the order page) is per-order. */
+		skippedRiderManaged: number;
 	}> => {
 		if (orderIds.length === 0)
-			return { updated: 0, skipped: 0, skippedAwaitingCollection: 0 };
+			return {
+				updated: 0,
+				skipped: 0,
+				skippedAwaitingCollection: 0,
+				skippedRiderManaged: 0,
+			};
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
 		let skippedAwaitingCollection = 0;
+		let skippedRiderManaged = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -2384,12 +2494,24 @@ export const bulkUpdateStatus = mutation({
 				skippedAwaitingCollection++;
 				continue;
 			}
+			// A live rider owns shipped/delivered — skip rather than message the
+			// buyer early without a tracking link. Deliberately no bulk override:
+			// overriding is a per-order judgement call (did THIS order's automatic
+			// update fail?), so it lives behind the order-detail confirm.
+			if (
+				status !== "cancelled" &&
+				(await riderOwnsTransition(ctx, order, status))
+			) {
+				skipped++;
+				skippedRiderManaged++;
+				continue;
+			}
 			await applyStatusTransition(ctx, order, status);
 			updated++;
 		}
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
-		return { updated, skipped, skippedAwaitingCollection };
+		return { updated, skipped, skippedAwaitingCollection, skippedRiderManaged };
 	},
 });
 
@@ -2583,6 +2705,10 @@ export const advanceToStage = mutation({
 		// never reported. Stamps `collectedAt` so the order unblocks for good
 		// instead of asking again at every stage. Ignored on standard orders.
 		markCollected: v.optional(v.boolean()),
+		// Set by the order-detail "Update manually" confirm — the seller asserts
+		// the rider's automatic update never landed (or they have no webhook and
+		// are moving it themselves). See riderOwnsTransition.
+		overrideRiderGate: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
@@ -2594,6 +2720,7 @@ export const advanceToStage = mutation({
 			courierName,
 			trackingNo,
 			markCollected,
+			overrideRiderGate,
 		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
@@ -2642,6 +2769,17 @@ export const advanceToStage = mutation({
 			throw new ConvexError(
 				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
 			);
+		}
+
+		// Rider gate — same rule as updateStatus. Within-anchor stage moves don't
+		// change canonical status, so isRiderManagedTransition lets them through.
+		// Checked after the collection gate, and never fires on collection orders
+		// (riderOwnsTransition rules them out by the order's frozen direction).
+		if (
+			!overrideRiderGate &&
+			(await riderOwnsTransition(ctx, order, targetStatus))
+		) {
+			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
 		const now = Date.now();

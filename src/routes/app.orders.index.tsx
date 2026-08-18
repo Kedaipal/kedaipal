@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import {
 	ArrowUpDown,
 	CalendarDays,
@@ -279,34 +281,36 @@ function OrdersRoute() {
 	// Permanent hard delete (single + bulk) is admin-only (Kedaipal support); a
 	// plain seller only ever cancels. Same shared gate as order detail — see
 	// `canHardDeleteOrders`. The server is the real guard.
-	const amIAdmin = useQuery(api.billing.amIAdmin);
+	const amIAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	const canHardDelete = canHardDeleteOrders({
 		actingAsAdmin: retailer?.actingAsAdmin,
 		amIAdmin,
 	});
 
 	const result = useQuery(
-		api.orders.searchOrders,
-		retailer
-			? inboxEnabled
-				? {
-						retailerId: retailer._id,
-						bucket,
-						paymentStatuses: pay.length > 0 ? pay : undefined,
-						paymentMethods: method.length > 0 ? method : undefined,
-						methodUnspecified: munspec || undefined,
-						dateFrom: from,
-						dateTo: to,
-						mockupPending: mockup || undefined,
-						fulfilmentWindow: fwin,
-						source,
-						searchText: debounced || undefined,
-						// No limit → stable full-window subscription; we paginate below
-						// by slicing to `visibleCount`, so "Load more" never re-queries.
-					}
-				: { retailerId: retailer._id, bucket: "all" as const }
-			: "skip",
-	);
+		convexQuery(
+			api.orders.searchOrders,
+			retailer
+				? inboxEnabled
+					? {
+							retailerId: retailer._id,
+							bucket,
+							paymentStatuses: pay.length > 0 ? pay : undefined,
+							paymentMethods: method.length > 0 ? method : undefined,
+							methodUnspecified: munspec || undefined,
+							dateFrom: from,
+							dateTo: to,
+							mockupPending: mockup || undefined,
+							fulfilmentWindow: fwin,
+							source,
+							searchText: debounced || undefined,
+							// No limit → stable full-window subscription; we paginate below
+							// by slicing to `visibleCount`, so "Load more" never re-queries.
+						}
+					: { retailerId: retailer._id, bucket: "all" as const }
+				: "skip",
+		),
+	).data;
 	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
 
 	if (!retailer) return <OrdersInboxSkeleton />;
@@ -439,14 +443,20 @@ function OrdersRoute() {
 		setBulkBusy(true);
 		try {
 			const res = await bulkUpdateStatus({ orderIds: ids, status });
+			// Name the actionable skip reasons — a bare "skipped 2" leaves the
+			// seller guessing why their bulk action half-worked.
+			const skipReasons = [
+				res.skippedAwaitingCollection > 0
+					? `${res.skippedAwaitingCollection} still with your customer`
+					: null,
+				res.skippedRiderManaged > 0
+					? `${res.skippedRiderManaged} with a rider on the way`
+					: null,
+			].filter(Boolean);
 			toast.success(
 				res.skipped > 0
-					? // Name the actionable reason — a bare "skipped 2" leaves the
-						// seller guessing why their bulk action half-worked.
-						`Updated ${res.updated} · skipped ${res.skipped}${
-							res.skippedAwaitingCollection > 0
-								? ` (${res.skippedAwaitingCollection} still with your customer)`
-								: ""
+					? `Updated ${res.updated} · skipped ${res.skipped}${
+							skipReasons.length > 0 ? ` (${skipReasons.join(", ")})` : ""
 						}`
 					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
 			);

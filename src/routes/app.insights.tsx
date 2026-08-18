@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { AlertTriangle, Share2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -45,17 +46,21 @@ function InsightsRoute() {
 	const hasClosed = closedTo >= from;
 
 	const rangeResult = useQuery(
-		api.analytics.getInsightsRange,
-		retailer && hasAccess && hasClosed
-			? { retailerId: retailer._id, from, to: closedTo, bucketing }
-			: "skip",
-	);
+		convexQuery(
+			api.analytics.getInsightsRange,
+			retailer && hasAccess && hasClosed
+				? { retailerId: retailer._id, from, to: closedTo, bucketing }
+				: "skip",
+		),
+	).data;
 	const todayResult = useQuery(
-		api.analytics.getTodayStats,
-		retailer && hasAccess && includeToday
-			? { retailerId: retailer._id }
-			: "skip",
-	);
+		convexQuery(
+			api.analytics.getTodayStats,
+			retailer && hasAccess && includeToday
+				? { retailerId: retailer._id }
+				: "skip",
+		),
+	).data;
 
 	if (!retailer) return null;
 

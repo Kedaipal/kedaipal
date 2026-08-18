@@ -314,16 +314,22 @@ export default defineSchema({
 		// yet still book Lalamove riders). `enabled` requires `businessAddress`
 		// AND the seller's own key pair (enforced in updateSettings). BYO-ONLY
 		// (decision revised 21 Jul): `apiKey`/`apiSecret` are the seller's own
-		// Lalamove credentials (plain fields per current convention, accepted for
-		// v1) — there is NO platform fallback; Kedaipal never books or pays on a
-		// seller's behalf. Sandbox vs production is inferred from the key prefix.
-		// See docs/delivery-lalamove.md.
+		// Lalamove credentials — there is NO platform fallback; Kedaipal never
+		// books or pays on a seller's behalf. ENCRYPTED AT REST since 86eyn25gk
+		// (`enc.v1.` envelope, key = env CREDENTIALS_ENCRYPTION_KEY; legacy rows
+		// may hold plaintext until credentials:encryptExistingCredentials runs).
+		// Sandbox vs production is inferred from the PLAINTEXT key prefix at
+		// decrypt time in actions; `apiKeyHint` is stamped at save because
+		// queries can't derive it from ciphertext. See
+		// docs/credential-encryption.md + docs/delivery-lalamove.md.
 		deliveryBooking: v.optional(
 			v.object({
 				enabled: v.boolean(),
 				vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 				apiKey: v.optional(v.string()),
 				apiSecret: v.optional(v.string()),
+				// Last 4 chars of the plaintext key, for the settings UI.
+				apiKeyHint: v.optional(v.string()),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
@@ -348,20 +354,28 @@ export default defineSchema({
 			}),
 		),
 		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
-		// `apiKey`/`salt` are the seller's OWN HitPay credentials (plain fields per
-		// current convention; never exposed to clients — reads emit only a
-		// HitpaySummary). Sandbox vs production is inferred from the key prefix
-		// ("test_" → sandbox, verified against a live sandbox key). `enabled` false
-		// pauses the buyer's Pay-now button WITHOUT wiping the keys, so a seller
-		// can switch online payments off and back on instantly. Enabling is
-		// Pro-gated; disabling/clearing never is (downgrade never traps), and an
-		// order's gateway fields keep working on every tier. `connectedAt` stamps
-		// the first save that stored a full credential. See docs/hitpay-gateway.md.
+		// `apiKey`/`salt` are the seller's OWN HitPay credentials (never exposed
+		// to clients — reads emit only a HitpaySummary). ENCRYPTED AT REST since
+		// 86eyn25gk (`enc.v1.` envelope, env CREDENTIALS_ENCRYPTION_KEY; legacy
+		// rows may hold plaintext until the one-shot backfill runs). Sandbox vs
+		// production ("test_" prefix) is judged on the PLAINTEXT key — `mode` +
+		// `apiKeyHint` are stamped at save because queries can't derive them
+		// from ciphertext. `enabled` false pauses the buyer's Pay-now button
+		// WITHOUT wiping the keys, so a seller can switch online payments off
+		// and back on instantly. Enabling is Pro-gated; disabling/clearing never
+		// is (downgrade never traps), and an order's gateway fields keep working
+		// on every tier. `connectedAt` stamps the first save that stored a full
+		// credential. See docs/credential-encryption.md + docs/hitpay-gateway.md.
 		hitpay: v.optional(
 			v.object({
 				enabled: v.boolean(),
 				apiKey: v.optional(v.string()),
 				salt: v.optional(v.string()),
+				// Stamped at save from the plaintext key (see comment above).
+				apiKeyHint: v.optional(v.string()),
+				mode: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				connectedAt: v.optional(v.number()),
 				// The ACCOUNT's enabled payment methods, as HitPay resolves them for
 				// this key (e.g. ["duitnow","touch_n_go"]). Learned from a throwaway

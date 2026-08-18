@@ -138,8 +138,10 @@ the strict rule). See
 | Seller dispatch card | `src/components/order/book-delivery-card.tsx` |
 | Seller setup (4th pricing mode inside Delivery charge) | `src/components/settings/fulfilment-tab.tsx` (`DeliveryChargeSection`) |
 
-Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret? }`
-(plain fields, accepted for v1 — flagged in the ticket), `deliverySnapshot`
+Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret?, apiKeyHint? }`
+(**encrypted at rest since 86eyn25gk** — the hint is stamped at save from the
+plaintext; see [`docs/credential-encryption.md`](./credential-encryption.md)),
+`deliverySnapshot`
 gains mode `"lalamove"` + `quotationId`/`vehicleType`/`quotedAt` audit
 fields, and two new tables: `deliveryQuotes` (transient server-side checkout
 quote record) and `deliveryJobs` (the booking ledger — indexes `by_order`,
@@ -149,10 +151,15 @@ quote record) and `deliveryJobs` (the booking ledger — indexes `by_order`,
 
 `resolveLalamoveCredentials(booking)` — the seller's own key pair on the
 retailer row is the ONLY source; absent/half → `null` (feature unavailable,
-checkout falls back gracefully). **No deployment env vars** — sandbox vs
+checkout falls back gracefully). **No per-seller env vars** — sandbox vs
 production is inferred from Lalamove's own key prefix (`pk_test_…` →
 sandbox, else production), so a key can never be pointed at the wrong API
-host and one store can run sandbox keys while another runs prod.
+host and one store can run sandbox keys while another runs prod. Since
+86eyn25gk the stored pair is **encrypted at rest**: the sync resolver is a
+presence check only, and `callLalamove` decrypts via
+`decryptLalamoveCredentials` (re-inferring env from the PLAINTEXT key) right
+before every request — see
+[`docs/credential-encryption.md`](./credential-encryption.md).
 `updateSettings` enforces: enabling requires business address + both key
 parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the
@@ -424,14 +431,15 @@ order stays where it is until the seller advances it by hand, which since
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened
-3 Aug):** while an order has an **ACTIVE** rider job, the order-detail
-stepper's advance into a **shipped- or delivered-anchored** stage renders
-**disabled-with-reason** — a manual tap would flip the buyer's order page to
-"on the way" before the rider has the goods and, for shipped, without the
-live-tracking link on it (pre-`86eyd63r8` it would also have fired a
-premature WhatsApp; the page-only consequence is what remains). Confirm/packed advances are
-never gated (pre-pickup work is the seller's), same-anchor custom-stage
-moves stay free, and a **"Update manually" confirm-gated escape** stays
+3 Aug; server-enforced 14 Aug, ClickUp `86eydum6y`):** while an order has
+an **ACTIVE** rider job, the order-detail stepper's advance into a
+**shipped- or delivered-anchored** stage renders **disabled-with-reason**
+— a manual tap would flip the buyer's order page to "on the way" before
+the rider has the goods and, for shipped, without the live-tracking link
+on it (pre-`86eyd63r8` it would also have fired a premature WhatsApp; the
+page-only consequence is what remains). Confirm/packed advances are never
+gated (pre-pickup work is the seller's), same-anchor custom-stage moves
+stay free, and a **"Update manually" confirm-gated escape** stays
 reachable so a dead webhook never strands the order (cancelling the
 booking lifts the gate outright — a second way out).
 
@@ -448,14 +456,44 @@ up" before that). Predicates: `isActiveJobStatus` +
 `isRiderManagedTransition`; `riderDrivesOrderStatus` now only answers "has
 this booking reported yet?" for copy.
 
-Client-side UX guard only — the server mutation is unchanged (the seller
-owns the order, and the webhook's same-status replays are already no-ops).
-Known gap, deliberate: the inbox **bulk** status bar can still mass-mark
-shipped without job awareness (needs a per-order job lookup in
-`searchOrders` — follow-up, not hotfix material). NOTE the collection gate
-below is different: that one IS server-enforced on every write path,
-because it protects a business rule (goods that aren't there yet) rather
-than message timing.
+**The gate is enforced server-side** (`riderOwnsTransition` in
+`convex/orders.ts`) across all three seller entry points — `advanceToStage`
+(the stepper), `updateStatus`, and the inbox's `bulkUpdateStatus` — with the
+client-side rendering above kept purely as the UX affordance. The server
+mirrors the client rule exactly: gated from the **moment of booking** (any
+ACTIVE job; no `lastEventAt` requirement, per the 3 Aug reasoning above)
+and **never on collection orders** — their rider drives the FRONT of the
+flow, the webhook moves the job only, and the order stays the seller's to
+advance by hand, so the gate would both lie and strand. That exclusion is
+judged off the ORDER's frozen `deliveryDirection` (never the store's live
+setting), so a mode switch can't re-gate or un-gate in-flight orders. The
+stepper's "Update manually" confirm passes `overrideRiderGate: true`;
+**bulk has no override** (whether a given order's automatic update failed
+is a per-order judgement), so a rider-driven order is **skipped** and
+counted in `skippedRiderManaged` — the inbox toast names the reason ("2
+with a rider on the way"), same posture as the collection skip count.
+
+Why server-side and not just UI: an early manual "shipped" is **permanent**,
+not cosmetic. `applyStatusTransition` WhatsApps the buyer immediately, and
+`SHIPPABLE_FROM` is `{confirmed, packed}` — so once the order reads
+"shipped", the rider's real PICKED_UP event is skipped and
+`carrierTrackingUrl` is never written. The buyer gets a shipped notice with
+no tracking link and the webhook can never heal it. This closes the gap
+previously logged here as "the inbox bulk status bar can still mass-mark
+shipped without job awareness"; it's resolved in the mutation (one indexed
+`by_order` read per order, and only once `isRiderManagedTransition` has
+already ruled the anchor in) rather than by threading job state through
+`searchOrders`. The collection gate below shares this posture: both are
+server-enforced on every write path.
+
+The gate reads the order's **ACTIVE** job row, not its first. An order
+routinely holds several `deliveryJobs` rows — a failed booking's released row
+is kept on purpose as the amber "failed" card, and `reserveBooking` then lets
+the seller rebook — and `by_order` is indexed on `orderId` alone, so a
+`.first()` would return the *oldest* row and read a rebooked order as
+rider-free. Every `by_order` reader (`dispatchContextForOrder`,
+`reserveBooking`, the cancel resolver, `dispatchStateForOrder`) therefore
+`.collect()`s and picks on `isActiveJobStatus`; the gate follows suit.
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 

@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { validateSlugShape } from "../lib/slug";
@@ -35,7 +36,9 @@ export function useSlugAvailability(rawSlug: string): SlugAvailabilityState {
 
 	const shape = validateSlugShape(debounced);
 	const queryArgs = shape.ok ? { slug: shape.value } : "skip";
-	const result = useQuery(api.retailers.checkSlugAvailability, queryArgs);
+	const result = useQuery(
+		convexQuery(api.retailers.checkSlugAvailability, queryArgs),
+	).data;
 
 	if (!shape.ok) {
 		if (rawSlug.length === 0) return { status: "idle" };

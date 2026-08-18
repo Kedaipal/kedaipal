@@ -1,5 +1,6 @@
 import { ClerkProvider, useAuth } from "@clerk/tanstack-react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
 	createRootRoute,
 	HeadContent,
@@ -13,7 +14,7 @@ import { Toaster } from "sonner";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
 import { isBuyerRouteId } from "../lib/buyer-routes";
-import { getConvexClient } from "../lib/convex";
+import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
@@ -77,16 +78,25 @@ function Providers({ children }: { children: React.ReactNode }) {
 	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
 		return <SetupNotice />;
 	}
+	// Both constructed only past the env guard above — getQueryClient() reaches
+	// getConvexClient(), which throws when VITE_CONVEX_URL is unset.
 	const convex = getConvexClient();
-	if (isBuyerSurface) {
-		return <ConvexProvider client={convex}>{children}</ConvexProvider>;
-	}
+	const queryClient = getQueryClient();
+	// QueryClientProvider wraps BOTH branches: buyer pages read via
+	// useQuery(convexQuery(...)) too, and keeping the provider outside the
+	// buyer/Clerk switch means the query cache survives that subtree remount.
 	return (
-		<ClerkProvider publishableKey={publishableKey}>
-			<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-				{children}
-			</ConvexProviderWithClerk>
-		</ClerkProvider>
+		<QueryClientProvider client={queryClient}>
+			{isBuyerSurface ? (
+				<ConvexProvider client={convex}>{children}</ConvexProvider>
+			) : (
+				<ClerkProvider publishableKey={publishableKey}>
+					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+						{children}
+					</ConvexProviderWithClerk>
+				</ClerkProvider>
+			)}
+		</QueryClientProvider>
 	);
 }
 

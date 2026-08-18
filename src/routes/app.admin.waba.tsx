@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	AlertOctagon,
 	Ban,
@@ -36,7 +38,7 @@ export const Route = createFileRoute("/app/admin/waba")({
 });
 
 function AdminWabaRoute() {
-	const isAdmin = useQuery(api.billing.amIAdmin);
+	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 
 	if (isAdmin === undefined) {
 		return (
@@ -108,7 +110,9 @@ function Stat({
 
 function AdminWabaContent() {
 	const [search, setSearch] = useState("");
-	const vendors = useQuery(api.wabaProtection.adminListVendors, { search });
+	const vendors = useQuery(
+		convexQuery(api.wabaProtection.adminListVendors, { search }),
+	).data;
 	const [target, setTarget] = useState<VendorRow | null>(null);
 
 	return (
@@ -222,7 +226,9 @@ function AdminWabaContent() {
 }
 
 function HealthBanner() {
-	const health = useQuery(api.wabaProtection.adminGetWabaHealth, {});
+	const health = useQuery(
+		convexQuery(api.wabaProtection.adminGetWabaHealth, {}),
+	).data;
 	if (health === undefined) {
 		return <Skeleton className="h-16 w-full rounded-2xl" />;
 	}

@@ -5467,6 +5467,267 @@ describe("minimum order rules", () => {
 	});
 });
 
+/**
+ * The rider gate: while a Lalamove booking is ACTIVE, the seller's manual
+ * shipped/delivered advance is refused server-side. Gated from the moment of
+ * BOOKING — no `lastEventAt` requirement (86eyg0n8e client rule; the
+ * confirm-gated override protects the webhook-less seller instead). Client-side
+ * gating alone was insufficient — the inbox bulk bar reaches the same
+ * transitions with no gate at all. Collection orders are never gated: their
+ * rider drives the FRONT of the flow and the order stays manual throughout.
+ *
+ * Why it matters beyond a stray notification: `SHIPPABLE_FROM` in
+ * convex/lalamove.ts is {confirmed, packed}, so once the order reads "shipped"
+ * the rider's real pickup event is skipped and `carrierTrackingUrl` is never
+ * written — the buyer's tracking link is lost permanently.
+ */
+describe("orders — Lalamove rider gate on manual advances", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	async function insertJob(
+		t: ReturnType<typeof setup>,
+		ids: { orderId: Id<"orders">; retailerId: Id<"retailers"> },
+		job: { status: string; lastEventAt?: number },
+	) {
+		await t.run(async (ctx) => {
+			await ctx.db.insert("deliveryJobs", {
+				orderId: ids.orderId,
+				retailerId: ids.retailerId,
+				provider: "lalamove",
+				status: job.status as "assigning",
+				costActual: 900,
+				quotationId: "q_test",
+				vehicleType: "MOTORCYCLE",
+				lastEventAt: job.lastEventAt,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+	}
+
+	async function orderWithJob(
+		t: ReturnType<typeof setup>,
+		job: { status: string; lastEventAt?: number } | null,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 50 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		if (job)
+			await insertJob(t, { orderId: order._id, retailerId: retailer._id }, job);
+		return { retailer, order, shortId, productId };
+	}
+
+	test("blocks a manual shipped while a live rider drives the order", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
+	});
+
+	test("overrideRiderGate lets the seller through (dead webhook escape hatch)", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+			overrideRiderGate: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	// The 86eyg0n8e booking-moment rule: `lastEventAt` unset (no webhook event
+	// yet — or no webhook at all) still gates, because the window between
+	// booking and the first event is exactly when a seller can click through a
+	// live trip. The override confirm is the webhook-less seller's escape.
+	test("a webhook-less booking gates too — the override confirm is the escape", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, { status: "ongoing" });
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+			overrideRiderGate: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	// Collection orders (86eyg0n8e): the rider collects FROM the buyer — the
+	// webhook moves the JOB only, so the seller advances the order by hand
+	// throughout and the rider gate must never fire (judged off the ORDER's
+	// frozen deliveryDirection). collectedAt is stamped so the collection gate
+	// itself is open and this isolates the rider gate.
+	test("a collection order is never rider-gated, even with an active job", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "picked_up",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, {
+				deliveryDirection: "collection",
+				collectedAt: 1_753_500_000_000,
+			});
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	test("a terminal job frees the order — no gate", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "canceled",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	// The rebook case, and the reason the gate must read the ACTIVE row rather
+	// than `.first()`: `by_order` is indexed on orderId alone, so the oldest row
+	// comes back first — and a released (canceled) booking is deliberately KEPT
+	// as the amber "failed" card before the seller rebooks. Reading the oldest
+	// would fail open on precisely the sellers reaching for the manual button.
+	test("a newer active job still gates, even behind a terminal one (rebook)", async () => {
+		const t = setup();
+		const { order, retailer } = await orderWithJob(t, {
+			status: "canceled",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await insertJob(
+			t,
+			{ orderId: order._id, retailerId: retailer._id },
+			{ status: "ongoing", lastEventAt: 1_753_500_100_000 },
+		);
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
+	});
+
+	test("cancelling is never gated", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"cancelled",
+		);
+	});
+
+	test("advanceToStage (the order-detail stepper) is gated too, and honours the override", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "picked_up",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await expect(
+			asA(t).mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "default:shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:shipped",
+			overrideRiderGate: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	test("bulkUpdateStatus skips the rider-driven order and still moves the rest", async () => {
+		const t = setup();
+		const { order: gated, retailer, productId } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		const { shortId: plainShortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const plain = await t.query(api.orders.get, {
+			token: await tk(t, plainShortId),
+		});
+		if (!plain) throw new Error("no order");
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: plain._id,
+			status: "packed",
+		});
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [gated._id, plain._id],
+			status: "shipped",
+		});
+		expect(res).toEqual({
+			updated: 1,
+			skipped: 1,
+			skippedAwaitingCollection: 0,
+			skippedRiderManaged: 1,
+		});
+		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
+		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+});
+
 describe("orders — manual courier + tracking number on shipped (86eyehvk4)", () => {
 	async function seedShippableOrder(t: ReturnType<typeof convexTest>) {
 		const retailer = await seedRetailer(t, USER_A);
@@ -6514,6 +6775,111 @@ describe("orders — the seller's unseen-order signal survives confirm-at-create
 			bucket: "in_progress",
 		});
 		expect(inProgress.orders.map((o) => o.shortId)).toEqual([shortId]);
+	});
+
+	test("the nav badge count (countActionable.newOrders) matches the New bucket", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const place = async () => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				return o!._id;
+			});
+		};
+		const badge = async () =>
+			(
+				await asA.query(api.orders.countActionable, {
+					retailerId: retailer._id,
+				})
+			).newOrders;
+
+		const first = await place();
+		const second = await place();
+		expect(await badge()).toBe(2);
+
+		// Opening an order retires it from the badge — the whole point: working
+		// through the orders drives the count to zero.
+		await asA.mutation(api.orders.markSeen, { orderId: first });
+		expect(await badge()).toBe(1);
+		await asA.mutation(api.orders.markSeen, { orderId: second });
+		expect(await badge()).toBe(0);
+
+		// Advancing a seen order through the pipeline never re-inflates it (the
+		// old `pending + confirmed` badge climbed here and never came back down).
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: first,
+			status: "packed",
+		});
+		expect(await badge()).toBe(0);
+
+		// And it agrees with the inbox chip it mirrors.
+		const inbox = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(inbox.counts.new).toBe(0);
+	});
+
+	test("the nav badge counts a legacy pending order and ignores a worked confirmed one", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Template env unset → legacy `pending` orders.
+		const place = async () => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				return o!._id;
+			});
+		};
+		const badge = async () =>
+			(
+				await asA.query(api.orders.countActionable, {
+					retailerId: retailer._id,
+				})
+			).newOrders;
+
+		const orderId = await place();
+		expect(await badge()).toBe(1);
+
+		// Confirming it = the seller has picked it up. A legacy confirmed order
+		// carries no `confirmationPushStatus`, so it's never "unseen".
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		expect(await badge()).toBe(0);
+		// The raw status counts the toasts read are untouched.
+		const counts = await asA.query(api.orders.countActionable, {
+			retailerId: retailer._id,
+		});
+		expect(counts.pending).toBe(0);
+		expect(counts.confirmed).toBe(1);
 	});
 
 	test("markSeen is idempotent and never un-sets", async () => {
