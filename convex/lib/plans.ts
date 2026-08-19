@@ -157,8 +157,7 @@ export const PLAN_MONTHLY_PRICES: Record<
 	SGD: { starter: 2900, pro: 5900, scale: 11900 },
 };
 
-// Standard monthly price (minor units / sen) — the MYR table, kept as a named
-// export for existing consumers.
+// MYR shorthand for the table above.
 export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
 
 // Founding Member monthly price — 30% lifetime discount (manual v1), per
@@ -173,7 +172,7 @@ export const FOUNDING_MONTHLY_PRICES: Record<
 	SGD: { pro: 4100, scale: 8300 },
 };
 
-// The MYR founding table, kept as a named export for existing consumers.
+// MYR shorthand for the founding table above.
 export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
 	FOUNDING_MONTHLY_PRICES.MYR;
 

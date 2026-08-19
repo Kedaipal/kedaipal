@@ -547,6 +547,10 @@ function IssueInvoiceForm() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
 	useEffect(() => {
 		setFounding(isExistingFounding);
+		// Currency resets to the default too — an SGD pick left over from the
+		// previous store must never silently carry to a Malaysian retailer (an SGD
+		// invoice ships with no bank/DuitNow block).
+		setCurrency("MYR");
 	}, [retailerId]);
 
 	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
