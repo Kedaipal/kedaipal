@@ -107,4 +107,17 @@ describe("buildSubscriptionInvoicePdf", () => {
 		});
 		expect(isPdf(bytes)).toBe(true);
 	});
+
+	test("renders a cross-border SGD invoice (no payment card, S$ amounts)", async () => {
+		const bytes = await buildSubscriptionInvoicePdf({
+			...invoice,
+			planLineLabel: "Kedaipal Pro Plan - Monthly Subscription",
+			foundingDiscount: undefined,
+			amount: 5900,
+			total: 5900,
+			currency: "SGD",
+			issuerBank: [],
+		});
+		expect(isPdf(bytes)).toBe(true);
+	});
 });
