@@ -65,6 +65,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { canHardDeleteOrders } from "../lib/admin-actions";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -818,7 +819,11 @@ function OrdersRoute() {
 								<div className="flex min-w-0 flex-1 flex-col">
 									{/* Name + money get the hierarchy. */}
 									<div className="flex items-center justify-between gap-2.5">
-										<span className="min-w-0 truncate text-[15px] font-semibold">
+										{/* Mask only the name — items/prices/status are the useful replay signal. */}
+										<span
+											{...MASK_PII}
+											className="min-w-0 truncate text-[15px] font-semibold"
+										>
 											{orderCustomerLabel(o.customer)}
 										</span>
 										<span className="shrink-0 text-[15px] font-bold tabular-nums">

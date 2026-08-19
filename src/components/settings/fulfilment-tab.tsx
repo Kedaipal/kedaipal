@@ -29,6 +29,7 @@ import {
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
@@ -2152,7 +2153,12 @@ function LocationRowBody({
 						</p>
 					) : null}
 					{location.managerName || location.managerWaPhone ? (
-						<p className="flex items-center gap-1 text-xs text-muted-foreground">
+						// MASK_PII: the manager is a third party — their name + phone
+						// shouldn't ride session replay.
+						<p
+							{...MASK_PII}
+							className="flex items-center gap-1 text-xs text-muted-foreground"
+						>
 							<Phone
 								className="size-3 shrink-0 text-accent"
 								aria-hidden="true"

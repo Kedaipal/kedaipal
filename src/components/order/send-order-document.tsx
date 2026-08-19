@@ -16,6 +16,7 @@ import {
 	downloadPdfBytes,
 	sharePdfBytes,
 } from "../../lib/download";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 
@@ -59,7 +60,8 @@ export function SendOrderDocument({
 			const res = await send({ shortId });
 			if (res.ok) {
 				setSent(true);
-				toast.success(`${Noun} resent to ${who} on WhatsApp.`);
+				// No buyer name in the toast — it portals outside every masked subtree.
+				toast.success(`${Noun} resent on WhatsApp.`);
 			} else {
 				toast.error(
 					SEND_ERROR[res.reason ?? ""] ?? `Couldn't send the ${noun}.`,
@@ -115,7 +117,8 @@ export function SendOrderDocument({
 	}
 
 	return (
-		<div className={className}>
+		// MASK_PII: the buyer's name appears in the button label + helper copy.
+		<div {...MASK_PII} className={className}>
 			<div className="grid gap-2 sm:grid-cols-2">
 				{hasBuyer ? (
 					<Button

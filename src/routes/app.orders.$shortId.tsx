@@ -619,9 +619,10 @@ function OrderDetailRoute() {
 		try {
 			const res = await sendPaymentReminder({ shortId });
 			if (res.ok) {
-				const who = order.customer.name ?? "The buyer";
+				// No buyer name here: toasts portal to document.root, outside every
+				// masked subtree, so replay would capture it verbatim.
 				toast.success("Payment reminder sent", {
-					description: `${who} will receive it on WhatsApp.`,
+					description: "The buyer will receive it on WhatsApp.",
 				});
 			} else {
 				// The server re-checks state (the buyer may have paid in another tab,
@@ -868,7 +869,10 @@ function OrderDetailRoute() {
 			    the buyer is reached (manual send, or they correct their number). */}
 			{order.confirmationPushStatus === "failed" &&
 			order.status !== "cancelled" ? (
-				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+				<section
+					{...MASK_PII}
+					className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50"
+				>
 					<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
@@ -2194,7 +2198,11 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 			</div>
 
 			{status === "changes_requested" && order.mockupChangeNote ? (
-				<div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+				// MASK_PII: the note is the buyer's own free text.
+				<div
+					{...MASK_PII}
+					className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900"
+				>
 					<span className="font-medium">Buyer requested changes:</span>{" "}
 					{order.mockupChangeNote}
 				</div>
@@ -2475,7 +2483,11 @@ function NotifyManagerCard({
 	}
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+		// MASK_PII: the composed message renders the buyer's name + phone verbatim.
+		<section
+			{...MASK_PII}
+			className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+		>
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Notify store manager
