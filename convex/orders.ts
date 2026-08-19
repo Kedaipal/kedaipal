@@ -66,6 +66,7 @@ import {
 	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
+import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
 	type CartWeightItem,
@@ -2699,23 +2700,12 @@ async function deleteOrderCascade(
 		await reverseCancellationEffects(ctx, order, now);
 	}
 
-	// 2. Delete owned storage blobs. Dedupe (the legacy singular mockup field is
-	//    kept in sync as `mockupImageStorageIds[0]`) and swallow per-blob errors —
-	//    a blob may already be gone; a missing blob must not abort the cascade.
-	const blobIds = new Set<string>();
-	if (order.customerImageStorageId) blobIds.add(order.customerImageStorageId);
-	if (order.paymentProofStorageId) blobIds.add(order.paymentProofStorageId);
-	for (const id of order.mockupImageStorageIds ??
-		(order.mockupImageStorageId ? [order.mockupImageStorageId] : [])) {
-		blobIds.add(id);
-	}
-	for (const id of blobIds) {
-		try {
-			await ctx.storage.delete(id);
-		} catch {
-			// already deleted / never existed — nothing to reclaim
-		}
-	}
+	// 2. Delete owned storage blobs — via the SHARED helper (86eyetzbk), which is
+	//    the one place that knows what an order owns. The account cascade
+	//    (retailers.deleteUser) open-coded its own shorter list and leaked the
+	//    buyer image + mockups; sharing means a future blob field is freed by
+	//    both callers or neither.
+	await deleteOrderOwnedBlobs(ctx, order);
 
 	// 3. Delete the order's event timeline.
 	const events = await ctx.db
