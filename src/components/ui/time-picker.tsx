@@ -30,6 +30,7 @@ export function TimePicker({
 	onChange,
 	stepMinutes = 30,
 	includeEndOfDay = true,
+	showIcon = true,
 	disabled = false,
 	isError = false,
 	"aria-label": ariaLabel,
@@ -43,6 +44,11 @@ export function TimePicker({
 	/** Append 23:59 as the terminal option ("11:59 PM") — the "until midnight"
 	 * choice and the open-all-day sentinel's second half. */
 	includeEndOfDay?: boolean;
+	/** Clock glyph in the trigger. Turn it OFF in dense repeated layouts (the
+	 * per-weekday hours grid renders 14 of these): there the surrounding rows
+	 * already say "times", so the icon is pure noise AND it eats ~32px of a
+	 * narrow phone column — enough to truncate "12:00 AM" to "12…". */
+	showIcon?: boolean;
 	disabled?: boolean;
 	isError?: boolean;
 	"aria-label"?: string;
@@ -90,10 +96,12 @@ export function TimePicker({
 						className,
 					)}
 				>
-					<Clock
-						className="size-4 shrink-0 text-muted-foreground"
-						aria-hidden="true"
-					/>
+					{showIcon ? (
+						<Clock
+							className="size-4 shrink-0 text-muted-foreground"
+							aria-hidden="true"
+						/>
+					) : null}
 					<span className="flex-1 truncate tabular-nums">
 						{Number.isNaN(selectedMinutes)
 							? "Pick a time"

@@ -2187,29 +2187,37 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 							</div>
 						</>
 					) : (
-						<div className="flex flex-col gap-2.5">
+						// Phones stack each day: name + switch on one line, the range
+						// full-width beneath. Side-by-side needs ~340px for the two
+						// pickers alone, so a 430px phone truncated them to "12…";
+						// the hairline separators keep the two-line rows from
+						// reading as one run-on list. One line again from sm.
+						<div className="flex flex-col gap-3 sm:gap-2.5">
 							{DAY_RENDER_ORDER.map((i) => {
 								const row = draft[i];
 								const rowInvalid = !row.closed && parsed[i] === null;
 								return (
 									<div
 										key={WEEKDAY_NAMES[i]}
-										className="flex items-center gap-2.5"
+										className="flex flex-col gap-2 border-b border-border/60 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:gap-2.5 sm:border-0 sm:pb-0"
 									>
-										<span className="w-10 shrink-0 text-sm font-medium">
-											{WEEKDAY_NAMES_SHORT[i]}
-										</span>
-										<ToggleSwitch
-											on={!row.closed}
-											onChange={(open) => setDay(i, { closed: !open })}
-											disabled={saving}
-											label={`Open on ${WEEKDAY_NAMES[i]}`}
-										/>
-										{row.closed ? (
-											<span className="text-sm text-muted-foreground">
-												Closed
+										<div className="flex items-center gap-2.5">
+											<span className="w-10 shrink-0 text-sm font-medium">
+												{WEEKDAY_NAMES_SHORT[i]}
 											</span>
-										) : (
+											<ToggleSwitch
+												on={!row.closed}
+												onChange={(open) => setDay(i, { closed: !open })}
+												disabled={saving}
+												label={`Open on ${WEEKDAY_NAMES[i]}`}
+											/>
+											{row.closed ? (
+												<span className="text-sm text-muted-foreground">
+													Closed
+												</span>
+											) : null}
+										</div>
+										{row.closed ? null : (
 											<div className="flex min-w-0 flex-1 items-center gap-1.5">
 												<TimePicker
 													value={row.openHhmm}
@@ -2218,6 +2226,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 													}
 													disabled={saving}
 													isError={rowInvalid}
+													showIcon={false}
 													aria-label={`${WEEKDAY_NAMES[i]} opening time`}
 													className="min-w-0 flex-1"
 												/>
@@ -2234,6 +2243,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 													}
 													disabled={saving}
 													isError={rowInvalid}
+													showIcon={false}
 													aria-label={`${WEEKDAY_NAMES[i]} closing time`}
 													className="min-w-0 flex-1"
 												/>
