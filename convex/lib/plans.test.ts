@@ -5,6 +5,7 @@ import {
 	capsForPlan,
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
+	FOUNDING_MONTHLY_PRICES,
 	isPlanSelectable,
 	isUnlimited,
 	PLAN_MONTHLY_PRICE,
@@ -98,14 +99,23 @@ describe("plans — pricing", () => {
 		expect(PLAN_MONTHLY_PRICE).toBe(PLAN_MONTHLY_PRICES.MYR);
 	});
 
-	test("founding pricing is MYR-only — any other currency throws", () => {
-		expect(() => planPrice("pro", "monthly", true, "SGD")).toThrow(/MYR-only/);
+	test("SGD founding prices — same ~30%-rounded-down rule as MYR", () => {
+		expect(planPrice("pro", "monthly", true, "SGD")).toBe(4100); // S$41
+		expect(FOUNDING_MONTHLY_PRICES.SGD.scale).toBe(8300); // S$83
+		// Starter has no founding price → falls back to its standard SGD price.
+		expect(planPrice("starter", "monthly", true, "SGD")).toBe(2900);
 	});
 
-	test("every billing currency prices every plan (exhaustive table)", () => {
+	test("every billing currency prices every plan (exhaustive tables)", () => {
 		for (const currency of BILLING_CURRENCIES) {
 			for (const plan of PLANS) {
 				expect(PLAN_MONTHLY_PRICES[currency][plan]).toBeGreaterThan(0);
+			}
+			// Founding is always cheaper than standard, in every currency.
+			for (const plan of ["pro", "scale"] as const) {
+				expect(FOUNDING_MONTHLY_PRICES[currency][plan]).toBeLessThan(
+					PLAN_MONTHLY_PRICES[currency][plan],
+				);
 			}
 		}
 	});

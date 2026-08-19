@@ -549,13 +549,12 @@ function IssueInvoiceForm() {
 		setFounding(isExistingFounding);
 	}, [retailerId]);
 
-	// Founding is Pro-only — flipping it on forces Pro. It's also MYR-only (the
-	// Founding 10 is a Malaysian cohort), so founding on forces MYR.
+	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
+	// currency (RM104 / S$41 monthly).
 	const effectivePlan = founding ? "pro" : plan;
-	const effectiveCurrency: BillingCurrency = founding ? "MYR" : currency;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding, effectiveCurrency);
-	const base = planPrice(effectivePlan, cycle, false, effectiveCurrency);
+	const total = planPrice(effectivePlan, cycle, founding, currency);
+	const base = planPrice(effectivePlan, cycle, false, currency);
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -568,7 +567,7 @@ function IssueInvoiceForm() {
 				plan: effectivePlan,
 				billingCycle: cycle,
 				founding,
-				currency: effectiveCurrency,
+				currency,
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
@@ -674,26 +673,19 @@ function IssueInvoiceForm() {
 							<button
 								key={cur}
 								type="button"
-								disabled={founding && cur !== "MYR"}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
-									effectiveCurrency === cur
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all ${
+									currency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
-								{effectiveCurrency === cur ? (
-									<Check className="size-3.5" />
-								) : null}
+								{currency === cur ? <Check className="size-3.5" /> : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>
 						))}
 					</div>
-					{founding ? (
-						<span className="text-[11px] text-muted-foreground">
-							Founding pricing is RM-only.
-						</span>
-					) : effectiveCurrency === "SGD" ? (
+					{currency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged
 							over WhatsApp.
@@ -706,7 +698,7 @@ function IssueInvoiceForm() {
 				<input
 					type="checkbox"
 					checked={founding}
-					disabled={isExistingFounding || currency !== "MYR"}
+					disabled={isExistingFounding}
 					onChange={(e) => setFounding(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
@@ -715,13 +707,11 @@ function IssueInvoiceForm() {
 					<span className="block text-xs text-muted-foreground">
 						{isExistingFounding
 							? "This store is a Founding Member — lifetime 30% discount applied automatically."
-							: currency !== "MYR"
-								? "Founding pricing is RM-only — switch the currency to MYR first."
-								: `Pro only · 30% lifetime discount · claims a rank when marked paid${
-										spotsRemaining === 0
-											? " (cohort full — no rank will be claimed)"
-											: ""
-									}`}
+							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+									spotsRemaining === 0
+										? " (cohort full — no rank will be claimed)"
+										: ""
+								}`}
 					</span>
 				</span>
 			</label>
@@ -730,12 +720,12 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, effectiveCurrency)}
+						{formatPrice(total, currency)}
 					</p>
 					{founding ? (
 						<p className="text-xs text-emerald-700">
-							{formatPrice(base, effectiveCurrency)} −{" "}
-							{formatPrice(base - total, effectiveCurrency)} founding discount
+							{formatPrice(base, currency)} −{" "}
+							{formatPrice(base - total, currency)} founding discount
 						</p>
 					) : null}
 				</div>

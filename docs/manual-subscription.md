@@ -382,10 +382,13 @@ was already currency-agnostic — the work was the issue path and the pay surfac
   **S$29 / S$59 / S$119** monthly (from the Aug 2026 SG pricing deck). Annual keeps
   the same 10-months-charged rule. `planPrice` takes an optional trailing
   `currency` (default `"MYR"`, so legacy call sites are byte-identical).
+- **Founding works in SGD too** (owner call, 19 Aug 2026): `FOUNDING_MONTHLY_PRICES`
+  holds a per-currency table — MYR RM104/RM209 (unchanged), SGD **S$41 / S$83**,
+  both derived by the same ~30%-off-rounded-down-to-a-whole-unit rule
+  (S$59 × 0.7 = S$41.30 → S$41). Rank claiming on `markPaid` is currency-agnostic.
 - **Issue:** `issueInvoice` takes an optional `currency` (`"MYR" | "SGD"`, default
-  MYR) — a segmented control on the admin issue form. **Founding is MYR-only**
-  (the Founding 10 is a Malaysian cohort): `planPrice` throws and `issueInvoice`
-  rejects `founding` + non-MYR; the form disables the combination with a reason.
+  MYR) — a segmented control on the admin issue form; the founding checkbox works
+  in either currency.
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says

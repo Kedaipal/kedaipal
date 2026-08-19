@@ -242,14 +242,15 @@ export const sendSampleBillingEmail = internalAction({
 	): Promise<{ sent: string; key: string }> => {
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
-		// Founding is MYR-only in the real flow, so an SGD sample ignores it.
 		const crossBorder = currency === "SGD";
-		const withDiscount = founding === true && !crossBorder;
-		const sampleTotal = crossBorder
-			? "SGD 59.00"
-			: withDiscount
-				? "MYR 104.00"
-				: "MYR 149.00";
+		const withDiscount = founding === true;
+		const sampleBase = crossBorder ? "SGD 59.00" : "MYR 149.00";
+		const sampleDiscount = crossBorder ? "SGD 18.00" : "MYR 45.00";
+		const sampleTotal = withDiscount
+			? crossBorder
+				? "SGD 41.00"
+				: "MYR 104.00"
+			: sampleBase;
 		const rendered =
 			key === "welcome" || key === "thanks"
 				? renderPaymentEmail(loc, key, {
@@ -269,8 +270,8 @@ export const sendSampleBillingEmail = internalAction({
 						invoiceNumber: "INV-202607-SAMPLE",
 						planLabel: "Pro · Monthly",
 						totalFormatted: sampleTotal,
-						baseFormatted: withDiscount ? "MYR 149.00" : undefined,
-						discountFormatted: withDiscount ? "MYR 45.00" : undefined,
+						baseFormatted: withDiscount ? sampleBase : undefined,
+						discountFormatted: withDiscount ? sampleDiscount : undefined,
 						dueDateFormatted: "5 Jul 2026",
 						bankName: crossBorder ? undefined : "Maybank",
 						bankAccountName: crossBorder ? undefined : "Kedaipal Sdn Bhd",

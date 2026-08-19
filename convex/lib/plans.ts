@@ -161,32 +161,35 @@ export const PLAN_MONTHLY_PRICES: Record<
 // export for existing consumers.
 export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
 
-// Founding Member monthly price — 30% lifetime discount (manual v1). Only the
-// Pro number is reachable at launch; Scale kept for when it activates.
-// Deliberately MYR-only: the Founding 10 is a Malaysian launch cohort, so
-// `planPrice` rejects founding pricing in any other billing currency.
-export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> = {
-	pro: 10400, // RM104
-	scale: 20900, // RM209
+// Founding Member monthly price — 30% lifetime discount (manual v1), per
+// billing currency, rounded DOWN to a whole unit the same way in each (MYR
+// RM104.30 → RM104; SGD S$41.30 → S$41, S$83.30 → S$83). Only the Pro number
+// is reachable at launch; Scale kept for when it activates.
+export const FOUNDING_MONTHLY_PRICES: Record<
+	BillingCurrency,
+	Record<"pro" | "scale", number>
+> = {
+	MYR: { pro: 10400, scale: 20900 },
+	SGD: { pro: 4100, scale: 8300 },
 };
+
+// The MYR founding table, kept as a named export for existing consumers.
+export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
+	FOUNDING_MONTHLY_PRICES.MYR;
 
 // Annual billing = 10 months paid, 12 received (~17% off), per CLAUDE.md.
 export const ANNUAL_MONTHS_CHARGED = 10;
 
-/** Plan price for a billing cycle (minor units). Annual = monthly × 10.
- * Founding pricing exists only in MYR — asking for it in another currency is a
- * caller bug, so it throws rather than silently billing the undiscounted rate. */
+/** Plan price for a billing cycle (minor units). Annual = monthly × 10. */
 export function planPrice(
 	plan: Plan,
 	cycle: BillingCycle,
 	founding = false,
 	currency: BillingCurrency = "MYR",
 ): number {
-	if (founding && currency !== "MYR")
-		throw new Error("Founding Member pricing is MYR-only.");
 	const monthly =
 		founding && (plan === "pro" || plan === "scale")
-			? FOUNDING_MONTHLY_PRICE[plan]
+			? FOUNDING_MONTHLY_PRICES[currency][plan]
 			: PLAN_MONTHLY_PRICES[currency][plan];
 	return cycle === "annual" ? monthly * ANNUAL_MONTHS_CHARGED : monthly;
 }

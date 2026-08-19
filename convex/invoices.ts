@@ -195,10 +195,6 @@ export const issueInvoice = mutation({
 			throw new ConvexError("Scale is unavailable for v1.");
 		if (founding && plan !== "pro")
 			throw new ConvexError("Only Pro qualifies for Founding Member.");
-		if (founding && currency !== "MYR")
-			throw new ConvexError(
-				"Founding Member pricing is RM-only — issue a standard invoice instead.",
-			);
 
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
