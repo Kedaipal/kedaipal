@@ -717,6 +717,7 @@ function SettingsRoute() {
 						businessAddress={retailer.businessAddress}
 						deliveryBooking={retailer.deliveryBooking}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}
 						subscription={retailer.subscription}
 					/>

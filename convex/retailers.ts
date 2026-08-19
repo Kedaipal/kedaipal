@@ -180,6 +180,10 @@ import { reserveFoundingRank } from "./foundingMembers";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
+import {
+	type OpeningHours,
+	sanitizeOpeningHours,
+} from "./lib/openingHours";
 import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
@@ -244,6 +248,18 @@ import {
 	type StatusLabelMap,
 	type StatusLabels,
 } from "./lib/orderStatus";
+
+// Store opening hours (86eyp5rav). Wire validator for updateSettings; the
+// shape is validated/normalized by sanitizeOpeningHours in the handler
+// (7 entries, 0 ≤ open < close ≤ 1439, ≥1 open day; an all-24h week
+// normalizes to unset). `v.null()` = clear back to open-24/7.
+const openingHoursValidator = v.array(
+	v.object({
+		open: v.number(),
+		close: v.number(),
+		closed: v.optional(v.boolean()),
+	}),
+);
 
 // Delivery-charge config + business address (86extzdr8). Wire validators for
 // updateSettings; the shape is validated/normalized by sanitizeDeliveryConfig
@@ -624,6 +640,11 @@ type RetailerPublic = {
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
+	// Store opening hours (86eyp5rav). Public-safe — buyers see them on the
+	// storefront header, and checkout clamps the fulfilment date/time to them.
+	// Undefined = open 24/7. Surfaced on both the owner read and the by-slug
+	// payload. See convex/lib/openingHours.ts.
+	openingHours?: OpeningHours;
 	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
 	// buyers must see the bar to reach it (checkout blocks below it). Undefined
 	// = no minimum. See convex/lib/minOrderRules.ts.
@@ -773,6 +794,7 @@ async function buildRetailerPublic(
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
+		openingHours: row.openingHours,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -915,6 +937,7 @@ export const getRetailerBySlug = query({
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
+					openingHours: active.openingHours,
 					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
@@ -1264,6 +1287,10 @@ export const updateSettings = mutation({
 		hitpay: v.optional(v.union(hitpayValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store opening hours (86eyp5rav). `null` clears (back to open 24/7 —
+		// always allowed); undefined = no change. Validated + normalized by
+		// sanitizeOpeningHours (an all-24h week also stores as unset).
+		openingHours: v.optional(v.union(openingHoursValidator, v.null())),
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
 		// undefined = no change. See convex/lib/minOrderRules.ts.
 		minOrderValue: v.optional(v.number()),
@@ -1315,6 +1342,7 @@ export const updateSettings = mutation({
 			deliveryBooking: DeliveryBooking | undefined;
 			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
+			openingHours: OpeningHours | undefined;
 			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
@@ -1742,6 +1770,15 @@ export const updateSettings = mutation({
 		if (args.minOrderValue !== undefined) {
 			// 0 sanitizes to undefined → the patch removes the field (rule cleared).
 			patch.minOrderValue = sanitizeMinOrderValue(args.minOrderValue);
+		}
+		if (args.openingHours !== undefined) {
+			// null and an all-24h week both sanitize to undefined → the patch
+			// removes the field (open 24/7 has one spelling).
+			try {
+				patch.openingHours = sanitizeOpeningHours(args.openingHours);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
 		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING

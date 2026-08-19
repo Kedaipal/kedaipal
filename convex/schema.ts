@@ -377,6 +377,27 @@ export default defineSchema({
 		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
 		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store opening hours (86eyp5rav) — 7 entries indexed by weekday (0 =
+		// Sunday, the getUTCDay index on a MYT-shifted date). Per day: open/close
+		// in minutes since MYT midnight (0 ≤ open < close ≤ 1439 — 23:59 is the
+		// ceiling, "24:00" isn't expressible in a time input), boundaries
+		// INCLUSIVE; `closed: true` = shut all day (open/close keep their last
+		// values so re-opening restores them). Undefined = open 24/7 (default —
+		// every pre-existing store; an all-24h week normalizes back to unset so
+		// "no constraint" has one spelling). Constrains ONLY the buyer's
+		// fulfilment date/time at storefront checkout — browsing/ordering stay
+		// 24/7, counter checkout is exempt. ≥1 open day enforced (the
+		// working-method-invariant posture). Public-safe (shown on the
+		// storefront header). See convex/lib/openingHours.ts.
+		openingHours: v.optional(
+			v.array(
+				v.object({
+					open: v.number(),
+					close: v.number(),
+					closed: v.optional(v.boolean()),
+				}),
+			),
+		),
 		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
 		// subtotal a storefront order must reach before checkout. Undefined = no
 		// minimum (default; 0 normalizes to unset via sanitizeMinOrderValue).

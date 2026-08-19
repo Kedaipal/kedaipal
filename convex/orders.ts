@@ -41,6 +41,7 @@ import {
 	assertValidFulfilmentTime,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
+import { assertWithinOpeningHours } from "./lib/openingHours";
 import {
 	collectMinQuantityShortfalls,
 	type MinRuleItem,
@@ -952,6 +953,25 @@ export const create = mutation({
 			try {
 				sanitizedFulfilmentTime = assertValidFulfilmentTime(
 					args.fulfilmentTimeMinutes,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		// Store opening hours (86eyp5rav): the fulfilment moment must fall inside
+		// them — a closed day rejects for BOTH methods, the time window applies
+		// only where a time exists (delivery; pickup is date-only, its point's
+		// schedule note carries the detail). The storefront mirrors this check
+		// pre-submit via the same shared function, so a buyer only hits it from
+		// a stale tab or a direct call. Counter checkout doesn't run this path
+		// (the seller is standing there — the min-notice posture). Unset hours
+		// = open 24/7, the check no-ops.
+		if (sanitizedFulfilmentDate !== undefined) {
+			try {
+				assertWithinOpeningHours(
+					retailer.openingHours,
+					sanitizedFulfilmentDate,
+					sanitizedFulfilmentTime,
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);

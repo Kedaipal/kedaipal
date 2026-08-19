@@ -7191,3 +7191,154 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
 	});
 });
+
+describe("orders — store opening hours at create (86eyp5rav)", () => {
+	// Local mirrors of the suite-above helpers (each describe keeps its own).
+	function tomorrowMidnight() {
+		return (
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000 +
+			86_400_000
+		);
+	}
+	/** MYT weekday (0 = Sunday) of a midnight epoch — inline mirror of
+	 * weekdayIndexMyt so the schedule targets whatever weekday "tomorrow"
+	 * lands on when the test actually runs. */
+	function weekdayOf(epoch: number) {
+		return new Date(epoch + 8 * 3600_000).getUTCDay();
+	}
+	/** A week open 24h everywhere, with per-weekday overrides (0 = Sunday). */
+	function weekWith(
+		overrides: Record<
+			number,
+			{ open: number; close: number; closed?: boolean }
+		>,
+	) {
+		return Array.from(
+			{ length: 7 },
+			(_, i) => overrides[i] ?? { open: 0, close: 1439 },
+		);
+	}
+
+	async function store(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	test("a closed day is refused for BOTH delivery and self-collect", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const date = tomorrowMidnight();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: weekWith({
+					[weekdayOf(date)]: { open: 540, close: 1080, closed: true },
+				}),
+			},
+		);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR" as const,
+			channel: "whatsapp" as const,
+			customer,
+			fulfilmentDate: date,
+		};
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				deliveryMethod: "delivery",
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/closed on/);
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				deliveryMethod: "self_collect",
+			}),
+		).rejects.toThrow(/closed on/);
+	});
+
+	test("the 3 AM order: an out-of-hours delivery time is refused; the closing boundary is inclusive", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const date = tomorrowMidnight();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: weekWith({
+					[weekdayOf(date)]: { open: 540, close: 1080 }, // 9 AM – 6 PM
+				}),
+			},
+		);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR" as const,
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+			deliveryAddress: validAddress,
+			fulfilmentDate: date,
+		};
+		// The incident that motivated the feature: a 3:00 AM delivery slot.
+		await expect(
+			t.mutation(api.orders.create, { ...base, fulfilmentTimeMinutes: 180 }),
+		).rejects.toThrow(/open 9:00 AM – 6:00 PM/);
+		// Delivering AT closing time is allowed (inclusive boundary).
+		const { shortId } = await t.mutation(api.orders.create, {
+			...base,
+			fulfilmentTimeMinutes: 1080,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(1080);
+	});
+
+	test("an open day passes date-only (self-collect), and unset hours constrain nothing", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const date = tomorrowMidnight();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: weekWith({
+					[weekdayOf(date)]: { open: 540, close: 1080 },
+				}),
+			},
+		);
+		// Self-collect is date-only: an open day passes even though 3 AM would
+		// be outside the window (pickup has no time; the point's schedule note
+		// governs the detail).
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: date,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentDate).toBe(date);
+
+		// A second store with NO hours takes a 3 AM delivery unchanged — the
+		// default stays byte-identical to the pre-hours behaviour.
+		const retailerB = await seedRetailer(t, USER_B);
+		const productB = await seedProduct(t, USER_B, retailerB._id);
+		const { shortId: sidB } = await t.mutation(api.orders.create, {
+			retailerId: retailerB._id,
+			items: [{ productId: productB, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 180,
+		});
+		const oB = await t.query(api.orders.get, { token: await tk(t, sidB) });
+		expect(oB?.fulfilmentTimeMinutes).toBe(180);
+	});
+});
