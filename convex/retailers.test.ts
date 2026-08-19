@@ -548,50 +548,36 @@ describe("retailers legal consent", () => {
 		});
 	}
 
-	test("createRetailer stamps current versions + timestamps + IP", async () => {
+	test("createRetailer stamps current versions + timestamps", async () => {
 		const t = setup();
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.retailers.createRetailer, {
 			storeName: "Consent Store",
 			slug: "consent",
-			acceptanceIp: "203.0.113.7",
 		});
 
 		const row = await readRetailer(t, USER_A);
 		expect(row?.termsVersion).toBe(TERMS_VERSION);
 		expect(row?.privacyVersion).toBe(PRIVACY_VERSION);
 		expect(row?.aupVersion).toBe(AUP_VERSION);
-		expect(row?.acceptanceIp).toBe("203.0.113.7");
 		expect(typeof row?.termsAcceptedAt).toBe("number");
 		expect(typeof row?.privacyAcceptedAt).toBe("number");
 		expect(typeof row?.aupAcceptedAt).toBe("number");
+		// acceptanceIp was dropped in 86eyn25fu (no client ever passed it, and a
+		// mutation can't observe the request IP) — pin that nothing writes it.
+		expect("acceptanceIp" in (row ?? {})).toBe(false);
 	});
 
-	test("createRetailer omits IP when blank", async () => {
-		const t = setup();
-		const asA = t.withIdentity({ subject: USER_A });
-		await asA.mutation(api.retailers.createRetailer, {
-			storeName: "No IP Store",
-			slug: "no-ip",
-			acceptanceIp: "   ",
-		});
-		const row = await readRetailer(t, USER_A);
-		expect(row?.acceptanceIp).toBeUndefined();
-		// Consent is still stamped even without an IP.
-		expect(row?.termsVersion).toBe(TERMS_VERSION);
-	});
-
-	test("getMyRetailer exposes accepted versions but not IP", async () => {
+	test("getMyRetailer exposes accepted versions", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "expose");
 		const me = await asA.query(api.retailers.getMyRetailer);
 		expect(me?.termsVersion).toBe(TERMS_VERSION);
 		expect(me?.privacyVersion).toBe(PRIVACY_VERSION);
 		expect(me?.aupVersion).toBe(AUP_VERSION);
-		expect(me).not.toHaveProperty("acceptanceIp");
 	});
 
-	test("recordConsentAcceptance re-stamps versions and IP", async () => {
+	test("recordConsentAcceptance re-stamps versions", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "restamp");
 		// Simulate a stale prior acceptance.
@@ -599,22 +585,16 @@ describe("retailers legal consent", () => {
 			const rows = await ctx.db.query("retailers").collect();
 			const row = rows.find((r) => r.userId === USER_A);
 			if (row) {
-				await ctx.db.patch(row._id, {
-					termsVersion: "2000-01-01",
-					acceptanceIp: undefined,
-				});
+				await ctx.db.patch(row._id, { termsVersion: "2000-01-01" });
 			}
 		});
 
-		await asA.mutation(api.retailers.recordConsentAcceptance, {
-			acceptanceIp: "198.51.100.4",
-		});
+		await asA.mutation(api.retailers.recordConsentAcceptance, {});
 
 		const row = await readRetailer(t, USER_A);
 		expect(row?.termsVersion).toBe(TERMS_VERSION);
 		expect(row?.privacyVersion).toBe(PRIVACY_VERSION);
 		expect(row?.aupVersion).toBe(AUP_VERSION);
-		expect(row?.acceptanceIp).toBe("198.51.100.4");
 	});
 
 	test("recordConsentAcceptance errors when the user has no store", async () => {

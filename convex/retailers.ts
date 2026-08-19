@@ -443,15 +443,6 @@ function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
 	};
 }
 
-/** Trim and bound a best-effort client IP before persisting. */
-function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
-	if (ip === undefined) return undefined;
-	const trimmed = ip.trim();
-	if (trimmed.length === 0) return undefined;
-	// IPv6 max textual length is 45 chars; clamp generously to avoid storing junk.
-	return trimmed.slice(0, 64);
-}
-
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
 // Trim outer whitespace (newlines INSIDE are preserved for multi-line blurbs),
@@ -1116,9 +1107,6 @@ export const createRetailer = mutation({
 		storeName: v.string(),
 		slug: v.string(),
 		waPhone: v.optional(v.string()),
-		// Best-effort client IP captured at the consent moment. Optional —
-		// onboarding never blocks if IP lookup fails.
-		acceptanceIp: v.optional(v.string()),
 		// Signup path. Both start a 14-day trial; "founding" additionally flags the
 		// store (`foundingIntent`) and reserves a Founding-10 rank, but the paid Pro
 		// plan still only starts at admin mark-paid. The real rank gate is mark-paid +
@@ -1183,7 +1171,6 @@ export const createRetailer = mutation({
 		// Consent is implied: the onboarding UI gates submission on a required,
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
-		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
 		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -1207,7 +1194,6 @@ export const createRetailer = mutation({
 			privacyVersion: PRIVACY_VERSION,
 			aupAcceptedAt: now,
 			aupVersion: AUP_VERSION,
-			acceptanceIp,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -1857,10 +1843,8 @@ export const updateSettings = mutation({
  * Like createRetailer, versions are taken server-side (never client-supplied).
  */
 export const recordConsentAcceptance = mutation({
-	args: {
-		acceptanceIp: v.optional(v.string()),
-	},
-	handler: async (ctx, args): Promise<{ ok: true }> => {
+	args: {},
+	handler: async (ctx): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
 		const retailer = await ctx.db
 			.query("retailers")
@@ -1876,7 +1860,6 @@ export const recordConsentAcceptance = mutation({
 			privacyVersion: PRIVACY_VERSION,
 			aupAcceptedAt: now,
 			aupVersion: AUP_VERSION,
-			acceptanceIp: sanitizeAcceptanceIp(args.acceptanceIp),
 			updatedAt: now,
 		});
 		return { ok: true };
