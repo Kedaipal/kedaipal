@@ -640,6 +640,29 @@ order left the vendor choosing between a 3 AM rider and no rider.
   sees) is `orders.rescheduleFulfilment` — see docs/fulfilment-date.md
   ("Seller reschedule"). Its hard guard: refused while a rider job is ACTIVE.
 
+### Rebook path + order sync (canonical bug 86eyp63xn, Wagyu Walid)
+
+- **Rebook auto-opens the time editor**: a failed/cancelled booking's schedule
+  is stale by definition (that's why it failed), so "Rebook delivery" opens the
+  modal with the date+time inputs already showing instead of hiding them behind
+  "Change time" — Arif's AC1. Date input bounds `[today, +30d]`
+  (MAX_NOTICE_DAYS); the buyer-facing `minNoticeDays` deliberately does NOT
+  bind the seller (amended off the ticket — a store with 3 days' notice must
+  still be able to rebook a failed delivery for tomorrow).
+- **"Also update the delivery time the buyer sees" (AC2)**: once a moment is
+  picked, a checkbox offers to move the ORDER to it. Confirm then runs
+  `rescheduleFulfilment` **before** `confirmBooking` — the only order where
+  both can move together, since an active job blocks the reschedule; a failed
+  sync aborts the dispatch (booking a trip whose promise update was refused
+  would recreate the exact mismatch this fixes). **Defaults**: ON when the
+  order's moment is already past or a failed booking exists (the rebook path —
+  the old time is wrong by definition), OFF when the buyer's moment is still
+  ahead (a rider leaving earlier than the promise is legitimate and must never
+  rewrite it silently). Never offered for "now" (an immediate dispatch is not
+  a promise to write) or counter orders. With the box ticked the amber
+  mismatch warning retires (the mismatch resolves itself at confirm); left
+  unticked, the warning points at the box instead of a detour.
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys

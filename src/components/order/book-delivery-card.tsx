@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import {
 	Bike,
 	Car,
@@ -26,7 +26,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
-import { formatPrice } from "../../lib/format";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
@@ -82,6 +82,9 @@ export function BookDeliveryCard({
 	const prepareBooking = useAction(api.lalamove.prepareBooking);
 	const confirmBooking = useAction(api.lalamove.confirmBooking);
 	const cancelBooking = useAction(api.lalamove.cancelBooking);
+	// AC2 of the rebook fix (86eyp63xn): booking at a seller-picked moment can
+	// also move the ORDER's promise in the same action — see syncOrderTime.
+	const rescheduleFulfilment = useMutation(api.orders.rescheduleFulfilment);
 
 	const [preparing, setPreparing] = useState(false);
 	const [quote, setQuote] = useState<{
@@ -113,6 +116,14 @@ export function BookDeliveryCard({
 	const [editSchedule, setEditSchedule] = useState(false);
 	const [schedDate, setSchedDate] = useState("");
 	const [schedTime, setSchedTime] = useState("");
+	// "Also update the delivery time the buyer sees": booking at a picked
+	// moment first reschedules the ORDER to it (86eyp63xn AC2), so the trip
+	// and the buyer's promise move together. Defaulted at prepare time —
+	// ON when the order's own moment is stale (past, or a failed booking
+	// exists: the rebook path, where the old time is wrong by definition),
+	// OFF when the buyer's moment is still ahead (a rider leaving earlier
+	// than the promise is legitimate and must not rewrite it silently).
+	const [syncOrderTime, setSyncOrderTime] = useState(false);
 	// Did this quote flow start from the seller trying to ADVANCE the order
 	// (vs. tapping the card's own book button / the packed prompt)? Only then
 	// does dismissing leave them stuck, so only then does the modal offer the
@@ -281,9 +292,16 @@ export function BookDeliveryCard({
 		setEditSchedule(false);
 		setSchedDate("");
 		setSchedTime("");
+		setSyncOrderTime(false);
 	}
 
-	async function handlePrepare(opts?: { fromAdvance?: boolean }) {
+	async function handlePrepare(opts?: {
+		fromAdvance?: boolean;
+		/** Rebook path (86eyp63xn): the failed booking's schedule is stale by
+		 * definition, so the time editor opens straight away instead of hiding
+		 * behind "Change time". */
+		autoEditSchedule?: boolean;
+	}) {
 		setFromAdvance(opts?.fromAdvance === true);
 		resetScheduleState();
 		setPreparing(true);
@@ -299,6 +317,14 @@ export function BookDeliveryCard({
 				return;
 			}
 			setQuote(result);
+			// Default the order-sync choice from THIS quote's reality (the
+			// docblock on syncOrderTime): stale promise or a failed booking →
+			// moving the order with the trip is almost certainly the intent.
+			const promiseStale =
+				result.buyerRequestedMoment === undefined ||
+				result.buyerRequestedMoment <= Date.now();
+			setSyncOrderTime(failedJob !== null || promiseStale);
+			if (opts?.autoEditSchedule) openScheduleEditor(result);
 		} finally {
 			setPreparing(false);
 		}
@@ -345,13 +371,18 @@ export function BookDeliveryCard({
 
 	/** Open the pickup-time editor prefilled with the moment the quote is
 	 * currently scheduled for (falling back to the buyer's ask, then "in an
-	 * hour" for orders with no time at all). */
-	function openScheduleEditor() {
+	 * hour" for orders with no time at all). `from` lets handlePrepare seed
+	 * off a fresh result before React state has settled (the rebook path). */
+	function openScheduleEditor(from?: {
+		scheduledFor?: number;
+		buyerRequestedMoment?: number;
+	}) {
+		const src = from ?? quote ?? undefined;
 		const seed =
-			quote?.scheduledFor ??
-			(quote?.buyerRequestedMoment !== undefined &&
-			quote.buyerRequestedMoment > Date.now()
-				? quote.buyerRequestedMoment
+			src?.scheduledFor ??
+			(src?.buyerRequestedMoment !== undefined &&
+			src.buyerRequestedMoment > Date.now()
+				? src.buyerRequestedMoment
 				: Date.now() + 60 * 60 * 1000);
 		const day = todayMytMidnight(seed);
 		setSchedDate(ymdFromEpoch(day));
@@ -381,6 +412,30 @@ export function BookDeliveryCard({
 		if (!quote) return;
 		setBooking(true);
 		try {
+			// Order-sync BEFORE the booking (86eyp63xn AC2): once the booking
+			// lands there is an ACTIVE job and rescheduleFulfilment refuses by
+			// design — this is the one moment both can move together. A failed
+			// sync aborts the dispatch: booking a trip whose promise update was
+			// refused would recreate exactly the mismatch this fix exists for.
+			if (
+				typeof scheduleOverride === "number" &&
+				syncOrderTime &&
+				order.source !== "counter"
+			) {
+				const day = todayMytMidnight(scheduleOverride);
+				try {
+					await rescheduleFulfilment({
+						orderId: order._id,
+						fulfilmentDate: day,
+						fulfilmentTimeMinutes: Math.round(
+							(scheduleOverride - day) / 60000,
+						),
+					});
+				} catch (err) {
+					toast.error(convexErrorMessage(err));
+					return;
+				}
+			}
 			const result = await confirmBooking({
 				shortId: order.shortId,
 				quotationId: quote.quotationId,
@@ -601,7 +656,11 @@ export function BookDeliveryCard({
 					<Button
 						type="button"
 						className="h-11 w-full"
-						onClick={() => handlePrepare()}
+						// Rebook (86eyp63xn): the failed trip's schedule is stale, so
+						// the dialog opens with the time editor already showing.
+						onClick={() =>
+							handlePrepare(failedJob ? { autoEditSchedule: true } : undefined)
+						}
 						disabled={preparing}
 					>
 						{preparing ? (
@@ -786,12 +845,40 @@ export function BookDeliveryCard({
 									) : null}
 								</div>
 							) : null}
+							{/* The one choice AC2 hangs on: a picked moment can also move
+							    the ORDER's promise (rescheduled just before dispatch, so
+							    the trip and the buyer's page agree). Own row outside the
+							    editor so it survives the editor closing and is visible at
+							    the moment of confirm. Never for "now" — an immediate
+							    dispatch is not a promise to write. */}
+							{typeof scheduleOverride === "number" &&
+							order.source !== "counter" ? (
+								<label className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-foreground">
+									<input
+										type="checkbox"
+										className="mt-0.5 size-4 shrink-0 accent-accent"
+										checked={syncOrderTime}
+										disabled={booking || requoting}
+										onChange={(e) => setSyncOrderTime(e.target.checked)}
+									/>
+									<span>
+										Also update the delivery time the buyer sees — the order
+										becomes{" "}
+										<span className="font-medium">
+											{formatScheduledMoment(scheduleOverride)}
+										</span>{" "}
+										when you book, and their order page follows instantly.
+									</span>
+								</label>
+							) : null}
 							{/* The trip being bought no longer matches what the order
-							    promises the buyer — say so BEFORE the money moves, and
-							    point at the fix (Reschedule updates what the buyer sees;
-							    it has to happen before booking, since an active booking
-							    locks the order's date). */}
+							    promises the buyer — say so BEFORE the money moves. With
+							    the sync checkbox ON the mismatch resolves itself at
+							    confirm, so the warning only fires when the seller has
+							    deliberately left the promise untouched (or chose "now",
+							    where there is nothing to write). */}
 							{scheduleOverride !== null &&
+							!(typeof scheduleOverride === "number" && syncOrderTime) &&
 							quote.buyerRequestedMoment !== undefined &&
 							quote.buyerRequestedMoment > Date.now() &&
 							quote.scheduledFor !== quote.buyerRequestedMoment ? (
@@ -800,10 +887,19 @@ export function BookDeliveryCard({
 									<span className="font-medium">
 										{formatScheduledMoment(quote.buyerRequestedMoment)}
 									</span>
-									. If you&apos;ve agreed a new delivery time with them, use{" "}
-									<span className="font-medium">Reschedule</span> on this page
-									before booking — their order page keeps the old time
-									otherwise.
+									{typeof scheduleOverride === "number" ? (
+										<>
+											. Tick the box above to update it when you book —
+											otherwise their order page keeps the old time.
+										</>
+									) : (
+										<>
+											. If you&apos;ve agreed a new delivery time with them,
+											use <span className="font-medium">Reschedule</span> on
+											this page before booking — their order page keeps the
+											old time otherwise.
+										</>
+									)}
 								</p>
 							) : null}
 							{/* Per-order vehicle choice — defaults to the settings vehicle;
