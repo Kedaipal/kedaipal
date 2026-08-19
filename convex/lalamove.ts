@@ -34,6 +34,7 @@ import {
 	parseOrderResponse,
 	parsePodImages,
 	parseQuotationResponse,
+	resolveDispatchSchedule,
 	resolveLalamoveCredentials,
 	resolveScheduleAt,
 	toLalamoveMyPhone,
@@ -867,10 +868,17 @@ export const prepareBooking = action({
 		vehicleType: v.optional(
 			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 		),
+		// Per-booking pickup-moment override (86eyp5qd1): the modal's time
+		// picker. A number = "come at this exact moment" (rider leaves earlier
+		// than the promise, or a 3am ask moved to a sane slot), "now" = dispatch
+		// immediately even though the buyer's moment is still ahead. Omitted →
+		// the buyer's fulfilment moment, exactly as before. Quotes are bound to
+		// their scheduleAt, so any change here re-runs this action.
+		scheduleAtOverride: v.optional(v.union(v.number(), v.literal("now"))),
 	},
 	handler: async (
 		ctx,
-		{ shortId, vehicleType: vehicleOverride },
+		{ shortId, vehicleType: vehicleOverride, scheduleAtOverride },
 	): Promise<
 		| {
 				ok: false;
@@ -887,11 +895,16 @@ export const prepareBooking = action({
 				vehicleType: string;
 				buyerContactFallback: boolean;
 				/** The pickup moment this quotation was scheduled for — the
-				 * buyer's fulfilment date+time when still ahead at prepare time
-				 * (86eyg0n8e follow-up). Undefined = the rider comes now (the
-				 * moment is past/imminent, or the order carries no time). The
-				 * dialog says which; confirmBooking stamps it on the job. */
+				 * buyer's fulfilment date+time (or the seller's override,
+				 * 86eyp5qd1) when still ahead at prepare time. Undefined = the
+				 * rider comes now (the moment is past/imminent, or the order
+				 * carries no time). The dialog says which; confirmBooking stamps
+				 * it on the job. */
 				scheduledFor?: number;
+				/** The buyer's own fulfilment moment, untouched by any override —
+				 * lets the modal warn when the trip being bought no longer
+				 * matches what the order promises the buyer (86eyp5qd1). */
+				buyerRequestedMoment?: number;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -900,8 +913,17 @@ export const prepareBooking = action({
 		if (!context.ok) return context;
 		const vehicleType = vehicleOverride ?? context.vehicleType;
 		// The buyer's ask is the DEFAULT; past or imminent books now — the
-		// same pure rule the checkout quote used to price the fee.
-		const scheduledFor = resolveScheduleAt(context.requestedMoment);
+		// same pure rule the checkout quote used to price the fee. A seller
+		// override (86eyp5qd1) rides the same clamps; only an explicit pick
+		// beyond Lalamove's 30-day window is refused outright.
+		const schedule = resolveDispatchSchedule(
+			scheduleAtOverride,
+			context.requestedMoment,
+		);
+		if (!schedule.ok) {
+			return { ok: false, reason: "quote_failed", message: schedule.message };
+		}
+		const scheduledFor = schedule.scheduleAt;
 		try {
 			const response = await callLalamove(
 				context.credentials,
@@ -933,6 +955,7 @@ export const prepareBooking = action({
 				vehicleType,
 				buyerContactFallback: context.buyerContactFallback,
 				scheduledFor,
+				buyerRequestedMoment: context.requestedMoment,
 			};
 		} catch (err) {
 			console.warn("[lalamove] dispatch quote failed", {

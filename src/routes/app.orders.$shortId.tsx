@@ -56,6 +56,7 @@ import {
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
 import {
 	MarkShippedDialog,
 	type ShipmentFields,
@@ -1351,6 +1352,11 @@ function OrderDetailRoute() {
 							) : null}
 						</div>
 					) : null}
+				</div>
+				{/* Seller reschedule (86eyp5qd1) — renders only inside the
+				    reschedule window (pre-shipped, non-counter, not collected). */}
+				<div className="ml-auto shrink-0">
+					<RescheduleFulfilmentDialog order={order} />
 				</div>
 			</section>
 
