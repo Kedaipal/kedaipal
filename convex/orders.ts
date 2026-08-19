@@ -39,7 +39,9 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
+	hhmmFromMinutes,
 	matchesFulfilmentWindow,
+	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import {
 	collectMinQuantityShortfalls,
@@ -3333,6 +3335,114 @@ export const setDeliveryFee = mutation({
 			});
 		}
 		await logAdminAction(ctx, access, "orders.setDeliveryFee", orderId);
+	},
+});
+
+/**
+ * Seller (or admin act-as): move an order's fulfilment date/time — the
+ * 3am-advance-order fix (86eyp5qd1). The buyer picks the moment at checkout
+ * and until now nothing could change it, so a vendor faced with a 3 AM
+ * delivery ask had no way out but to serve it or ghost it. The seller agrees
+ * a new time with the buyer in chat, records it here, and every live surface
+ * follows: the buyer's tracking page updates instantly (reactive read), later
+ * stage messages/emails render from live fields, dispatch re-derives its
+ * schedule from the order. Deliberately NO new WhatsApp send (one-msg-per-
+ * order posture) — messages already sent keep the old time; the chat
+ * agreement covers that gap, and the order page is the record.
+ *
+ * The buyer-facing minimum-notice floor does NOT apply — the notice window
+ * exists to protect the seller's lead time, and here the seller is the one
+ * moving the date. The [today, +30d] range still holds (checkout's ceiling).
+ *
+ * All-tier: this is a correctness escape hatch, not a feature to upsell.
+ */
+export const rescheduleFulfilment = mutation({
+	args: {
+		orderId: v.id("orders"),
+		fulfilmentDate: v.number(),
+		// Only meaningful on delivery orders (mirrors create — self-collect and
+		// counter orders are date-only). Omitted → the order's existing time is
+		// kept, so a date-only change can never silently drop the clock.
+		fulfilmentTimeMinutes: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, fulfilmentDate, fulfilmentTimeMinutes },
+	): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
+		if (order.status === "cancelled")
+			throw new ConvexError("This order was cancelled");
+		if (order.status === "shipped" || order.status === "delivered")
+			throw new ConvexError(
+				"This order is already on its way — the fulfilment date can't change now",
+			);
+		if (order.source === "counter")
+			throw new ConvexError(
+				"Counter orders are fulfilled on the spot — there's no date to move",
+			);
+		// Collection (86eyg0n8e): the date answers "when do we collect?" — once
+		// the goods are with the seller that question is history, and moving the
+		// date would rewrite it.
+		if (order.collectedAt !== undefined)
+			throw new ConvexError(
+				"This order was already collected — the date can't change now",
+			);
+		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
+		// will NOT follow the order — rescheduling under it would desync the
+		// buyer's promise from the trip actually booked. The dialog says so and
+		// points at cancelling the booking first; this is the backstop.
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", orderId))
+			.collect();
+		if (jobs.some((j) => isActiveJobStatus(j.status)))
+			throw new ConvexError(
+				"A rider booking is active for this order — cancel the booking first, then reschedule",
+			);
+
+		let sanitizedDate: number;
+		try {
+			// Notice floor 0 on purpose — see the docblock.
+			sanitizedDate = assertValidFulfilmentDate(fulfilmentDate, 0);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		const isDelivery = (order.deliveryMethod ?? "delivery") === "delivery";
+		let sanitizedTime: number | undefined;
+		if (fulfilmentTimeMinutes !== undefined && isDelivery) {
+			try {
+				sanitizedTime = assertValidFulfilmentTime(fulfilmentTimeMinutes);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		const nextTime = isDelivery
+			? (sanitizedTime ?? order.fulfilmentTimeMinutes)
+			: order.fulfilmentTimeMinutes;
+
+		const now = Date.now();
+		// Audit trail in the delivery_fee_set style — compact, ASCII, greppable.
+		const stamp = (d: number | undefined, tm: number | undefined) =>
+			d === undefined
+				? "unset"
+				: tm === undefined
+					? ymdFromEpoch(d)
+					: `${ymdFromEpoch(d)} ${hhmmFromMinutes(tm)}`;
+		await ctx.db.patch(orderId, {
+			fulfilmentDate: sanitizedDate,
+			fulfilmentTimeMinutes: nextTime,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: `fulfilment_rescheduled (from ${stamp(order.fulfilmentDate, order.fulfilmentTimeMinutes)} to ${stamp(sanitizedDate, nextTime)})`,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "orders.rescheduleFulfilment", orderId);
 	},
 });
 

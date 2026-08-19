@@ -18,7 +18,12 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import {
 	formatFulfilmentDateTime,
+	hhmmFromMinutes,
+	MAX_NOTICE_DAYS,
+	mytMidnightFromYmd,
+	timeMinutesFromHhmm,
 	todayMytMidnight,
+	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { formatPrice } from "../../lib/format";
@@ -26,6 +31,7 @@ import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { Input } from "../ui/input";
 import {
 	Dialog,
 	DialogContent,
@@ -89,12 +95,24 @@ export function BookDeliveryCard({
 		/** The pickup moment this quote is scheduled for — undefined = the
 		 * rider comes now (86eyg0n8e follow-up). */
 		scheduledFor?: number;
+		/** The buyer's own fulfilment moment, untouched by any override
+		 * (86eyp5qd1) — drives the promise-mismatch warning below. */
+		buyerRequestedMoment?: number;
 	} | null>(null);
 	const [booking, setBooking] = useState(false);
 	// In-dialog vehicle switch → fresh quote (prices are per-vehicle). Keeps
 	// the dialog open with the price row loading instead of bouncing the
 	// seller back to settings to change vehicle for one order.
 	const [requoting, setRequoting] = useState(false);
+	// Seller's pickup-time override (86eyp5qd1): null = the buyer's moment
+	// (the default), a number = "come at this exact moment", "now" = dispatch
+	// immediately. Quotes are bound to their scheduleAt, so a change re-quotes.
+	const [scheduleOverride, setScheduleOverride] = useState<
+		number | "now" | null
+	>(null);
+	const [editSchedule, setEditSchedule] = useState(false);
+	const [schedDate, setSchedDate] = useState("");
+	const [schedTime, setSchedTime] = useState("");
 	// Did this quote flow start from the seller trying to ADVANCE the order
 	// (vs. tapping the card's own book button / the packed prompt)? Only then
 	// does dismissing leave them stuck, so only then does the modal offer the
@@ -256,8 +274,18 @@ export function BookDeliveryCard({
 	}
 	if (!job && !bookable) return null;
 
+	/** Drop every schedule-editor state — a fresh open must start from the
+	 * buyer's moment, never a leftover override from a dismissed dialog. */
+	function resetScheduleState() {
+		setScheduleOverride(null);
+		setEditSchedule(false);
+		setSchedDate("");
+		setSchedTime("");
+	}
+
 	async function handlePrepare(opts?: { fromAdvance?: boolean }) {
 		setFromAdvance(opts?.fromAdvance === true);
+		resetScheduleState();
 		setPreparing(true);
 		const gen = prepareGenRef.current;
 		try {
@@ -276,23 +304,76 @@ export function BookDeliveryCard({
 		}
 	}
 
-	// Vehicle switch inside the open dialog — re-quote for the chosen vehicle
-	// (each quotation is vehicle-bound). On failure the previous quote stays.
-	async function handleSwitchVehicle(vehicleType: "MOTORCYCLE" | "CAR") {
-		if (!quote || quote.vehicleType === vehicleType || requoting) return;
+	// In-dialog re-quote — a vehicle switch or a pickup-time change (each
+	// quotation is bound to both). On failure the previous quote (and its
+	// schedule) stays. Returns whether the fresh quote landed.
+	async function handleRequote(next: {
+		vehicleType?: "MOTORCYCLE" | "CAR";
+		scheduleOverride?: number | "now" | null;
+	}): Promise<boolean> {
+		if (!quote || requoting) return false;
+		const vehicleType =
+			next.vehicleType ??
+			(quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE");
+		const override =
+			next.scheduleOverride !== undefined
+				? next.scheduleOverride
+				: scheduleOverride;
 		setRequoting(true);
 		try {
 			const result = await prepareBooking({
 				shortId: order.shortId,
 				vehicleType,
+				scheduleAtOverride: override === null ? undefined : override,
 			});
 			if (!result.ok) {
 				toast.error(result.message ?? dispatchBlockCopy(result.reason));
-				return;
+				return false;
 			}
+			setScheduleOverride(override);
 			setQuote(result);
+			return true;
 		} finally {
 			setRequoting(false);
+		}
+	}
+
+	function handleSwitchVehicle(vehicleType: "MOTORCYCLE" | "CAR") {
+		if (!quote || quote.vehicleType === vehicleType || requoting) return;
+		void handleRequote({ vehicleType });
+	}
+
+	/** Open the pickup-time editor prefilled with the moment the quote is
+	 * currently scheduled for (falling back to the buyer's ask, then "in an
+	 * hour" for orders with no time at all). */
+	function openScheduleEditor() {
+		const seed =
+			quote?.scheduledFor ??
+			(quote?.buyerRequestedMoment !== undefined &&
+			quote.buyerRequestedMoment > Date.now()
+				? quote.buyerRequestedMoment
+				: Date.now() + 60 * 60 * 1000);
+		const day = todayMytMidnight(seed);
+		setSchedDate(ymdFromEpoch(day));
+		// Round to the input's 5-min step, clamped below midnight — a seed in
+		// the day's last minutes must not round up to the invalid "24:00".
+		setSchedTime(
+			hhmmFromMinutes(
+				Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5),
+			),
+		);
+		setEditSchedule(true);
+	}
+
+	async function handleApplySchedule() {
+		const day = mytMidnightFromYmd(schedDate);
+		const minutes = timeMinutesFromHhmm(schedTime);
+		if (Number.isNaN(day) || Number.isNaN(minutes)) {
+			toast.error("Pick a valid date and time first.");
+			return;
+		}
+		if (await handleRequote({ scheduleOverride: day + minutes * 60000 })) {
+			setEditSchedule(false);
 		}
 	}
 
@@ -313,6 +394,7 @@ export function BookDeliveryCard({
 				return;
 			}
 			setQuote(null);
+			resetScheduleState();
 			toast.success(
 				"Rider booking placed — you'll see the driver here once one accepts.",
 			);
@@ -581,6 +663,7 @@ export function BookDeliveryCard({
 					// attempt stale and let its result land nowhere.
 					if (preparing) prepareGenRef.current += 1;
 					setQuote(null);
+					resetScheduleState();
 				}}
 			>
 				<DialogContent>
@@ -604,20 +687,125 @@ export function BookDeliveryCard({
 					) : (
 						<div className="flex flex-col gap-1.5 text-sm">
 							{/* A scheduled pickup and a rider-now dispatch are different
-							    purchases — say which one this confirm buys. */}
-							<p
-								className={`rounded-lg px-3 py-2 text-xs ${
+							    purchases — say which one this confirm buys, and let the
+							    seller buy a different slot (86eyp5qd1): advance-book a
+							    sane time, leave earlier than the promise, or send now. */}
+							<div
+								className={`flex items-start justify-between gap-2 rounded-lg px-3 py-2 text-xs ${
 									quote.scheduledFor
 										? "bg-accent/10 text-accent-emphasis"
 										: "bg-muted text-muted-foreground"
 								}`}
 							>
-								{quote.scheduledFor
-									? `Scheduled pickup — the rider comes ${formatScheduledMoment(
-											quote.scheduledFor,
-										)}, the time the buyer asked for.`
-									: "The rider comes now — the buyer's requested time is already here (or none was set)."}
-							</p>
+								<span>
+									{quote.scheduledFor
+										? `Scheduled pickup — the rider comes ${formatScheduledMoment(
+												quote.scheduledFor,
+											)}, ${
+												scheduleOverride !== null
+													? "the time you picked."
+													: "the time the buyer asked for."
+											}`
+										: scheduleOverride === "now"
+											? "The rider comes now — dispatching immediately, at your choice."
+											: scheduleOverride !== null
+												? "The rider comes now — the time you picked is less than 15 minutes away, so this books an immediate pickup."
+												: "The rider comes now — the buyer's requested time is already here (or none was set)."}
+								</span>
+								<button
+									type="button"
+									className="shrink-0 font-semibold underline-offset-2 hover:underline disabled:opacity-60"
+									disabled={requoting || booking}
+									onClick={() =>
+										editSchedule ? setEditSchedule(false) : openScheduleEditor()
+									}
+								>
+									{editSchedule ? "Close" : "Change time"}
+								</button>
+							</div>
+							{editSchedule ? (
+								<div className="flex flex-col gap-2 rounded-lg border border-border p-2.5">
+									<div className="grid grid-cols-2 gap-2">
+										<Input
+											type="date"
+											variant="field"
+											aria-label="Pickup date"
+											min={ymdFromEpoch(todayMytMidnight())}
+											max={ymdFromEpoch(
+												todayMytMidnight() +
+													MAX_NOTICE_DAYS * 24 * 60 * 60 * 1000,
+											)}
+											value={schedDate}
+											onChange={(e) => setSchedDate(e.target.value)}
+										/>
+										<Input
+											type="time"
+											variant="field"
+											aria-label="Pickup time"
+											step={300}
+											value={schedTime}
+											onChange={(e) => setSchedTime(e.target.value)}
+										/>
+									</div>
+									<div className="flex flex-wrap gap-2">
+										<Button
+											type="button"
+											className="h-10 flex-1"
+											disabled={requoting || booking}
+											onClick={() => void handleApplySchedule()}
+										>
+											{requoting ? "Updating price…" : "Use this time"}
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											className="h-10"
+											disabled={requoting || booking}
+											onClick={() =>
+												void handleRequote({ scheduleOverride: "now" }).then(
+													(ok) => ok && setEditSchedule(false),
+												)
+											}
+										>
+											Send the rider now
+										</Button>
+									</div>
+									{scheduleOverride !== null ? (
+										<button
+											type="button"
+											className="self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
+											disabled={requoting || booking}
+											onClick={() =>
+												void handleRequote({ scheduleOverride: null }).then(
+													(ok) => ok && setEditSchedule(false),
+												)
+											}
+										>
+											Use the buyer&apos;s time instead
+										</button>
+									) : null}
+								</div>
+							) : null}
+							{/* The trip being bought no longer matches what the order
+							    promises the buyer — say so BEFORE the money moves, and
+							    point at the fix (Reschedule updates what the buyer sees;
+							    it has to happen before booking, since an active booking
+							    locks the order's date). */}
+							{scheduleOverride !== null &&
+							quote.buyerRequestedMoment !== undefined &&
+							quote.buyerRequestedMoment > Date.now() &&
+							quote.scheduledFor !== quote.buyerRequestedMoment ? (
+								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+									The order still promises the buyer{" "}
+									<span className="font-medium">
+										{formatScheduledMoment(quote.buyerRequestedMoment)}
+									</span>
+									. If you&apos;ve agreed a new delivery time with them, use{" "}
+									<span className="font-medium">Reschedule</span> on this page
+									before booking — their order page keeps the old time
+									otherwise.
+								</p>
+							) : null}
 							{/* Per-order vehicle choice — defaults to the settings vehicle;
 							    switching re-quotes (prices are per-vehicle). */}
 							<div className="grid grid-cols-2 gap-2">

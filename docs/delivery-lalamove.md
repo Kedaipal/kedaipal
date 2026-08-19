@@ -638,6 +638,46 @@ collect", pills Finding rider → Heading to customer → Collected → Arrived,
 — distance is symmetric; `deliveryFeePending`, radius/flat modes and the
 no-fee-pending-under-Lalamove rule all apply unchanged.
 
+## Dispatch pickup-time picker — seller override (19 Aug 2026, ClickUp 86eyp5qd1)
+
+The booking modal's schedule strip is now interactive. Before, the pickup
+moment was **always** the buyer's fulfilment moment (`resolveScheduleAt` on
+`requestedMoment`) with no way to book a different slot — the 3 AM advance
+order left the vendor choosing between a 3 AM rider and no rider.
+
+- **`prepareBooking.scheduleAtOverride`** (`number | "now"`, optional): a
+  number = "come at this exact moment", `"now"` = dispatch immediately even
+  though the buyer's moment is still ahead (goods ready early), omitted = the
+  buyer's moment, byte-identical to before. Resolution is the pure
+  `resolveDispatchSchedule` (convex/lib/lalamove.ts): the default and an
+  explicit pick share `resolveScheduleAt`'s clamps (past/imminent → book now),
+  with ONE asymmetry — an explicit pick beyond Lalamove's 30-day window is
+  **refused with a message**, never silently degraded to an immediate booking
+  (a rider right now is the opposite of what the seller just asked for; the
+  buyer-derived default keeps its silent degrade since orders can't exceed
+  +30d anyway). Quotes are bound to their `scheduleAt`, so every change
+  re-quotes — the price is always for the trip actually being bought.
+- **Modal UX**: the strip says whose time the trip is scheduled for ("the time
+  the buyer asked for" vs "the time you picked") with a **Change time**
+  toggle → date+time inputs + "Use this time" (re-quote) + "Send the rider
+  now" + "Use the buyer's time instead" (reset). Override state fully resets
+  on dialog close/confirm — a dismissed override can never leak into the next
+  booking.
+- **Promise-mismatch warning**: when an override makes the trip differ from a
+  still-future buyer moment, an amber note says the order still promises the
+  buyer the old time and points at **Reschedule** (order detail) *before*
+  booking — deliberately before, because an active booking blocks the
+  reschedule (frozen `quotationId`). The two features compose as
+  *reschedule → book*; the dispatch override alone is for pickup-lead
+  tweaks ("rider leaves 45 min before the promise") and send-now.
+- `prepareBooking` also returns `buyerRequestedMoment` (the untouched buyer
+  moment) so the modal can render that warning without a second read.
+  `confirmBooking`/`deliveryJobs.scheduledAt` are unchanged — the override is
+  already baked into the quote's `scheduledFor`.
+- The seller-side reschedule of the ORDER's fulfilment moment (what the buyer
+  sees) is `orders.rescheduleFulfilment` — see docs/fulfilment-date.md
+  ("Seller reschedule"). Its hard guard: refused while a rider job is ACTIVE.
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys

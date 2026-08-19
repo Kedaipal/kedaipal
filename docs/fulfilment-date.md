@@ -191,3 +191,49 @@ point's hours are governed by its own schedule note.
   moment" + the scheduled-booking paragraph). The shared rule is
   `resolveScheduleAt`: ≥30 min ahead and within ~30 days schedules,
   anything else books now.
+
+## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
+
+The escape hatch the 3 AM advance order exposed: a buyer scheduled a delivery
+two days out at 3:00 AM and nothing in the product could change it — both
+fulfilment fields were write-once at `orders.create`, and dispatch would only
+offer a rider *at 3 AM*. Now the seller agrees a new time with the buyer in
+chat and records it on the order.
+
+- **`orders.rescheduleFulfilment`** (owner-or-admin via `requireRetailerAccess`,
+  admin act-as audited): patches `fulfilmentDate` (+ `fulfilmentTimeMinutes` on
+  delivery orders) and writes a `fulfilment_rescheduled (from … to …)`
+  orderEvent in the `delivery_fee_set` note style. Omitting the time keeps the
+  existing one — a date-only change can never silently drop the clock. A
+  passed time on a self-collect order is ignored (mirrors create). A dateless
+  legacy order may be *given* a date (`from unset`).
+- **Window**: `pending`/`confirmed`/`packed` only; refused on
+  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), and
+  once a collection order's goods have arrived (`collectedAt`).
+- **The hard guard is the ACTIVE Lalamove job**: a booking is frozen against
+  its `quotationId` and will NOT follow the order, so rescheduling under it
+  would desync the buyer's promise from the trip. Server throws; the dialog
+  opens onto an explanation pointing at "cancel the booking first". Order of
+  operations is therefore *reschedule → book*, never the reverse.
+- **The buyer-facing minimum-notice floor does NOT apply** — the notice window
+  protects the seller's lead time and the seller is the one moving the date.
+  The `[today, +30d]` range still holds (validation passes notice `0` to
+  `assertValidFulfilmentDate`).
+- **The buyer sees it instantly, with zero new plumbing**: the tracking page
+  reads `orders.get` reactively, later stage messages/emails render from live
+  order fields, and the inbox due-today buckets/sort are live reads.
+  Deliberately **no new WhatsApp send** (one-msg-per-order posture) — messages
+  already sent keep the old time; the chat agreement covers that, and the
+  dialog's helper copy says so ("agree the new time with them in chat first").
+- **UI**: `RescheduleFulfilmentDialog` on order detail's Fulfillment card —
+  renders only inside the reschedule window ("Reschedule", or "Set date" on a
+  dateless order), native date+time inputs, live "the buyer's order page will
+  show …" preview.
+- Dispatch needs no change to follow: `prepareBooking` re-derives
+  `requestedMoment` from the live order doc on every quote. The companion
+  dispatch-side picker (book a rider at a *different* moment than the order
+  promises) lives in docs/delivery-lalamove.md.
+- **Prevention is a separate ticket**: checkout's time floor only applies to
+  today, so a future-day 3 AM stays pickable until the store opening-hours
+  work lands (Zaki's parallel branch) — that will gate the buyer's picker;
+  this reschedule stays the vendor-side correction for edge cases.
