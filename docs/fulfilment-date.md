@@ -310,7 +310,14 @@ chat and records it on the order.
 - **UI**: `RescheduleFulfilmentDialog` on order detail's Fulfillment card —
   renders only inside the reschedule window ("Reschedule", or "Set date" on a
   dateless order), native date+time inputs, live "the buyer's order page will
-  show …" preview.
+  show …" preview. On a **bookable Lalamove order** the dialog also fetches a
+  debounced **"Lalamove for this slot"** price for the picked moment (rider
+  prices are slot-sensitive) with the frozen buyer-paid fee named beside it —
+  purely the seller's cost outlook, re-quoted for real at booking; flat/
+  radius/weight stores never see it (their fees aren't time-sensitive). The
+  Fulfillment card itself is two stacked rows (header + Reschedule up top,
+  date/time on its own full-width line under a separator) so the badge, time
+  and control never fight for one mobile line.
 - Dispatch needs no change to follow: `prepareBooking` re-derives
   `requestedMoment` from the live order doc on every quote. The companion
   dispatch-side picker (book a rider at a *different* moment than the order

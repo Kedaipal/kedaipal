@@ -1,8 +1,8 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { useMutation } from "convex/react";
-import { CalendarClock } from "lucide-react";
-import { useState } from "react";
+import { useAction, useMutation } from "convex/react";
+import { CalendarClock, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -16,7 +16,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { isActiveJobStatus } from "../../../convex/lib/lalamove";
-import { convexErrorMessage } from "../../lib/format";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -50,6 +50,20 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 	const [timeValue, setTimeValue] = useState("");
 	const [saving, setSaving] = useState(false);
 	const reschedule = useMutation(api.orders.rescheduleFulfilment);
+	const prepareBooking = useAction(api.lalamove.prepareBooking);
+	// Live Lalamove price for the moment being picked (Zaki, 19 Aug): the
+	// reschedule moves the DISPATCH moment too, and rider prices are
+	// slot-sensitive — so a Lalamove-enabled store sees what a rider costs at
+	// the new time before committing. The buyer's paid fee is frozen and never
+	// re-priced here; this is purely the seller's cost outlook, re-quoted for
+	// real at booking. Debounced (each preview is a live quotation call).
+	const [feePreview, setFeePreview] = useState<
+		| { state: "idle" }
+		| { state: "loading" }
+		| { state: "ready"; fee: number; buyerPaidFee: number; immediate: boolean }
+		| { state: "unavailable" }
+	>({ state: "idle" });
+	const previewGenRef = useRef(0);
 
 	const isDelivery = order.deliveryMethod !== "self_collect";
 	// Only delivery orders can carry a rider booking — skip the read otherwise.
@@ -61,6 +75,54 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 	).data;
 	const hasActiveRiderJob =
 		!!dispatch?.job && isActiveJobStatus(dispatch.job.status);
+	// Fee preview only where a rider quote is real: Lalamove is the store's
+	// delivery method AND this order is bookable right now. Flat/radius/weight
+	// stores never see it — their fees aren't time-sensitive.
+	const canPreviewFee =
+		isDelivery &&
+		dispatch?.bookingEnabled === true &&
+		dispatch.blockReason === null &&
+		!hasActiveRiderJob;
+
+	// Debounced slot-price fetch, stale-guarded: only the newest request may
+	// paint (a slow quote for an abandoned date must land nowhere).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: prepareBooking is a stable hook ref; the effect keys off the picked values + gate.
+	useEffect(() => {
+		if (!open || !canPreviewFee) {
+			setFeePreview({ state: "idle" });
+			return;
+		}
+		const date = mytMidnightFromYmd(dateValue);
+		const minutes = timeMinutesFromHhmm(timeValue);
+		if (Number.isNaN(date) || Number.isNaN(minutes)) {
+			setFeePreview({ state: "idle" });
+			return;
+		}
+		const moment = date + minutes * 60000;
+		const gen = ++previewGenRef.current;
+		setFeePreview({ state: "loading" });
+		const handle = setTimeout(() => {
+			prepareBooking({ shortId: order.shortId, scheduleAtOverride: moment })
+				.then((res) => {
+					if (gen !== previewGenRef.current) return;
+					if (!res.ok) {
+						setFeePreview({ state: "unavailable" });
+						return;
+					}
+					setFeePreview({
+						state: "ready",
+						fee: res.fee,
+						buyerPaidFee: res.buyerPaidFee,
+						immediate: res.scheduledFor === undefined,
+					});
+				})
+				.catch(() => {
+					if (gen === previewGenRef.current)
+						setFeePreview({ state: "unavailable" });
+				});
+		}, 500);
+		return () => clearTimeout(handle);
+	}, [open, canPreviewFee, dateValue, timeValue, order.shortId]);
 
 	const inWindow =
 		(order.status === "pending" ||
@@ -222,6 +284,48 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 									</span>
 									.
 								</p>
+							) : null}
+							{/* Rider-cost outlook for the picked slot (Lalamove stores on a
+							    bookable order only) — the buyer's paid fee never moves here. */}
+							{canPreviewFee && feePreview.state !== "idle" ? (
+								<div className="flex flex-col gap-1 rounded-lg border border-border px-3 py-2.5">
+									<div className="flex items-center justify-between gap-2 text-sm">
+										<span className="text-muted-foreground">
+											Lalamove for this slot
+										</span>
+										{feePreview.state === "loading" ? (
+											<Loader2 className="size-4 animate-spin text-muted-foreground" />
+										) : feePreview.state === "ready" ? (
+											<span className="font-semibold tabular-nums">
+												{formatPrice(feePreview.fee, order.currency)}
+											</span>
+										) : (
+											<span className="text-xs text-muted-foreground">
+												No price right now
+											</span>
+										)}
+									</div>
+									{feePreview.state === "ready" &&
+									feePreview.fee !== feePreview.buyerPaidFee ? (
+										<p className="text-xs text-muted-foreground">
+											Buyer paid{" "}
+											{formatPrice(feePreview.buyerPaidFee, order.currency)} —
+											the difference settles from your Lalamove wallet when you
+											book.
+										</p>
+									) : null}
+									{feePreview.state === "ready" && feePreview.immediate ? (
+										<p className="text-xs text-muted-foreground">
+											This time is close — booking would send the rider
+											straight away.
+										</p>
+									) : null}
+									{feePreview.state === "ready" ? (
+										<p className="text-xs text-muted-foreground/80">
+											Estimate for today — re-quoted when you book.
+										</p>
+									) : null}
+								</div>
 							) : null}
 							<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 								Updates the buyer&apos;s order page instantly — no WhatsApp

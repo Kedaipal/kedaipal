@@ -783,7 +783,10 @@ export function BookDeliveryCard({
 								</button>
 							</div>
 							{editSchedule ? (
-								<div className="flex flex-col gap-2 rounded-lg border border-border p-2.5">
+								<div className="flex flex-col gap-2 rounded-xl border border-border p-3">
+									{/* Inputs and actions share one 2-col grid rhythm and one
+									    height (field inputs are min-h-11), so the four controls
+									    read as a set instead of mismatched sizes. */}
 									<div className="grid grid-cols-2 gap-2">
 										<Input
 											type="date"
@@ -806,10 +809,10 @@ export function BookDeliveryCard({
 											onChange={(e) => setSchedTime(e.target.value)}
 										/>
 									</div>
-									<div className="flex flex-wrap gap-2">
+									<div className="grid grid-cols-2 gap-2">
 										<Button
 											type="button"
-											className="h-10 flex-1"
+											className="h-11 w-full"
 											disabled={requoting || booking}
 											onClick={() => void handleApplySchedule()}
 										>
@@ -818,7 +821,7 @@ export function BookDeliveryCard({
 										<Button
 											type="button"
 											variant="outline"
-											className="h-10"
+											className="h-11 w-full"
 											disabled={requoting || booking}
 											onClick={() =>
 												void handleRequote({ scheduleOverride: "now" }).then(
@@ -832,7 +835,7 @@ export function BookDeliveryCard({
 									{scheduleOverride !== null ? (
 										<button
 											type="button"
-											className="self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
+											className="flex min-h-9 items-center self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
 											disabled={requoting || booking}
 											onClick={() =>
 												void handleRequote({ scheduleOverride: null }).then(

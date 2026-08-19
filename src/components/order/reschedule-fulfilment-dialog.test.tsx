@@ -21,9 +21,12 @@ import { RescheduleFulfilmentDialog } from "./reschedule-fulfilment-dialog";
 const state = vi.hoisted(() => ({
 	dispatch: null as unknown,
 	mutation: undefined as unknown,
+	action: undefined as unknown,
 }));
 vi.mock("convex/react", () => ({
 	useMutation: () => state.mutation ?? vi.fn(),
+	// Backs prepareBooking (the Lalamove slot-price preview).
+	useAction: () => state.action ?? vi.fn(),
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -36,6 +39,7 @@ afterEach(() => {
 	cleanup();
 	state.dispatch = null;
 	state.mutation = undefined;
+	state.action = undefined;
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +51,7 @@ function threeAmOrder(overrides: Record<string, unknown> = {}) {
 		shortId: "ORD-TEST",
 		status: "confirmed",
 		deliveryMethod: "delivery",
+		currency: "MYR",
 		source: undefined,
 		collectedAt: undefined,
 		fulfilmentDate: todayMytMidnight() + 2 * DAY_MS,
@@ -142,5 +147,62 @@ describe("RescheduleFulfilmentDialog — form", () => {
 
 		expect(screen.getByText(/booking is active/i)).toBeTruthy();
 		expect(screen.queryByText("Save new date")).toBeNull();
+	});
+});
+
+describe("RescheduleFulfilmentDialog — Lalamove slot-price preview", () => {
+	it("shows the rider price for the picked slot on a bookable Lalamove order", async () => {
+		state.dispatch = {
+			job: null,
+			blockReason: null,
+			bookingEnabled: true,
+			promptBookOnPacked: false,
+		};
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q-preview",
+			senderStopId: "s",
+			recipientStopId: "r",
+			fee: 1200,
+			buyerPaidFee: 400,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+			scheduledFor: Date.now() + 24 * 60 * 60 * 1000,
+			buyerRequestedMoment: Date.now() + 24 * 60 * 60 * 1000,
+		});
+		state.action = prepare;
+		render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+
+		fireEvent.click(screen.getByText("Reschedule"));
+		// Debounced (500ms) live quote for the prefilled moment.
+		expect(
+			await screen.findByText("Lalamove for this slot", {}, { timeout: 2500 }),
+		).toBeTruthy();
+		expect(
+			await screen.findByText(/RM\s?12\.00/, {}, { timeout: 2500 }),
+		).toBeTruthy();
+		// The buyer's frozen fee is named, never re-priced.
+		expect(screen.getByText(/Buyer paid RM\s?4\.00/)).toBeTruthy();
+		expect(prepare).toHaveBeenCalledWith(
+			expect.objectContaining({ shortId: "ORD-TEST" }),
+		);
+	});
+
+	it("never quotes on a store without Lalamove booking", async () => {
+		state.dispatch = {
+			job: null,
+			blockReason: null,
+			bookingEnabled: false,
+			promptBookOnPacked: false,
+		};
+		const prepare = vi.fn();
+		state.action = prepare;
+		render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+
+		fireEvent.click(screen.getByText("Reschedule"));
+		// Outwait the debounce window — nothing may fire or render.
+		await new Promise((r) => setTimeout(r, 800));
+		expect(screen.queryByText("Lalamove for this slot")).toBeNull();
+		expect(prepare).not.toHaveBeenCalled();
 	});
 });
