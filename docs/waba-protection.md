@@ -107,6 +107,16 @@ one button that either opts it out (`adminRegisterOptOut`, the first caller of
 the `manual_admin` source declared in the schema from day one) or re-activates
 it (`adminReactivateOptIn`). Same scope as a STOP; idempotent both ways.
 
+**Input is canonicalized to the international `60…` form** via
+`assertValidMyMobile` — the same rule as the counter manual-phone dialog,
+whose buyers are this panel's whole audience (PR #191 review). Every key the
+send gate checks is international (Meta's inbound `from`, checkout/counter
+numbers), so an opt-out keyed on a bare local-digits strip would never match
+`isOptedOut` and fail silently while the panel claimed otherwise. Invalid /
+non-MY input disables the button with a reason instead of registering an
+unmatchable key; canonicalization also keeps buyer-texted `START` able to undo
+an admin opt-out (one key, both paths — pinned by test).
+
 Every manual action is audited via **`logGlobalAdminAction`** — a new
 `adminAuditLog` shape with **no `retailerId`** (the field widened to optional),
 because the opt-out is global to the shared number, not a store action. The

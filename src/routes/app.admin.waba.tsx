@@ -247,6 +247,10 @@ function GlobalOptOutPanel() {
 	const registerOptOut = useMutation(api.wabaProtection.adminRegisterOptOut);
 	const reactivate = useMutation(api.wabaProtection.adminReactivateOptIn);
 	const [submitting, setSubmitting] = useState(false);
+	// The server is the judge of what counts as a valid MY mobile (PR #191
+	// review — the key must canonicalize to the 60… form the send gate checks).
+	const invalid =
+		status !== undefined && !status.optedOut && status.invalid === true;
 
 	async function act() {
 		if (!status) return;
@@ -290,7 +294,7 @@ function GlobalOptOutPanel() {
 				<Button
 					variant={status?.optedOut ? "outline" : "destructive"}
 					onClick={act}
-					disabled={!valid || status === undefined || submitting}
+					disabled={!valid || status === undefined || invalid || submitting}
 				>
 					{status?.optedOut ? (
 						<>
@@ -309,7 +313,9 @@ function GlobalOptOutPanel() {
 						? `Currently opted out (${status.source.replaceAll("_", " ")}, since ${new Date(
 								status.since,
 							).toLocaleDateString("en-MY")}).`
-						: "This number is not currently opted out."}
+						: invalid
+							? "Enter a valid Malaysian mobile number (e.g. 011-2345 6789)."
+							: "This number is not currently opted out."}
 				</p>
 			) : null}
 		</section>

@@ -336,6 +336,73 @@ describe("admin manual opt-out (86eyn25gu)", () => {
 			audits2.some((a) => a.action === "wabaProtection.manualOptIn"),
 		).toBe(true);
 	});
+
+	// PR #191 review finding: the panel's placeholder suggests the LOCAL format
+	// ("011-2345 6789"), but every key the send gate checks is international
+	// (Meta's inbound `from`, checkout/counter numbers) — so a local-keyed row
+	// would suppress nothing while the status panel claimed it did. Red on the
+	// digits-only-strip version, green with assertValidMyMobile canonicalization.
+	test("local-format input canonicalizes to the 60… form the send gate and START both key on", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// BUYER ("60111222333") typed the way the placeholder suggests.
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "011-1222 333",
+		});
+
+		// Stored under the INTERNATIONAL key — the one isOptedOut checks.
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe(BUYER);
+
+		// Both spellings of the same number agree on the status.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: true, source: "manual_admin" });
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "011-1222 333",
+			}),
+		).toMatchObject({ optedOut: true });
+
+		// The keyword path (buyer texts START — always the international form)
+		// can undo an admin opt-out: the two paths share one key.
+		await t.mutation(internal.wabaProtection.reactivateOptIn, {
+			waPhone: BUYER,
+		});
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "011-1222 333",
+			}),
+		).toMatchObject({ optedOut: false });
+	});
+
+	test("non-MY / partial input is invalid: status says so, register refuses", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// A Singapore number is out of scope for this panel (counter buyers are
+		// MY-mobile validated); the panel disables with reason instead of
+		// registering a key no send-gate check would ever match.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "+65 9123 4567",
+			}),
+		).toMatchObject({ optedOut: false, invalid: true });
+		await expect(
+			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+				waPhone: "+65 9123 4567",
+			}),
+		).rejects.toThrow();
+		expect(
+			await t.run(async (ctx) => ctx.db.query("optOuts").collect()),
+		).toHaveLength(0);
+	});
 });
 
 describe("guarded send end-to-end", () => {
