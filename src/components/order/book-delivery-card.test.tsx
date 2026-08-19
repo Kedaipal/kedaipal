@@ -8,6 +8,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import {
+	mytMidnightFromYmd,
+	todayMytMidnight,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
 import { BookDeliveryCard } from "./book-delivery-card";
 
 // The card reads its job via `useQuery(convexQuery(...)).data` and books via
@@ -20,9 +25,12 @@ import { BookDeliveryCard } from "./book-delivery-card";
 const state = vi.hoisted(() => ({
 	dispatch: null as unknown,
 	action: undefined as unknown,
+	mutation: undefined as unknown,
 }));
 vi.mock("convex/react", () => ({
 	useAction: () => state.action ?? vi.fn(),
+	// Backs rescheduleFulfilment (the order-sync half of the rebook fix).
+	useMutation: () => state.mutation ?? vi.fn(),
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -37,6 +45,7 @@ vi.mock("@tanstack/react-router", () => ({
 afterEach(() => {
 	cleanup();
 	state.action = undefined;
+	state.mutation = undefined;
 });
 
 const deliveredOrder = {
@@ -686,5 +695,182 @@ describe("BookDeliveryCard — manual advance opens the booking modal", () => {
 			expect(onAdvanceBookUnavailable).toHaveBeenCalledTimes(1),
 		);
 		expect(screen.queryByText("Confirm & dispatch")).toBeNull();
+	});
+});
+
+describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () => {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const bookableOrder = {
+		_id: "order-rebook-1",
+		shortId: "ORD-WAGYU",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+		source: undefined,
+	} as unknown as Doc<"orders">;
+
+	function quoteResult(overrides: Record<string, unknown> = {}) {
+		return {
+			ok: true,
+			quotationId: "q-1",
+			senderStopId: "s-1",
+			recipientStopId: "r-1",
+			fee: 1200,
+			buyerPaidFee: 1200,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+			scheduledFor: undefined,
+			buyerRequestedMoment: undefined,
+			...overrides,
+		};
+	}
+
+	/** Amber failed-booking dispatch — the Wagyu Walid rebook entry state. */
+	function failedDispatch() {
+		return {
+			promptBookOnPacked: false,
+			blockReason: null,
+			deliveryDirection: "standard",
+			job: {
+				status: "canceled",
+				providerOrderId: "3545890794555130640",
+				costActual: 1170,
+				vehicleType: "MOTORCYCLE",
+				driver: undefined,
+				shareLink: undefined,
+				failureReason: "driver not found",
+				createdAt: 1_700_000_000_000,
+			},
+		};
+	}
+
+	it("Rebook opens the dialog with the time editor ALREADY showing — the stale schedule is never a hidden default", async () => {
+		state.dispatch = failedDispatch();
+		// Stale promise: the failed trip's moment is already past.
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ buyerRequestedMoment: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Rebook delivery"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("Pickup date")).toBeTruthy(),
+		);
+		expect(screen.getByLabelText("Pickup time")).toBeTruthy();
+	});
+
+	it("applying a picked time surfaces the order-sync checkbox, pre-checked on the rebook path", async () => {
+		state.dispatch = failedDispatch();
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ buyerRequestedMoment: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Rebook delivery"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("Pickup date")).toBeTruthy(),
+		);
+		const ymd = ymdFromEpoch(todayMytMidnight() + DAY_MS);
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymd },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		fireEvent.click(screen.getByText("Use this time"));
+
+		const checkbox = (await screen.findByRole(
+			"checkbox",
+		)) as HTMLInputElement;
+		expect(checkbox.checked).toBe(true);
+	});
+
+	it("a still-future buyer moment defaults the sync OFF and warns instead", async () => {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			deliveryDirection: "standard",
+			job: null,
+		};
+		const future = Date.now() + 5 * 60 * 60 * 1000;
+		// First call = the open-dialog prepare (buyer's own moment); later
+		// calls = the re-quote at the picked moment, which the real server
+		// returns as a DIFFERENT scheduledFor.
+		state.action = vi
+			.fn()
+			.mockResolvedValueOnce(
+				quoteResult({ buyerRequestedMoment: future, scheduledFor: future }),
+			)
+			.mockResolvedValue(
+				quoteResult({
+					buyerRequestedMoment: future,
+					scheduledFor: future + 2 * 60 * 60 * 1000,
+				}),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await waitFor(() => expect(screen.getByText("Change time")).toBeTruthy());
+		fireEvent.click(screen.getByText("Change time"));
+		const ymd = ymdFromEpoch(todayMytMidnight() + DAY_MS);
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymd },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		fireEvent.click(screen.getByText("Use this time"));
+
+		const checkbox = (await screen.findByRole(
+			"checkbox",
+		)) as HTMLInputElement;
+		expect(checkbox.checked).toBe(false);
+		// The promise-mismatch warning points at the box, not at a detour.
+		expect(screen.getByText(/Tick the box above/)).toBeTruthy();
+	});
+
+	it("confirming with sync ON reschedules the ORDER to the picked moment before dispatching", async () => {
+		state.dispatch = failedDispatch();
+		const mutate = vi.fn().mockResolvedValue(undefined);
+		state.mutation = mutate;
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ buyerRequestedMoment: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Rebook delivery"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("Pickup date")).toBeTruthy(),
+		);
+		const ymd = ymdFromEpoch(todayMytMidnight() + DAY_MS);
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymd },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		fireEvent.click(screen.getByText("Use this time"));
+		await screen.findByRole("checkbox");
+
+		fireEvent.click(screen.getByText("Confirm & dispatch"));
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith({
+				orderId: bookableOrder._id,
+				fulfilmentDate: mytMidnightFromYmd(ymd),
+				fulfilmentTimeMinutes: 9 * 60,
+			}),
+		);
+		// Dispatch still went through after the sync (3rd action call: prepare,
+		// re-quote, confirm).
+		await waitFor(() =>
+			expect((state.action as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3),
+		);
 	});
 });

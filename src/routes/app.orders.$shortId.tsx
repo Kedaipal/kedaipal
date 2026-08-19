@@ -56,6 +56,7 @@ import {
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
 import {
 	MarkShippedDialog,
 	type ShipmentFields,
@@ -1312,52 +1313,62 @@ function OrderDetailRoute() {
 				) : null}
 			</section>
 
-			{/* Delivery method */}
-			<section className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
-				<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-					{isSelfCollect ? (
-						<Package className="size-4 text-muted-foreground" />
-					) : (
-						<Truck className="size-4 text-muted-foreground" />
-					)}
+			{/* Delivery method. Two stacked rows, not one — the date badge, time
+			    and Reschedule control all competed for one line on mobile and
+			    wrapped mid-badge (Zaki's 19 Aug screenshot); the date row now
+			    owns the card's full width under a separator. */}
+			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+				<div className="flex items-center gap-3">
+					<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+						{isSelfCollect ? (
+							<Package className="size-4 text-muted-foreground" />
+						) : (
+							<Truck className="size-4 text-muted-foreground" />
+						)}
+					</div>
+					<div className="flex min-w-0 flex-col">
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Fulfillment
+						</p>
+						<p className="text-sm font-medium">
+							{isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Drop-off"
+									: "Self Collect"
+								: collectionService
+									? "Collection"
+									: "Delivery"}
+						</p>
+					</div>
+					{/* Seller reschedule (86eyp5qd1) — renders only inside the
+					    reschedule window (pre-shipped, non-counter, not collected). */}
+					<div className="ml-auto shrink-0">
+						<RescheduleFulfilmentDialog order={order} />
+					</div>
 				</div>
-				<div className="flex flex-col gap-1">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Fulfillment
-					</p>
-					<p className="text-sm font-medium">
-						{isSelfCollect
-							? order.pickupSnapshot?.locationType === "drop_off"
-								? "Drop-off"
-								: "Self Collect"
-							: collectionService
-								? "Collection"
-								: "Delivery"}
-					</p>
-					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
-						<div className="flex items-center gap-1.5">
-							<span className="text-xs text-muted-foreground">
-								{isSelfCollect
-									? order.pickupSnapshot?.locationType === "drop_off"
-										? "Meet on"
-										: "Collect on"
-									: collectionService
-										? "Collect on"
-										: "Deliver on"}
+				{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
+					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3">
+						<span className="text-xs text-muted-foreground">
+							{isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Meet on"
+									: "Collect on"
+								: collectionService
+									? "Collect on"
+									: "Deliver on"}
+						</span>
+						<FulfilmentDateBadge
+							epoch={order.fulfilmentDate}
+							size="md"
+							muted={isTerminal || order.collectedAt !== undefined}
+						/>
+						{order.fulfilmentTimeMinutes !== undefined ? (
+							<span className="text-sm font-medium whitespace-nowrap">
+								{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
 							</span>
-							<FulfilmentDateBadge
-								epoch={order.fulfilmentDate}
-								size="md"
-								muted={isTerminal || order.collectedAt !== undefined}
-							/>
-							{order.fulfilmentTimeMinutes !== undefined ? (
-								<span className="text-sm font-medium">
-									{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
-								</span>
-							) : null}
-						</div>
-					) : null}
-				</div>
+						) : null}
+					</div>
+				) : null}
 			</section>
 
 			{/* Items */}

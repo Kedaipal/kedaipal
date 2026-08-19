@@ -87,6 +87,7 @@ describe("FulfilmentTab act-as wiring", () => {
 					businessAddress={undefined}
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
 					minOrderValue={undefined}
 					subscription={undefined}
 				/>
@@ -190,6 +191,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 						apiKeyHint: "abcd",
 					}}
 					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
 					minOrderValue={undefined}
 					subscription={undefined}
 				/>
@@ -235,5 +237,177 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 		expect(
 			updateSettings.mock.calls[0][0].deliveryBooking.deliveryDirection,
 		).toBe("standard");
+	});
+});
+
+describe("OpeningHoursCard (86eyp5rav)", () => {
+	let updateSettings: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		// The themed TimePicker's popover rides radix popper, whose floating-ui
+		// positioning needs ResizeObserver — absent in jsdom. Inert polyfill.
+		globalThis.ResizeObserver ??= class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		} as never;
+		updateSettings = vi.fn().mockResolvedValue({ ok: true });
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => ({
+			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
+			isPending: false,
+		})) as never);
+		vi.mocked(useMutation).mockImplementation(((
+			ref: FunctionReference<"mutation">,
+		) =>
+			getFunctionName(ref) === NAME.updateSettings
+				? updateSettings
+				: vi.fn().mockResolvedValue(undefined)) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	function renderWithHours(
+		openingHours:
+			| Array<{ open: number; close: number; closed?: boolean }>
+			| undefined,
+	) {
+		return render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={undefined}
+					businessAddress={undefined}
+					deliveryBooking={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={openingHours}
+					minOrderValue={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>,
+		);
+	}
+
+	it("defaults to 'Open 24 hours, every day'; closing one day saves a 7-row schedule", async () => {
+		renderWithHours(undefined);
+		expect(
+			screen.getByText(/Open 24 hours, every day/),
+		).toBeTruthy();
+		fireEvent.click(
+			screen.getByRole("button", { name: "Set opening hours" }),
+		);
+		// The editor opens in "Same every day" seeded at the current truth
+		// (00:00–23:59 = all day). Tap Sunday's chip off, save.
+		fireEvent.click(screen.getByRole("button", { name: "Sunday" }));
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: [
+					{ open: 0, close: 1439, closed: true },
+					...Array.from({ length: 6 }, () => ({ open: 0, close: 1439 })),
+				],
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("same-every-day: one range set through the themed picker writes the whole week", async () => {
+		renderWithHours(undefined);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Set opening hours" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Opening time" }));
+		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
+		fireEvent.click(screen.getByRole("button", { name: "Closing time" }));
+		fireEvent.click(await screen.findByRole("button", { name: "6:00 PM" }));
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: Array.from({ length: 7 }, () => ({
+					open: 540,
+					close: 1080,
+				})),
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("closing every day disables Save with the reason on screen", () => {
+		renderWithHours(undefined);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Set opening hours" }),
+		);
+		for (const day of [
+			"Monday",
+			"Tuesday",
+			"Wednesday",
+			"Thursday",
+			"Friday",
+			"Saturday",
+			"Sunday",
+		]) {
+			fireEvent.click(screen.getByRole("button", { name: day }));
+		}
+		const save = screen.getByRole("button", {
+			name: "Save hours",
+		}) as HTMLButtonElement;
+		expect(save.disabled).toBe(true);
+		expect(screen.getByText(/Keep at least one day open/)).toBeTruthy();
+		expect(updateSettings).not.toHaveBeenCalled();
+	});
+
+	it("an uneven week opens in 'Different per day'; one row edits alone", async () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ open: 540, close: 1080 }, // Monday
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		// Open days hold two different ranges -> per-day mode pre-selected.
+		const perDay = screen.getByRole("button", {
+			name: /Different per day/,
+		});
+		expect(perDay.getAttribute("aria-pressed")).toBe("true");
+		fireEvent.click(
+			screen.getByRole("button", { name: "Monday opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "8:00 AM" }));
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: [
+					{ open: 540, close: 1080, closed: true },
+					{ open: 480, close: 1080 },
+					...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+				],
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("a configured store shows the weekly summary; Reset sends the null clear", async () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			...Array.from({ length: 6 }, () => ({ open: 540, close: 1080 })),
+		]);
+		// Summary view: window text + the closed day, no editor yet.
+		expect(screen.getAllByText("9:00 AM – 6:00 PM").length).toBe(6);
+		expect(screen.getByText("Closed")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Reset to open 24/7" }),
+		);
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: null,
+				retailerId: undefined,
+			}),
+		);
 	});
 });

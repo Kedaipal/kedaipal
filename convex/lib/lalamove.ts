@@ -622,3 +622,43 @@ export function resolveScheduleAt(
 	if (moment > now + MAX_SCHEDULE_AHEAD_MS) return undefined;
 	return moment;
 }
+
+/**
+ * Seller override for the dispatch pickup moment (86eyp5qd1): the booking
+ * modal lets the vendor pick a different slot than the buyer's fulfilment
+ * moment — `"now"` forces an immediate booking, a number asks for that exact
+ * pickup time, `undefined` keeps the default (the buyer's moment).
+ */
+export type DispatchScheduleOverride = number | "now" | undefined;
+
+/**
+ * Turn a seller's schedule choice into the `scheduleAt` a quotation is built
+ * with. The default and an explicit moment share `resolveScheduleAt`'s clamps,
+ * with ONE deliberate asymmetry at the +30d ceiling: the buyer-derived default
+ * silently degrades to "now" there (it can only happen through clock edge
+ * cases — orders are capped at +30d at create — and an immediate booking is a
+ * safe dispatch), but an EXPLICIT seller pick beyond the window is refused
+ * with a message, because booking a rider right now is the opposite of what
+ * they just asked for. Past/imminent picks still degrade to "now" — that is
+ * what "come as soon as you can" means, and the modal says so before confirm.
+ */
+export function resolveDispatchSchedule(
+	override: DispatchScheduleOverride,
+	requestedMoment: number | undefined,
+	now: number = Date.now(),
+):
+	| { ok: true; scheduleAt: number | undefined }
+	| { ok: false; message: string } {
+	if (override === "now") return { ok: true, scheduleAt: undefined };
+	if (typeof override === "number") {
+		if (override > now + MAX_SCHEDULE_AHEAD_MS) {
+			return {
+				ok: false,
+				message:
+					"Lalamove can only schedule pickups up to 30 days ahead — pick an earlier time.",
+			};
+		}
+		return { ok: true, scheduleAt: resolveScheduleAt(override, now) };
+	}
+	return { ok: true, scheduleAt: resolveScheduleAt(requestedMoment, now) };
+}

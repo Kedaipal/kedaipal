@@ -53,6 +53,7 @@ import type * as lib_legal from "../lib/legal.js";
 import type * as lib_locale from "../lib/locale.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_minOrderRules from "../lib/minOrderRules.js";
+import type * as lib_openingHours from "../lib/openingHours.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderCsv from "../lib/orderCsv.js";
@@ -147,6 +148,7 @@ declare const fullApi: ApiFromModules<{
   "lib/locale": typeof lib_locale;
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/minOrderRules": typeof lib_minOrderRules;
+  "lib/openingHours": typeof lib_openingHours;
   "lib/order": typeof lib_order;
   "lib/orderBuckets": typeof lib_orderBuckets;
   "lib/orderCsv": typeof lib_orderCsv;
