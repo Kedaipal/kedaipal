@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 import {
 	MIN_SCHEDULE_LEAD_MS,
+	resolveDispatchSchedule,
 	resolveScheduleAt,
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
@@ -481,5 +482,59 @@ describe("resolveScheduleAt (86eyg0n8e follow-up)", () => {
 
 	test("no moment = the pre-existing immediate booking", () => {
 		expect(resolveScheduleAt(undefined, NOW)).toBeUndefined();
+	});
+});
+
+describe("resolveDispatchSchedule — seller pickup-time override (86eyp5qd1)", () => {
+	const NOW = 1_785_000_000_000;
+	const MIN = 60_000;
+	const DAY = 24 * 60 * MIN;
+	const BUYER = NOW + 5 * 60 * MIN; // buyer's fulfilment moment, 5h out
+
+	test("no override delegates to the buyer's moment — byte-identical to the old path", () => {
+		expect(resolveDispatchSchedule(undefined, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: resolveScheduleAt(BUYER, NOW),
+		});
+		expect(resolveDispatchSchedule(undefined, undefined, NOW)).toEqual({
+			ok: true,
+			scheduleAt: undefined,
+		});
+	});
+
+	test('"now" forces an immediate booking even when the buyer\'s moment is ahead', () => {
+		expect(resolveDispatchSchedule("now", BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: undefined,
+		});
+	});
+
+	test("a comfortably future pick schedules for exactly then", () => {
+		expect(resolveDispatchSchedule(NOW + 90 * MIN, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: NOW + 90 * MIN,
+		});
+	});
+
+	test("an imminent pick degrades to book-now, same clamp the buyer path uses", () => {
+		expect(resolveDispatchSchedule(NOW + 14 * MIN, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: undefined,
+		});
+	});
+
+	test("an explicit pick beyond the 30-day window is REFUSED, never silently booked now", () => {
+		// Asymmetry with the buyer default (which degrades to now there): an
+		// immediate rider is the opposite of what the seller just asked for.
+		const result = resolveDispatchSchedule(NOW + 31 * DAY, BUYER, NOW);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.message).toMatch(/30 days/);
+	});
+
+	test("exactly at the 30-day boundary still schedules", () => {
+		expect(resolveDispatchSchedule(NOW + 30 * DAY, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: NOW + 30 * DAY,
+		});
 	});
 });
