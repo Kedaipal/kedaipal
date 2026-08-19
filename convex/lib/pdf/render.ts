@@ -523,7 +523,8 @@ export async function buildSubscriptionInvoicePdf(
 		MARGIN + CONTENT_W / 2 + 12,
 		"From",
 		[
-			{ text: "Kedaipal", strong: true },
+			{ text: "Kedaipal Pte Ltd", strong: true },
+			{ text: "UEN 202630712C" },
 			{ text: "WhatsApp-first order hub" },
 		],
 		y,
@@ -585,9 +586,14 @@ export async function buildSubscriptionInvoicePdf(
 
 	y = paymentCard(d, "Payment instructions", data.issuerBank, y);
 
+	// A cross-border (non-MYR) invoice carries no payment card — the MY rails in
+	// billingConfig can't settle it — so the footer points at WhatsApp instead of
+	// "any account above".
 	footer(
 		d,
-		`Please transfer to any account above and use ${data.invoiceNumber} as your payment reference.`,
+		data.issuerBank.length > 0
+			? `Please transfer to any account above and use ${data.invoiceNumber} as your payment reference.`
+			: `We'll confirm payment details with you on WhatsApp — quote ${data.invoiceNumber} as your payment reference.`,
 	);
 	return d.doc.save();
 }

@@ -366,6 +366,70 @@ describe("invoices.issueInvoice", () => {
 		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
+	test("defaults to MYR when no currency is passed (legacy call shape)", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u_myr", "myr-store");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.currency).toBe("MYR");
+		expect(inv?.total).toBe(14900);
+	});
+
+	test("an SGD invoice bills from the SGD price table", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u_sgd", "sgd-store");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "SGD",
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.currency).toBe("SGD");
+		expect(inv?.amount).toBe(5900); // S$59 Pro monthly
+		expect(inv?.total).toBe(5900);
+		expect(inv?.foundingDiscount).toBeUndefined();
+	});
+
+	test("an SGD ANNUAL invoice charges 10 months, like MYR", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u_sgd_a", "sgd-annual-store");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "annual",
+			founding: false,
+			currency: "SGD",
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.currency).toBe("SGD");
+		expect(inv?.total).toBe(2900 * 10); // S$29 × 10 months
+	});
+
+	test("rejects a FOUNDING invoice in SGD — founding pricing is MYR-only", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u_sgd_f", "sgd-founding-store");
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: true,
+				currency: "SGD",
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/RM-only/i);
+	});
+
 	test("rejects Scale + founding-non-Pro + duplicate pending + non-admin", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u3", "store-3");

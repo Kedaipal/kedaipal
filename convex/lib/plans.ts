@@ -140,15 +140,31 @@ export function featuresForPlan(plan: Plan): PlanFeatures {
 	return { ...PLAN_FEATURES[plan] };
 }
 
-// Standard monthly price (minor units / sen).
-export const PLAN_MONTHLY_PRICE: Record<Plan, number> = {
-	starter: 7900,
-	pro: 14900,
-	scale: 29900,
+/** Currencies Kedaipal itself invoices subscriptions in. Distinct from the
+ * storefront `SUPPORTED_CURRENCIES` (lib/currency.ts) — a seller's shop can
+ * trade in more currencies than we bill in. Exhaustive Records below make a
+ * future billing currency a compile error, never a silent MYR fallback. */
+export type BillingCurrency = "MYR" | "SGD";
+export const BILLING_CURRENCIES: BillingCurrency[] = ["MYR", "SGD"];
+
+// Standard monthly price per billing currency (minor units — sen / cents).
+// SGD numbers come from the Aug 2026 SG pricing deck (S$29 / S$59 / S$119).
+export const PLAN_MONTHLY_PRICES: Record<
+	BillingCurrency,
+	Record<Plan, number>
+> = {
+	MYR: { starter: 7900, pro: 14900, scale: 29900 },
+	SGD: { starter: 2900, pro: 5900, scale: 11900 },
 };
+
+// Standard monthly price (minor units / sen) — the MYR table, kept as a named
+// export for existing consumers.
+export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
 
 // Founding Member monthly price — 30% lifetime discount (manual v1). Only the
 // Pro number is reachable at launch; Scale kept for when it activates.
+// Deliberately MYR-only: the Founding 10 is a Malaysian launch cohort, so
+// `planPrice` rejects founding pricing in any other billing currency.
 export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> = {
 	pro: 10400, // RM104
 	scale: 20900, // RM209
@@ -157,16 +173,21 @@ export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> = {
 // Annual billing = 10 months paid, 12 received (~17% off), per CLAUDE.md.
 export const ANNUAL_MONTHS_CHARGED = 10;
 
-/** Plan price for a billing cycle (minor units). Annual = monthly × 10. */
+/** Plan price for a billing cycle (minor units). Annual = monthly × 10.
+ * Founding pricing exists only in MYR — asking for it in another currency is a
+ * caller bug, so it throws rather than silently billing the undiscounted rate. */
 export function planPrice(
 	plan: Plan,
 	cycle: BillingCycle,
 	founding = false,
+	currency: BillingCurrency = "MYR",
 ): number {
+	if (founding && currency !== "MYR")
+		throw new Error("Founding Member pricing is MYR-only.");
 	const monthly =
 		founding && (plan === "pro" || plan === "scale")
 			? FOUNDING_MONTHLY_PRICE[plan]
-			: PLAN_MONTHLY_PRICE[plan];
+			: PLAN_MONTHLY_PRICES[currency][plan];
 	return cycle === "annual" ? monthly * ANNUAL_MONTHS_CHARGED : monthly;
 }
 

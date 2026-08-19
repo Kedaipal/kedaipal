@@ -21,7 +21,11 @@ import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { planPrice } from "../../convex/lib/plans";
+import {
+	BILLING_CURRENCIES,
+	type BillingCurrency,
+	planPrice,
+} from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -198,7 +202,24 @@ function AdminBillingOverview() {
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
-	const pendingTotal = invoices?.reduce((sum, inv) => sum + inv.total, 0) ?? 0;
+	// Invoices can carry different billing currencies (MYR + SGD), so the
+	// outstanding tile sums per currency — one flattened number would be a lie.
+	const pendingByCurrency = new Map<string, number>();
+	for (const inv of invoices ?? []) {
+		pendingByCurrency.set(
+			inv.currency,
+			(pendingByCurrency.get(inv.currency) ?? 0) + inv.total,
+		);
+	}
+	const outstanding =
+		pendingByCurrency.size === 0
+			? formatPrice(0, "MYR")
+			: [...pendingByCurrency.entries()]
+					.sort(([a], [b]) =>
+						a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b),
+					)
+					.map(([currency, sum]) => formatPrice(sum, currency))
+					.join(" + ");
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
@@ -219,7 +240,7 @@ function AdminBillingOverview() {
 		},
 		{
 			label: "Outstanding",
-			value: invoices === undefined ? "..." : formatPrice(pendingTotal, "MYR"),
+			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
 			className: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -513,6 +534,7 @@ function IssueInvoiceForm() {
 	const [plan, setPlan] = useState<"starter" | "pro">("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	const [founding, setFounding] = useState(false);
+	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
@@ -527,11 +549,13 @@ function IssueInvoiceForm() {
 		setFounding(isExistingFounding);
 	}, [retailerId]);
 
-	// Founding is Pro-only — flipping it on forces Pro.
+	// Founding is Pro-only — flipping it on forces Pro. It's also MYR-only (the
+	// Founding 10 is a Malaysian cohort), so founding on forces MYR.
 	const effectivePlan = founding ? "pro" : plan;
+	const effectiveCurrency: BillingCurrency = founding ? "MYR" : currency;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding);
-	const base = planPrice(effectivePlan, cycle, false);
+	const total = planPrice(effectivePlan, cycle, founding, effectiveCurrency);
+	const base = planPrice(effectivePlan, cycle, false, effectiveCurrency);
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -544,10 +568,13 @@ function IssueInvoiceForm() {
 				plan: effectivePlan,
 				billingCycle: cycle,
 				founding,
+				currency: effectiveCurrency,
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
 			setFounding(false);
+			// Reset to the default so the next store isn't silently billed in SGD.
+			setCurrency("MYR");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -637,13 +664,49 @@ function IssueInvoiceForm() {
 						))}
 					</div>
 				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<span className="text-xs font-medium text-muted-foreground">
+						Currency
+					</span>
+					<div className="grid grid-cols-2 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
+						{BILLING_CURRENCIES.map((cur) => (
+							<button
+								key={cur}
+								type="button"
+								disabled={founding && cur !== "MYR"}
+								onClick={() => setCurrency(cur)}
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+									effectiveCurrency === cur
+										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+								}`}
+							>
+								{effectiveCurrency === cur ? (
+									<Check className="size-3.5" />
+								) : null}
+								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
+							</button>
+						))}
+					</div>
+					{founding ? (
+						<span className="text-[11px] text-muted-foreground">
+							Founding pricing is RM-only.
+						</span>
+					) : effectiveCurrency === "SGD" ? (
+						<span className="text-[11px] text-muted-foreground">
+							SGD invoices carry no bank/DuitNow block — payment is arranged
+							over WhatsApp.
+						</span>
+					) : null}
+				</div>
 			</div>
 
 			<label className="flex items-center gap-2.5 text-sm">
 				<input
 					type="checkbox"
 					checked={founding}
-					disabled={isExistingFounding}
+					disabled={isExistingFounding || currency !== "MYR"}
 					onChange={(e) => setFounding(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
@@ -652,11 +715,13 @@ function IssueInvoiceForm() {
 					<span className="block text-xs text-muted-foreground">
 						{isExistingFounding
 							? "This store is a Founding Member — lifetime 30% discount applied automatically."
-							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
-									spotsRemaining === 0
-										? " (cohort full — no rank will be claimed)"
-										: ""
-								}`}
+							: currency !== "MYR"
+								? "Founding pricing is RM-only — switch the currency to MYR first."
+								: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+										spotsRemaining === 0
+											? " (cohort full — no rank will be claimed)"
+											: ""
+									}`}
 					</span>
 				</span>
 			</label>
@@ -665,12 +730,12 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, "MYR")}
+						{formatPrice(total, effectiveCurrency)}
 					</p>
 					{founding ? (
 						<p className="text-xs text-emerald-700">
-							{formatPrice(base, "MYR")} − {formatPrice(base - total, "MYR")}{" "}
-							founding discount
+							{formatPrice(base, effectiveCurrency)} −{" "}
+							{formatPrice(base - total, effectiveCurrency)} founding discount
 						</p>
 					) : null}
 				</div>

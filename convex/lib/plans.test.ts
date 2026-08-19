@@ -1,12 +1,14 @@
 import { describe, expect, test } from "vitest";
 import {
 	ANNUAL_MONTHS_CHARGED,
+	BILLING_CURRENCIES,
 	capsForPlan,
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	isPlanSelectable,
 	isUnlimited,
 	PLAN_MONTHLY_PRICE,
+	PLAN_MONTHLY_PRICES,
 	PLANS,
 	planPrice,
 	planQualifiesForFounding,
@@ -79,6 +81,33 @@ describe("plans — pricing", () => {
 		expect(planPrice("pro", "monthly", true)).toBe(10400);
 		// Starter has no founding price → falls back to its standard price.
 		expect(planPrice("starter", "monthly", true)).toBe(PLAN_MONTHLY_PRICE.starter);
+	});
+
+	test("SGD table prices per the Aug 2026 SG deck (S$29 / S$59 / S$119)", () => {
+		expect(planPrice("starter", "monthly", false, "SGD")).toBe(2900);
+		expect(planPrice("pro", "monthly", false, "SGD")).toBe(5900);
+		expect(planPrice("scale", "monthly", false, "SGD")).toBe(11900);
+		// Annual keeps the same 10-months-charged rule in every currency.
+		expect(planPrice("pro", "annual", false, "SGD")).toBe(5900 * 10);
+	});
+
+	test("MYR stays the default — legacy call shape is byte-identical", () => {
+		expect(planPrice("pro", "monthly")).toBe(
+			planPrice("pro", "monthly", false, "MYR"),
+		);
+		expect(PLAN_MONTHLY_PRICE).toBe(PLAN_MONTHLY_PRICES.MYR);
+	});
+
+	test("founding pricing is MYR-only — any other currency throws", () => {
+		expect(() => planPrice("pro", "monthly", true, "SGD")).toThrow(/MYR-only/);
+	});
+
+	test("every billing currency prices every plan (exhaustive table)", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of PLANS) {
+				expect(PLAN_MONTHLY_PRICES[currency][plan]).toBeGreaterThan(0);
+			}
+		}
 	});
 });
 
