@@ -191,3 +191,73 @@ point's hours are governed by its own schedule note.
   moment" + the scheduled-booking paragraph). The shared rule is
   `resolveScheduleAt`: ≥30 min ahead and within ~30 days schedules,
   anything else books now.
+
+## Update (2026-08-19, 86eyp5rav): store opening hours
+
+A buyer scheduled a **3:00 AM delivery** two days out — nothing told checkout
+when the store can actually operate. Stores now carry an optional weekly
+schedule, and the fulfilment moment must fall inside it.
+
+- **Storage:** `retailers.openingHours` — 7 entries indexed by weekday
+  (**0 = Sunday**, the `getUTCDay` index `formatFulfilmentDate` already reads
+  off a MYT-shifted date, so the two can never disagree about which weekday a
+  date is). Per day `{ open, close, closed? }` in minutes since MYT midnight,
+  `0 ≤ open < close ≤ 1439` — **23:59 is the ceiling** because a native
+  `<input type="time">` cannot express "24:00" and fulfilment times are
+  already `< 1440`, so "open 24 hours" is `{0, 1439}` and there is no
+  midnight special case anywhere. Boundaries are **inclusive** (delivering AT
+  closing time is fine — the freeAbove posture). A closed day keeps its
+  open/close values so re-opening it in settings restores them.
+  **Undefined = open 24/7** (every pre-existing store, zero migration); an
+  explicitly-saved all-24h week **normalizes back to unset** (one spelling,
+  the minOrderValue posture); an **all-closed week is rejected** (the
+  working-method-invariant posture — the store could never take an order).
+  All-tier, public-safe (both retailer reads carry it).
+- **One pure module, one author:** `convex/lib/openingHours.ts` —
+  `sanitizeOpeningHours` (updateSettings), `assertWithinOpeningHours`
+  (`orders.create` AND the checkout submit mirror, so the words match),
+  `selectableTimeWindow` (the lead floor raised to opening, capped by
+  closing — with hours unset it degrades to exactly the pre-hours floor
+  behaviour), `defaultTimeWithinHours` (the 10:00-AM/floor prefill clamped
+  into the window), `openNowStatus` (storefront header line),
+  `openingHoursSpecification` (Store JSON-LD).
+- **What it constrains — and what it deliberately doesn't.** Only the
+  buyer's fulfilment date/time at storefront checkout: browsing and placing
+  orders stay 24/7 (the whole point of an async order hub), **counter
+  checkout is exempt** (seller standing there — the min-notice posture,
+  pinned by test), and **pickup orders validate day-level only** (they have
+  no time field; the pickup point's own `scheduleNote` keeps carrying the
+  point-level detail). A closed day rejects for BOTH methods.
+- **Checkout UX:** day chips **skip closed days and scan forward** (three
+  real choices still show; for delivery, a today whose window has passed is
+  skipped too), the default date is the first day the store can actually
+  fulfil, the time input carries the window as native `min`/`max` **plus the
+  hours named in its helper text** (the rule is never silent), the 30s
+  repair pulls an invalidated slot into the window, and a closed day picked
+  via the native date input (which can't skip weekdays) gets an immediate
+  inline explanation naming the weekday. Server re-validates everything.
+- **Storefront display:** stores WITH configured hours get a live
+  "Open now · closes 9:00 PM" / "Closed · opens 9:00 AM tomorrow" line in
+  the shared `StorefrontHeader` (all four buyer pages), tapping open the
+  weekly schedule in a dialog; the 24/7 default renders nothing (no clutter
+  where the rule doesn't bind). SSR-safe via `suppressHydrationWarning` on
+  the clock-dependent text + a minute tick. The store home's JSON-LD gains
+  `openingHoursSpecification` (open days only — the default claims nothing
+  rather than asserting "always open").
+- **Settings → Fulfilment**, first card (hours are the most fundamental
+  timing rule, above notice): summary view ("Open 24 hours, every day" when
+  unset) → 7-day editor (Monday-first display over the Sunday-indexed
+  array), per-day open/closed toggle + time range, "Apply X's hours to every
+  day" convenience, disabled-with-reason Save on an all-closed draft, and a
+  quiet "Reset to open 24/7" (`openingHours: null`).
+- **NO hidden ±1h buffer** (the "first slot an hour after open" idea was
+  considered and rejected): a hidden offset makes the displayed hours lie
+  ("you open at 9 — why can't I pick 9?"), and prep headroom already has
+  explicit levers — min notice, the 15-min lead floor, or simply tighter
+  hours. An explicit "prep buffer" setting is a clean follow-up if a real
+  seller asks.
+- **v1 limits** (each a follow-up if a real seller asks): one range per day,
+  no overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception dates.
+  Known corner: a long notice (e.g. 27 days) combined with closed days can
+  leave a mostly-closed selectable window — chips go sparse and submit
+  explains; the server gate keeps it correct.

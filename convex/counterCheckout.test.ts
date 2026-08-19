@@ -1271,3 +1271,39 @@ describe("counterCheckout — minimum order rules exemption", () => {
 		expect(order?.total).toBe(500);
 	});
 });
+
+describe("counterCheckout — opening hours exemption (86eyp5rav)", () => {
+	test("a counter order on a CLOSED day still creates — the seller is standing there", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		// Close the store on TODAY's weekday (0 = Sunday, MYT), the min-notice
+		// exemption posture: storefront checkout would refuse this date.
+		const today =
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000;
+		const todayDow = new Date(today + 8 * 3600_000).getUTCDay();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: Array.from({ length: 7 }, (_, i) =>
+					i === todayDow
+						? { open: 540, close: 1080, closed: true }
+						: { open: 0, close: 1439 },
+				),
+			},
+		);
+		const sessionId = await boundSession(t, retailer._id);
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				fulfilmentDate: today,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.fulfilmentDate).toBe(today);
+		expect(order?.status).toBe("confirmed");
+	});
+});
