@@ -246,10 +246,22 @@ schedule, and the fulfilment moment must fall inside it.
   rather than asserting "always open").
 - **Settings → Fulfilment**, first card (hours are the most fundamental
   timing rule, above notice): summary view ("Open 24 hours, every day" when
-  unset) → 7-day editor (Monday-first display over the Sunday-indexed
-  array), per-day open/closed toggle + time range, "Apply X's hours to every
-  day" convenience, disabled-with-reason Save on an all-closed draft, and a
-  quiet "Reset to open 24/7" (`openingHours: null`).
+  unset) → an editor that leads with a **mode choice** (Zaki's round-2
+  feedback — setting 7 rows one by one was the entry fee, and the browser's
+  native time dropdown was ugly): **"Same every day"** (the default — ONE
+  time range + tap-to-toggle weekday chips for rest days; editing the range
+  writes every row, closed days included, so re-opening a chip inherits it;
+  switching to this mode visibly unifies onto the first open day's range)
+  vs **"Different per day"** (the 7-row editor, Monday-first display over
+  the Sunday-indexed array). Mode is derived on entry: open days sharing one
+  range read as "same". Both modes pick times through the new **themed
+  `ui/time-picker.tsx`** — a field-styled trigger opening a single
+  scrollable 30-min-step list (Google-Calendar pattern, 11:59 PM appended as
+  the terminal option), replacing the unstyled native dropdown on dashboard
+  surfaces; the buyer checkout's TimeField deliberately STAYS native (on
+  phones it opens the OS wheel, which no custom popover beats — the ugliness
+  was a desktop-dashboard problem). Disabled-with-reason Save on an
+  all-closed draft, quiet "Reset to open 24/7" (`openingHours: null`).
 - **NO hidden ±1h buffer** (the "first slot an hour after open" idea was
   considered and rejected): a hidden offset makes the displayed hours lie
   ("you open at 9 — why can't I pick 9?"), and prep headroom already has

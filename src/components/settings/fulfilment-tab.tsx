@@ -61,6 +61,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
+import { TimePicker } from "../ui/time-picker";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
@@ -1972,12 +1973,27 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	const updateSettings = useUpdateSettings();
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState<DayDraft[]>(() => draftFromHours(initial));
+	// "Same every day" (one range + day chips — the overwhelmingly common
+	// schedule) vs "Different per day" (the 7-row editor). Derived on entry:
+	// a schedule whose OPEN days all share one range reads as "same".
+	const [mode, setMode] = useState<"same" | "perDay">("same");
 	const [saving, setSaving] = useState(false);
 
 	const configured = initial !== undefined;
 
 	function startEditing() {
-		setDraft(draftFromHours(initial));
+		const rows = draftFromHours(initial);
+		const open = rows.filter((row) => !row.closed);
+		setMode(
+			open.every(
+				(row) =>
+					row.openHhmm === open[0].openHhmm &&
+					row.closeHhmm === open[0].closeHhmm,
+			)
+				? "same"
+				: "perDay",
+		);
+		setDraft(rows);
 		setEditing(true);
 	}
 
@@ -1987,17 +2003,33 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 		);
 	}
 
+	/** Same-mode range edit — one pair of pickers writes every day's times
+	 * (closed days included, so re-opening a chip inherits the range). */
+	function setAllDays(patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm">>) {
+		setDraft((prev) => prev.map((row) => ({ ...row, ...patch })));
+	}
+
+	/** Switching to "same" unifies every day onto the first open day's range —
+	 * visible immediately in the pickers, so the collapse is never a silent
+	 * surprise at save time. Switching back keeps the unified values. */
+	function switchMode(next: "same" | "perDay") {
+		if (next === "same") {
+			const source = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+			setAllDays({ openHhmm: source.openHhmm, closeHhmm: source.closeHhmm });
+		}
+		setMode(next);
+	}
+
 	const parsed = draft.map(parseDayDraft);
 	const invalidDays = DAY_RENDER_ORDER.filter(
 		(i) => !draft[i].closed && parsed[i] === null,
 	);
 	const allClosed = draft.every((row) => row.closed);
 	const valid = invalidDays.length === 0 && !allClosed;
-
-	// "Same hours every day" convenience — copies the first OPEN day (in
-	// Monday-first render order) onto every other day's times, leaving each
-	// day's open/closed toggle alone.
-	const templateDay = DAY_RENDER_ORDER.find((i) => !draft[i].closed);
+	// Same-mode reads its range off the first open row (all rows are kept in
+	// sync); when every chip is off, fall back to Monday so the pickers keep
+	// showing the last times instead of blanking.
+	const rangeSource = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
 
 	async function save() {
 		if (!valid) return;
@@ -2085,92 +2117,141 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 				</>
 			) : (
 				<>
-					<div className="flex flex-col gap-2.5">
-						{DAY_RENDER_ORDER.map((i) => {
-							const row = draft[i];
-							const rowInvalid = !row.closed && parsed[i] === null;
-							return (
-								<div
-									key={WEEKDAY_NAMES[i]}
-									className="flex items-center gap-2.5"
-								>
-									<span className="w-10 shrink-0 text-sm font-medium">
-										{WEEKDAY_NAMES_SHORT[i]}
-									</span>
-									<ToggleSwitch
-										on={!row.closed}
-										onChange={(open) => setDay(i, { closed: !open })}
-										disabled={saving}
-										label={`Open on ${WEEKDAY_NAMES[i]}`}
-									/>
-									{row.closed ? (
-										<span className="text-sm text-muted-foreground">
-											Closed
-										</span>
-									) : (
-										<div className="flex min-w-0 flex-1 items-center gap-1.5">
-											<Input
-												type="time"
-												value={row.openHhmm}
-												onChange={(e) =>
-													setDay(i, { openHhmm: e.target.value })
-												}
-												disabled={saving}
-												variant="field"
-												isError={rowInvalid}
-												aria-label={`${WEEKDAY_NAMES[i]} opening time`}
-												className="min-w-0 flex-1 px-2"
-											/>
-											<span
-												className="shrink-0 text-muted-foreground"
-												aria-hidden="true"
-											>
-												–
-											</span>
-											<Input
-												type="time"
-												value={row.closeHhmm}
-												onChange={(e) =>
-													setDay(i, { closeHhmm: e.target.value })
-												}
-												disabled={saving}
-												variant="field"
-												isError={rowInvalid}
-												aria-label={`${WEEKDAY_NAMES[i]} closing time`}
-												className="min-w-0 flex-1 px-2"
-											/>
-										</div>
-									)}
-								</div>
-							);
-						})}
+					{/* Same-every-day is the overwhelmingly common schedule, so it
+					    leads and is the default — the 7-row editor is the escape
+					    hatch, not the entry fee. KindButton pattern (pickup dialog). */}
+					<div className="grid grid-cols-2 gap-2">
+						<ModeButton
+							active={mode === "same"}
+							onClick={() => switchMode("same")}
+							title="Same every day"
+							subtitle="One set of hours for the whole week"
+						/>
+						<ModeButton
+							active={mode === "perDay"}
+							onClick={() => switchMode("perDay")}
+							title="Different per day"
+							subtitle="Set each day's hours individually"
+						/>
 					</div>
-					{templateDay !== undefined ? (
-						<button
-							type="button"
-							disabled={saving}
-							onClick={() => {
-								const source = draft[templateDay];
-								setDraft((prev) =>
-									prev.map((row) => ({
-										...row,
-										openHhmm: source.openHhmm,
-										closeHhmm: source.closeHhmm,
-									})),
+					{mode === "same" ? (
+						<>
+							<div className="flex items-center gap-2">
+								<TimePicker
+									value={rangeSource.openHhmm}
+									onChange={(next) => setAllDays({ openHhmm: next })}
+									disabled={saving}
+									isError={invalidDays.length > 0}
+									aria-label="Opening time"
+									className="flex-1"
+								/>
+								<span
+									className="shrink-0 text-muted-foreground"
+									aria-hidden="true"
+								>
+									–
+								</span>
+								<TimePicker
+									value={rangeSource.closeHhmm}
+									onChange={(next) => setAllDays({ closeHhmm: next })}
+									disabled={saving}
+									isError={invalidDays.length > 0}
+									aria-label="Closing time"
+									className="flex-1"
+								/>
+							</div>
+							{/* Tap a day off for the weekly rest day — chips, not 7
+							    toggle rows, because open/closed is the ONLY per-day
+							    fact left in this mode. */}
+							<div className="flex flex-col gap-1.5">
+								<span className="text-xs font-medium text-muted-foreground">
+									Open on
+								</span>
+								<div className="flex flex-wrap gap-1.5">
+									{DAY_RENDER_ORDER.map((i) => (
+										<FilterChip
+											key={WEEKDAY_NAMES[i]}
+											tone="accent"
+											selected={!draft[i].closed}
+											disabled={saving}
+											aria-label={WEEKDAY_NAMES[i]}
+											onClick={() =>
+												setDay(i, { closed: !draft[i].closed })
+											}
+											className="px-3"
+										>
+											{WEEKDAY_NAMES_SHORT[i]}
+										</FilterChip>
+									))}
+								</div>
+							</div>
+						</>
+					) : (
+						<div className="flex flex-col gap-2.5">
+							{DAY_RENDER_ORDER.map((i) => {
+								const row = draft[i];
+								const rowInvalid = !row.closed && parsed[i] === null;
+								return (
+									<div
+										key={WEEKDAY_NAMES[i]}
+										className="flex items-center gap-2.5"
+									>
+										<span className="w-10 shrink-0 text-sm font-medium">
+											{WEEKDAY_NAMES_SHORT[i]}
+										</span>
+										<ToggleSwitch
+											on={!row.closed}
+											onChange={(open) => setDay(i, { closed: !open })}
+											disabled={saving}
+											label={`Open on ${WEEKDAY_NAMES[i]}`}
+										/>
+										{row.closed ? (
+											<span className="text-sm text-muted-foreground">
+												Closed
+											</span>
+										) : (
+											<div className="flex min-w-0 flex-1 items-center gap-1.5">
+												<TimePicker
+													value={row.openHhmm}
+													onChange={(next) =>
+														setDay(i, { openHhmm: next })
+													}
+													disabled={saving}
+													isError={rowInvalid}
+													aria-label={`${WEEKDAY_NAMES[i]} opening time`}
+													className="min-w-0 flex-1"
+												/>
+												<span
+													className="shrink-0 text-muted-foreground"
+													aria-hidden="true"
+												>
+													–
+												</span>
+												<TimePicker
+													value={row.closeHhmm}
+													onChange={(next) =>
+														setDay(i, { closeHhmm: next })
+													}
+													disabled={saving}
+													isError={rowInvalid}
+													aria-label={`${WEEKDAY_NAMES[i]} closing time`}
+													className="min-w-0 flex-1"
+												/>
+											</div>
+										)}
+									</div>
 								);
-							}}
-							className="self-start text-xs font-medium text-accent-emphasis underline-offset-2 hover:underline"
-						>
-							Apply {WEEKDAY_NAMES[templateDay]}&apos;s hours to every day
-						</button>
-					) : null}
+							})}
+						</div>
+					)}
 					<p className="text-xs text-muted-foreground">
-						Leave a day at 12:00 AM – 11:59 PM to keep it open all day.
+						12:00 AM – 11:59 PM means open all day.
 					</p>
 					{invalidDays.length > 0 ? (
 						<p className="text-xs text-destructive">
-							{WEEKDAY_NAMES[invalidDays[0]]}: opening time must be before
-							closing time.
+							{mode === "same"
+								? "Opening time must be before closing time."
+								: `${WEEKDAY_NAMES[invalidDays[0]]}: opening time must be before closing time.`}
 						</p>
 					) : allClosed ? (
 						<p className="text-xs text-destructive">

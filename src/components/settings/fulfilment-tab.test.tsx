@@ -244,6 +244,13 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 	let updateSettings: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
+		// The themed TimePicker's popover rides radix popper, whose floating-ui
+		// positioning needs ResizeObserver — absent in jsdom. Inert polyfill.
+		globalThis.ResizeObserver ??= class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		} as never;
 		updateSettings = vi.fn().mockResolvedValue({ ok: true });
 		vi.mocked(useQuery).mockImplementation(((opts: {
 			__fn: FunctionReference<"query">;
@@ -295,9 +302,9 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		fireEvent.click(
 			screen.getByRole("button", { name: "Set opening hours" }),
 		);
-		// The editor seeds every day at the current truth (00:00–23:59 = all
-		// day). Close Sunday, save.
-		fireEvent.click(screen.getByRole("switch", { name: "Open on Sunday" }));
+		// The editor opens in "Same every day" seeded at the current truth
+		// (00:00–23:59 = all day). Tap Sunday's chip off, save.
+		fireEvent.click(screen.getByRole("button", { name: "Sunday" }));
 		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
 		await waitFor(() =>
 			expect(updateSettings).toHaveBeenCalledWith({
@@ -310,22 +317,15 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		);
 	});
 
-	it("'Apply … to every day' copies the first open day's times onto the week", async () => {
+	it("same-every-day: one range set through the themed picker writes the whole week", async () => {
 		renderWithHours(undefined);
 		fireEvent.click(
 			screen.getByRole("button", { name: "Set opening hours" }),
 		);
-		fireEvent.change(screen.getByLabelText("Monday opening time"), {
-			target: { value: "09:00" },
-		});
-		fireEvent.change(screen.getByLabelText("Monday closing time"), {
-			target: { value: "18:00" },
-		});
-		fireEvent.click(
-			screen.getByRole("button", {
-				name: "Apply Monday's hours to every day",
-			}),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Opening time" }));
+		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
+		fireEvent.click(screen.getByRole("button", { name: "Closing time" }));
+		fireEvent.click(await screen.findByRole("button", { name: "6:00 PM" }));
 		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
 		await waitFor(() =>
 			expect(updateSettings).toHaveBeenCalledWith({
@@ -352,7 +352,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 			"Saturday",
 			"Sunday",
 		]) {
-			fireEvent.click(screen.getByRole("switch", { name: `Open on ${day}` }));
+			fireEvent.click(screen.getByRole("button", { name: day }));
 		}
 		const save = screen.getByRole("button", {
 			name: "Save hours",
@@ -360,6 +360,35 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		expect(save.disabled).toBe(true);
 		expect(screen.getByText(/Keep at least one day open/)).toBeTruthy();
 		expect(updateSettings).not.toHaveBeenCalled();
+	});
+
+	it("an uneven week opens in 'Different per day'; one row edits alone", async () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ open: 540, close: 1080 }, // Monday
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		// Open days hold two different ranges -> per-day mode pre-selected.
+		const perDay = screen.getByRole("button", {
+			name: /Different per day/,
+		});
+		expect(perDay.getAttribute("aria-pressed")).toBe("true");
+		fireEvent.click(
+			screen.getByRole("button", { name: "Monday opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "8:00 AM" }));
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: [
+					{ open: 540, close: 1080, closed: true },
+					{ open: 480, close: 1080 },
+					...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+				],
+				retailerId: undefined,
+			}),
+		);
 	});
 
 	it("a configured store shows the weekly summary; Reset sends the null clear", async () => {
