@@ -28,6 +28,11 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import {
+	DELIVERY_MODE_LABELS,
+	type DeliveryConfig,
+	deliveryModeAllowed,
+} from "../../convex/lib/delivery";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
@@ -649,7 +654,9 @@ function SettingsRoute() {
 							<CountryForm
 								current={retailer.country}
 								currency={retailer.currency}
-								onSave={(country) => updateSettings({ country })}
+								deliveryConfig={retailer.deliveryConfig}
+								onSave={(patch) => updateSettings(patch)}
+								onGoToFulfilment={() => setActiveTab("fulfilment")}
 							/>
 						</Card>
 						<Card>
@@ -2214,17 +2221,28 @@ function LocaleForm({
 function CountryForm({
 	current,
 	currency,
+	deliveryConfig,
 	onSave,
+	onGoToFulfilment,
 }: {
 	current: Country;
 	currency: string;
-	onSave: (country: Country) => Promise<unknown>;
+	/** The store's delivery-charge config — some modes are Malaysia-only, and a
+	 * country switch that collides with one is refused server-side. Read here so
+	 * the collision is explained BEFORE the save, with a way out. */
+	deliveryConfig?: DeliveryConfig;
+	onSave: (patch: {
+		country: Country;
+		deliveryConfig?: null;
+	}) => Promise<unknown>;
+	onGoToFulfilment: () => void;
 }) {
+	const [clearing, setClearing] = useState(false);
 	const form = useAppForm({
 		defaultValues: { country: current as string },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave(value.country as Country);
+				await onSave({ country: value.country as Country });
 				toast.success("Country saved.");
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
@@ -2234,6 +2252,23 @@ function CountryForm({
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
+	}
+
+	// Switch the country AND drop the incompatible pricing in ONE mutation —
+	// the server accepts both fields together, so the seller never lands in the
+	// half-applied state a two-step would create.
+	async function switchWithFreeDelivery(country: Country) {
+		setClearing(true);
+		try {
+			await onSave({ country, deliveryConfig: null });
+			toast.success(
+				"Country saved — delivery is now free. Set a flat fee any time in Fulfilment.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setClearing(false);
+		}
 	}
 
 	return (
@@ -2260,6 +2295,14 @@ function CountryForm({
 					const picked = values.country as Country;
 					const expectedCurrency = COUNTRY_CURRENCY[picked];
 					const dirty = values.country !== current;
+					// The stored pricing mode this switch would collide with. The
+					// server refuses the pair; surfacing it here turns a red toast
+					// after the fact into a choice made before it.
+					const blockedMode =
+						deliveryConfig && !deliveryModeAllowed(picked, deliveryConfig.mode)
+							? deliveryConfig.mode
+							: null;
+					const busy = isSubmitting || clearing;
 					return (
 						<>
 							{expectedCurrency !== currency ? (
@@ -2269,9 +2312,43 @@ function CountryForm({
 									the Currency card below if that's not intentional.
 								</p>
 							) : null}
+							{blockedMode ? (
+								<div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-3 dark:border-amber-800">
+									<p className="text-sm text-amber-800 dark:text-amber-300">
+										Your delivery charge is{" "}
+										<span className="font-medium">
+											{DELIVERY_MODE_LABELS[blockedMode]}
+										</span>{" "}
+										pricing, which only works in Malaysia for now.{" "}
+										{COUNTRY_LABELS[picked]} stores can charge a flat fee or
+										nothing at all.
+									</p>
+									<div className="flex flex-col gap-2 sm:flex-row">
+										<Button
+											type="button"
+											onClick={() => switchWithFreeDelivery(picked)}
+											disabled={busy}
+											className="h-11 sm:w-auto sm:px-5"
+										>
+											{clearing
+												? "Saving…"
+												: `Switch to ${COUNTRY_LABELS[picked]} & make delivery free`}
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											onClick={onGoToFulfilment}
+											disabled={busy}
+											className="h-11 sm:w-auto sm:px-5"
+										>
+											Set a flat fee first
+										</Button>
+									</div>
+								</div>
+							) : null}
 							<Button
 								type="submit"
-								disabled={!dirty || !canSubmit || isSubmitting}
+								disabled={!dirty || !canSubmit || busy || blockedMode !== null}
 								className={SAVE_BTN_CLASS}
 							>
 								{isSubmitting ? "Saving…" : "Save country"}
