@@ -7,6 +7,7 @@ import {
 	Car,
 	CircleAlert,
 	ExternalLink,
+	FlaskConical,
 	Loader2,
 	Phone,
 	RefreshCw,
@@ -40,6 +41,30 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../ui/dialog";
+
+/** A live quotation the confirm dialog is holding. Mirrors `prepareBooking`'s
+ * success payload, except `expiresAt` is resolved to a definite moment here —
+ * see applyQuote. */
+type QuoteState = {
+	quotationId: string;
+	senderStopId: string;
+	recipientStopId: string;
+	fee: number;
+	buyerPaidFee: number;
+	vehicleType: string;
+	buyerContactFallback: boolean;
+	/** The pickup moment this quote is scheduled for — undefined = the rider
+	 * comes now (86eyg0n8e follow-up). */
+	scheduledFor?: number;
+	/** The buyer's own fulfilment moment, untouched by any override
+	 * (86eyp5qd1) — drives the promise-mismatch warning below. */
+	buyerRequestedMoment?: number;
+	/** Resolved, always-present expiry (86eypncfy): Lalamove's own `expiresAt`
+	 * when it gave one, else our own 5-minute clock from the moment the quote
+	 * landed. Never optional here — a quote whose death we can't name is
+	 * exactly the one that traps the seller. */
+	expiresAt: number;
+};
 
 /**
  * Lalamove dispatch card on order detail (86eyb5hrf) — the seller's one-tap
@@ -87,21 +112,7 @@ export function BookDeliveryCard({
 	const rescheduleFulfilment = useMutation(api.orders.rescheduleFulfilment);
 
 	const [preparing, setPreparing] = useState(false);
-	const [quote, setQuote] = useState<{
-		quotationId: string;
-		senderStopId: string;
-		recipientStopId: string;
-		fee: number;
-		buyerPaidFee: number;
-		vehicleType: string;
-		buyerContactFallback: boolean;
-		/** The pickup moment this quote is scheduled for — undefined = the
-		 * rider comes now (86eyg0n8e follow-up). */
-		scheduledFor?: number;
-		/** The buyer's own fulfilment moment, untouched by any override
-		 * (86eyp5qd1) — drives the promise-mismatch warning below. */
-		buyerRequestedMoment?: number;
-	} | null>(null);
+	const [quote, setQuote] = useState<QuoteState | null>(null);
 	const [booking, setBooking] = useState(false);
 	// In-dialog vehicle switch → fresh quote (prices are per-vehicle). Keeps
 	// the dialog open with the price row loading instead of bouncing the
@@ -138,6 +149,16 @@ export function BookDeliveryCard({
 	const prepareGenRef = useRef(0);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
+	// A failed confirm used to be a toast and nothing else, while the dialog
+	// stayed open holding the dead quote — so the seller's obvious next move
+	// (press the same button again) re-sent an expired quotationId forever, and
+	// the copy pointed at a Book button hidden behind the overlay. Wagyu Walid
+	// did exactly this five times in 5m23s before giving up (86eypncfy). The
+	// reason now lives IN the dialog and swaps the primary action to a re-quote.
+	const [bookingError, setBookingError] = useState<string | null>(null);
+	// Ticks only while the dialog is open, so a quote can visibly lapse instead
+	// of silently rotting behind a button that still looks armed.
+	const [now, setNow] = useState<number>(() => Date.now());
 
 	// Prompt-to-book-on-packed (opt-in): when the seller marks a PAID, due-today
 	// delivery order Packed, auto-open the confirm dialog (today's price) so they
@@ -181,6 +202,15 @@ export function BookDeliveryCard({
 		void handlePrepare();
 	}, [order.status, order.paymentStatus, dispatch]);
 
+	// Quote countdown — a 1s tick while the confirm dialog holds a quote, so
+	// "locked for 5 minutes" is a live fact rather than a claim.
+	useEffect(() => {
+		if (quote === null) return;
+		setNow(Date.now());
+		const id = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(id);
+	}, [quote]);
+
 	// External book request — the stepper raises it when the seller advances a
 	// bookable order by hand, so THIS modal answers "how is it going out?".
 	// Token baseline on mount so a remount never re-fires a stale request; the
@@ -215,6 +245,13 @@ export function BookDeliveryCard({
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
+	// TEST KEYS (86eypncfy). Not a warning we can afford to leave in Settings:
+	// a sandbox booking looks identical to a real one right up until no rider
+	// ever arrives, and the buyer has already been charged a fee the test
+	// environment priced. So it is stated on the card AND inside the confirm
+	// dialog — every surface where the seller is about to spend. Undefined env
+	// (row not yet stamped) renders nothing rather than a false all-clear.
+	const sandbox = dispatch.env === "sandbox";
 	// Collection service (86eyg0n8e): the rider collects FROM the customer and
 	// brings the goods here. TWO questions, two sources — they only diverge
 	// after a seller switches modes (and will diverge routinely once direction
@@ -289,6 +326,23 @@ export function BookDeliveryCard({
 	}
 	if (!job && !bookable) return null;
 
+	/** Lalamove honours a quotation for exactly 5 minutes; used as the fallback
+	 * when the provider's own `expiresAt` is absent. */
+	const QUOTE_TTL_MS = 5 * 60 * 1000;
+
+	/** The single place an action result becomes quote state, so every path
+	 * (first quote, vehicle switch, time change, re-quote after a failure)
+	 * carries an expiry and none can reintroduce the deathless quote. */
+	function applyQuote(
+		result: Omit<QuoteState, "expiresAt"> & { expiresAt?: number },
+	) {
+		setQuote({
+			...result,
+			expiresAt: result.expiresAt ?? Date.now() + QUOTE_TTL_MS,
+		});
+		setBookingError(null);
+	}
+
 	/** Drop every schedule-editor state — a fresh open must start from the
 	 * buyer's moment, never a leftover override from a dismissed dialog. */
 	function resetScheduleState() {
@@ -309,6 +363,7 @@ export function BookDeliveryCard({
 	}) {
 		setFromAdvance(opts?.fromAdvance === true);
 		resetScheduleState();
+		setBookingError(null);
 		setPreparing(true);
 		const gen = prepareGenRef.current;
 		try {
@@ -321,7 +376,7 @@ export function BookDeliveryCard({
 				if (opts?.fromAdvance) onAdvanceBookUnavailable?.();
 				return;
 			}
-			setQuote(result);
+			applyQuote(result);
 			// Default the order-sync choice from THIS quote's reality (the
 			// docblock on syncOrderTime): stale promise or a failed booking →
 			// moving the order with the trip is almost certainly the intent.
@@ -362,7 +417,7 @@ export function BookDeliveryCard({
 				return false;
 			}
 			setScheduleOverride(override);
-			setQuote(result);
+			applyQuote(result);
 			return true;
 		} finally {
 			setRequoting(false);
@@ -467,10 +522,15 @@ export function BookDeliveryCard({
 				scheduledFor: quote.scheduledFor,
 			});
 			if (!result.ok) {
-				toast.error(result.message ?? dispatchBlockCopy(result.reason));
+				// Deliberately NOT a toast: the seller's next action is decided by
+				// this message, and a toast is gone before they get back from the
+				// Lalamove app. It also retires the quote as a bookable thing —
+				// the primary action becomes "Get a fresh price" below.
+				setBookingError(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(null);
+			setBookingError(null);
 			resetScheduleState();
 			toast.success(
 				"Rider booking placed — you'll see the driver here once one accepts.",
@@ -492,6 +552,10 @@ export function BookDeliveryCard({
 	}
 
 	const variance = quote ? quote.fee - quote.buyerPaidFee : 0;
+	// A quote past its window can't be dispatched, and neither can one whose
+	// confirm already failed — both need a fresh price, not another press.
+	const quoteStale = quote !== null && now >= quote.expiresAt;
+	const needsFreshQuote = bookingError !== null || quoteStale;
 
 	return (
 		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -505,6 +569,30 @@ export function BookDeliveryCard({
 					<JobStatusPill status="completed" collection={jobCollection} />
 				) : null}
 			</div>
+
+			{sandbox ? (
+				<div className="flex items-start gap-2 rounded-xl bg-amber-100 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+					<FlaskConical className="mt-0.5 size-4 shrink-0" />
+					<span>
+						<span className="font-medium">Test mode — no real rider.</span> Your
+						Lalamove keys are sandbox keys (they start with{" "}
+						<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+							pk_test_
+						</code>
+						), so bookings are simulated and buyers are quoted test prices.
+						Topping up your real wallet won&apos;t change that — paste your live
+						keys in{" "}
+						<Link
+							to="/app/settings"
+							search={{ tab: "fulfilment" }}
+							className="font-medium underline underline-offset-2"
+						>
+							Settings → Fulfilment
+						</Link>
+						.
+					</span>
+				</div>
+			) : null}
 
 			{/* Failed booking — amber, with the one-tap rebook the ticket asks for. */}
 			{failedJob && !activeJob ? (
@@ -744,6 +832,7 @@ export function BookDeliveryCard({
 					// attempt stale and let its result land nowhere.
 					if (preparing) prepareGenRef.current += 1;
 					setQuote(null);
+					setBookingError(null);
 					resetScheduleState();
 				}}
 			>
@@ -760,6 +849,15 @@ export function BookDeliveryCard({
 								: "Today's price for this delivery. The price is locked for 5 minutes — confirm to dispatch."}
 						</DialogDescription>
 					</DialogHeader>
+					{sandbox ? (
+						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+							<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+							<span>
+								<span className="font-medium">Test keys.</span> This dispatches a
+								simulated trip — no rider will come and nothing is charged.
+							</span>
+						</p>
+					) : null}
 					{quote === null ? (
 						<div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
 							<Loader2 className="size-4 animate-spin" />
@@ -1028,28 +1126,86 @@ export function BookDeliveryCard({
 							disabled={booking || quote === null}
 							onClick={() => {
 								setQuote(null);
+								setBookingError(null);
 								advanceWithoutRider.onConfirm();
 							}}
 						>
 							{advanceWithoutRider.label}
 						</Button>
 					) : null}
+					{/* The failure the seller must act on, and the way out. A dead
+					    quote is the ordinary end state here: fixing a wallet or a
+					    phone number takes longer than the 5 minutes Lalamove holds a
+					    price, so the recovery action has to live in this dialog
+					    rather than on the card behind it (86eypncfy). */}
+					{bookingError ? (
+						<div className="flex flex-col gap-1.5 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+							<p className="flex items-start gap-2">
+								<CircleAlert className="mt-0.5 size-4 shrink-0" />
+								<span>
+									<span className="font-medium">
+										Booking didn&apos;t go through
+									</span>{" "}
+									— {bookingError}
+								</span>
+							</p>
+							<p className="pl-6 text-xs opacity-80">
+								Nothing was charged and your buyer wasn&apos;t notified. Fix
+								it, then get a fresh price — this one is no longer valid.
+							</p>
+						</div>
+					) : quoteStale ? (
+						<p className="rounded-xl bg-muted px-3 py-2 text-xs text-muted-foreground">
+							This price has expired — Lalamove only holds a quote for 5
+							minutes. Get a fresh one to dispatch.
+						</p>
+					) : quote !== null ? (
+						<p className="text-right text-xs text-muted-foreground tabular-nums">
+							Price locked for {formatCountdown(quote.expiresAt - now)}
+						</p>
+					) : null}
 					<DialogFooter>
 						<Button
 							type="button"
 							variant="outline"
-							onClick={() => setQuote(null)}
+							onClick={() => {
+								setQuote(null);
+								setBookingError(null);
+							}}
 							disabled={booking}
 						>
 							Not now
 						</Button>
-						<Button
-							type="button"
-							onClick={handleConfirm}
-							disabled={booking || requoting || quote === null}
-						>
-							{booking ? "Booking…" : "Confirm & dispatch"}
-						</Button>
+						{/* One primary action, and it is always the one that can
+						    actually succeed: dispatch while the price is live, a
+						    re-quote once it isn't. Re-pressing a dead "Confirm" was
+						    the trap. */}
+						{needsFreshQuote ? (
+							<Button
+								type="button"
+								onClick={() => void handleRequote({})}
+								disabled={booking || requoting || quote === null}
+							>
+								{requoting ? (
+									<>
+										<Loader2 className="size-4 animate-spin" /> Getting a fresh
+										price…
+									</>
+								) : (
+									<>
+										<RefreshCw className="size-4" /> Get a fresh price
+									</>
+								)}
+							</Button>
+						) : (
+							<Button
+								type="button"
+								onClick={handleConfirm}
+								disabled={booking || requoting || quote === null}
+							>
+								{booking ? "Booking…" : "Confirm & dispatch"}
+							</Button>
+						)}
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
@@ -1066,6 +1222,13 @@ export function BookDeliveryCard({
 			/>
 		</section>
 	);
+}
+
+/** "4:32" / "0:07" from a remaining-ms figure, floored at zero so a lapsed
+ * quote never renders a negative clock. */
+function formatCountdown(remainingMs: number): string {
+	const total = Math.max(0, Math.floor(remainingMs / 1000));
+	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 /** "4 Aug 2026 · 3:30 PM" from an epoch moment — the card's one spelling for

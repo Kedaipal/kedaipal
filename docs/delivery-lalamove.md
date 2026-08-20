@@ -707,6 +707,99 @@ order left the vendor choosing between a 3 AM rider and no rider.
   mismatch warning retires (the mismatch resolves itself at confirm); left
   unticked, the warning points at the box instead of a detour.
 
+## Which environment am I in? (21 Aug 2026, ClickUp `86eypncfy`)
+
+Lalamove issues `pk_test_…` (sandbox) and `pk_prod_…` (production) keys, and
+`inferLalamoveEnv` has always routed each to its own API host. What it did NOT
+do was tell anyone — the environment was derived on every call and discarded.
+
+**Why that mattered.** Wagyu Walid was onboarded on 8 Aug with sandbox keys.
+Nothing in the product said so, so for two weeks his live storefront quoted
+buyers through Lalamove's **test environment** and charged those prices for
+real (`ORD-W4AH`: RM27.40). His one "successful" booking was a simulated trip
+no rider could ever run. When the sandbox's play-money wallet drained he got
+`ERR_INSUFFICIENT_BALANCE`, our copy told him to *"top it up in the Lalamove
+app"*, and he topped up a real wallet that the sandbox can never see — nine
+failed attempts across 26 hours before he shipped the order by hand.
+
+Diagnosing it needed a production dig, because the only stored trace of the
+environment was the **host in `deliveryJobs.shareLink`**
+(`share.sandbox.lalamove.com` vs `share.lalamove.com`) — and that exists only
+on bookings that actually committed.
+
+**Now:** `retailers.deliveryBooking.env` is stamped at save from the
+**plaintext** key, exactly like `apiKeyHint` and HitPay's `mode`, and rides
+`DeliveryBookingSummary` + `getDeliveryJob` to the UI.
+
+- Stamped in `retailers.updateSettings` (stamp-on-type, keep-otherwise, cleared
+  with the key) and by the backfill below.
+- **Never derived from a stored value in a query.** A ciphertext doesn't start
+  with `pk_test_`, so inferring post-encryption returns `"production"` for
+  everyone — which would silently suppress the one warning this field exists
+  for. `dispatchContextForOrder` and `getDeliveryJob` therefore read the
+  stamped field, **not** `credentials.env`.
+- `undefined` = a row the backfill hasn't reached. Rendered as **nothing** —
+  never as a green "Live", because a false all-clear is the original bug.
+
+**Surfaced at every point of spend**, not just Settings — a sandbox booking
+looks identical to a real one right up until no rider arrives:
+
+| Surface | What it says |
+| --- | --- |
+| Settings → Fulfilment | `Test keys` / `Live` chip beside the stored key, plus an amber block naming the consequence (simulated trips, buyers quoted test prices, wallet can't be topped up) |
+| Dispatch card (order detail) | Amber "Test mode — no real rider" banner with the `pk_prod_` fix and a link back to Settings |
+| Booking confirm dialog | Compact "Test keys — this dispatches a simulated trip" line, above the price |
+| Booking failure copy | On sandbox, an insufficient-balance refusal explains the test wallet instead of asking for a top-up |
+
+**Deliberately NOT blocked.** Sandbox keys on a production deployment are a
+legitimate testing setup (Zaki uses them); this is a visibility problem, not an
+authorisation one. Loud and unmissable, never refused.
+
+### Backfill (one-shot, per deployment)
+
+```bash
+npx convex run credentials:backfillLalamoveEnv
+```
+
+**Must run wherever `credentials:encryptExistingCredentials` already ran** — by
+the time `env` existed every prod row was ciphertext, so the encrypt backfill
+can't stamp them (it only ever touched plaintext). This one decrypts each
+stored key purely to read its prefix; the plaintext is never stored, logged or
+returned. A key it can't decrypt leaves `env` unset rather than guessing.
+
+### Booking errors are classified by id, not by body text
+
+`friendlyBookingError` used to lowercase the whole response body and match
+`"insufficient" | "balance" | "credit"` anywhere in it. Lalamove ships a
+free-text `message` beside the machine-readable `id`, so any failure whose
+wording happened to contain one of those words was reported as a wallet
+problem — sending a seller to spend money that fixes nothing. It now goes
+through `classifyBookingFailure`, keyed off the `id` (`parseLalamoveErrorCode`,
+the same source `isOutOfServiceAreaError` already used). Text sniffing survives
+only as a last resort for bodies with no parseable id (HTML error pages, socket
+errors), and a *recognised* id we have no copy for stops at `"unknown"` rather
+than falling through to guess.
+
+### The dead quote — a failed confirm must not trap the seller
+
+A quotation is valid for **exactly 5 minutes**. `handleConfirm` used to toast
+the failure and return, leaving the dialog open on that quote — so the obvious
+next move (press "Confirm & dispatch" again) re-sent an expired `quotationId`,
+and the resulting copy pointed at a "Book delivery" button sitting *behind the
+modal overlay*. Wagyu Walid pressed it five times in 5m23s against one
+quotationId before giving up.
+
+Fixed in `BookDeliveryCard`:
+
+- The failure renders **inside** the dialog (a toast is gone before the seller
+  returns from the Lalamove app) and states that nothing was charged.
+- The primary action becomes **"Get a fresh price"** — an in-place re-quote —
+  whenever a confirm has failed *or* the quote has lapsed. Dispatch is only
+  offered while it can actually succeed.
+- `prepareBooking` now returns the quotation's `expiresAt` (parsed all along,
+  previously discarded); the dialog shows a live `Price locked for 4:32`
+  countdown and falls back to its own 5-minute clock if the provider omits it.
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys

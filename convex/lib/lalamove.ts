@@ -272,6 +272,65 @@ export function isOutOfServiceAreaError(body: string): boolean {
 }
 
 /**
+ * Why a BOOKING attempt failed, as a stable machine-readable class
+ * (86eypncfy). Keyed off Lalamove's error `id`, never a substring of the raw
+ * body: the body carries a free-text `message` too, so matching "credit" or
+ * "balance" anywhere in it reports unrelated failures as a wallet problem —
+ * and a seller told to top up spends real money that fixes nothing. Only
+ * when there is NO parseable id do we fall back to sniffing the text, which
+ * is the case (HTML error pages, socket errors) where a guess beats silence.
+ */
+export type BookingFailure =
+	| "wallet"
+	| "quote_expired"
+	| "bad_phone"
+	| "out_of_range"
+	| "unknown";
+
+/** Lalamove's documented wallet/credit refusals. */
+const WALLET_ERROR_IDS: ReadonlySet<string> = new Set([
+	"ERR_INSUFFICIENT_BALANCE",
+	"ERR_INSUFFICIENT_CREDIT",
+	"ERR_PAYMENT_METHOD_NOT_ALLOWED",
+]);
+
+/** A quotation that no longer exists or has lapsed — Lalamove honours one for
+ * exactly 5 minutes, so this is the ordinary "the dialog sat open" failure. */
+const QUOTE_ERROR_IDS: ReadonlySet<string> = new Set([
+	"ERR_INVALID_QUOTATION",
+	"ERR_QUOTATION_EXPIRED",
+	"ERR_QUOTATION_NOT_FOUND",
+	"ERR_ORDER_ALREADY_PLACED",
+]);
+
+const PHONE_ERROR_IDS: ReadonlySet<string> = new Set([
+	"ERR_INVALID_PHONE_NUMBER",
+	"ERR_INVALID_SENDER_PHONE",
+	"ERR_INVALID_RECIPIENT_PHONE",
+]);
+
+export function classifyBookingFailure(body: string): BookingFailure {
+	const code = parseLalamoveErrorCode(body);
+	if (code) {
+		if (WALLET_ERROR_IDS.has(code)) return "wallet";
+		if (QUOTE_ERROR_IDS.has(code)) return "quote_expired";
+		if (PHONE_ERROR_IDS.has(code)) return "bad_phone";
+		if (code === "ERR_OUT_OF_SERVICE_AREA" || code === "ERR_INVALID_MARKET")
+			return "out_of_range";
+		// A recognised id we simply don't have copy for is still a KNOWN answer:
+		// falling through to substring-sniffing its message is how a wrong story
+		// gets told, so stop here.
+		return "unknown";
+	}
+	// No id — last-resort text sniffing on a body that isn't Lalamove's JSON.
+	const text = body.toLowerCase();
+	if (text.includes("insufficient balance") || text.includes("insufficient credit"))
+		return "wallet";
+	if (text.includes("quotation")) return "quote_expired";
+	return "unknown";
+}
+
+/**
  * Classify a failed quotation into the THREE buyer-facing stories, because
  * each demands different copy and only one is retryable:
  *

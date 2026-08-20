@@ -204,7 +204,7 @@ import {
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { isEncrypted } from "./lib/credentialCrypto";
-import { resolveLalamoveCredentials } from "./lib/lalamove";
+import { inferLalamoveEnv, resolveLalamoveCredentials } from "./lib/lalamove";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -347,6 +347,10 @@ type DeliveryBooking = {
 	/** Stamped at save from the plaintext key (86eyn25gk) — the stored key may
 	 * be ciphertext, which a query can't slice a hint from. */
 	apiKeyHint?: string;
+	/** Sandbox vs production, stamped at save from the plaintext key
+	 * (86eypncfy) for the same reason as the hint — ciphertext has no prefix
+	 * to read. */
+	env?: "sandbox" | "production";
 };
 
 /** Owner-read summary of the booking config — the API secret NEVER crosses
@@ -363,6 +367,11 @@ export type DeliveryBookingSummary = {
 	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
 	 * show which key is stored without exposing it. */
 	apiKeyHint?: string;
+	/** Which Lalamove environment the stored keys talk to (86eypncfy).
+	 * Undefined = a pre-backfill row we can't judge; the UI says "unknown"
+	 * rather than assuming production, because assuming wrong is exactly the
+	 * failure this field exists to stop. */
+	env?: "sandbox" | "production";
 };
 
 function summarizeDeliveryBooking(
@@ -381,6 +390,15 @@ function summarizeDeliveryBooking(
 			booking.apiKeyHint ??
 			(booking.apiKey && !isEncrypted(booking.apiKey)
 				? booking.apiKey.slice(-4)
+				: undefined),
+		// Same rule for the environment: the stored stamp wins, and inferring is
+		// only sound on a still-plaintext row (a ciphertext prefix would read
+		// "production" and quietly clear a sandbox warning — the one mistake
+		// this field must never make).
+		env:
+			booking.env ??
+			(booking.apiKey && !isEncrypted(booking.apiKey)
+				? inferLalamoveEnv(booking.apiKey)
 				: undefined),
 	};
 }
@@ -1774,6 +1792,19 @@ export const updateSettings = mutation({
 									? prev.apiKey.slice(-4)
 									: undefined))
 							: args.deliveryBooking.apiKey.trim().slice(-4) || undefined,
+					// Same stamp-on-type/keep-otherwise rule as the hint, on the
+					// value that decides which Lalamove world this store books in
+					// (86eypncfy). Clearing the key clears the stamp — an unset
+					// credential has no environment to report.
+					env:
+						args.deliveryBooking.apiKey === undefined
+							? (prev?.env ??
+								(prev?.apiKey && !isEncrypted(prev.apiKey)
+									? inferLalamoveEnv(prev.apiKey)
+									: undefined))
+							: args.deliveryBooking.apiKey.trim()
+								? inferLalamoveEnv(args.deliveryBooking.apiKey.trim())
+								: undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
 				// refuse half a credential up front so the failure is at save time
