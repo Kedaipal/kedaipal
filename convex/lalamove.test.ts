@@ -5,9 +5,14 @@
 // convex/lib/lalamove.test.ts; signature auth in lalamoveSignature.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import {
+	decryptSecret,
+	encryptSecret,
+	isEncrypted,
+} from "./lib/credentialCrypto";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -378,6 +383,47 @@ describe("getWebhookContext (secret resolution)", () => {
 		});
 		expect(foreign.jobId).toBeNull();
 		expect(foreign.secrets).toEqual([]);
+	});
+
+	// Encrypted-at-rest rows (86eyn25gk): the QUERY hands out the stored
+	// ciphertext untouched (queries can't decrypt), and the webhook route's
+	// decryptSecret call recovers the plaintext signing secret — pinned here
+	// since the route itself is a one-line wrap around the sandbox-verified
+	// verifier.
+	test("encrypted secret: query returns ciphertext, decryptSecret recovers the signing secret", async () => {
+		vi.stubEnv(
+			"CREDENTIALS_ENCRYPTION_KEY",
+			btoa("0123456789abcdef0123456789abcdef"),
+		);
+		try {
+			const t = setup();
+			const retailer = await seedRetailer(t);
+			const storedSecret = await encryptSecret("sk_byo");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(retailer._id, {
+					deliveryBooking: {
+						enabled: true,
+						vehicleType: "MOTORCYCLE" as const,
+						apiKey: await encryptSecret("pk_byo"),
+						apiSecret: storedSecret,
+						apiKeyHint: "_byo",
+					},
+				});
+			});
+			const orderId = await seedOrder(t, retailer._id);
+			await seedJob(t, retailer._id, orderId);
+
+			const context = await t.query(internal.lalamove.getWebhookContext, {
+				providerOrderId: "LLM-1",
+				apiKey: "pk_byo",
+			});
+			expect(context.secrets).toHaveLength(1);
+			expect(isEncrypted(context.secrets[0])).toBe(true);
+			expect(context.secrets[0]).not.toContain("sk_byo");
+			expect(await decryptSecret(context.secrets[0])).toBe("sk_byo");
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 });
 

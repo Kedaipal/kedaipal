@@ -874,3 +874,84 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 		);
 	});
 });
+
+describe("BookDeliveryCard — past pickup moments are refused (86eyp63xn follow-up)", () => {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const order = {
+		_id: "order-past-1",
+		shortId: "ORD-PAST",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+		source: undefined,
+	} as unknown as Doc<"orders">;
+	const bookableDispatch = {
+		promptBookOnPacked: false,
+		blockReason: null,
+		deliveryDirection: "standard",
+		job: null,
+	};
+	function quoteResult(overrides: Record<string, unknown> = {}) {
+		return {
+			ok: true,
+			quotationId: "q-1",
+			senderStopId: "s-1",
+			recipientStopId: "r-1",
+			fee: 1200,
+			buyerPaidFee: 1200,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+			scheduledFor: undefined,
+			buyerRequestedMoment: undefined,
+			...overrides,
+		};
+	}
+
+	it("a past date/time shows an inline reason and never re-quotes", async () => {
+		state.dispatch = bookableDispatch;
+		const prepare = vi.fn().mockResolvedValue(quoteResult());
+		state.action = prepare;
+		render(<BookDeliveryCard order={order} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await waitFor(() => expect(screen.getByText("Change time")).toBeTruthy());
+		fireEvent.click(screen.getByText("Change time"));
+
+		// The native min only greys the picker — a typed/stepped value below it
+		// still lands in state, so the guard has to be ours.
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymdFromEpoch(todayMytMidnight() - DAY_MS) },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		const callsBefore = prepare.mock.calls.length;
+		fireEvent.click(screen.getByText("Use this time"));
+
+		expect(
+			await screen.findByText(/That time has already passed/),
+		).toBeTruthy();
+		expect(prepare.mock.calls.length).toBe(callsBefore); // no quote fired
+		// Correcting the input clears the reason.
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymdFromEpoch(todayMytMidnight() + DAY_MS) },
+		});
+		expect(screen.queryByText(/That time has already passed/)).toBeNull();
+	});
+
+	it("a stale scheduledFor never prefills a past day into the editor", async () => {
+		state.dispatch = bookableDispatch;
+		state.action = vi.fn().mockResolvedValue(
+			quoteResult({ scheduledFor: Date.now() - 3 * 60 * 60 * 1000 }),
+		);
+		render(<BookDeliveryCard order={order} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await waitFor(() => expect(screen.getByText("Change time")).toBeTruthy());
+		fireEvent.click(screen.getByText("Change time"));
+
+		const dateInput = screen.getByLabelText("Pickup date") as HTMLInputElement;
+		expect(dateInput.value >= ymdFromEpoch(todayMytMidnight())).toBe(true);
+	});
+});

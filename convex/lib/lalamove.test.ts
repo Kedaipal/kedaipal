@@ -1,7 +1,8 @@
 // Pure Lalamove client helpers — signing, credential resolution, money
 // conversion, response parsing, status normalization. See lalamove.ts.
 import { createHmac } from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { encryptSecret } from "./credentialCrypto";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 import {
 	MIN_SCHEDULE_LEAD_MS,
@@ -23,6 +24,7 @@ import {
 	parseOrderResponse,
 	parsePodImages,
 	parseQuotationResponse,
+	decryptLalamoveCredentials,
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
 	riderDrivesOrderStatus,
@@ -482,6 +484,44 @@ describe("resolveScheduleAt (86eyg0n8e follow-up)", () => {
 
 	test("no moment = the pre-existing immediate booking", () => {
 		expect(resolveScheduleAt(undefined, NOW)).toBeUndefined();
+	});
+});
+
+describe("decryptLalamoveCredentials (86eyn25gk)", () => {
+	test("re-infers env from the PLAINTEXT key — ciphertext would always read production", async () => {
+		vi.stubEnv(
+			"CREDENTIALS_ENCRYPTION_KEY",
+			btoa("0123456789abcdef0123456789abcdef"),
+		);
+		try {
+			const stored = resolveLalamoveCredentials({
+				apiKey: await encryptSecret("pk_test_abc"),
+				apiSecret: await encryptSecret("sk_test_abc"),
+			});
+			expect(stored).not.toBeNull();
+			expect(stored?.env).toBe("production");
+			const live = await decryptLalamoveCredentials(stored!);
+			expect(live).toEqual({
+				apiKey: "pk_test_abc",
+				apiSecret: "sk_test_abc",
+				env: "sandbox",
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	test("legacy plaintext rows pass through unchanged", async () => {
+		const live = await decryptLalamoveCredentials({
+			apiKey: "pk_test_x",
+			apiSecret: "sk_x",
+			env: "sandbox",
+		});
+		expect(live).toEqual({
+			apiKey: "pk_test_x",
+			apiSecret: "sk_x",
+			env: "sandbox",
+		});
 	});
 });
 

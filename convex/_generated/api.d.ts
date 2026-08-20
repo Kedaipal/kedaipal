@@ -15,6 +15,7 @@ import type * as billingEmail from "../billingEmail.js";
 import type * as categories from "../categories.js";
 import type * as contact from "../contact.js";
 import type * as counterCheckout from "../counterCheckout.js";
+import type * as credentials from "../credentials.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as delivery from "../delivery.js";
@@ -36,6 +37,7 @@ import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/ad
 import type * as lib_confirmationPush from "../lib/confirmationPush.js";
 import type * as lib_contact from "../lib/contact.js";
 import type * as lib_couriers from "../lib/couriers.js";
+import type * as lib_credentialCrypto from "../lib/credentialCrypto.js";
 import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
 import type * as lib_delivery from "../lib/delivery.js";
@@ -108,6 +110,7 @@ declare const fullApi: ApiFromModules<{
   categories: typeof categories;
   contact: typeof contact;
   counterCheckout: typeof counterCheckout;
+  credentials: typeof credentials;
   crons: typeof crons;
   customers: typeof customers;
   delivery: typeof delivery;
@@ -129,6 +132,7 @@ declare const fullApi: ApiFromModules<{
   "lib/confirmationPush": typeof lib_confirmationPush;
   "lib/contact": typeof lib_contact;
   "lib/couriers": typeof lib_couriers;
+  "lib/credentialCrypto": typeof lib_credentialCrypto;
   "lib/currency": typeof lib_currency;
   "lib/customer": typeof lib_customer;
   "lib/delivery": typeof lib_delivery;

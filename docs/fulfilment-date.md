@@ -310,7 +310,12 @@ chat and records it on the order.
 - **UI**: `RescheduleFulfilmentDialog` on order detail's Fulfillment card —
   renders only inside the reschedule window ("Reschedule", or "Set date" on a
   dateless order), native date+time inputs, live "the buyer's order page will
-  show …" preview. On a **bookable Lalamove order** the dialog also fetches a
+  show …" preview. **Past/beyond-window picks are refused live** (20 Aug
+  follow-up — native min/max are advisory): a passed day, a passed time today,
+  or a beyond-30d day disables Save with a visible reason, the fee preview
+  skips invalid moments (a quote would legitimise them), and an overdue
+  order's prefill clamps to today (keeping the agreed time-of-day). The
+  server's range check stays the backstop. On a **bookable Lalamove order** the dialog also fetches a
   debounced **"Lalamove for this slot"** price for the picked moment (rider
   prices are slot-sensitive) with the frozen buyer-paid fee named beside it —
   purely the seller's cost outlook, re-quoted for real at booking; flat/

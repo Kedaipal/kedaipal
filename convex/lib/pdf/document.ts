@@ -41,17 +41,19 @@ export function formatPeriodLabel(epochMs: number): string {
 }
 
 /**
- * Minor units (sen) -> "RM 1,234.50". Falls back to a `<CODE> <amount>` prefix
- * for any non-MYR currency. Kept ASCII (no Unicode currency glyphs) so it encodes
- * cleanly in pdf-lib's standard WinAnsi fonts.
+ * Minor units (sen) -> "RM 1,234.50" / "S$ 59.00". Falls back to a
+ * `<CODE> <amount>` prefix for any unmapped currency. Kept ASCII (no Unicode
+ * currency glyphs) so it encodes cleanly in pdf-lib's standard WinAnsi fonts.
  */
+const CURRENCY_PREFIX: Record<string, string> = { MYR: "RM", SGD: "S$" };
+
 export function formatMoney(minorUnits: number, currency: string): string {
 	const negative = minorUnits < 0;
 	const major = Math.abs(minorUnits) / 100;
 	const fixed = major.toFixed(2);
 	const [intPart, frac] = fixed.split(".");
 	const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-	const prefix = currency === "MYR" ? "RM" : currency;
+	const prefix = CURRENCY_PREFIX[currency] ?? currency;
 	return `${negative ? "-" : ""}${prefix} ${grouped}.${frac}`;
 }
 
@@ -326,6 +328,10 @@ export function invoiceToSubscriptionData(args: {
 		foundingDiscount: invoice.foundingDiscount,
 		total: invoice.total,
 		currency: invoice.currency,
-		issuerBank: billingConfigToBlocks(billingConfig),
+		// The billingConfig rails (MY bank + DuitNow) can only settle MYR — a
+		// non-MYR (cross-border) invoice prints no payment card, and the footer
+		// swaps to a "we'll confirm payment details on WhatsApp" note instead.
+		issuerBank:
+			invoice.currency === "MYR" ? billingConfigToBlocks(billingConfig) : [],
 	};
 }
