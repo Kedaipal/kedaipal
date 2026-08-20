@@ -116,6 +116,10 @@ export function BookDeliveryCard({
 	const [editSchedule, setEditSchedule] = useState(false);
 	const [schedDate, setSchedDate] = useState("");
 	const [schedTime, setSchedTime] = useState("");
+	// Inline validation for the editor (86eyp63xn follow-up): the native
+	// input's min can be bypassed by typing/stepping, so past picks are
+	// refused here with a visible reason, never a silent book-now.
+	const [scheduleError, setScheduleError] = useState<string | null>(null);
 	// "Also update the delivery time the buyer sees": booking at a picked
 	// moment first reschedules the ORDER to it (86eyp63xn AC2), so the trip
 	// and the buyer's promise move together. Defaulted at prepare time —
@@ -292,6 +296,7 @@ export function BookDeliveryCard({
 		setEditSchedule(false);
 		setSchedDate("");
 		setSchedTime("");
+		setScheduleError(null);
 		setSyncOrderTime(false);
 	}
 
@@ -378,12 +383,16 @@ export function BookDeliveryCard({
 		buyerRequestedMoment?: number;
 	}) {
 		const src = from ?? quote ?? undefined;
-		const seed =
+		let seed =
 			src?.scheduledFor ??
 			(src?.buyerRequestedMoment !== undefined &&
 			src.buyerRequestedMoment > Date.now()
 				? src.buyerRequestedMoment
 				: Date.now() + 60 * 60 * 1000);
+		// Never prefill a moment that has already passed (a stale scheduledFor
+		// from an order whose day rolled over) — the editor would open onto a
+		// value its own validation rejects.
+		if (seed < Date.now()) seed = Date.now() + 60 * 60 * 1000;
 		const day = todayMytMidnight(seed);
 		setSchedDate(ymdFromEpoch(day));
 		// Round to the input's 5-min step, clamped below midnight — a seed in
@@ -393,6 +402,7 @@ export function BookDeliveryCard({
 				Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5),
 			),
 		);
+		setScheduleError(null);
 		setEditSchedule(true);
 	}
 
@@ -400,10 +410,22 @@ export function BookDeliveryCard({
 		const day = mytMidnightFromYmd(schedDate);
 		const minutes = timeMinutesFromHhmm(schedTime);
 		if (Number.isNaN(day) || Number.isNaN(minutes)) {
-			toast.error("Pick a valid date and time first.");
+			setScheduleError("Pick a valid date and time first.");
 			return;
 		}
-		if (await handleRequote({ scheduleOverride: day + minutes * 60000 })) {
+		const moment = day + minutes * 60000;
+		// The native input's `min` only greys the picker — typed, stepped or
+		// seeded values below it still land here. A past moment would silently
+		// degrade to an immediate booking (and offer the ORDER a past promise
+		// via the sync checkbox), so it is refused with the honest way out.
+		if (moment < Date.now()) {
+			setScheduleError(
+				"That time has already passed — pick a moment ahead, or use “Send the rider now” for an immediate pickup.",
+			);
+			return;
+		}
+		setScheduleError(null);
+		if (await handleRequote({ scheduleOverride: moment })) {
 			setEditSchedule(false);
 		}
 	}
@@ -798,7 +820,10 @@ export function BookDeliveryCard({
 													MAX_NOTICE_DAYS * 24 * 60 * 60 * 1000,
 											)}
 											value={schedDate}
-											onChange={(e) => setSchedDate(e.target.value)}
+											onChange={(e) => {
+												setSchedDate(e.target.value);
+												setScheduleError(null);
+											}}
 										/>
 										<Input
 											type="time"
@@ -806,9 +831,17 @@ export function BookDeliveryCard({
 											aria-label="Pickup time"
 											step={300}
 											value={schedTime}
-											onChange={(e) => setSchedTime(e.target.value)}
+											onChange={(e) => {
+												setSchedTime(e.target.value);
+												setScheduleError(null);
+											}}
 										/>
 									</div>
+									{scheduleError ? (
+										<p className="text-xs font-medium text-destructive">
+											{scheduleError}
+										</p>
+									) : null}
 									<div className="grid grid-cols-2 gap-2">
 										<Button
 											type="button"
