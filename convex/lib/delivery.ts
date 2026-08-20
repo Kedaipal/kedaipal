@@ -126,6 +126,18 @@ export function deliveryModeAllowed(
 	return COUNTRY_DELIVERY_MODES[country].includes(mode);
 }
 
+/**
+ * Human names for the pricing modes, for copy that has to tell a seller which
+ * one is in their way (the country card's blocked-switch explanation). Lives
+ * beside the allowlist so the rule and its wording can't drift apart.
+ */
+export const DELIVERY_MODE_LABELS: Record<DeliveryConfig["mode"], string> = {
+	flat: "flat fee",
+	radius: "distance-based",
+	weight: "weight-zone",
+	lalamove: "Lalamove live-quote",
+};
+
 export type Coordinates = { latitude: number; longitude: number };
 
 /**
