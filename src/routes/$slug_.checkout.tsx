@@ -185,6 +185,7 @@ function CheckoutRoute() {
 						storeSlug={retailer.slug}
 						checkoutPhone={retailer.checkoutPhone}
 						locale={retailer.locale}
+						country={retailer.country}
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}

@@ -81,6 +81,7 @@ describe("FulfilmentTab act-as wiring", () => {
 			<ActAsProvider>
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
+					country="MY"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -174,6 +175,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 			<ActAsProvider>
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
+					country="MY"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={{ mode: "lalamove", onUnquotable: "block" }}
@@ -280,6 +282,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 			<ActAsProvider>
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
+					country="MY"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}

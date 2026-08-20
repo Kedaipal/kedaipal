@@ -14,6 +14,7 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { Country } from "../../../convex/lib/country";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
@@ -46,7 +47,7 @@ import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
 import {
 	convexErrorMessage,
-	formatMyMobile,
+	formatMobile,
 	formatPrice,
 } from "../../lib/format";
 import { composeCustomerNote } from "../../lib/order-note";
@@ -54,13 +55,13 @@ import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
 	emptyAddress,
-	myWaPhoneCheckoutSchema,
+	waPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
-import { MyPhonePrefix } from "../ui/my-phone-input";
+import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
 import { AddressFieldset } from "./address-fieldset";
 import {
 	CheckoutSummary,
@@ -85,6 +86,10 @@ interface CheckoutPageProps {
 	/** Store locale — localizes the buyer-facing PDPA line under the phone
 	 * field (the rest of checkout is EN pending the storefront i18n phase). */
 	locale: string;
+	/** Store country (SG-lite, 86eynw28q) — picks the phone plate + which
+	 * validator arm judges the buyer's number. Must match what the server
+	 * enforces in orders.create, which reads the same retailer field. */
+	country: Country;
 	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
 	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
 	confirmPushEnabled: boolean;
@@ -200,6 +205,7 @@ export function CheckoutPage({
 	storeSlug,
 	checkoutPhone,
 	locale,
+	country,
 	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
@@ -389,7 +395,7 @@ export function CheckoutPage({
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
 		},
-		validators: { onChange: checkoutFormSchema },
+		validators: { onChange: checkoutFormSchema[country] },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
 			setPickupError(null);
@@ -530,7 +536,8 @@ export function CheckoutPage({
 					customer: {
 						name: value.name?.trim() || undefined,
 						// Raw as typed — the server normalizes ("012-345 6789" →
-						// "60123456789") via assertValidMyWaPhone, the same bridge the
+						// "60123456789", "9123 4567" → "6591234567") by the store's
+						// country via assertValidMobileForCountry, the same bridge the
 						// counter manual bind uses.
 						waPhone: value.waPhone.trim(),
 					},
@@ -1171,10 +1178,12 @@ export function CheckoutPage({
 									autoComplete="tel"
 									// The plate says the country code is handled, so the
 									// placeholder shows the rest. A buyer who ignores it and
-									// types the full "012-345 6789" (or "60123…") is still
-									// normalized to the same number — see myWaPhoneCheckoutSchema.
-									prefix={<MyPhonePrefix />}
-									placeholder="12-345 6789"
+									// types the full local/international form is still normalized
+									// to the same number — see waPhoneCheckoutSchema. Plate +
+									// schema share the store's country, so the badge never
+									// promises a shape the validator rejects.
+									prefix={<MyPhonePrefix country={country} />}
+									placeholder={MOBILE_PLACEHOLDER[country]}
 									required
 									description={
 										confirmPushEnabled
@@ -1192,9 +1201,11 @@ export function CheckoutPage({
 						    unreachable number still degrades to the recovery card). */}
 						<form.Subscribe selector={(s) => s.values.waPhone}>
 							{(typed) => {
-								const parsed = myWaPhoneCheckoutSchema.safeParse(typed ?? "");
+								const parsed = waPhoneCheckoutSchema[country].safeParse(
+									typed ?? "",
+								);
 								if (!parsed.success) return null;
-								const pretty = formatMyMobile(parsed.data);
+								const pretty = formatMobile(parsed.data);
 								return (
 									<p className="text-sm font-medium text-accent-emphasis">
 										{locale === "ms"

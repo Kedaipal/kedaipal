@@ -16,6 +16,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import type { Country } from "../../../convex/lib/country";
 import { MY_STATES } from "../../../convex/lib/address";
 import type { DeliveryConfig, DeliveryZone } from "../../../convex/lib/delivery";
 import {
@@ -85,6 +86,9 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
+	/** Store country — threaded to the pickup-point editor's manager-contact
+	 * phone plate/validator (SG-lite, 86eynw2dy). */
+	country: Country;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	/** Current delivery-charge config (undefined = free delivery). */
@@ -182,6 +186,7 @@ function ToggleSwitch({
 
 export function FulfilmentTab({
 	retailerId,
+	country,
 	offerSelfCollect,
 	offerDelivery,
 	deliveryConfig,
@@ -491,6 +496,7 @@ export function FulfilmentTab({
 				location={editing === "new" ? undefined : (editing ?? undefined)}
 				retailerId={retailerId}
 				canChargeFee={hasFeature(subscription, "chargeablePickup")}
+				country={country}
 			/>
 		</div>
 	);
