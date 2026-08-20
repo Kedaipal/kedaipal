@@ -216,6 +216,11 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
+	type Country,
+	COUNTRY_CURRENCY,
+	DEFAULT_COUNTRY,
+} from "./lib/country";
+import {
 	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
@@ -619,6 +624,10 @@ type RetailerPublic = {
 	coverImageStorageId?: string;
 	coverImageUrl?: string;
 	currency: SupportedCurrency;
+	// Store country (SG-lite). Resolved — undefined rows read as "MY". Public-
+	// safe (which country a storefront operates in is not seller data): checkout
+	// keys the phone plate/validator arm and the address variant off it.
+	country: Country;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
 	// Per-retailer SHORT status labels (tracking timeline / dashboard). Omitted
@@ -798,6 +807,7 @@ async function buildRetailerPublic(
 		coverImageStorageId: row.coverImageStorageId,
 		coverImageUrl,
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+		country: row.country ?? DEFAULT_COUNTRY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
 		statusLabels: row.statusLabels as StatusLabels | undefined,
@@ -946,6 +956,7 @@ export const getRetailerBySlug = query({
 					coverImageUrl,
 					currency:
 						(active.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					country: active.country ?? DEFAULT_COUNTRY,
 					locale: active.locale ?? DEFAULT_LOCALE,
 					messageTemplates: active.messageTemplates as
 						| MessageTemplatesShape
@@ -1139,6 +1150,12 @@ export const createRetailer = mutation({
 		storeName: v.string(),
 		slug: v.string(),
 		waPhone: v.optional(v.string()),
+		// Store country (SG-lite). Optional — omitted/MY stores stay undefined on
+		// the row (the zero-migration posture); SG is stored explicitly and sets
+		// the store's currency to SGD at birth, BEFORE any product exists (products
+		// freeze their currency at create, so a wrong default here would strand
+		// the whole catalog — see docs/sg-lite.md).
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		// Best-effort client IP captured at the consent moment. Optional —
 		// onboarding never blocks if IP lookup fails.
 		acceptanceIp: v.optional(v.string()),
@@ -1207,13 +1224,18 @@ export const createRetailer = mutation({
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
 		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
+		const country = args.country ?? DEFAULT_COUNTRY;
 		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
 			storeName,
 			waPhone,
 			notifyEmail,
-			currency: DEFAULT_CURRENCY,
+			// Currency is born from the country (SG → SGD) so the first product a
+			// seller creates already carries the right currency — products freeze
+			// theirs at create and orders refuse a currency mismatch.
+			currency: COUNTRY_CURRENCY[country],
+			...(args.country !== undefined ? { country: args.country } : {}),
 			channel: "whatsapp",
 			// Default self-collect ON so new retailers discover the pickup feature
 			// in the onboarding checklist. They can toggle it off from Settings →
@@ -1270,6 +1292,10 @@ export const updateSettings = mutation({
 		notifyWaPhone: v.optional(v.string()),
 		orderWaAlerts: v.optional(v.boolean()),
 		currency: v.optional(v.string()),
+		// Store country (SG-lite, 86eynw27f). No cascade onto currency — that
+		// stays its own setting; the settings UI hints when the two disagree
+		// instead of silently rewriting prices' denomination.
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -1311,7 +1337,10 @@ export const updateSettings = mutation({
 		// undefined = no change. See convex/lib/minOrderRules.ts.
 		minOrderValue: v.optional(v.number()),
 	},
-	handler: async (ctx, args): Promise<{ ok: true }> => {
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ ok: true; productsCurrencySynced: number }> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
 		// path (owner-or-admin); otherwise it's the caller's own store.
 		let retailer: Doc<"retailers">;
@@ -1345,6 +1374,7 @@ export const updateSettings = mutation({
 			logoStorageId: string | undefined;
 			coverImageStorageId: string | undefined;
 			currency: SupportedCurrency;
+			country: Country;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
 			statusLabels: StatusLabels | undefined;
@@ -1433,6 +1463,9 @@ export const updateSettings = mutation({
 		}
 		if (args.currency !== undefined) {
 			try { patch.currency = assertSupportedCurrency(args.currency); } catch (err) { throw new ConvexError((err as Error).message); }
+		}
+		if (args.country !== undefined) {
+			patch.country = args.country;
 		}
 		if (args.locale !== undefined) {
 			patch.locale = args.locale;
@@ -1866,6 +1899,32 @@ export const updateSettings = mutation({
 			}
 		}
 
+		// Currency change re-stamps every product with the new code (86eynw27f):
+		// products freeze their currency at create and `orders.create` refuses an
+		// order-vs-product mismatch, so leaving the catalog on the old code would
+		// brick checkout store-wide — the trap the old "existing products keep
+		// their original currency" posture set for the first SG store. Amounts are
+		// deliberately untouched (RM 12 becomes S$ 12; repricing is the seller's
+		// own pass — the settings card says exactly that). Bounded: the product
+		// cap holds every store at ≤200 rows, and archived rows sync too so a
+		// later restore can't resurrect a mismatched currency.
+		let productsCurrencySynced = 0;
+		if (
+			patch.currency !== undefined &&
+			patch.currency !==
+				((retailer.currency as SupportedCurrency) ?? DEFAULT_CURRENCY)
+		) {
+			const products = await ctx.db
+				.query("products")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect();
+			for (const product of products) {
+				if (product.currency === patch.currency) continue;
+				await ctx.db.patch(product._id, { currency: patch.currency });
+				productsCurrencySynced += 1;
+			}
+		}
+
 		await ctx.db.patch(retailer._id, patch);
 		// Encrypt-at-rest (86eyn25gk): a save that stored a plaintext credential
 		// schedules the encrypt action (mutations never touch crypto.subtle).
@@ -1884,7 +1943,7 @@ export const updateSettings = mutation({
 			);
 		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
-		return { ok: true };
+		return { ok: true, productsCurrencySynced };
 	},
 });
 

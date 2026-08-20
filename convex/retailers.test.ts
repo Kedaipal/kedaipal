@@ -1635,3 +1635,119 @@ describe("retailers — store opening hours (86eyp5rav)", () => {
 		).rejects.toThrow(/Tuesday/);
 	});
 });
+
+describe("retailer country (SG-lite, 86eynw27f)", () => {
+	test("createRetailer without a country stays MY: no stored field, MYR currency, resolved MY on reads", async () => {
+		const t = setup();
+		await seed(t, USER_A, "my-default-store");
+		const row = await t.run(async (ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "my-default-store"))
+				.first(),
+		);
+		// Zero-migration posture: MY stores keep no stored country field.
+		expect(row?.country).toBeUndefined();
+		expect(row?.currency).toBe("MYR");
+
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "my-default-store",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.country).toBe("MY");
+	});
+
+	test("createRetailer with SG stores the country and is born with SGD", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-store",
+			country: "SG",
+		});
+		const row = await t.run(async (ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "sg-store"))
+				.first(),
+		);
+		expect(row?.country).toBe("SG");
+		// Currency is born from the country — products freeze theirs at create,
+		// so a wrong default here would strand the whole catalog on MYR.
+		expect(row?.currency).toBe("SGD");
+
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "sg-store",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.country).toBe("SG");
+		expect(result.retailer.currency).toBe("SGD");
+	});
+
+	test("updateSettings sets country and both payloads expose it", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "country-flip");
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+
+		const mine = await asA.query(api.retailers.getMyRetailer, {});
+		expect(mine?.country).toBe("SG");
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "country-flip",
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status !== "ok") return;
+		expect(pub.retailer.country).toBe("SG");
+	});
+
+	test("currency change re-stamps every product (archived too) and reports the count", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "currency-sync");
+		const retailerId = await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "currency-sync"))
+				.first();
+			if (!row) throw new Error("no retailer");
+			const now = Date.now();
+			const base = {
+				retailerId: row._id,
+				currency: "MYR",
+				imageStorageIds: [] as string[],
+				channel: "whatsapp" as const,
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			};
+			await ctx.db.insert("products", { ...base, name: "Active", active: true });
+			await ctx.db.insert("products", {
+				...base,
+				name: "Archived",
+				active: false,
+			});
+			return row._id;
+		});
+
+		const result = await asA.mutation(api.retailers.updateSettings, {
+			currency: "SGD",
+		});
+		expect(result.productsCurrencySynced).toBe(2);
+		const currencies = await t.run(async (ctx) => {
+			const products = await ctx.db
+				.query("products")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return products.map((p) => p.currency);
+		});
+		// Archived rows sync too — a later restore must not resurrect a
+		// mismatched currency (orders refuse an order-vs-product mismatch).
+		expect(currencies).toEqual(["SGD", "SGD"]);
+
+		// Saving anything else (or the same currency) syncs nothing.
+		const again = await asA.mutation(api.retailers.updateSettings, {
+			currency: "SGD",
+		});
+		expect(again.productsCurrencySynced).toBe(0);
+	});
+});

@@ -16,6 +16,12 @@ import { Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	COUNTRIES,
+	COUNTRY_CURRENCY,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../convex/lib/country";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
@@ -86,6 +92,10 @@ function OnboardingForm() {
 	// If a slug came in the link, treat it as hand-set so it's not re-derived.
 	const [slugEdited, setSlugEdited] = useState(Boolean(prefill?.slug));
 	const [waPhone, setWaPhone] = useState(prefill?.wa ?? "");
+	// Store country (SG-lite). Picked BEFORE the store exists because currency
+	// is born from it (SG → SGD) and products freeze their currency at create —
+	// fixing it after the catalog exists means a bulk currency switch.
+	const [country, setCountry] = useState<Country>(prefill?.country ?? "MY");
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 
@@ -124,6 +134,7 @@ function OnboardingForm() {
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
+				country,
 				...(trimmedWa.length > 0 ? { waPhone: trimmedWa } : {}),
 				// Founding-10: starts on the normal 14-day trial; the discounted Pro
 				// plan begins once Arif marks their founding invoice paid.
@@ -218,6 +229,31 @@ function OnboardingForm() {
 						/>
 					</div>
 					<AvailabilityHint state={availability} />
+				</Field>
+
+				<Field label="Country">
+					<div className="grid grid-cols-2 gap-2">
+						{COUNTRIES.map((c) => (
+							<button
+								key={c}
+								type="button"
+								aria-pressed={country === c}
+								onClick={() => setCountry(c)}
+								className={`min-h-11 rounded-xl border px-4 text-sm font-medium transition-colors ${
+									country === c
+										? "border-accent bg-accent/10 text-foreground"
+										: "border-input bg-background text-muted-foreground hover:border-ring"
+								}`}
+							>
+								{COUNTRY_LABELS[c]}
+							</button>
+						))}
+					</div>
+					<span className="text-xs text-muted-foreground">
+						Sets your storefront currency ({COUNTRY_CURRENCY[country]}) and
+						which phone numbers and addresses checkout accepts. You can change
+						both later in Settings.
+					</span>
 				</Field>
 
 				{assisted ? (

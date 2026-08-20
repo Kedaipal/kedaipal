@@ -96,6 +96,7 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	type OrderReceiptData,
 	orderToReceiptData,
@@ -1285,6 +1286,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
 	retailerLocale: Locale;
+	// Store country (SG-lite), resolved (undefined rows read as "MY"). The track
+	// page keys the buyer phone-repair plate/validator arm and the address-edit
+	// dialog's variant off it — this payload is that page's ONLY retailer read,
+	// so the by-slug field alone can't reach it.
+	retailerCountry: Country;
 	// Store name + the vendor's own WhatsApp number, for the buyer "Message the
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
@@ -1424,6 +1430,7 @@ export const get = query({
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
+			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the

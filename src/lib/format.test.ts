@@ -2,6 +2,7 @@ import { describe, expect, it, test } from "vitest";
 import {
 	formatMyMobile,
 	formatOrderTimestamp,
+	formatPrice,
 	formatPriceCompact,
 	normalizePriceInput,
 	parsePriceInput,
@@ -101,6 +102,33 @@ describe("formatPriceCompact", () => {
 
 	test("unknown currency falls back to a plain rounded number", () => {
 		expect(formatPriceCompact(3_772_003, "NOPE")).toBe("NOPE 37,720");
+	});
+
+	test("SGD uses the pinned S$ symbol at every magnitude (SG-lite)", () => {
+		expect(formatPriceCompact(124_050, "SGD")).toBe(`S$${NB}1,240.50`);
+		expect(formatPriceCompact(3_772_003, "SGD")).toBe(`S$${NB}37,720`);
+		expect(formatPriceCompact(222_548_150, "SGD")).toBe(`S$${NB}2.23M`);
+	});
+});
+
+describe("formatPrice", () => {
+	// Intl separates "RM" from the number with a non-breaking space (U+00A0).
+	const NB = " ";
+
+	test("MYR stays on the Intl path, byte-identical to before", () => {
+		expect(formatPrice(123_450, "MYR")).toBe(`RM${NB}1,234.50`);
+		expect(formatPrice(0, "MYR")).toBe(`RM${NB}0.00`);
+	});
+
+	test("SGD renders the human symbol, not the bare code (SG-lite)", () => {
+		// en-MY Intl would say "SGD 41.00"; the PDF renderer says "S$ 41.00" —
+		// the web must agree with the receipt (convex/lib/pdf/document.ts).
+		expect(formatPrice(4_100, "SGD")).toBe(`S$${NB}41.00`);
+		expect(formatPrice(123_450, "SGD")).toBe(`S$${NB}1,234.50`);
+	});
+
+	test("unmapped currency keeps the code prefix", () => {
+		expect(formatPrice(4_100, "THB")).toBe(`THB${NB}41.00`);
 	});
 });
 
