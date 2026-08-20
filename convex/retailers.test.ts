@@ -1935,3 +1935,80 @@ describe("seller-side phone arms (SG-lite, 86eynw2dy)", () => {
 		).rejects.toThrow(/Malaysian mobile/i);
 	});
 });
+
+describe("country switch carries no wrong-country WhatsApp numbers (SG-lite invariant)", () => {
+	test("a bare MY→SG switch is refused while an MY waPhone is stored", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-stale-wa");
+		await asA.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/WhatsApp contact number isn't a Singapore number/);
+		// Refused save must not half-apply.
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("MY");
+		expect(mine?.waPhone).toBe("60123456789");
+	});
+
+	test("one save can switch AND clear the number together", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-clear-wa");
+		await asA.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.waPhone).toBeUndefined();
+	});
+
+	test("one save can switch AND replace with the new country's number", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-replace-wa");
+		await asA.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "9123 4567",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.waPhone).toBe("6591234567");
+	});
+
+	test("a stored notifyWaPhone blocks the switch too; clearing it in-call auto-disables alerts", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-stale-notify");
+		await asA.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "011-2345 6789",
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/order-alerts WhatsApp number isn't a Singapore number/);
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			notifyWaPhone: "",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.notifyWaPhone).toBeUndefined();
+		expect(mine?.orderWaAlerts).toBeFalsy();
+	});
+
+	test("the guard is symmetric — SG→MY refuses a stored SG number", async () => {
+		const t = setup();
+		const asSg = await seedSg(t, "switch-back-my");
+		await asSg.mutation(api.retailers.updateSettings, {
+			waPhone: "9123 4567",
+		});
+		await expect(
+			asSg.mutation(api.retailers.updateSettings, { country: "MY" }),
+		).rejects.toThrow(/isn't a Malaysian number/);
+	});
+});
