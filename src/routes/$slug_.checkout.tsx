@@ -192,6 +192,7 @@ function CheckoutRoute() {
 							retailer.deliveryCollectsFromCustomer ?? false
 						}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
 					/>

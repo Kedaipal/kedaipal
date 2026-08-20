@@ -1548,3 +1548,90 @@ describe("retailers.updateSettings — waPhone is a Malaysian mobile", () => {
 		expect(retailer?.waPhone).toBeUndefined();
 	});
 });
+
+describe("retailers — store opening hours (86eyp5rav)", () => {
+	/** A week open 24h everywhere, with per-weekday overrides (0 = Sunday). */
+	function weekWith(
+		overrides: Record<
+			number,
+			{ open: number; close: number; closed?: boolean }
+		> = {},
+	) {
+		return Array.from(
+			{ length: 7 },
+			(_, i) => overrides[i] ?? { open: 0, close: 1439 },
+		);
+	}
+
+	test("saves a schedule, exposes it on BOTH reads, and null clears it", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "hours-store");
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: weekWith({
+				0: { open: 540, close: 1080, closed: true },
+				1: { open: 540, close: 1080 },
+			}),
+		});
+
+		// Public storefront payload — buyers must see the hours to plan around
+		// them (header line + checkout clamp read this).
+		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "hours-store",
+		});
+		expect(bySlug.status).toBe("ok");
+		if (bySlug.status === "ok") {
+			expect(bySlug.retailer.openingHours?.[0]).toEqual({
+				open: 540,
+				close: 1080,
+				closed: true,
+			});
+			expect(bySlug.retailer.openingHours?.[1]).toEqual({
+				open: 540,
+				close: 1080,
+			});
+		}
+		// Owner read — the settings card prefills from it.
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.openingHours).toHaveLength(7);
+
+		// null = the explicit clear, back to open 24/7 (field removed).
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: null,
+		});
+		const cleared = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "hours-store",
+		});
+		if (cleared.status === "ok") {
+			expect(cleared.retailer.openingHours).toBeUndefined();
+		}
+	});
+
+	test("an all-24h week normalizes to unset — open 24/7 has one spelling", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "always-open");
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: weekWith(),
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.openingHours).toBeUndefined();
+	});
+
+	test("rejects an all-closed week and an inverted window", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "bad-hours");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				openingHours: Array.from({ length: 7 }, () => ({
+					open: 540,
+					close: 1080,
+					closed: true,
+				})),
+			}),
+		).rejects.toThrow(/at least one day/);
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				openingHours: weekWith({ 2: { open: 1080, close: 540 } }),
+			}),
+		).rejects.toThrow(/Tuesday/);
+	});
+});

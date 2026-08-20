@@ -24,8 +24,18 @@ import {
 } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
+	hhmmFromMinutes,
 	MAX_NOTICE_DAYS,
+	timeMinutesFromHhmm,
 } from "../../../convex/lib/fulfilmentDate";
+import {
+	type DayHours,
+	formatDayWindow,
+	OPEN_ALL_DAY,
+	type OpeningHours,
+	WEEKDAY_NAMES,
+	WEEKDAY_NAMES_SHORT,
+} from "../../../convex/lib/openingHours";
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
@@ -51,6 +61,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
+import { TimePicker } from "../ui/time-picker";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
@@ -83,6 +94,9 @@ interface FulfilmentTabProps {
 	/** Lalamove booking summary (86eyb5hrf) — secrets never reach the client. */
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store opening hours (86eyp5rav) — undefined = open 24/7. Buyers can only
+	 * pick fulfilment dates/times inside them. See convex/lib/openingHours.ts. */
+	openingHours: OpeningHours | undefined;
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
@@ -174,6 +188,7 @@ export function FulfilmentTab({
 	businessAddress,
 	deliveryBooking,
 	minFulfilmentNoticeDays,
+	openingHours,
 	minOrderValue,
 	subscription,
 }: FulfilmentTabProps) {
@@ -311,6 +326,7 @@ export function FulfilmentTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
+			<OpeningHoursCard initial={openingHours} />
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} />
 
@@ -1921,12 +1937,381 @@ function WeightZoneCard({
 	);
 }
 
+/** Render order for the weekly editor/summary: Monday-first (MY convention),
+ * while the underlying array stays 0 = Sunday (the getUTCDay index). */
+const DAY_RENDER_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+/** Editor draft — times as the native input's own "HH:MM" strings so a
+ * half-typed value never fights the controlled input; parsed at save. */
+type DayDraft = { openHhmm: string; closeHhmm: string; closed: boolean };
+
+function draftFromHours(initial: OpeningHours | undefined): DayDraft[] {
+	const week = initial ?? Array.from({ length: 7 }, () => OPEN_ALL_DAY);
+	return week.map((day) => ({
+		openHhmm: hhmmFromMinutes(day.open),
+		closeHhmm: hhmmFromMinutes(day.close),
+		closed: day.closed === true,
+	}));
+}
+
+/** Parse one draft row. Null = invalid (unparseable or open ≥ close). */
+function parseDayDraft(row: DayDraft): DayHours | null {
+	const open = timeMinutesFromHhmm(row.openHhmm);
+	const close = timeMinutesFromHhmm(row.closeHhmm);
+	if (Number.isNaN(open) || Number.isNaN(close) || open >= close) return null;
+	return row.closed ? { open, close, closed: true } : { open, close };
+}
+
+/**
+ * Store opening hours (86eyp5rav) — the weekly schedule buyers' fulfilment
+ * dates/times must fall inside. Sits first in the tab: it's the most
+ * fundamental checkout-wide timing rule (when the store operates at all),
+ * above the notice window. Default (unset) = open 24/7; the server normalizes
+ * an all-24h week back to unset and rejects an all-closed one.
+ */
+function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
+	const updateSettings = useUpdateSettings();
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState<DayDraft[]>(() => draftFromHours(initial));
+	// "Same every day" (one range + day chips — the overwhelmingly common
+	// schedule) vs "Different per day" (the 7-row editor). Derived on entry:
+	// a schedule whose OPEN days all share one range reads as "same".
+	const [mode, setMode] = useState<"same" | "perDay">("same");
+	const [saving, setSaving] = useState(false);
+
+	const configured = initial !== undefined;
+
+	function startEditing() {
+		const rows = draftFromHours(initial);
+		const open = rows.filter((row) => !row.closed);
+		setMode(
+			open.every(
+				(row) =>
+					row.openHhmm === open[0].openHhmm &&
+					row.closeHhmm === open[0].closeHhmm,
+			)
+				? "same"
+				: "perDay",
+		);
+		setDraft(rows);
+		setEditing(true);
+	}
+
+	function setDay(index: number, patch: Partial<DayDraft>) {
+		setDraft((prev) =>
+			prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+		);
+	}
+
+	/** Same-mode range edit — one pair of pickers writes every day's times
+	 * (closed days included, so re-opening a chip inherits the range). */
+	function setAllDays(patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm">>) {
+		setDraft((prev) => prev.map((row) => ({ ...row, ...patch })));
+	}
+
+	/** Switching to "same" unifies every day onto the first open day's range —
+	 * visible immediately in the pickers, so the collapse is never a silent
+	 * surprise at save time. Switching back keeps the unified values. */
+	function switchMode(next: "same" | "perDay") {
+		if (next === "same") {
+			const source = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+			setAllDays({ openHhmm: source.openHhmm, closeHhmm: source.closeHhmm });
+		}
+		setMode(next);
+	}
+
+	const parsed = draft.map(parseDayDraft);
+	const invalidDays = DAY_RENDER_ORDER.filter(
+		(i) => !draft[i].closed && parsed[i] === null,
+	);
+	const allClosed = draft.every((row) => row.closed);
+	const valid = invalidDays.length === 0 && !allClosed;
+	// Same-mode reads its range off the first open row (all rows are kept in
+	// sync); when every chip is off, fall back to Monday so the pickers keep
+	// showing the last times instead of blanking.
+	const rangeSource = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+
+	async function save() {
+		if (!valid) return;
+		setSaving(true);
+		try {
+			await updateSettings({
+				openingHours: draft.map((row, i) => {
+					const day = parseDayDraft(row);
+					// Closed rows may hold an unparseable range the seller never
+					// looked at — persist their last-known-good times (or all-day)
+					// so re-opening the day restores something sensible.
+					return (
+						day ??
+						(initial?.[i]
+							? { ...initial[i], closed: true }
+							: { ...OPEN_ALL_DAY, closed: true })
+					);
+				}),
+			});
+			toast.success("Opening hours updated.");
+			setEditing(false);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	async function resetTo247() {
+		setSaving(true);
+		try {
+			await updateSettings({ openingHours: null });
+			toast.success("Back to open 24 hours, every day.");
+			setEditing(false);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card>
+			<SectionHeading
+				title="Opening hours"
+				description="When your store operates. Buyers can browse and place orders any time — but the delivery or pickup date and time they pick at checkout must fall inside these hours, and closed days can't be picked at all. Counter sales aren't affected."
+			/>
+			{!editing ? (
+				<>
+					{configured ? (
+						<ul className="flex flex-col gap-1 text-sm tabular-nums">
+							{DAY_RENDER_ORDER.map((i) => {
+								const day = initial[i];
+								return (
+									<li key={WEEKDAY_NAMES[i]} className="flex justify-between">
+										<span className="text-muted-foreground">
+											{WEEKDAY_NAMES_SHORT[i]}
+										</span>
+										<span
+											className={
+												day.closed ? "text-muted-foreground" : "font-medium"
+											}
+										>
+											{day.closed ? "Closed" : formatDayWindow(day)}
+										</span>
+									</li>
+								);
+							})}
+						</ul>
+					) : (
+						<p className="text-sm text-muted-foreground">
+							Open 24 hours, every day — buyers can pick any date and time.
+						</p>
+					)}
+					<div>
+						<Button
+							type="button"
+							variant={configured ? "outline" : "default"}
+							onClick={startEditing}
+							className="h-11"
+						>
+							{configured ? "Edit hours" : "Set opening hours"}
+						</Button>
+					</div>
+				</>
+			) : (
+				<>
+					{/* Same-every-day is the overwhelmingly common schedule, so it
+					    leads and is the default — the 7-row editor is the escape
+					    hatch, not the entry fee. KindButton pattern (pickup dialog). */}
+					<div className="grid grid-cols-2 gap-2">
+						<ModeButton
+							active={mode === "same"}
+							onClick={() => switchMode("same")}
+							title="Same every day"
+							subtitle="One set of hours for the whole week"
+						/>
+						<ModeButton
+							active={mode === "perDay"}
+							onClick={() => switchMode("perDay")}
+							title="Different per day"
+							subtitle="Set each day's hours individually"
+						/>
+					</div>
+					{mode === "same" ? (
+						<>
+							<div className="flex items-center gap-2">
+								<TimePicker
+									value={rangeSource.openHhmm}
+									onChange={(next) => setAllDays({ openHhmm: next })}
+									disabled={saving}
+									isError={invalidDays.length > 0}
+									aria-label="Opening time"
+									className="flex-1"
+								/>
+								<span
+									className="shrink-0 text-muted-foreground"
+									aria-hidden="true"
+								>
+									–
+								</span>
+								<TimePicker
+									value={rangeSource.closeHhmm}
+									onChange={(next) => setAllDays({ closeHhmm: next })}
+									disabled={saving}
+									isError={invalidDays.length > 0}
+									aria-label="Closing time"
+									className="flex-1"
+								/>
+							</div>
+							{/* Tap a day off for the weekly rest day — chips, not 7
+							    toggle rows, because open/closed is the ONLY per-day
+							    fact left in this mode. */}
+							<div className="flex flex-col gap-1.5">
+								<span className="text-xs font-medium text-muted-foreground">
+									Open on
+								</span>
+								<div className="flex flex-wrap gap-1.5">
+									{DAY_RENDER_ORDER.map((i) => (
+										<FilterChip
+											key={WEEKDAY_NAMES[i]}
+											tone="accent"
+											selected={!draft[i].closed}
+											disabled={saving}
+											aria-label={WEEKDAY_NAMES[i]}
+											onClick={() =>
+												setDay(i, { closed: !draft[i].closed })
+											}
+											className="px-3"
+										>
+											{WEEKDAY_NAMES_SHORT[i]}
+										</FilterChip>
+									))}
+								</div>
+							</div>
+						</>
+					) : (
+						// Phones stack each day: name + switch on one line, the range
+						// full-width beneath. Side-by-side needs ~340px for the two
+						// pickers alone, so a 430px phone truncated them to "12…";
+						// the hairline separators keep the two-line rows from
+						// reading as one run-on list. One line again from sm.
+						<div className="flex flex-col gap-3 sm:gap-2.5">
+							{DAY_RENDER_ORDER.map((i) => {
+								const row = draft[i];
+								const rowInvalid = !row.closed && parsed[i] === null;
+								return (
+									<div
+										key={WEEKDAY_NAMES[i]}
+										className="flex flex-col gap-2 border-b border-border/60 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:gap-2.5 sm:border-0 sm:pb-0"
+									>
+										<div className="flex items-center gap-2.5">
+											<span className="w-10 shrink-0 text-sm font-medium">
+												{WEEKDAY_NAMES_SHORT[i]}
+											</span>
+											<ToggleSwitch
+												on={!row.closed}
+												onChange={(open) => setDay(i, { closed: !open })}
+												disabled={saving}
+												label={`Open on ${WEEKDAY_NAMES[i]}`}
+											/>
+											{row.closed ? (
+												<span className="text-sm text-muted-foreground">
+													Closed
+												</span>
+											) : null}
+										</div>
+										{row.closed ? null : (
+											<div className="flex min-w-0 flex-1 items-center gap-1.5">
+												<TimePicker
+													value={row.openHhmm}
+													onChange={(next) =>
+														setDay(i, { openHhmm: next })
+													}
+													disabled={saving}
+													isError={rowInvalid}
+													showIcon={false}
+													aria-label={`${WEEKDAY_NAMES[i]} opening time`}
+													className="min-w-0 flex-1"
+												/>
+												<span
+													className="shrink-0 text-muted-foreground"
+													aria-hidden="true"
+												>
+													–
+												</span>
+												<TimePicker
+													value={row.closeHhmm}
+													onChange={(next) =>
+														setDay(i, { closeHhmm: next })
+													}
+													disabled={saving}
+													isError={rowInvalid}
+													showIcon={false}
+													aria-label={`${WEEKDAY_NAMES[i]} closing time`}
+													className="min-w-0 flex-1"
+												/>
+											</div>
+										)}
+									</div>
+								);
+							})}
+						</div>
+					)}
+					<p className="text-xs text-muted-foreground">
+						12:00 AM – 11:59 PM means open all day.
+					</p>
+					{invalidDays.length > 0 ? (
+						<p className="text-xs text-destructive">
+							{mode === "same"
+								? "Opening time must be before closing time."
+								: `${WEEKDAY_NAMES[invalidDays[0]]}: opening time must be before closing time.`}
+						</p>
+					) : allClosed ? (
+						<p className="text-xs text-destructive">
+							Keep at least one day open — buyers need a day they can pick at
+							checkout.
+						</p>
+					) : null}
+					<div className="flex flex-wrap items-center gap-3">
+						<Button
+							type="button"
+							onClick={save}
+							disabled={!valid || saving}
+							isLoading={saving}
+							className="h-11"
+						>
+							Save hours
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => setEditing(false)}
+							disabled={saving}
+							className="h-11"
+						>
+							Cancel
+						</Button>
+						{configured ? (
+							<button
+								type="button"
+								onClick={resetTo247}
+								disabled={saving}
+								className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+							>
+								Reset to open 24/7
+							</button>
+						) : null}
+					</div>
+				</>
+			)}
+		</Card>
+	);
+}
+
 /**
  * Order-date notice setting — how many days ahead a buyer's chosen fulfilment
  * date must be. Governs the storefront date picker's earliest selectable day
- * (and counter checkout's default). Sits first in the tab: it's a checkout-wide
- * timing rule that applies to BOTH delivery and pickup, above the per-method
- * toggles. 0 = same-day allowed (ready-stock sellers).
+ * (and counter checkout's default). Sits with the other checkout-wide timing
+ * rules at the top of the tab (below Opening hours): it applies to BOTH
+ * delivery and pickup, above the per-method toggles. 0 = same-day allowed
+ * (ready-stock sellers).
  */
 function MinNoticeCard({ initial }: { initial: number | undefined }) {
 	const updateSettings = useUpdateSettings();
