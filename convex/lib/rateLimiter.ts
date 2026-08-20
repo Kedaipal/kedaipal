@@ -5,8 +5,16 @@ import { components } from "../_generated/api";
  * Rate limit definitions.
  *
  * - `orderCreate`: public order creation endpoint. Keyed by retailerId so each
- *   storefront is throttled independently. Token bucket allows a burst of 5
- *   then refills at 30/min steady state.
+ *   storefront is throttled independently. Token bucket allows a burst of 60
+ *   then refills at 120/min (2/s) steady state.
+ *
+ *   Sized for a LIVE SALE, not for an idle storefront. The original 5-burst /
+ *   30-per-min settings silently capped a store at five near-simultaneous
+ *   checkouts: a drop with forty buyers tapping "Place order" inside ten
+ *   seconds would have taken about five orders and rejected the rest. The
+ *   asymmetry decides the number — a spam order costs an inventory hold and
+ *   some noise, a throttled buyer costs a real sale — so the bucket is set
+ *   far above any traffic our sellers see while still bounding abuse.
  * - `productWrite`: authenticated retailer mutations. Keyed by Clerk subject so
  *   a single user cannot bulk-trash inventory.
  * - `addressUpdate`: public mutation that lets a shopper edit their delivery
@@ -32,9 +40,9 @@ import { components } from "../_generated/api";
 export const rateLimiter = new RateLimiter(components.rateLimiter, {
 	orderCreate: {
 		kind: "token bucket",
-		rate: 30,
+		rate: 120,
 		period: MINUTE,
-		capacity: 5,
+		capacity: 60,
 	},
 	productWrite: {
 		kind: "fixed window",

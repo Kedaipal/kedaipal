@@ -1,5 +1,7 @@
+import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
 import {
+	convexErrorMessage,
 	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
@@ -176,5 +178,35 @@ describe("formatMobile", () => {
 		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
 		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
 		expect(formatMobile("")).toBe("");
+	});
+});
+
+describe("convexErrorMessage — rate-limit payload", () => {
+	// The limiter throws ConvexError with an OBJECT payload. Before this was
+	// handled the generic branch stringified it and a throttled buyer read the
+	// literal "[object Object]" at checkout. Delete the isRateLimitError branch
+	// in format.ts and this test goes red on exactly that string.
+	function rateLimitError(retryAfterMs: number) {
+		return new ConvexError({
+			kind: "RateLimited",
+			name: "orderCreate",
+			retryAfter: retryAfterMs,
+		});
+	}
+
+	it("renders a human retry message, never [object Object]", () => {
+		const msg = convexErrorMessage(rateLimitError(4200));
+		expect(msg).not.toContain("[object Object]");
+		expect(msg).toContain("5s");
+	});
+
+	it("floors the wait at 1s so it never says 0s", () => {
+		expect(convexErrorMessage(rateLimitError(120))).toContain("1s");
+	});
+
+	it("still passes a plain string payload straight through", () => {
+		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
+			"Only 2 in stock",
+		);
 	});
 });

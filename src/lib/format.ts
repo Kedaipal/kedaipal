@@ -6,6 +6,7 @@
  * Always divide by 100 before formatting for display.
  */
 
+import { isRateLimitError } from "@convex-dev/rate-limiter";
 import { ConvexError } from "convex/values";
 import { COUNTRIES, type Country } from "../../convex/lib/country";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
@@ -17,6 +18,18 @@ import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
  * ensures users see only the original message.
  */
 export function convexErrorMessage(err: unknown): string {
+	// Checked FIRST: the rate limiter throws a STRUCTURED payload ({kind, name,
+	// retryAfter}), not a string, so the generic branch below would stringify it
+	// to the literal "[object Object]" — which is what a buyer read when a busy
+	// storefront throttled their checkout. Every gated mutation shares this
+	// helper, so handling the shape here covers checkout, the address edit and
+	// the counter alike. (The guard does its own ConvexError + shape test, and
+	// running it ahead of the `instanceof` also keeps TS from narrowing the
+	// payload union to `never`.)
+	if (isRateLimitError(err)) {
+		const seconds = Math.max(1, Math.ceil(err.data.retryAfter / 1000));
+		return `Busy right now — please try again in ${seconds}s. Nothing was submitted.`;
+	}
 	if (err instanceof ConvexError) {
 		return typeof err.data === "string" ? err.data : String(err.data);
 	}
