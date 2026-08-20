@@ -729,6 +729,7 @@ function SettingsRoute() {
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
 						retailerId={retailer._id}
+						country={retailer.country}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
 						deliveryConfig={retailer.deliveryConfig}

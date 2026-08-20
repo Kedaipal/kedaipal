@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { type Country, COUNTRY_LABELS } from "../../../convex/lib/country";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -31,6 +32,9 @@ interface PickupLocationEditDialogProps {
 	 */
 	location: Doc<"pickupLocations"> | undefined;
 	retailerId: Id<"retailers">;
+	/** The store's country (SG-lite, 86eynw29u) — the address search covers it
+	 * (Places region lock) and the placeholder names it. */
+	country: Country;
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
@@ -94,6 +98,7 @@ export function PickupLocationEditDialog({
 	onClose,
 	location,
 	retailerId,
+	country,
 	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
@@ -334,7 +339,8 @@ export function PickupLocationEditDialog({
 								initialValue={location?.address ?? ""}
 								label="Address"
 								required
-								placeholder="Start typing an address in Malaysia…"
+								country={country}
+								placeholder={`Start typing an address in ${COUNTRY_LABELS[country]}…`}
 								description={
 									hasCoords
 										? "✓ Pinned via Google Maps — buyers will get a tappable location pin in WhatsApp."

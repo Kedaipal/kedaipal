@@ -161,6 +161,47 @@ describe("google.autocompleteAddress", () => {
 		}
 	});
 
+	// SG-lite (86eynw29u): the region lock follows the store's country. An
+	// omitted country stays MY — the pre-SG contract — pinned by the
+	// "forwards … MY region" test above, which passes no country at all.
+	test("country: 'SG' scopes predictions to the sg region", async () => {
+		const t = setup();
+		const retailerId = await seedRetailerId(t);
+		const mock = installFetchMock();
+		mock.queueResponse({ suggestions: [] });
+		try {
+			await t.action(api.google.autocompleteAddress, {
+				input: "bedok",
+				sessionToken: "tok-sg",
+				retailerId,
+				country: "SG",
+			});
+			const sent = JSON.parse(mock.calls[0].init?.body as string);
+			expect(sent.includedRegionCodes).toEqual(["sg"]);
+		} finally {
+			mock.restore();
+		}
+	});
+
+	test("country: 'MY' explicitly keeps the my region", async () => {
+		const t = setup();
+		const retailerId = await seedRetailerId(t);
+		const mock = installFetchMock();
+		mock.queueResponse({ suggestions: [] });
+		try {
+			await t.action(api.google.autocompleteAddress, {
+				input: "klcc",
+				sessionToken: "tok-my",
+				retailerId,
+				country: "MY",
+			});
+			const sent = JSON.parse(mock.calls[0].init?.body as string);
+			expect(sent.includedRegionCodes).toEqual(["my"]);
+		} finally {
+			mock.restore();
+		}
+	});
+
 	test("throws a sanitized error on non-2xx", async () => {
 		const t = setup();
 		const retailerId = await seedRetailerId(t);

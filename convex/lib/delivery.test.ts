@@ -5,6 +5,7 @@ import {
 	DELIVERY_FEE_MAX,
 	DELIVERY_ZONES_MAX,
 	type DeliveryConfig,
+	deliveryModeAllowed,
 	haversineKm,
 	resolveDeliveryQuote,
 	sanitizeDeliveryConfig,
@@ -763,5 +764,20 @@ describe("sanitizeDeliveryConfig — weight mode", () => {
 				onUnpriceable: "arrange",
 			}),
 		).toThrow(/positive/);
+	});
+});
+
+describe("deliveryModeAllowed (SG-lite, 86eynw29u)", () => {
+	test("MY allows every pricing mode", () => {
+		for (const mode of ["flat", "radius", "weight", "lalamove"] as const) {
+			expect(deliveryModeAllowed("MY", mode)).toBe(true);
+		}
+	});
+
+	test("SG allows only flat — radius/weight/lalamove are MY-shaped", () => {
+		expect(deliveryModeAllowed("SG", "flat")).toBe(true);
+		for (const mode of ["radius", "weight", "lalamove"] as const) {
+			expect(deliveryModeAllowed("SG", mode)).toBe(false);
+		}
 	});
 });

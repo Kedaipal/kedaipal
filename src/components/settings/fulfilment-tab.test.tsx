@@ -40,6 +40,13 @@ vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
 }));
 
+// Every test here renders the ENTIRE FulfilmentTab (cards, hours editor, DnD
+// list) in jsdom, and the OpeningHoursCard tests then drive radix-popper time
+// pickers through multiple re-renders — measured right at vitest's 5s default
+// when the whole suite runs in parallel workers (isolated: ~1s). Raise the
+// file's budget so a loaded machine doesn't flake the gate.
+vi.setConfig({ testTimeout: 20_000 });
+
 const NAME = {
 	updateSettings: getFunctionName(api.retailers.updateSettings),
 	markSeen: getFunctionName(api.retailers.markPickupSetupSeen),
@@ -81,6 +88,7 @@ describe("FulfilmentTab act-as wiring", () => {
 			<ActAsProvider>
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
+					country="MY"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -174,6 +182,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 			<ActAsProvider>
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
+					country="MY"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={{ mode: "lalamove", onUnquotable: "block" }}
@@ -280,6 +289,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 			<ActAsProvider>
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
+					country="MY"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -409,5 +419,79 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 				retailerId: undefined,
 			}),
 		);
+	});
+});
+
+describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
+	beforeEach(() => {
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => ({
+			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
+			isPending: false,
+		})) as never);
+		vi.mocked(useMutation).mockImplementation((() =>
+			vi.fn().mockResolvedValue({ ok: true })) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	function renderTab(
+		country: "MY" | "SG",
+		deliveryConfig?: Parameters<typeof FulfilmentTab>[0]["deliveryConfig"],
+	) {
+		return render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country={country}
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={deliveryConfig}
+					businessAddress={undefined}
+					deliveryBooking={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					minOrderValue={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>,
+		);
+	}
+
+	it("an SG store sees only Free + Flat, with the reason on screen", () => {
+		renderTab("SG");
+		expect(screen.getByRole("button", { name: /Free/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /Flat fee/ })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /By distance/ })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /By weight & zone/ }),
+		).toBeNull();
+		expect(screen.queryByAltText("Lalamove")).toBeNull();
+		// The missing cards are explained, never a mystery.
+		expect(screen.getByText(/Malaysia-only for now/)).toBeTruthy();
+	});
+
+	it("an MY store keeps all five mode cards and no SG reason line", () => {
+		renderTab("MY");
+		expect(screen.getByRole("button", { name: /By distance/ })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /By weight & zone/ }),
+		).toBeTruthy();
+		expect(screen.queryByText(/Malaysia-only for now/)).toBeNull();
+	});
+
+	it("an SG store stuck on a stored MY-only mode gets the amber repair note", () => {
+		renderTab("SG", {
+			mode: "radius",
+			bands: [{ maxKm: 5, fee: 500 }],
+			outOfRange: "arrange",
+		});
+		expect(
+			screen.getByText(/uses a Malaysia-only mode/),
+		).toBeTruthy();
 	});
 });

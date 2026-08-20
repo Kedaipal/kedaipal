@@ -3,9 +3,13 @@
  * can be unit-tested in isolation and mirrors the client-side Zod schema in
  * `src/lib/schemas.ts`.
  *
- * Malaysia-only for v1. When we expand markets, replace MY_STATES with a
- * country-keyed map and accept a country code on the address object.
+ * Country-keyed since SG-lite (86eynw29u): the caller resolves the RETAILER's
+ * country and passes it — an address is judged against the store's country,
+ * never sniffed from its own fields. Omitted country = MY, so every
+ * pre-existing caller and order keeps today's behaviour byte-identical.
  */
+
+import { type Country, DEFAULT_COUNTRY } from "./country";
 
 export const MY_STATES = [
 	"Johor",
@@ -30,7 +34,19 @@ export type MyState = (typeof MY_STATES)[number];
 
 const MY_STATE_SET: ReadonlySet<string> = new Set(MY_STATES);
 
-const POSTCODE_PATTERN = /^\d{5}$/;
+/**
+ * Singapore has no state tier — the whole country is one city-state, so SG
+ * addresses store this literal in BOTH `city` and `state`. Storing a real
+ * value (never undefined) keeps every downstream consumer — zone matching,
+ * display renderers, CSV — on the same required-string shape as MY; display
+ * sites dedupe the repetition (src/lib/address-display.ts).
+ */
+export const SG_STATE_LABEL = "Singapore";
+
+const POSTCODE_RULES: Record<Country, { pattern: RegExp; error: string }> = {
+	MY: { pattern: /^\d{5}$/, error: "Postcode must be 5 digits" },
+	SG: { pattern: /^\d{6}$/, error: "Postal code must be 6 digits" },
+};
 
 const LINE1_MIN = 3;
 const LINE1_MAX = 120;
@@ -92,7 +108,34 @@ function assertValidUrl(raw: string): string {
 	}
 }
 
-export function assertValidAddress(addr: RawAddress): SanitizedAddress {
+/**
+ * Per-country state validation. MY: membership in the canonical MY_STATES set
+ * (exact spelling — the client's dropdown and Google normalizer both emit it).
+ * SG: the literal "Singapore", accepted case-insensitively and normalized, so
+ * a hand-built caller writing "singapore" can't fork the stored spelling.
+ */
+function assertValidState(raw: string, country: Country): string {
+	const state = raw.trim();
+	switch (country) {
+		case "MY":
+			if (!MY_STATE_SET.has(state)) {
+				throw new Error(`Unknown state: ${state}`);
+			}
+			return state;
+		case "SG":
+			if (state.toLowerCase() !== SG_STATE_LABEL.toLowerCase()) {
+				throw new Error(
+					`Singapore addresses carry "${SG_STATE_LABEL}" as the state`,
+				);
+			}
+			return SG_STATE_LABEL;
+	}
+}
+
+export function assertValidAddress(
+	addr: RawAddress,
+	country: Country = DEFAULT_COUNTRY,
+): SanitizedAddress {
 	const line1 = addr.line1.trim();
 	if (line1.length < LINE1_MIN) {
 		throw new Error(`Address line 1 must be at least ${LINE1_MIN} characters`);
@@ -114,14 +157,12 @@ export function assertValidAddress(addr: RawAddress): SanitizedAddress {
 		throw new Error(`City must be at most ${CITY_MAX} characters`);
 	}
 
-	const state = addr.state.trim();
-	if (!MY_STATE_SET.has(state)) {
-		throw new Error(`Unknown state: ${state}`);
-	}
+	const state = assertValidState(addr.state, country);
 
 	const postcode = addr.postcode.trim();
-	if (!POSTCODE_PATTERN.test(postcode)) {
-		throw new Error("Postcode must be 5 digits");
+	const postcodeRule = POSTCODE_RULES[country];
+	if (!postcodeRule.pattern.test(postcode)) {
+		throw new Error(postcodeRule.error);
 	}
 
 	const notes = trimmedOrUndefined(addr.notes);
