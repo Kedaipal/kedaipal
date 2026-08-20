@@ -30,6 +30,7 @@ import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { Country } from "../../convex/lib/country";
 import {
 	formatFulfilmentDate,
 	fulfilmentDateBounds,
@@ -402,12 +403,31 @@ function EmptyCheckouts() {
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
+
+// Manual-bind copy per store country (SG-lite, 86eynw28q). "We'll add the
+// country code automatically" is the loose server normalizer's promise: MY
+// bridges `012…`→`60…`, SG bridges a bare 8-digit `8/9…`→`65…` — while a
+// number typed WITH its own country code (a foreign walk-in) passes through.
+const MANUAL_BIND_PLACEHOLDER: Record<Country, string> = {
+	MY: "e.g. 012-345 6789",
+	SG: "e.g. 9123 4567",
+};
+const MANUAL_BIND_HELP: Record<Country, string> = {
+	MY: "Malaysian mobile number. We'll add the country code automatically.",
+	SG: "Singapore mobile number. We'll add the country code automatically.",
+};
 function CounterCheckoutActions({
 	onStarted,
 }: {
 	onStarted: (sessionId: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
+	// Store country drives the manual-bind helper copy + example (SG-lite). The
+	// input itself stays deliberately loose and plate-less — a cashier may key
+	// a foreign number for a walk-in — but the copy should name the store's own
+	// country, and the server prefixes bare local numbers with its dial code.
+	const retailer = useDashboardRetailer();
+	const country = retailer?.country ?? "MY";
 
 	// --- Store QR (the buyer-scan path) ---
 	const storeQr = useQuery(
@@ -644,12 +664,11 @@ function CounterCheckoutActions({
 									if (e.key === "Enter" && phoneReady && nameReady)
 										void submitPhone();
 								}}
-								placeholder="e.g. 012-345 6789"
+								placeholder={MANUAL_BIND_PLACEHOLDER[country]}
 								className="mt-1 h-12 text-base"
 							/>
 							<span className="mt-1 block text-xs text-muted-foreground">
-								Malaysian mobile number. We'll add the country code
-								automatically.
+								{MANUAL_BIND_HELP[country]}
 							</span>
 						</label>
 						<DialogFooter className="gap-2 sm:gap-2">

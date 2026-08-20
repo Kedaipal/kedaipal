@@ -25,12 +25,13 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
-		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
-		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
-		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
-		// route alerts to whoever runs orders — same split as notifyEmail vs the
-		// Clerk email. Stored in the normalized inbound form ("60…", via
-		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		// Seller WhatsApp order alerts (86eyhw9zy): the mobile (in the store's
+		// country — SG-lite 86eynw2dy) that receives them. Deliberately SEPARATE
+		// from `waPhone` (the buyer-facing store contact / wa.me fallback /
+		// Lalamove sender) so a multi-person store can route alerts to whoever
+		// runs orders — same split as notifyEmail vs the Clerk email. Stored in
+		// the normalized inbound form ("60…"/"65…", via
+		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
 		// Opt-in switch for the seller WhatsApp order alerts (new order +
 		// payment claim, sent as Meta utility templates to notifyWaPhone).

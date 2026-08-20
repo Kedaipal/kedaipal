@@ -231,7 +231,7 @@ import {
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
-	assertValidMyMobile,
+	assertValidMobileForCountry,
 	assertValidSlug,
 	assertValidStoreName,
 	normalizeWaPhone,
@@ -594,7 +594,7 @@ type RetailerPublic = {
 	waPhone?: string;
 	notifyEmail?: string;
 	// Seller WhatsApp order alerts (86eyhw9zy) — OWNER-only alert config: the
-	// receiving MY mobile + the opt-in flag, plus two derived bits the settings
+	// receiving mobile (store's country) + the opt-in flag, plus two derived bits the settings
 	// card needs: `waOrderAlertsAvailable` (an approved seller template is
 	// configured on this deployment — card hidden otherwise) and
 	// `notifyWaPhoneOptedOut` (the saved number holds a global STOP opt-out, so
@@ -1173,10 +1173,13 @@ export const createRetailer = mutation({
 		let storeName: string;
 		let slug: string;
 		let waPhone: string | undefined;
+		// The SAME-CALL country judges the phone — the row doesn't exist yet, so
+		// there is nothing stored to read (SG-lite, 86eynw2dy).
+		const country = args.country ?? DEFAULT_COUNTRY;
 		try { storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
 		try { slug = assertValidSlug(args.slug); } catch (err) { throw new ConvexError((err as Error).message); }
 		if (args.waPhone && args.waPhone.trim().length > 0) {
-			try { waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+			try { waPhone = assertValidMobileForCountry(args.waPhone, country); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 
 		// Prefill notifyEmail from Clerk identity if available. Swallow validation
@@ -1225,7 +1228,6 @@ export const createRetailer = mutation({
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
 		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
-		const country = args.country ?? DEFAULT_COUNTRY;
 		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -1288,8 +1290,9 @@ export const updateSettings = mutation({
 		notifyEmail: v.optional(v.string()),
 		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
 		// (and switches the alerts off with it); undefined = no change; validated
-		// as a MY mobile and normalized to the inbound "60…" form. orderWaAlerts:
-		// enabling is Pro-gated + requires a number; disabling always allowed.
+		// as a mobile in the store's country and normalized to the inbound
+		// "60…"/"65…" form. orderWaAlerts: enabling is Pro-gated + requires a
+		// number; disabling always allowed.
 		notifyWaPhone: v.optional(v.string()),
 		orderWaAlerts: v.optional(v.boolean()),
 		currency: v.optional(v.string()),
@@ -1394,6 +1397,11 @@ export const updateSettings = mutation({
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
+		// Which validator arm judges the seller's own numbers: a same-call country
+		// change wins over the stored row, so "switch to SG + save the SG number"
+		// in one call validates coherently instead of bouncing off the old arm.
+		const effectiveCountry = args.country ?? retailer.country ?? DEFAULT_COUNTRY;
+
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
@@ -1402,7 +1410,7 @@ export const updateSettings = mutation({
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {
-				try { patch.waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+				try { patch.waPhone = assertValidMobileForCountry(args.waPhone, effectiveCountry); } catch (err) { throw new ConvexError((err as Error).message); }
 			} else {
 				patch.waPhone = undefined;
 			}
@@ -1418,7 +1426,10 @@ export const updateSettings = mutation({
 			if (args.notifyWaPhone.trim().length > 0) {
 				let alertPhone: string;
 				try {
-					alertPhone = assertValidMyMobile(args.notifyWaPhone);
+					alertPhone = assertValidMobileForCountry(
+						args.notifyWaPhone,
+						effectiveCountry,
+					);
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
 				}

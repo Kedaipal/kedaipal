@@ -7996,3 +7996,148 @@ describe("SG addresses (SG-lite, 86eynw29u)", () => {
 		).rejects.toThrow(/store's side/);
 	});
 });
+
+describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
+	/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
+	 * an order-vs-product currency mismatch, so the whole chain must be SGD. */
+	async function seedSgStore(t: ReturnType<typeof setup>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-store-phones",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			currency: "SGD",
+		});
+		return { retailer, productId };
+	}
+
+	function sgOrderArgs(
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone: string,
+	) {
+		return {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "SGD",
+			channel: "whatsapp" as const,
+			customer: { name: "Wei Ling", waPhone },
+			// SG-shaped — the address arm (86eynw29u) judges by the SAME retailer
+			// country as the phone arm, so an MY `validAddress` would fail first
+			// and mask the phone assertion under test.
+			deliveryAddress: {
+				line1: "12 Bedok North Ave 3",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "238859",
+			},
+		};
+	}
+
+	test("accepts a +65 buyer and stores the inbound (65…) form", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "+65 9123 4567"),
+		);
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6591234567");
+	});
+
+	test("accepts the bare national number the +65 plate asks for", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "8123 4567"),
+		);
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6581234567");
+	});
+
+	test("rejects an MY buyer number with the SG message — no cross-accept", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				sgOrderArgs(retailer._id, productId, "012-345 6789"),
+			),
+		).rejects.toThrow(/Singapore mobile/i);
+	});
+
+	test("an MY store keeps rejecting +65 buyers exactly as before", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "+65 9123 4567" },
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("updateBuyerPhone on an SG store repairs with the SG arm", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "9999 8888"),
+		);
+		// Push failed against the typo'd number — the only state the repair
+		// window opens for. Stamped directly: the push pipeline itself is
+		// covered by the 86eyf1rck suites above.
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			await ctx.db.patch(o!._id, {
+				confirmationPushStatus: "failed",
+				confirmationPushFailureKind: "unreachable",
+			});
+		});
+
+		// An MY number is refused with the SG copy…
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+
+		// …and the bare SG national form lands in the stored shape.
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "9123 4567",
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6591234567");
+		expect(order?.confirmationPushStatus).toBe("sending");
+	});
+});

@@ -76,6 +76,13 @@ function OnboardingRoute() {
 	);
 }
 
+// Helper line under the assisted-onboarding phone field — names the mobile
+// kind the picked country's validator arm accepts (SG-lite, 86eynw2dy).
+const WA_PHONE_HELP: Record<Country, string> = {
+	MY: "The Malaysian mobile buyers reach you on. Leave blank to add it later.",
+	SG: "The Singapore mobile buyers reach you on. Leave blank to add it later.",
+};
+
 function OnboardingForm() {
 	const navigate = useNavigate();
 	const search = Route.useSearch();
@@ -258,13 +265,16 @@ function OnboardingForm() {
 
 				{assisted ? (
 					<Field label="WhatsApp number">
+						{/* Reacts to the country picker above LIVE — flipping to
+						    Singapore re-plates the field to +65, matching the arm
+						    createRetailer validates the same-call country with. */}
 						<MyPhoneInput
 							value={waPhone}
 							onChange={setWaPhone}
+							country={country}
 						/>
 						<span className="text-xs text-muted-foreground">
-							The Malaysian mobile buyers reach you on. Leave blank to add it
-							later.
+							{WA_PHONE_HELP[country]}
 						</span>
 					</Field>
 				) : null}

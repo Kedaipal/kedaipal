@@ -361,6 +361,16 @@ describe("toLalamoveMyPhone", () => {
 		expect(toLalamoveMyPhone("14155551234")).toBeNull();
 	});
 
+	test("SG-lite (86eynw28q) must NOT loosen this: a stored SG number stays null", () => {
+		// Deliberate, not an oversight — Lalamove validates the area code per
+		// market (this integration is Lalamove MALAYSIA), so a +65 contact 422s
+		// the booking. Returning null routes dispatch to its fallback: the
+		// seller's own +60 number as rider contact, buyer number in the rider
+		// remarks. A future "accept 65 everywhere" sweep that touches this
+		// function breaks real bookings.
+		expect(toLalamoveMyPhone("6581234567")).toBeNull();
+	});
+
 	test("rejects junk: empty, undefined, too short/long", () => {
 		expect(toLalamoveMyPhone(undefined)).toBeNull();
 		expect(toLalamoveMyPhone("")).toBeNull();

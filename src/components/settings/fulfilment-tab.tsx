@@ -16,8 +16,8 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import { MY_STATES } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
+import { MY_STATES } from "../../../convex/lib/address";
 import type { DeliveryConfig, DeliveryZone } from "../../../convex/lib/delivery";
 import {
 	DELIVERY_BANDS_MAX,
@@ -87,9 +87,10 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
-	/** The store's country (SG-lite, 86eynw29u) — SG stores see only the
-	 * Free/Flat delivery-charge modes (the MY-only ones are server-refused),
-	 * and the address pickers search the store's own country. */
+	/** The store's country (SG-lite) — SG stores see only the Free/Flat
+	 * delivery-charge modes (the MY-only ones are server-refused), the address
+	 * pickers search the store's own country, and the pickup-point editor's
+	 * manager-contact phone plate/validator follows it. */
 	country: Country;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;

@@ -48,7 +48,7 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
-import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
+import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -1532,7 +1532,7 @@ function PushSendingCard({
 	ms: boolean;
 	waPhone: string | undefined;
 }) {
-	const pretty = waPhone ? formatMyMobile(waPhone) : "";
+	const pretty = waPhone ? formatMobile(waPhone) : "";
 	return (
 		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 			<Loader2 className="size-5 shrink-0 animate-spin text-muted-foreground" />
@@ -1578,7 +1578,7 @@ function PushFailedCard({
 	const storeName = order.storeName || (ms ? "kedai" : "the store");
 	const unreachable = order.confirmationPushFailureKind !== "system";
 	const pretty = order.customer.waPhone
-		? formatMyMobile(order.customer.waPhone)
+		? formatMobile(order.customer.waPhone)
 		: "";
 	const updatePhone = useMutation(api.orders.updateBuyerPhone);
 	const [editing, setEditing] = useState(false);
@@ -1651,14 +1651,17 @@ function PushFailedCard({
 						</label>
 						{/* Same plated control as the storefront checkout field this is
 						    repairing — the buyer has already met it once, and it's the
-						    only shape `assertValidMyMobile` behind it accepts. Its own
-						    neutral chrome inside the amber card, so the control reads as
-						    a control and not as part of the warning. */}
+						    only shape `assertValidMobileForCountry` behind it accepts
+						    (judged by the store's country, which rides the order
+						    payload). Its own neutral chrome inside the amber card, so
+						    the control reads as a control and not as part of the
+						    warning. */}
 						<MyPhoneInput
 							id="repair-wa-phone"
 							ref={phoneInputRef}
 							value={value}
 							onChange={setValue}
+							country={order.retailerCountry}
 							className="bg-white dark:bg-amber-950"
 						/>
 						<div className="flex gap-2">

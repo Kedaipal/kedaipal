@@ -113,7 +113,7 @@ import {
 	mapHitpayPaymentType,
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyMobile } from "./lib/slug";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import { renderSystemMessage } from "./lib/whatsappCopy";
@@ -583,9 +583,15 @@ export const updateBuyerPhone = mutation({
 			);
 		}
 
+		// The repair field wears the same country plate as the checkout field it
+		// fixes — judge the new number by the STORE's country (SG-lite).
+		const orderRetailer = await ctx.db.get(order.retailerId);
 		let normalized: string;
 		try {
-			normalized = assertValidMyMobile(waPhone);
+			normalized = assertValidMobileForCountry(
+				waPhone,
+				orderRetailer?.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -706,18 +712,45 @@ export const create = mutation({
 				"Delivery orders should not include a pickup location",
 			);
 		}
+		// Loaded before the address + phone checks below — the store's country
+		// picks the address shape AND which validator arm judges the buyer's
+		// number (SG-lite, 86eynw28q + 86eynw29u).
+		const retailer = await ctx.db.get(args.retailerId);
+		if (!retailer) throw new ConvexError("Retailer not found");
+		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
+
+		// Address shape follows the STORE's country — SG stores take 6-digit
+		// postal codes with "Singapore" as the state; MY keeps the 5-digit +
+		// MY_STATES shape.
+		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
+		if (args.deliveryAddress) {
+			try {
+				sanitizedAddress = assertValidAddress(
+					args.deliveryAddress,
+					retailerCountry,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
+
 		// Customer waPhone: the storefront form requires it (86eyf1rck — the
 		// confirmation push needs a reachable number), but it stays optional at
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
-		// WhatsApp webhook stamps the number on the inbound message. MY-aware
-		// normalization (assertValidMyMobile): buyers type local numbers
-		// ("012-345 6789"), and the stored form must match what Meta delivers
-		// inbound (60…) or the customer record would fork.
+		// WhatsApp webhook stamps the number on the inbound message.
+		// Country-aware normalization (assertValidMobileForCountry, keyed off
+		// the STORE's country): buyers type local numbers ("012-345 6789" /
+		// "9123 4567"), and the stored form must match what Meta delivers
+		// inbound (60… / 65…) or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMyMobile(args.customer.waPhone);
+				customerWaPhone = assertValidMobileForCountry(
+					args.customer.waPhone,
+					retailerCountry,
+				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
@@ -740,25 +773,6 @@ export const create = mutation({
 			);
 		const sanitizedCustomerNote =
 			trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
-
-		const retailer = await ctx.db.get(args.retailerId);
-		if (!retailer) throw new ConvexError("Retailer not found");
-
-		// Address shape follows the STORE's country (SG-lite, 86eynw29u) — SG
-		// stores take 6-digit postal codes with "Singapore" as the state; MY
-		// keeps the 5-digit + MY_STATES shape. Sits after the retailer load
-		// because the country lives on the retailer row.
-		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
-		if (args.deliveryAddress) {
-			try {
-				sanitizedAddress = assertValidAddress(
-					args.deliveryAddress,
-					retailer.country ?? DEFAULT_COUNTRY,
-				);
-			} catch (err) {
-				throw new ConvexError((err as Error).message);
-			}
-		}
 
 		// Fulfilment date is validated AFTER the item loop below — the effective
 		// notice window is max(store setting, every item's per-product override),

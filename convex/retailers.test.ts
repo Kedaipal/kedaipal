@@ -1752,6 +1752,17 @@ describe("retailer country (SG-lite, 86eynw27f)", () => {
 	});
 });
 
+/** Seed an SG-country store — shared by the SG-lite suites below. */
+async function seedSg(t: ReturnType<typeof setup>, slug: string) {
+	const asUser = t.withIdentity({ subject: USER_A });
+	await asUser.mutation(api.retailers.createRetailer, {
+		storeName: "SG Store",
+		slug,
+		country: "SG",
+	});
+	return asUser;
+}
+
 describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 	const weightConfig = {
 		mode: "weight" as const,
@@ -1765,16 +1776,6 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 		onOutOfBands: "arrange" as const,
 		onUnpriceable: "arrange" as const,
 	};
-
-	async function seedSg(t: ReturnType<typeof setup>, slug: string) {
-		const asUser = t.withIdentity({ subject: USER_A });
-		await asUser.mutation(api.retailers.createRetailer, {
-			storeName: "SG Store",
-			slug,
-			country: "SG",
-		});
-		return asUser;
-	}
 
 	test("an SG store can save flat and clear back to free", async () => {
 		const t = setup();
@@ -1854,5 +1855,83 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 		const mine = await asA.query(api.retailers.getMyRetailer);
 		expect(mine?.country).toBe("SG");
 		expect(mine?.deliveryConfig).toMatchObject({ mode: "flat", fee: 700 });
+	});
+});
+
+describe("seller-side phone arms (SG-lite, 86eynw2dy)", () => {
+	test("createRetailer with country SG accepts a +65 waPhone in the bare local form", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-phone-create",
+			country: "SG",
+			// The SAME-CALL country must judge this — the row doesn't exist yet.
+			waPhone: "9123 4567",
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.waPhone).toBe("6591234567");
+	});
+
+	test("createRetailer without a country keeps rejecting +65 (MY arm intact)", async () => {
+		const t = setup();
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(
+				api.retailers.createRetailer,
+				{
+					storeName: "MY Store",
+					slug: "my-phone-create",
+					waPhone: "+65 9123 4567",
+				},
+			),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("updateSettings on an SG store accepts +65 waPhone + notifyWaPhone, rejects MY", async () => {
+		const t = setup();
+		const asUser = await seedSg(t, "sg-phone-settings");
+		await asUser.mutation(api.retailers.updateSettings, {
+			waPhone: "+65 8123 4567",
+			notifyWaPhone: "9123 4567",
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.waPhone).toBe("6581234567");
+		expect(mine?.notifyWaPhone).toBe("6591234567");
+
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				notifyWaPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+	});
+
+	test("a same-call country switch + phone save validates coherently", async () => {
+		// "Switch to Singapore and save my SG number" arrives as ONE updateSettings
+		// call — the new country must judge the phone, or the save bounces off the
+		// stored (old) arm and the two fields can never be changed together.
+		const t = setup();
+		const asUser = await seed(t, USER_A, "country-and-phone");
+		await asUser.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "9123 4567",
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.waPhone).toBe("6591234567");
+	});
+
+	test("an MY store's settings keep rejecting +65 exactly as before", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "my-phone-settings");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				waPhone: "+65 9123 4567",
+			}),
+		).rejects.toThrow(/Malaysian mobile/i);
 	});
 });
