@@ -35,9 +35,10 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
@@ -329,6 +330,13 @@ function OrderDetailRoute() {
 	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
 	// the server is the guard.
 	const retailer = useDashboardRetailer();
+	// Settlement rails the seller may hand-pick on "Mark payment received" — the
+	// store's country decides them, so an SG seller is never made to file a
+	// PayNow transfer under "Other" (86eyph341). Undefined while the payload
+	// loads reads as MY, the app-wide default; the dialog only opens on a tap,
+	// long after it resolves.
+	const paymentMethodChoices =
+		COUNTRY_PAYMENT_METHODS[retailer?.country ?? DEFAULT_COUNTRY];
 	const amIAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	const canHardDelete = canHardDeleteOrders({
 		actingAsAdmin: retailer?.actingAsAdmin,
@@ -1877,7 +1885,7 @@ function OrderDetailRoute() {
 							How did they pay? <span className="font-normal">(optional)</span>
 						</p>
 						<div className="flex flex-wrap gap-2">
-							{ORDER_PAYMENT_METHODS.map((m) => {
+							{paymentMethodChoices.map((m) => {
 								const active = paymentMethodChoice === m;
 								return (
 									<button

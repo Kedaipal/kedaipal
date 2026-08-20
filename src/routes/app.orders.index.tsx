@@ -712,6 +712,7 @@ function OrdersRoute() {
 								source,
 							}}
 							onChange={setFilters}
+							country={retailer.country}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
 						/>

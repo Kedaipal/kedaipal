@@ -249,6 +249,95 @@ verified to re-validate nothing.
 - Rider copy in `src/lib/dispatch-block.ts` / the Lalamove error strings — the
   `+60` requirement there is Lalamove-true.
 
+## Payment rails — `86eyph341`
+
+An SG store's "Mark payment received" dialog offered **DuitNow** and **Touch 'n
+Go** (neither exists in Singapore) and **no PayNow**, so a seller who was
+genuinely paid by PayNow had to file it under **Other** — after which the
+Insights donut and the inbox Method filter told them nothing.
+
+### The enum is not the picker
+
+The one distinction to hold on to, stated in `convex/lib/paymentMethod.ts` and
+pinned by `paymentMethod.test.ts`:
+
+- **`ORDER_PAYMENT_METHODS` — what may be STAMPED on an order.** A closed set
+  spanning every country, now `cash | duitnow | tng | bank_transfer | fpx |
+  card | other | paynow | paylah | nets | grabpay`. It has to span countries
+  because **the HitPay gateway stamps whatever rail the buyer actually used** —
+  an MY order settled through GrabPay is tagged `grabpay` and must render its
+  label, even though MY's picker never offers GrabPay by hand.
+- **`COUNTRY_PAYMENT_METHODS: Record<Country, readonly OrderPaymentMethod[]>` —
+  what the seller is OFFERED to hand-pick**, in the order they see it.
+
+So: **never gate a label, a filter match, or a stamp on the country list — only
+the pickers.** `PAYMENT_METHOD_LABELS` stays a `Record` over the whole enum,
+and `paymentMethodLabel` is country-blind.
+
+| Country | Offered, in order |
+|---|---|
+| **MY** | `cash, duitnow, tng, bank_transfer, fpx, card, other` — **byte-identical to pre-SG-lite**, frozen by a hand-written literal in the test. |
+| **SG** | `cash, paynow, paylah, nets, grabpay, bank_transfer, card, other` |
+
+**GrabPay is deliberately absent from MY's picker.** HitPay MY can stamp it, but
+no MY seller has asked to hand-pick it; it's one line to add when one does.
+
+**PayLah! is its own option** even though a PayLah!-to-PayLah! transfer usually
+settles over PayNow underneath. The tag is the seller recording *what they saw*,
+and an SG seller says "he PayLah-ed me" — the seller's vocabulary beats rail
+purity for a hand-picked tag. Do not "correct" it into a PayNow alias.
+
+**NETS is picker-only** — a terminal or NETS QR at the counter, not a rail we
+mint through HitPay, so it never appears in the connect card's pitch.
+
+### Where the country list is read
+
+Three seller surfaces, each resolving the country off the dashboard retailer
+(`RetailerPublic.country`, already resolved — never hardcoded):
+
+1. **Order detail → "Mark payment received"** chips (the reported bug).
+2. **Counter checkout → "Paid now"** `<select>`. A resumed draft holding a rail
+   the store no longer offers falls back to the country's first rail, because
+   seeding a `<select>` with a value that isn't an `<option>` renders it blank.
+3. **Orders inbox → Method filter** chips — plus **any method already
+   selected** that the country doesn't offer (`methodChoicesFor`). A
+   gateway-stamped rail or a deep-linked `?method=` can hold such a value, and a
+   selected chip the seller can't see is a filter they can't switch off.
+
+### HitPay rail mapping
+
+`mapHitpayPaymentType` used to drop PayNow into `other` — its own default-branch
+comment named `paynow_online`. Now `paynow_online` / `paynow` → `paynow` and
+`grabpay` / `grabpay_direct` → `grabpay`. The bare `paynow` form is accepted so
+an upstream naming change can't silently demote a real settlement.
+
+### Connect-card copy
+
+`online-payments-card.tsx` told every seller they need an **SSM-registered
+business** — the Malaysian registry — and compared payout speed against a direct
+**DuitNow** transfer. Both are keyed off the country now (`COUNTRY_COPY`, an
+exhaustive `Record`): SG reads **"a UEN — an ACRA-registered business"** and
+compares against **PayNow**. The load-bearing lines are untouched in both — the
+money lands in the seller's own HitPay account, and Kedaipal adds nothing on top.
+
+The SG fee bullet is deliberately **structural, not a quoted rate**
+("lowest on PayNow, higher on cards") — MY keeps its measured "~1.2% for DuitNow
+QR". Drop a real SG number in when one is confirmed.
+
+The pitch marks are per country too (`PITCH_CODES`), and **PayNow renders as a
+wordmark chip, not a mark**: `public/img/payment/paynow.svg` is a base64 PNG in
+an `<svg>` shell — the recurring defect audited in
+[`landing-funnel.md`](./landing-funnel.md) — so `METHOD_ICONS` deliberately has
+no `paynow_online` entry and a `METHOD_CHIP_LABELS` map keeps the chip reading
+"PayNow" rather than the raw API code.
+
+### Not touched
+
+The **buyer-facing manual payment methods** a seller configures
+(`convex/lib/payment.ts`) — that's their payout details, a different concept.
+The vendor guide `public/guides/hitpay-setup.html` still walks the MY KYC path;
+an SG variant is a follow-up.
+
 ## What deliberately did NOT change here
 
 - **Subscription billing currency** — per-invoice, chosen by the admin

@@ -724,6 +724,7 @@ function SettingsRoute() {
 							<OnlinePaymentsCard
 								hitpay={retailer.hitpay}
 								canUse={hasFeature(retailer.subscription, "onlinePayments")}
+								country={retailer.country}
 								onSave={(patch) => updateSettings(patch)}
 							/>
 						</Card>

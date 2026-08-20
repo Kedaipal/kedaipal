@@ -38,7 +38,7 @@ import {
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
@@ -225,6 +225,7 @@ function ActiveSession({
 					customer: session.customer,
 				}}
 				currency={retailer.currency ?? "MYR"}
+				country={retailer.country}
 				draft={session.draft}
 				onCreated={onCreated}
 				onCancel={onCancelActive}
@@ -1229,6 +1230,7 @@ function BuildOrderScreen({
 	sessionId,
 	buyer,
 	currency,
+	country,
 	draft,
 	onCreated,
 	onCancel,
@@ -1246,6 +1248,9 @@ function BuildOrderScreen({
 		} | null;
 	};
 	currency: string;
+	/** Store country — decides which settlement rails the "Paid now" picker
+	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
+	country: Country;
 	draft: SessionDraft | undefined;
 	onCreated: (created: {
 		shortId: string;
@@ -1278,8 +1283,14 @@ function BuildOrderScreen({
 	const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [paidInPerson, setPaidInPerson] = useState(draft?.paidInPerson ?? true);
-	const [method, setMethod] = useState<OrderPaymentMethod>(
-		draft?.paymentMethod ?? "cash",
+	const methodChoices = COUNTRY_PAYMENT_METHODS[country];
+	// A resumed draft can hold a rail this store no longer offers (its country
+	// was switched mid-checkout) — seeding the <select> with a value that isn't
+	// an <option> renders it blank, so fall back to the country's first rail.
+	const [method, setMethod] = useState<OrderPaymentMethod>(() =>
+		draft?.paymentMethod && methodChoices.includes(draft.paymentMethod)
+			? draft.paymentMethod
+			: methodChoices[0],
 	);
 	// An anonymous walk-in (no phone) has no one to send a pay-later link to, so
 	// it's always settled in person — the pay-later toggle is disabled with that
@@ -1878,7 +1889,7 @@ function BuildOrderScreen({
 										}
 										className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 									>
-										{ORDER_PAYMENT_METHODS.map((m) => (
+										{methodChoices.map((m) => (
 											<option key={m} value={m}>
 												{PAYMENT_METHOD_LABELS[m]}
 											</option>
