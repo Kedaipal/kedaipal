@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Printer, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -31,6 +31,14 @@ export type BulkAction = {
  * `onDelete` (optional) adds a **permanent hard delete** below Cancel — its own
  * confirm dialog with harsher copy, since it erases the orders and their records
  * outright (no WhatsApp is sent).
+ *
+ * `onPrint` (optional, 86eyp63mp) adds a compact printer button BESIDE the
+ * dropdown rather than an item inside it: printing despatch labels isn't a
+ * status change, so it doesn't belong under "Mark N orders as", and putting it
+ * on the bar lets it carry the live count. It is deliberately always tappable
+ * while there's a selection — the dialog it opens is where a selection with
+ * nothing printable in it gets explained (the "blocked but tappable" pattern;
+ * a disabled Button can't even show a reason on touch).
  */
 export function OrderBulkBar({
 	count,
@@ -38,6 +46,7 @@ export function OrderBulkBar({
 	allSelected,
 	onApply,
 	onDelete,
+	onPrint,
 	onToggleSelectAll,
 	onExit,
 	busy = false,
@@ -52,6 +61,8 @@ export function OrderBulkBar({
 	onApply: (status: BulkAction["status"]) => void | Promise<void>;
 	// Permanent hard delete of the selection. Omit to hide the delete item.
 	onDelete?: () => void | Promise<void>;
+	// Open the despatch-label print dialog for the selection. Omit to hide.
+	onPrint?: () => void;
 	onToggleSelectAll: () => void;
 	onExit: () => void;
 	busy?: boolean;
@@ -99,6 +110,18 @@ export function OrderBulkBar({
 				>
 					{allSelected ? "Clear all" : "Select all"}
 				</button>
+				{onPrint ? (
+					<button
+						type="button"
+						onClick={onPrint}
+						disabled={busy || !hasSelection}
+						aria-label={`Print despatch labels for ${count} selected ${orderWord}`}
+						className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold text-background transition-colors hover:bg-background/10 disabled:opacity-45"
+					>
+						<Printer className="size-4" aria-hidden="true" />
+						<span className="tabular-nums">{count}</span>
+					</button>
+				) : null}
 				<Popover open={open} onOpenChange={setOpen}>
 					<PopoverTrigger asChild>
 						<button

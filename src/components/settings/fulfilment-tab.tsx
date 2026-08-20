@@ -38,6 +38,10 @@ import {
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
+import {
+	resolveAwbConfig,
+	type StoredAwbConfig,
+} from "../../../convex/lib/awbConfig";
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
@@ -64,6 +68,7 @@ import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
+import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
@@ -107,6 +112,8 @@ interface FulfilmentTabProps {
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
+	/** Despatch-label template (86eyp63mp) — undefined = every default. */
+	awbConfig: StoredAwbConfig | undefined;
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
@@ -198,6 +205,7 @@ export function FulfilmentTab({
 	minFulfilmentNoticeDays,
 	openingHours,
 	minOrderValue,
+	awbConfig,
 	subscription,
 }: FulfilmentTabProps) {
 	const locations = useQuery(
@@ -377,6 +385,15 @@ export function FulfilmentTab({
 					/>
 				</div>
 			</Card>
+
+			{/* Directly after Delivery, and before Pickup, because that is what it
+			    configures: the paper that goes on a parcel once it's going out by
+			    courier. Pickup orders have no address, so they never get one. */}
+			<DespatchLabelCard
+				key={JSON.stringify(awbConfig ?? {})}
+				config={resolveAwbConfig(awbConfig)}
+				onSave={(patch) => updateSettings({ awbConfig: patch })}
+			/>
 
 			<Card>
 				<div className="flex items-start justify-between gap-4">

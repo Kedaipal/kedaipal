@@ -62,6 +62,7 @@ import {
 	type InboxFilterArgs,
 	needsMockup,
 } from "./lib/orderInboxFilter";
+import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
 	computeOrderTotals,
 	generateShortId,
@@ -2040,6 +2041,14 @@ export const searchOrders = query({
 			unpaid: 0,
 			/** Sum of `total` across those unpaid open orders (RM outstanding). */
 			unpaidAmount: 0,
+			/**
+			 * Packed + paid parcel orders waiting to go out (86eyp63mp) — the
+			 * one-click "print all despatch labels" queue. Computed here, over the
+			 * FULL set like every other count, precisely so the control's number is
+			 * the store's real backlog and doesn't move when the seller filters the
+			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
+			 */
+			readyToShip: 0,
 		};
 		for (const o of all) {
 			const b = orderBucket(o);
@@ -2061,6 +2070,7 @@ export const searchOrders = query({
 				counts.unpaid++;
 				counts.unpaidAmount += o.total;
 			}
+			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the

@@ -177,6 +177,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import {
+	sanitizeAwbConfig,
+	type StoredAwbConfig,
+} from "./lib/awbConfig";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
@@ -269,6 +273,19 @@ const openingHoursValidator = v.array(
 		closed: v.optional(v.boolean()),
 	}),
 );
+
+// Despatch-label template (86eyp63mp). Wire validator for updateSettings; the
+// shape is validated/normalized by sanitizeAwbConfig in the handler (an
+// all-default object stores as unset). `v.null()` = reset to the defaults.
+const awbConfigValidator = v.object({
+	paperSize: v.optional(v.union(v.literal("a6"), v.literal("a4-4up"))),
+	showLogo: v.optional(v.boolean()),
+	showItems: v.optional(v.boolean()),
+	showCod: v.optional(v.boolean()),
+	showWeight: v.optional(v.boolean()),
+	showNote: v.optional(v.boolean()),
+	footerText: v.optional(v.string()),
+});
 
 // Delivery-charge config + business address (86extzdr8). Wire validators for
 // updateSettings; the shape is validated/normalized by sanitizeDeliveryConfig
@@ -672,6 +689,10 @@ type RetailerPublic = {
 	// Undefined = open 24/7. Surfaced on both the owner read and the by-slug
 	// payload. See convex/lib/openingHours.ts.
 	openingHours?: OpeningHours;
+	// Despatch-label template (86eyp63mp) — OWNER-only: it says nothing a buyer
+	// needs, and the footer line is the seller's own returns copy. Undefined =
+	// every default. See convex/lib/awbConfig.ts.
+	awbConfig?: StoredAwbConfig;
 	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
 	// buyers must see the bar to reach it (checkout blocks below it). Undefined
 	// = no minimum. See convex/lib/minOrderRules.ts.
@@ -823,6 +844,7 @@ async function buildRetailerPublic(
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
+		awbConfig: row.awbConfig,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -1338,6 +1360,10 @@ export const updateSettings = mutation({
 		// always allowed); undefined = no change. Validated + normalized by
 		// sanitizeOpeningHours (an all-24h week also stores as unset).
 		openingHours: v.optional(v.union(openingHoursValidator, v.null())),
+		// Despatch-label template (86eyp63mp). `null` resets to the defaults
+		// (always allowed); undefined = no change. All-tier — printing a label
+		// for a parcel you're already shipping is correctness, not an upsell.
+		awbConfig: v.optional(v.union(awbConfigValidator, v.null())),
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
 		// undefined = no change. See convex/lib/minOrderRules.ts.
 		minOrderValue: v.optional(v.number()),
@@ -1394,6 +1420,7 @@ export const updateSettings = mutation({
 			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
 			openingHours: OpeningHours | undefined;
+			awbConfig: StoredAwbConfig | undefined;
 			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
@@ -1931,6 +1958,16 @@ export const updateSettings = mutation({
 			// removes the field (open 24/7 has one spelling).
 			try {
 				patch.openingHours = sanitizeOpeningHours(args.openingHours);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
+		if (args.awbConfig !== undefined) {
+			// null and an all-default object both sanitize to undefined → the
+			// patch removes the field (the defaults have one spelling).
+			try {
+				patch.awbConfig = sanitizeAwbConfig(args.awbConfig);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
