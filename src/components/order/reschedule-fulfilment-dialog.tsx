@@ -88,6 +88,12 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 	// paint (a slow quote for an abandoned date must land nowhere).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: prepareBooking is a stable hook ref; the effect keys off the picked values + gate.
 	useEffect(() => {
+		// Invalidate any in-flight quote FIRST, before every early return
+		// (PR #201 review): whatever this run decides — idle or a fresh fetch —
+		// a result quoted for an earlier moment must land nowhere. Bumping only
+		// on the fetch path let a 1–3s Lalamove round-trip paint "ready"
+		// underneath the freshly-shown validation error.
+		const gen = ++previewGenRef.current;
 		if (!open || !canPreviewFee) {
 			setFeePreview({ state: "idle" });
 			return;
@@ -106,7 +112,6 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 			setFeePreview({ state: "idle" });
 			return;
 		}
-		const gen = ++previewGenRef.current;
 		setFeePreview({ state: "loading" });
 		const handle = setTimeout(() => {
 			prepareBooking({ shortId: order.shortId, scheduleAtOverride: moment })
@@ -217,6 +222,15 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 				toast.error("Pick a valid time first.");
 				return;
 			}
+		}
+		// Fresh-clock re-check (PR #201 review): scheduleIssue was computed at
+		// render time — a dialog left open while the picked moment passed would
+		// otherwise fire the mutation, and the server's time-of-day check is
+		// deliberately range-only. Past DAYS are server-rejected regardless;
+		// only passed-time-today slips, so that's what gets re-judged here.
+		if (timeMinutes !== undefined && date + timeMinutes * 60000 < Date.now()) {
+			toast.error("That time has just passed — pick a later time.");
+			return;
 		}
 		setSaving(true);
 		try {

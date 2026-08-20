@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -266,6 +267,82 @@ describe("RescheduleFulfilmentDialog — past moments are refused (86eyp63xn fol
 			expect(
 				screen.queryByText(/That time has already passed today/),
 			).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("RescheduleFulfilmentDialog — PR #201 review regressions", () => {
+	it("an in-flight quote for a superseded moment never paints under the error", async () => {
+		state.dispatch = {
+			job: null,
+			blockReason: null,
+			bookingEnabled: true,
+			promptBookOnPacked: false,
+		};
+		let resolveQuote: (v: unknown) => void = () => {};
+		const prepare = vi.fn().mockImplementation(
+			() =>
+				new Promise((r) => {
+					resolveQuote = r;
+				}),
+		);
+		state.action = prepare;
+		render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+
+		fireEvent.click(screen.getByText("Reschedule"));
+		// Valid prefill → the debounced quote fires and hangs in flight.
+		await waitFor(() => expect(prepare).toHaveBeenCalledTimes(1), {
+			timeout: 2500,
+		});
+		// Supersede it with an invalid pick BEFORE the quote resolves.
+		fireEvent.change(screen.getByLabelText(/Delivery date/), {
+			target: { value: ymdFromEpoch(todayMytMidnight() - DAY_MS) },
+		});
+		expect(screen.getByText(/That day has already passed/)).toBeTruthy();
+		// The stale quote lands nowhere — no "ready" card under the error.
+		await act(async () => {
+			resolveQuote({
+				ok: true,
+				quotationId: "q",
+				senderStopId: "s",
+				recipientStopId: "r",
+				fee: 1200,
+				buyerPaidFee: 400,
+				vehicleType: "MOTORCYCLE",
+				buyerContactFallback: false,
+				scheduledFor: Date.now() + 24 * 60 * 60 * 1000,
+				buyerRequestedMoment: undefined,
+			});
+			await Promise.resolve();
+		});
+		expect(screen.queryByText("Lalamove for this slot")).toBeNull();
+	});
+
+	it("Save re-judges the clock — a moment that passed while the dialog sat open never fires the mutation", () => {
+		vi.useFakeTimers({ now: new Date("2026-08-20T04:00:00Z") }); // 12:00 MYT
+		try {
+			const mutate = vi.fn();
+			state.mutation = mutate;
+			render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+
+			fireEvent.click(screen.getByText("Reschedule"));
+			fireEvent.change(screen.getByLabelText(/Delivery date/), {
+				target: { value: ymdFromEpoch(todayMytMidnight()) },
+			});
+			fireEvent.change(screen.getByLabelText(/Delivery time/), {
+				target: { value: "13:00" }, // an hour ahead — valid, Save enabled
+			});
+			const save = screen
+				.getByText("Save new date")
+				.closest("button") as HTMLButtonElement;
+			expect(save.disabled).toBe(false);
+
+			// The seller walks away; the picked moment passes with no re-render.
+			vi.setSystemTime(new Date("2026-08-20T06:00:00Z")); // 14:00 MYT
+			fireEvent.click(save);
+			expect(mutate).not.toHaveBeenCalled();
 		} finally {
 			vi.useRealTimers();
 		}
