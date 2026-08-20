@@ -206,3 +206,68 @@ describe("RescheduleFulfilmentDialog — Lalamove slot-price preview", () => {
 		expect(prepare).not.toHaveBeenCalled();
 	});
 });
+
+describe("RescheduleFulfilmentDialog — past moments are refused (86eyp63xn follow-up)", () => {
+	it("an overdue order prefills TODAY, never its own passed date", () => {
+		render(
+			<RescheduleFulfilmentDialog
+				order={threeAmOrder({
+					fulfilmentDate: todayMytMidnight() - 2 * DAY_MS,
+				})}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Reschedule"));
+		const dateInput = screen.getByLabelText(/Delivery date/) as HTMLInputElement;
+		expect(dateInput.value).toBe(ymdFromEpoch(todayMytMidnight()));
+	});
+
+	it("a typed past date disables Save with a visible reason", () => {
+		render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+		fireEvent.change(screen.getByLabelText(/Delivery date/), {
+			target: { value: ymdFromEpoch(todayMytMidnight() - DAY_MS) },
+		});
+		expect(screen.getByText(/That day has already passed/)).toBeTruthy();
+		const save = screen.getByText("Save new date").closest("button");
+		expect(save?.disabled).toBe(true);
+	});
+
+	it("a beyond-30-days date is refused the same way", () => {
+		render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+		fireEvent.change(screen.getByLabelText(/Delivery date/), {
+			target: { value: ymdFromEpoch(todayMytMidnight() + 31 * DAY_MS) },
+		});
+		expect(screen.getByText(/at most 30 days/)).toBeTruthy();
+		expect(
+			(screen.getByText("Save new date").closest("button") as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+	});
+
+	it("a passed time TODAY is refused (fixed clock: 12:00 MYT)", () => {
+		vi.useFakeTimers({ now: new Date("2026-08-20T04:00:00Z") }); // 12:00 MYT
+		try {
+			render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
+			fireEvent.click(screen.getByText("Reschedule"));
+			fireEvent.change(screen.getByLabelText(/Delivery date/), {
+				target: { value: ymdFromEpoch(todayMytMidnight()) },
+			});
+			fireEvent.change(screen.getByLabelText(/Delivery time/), {
+				target: { value: "09:00" },
+			});
+			expect(
+				screen.getByText(/That time has already passed today/),
+			).toBeTruthy();
+			// A future time the same day clears it.
+			fireEvent.change(screen.getByLabelText(/Delivery time/), {
+				target: { value: "18:00" },
+			});
+			expect(
+				screen.queryByText(/That time has already passed today/),
+			).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

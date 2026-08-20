@@ -99,6 +99,13 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 			return;
 		}
 		const moment = date + minutes * 60000;
+		// Don't price a moment the dialog itself refuses (past, or beyond the
+		// 30-day window) — a quote there would legitimise an invalid pick.
+		const today = todayMytMidnight();
+		if (moment < Date.now() || date < today || date > today + MAX_NOTICE_DAYS * DAY_MS) {
+			setFeePreview({ state: "idle" });
+			return;
+		}
 		const gen = ++previewGenRef.current;
 		setFeePreview({ state: "loading" });
 		const handle = setTimeout(() => {
@@ -147,9 +154,15 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 	const maxYmd = ymdFromEpoch(today + MAX_NOTICE_DAYS * DAY_MS);
 
 	function openDialog() {
-		setDateValue(
-			order.fulfilmentDate !== undefined ? ymdFromEpoch(order.fulfilmentDate) : "",
-		);
+		// Prefill from the order, clamped to today: an overdue order (the very
+		// case this dialog exists for) must not open onto a date its own
+		// validation rejects. The agreed time-of-day is kept — often only the
+		// day moves.
+		const prefillDate =
+			order.fulfilmentDate !== undefined
+				? Math.max(order.fulfilmentDate, todayMytMidnight())
+				: undefined;
+		setDateValue(prefillDate !== undefined ? ymdFromEpoch(prefillDate) : "");
 		setTimeValue(
 			order.fulfilmentTimeMinutes !== undefined
 				? hhmmFromMinutes(order.fulfilmentTimeMinutes)
@@ -169,12 +182,34 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 				isDelivery && !Number.isNaN(previewTime) ? previewTime : undefined,
 			);
 
+	// Live validation with a visible reason — the native min/max only grey the
+	// picker; typed or stepped values below them still land in state. A past
+	// moment as the buyer's promise is always a mistake, so Save is
+	// disabled-with-reason instead of failing at the server. Parse failures
+	// mid-typing stay quiet (Save is disabled on an empty date anyway).
+	const scheduleIssue = (() => {
+		if (Number.isNaN(previewDate)) return null;
+		const today = todayMytMidnight();
+		if (previewDate < today)
+			return "That day has already passed — pick today or later.";
+		if (previewDate > today + MAX_NOTICE_DAYS * DAY_MS)
+			return "The date can be at most 30 days from today.";
+		if (
+			isDelivery &&
+			!Number.isNaN(previewTime) &&
+			previewDate + previewTime * 60000 < Date.now()
+		)
+			return "That time has already passed today — pick a later time.";
+		return null;
+	})();
+
 	async function handleSave() {
 		const date = mytMidnightFromYmd(dateValue);
 		if (Number.isNaN(date)) {
 			toast.error("Pick a valid date first.");
 			return;
 		}
+		if (scheduleIssue) return; // Save is disabled; belt-and-braces.
 		let timeMinutes: number | undefined;
 		if (isDelivery && timeValue.trim() !== "") {
 			timeMinutes = timeMinutesFromHhmm(timeValue);
@@ -276,7 +311,12 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 									</label>
 								) : null}
 							</div>
-							{previewLabel ? (
+							{scheduleIssue ? (
+								<p className="text-xs font-medium text-destructive">
+									{scheduleIssue}
+								</p>
+							) : null}
+							{previewLabel && !scheduleIssue ? (
 								<p className="text-sm text-muted-foreground">
 									The buyer&apos;s order page will show{" "}
 									<span className="font-medium text-foreground">
@@ -344,7 +384,7 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 									type="button"
 									onClick={handleSave}
 									isLoading={saving}
-									disabled={saving || dateValue === ""}
+									disabled={saving || dateValue === "" || scheduleIssue !== null}
 								>
 									Save new date
 								</Button>

@@ -683,7 +683,13 @@ order left the vendor choosing between a 3 AM rider and no rider.
 - **Rebook auto-opens the time editor**: a failed/cancelled booking's schedule
   is stale by definition (that's why it failed), so "Rebook delivery" opens the
   modal with the date+time inputs already showing instead of hiding them behind
-  "Change time" — Arif's AC1. Date input bounds `[today, +30d]`
+  "Change time" — Arif's AC1. **Past picks are refused client-side** (20 Aug
+  follow-up): the native `min` only greys the picker — typed/stepped/seeded
+  values below it still land in state and would silently degrade to an
+  immediate booking (and offer the ORDER a past promise via the sync
+  checkbox) — so "Use this time" validates `moment >= now` with an inline
+  reason pointing at "Send the rider now", and the editor's prefill clamps a
+  stale seed to today. Date input bounds `[today, +30d]`
   (MAX_NOTICE_DAYS); the buyer-facing `minNoticeDays` deliberately does NOT
   bind the seller (amended off the ticket — a store with 3 days' notice must
   still be able to rebook a failed delivery for tomorrow).
