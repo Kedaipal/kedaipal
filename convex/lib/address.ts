@@ -39,9 +39,35 @@ const MY_STATE_SET: ReadonlySet<string> = new Set(MY_STATES);
  * addresses store this literal in BOTH `city` and `state`. Storing a real
  * value (never undefined) keeps every downstream consumer — zone matching,
  * display renderers, CSV — on the same required-string shape as MY; display
- * sites dedupe the repetition (src/lib/address-display.ts).
+ * sites dedupe the repetition via `displayAddressState` below.
  */
 export const SG_STATE_LABEL = "Singapore";
+
+/**
+ * Display rule for the address's state line (SG-lite, 86eynw29u).
+ *
+ * SG addresses store "Singapore" in BOTH `city` and `state` (see above), so any
+ * renderer that prints "postcode city" followed by the state would read
+ * "123456 Singapore, Singapore". One author of the dedupe: the state is display
+ * noise whenever it merely repeats the city, whatever the country — no MY
+ * address triggers it (no MY city shares a name with a state).
+ *
+ * Lives here, in the pure address module, because BOTH sides need it: the
+ * client renderers (re-exported by `src/lib/address-display.ts`, the
+ * `src/lib/phone.ts` precedent) and the server-side despatch-label view-model
+ * (`convex/lib/pdf/awb.ts`, 86eyp63mp) — a label that prints the state twice is
+ * the same bug on paper.
+ */
+export function displayAddressState(addr: {
+	city: string;
+	state: string;
+}): string | undefined {
+	const state = addr.state.trim();
+	if (state.length === 0) return undefined;
+	return state.toLowerCase() === addr.city.trim().toLowerCase()
+		? undefined
+		: state;
+}
 
 const POSTCODE_RULES: Record<Country, { pattern: RegExp; error: string }> = {
 	MY: { pattern: /^\d{5}$/, error: "Postcode must be 5 digits" },

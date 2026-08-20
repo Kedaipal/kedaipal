@@ -2886,6 +2886,9 @@ describe("orders — inbox search", () => {
 			dueToday: 0,
 			unpaid: 2,
 			unpaidAmount: o1.total + o2.total,
+			// Nothing is packed AND paid here, so the despatch queue is empty
+			// (86eyp63mp — covered properly in convex/awb.test.ts).
+			readyToShip: 0,
 		});
 		expect(all.total).toBe(4);
 
