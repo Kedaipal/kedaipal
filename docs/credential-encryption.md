@@ -53,10 +53,14 @@ derived from the key at read time — impossible once the stored value is
 ciphertext (whose prefix would always read "production", pointing sandbox keys
 at live hosts). So:
 
-- `hitpay.mode` + `hitpay.apiKeyHint` + `deliveryBooking.apiKeyHint` are
-  **stamped at save** from the typed plaintext (and by the backfill for legacy
-  rows). Summaries read the stored values, falling back to deriving only on a
-  legacy still-plaintext row.
+- `hitpay.mode` + `hitpay.apiKeyHint` + `deliveryBooking.apiKeyHint` +
+  `deliveryBooking.env` are **stamped at save** from the typed plaintext (and
+  by the backfills for legacy rows). Summaries read the stored values, falling
+  back to deriving only on a legacy still-plaintext row.
+- `deliveryBooking.env` was added later (21 Aug, `86eypncfy`) — Lalamove had no
+  counterpart to `hitpay.mode`, so a seller on sandbox keys had **no way to
+  find out**, which cost a paying vendor two weeks of un-dispatchable orders.
+  See [`delivery-lalamove.md`](./delivery-lalamove.md#which-environment-am-i-in-21-aug-2026-clickup-86eypncfy).
 - The decrypt helpers (`decryptHitpayCredentials` /
   `decryptLalamoveCredentials`) **re-infer** mode/env from the decrypted
   plaintext — never trust a pre-decrypt inference (pinned by tests in both lib
@@ -79,8 +83,24 @@ npx convex run credentials:encryptExistingCredentials
 ```
 
 Idempotent (encrypted fields are skipped), paginated house-style, also stamps
-`apiKeyHint`/`mode` on legacy rows. **Losing the key strands every encrypted
-credential** — sellers would re-paste their keys (they own them); store the
+`apiKeyHint`/`mode`/`env` on legacy rows.
+
+**Second one-shot, for deployments where the above ALREADY ran:**
+
+```
+npx convex run credentials:backfillLalamoveEnv
+```
+
+`deliveryBooking.env` postdates the encryption rollout, so on those deployments
+every Lalamove row is already ciphertext and the encrypt backfill can no longer
+stamp it (it only ever touched plaintext). This one decrypts each stored key
+solely to read its `pk_test_`/`pk_prod_` prefix and writes back the verdict —
+the plaintext is never stored, logged or returned, and an undecryptable key
+leaves `env` unset rather than guessing. Skipping it leaves every existing
+Lalamove seller reading as "environment unknown", which suppresses the sandbox
+warning entirely.
+
+**Losing the key strands every encrypted credential** — sellers would re-paste their keys (they own them); store the
 key wherever the other Convex prod secrets live.
 
 ## Known behaviour changes
