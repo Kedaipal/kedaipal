@@ -1,5 +1,5 @@
 import { ImageOff } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "#/lib/utils";
 import { Skeleton } from "./skeleton";
 
@@ -11,14 +11,40 @@ import { Skeleton } from "./skeleton";
  * a dead storage URL or a slow connection just showed a blank box.
  *
  * States: `loading` (skeleton overlay, image invisible) → `loaded` (fades in)
- * or `error` (muted box + icon + the alt text, terminal until `src` changes).
- * An unset `src` renders the same fallback with zero network request.
+ * or `error` (muted box + icon + the alt text). A failed load is retried a
+ * bounded number of times before `error` becomes terminal — see
+ * `MAX_LOAD_RETRIES`. An unset `src` renders the same fallback with zero
+ * network request.
  *
  * Deliberately NOT used by `store-poster.tsx` (a print/PDF-export surface —
  * a lazy or opacity-0 image can print blank).
  */
 
 type ImageStatus = "loading" | "loaded" | "error";
+
+/**
+ * How many times a failed load is retried before the error state becomes
+ * terminal. Bounded on purpose: the original no-retry rule existed so a dead
+ * storage URL could never turn into a request loop hammering storage, and that
+ * still holds — three total attempts, then we stop for good.
+ */
+export const MAX_LOAD_RETRIES = 2;
+const RETRY_BASE_MS = 700;
+
+/**
+ * Backoff for retry `n` (0-based), with heavy jitter.
+ *
+ * The jitter is the load-bearing part, not a nicety. The failures worth
+ * retrying here are congestion-driven — a storefront can queue 30+ photos
+ * against a single host, and requests die because the pile-up starves them,
+ * not because the bytes are gone. Retrying every failed image on the same
+ * timer would rebuild the exact pile-up that broke them. Spreading the herd
+ * across a wide window is what makes the retry actually land.
+ */
+function retryDelayMs(attempt: number): number {
+	const base = RETRY_BASE_MS * 3 ** attempt;
+	return Math.round(base * (0.5 + Math.random()));
+}
 
 export interface AppImageProps {
 	/** Image URL. `undefined`/`null`/empty string renders the fallback — no `<img>` mounts, no request fires. */
@@ -96,6 +122,14 @@ export function AppImage({
 	const initialStatus: ImageStatus = isLocalPreview ? "loaded" : "loading";
 
 	const [status, setStatus] = useState<ImageStatus>(initialStatus);
+	// Bumped on each retry and folded into the <img> `key`, which remounts the
+	// element and issues a genuinely fresh request. Same URL on purpose: a
+	// failed load leaves no cache entry to bust, and a cache-busting query
+	// param would both re-download the full bytes and poison the 30-day cache
+	// with a duplicate entry for an image that is often several MB.
+	const [reloadKey, setReloadKey] = useState(0);
+	const retriesUsedRef = useRef(0);
+	const retryTimerRef = useRef<number | null>(null);
 
 	// Tracks the src this render's `status` reflects. When `src` changes
 	// identity (a different product image, a fresh upload replacing a
@@ -108,7 +142,27 @@ export function AppImage({
 	if (trackedSrcRef.current !== src) {
 		trackedSrcRef.current = src;
 		setStatus(initialStatus);
+		// A fresh src gets a fresh retry budget, and any retry still queued for
+		// the OLD src is dropped — letting it fire would remount the <img> a
+		// beat after the new URL had already started loading.
+		retriesUsedRef.current = 0;
+		setReloadKey(0);
+		if (retryTimerRef.current !== null) {
+			clearTimeout(retryTimerRef.current);
+			retryTimerRef.current = null;
+		}
 	}
+
+	// Never leave a retry pending on an unmounted image — a storefront grid can
+	// hold dozens of these, and scrolling away mid-retry shouldn't queue work
+	// for elements that are gone.
+	useEffect(
+		() => () => {
+			if (retryTimerRef.current !== null)
+				clearTimeout(retryTimerRef.current);
+		},
+		[],
+	);
 
 	// Covers the classic "already cached" trap: an image that's already
 	// `complete` the moment it mounts (browser cache, SPA back-navigation)
@@ -136,6 +190,31 @@ export function AppImage({
 		);
 	}
 
+	/**
+	 * A failed load is retried (bounded, jittered) before the fallback is shown.
+	 * The status deliberately stays `loading` across retries so the buyer keeps
+	 * seeing the skeleton — flipping to the broken box and back would read as a
+	 * glitch on a photo that is simply still arriving.
+	 *
+	 * Local previews are exempt: a `blob:` URL fails because it was revoked, and
+	 * no number of retries brings a revoked object URL back.
+	 */
+	const handleError = () => {
+		// A retry is already armed — never stack a second timer on top of it, or
+		// the extra one leaks past the element it was scheduled for.
+		if (retryTimerRef.current !== null) return;
+		if (isLocalPreview || retriesUsedRef.current >= MAX_LOAD_RETRIES) {
+			setStatus("error");
+			return;
+		}
+		const attempt = retriesUsedRef.current;
+		retriesUsedRef.current = attempt + 1;
+		retryTimerRef.current = window.setTimeout(() => {
+			retryTimerRef.current = null;
+			setReloadKey(attempt + 1);
+		}, retryDelayMs(attempt));
+	};
+
 	const eager = priority || isLocalPreview;
 
 	return (
@@ -144,7 +223,7 @@ export function AppImage({
 				<Skeleton className="absolute inset-0 rounded-[inherit]" />
 			) : null}
 			<img
-				key={src}
+				key={`${src}#${reloadKey}`}
 				ref={setImgRef}
 				src={src}
 				alt={alt}
@@ -160,7 +239,7 @@ export function AppImage({
 				decoding="async"
 				fetchPriority={eager ? "high" : undefined}
 				onLoad={() => setStatus("loaded")}
-				onError={() => setStatus("error")}
+				onError={handleError}
 			/>
 		</span>
 	);
