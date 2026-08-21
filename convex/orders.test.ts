@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { rateLimiter } from "./lib/rateLimiter";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
 import schema from "./schema";
 
@@ -2886,6 +2887,9 @@ describe("orders — inbox search", () => {
 			dueToday: 0,
 			unpaid: 2,
 			unpaidAmount: o1.total + o2.total,
+			// Nothing is packed AND paid here, so the despatch queue is empty
+			// (86eyp63mp — covered properly in convex/awb.test.ts).
+			readyToShip: 0,
 		});
 		expect(all.total).toBe(4);
 
@@ -7818,5 +7822,414 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		);
 		const note = events.find((e) => e.note?.startsWith("fulfilment_rescheduled"));
 		expect(note?.note).toMatch(/from unset to \d{4}-\d{2}-\d{2} 14:00/);
+	});
+});
+
+describe("SG addresses (SG-lite, 86eynw29u)", () => {
+	const sgAddress = {
+		line1: "12 Bedok North Ave 3",
+		city: "Singapore",
+		state: "Singapore",
+		postcode: "238859",
+	};
+	// Phone-less on purpose: the +65 phone arms are a sibling ticket — these
+	// orders ride the legacy no-phone protocol path so the address is the only
+	// thing under test.
+	const sgCustomer = { name: "Tan Wei Ming" };
+
+	/** SG retailer (born SGD) + one SGD product. */
+	async function seedSgStore(t: ReturnType<typeof setup>, slug: string) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Test Store",
+			slug,
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			currency: "SGD",
+		});
+		return { retailer, productId };
+	}
+
+	test("create accepts an SG address on an SG store and normalizes the state literal", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-ok");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "SGD",
+			channel: "whatsapp",
+			customer: sgCustomer,
+			deliveryAddress: { ...sgAddress, state: "singapore" },
+		});
+		const stored = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.deliveryAddress;
+		});
+		expect(stored?.state).toBe("Singapore");
+		expect(stored?.postcode).toBe("238859");
+	});
+
+	test("create on an SG store rejects MY-shaped addresses", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-my-shape");
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "SGD",
+				channel: "whatsapp",
+				customer: sgCustomer,
+				deliveryAddress: { ...sgAddress, postcode: "47301" },
+			}),
+		).rejects.toThrow(/Postal code must be 6 digits/);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "SGD",
+				channel: "whatsapp",
+				customer: sgCustomer,
+				deliveryAddress: { ...sgAddress, state: "Selangor" },
+			}),
+		).rejects.toThrow(/Singapore/);
+	});
+
+	test("create on an MY store rejects SG shapes exactly as before", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: { ...validAddress, postcode: "238859" },
+			}),
+		).rejects.toThrow(/Postcode must be 5 digits/);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: { ...validAddress, state: "Singapore" },
+			}),
+		).rejects.toThrow(/Unknown state/);
+	});
+
+	test("updateDeliveryAddress re-validates against the SG arm", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-edit");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "SGD",
+			channel: "whatsapp",
+			customer: sgCustomer,
+			deliveryAddress: sgAddress,
+		});
+		const token = await tk(t, shortId);
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: { ...sgAddress, line1: "5 Tampines Central" },
+		});
+		const stored = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.deliveryAddress;
+		});
+		expect(stored?.line1).toBe("5 Tampines Central");
+		// An MY-shaped edit is refused; the stored address stays put.
+		await expect(
+			t.mutation(api.orders.updateDeliveryAddress, {
+				token,
+				deliveryAddress: { ...sgAddress, postcode: "47301" },
+			}),
+		).rejects.toThrow(/Postal code must be 6 digits/);
+	});
+
+	test("read guards: an MY-only delivery mode stored on an SG store blocks instead of stranding", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-badmode");
+		// Hand-patch past updateSettings (which refuses this combination) — the
+		// read-side guards are the defence for exactly this bad data.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				deliveryConfig: {
+					mode: "weight",
+					zones: [
+						{
+							name: "West MY",
+							states: ["Selangor"],
+							bands: [{ maxKg: 5, fee: 1500 }],
+						},
+					],
+					onOutOfBands: "arrange",
+					onUnpriceable: "arrange",
+				},
+			});
+		});
+		// Public quote → seller-side blocked, never a nonsense state error.
+		const quote = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 12000,
+			state: "Singapore",
+		});
+		expect(quote).toEqual({ kind: "blocked", reason: "store_unavailable" });
+		// Order create refuses too — a silent fee-pending forever is the trap.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "SGD",
+				channel: "whatsapp",
+				customer: sgCustomer,
+				deliveryAddress: sgAddress,
+			}),
+		).rejects.toThrow(/store's side/);
+	});
+});
+
+describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
+	/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
+	 * an order-vs-product currency mismatch, so the whole chain must be SGD. */
+	async function seedSgStore(t: ReturnType<typeof setup>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-store-phones",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			currency: "SGD",
+		});
+		return { retailer, productId };
+	}
+
+	function sgOrderArgs(
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone: string,
+	) {
+		return {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "SGD",
+			channel: "whatsapp" as const,
+			customer: { name: "Wei Ling", waPhone },
+			// SG-shaped — the address arm (86eynw29u) judges by the SAME retailer
+			// country as the phone arm, so an MY `validAddress` would fail first
+			// and mask the phone assertion under test.
+			deliveryAddress: {
+				line1: "12 Bedok North Ave 3",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "238859",
+			},
+		};
+	}
+
+	test("accepts a +65 buyer and stores the inbound (65…) form", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "+65 9123 4567"),
+		);
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6591234567");
+	});
+
+	test("accepts the bare national number the +65 plate asks for", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "8123 4567"),
+		);
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6581234567");
+	});
+
+	test("rejects an MY buyer number with the SG message — no cross-accept", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				sgOrderArgs(retailer._id, productId, "012-345 6789"),
+			),
+		).rejects.toThrow(/Singapore mobile/i);
+	});
+
+	test("an MY store keeps rejecting +65 buyers exactly as before", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "+65 9123 4567" },
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("updateBuyerPhone on an SG store repairs with the SG arm", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "9999 8888"),
+		);
+		// Push failed against the typo'd number — the only state the repair
+		// window opens for. Stamped directly: the push pipeline itself is
+		// covered by the 86eyf1rck suites above.
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			await ctx.db.patch(o!._id, {
+				confirmationPushStatus: "failed",
+				confirmationPushFailureKind: "unreachable",
+			});
+		});
+
+		// An MY number is refused with the SG copy…
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+
+		// …and the bare SG national form lands in the stored shape.
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "9123 4567",
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6591234567");
+		expect(order?.confirmationPushStatus).toBe("sending");
+	});
+});
+
+describe("orders — creation rate limits (PR #206 review)", () => {
+	// Neither limiter had a test before this suite — the 5→60 burst change
+	// shipped unpinned. Both are exercised through the REAL `orders.create`
+	// wiring (credits drained via the component directly with `count`, so the
+	// tests don't loop hundreds of checkouts): delete either `rateLimiter.limit`
+	// call in orders.create and its test here goes red.
+
+	async function drain(
+		t: ReturnType<typeof setup>,
+		name: "orderCreate" | "orderCreateDaily",
+		key: string,
+		count: number,
+	) {
+		await t.run(async (ctx) => {
+			await rateLimiter.limit(ctx, name, { key, count });
+		});
+	}
+
+	function orderArgs(retailerId: Id<"retailers">, productId: Id<"products">) {
+		return {
+			retailerId,
+			customer,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			deliveryAddress: validAddress,
+		};
+	}
+
+	test("the daily ceiling refuses order 501 with the structured payload", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 1000,
+		});
+
+		// 499 of the day's 500 credits gone — the 500th order still lands…
+		await drain(t, "orderCreateDaily", retailer._id, 499);
+		await t.mutation(api.orders.create, orderArgs(retailer._id, productId));
+
+		// …and the 501st is refused BEFORE any state is written, with the
+		// structured payload `convexErrorMessage` renders (never a raw object).
+		const refused = await t
+			.mutation(api.orders.create, orderArgs(retailer._id, productId))
+			.then(() => null)
+			.catch((e: unknown) => e as { data?: unknown });
+		// convex-test round-trips ConvexError data as a JSON string (a real client
+		// receives the structured object `isRateLimitError` matches on) — assert
+		// the discriminants through the string so the test still pins WHICH
+		// limiter fired.
+		expect(String(refused?.data)).toContain('\\"kind\\":\\"RateLimited\\"');
+		expect(String(refused?.data)).toContain('\\"name\\":\\"orderCreateDaily\\"');
+		// The refused attempt held no stock.
+		expect(await getProductStock(t, productId)).toBe(999);
+	});
+
+	test("the burst bucket still guards the same door (60-capacity)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		await drain(t, "orderCreate", retailer._id, 60);
+		const refused = await t
+			.mutation(api.orders.create, orderArgs(retailer._id, productId))
+			.then(() => null)
+			.catch((e: unknown) => e as { data?: unknown });
+		expect(String(refused?.data)).toContain('\\"kind\\":\\"RateLimited\\"');
+		expect(String(refused?.data)).toContain('\\"name\\":\\"orderCreate\\"');
+	});
+
+	test("one drained storefront never throttles another (per-retailer keys)", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const productB = await seedProduct(t, USER_B, retailerB._id);
+
+		await drain(t, "orderCreateDaily", retailerA._id, 500);
+		await drain(t, "orderCreate", retailerA._id, 60);
+
+		// Store B checks out untouched.
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			orderArgs(retailerB._id, productB),
+		);
+		expect(shortId).toMatch(/^ORD-/);
 	});
 });

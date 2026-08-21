@@ -1,5 +1,6 @@
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { deriveMapsUrl } from "../../convex/lib/mapsUrl";
+import { displayAddressState } from "./address-display";
 import { formatPrice } from "./format";
 
 /**
@@ -78,7 +79,9 @@ function formatAddressOneLine(
 	const parts = [addr.line1];
 	if (addr.line2) parts.push(addr.line2);
 	parts.push(`${addr.postcode} ${addr.city}`);
-	parts.push(addr.state);
+	// Skipped when it repeats the city — SG stores "Singapore" in both.
+	const stateLine = displayAddressState(addr);
+	if (stateLine) parts.push(stateLine);
 	return parts.join(", ");
 }
 

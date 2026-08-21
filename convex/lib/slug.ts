@@ -6,7 +6,15 @@
  * IMPORTANT: Keep in sync with `src/lib/slug.ts`. Both files must stay
  * byte-identical in logic — they exist separately because Convex functions
  * bundle from the `convex/` directory.
+ *
+ * This module is also the ONE author of phone normalization (SG-lite,
+ * 86eynw28q): the client (`src/lib/phone.ts`, `src/lib/schemas.ts`) imports
+ * the per-country patterns, messages, and `normalizeMobileDigits` from here
+ * rather than mirroring them, so checkout's client gate and the server
+ * validator can never disagree about what a store accepts.
  */
+
+import { type Country, COUNTRY_DIAL_CODE } from "./country";
 
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
 	"_",
@@ -130,91 +138,185 @@ export function assertValidWaPhone(raw: string): string {
 }
 
 /**
- * Normalize a Malaysian-typed phone number to the SAME E.164-ish digits an
+ * A mobile national significant number typed WITHOUT any country code — what a
+ * buyer types after reading the plate's `+60`/`+65` badge. MY: 9–10 digits
+ * starting with 1 (`12-345 6789`). SG: exactly 8 digits starting 8 or 9
+ * (`9123 4567` — SG has no trunk 0 and no non-mobile 8/9 ranges we'd swallow).
+ * Both windows are pinned tight so a foreign international number can never be
+ * captured and silently rewritten (a US `+1…` is 11 digits; a UK `+44…` never
+ * matches either shape).
+ */
+const MOBILE_NSN: Record<Country, RegExp> = {
+	MY: /^1\d{8,9}$/,
+	SG: /^[89]\d{7}$/,
+};
+
+/**
+ * The stored (inbound-Meta) mobile shape per country: dial code + mobile NSN.
+ * The single accept pattern behind every plated phone field — imported by the
+ * client schemas so the two sides can't drift.
+ */
+export const STORED_MOBILE_PATTERN: Record<Country, RegExp> = {
+	MY: /^601\d{8,9}$/,
+	SG: /^65[89]\d{7}$/,
+};
+
+/**
+ * One rejection message per country — referenced by the server validators AND
+ * the client schemas/fallback copy, so the wording exists in exactly one place.
+ */
+export const MOBILE_MESSAGE: Record<Country, string> = {
+	MY: "Enter a Malaysian mobile number (e.g. 012-345 6789)",
+	SG: "Enter a Singapore mobile number (e.g. 9123 4567)",
+};
+
+/**
+ * Loose per-country bridging of a locally-typed number to international digits.
+ *
+ * MY keeps the historical arm byte-identical: drop the trunk 0, keep `60…`,
+ * pass everything else through (a cashier may key a foreign number that
+ * already carries its country code — see `assertValidWaPhoneForCountry`).
+ * Deliberately NO bare-NSN fold here: a 9–10-digit number starting with 1
+ * could plausibly be a mis-keyed foreign number, so only the strict validator
+ * (whose field wears the `+60` plate) folds it.
+ *
+ * SG folds its bare NSN (`[89]` + 7 digits) even in the loose arm — the M3
+ * CRM-fork fix: SG has no trunk 0, so `81234567` is the natural way an SG
+ * cashier keys a local buyer, and an 8-digit string carries no country code
+ * for the pass-through posture to preserve. Unprefixed it would be stored as
+ * `81234567` while Meta delivers the same buyer inbound as `6581234567`,
+ * forking the `(retailerId, waPhone)` customer row and sending to a dead
+ * number.
+ */
+const LOOSE_NORMALIZE: Record<Country, (digits: string) => string> = {
+	MY: (digits) => {
+		if (digits.startsWith("60")) return digits;
+		if (digits.startsWith("0")) return `60${digits.slice(1)}`;
+		return digits;
+	},
+	SG: (digits) => {
+		if (digits.startsWith("65")) return digits;
+		if (MOBILE_NSN.SG.test(digits)) return `65${digits}`;
+		return digits;
+	},
+};
+
+/**
+ * Normalize a locally-typed phone number to the SAME E.164-ish digits an
  * inbound WhatsApp message produces, so a cashier-keyed number keys identically
  * to a scan bind (customers are keyed by `(retailerId, waPhone)`; a mismatch
  * would fork a returning buyer into a duplicate CRM row and send to a bad
- * number). A cashier types a LOCAL number (`012-345 6789`), but Meta delivers
- * `60123456789` — so a bare `assertValidWaPhone` (which only strips separators)
- * is not enough for manual entry. This bridges that gap:
- *   - `0xx…`  → `60xx…`  (drop the trunk 0, prepend the MY country code)
- *   - `60xx…` / `+60xx…` → kept as-is (already international)
- *   - anything else → passed through and validated (assume it already carries a
- *     country code; the 8–15-digit rule still rejects junk)
- * Then `assertValidWaPhone` enforces the shared 8–15-digit shape. Malaysia-only
- * for v1 — when we add markets, take the retailer's country and branch here.
+ * number). A cashier types a LOCAL number (`012-345 6789` / `9123 4567`), but
+ * Meta delivers `60123456789` / `6591234567` — so a bare `assertValidWaPhone`
+ * (which only strips separators) is not enough for manual entry. The
+ * per-country bridging lives in `LOOSE_NORMALIZE`; anything unbridged is
+ * passed through and validated (assume it already carries a country code —
+ * the 8–15-digit rule still rejects junk). Which arm applies is driven by the
+ * RETAILER's country, never by sniffing the number — sniffing is how a typo in
+ * one country's shape gets silently accepted as the other's.
  */
-export function assertValidMyWaPhone(raw: string): string {
+export function assertValidWaPhoneForCountry(
+	raw: string,
+	country: Country,
+): string {
 	const digits = raw.replace(/\D/g, "");
-	let candidate: string;
-	if (digits.startsWith("60")) candidate = digits;
-	else if (digits.startsWith("0")) candidate = `60${digits.slice(1)}`;
-	else candidate = digits;
-	return assertValidWaPhone(candidate);
+	return assertValidWaPhone(LOOSE_NORMALIZE[country](digits));
 }
 
-/** A Malaysian mobile national significant number typed WITHOUT the trunk 0 —
- * `12-345 6789`, i.e. 9–10 digits starting with 1. See `assertValidMyMobile`. */
-const MY_MOBILE_NSN = /^1\d{8,9}$/;
+/** MY-fixed alias kept for the callers that predate SG-lite (86eynw28q) and
+ * genuinely mean Malaysia. New country-aware paths take the retailer's country
+ * and call `assertValidWaPhoneForCountry` instead. */
+export function assertValidMyWaPhone(raw: string): string {
+	return assertValidWaPhoneForCountry(raw, "MY");
+}
 
 /**
- * Stricter sibling of `assertValidMyWaPhone` for numbers we intend to MESSAGE:
- * normalizes the same way, then requires a Malaysian **mobile** shape (`601X`
- * plus 8–9 digits). A landline (`03-…` → `60312345678`) satisfies the loose
- * 8–15-digit rule but can never receive WhatsApp, so accepting one guarantees a
- * failed confirmation push — better to reject it at the door with copy the
- * buyer can act on.
+ * Non-throwing sibling of `assertValidMobileForCountry`'s normalization — the
+ * client's "has this changed?" checks and Zod schemas run this, then test
+ * `STORED_MOBILE_PATTERN` themselves. The shape is *not* checked here, so this
+ * is only for comparison and for feeding a validator, never for deciding a
+ * number is valid. Folds the bare NSN for BOTH countries (these callers sit
+ * behind the plate, where "type the rest" is exactly what the badge asks for).
+ */
+export function normalizeMobileDigits(
+	value: string | undefined,
+	country: Country,
+): string {
+	const digits = (value ?? "").replace(/\D/g, "");
+	if (MOBILE_NSN[country].test(digits))
+		return `${COUNTRY_DIAL_CODE[country]}${digits}`;
+	return LOOSE_NORMALIZE[country](digits);
+}
+
+/**
+ * Stricter sibling of `assertValidWaPhoneForCountry` for numbers we intend to
+ * MESSAGE: normalizes the same way, then requires the country's **mobile**
+ * shape (`STORED_MOBILE_PATTERN`). An MY landline (`03-…` → `60312345678`)
+ * satisfies the loose 8–15-digit rule but can never receive WhatsApp, so
+ * accepting one guarantees a failed confirmation push — better to reject it at
+ * the door with copy the buyer can act on.
  *
- * Accepts one shape the loose normalizer doesn't: a bare NSN (`12-345 6789`,
- * no trunk 0, no country code). Checkout shows a `+60` prefix on the field, so
- * "type the rest" is exactly what that badge asks for — without this the buyer
- * who obeys the prefix gets rejected. Safe to fold in HERE and not in
- * `assertValidMyWaPhone`: the pattern is pinned to 9–10 digits starting with 1,
- * so a non-MY international number that happens to start with 1 (a US `+1`,
- * which is 11 digits) can't be captured and silently rewritten to a Malaysian
- * one. The loose normalizer stays untouched for the counter's manual bind,
- * where a cashier may legitimately key a foreign number.
+ * Accepts one shape the loose MY normalizer doesn't: a bare NSN (`12-345
+ * 6789`, no trunk 0, no country code). The field wears a `+60`/`+65` prefix,
+ * so "type the rest" is exactly what that badge asks for — without this the
+ * buyer who obeys the prefix gets rejected. Safe to fold in HERE: `MOBILE_NSN`
+ * windows are pinned per country, so a non-local international number can't be
+ * captured and silently rewritten.
  *
- * Mirrors `myWaPhoneCheckoutSchema` in `src/lib/schemas.ts` (same message, same
- * pattern); the client fails fast, this is the authority.
+ * The client fails fast via `src/lib/schemas.ts` (which imports this module's
+ * patterns + messages, so the two can't drift); this is the authority.
  *
- * **The validator behind the `+60` plate.** Every field in the app that renders
+ * **The validator behind the plate.** Every field in the app that renders
  * `MyPhoneInput` / `TextField prefix={<MyPhonePrefix />}` lands here — buyer
  * checkout and the buyer's number repair (86eyf1rck), the seller's alert number
  * (86eyhw9zy), and since 86eyknr2r the store's own contact `waPhone` (settings,
  * onboarding, admin create) plus a pickup point's manager contact. The plate is
- * a promise about what the field takes, so the two move together: never put the
- * plate on a field this doesn't guard.
+ * a promise about what the field accepts, so the two move together: the plate's
+ * country and this validator's country both come from the retailer row, and a
+ * field must never wear a plate this doesn't guard.
  *
- * Seller-side numbers joined the strict rule because Kedaipal is Malaysia-only
- * in every direction that matters — the shared WABA is MY-verified, and a
- * Lalamove sender contact must be `+60`, with `waPhone` as its fallback, so a
- * non-MY value silently broke dispatch rather than being a supported case.
+ * Which arm applies is the RETAILER's country (SG-lite, 86eynw28q/86eynw2dy) —
+ * never a permissive both-countries regex. Cross-country numbers are rejected
+ * on purpose: an SG store's checkout refuses a `+60` buyer with the SG
+ * message, an MY store's refuses `+65`, keeping each side's typo protection
+ * exactly as strict as it was when the app was MY-only.
  *
  * Deliberately NOT applied to the counter's manual bind, where a cashier may
- * legitimately key an unusual number for a buyer standing in front of them.
+ * legitimately key an unusual number for a buyer standing in front of them
+ * (that path uses `assertValidWaPhoneForCountry`).
  */
-export const MY_MOBILE_MESSAGE =
-	"Enter a Malaysian mobile number (e.g. 012-345 6789)";
-
-export function assertValidMyMobile(raw: string): string {
+export function assertValidMobileForCountry(
+	raw: string,
+	country: Country,
+): string {
 	const digits = raw.replace(/\D/g, "");
 	// One message, whatever the input. The loose normalizer throws its own
-	// "8–15 digits, with country code" text on junk — advice that now directly
-	// contradicts the `+60` plate the field is wearing, since the plate's whole
-	// job is to say the country code is already handled.
+	// "8–15 digits, with country code" text on junk — advice that directly
+	// contradicts the plate the field is wearing, since the plate's whole job
+	// is to say the country code is already handled.
 	let normalized: string;
 	try {
-		normalized = MY_MOBILE_NSN.test(digits)
-			? assertValidMyWaPhone(`60${digits}`)
-			: assertValidMyWaPhone(raw);
+		normalized = MOBILE_NSN[country].test(digits)
+			? assertValidWaPhoneForCountry(
+					`${COUNTRY_DIAL_CODE[country]}${digits}`,
+					country,
+				)
+			: assertValidWaPhoneForCountry(raw, country);
 	} catch {
-		throw new Error(MY_MOBILE_MESSAGE);
+		throw new Error(MOBILE_MESSAGE[country]);
 	}
-	if (!/^601\d{8,9}$/.test(normalized)) {
-		throw new Error(MY_MOBILE_MESSAGE);
+	if (!STORED_MOBILE_PATTERN[country].test(normalized)) {
+		throw new Error(MOBILE_MESSAGE[country]);
 	}
 	return normalized;
+}
+
+/** MY-fixed alias, kept so Kedaipal's own always-Malaysian numbers (the
+ * platform support line in `./contact.ts`) don't have to spell out a country
+ * that is not data-driven. Seller/buyer paths resolve the retailer's country
+ * and call `assertValidMobileForCountry`. */
+export function assertValidMyMobile(raw: string): string {
+	return assertValidMobileForCountry(raw, "MY");
 }
 
 /**

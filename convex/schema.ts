@@ -25,12 +25,13 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
-		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
-		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
-		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
-		// route alerts to whoever runs orders — same split as notifyEmail vs the
-		// Clerk email. Stored in the normalized inbound form ("60…", via
-		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		// Seller WhatsApp order alerts (86eyhw9zy): the mobile (in the store's
+		// country — SG-lite 86eynw2dy) that receives them. Deliberately SEPARATE
+		// from `waPhone` (the buyer-facing store contact / wa.me fallback /
+		// Lalamove sender) so a multi-person store can route alerts to whoever
+		// runs orders — same split as notifyEmail vs the Clerk email. Stored in
+		// the normalized inbound form ("60…"/"65…", via
+		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
 		// Opt-in switch for the seller WhatsApp order alerts (new order +
 		// payment claim, sent as Meta utility templates to notifyWaPhone).
@@ -47,6 +48,12 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
+		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
+		// rule reads: checkout phone plate/validator arm, address variant, Places
+		// autocomplete region, and the currency a new store defaults to. Undefined
+		// = MY (every pre-existing store, zero migration). Closed set in
+		// convex/lib/country.ts.
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -324,6 +331,18 @@ export default defineSchema({
 				apiSecret: v.optional(v.string()),
 				// Last 4 chars of the plaintext key, for the settings UI.
 				apiKeyHint: v.optional(v.string()),
+				// Which Lalamove world these keys talk to (86eypncfy), stamped at
+				// save from the PLAINTEXT key (`pk_test_…` → sandbox). Ciphertext
+				// always reads as "production", so a query can no more derive this
+				// than it can the hint — and unlike the hint this one is
+				// load-bearing: a sandbox key books trips no rider will ever run
+				// and prices real buyers off the test environment, so every
+				// surface that spends money has to be able to say so. Undefined =
+				// not yet stamped (pre-backfill row), which the UI treats as
+				// "unknown", never as "production".
+				env: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
@@ -411,6 +430,30 @@ export default defineSchema({
 					closed: v.optional(v.boolean()),
 				}),
 			),
+		),
+		// Despatch-label template (86eyp63mp) — what this store's printed parcel
+		// label shows, and on what paper. Undefined = every default (a4-4up,
+		// logo/COD/weight/note on, contents off) — every pre-existing store, zero
+		// migration. EVERY field is optional so a future toggle is a widen rather
+		// than a migration, and `sanitizeAwbConfig` drops any field that equals
+		// its default (an all-default save normalises the whole object back to
+		// unset) so "the defaults" has one spelling. All-tier and owner-only —
+		// never in the public storefront payload. NOTE: this is Kedaipal's own
+		// despatch label, NOT a courier-issued consignment note; it carries the
+		// courier name + tracking number the seller records manually (86eyehvk4).
+		// See convex/lib/awbConfig.ts + docs/despatch-labels.md.
+		awbConfig: v.optional(
+			v.object({
+				paperSize: v.optional(
+					v.union(v.literal("a6"), v.literal("a4-4up")),
+				),
+				showLogo: v.optional(v.boolean()),
+				showItems: v.optional(v.boolean()),
+				showCod: v.optional(v.boolean()),
+				showWeight: v.optional(v.boolean()),
+				showNote: v.optional(v.boolean()),
+				footerText: v.optional(v.string()),
+			}),
 		),
 		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
 		// subtotal a storefront order must reach before checkout. Undefined = no
@@ -1030,6 +1073,13 @@ export default defineSchema({
 		// 2026 — late-added tracking is track-page-only). Delivery orders only.
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// When a despatch label carrying this order was last generated (86eyp63mp).
+		// "Printed" means "label PDF built and handed to the seller" — we can't see
+		// the physical printer, and that's close enough for the print queue's
+		// "Printed · 2h ago" chip. Re-prints re-stamp (latest wins; it's a fact,
+		// not a one-shot), and a batch stamps only the orders actually included,
+		// never the skipped ones. Undefined = never printed.
+		labelPrintedAt: v.optional(v.number()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.

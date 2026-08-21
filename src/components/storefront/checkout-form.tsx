@@ -37,6 +37,8 @@ import {
 	WEEKDAY_NAMES,
 	weekdayIndexMyt,
 } from "../../../convex/lib/openingHours";
+import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import type { Country } from "../../../convex/lib/country";
 import {
 	collectMinQuantityShortfalls,
 	minOrderValueShortfall,
@@ -46,21 +48,22 @@ import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
 import {
 	convexErrorMessage,
-	formatMyMobile,
+	formatMobile,
 	formatPrice,
 } from "../../lib/format";
+import { displayAddressState } from "../../lib/address-display";
 import { composeCustomerNote } from "../../lib/order-note";
+import { loadSavedAddress, saveAddress } from "../../lib/saved-address";
 import {
 	type CheckoutAddressValues,
-	checkoutFormSchema,
-	emptyAddress,
-	myWaPhoneCheckoutSchema,
+	checkoutFormSchemaFor,
+	waPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
-import { MyPhonePrefix } from "../ui/my-phone-input";
+import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
 import { AddressFieldset } from "./address-fieldset";
 import {
 	CheckoutSummary,
@@ -74,8 +77,6 @@ import {
 	pickupFeeOf,
 } from "./pickup-location-options";
 
-const ADDRESS_STORAGE_KEY = "kedaipal:lastAddress";
-
 interface CheckoutPageProps {
 	cart: UseCart;
 	retailerId: Id<"retailers">;
@@ -85,6 +86,13 @@ interface CheckoutPageProps {
 	/** Store locale — localizes the buyer-facing PDPA line under the phone
 	 * field (the rest of checkout is EN pending the storefront i18n phase). */
 	locale: string;
+	/** The store's country (SG-lite, 86eynw28q + 86eynw29u) — keys the phone
+	 * plate/validator arm AND the address variant (schema arm, fieldset shape,
+	 * Places region, saved-address namespace). From the resolved
+	 * `getRetailerBySlug` payload (undefined never reaches here — the read
+	 * resolves it to MY); must match what the server enforces in orders.create,
+	 * which reads the same retailer field. */
+	country: Country;
 	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
 	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
 	confirmPushEnabled: boolean;
@@ -119,39 +127,10 @@ interface SanitizedDeliveryAddress {
 	placeId?: string;
 }
 
-function loadSavedAddress(): CheckoutAddressValues {
-	if (typeof window === "undefined") return emptyAddress;
-	try {
-		const raw = window.localStorage.getItem(ADDRESS_STORAGE_KEY);
-		if (!raw) return emptyAddress;
-		const parsed = JSON.parse(raw);
-		return {
-			line1: typeof parsed.line1 === "string" ? parsed.line1 : "",
-			line2: typeof parsed.line2 === "string" ? parsed.line2 : "",
-			city: typeof parsed.city === "string" ? parsed.city : "",
-			state: typeof parsed.state === "string" ? parsed.state : "",
-			postcode: typeof parsed.postcode === "string" ? parsed.postcode : "",
-			notes: typeof parsed.notes === "string" ? parsed.notes : "",
-			mapsUrl: typeof parsed.mapsUrl === "string" ? parsed.mapsUrl : "",
-			latitude: typeof parsed.latitude === "string" ? parsed.latitude : "",
-			longitude: typeof parsed.longitude === "string" ? parsed.longitude : "",
-			placeId: typeof parsed.placeId === "string" ? parsed.placeId : "",
-		};
-	} catch {
-		return emptyAddress;
-	}
-}
-
-function saveAddress(addr: CheckoutAddressValues): void {
-	if (typeof window === "undefined") return;
-	try {
-		window.localStorage.setItem(ADDRESS_STORAGE_KEY, JSON.stringify(addr));
-	} catch {
-		// Quota errors / privacy mode — silently ignore.
-	}
-}
-
-function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
+function sanitizeAddress(
+	raw: CheckoutAddressValues,
+	country: Country,
+): SanitizedDeliveryAddress {
 	const line2 = raw.line2.trim();
 	const notes = raw.notes.trim();
 	const mapsUrl = raw.mapsUrl.trim();
@@ -167,11 +146,15 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 		lngNum >= -180 &&
 		lngNum <= 180;
 	const placeId = raw.placeId.trim();
+	// SG forms render no city/state inputs (Singapore has no state tier), so
+	// both are stamped with the canonical literal here — never read off form
+	// state, which may hold "" from manual entry. Mirrors the server arm.
+	const sgAddress = country === "SG";
 	return {
 		line1: raw.line1.trim(),
 		line2: line2.length > 0 ? line2 : undefined,
-		city: raw.city.trim(),
-		state: raw.state,
+		city: sgAddress ? SG_STATE_LABEL : raw.city.trim(),
+		state: sgAddress ? SG_STATE_LABEL : raw.state,
 		postcode: raw.postcode.trim(),
 		notes: notes.length > 0 ? notes : undefined,
 		mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
@@ -200,6 +183,7 @@ export function CheckoutPage({
 	storeSlug,
 	checkoutPhone,
 	locale,
+	country,
 	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
@@ -363,7 +347,9 @@ export function CheckoutPage({
 			// push (or the wa.me fallback) is how the order reaches a chat at all.
 			waPhone: "",
 			deliveryMethod: defaultMethod,
-			address: loadSavedAddress(),
+			// Saved per country (SG-lite) — an MY address can't leak a state or a
+			// 5-digit postcode into an SG form, and vice versa.
+			address: loadSavedAddress(country),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
@@ -389,7 +375,7 @@ export function CheckoutPage({
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
 		},
-		validators: { onChange: checkoutFormSchema },
+		validators: { onChange: checkoutFormSchemaFor(country) },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
 			setPickupError(null);
@@ -405,7 +391,7 @@ export function CheckoutPage({
 			}
 			const sanitizedAddress =
 				value.deliveryMethod === "delivery"
-					? sanitizeAddress(value.address)
+					? sanitizeAddress(value.address, country)
 					: undefined;
 
 			// Resolve the chosen pickup location id. For the single-location case
@@ -530,7 +516,8 @@ export function CheckoutPage({
 					customer: {
 						name: value.name?.trim() || undefined,
 						// Raw as typed — the server normalizes ("012-345 6789" →
-						// "60123456789") via assertValidMyWaPhone, the same bridge the
+						// "60123456789", "9123 4567" → "6591234567") by the store's
+						// country via assertValidMobileForCountry, the same bridge the
 						// counter manual bind uses.
 						waPhone: value.waPhone.trim(),
 					},
@@ -550,7 +537,8 @@ export function CheckoutPage({
 							? liveQuote.quoteId
 							: undefined,
 				});
-				if (value.deliveryMethod === "delivery") saveAddress(value.address);
+				if (value.deliveryMethod === "delivery")
+					saveAddress(country, value.address);
 				setSubmitted(true);
 				cart.clearCart();
 				form.reset();
@@ -739,7 +727,12 @@ export function CheckoutPage({
 		longitude: hasCoords ? lngNum : undefined,
 		getAddressLabel: () => {
 			const a = form.store.state.values.address;
-			return [a.line1, a.line2, `${a.postcode} ${a.city}`.trim(), a.state]
+			return [
+				a.line1,
+				a.line2,
+				`${a.postcode} ${a.city}`.trim(),
+				displayAddressState(a),
+			]
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
 		},
@@ -1171,10 +1164,12 @@ export function CheckoutPage({
 									autoComplete="tel"
 									// The plate says the country code is handled, so the
 									// placeholder shows the rest. A buyer who ignores it and
-									// types the full "012-345 6789" (or "60123…") is still
-									// normalized to the same number — see myWaPhoneCheckoutSchema.
-									prefix={<MyPhonePrefix />}
-									placeholder="12-345 6789"
+									// types the full local/international form is still normalized
+									// to the same number — see waPhoneCheckoutSchema. Plate +
+									// schema share the store's country, so the badge never
+									// promises a shape the validator rejects.
+									prefix={<MyPhonePrefix country={country} />}
+									placeholder={MOBILE_PLACEHOLDER[country]}
 									required
 									description={
 										confirmPushEnabled
@@ -1192,9 +1187,11 @@ export function CheckoutPage({
 						    unreachable number still degrades to the recovery card). */}
 						<form.Subscribe selector={(s) => s.values.waPhone}>
 							{(typed) => {
-								const parsed = myWaPhoneCheckoutSchema.safeParse(typed ?? "");
+								const parsed = waPhoneCheckoutSchema[country].safeParse(
+									typed ?? "",
+								);
 								if (!parsed.success) return null;
-								const pretty = formatMyMobile(parsed.data);
+								const pretty = formatMobile(parsed.data);
 								return (
 									<p className="text-sm font-medium text-accent-emphasis">
 										{locale === "ms"
@@ -1325,6 +1322,7 @@ export function CheckoutPage({
 												form={form}
 												fields="address"
 												retailerId={retailerId}
+												country={country}
 												allowManualEntry={allowManualAddressEntry}
 												// Only when the section heading is the method question
 												// ("How do you want to get it?") — a delivery-only store

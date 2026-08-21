@@ -10,6 +10,8 @@
 // Money is stored in MINOR units (sen) everywhere — see src/lib/format.ts — so
 // every amount here is sen and `formatMoney` divides by 100.
 
+import { printable } from "./latin1";
+
 // Malaysia is UTC+8 with no DST, so a fixed offset renders the correct calendar
 // day without depending on the runtime's timezone database.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -212,11 +214,14 @@ export function orderToReceiptData(args: {
 		paidDate: status === "received" ? order.paymentReceivedAt : undefined,
 		paid: status === "received",
 		paymentStatusLabel: PAYMENT_STATUS_LABEL[status] ?? "Awaiting payment",
-		customerName: order.customer.name?.trim() || undefined,
-		customerPhone: order.customer.waPhone?.trim() || undefined,
+		// Clamped BEFORE the emptiness test, not after: a name the page can't draw
+		// is non-empty here and blank on paper, so testing the raw string leaves a
+		// labelled field with nothing in it. Same rule as the despatch label.
+		customerName: printable(order.customer.name),
+		customerPhone: printable(order.customer.waPhone),
 		items: order.items.map((it) => ({
-			name: it.name,
-			variantLabel: it.variantLabel?.trim() || undefined,
+			name: printable(it.name) ?? "Item",
+			variantLabel: printable(it.variantLabel),
 			quantity: it.quantity,
 			unitPrice: it.price,
 		})),
@@ -236,7 +241,7 @@ export function orderToReceiptData(args: {
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,
-		customerNote: order.customerNote?.trim() || undefined,
+		customerNote: printable(order.customerNote),
 		paymentBlocks: paymentMethodsToBlocks(paymentMethods),
 	};
 }

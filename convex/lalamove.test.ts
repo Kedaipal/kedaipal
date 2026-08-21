@@ -707,9 +707,86 @@ describe("updateSettings — deliveryBooking guards", () => {
 			promptBookOnPacked: false,
 			deliveryDirection: "standard",
 			apiKeyHint: "abcd",
+			// A non-`pk_test_` key is a live one (86eypncfy).
+			env: "production",
 		});
 		// The raw secret must never appear anywhere in the owner payload.
 		expect(JSON.stringify(retailer)).not.toContain("sk_byo_secret");
+	});
+
+	test("a pk_test_ key is stamped and reported as sandbox (86eypncfy)", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_sandboxkey",
+				apiSecret: "sk_test_sandboxsecret",
+			},
+		});
+		const sandbox = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(sandbox?.deliveryBooking?.env).toBe("sandbox");
+
+		// Swapping to a live pair re-stamps — the badge must follow the key, or
+		// a seller who fixes their setup keeps being told they're in test mode.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_prod_livekey",
+				apiSecret: "sk_prod_livesecret",
+			},
+		});
+		const live = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(live?.deliveryBooking?.env).toBe("production");
+
+		// A save that doesn't touch the keys keeps the stamp (the apiKeyHint
+		// rule) — toggling vehicle must not blank the warning.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: { enabled: true, vehicleType: "CAR" },
+		});
+		expect(
+			(await asUser(t).query(api.retailers.getMyRetailer))?.deliveryBooking
+				?.env,
+		).toBe("production");
+
+		// Clearing the keys clears the stamp — an unset credential has no
+		// environment to report.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: false,
+				vehicleType: "CAR",
+				apiKey: "",
+				apiSecret: "",
+			},
+		});
+		expect(
+			(await asUser(t).query(api.retailers.getMyRetailer))?.deliveryBooking
+				?.env,
+		).toBeUndefined();
+	});
+
+	test("getDeliveryJob reports the store's Lalamove environment", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_sandboxkey",
+				apiSecret: "sk_test_sandboxsecret",
+			},
+		});
+		const orderId = await seedOrder(t, retailer._id);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		// The card can only warn about test keys if the read carries the fact.
+		expect(dispatch?.env).toBe("sandbox");
 	});
 
 	test("re-saving without keys keeps the stored ones; empty string clears", async () => {

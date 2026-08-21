@@ -21,6 +21,10 @@ export const DEFAULT_SUPPORT_WA_NUMBER = "60184735095";
  * and a typo in an env var must degrade to the fallback rather than break the
  * only way a seller can reach us. A rejected value is logged so the mistake is
  * visible in the Convex logs instead of silently ignored.
+ *
+ * Deliberately MY-only even after SG-lite (86eynw28q): this validates
+ * KEDAIPAL's own support line, not seller data — the platform's contact number
+ * is Malaysian regardless of which countries its stores operate in.
  */
 export function resolveSupportWaNumber(raw: string | undefined): string {
 	const trimmed = raw?.trim();

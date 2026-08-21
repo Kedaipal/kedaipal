@@ -10,6 +10,7 @@
 
 import type * as admin from "../admin.js";
 import type * as analytics from "../analytics.js";
+import type * as awb from "../awb.js";
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
 import type * as categories from "../categories.js";
@@ -29,6 +30,7 @@ import type * as lalamove from "../lalamove.js";
 import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_awbConfig from "../lib/awbConfig.js";
 import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
 import type * as lib_categoryCounts from "../lib/categoryCounts.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
@@ -36,6 +38,7 @@ import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
 import type * as lib_confirmationPush from "../lib/confirmationPush.js";
 import type * as lib_contact from "../lib/contact.js";
+import type * as lib_country from "../lib/country.js";
 import type * as lib_couriers from "../lib/couriers.js";
 import type * as lib_credentialCrypto from "../lib/credentialCrypto.js";
 import type * as lib_currency from "../lib/currency.js";
@@ -62,8 +65,12 @@ import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
 import type * as lib_paymentMethod from "../lib/paymentMethod.js";
 import type * as lib_paymentReminder from "../lib/paymentReminder.js";
+import type * as lib_pdf_awb from "../lib/pdf/awb.js";
+import type * as lib_pdf_barcode from "../lib/pdf/barcode.js";
 import type * as lib_pdf_document from "../lib/pdf/document.js";
+import type * as lib_pdf_latin1 from "../lib/pdf/latin1.js";
 import type * as lib_pdf_logo from "../lib/pdf/logo.js";
+import type * as lib_pdf_qr from "../lib/pdf/qr.js";
 import type * as lib_pdf_render from "../lib/pdf/render.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_popularProducts from "../lib/popularProducts.js";
@@ -105,6 +112,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   analytics: typeof analytics;
+  awb: typeof awb;
   billing: typeof billing;
   billingEmail: typeof billingEmail;
   categories: typeof categories;
@@ -124,6 +132,7 @@ declare const fullApi: ApiFromModules<{
   "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
+  "lib/awbConfig": typeof lib_awbConfig;
   "lib/billingEmailCopy": typeof lib_billingEmailCopy;
   "lib/categoryCounts": typeof lib_categoryCounts;
   "lib/channels/registry": typeof lib_channels_registry;
@@ -131,6 +140,7 @@ declare const fullApi: ApiFromModules<{
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
   "lib/confirmationPush": typeof lib_confirmationPush;
   "lib/contact": typeof lib_contact;
+  "lib/country": typeof lib_country;
   "lib/couriers": typeof lib_couriers;
   "lib/credentialCrypto": typeof lib_credentialCrypto;
   "lib/currency": typeof lib_currency;
@@ -157,8 +167,12 @@ declare const fullApi: ApiFromModules<{
   "lib/payment": typeof lib_payment;
   "lib/paymentMethod": typeof lib_paymentMethod;
   "lib/paymentReminder": typeof lib_paymentReminder;
+  "lib/pdf/awb": typeof lib_pdf_awb;
+  "lib/pdf/barcode": typeof lib_pdf_barcode;
   "lib/pdf/document": typeof lib_pdf_document;
+  "lib/pdf/latin1": typeof lib_pdf_latin1;
   "lib/pdf/logo": typeof lib_pdf_logo;
+  "lib/pdf/qr": typeof lib_pdf_qr;
   "lib/pdf/render": typeof lib_pdf_render;
   "lib/plans": typeof lib_plans;
   "lib/popularProducts": typeof lib_popularProducts;

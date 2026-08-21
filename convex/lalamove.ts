@@ -37,6 +37,7 @@ import {
 	decryptLalamoveCredentials,
 	resolveDispatchSchedule,
 	resolveLalamoveCredentials,
+	classifyBookingFailure,
 	resolveScheduleAt,
 	toLalamoveMyPhone,
 	toLalamovePhone,
@@ -696,6 +697,14 @@ type DispatchContext =
 			 * resolveScheduleAt decides at prepare time whether it is still
 			 * ahead (schedule for then) or past/imminent (book now). */
 			requestedMoment?: number;
+			/** Which Lalamove world this store books in, read from the STAMPED
+			 * `deliveryBooking.env` (86eypncfy). Deliberately NOT
+			 * `credentials.env`: that is inferred from the stored value, which is
+			 * ciphertext, and a ciphertext never starts with `pk_test_` — so it
+			 * reads "production" for everyone and would silently suppress the one
+			 * warning that matters. Undefined = a row the backfill hasn't stamped
+			 * yet; callers must treat that as "unknown", never as production. */
+			env?: "sandbox" | "production";
 			credentials: LalamoveCredentials;
 	  };
 
@@ -789,6 +798,7 @@ async function dispatchContextForOrder(
 			remarks,
 		},
 		buyerContactFallback: buyerMyPhone === null,
+		env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
 		deliveryDirection: collection ? "collection" : "standard",
@@ -835,24 +845,35 @@ export const getDispatchContext = internalQuery({
 });
 
 
-/** Map a Lalamove API failure to seller-facing copy — the wallet case gets
- * the explicit "top up" ask the ticket requires; everything else stays
- * honest-but-generic (the raw body is in the logs). */
-function friendlyBookingError(err: unknown): string {
+/**
+ * Map a Lalamove API failure to seller-facing copy, via the error ID rather
+ * than a substring of the raw body (86eypncfy — the old body sniffing
+ * reported anything merely containing "credit"/"balance" as a wallet
+ * problem).
+ *
+ * `env` matters for exactly one case and it is the case that cost us a
+ * vendor: on a SANDBOX key an insufficient-balance refusal is not a wallet
+ * problem at all. Lalamove's test environment has its own play-money wallet
+ * that no real top-up can ever reach, so "top it up in the Lalamove app"
+ * sends the seller to spend money that cannot possibly help — which is
+ * precisely what happened to Wagyu Walid across 26 hours and nine attempts.
+ */
+function friendlyBookingError(
+	err: unknown,
+	env?: "sandbox" | "production",
+): string {
 	if (err instanceof LalamoveApiError) {
-		const body = err.body.toLowerCase();
-		if (
-			body.includes("insufficient") ||
-			body.includes("balance") ||
-			body.includes("credit")
-		) {
-			return "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove app, then retry the booking.";
-		}
-		if (body.includes("expired") || body.includes("quotation")) {
-			return "The price quote expired — tap Book delivery again for a fresh price.";
-		}
-		if (body.includes("phone")) {
-			return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+		switch (classifyBookingFailure(err.body)) {
+			case "wallet":
+				return env === "sandbox"
+					? "These are Lalamove TEST keys, so this booking is hitting the sandbox — its balance is play money and topping up your real wallet can't change it. Paste your live keys (they start with pk_prod_) in Settings → Fulfilment to book real riders."
+					: "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove Business account these API keys belong to — a top-up in the personal Lalamove app credits a different wallet — then book again.";
+			case "quote_expired":
+				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
+			case "bad_phone":
+				return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+			case "out_of_range":
+				return "Lalamove doesn't serve this drop-off address. The order needs to go out another way.";
 		}
 	}
 	return "Lalamove couldn't process the booking right now. Please try again in a moment.";
@@ -910,6 +931,12 @@ export const prepareBooking = action({
 				 * lets the modal warn when the trip being bought no longer
 				 * matches what the order promises the buyer (86eyp5qd1). */
 				buyerRequestedMoment?: number;
+				/** When this quotation stops being bookable — Lalamove honours one
+				 * for exactly 5 minutes (86eypncfy). Parsed all along and thrown
+				 * away, which let the confirm dialog sit on a dead quote and
+				 * re-send it forever. Undefined = the provider didn't say; the
+				 * client falls back to its own 5-minute clock from receipt. */
+				expiresAt?: number;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -961,6 +988,11 @@ export const prepareBooking = action({
 				buyerContactFallback: context.buyerContactFallback,
 				scheduledFor,
 				buyerRequestedMoment: context.requestedMoment,
+				expiresAt: parsed.expiresAt
+					? (Number.isFinite(Date.parse(parsed.expiresAt))
+						? Date.parse(parsed.expiresAt)
+						: undefined)
+					: undefined,
 			};
 		} catch (err) {
 			console.warn("[lalamove] dispatch quote failed", {
@@ -970,7 +1002,7 @@ export const prepareBooking = action({
 			return {
 				ok: false,
 				reason: "quote_failed",
-				message: friendlyBookingError(err),
+				message: friendlyBookingError(err, context.env),
 			};
 		}
 	},
@@ -1078,7 +1110,7 @@ export const confirmBooking = action({
 				shortId: args.shortId,
 				message: err instanceof Error ? err.message : String(err),
 			});
-			const message = friendlyBookingError(err);
+			const message = friendlyBookingError(err, context.env);
 			// Free the slot so the seller can rebook immediately; the released row
 			// doubles as the amber failed card.
 			await ctx.runMutation(internal.lalamove.releaseReservation, {
@@ -1606,6 +1638,12 @@ export const getDeliveryJob = query({
 		 * `job.deliveryDirection`; the two only diverge after a mode switch (and
 		 * routinely once direction varies per order — per-product v2). */
 		deliveryDirection: "standard" | "collection";
+		/** Which Lalamove world a booking from this card would hit (86eypncfy).
+		 * "sandbox" means no real rider can ever be dispatched and the buyer's
+		 * fee was priced by the test environment, so the card says so out loud
+		 * at every point of spend. Undefined = un-stamped row (pre-backfill) —
+		 * rendered as nothing rather than a false all-clear. */
+		env?: "sandbox" | "production";
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1656,6 +1694,7 @@ export const getDeliveryJob = query({
 		}
 		return {
 			promptBookOnPacked,
+			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 			bookingEnabled: retailer.deliveryBooking?.enabled === true,
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",

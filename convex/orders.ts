@@ -62,6 +62,7 @@ import {
 	type InboxFilterArgs,
 	needsMockup,
 } from "./lib/orderInboxFilter";
+import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
 	computeOrderTotals,
 	generateShortId,
@@ -76,6 +77,7 @@ import {
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
 	type DeliveryQuoteReason,
+	deliveryModeAllowed,
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 	summarizeCartWeight,
@@ -96,6 +98,7 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	type OrderReceiptData,
 	orderToReceiptData,
@@ -111,7 +114,7 @@ import {
 	mapHitpayPaymentType,
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyMobile } from "./lib/slug";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import { renderSystemMessage } from "./lib/whatsappCopy";
@@ -222,6 +225,18 @@ function resolveDeliveryForOrder(
 	pendingReason?: DeliveryQuoteReason;
 } {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
+	// Country/mode mismatch (SG-lite belt-and-braces — updateSettings refuses
+	// storing this): resolving would either throw a nonsense state error or
+	// silently strand the order fee-pending, so refuse with the same
+	// seller-side framing the checkout preview shows for this store.
+	if (
+		config &&
+		!deliveryModeAllowed(retailer.country ?? DEFAULT_COUNTRY, config.mode)
+	) {
+		throw new ConvexError(
+			"Delivery pricing isn't working for this store right now — it's on the store's side. Message them on WhatsApp to sort it out.",
+		);
+	}
 	if (config?.mode === "radius" && !retailer.businessAddress) {
 		// Shouldn't happen (updateSettings refuses radius without an address) —
 		// fail open to free delivery rather than blocking the storefront.
@@ -569,9 +584,15 @@ export const updateBuyerPhone = mutation({
 			);
 		}
 
+		// The repair field wears the same country plate as the checkout field it
+		// fixes — judge the new number by the STORE's country (SG-lite).
+		const orderRetailer = await ctx.db.get(order.retailerId);
 		let normalized: string;
 		try {
-			normalized = assertValidMyMobile(waPhone);
+			normalized = assertValidMobileForCountry(
+				waPhone,
+				orderRetailer?.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -663,8 +684,16 @@ export const create = mutation({
 		// = the legacy buyer-sends-first flow (phone missing or template env unset).
 		confirmedAtCreate?: boolean;
 	}> => {
-		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
+		// Rate limit FIRST — public endpoint, throttle per storefront before any
+		// DB reads. Two limits on one key: the burst bucket shapes a live drop,
+		// the daily ceiling bounds total confirmation-push spend (each order
+		// schedules a Meta-billed template send that bypasses WABA gating — see
+		// lib/rateLimiter.ts for the full cost model).
 		await rateLimiter.limit(ctx, "orderCreate", {
+			key: args.retailerId,
+			throws: true,
+		});
+		await rateLimiter.limit(ctx, "orderCreateDaily", {
 			key: args.retailerId,
 			throws: true,
 		});
@@ -692,27 +721,45 @@ export const create = mutation({
 				"Delivery orders should not include a pickup location",
 			);
 		}
+		// Loaded before the address + phone checks below — the store's country
+		// picks the address shape AND which validator arm judges the buyer's
+		// number (SG-lite, 86eynw28q + 86eynw29u).
+		const retailer = await ctx.db.get(args.retailerId);
+		if (!retailer) throw new ConvexError("Retailer not found");
+		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
+
+		// Address shape follows the STORE's country — SG stores take 6-digit
+		// postal codes with "Singapore" as the state; MY keeps the 5-digit +
+		// MY_STATES shape.
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
 		if (args.deliveryAddress) {
 			try {
-				sanitizedAddress = assertValidAddress(args.deliveryAddress);
+				sanitizedAddress = assertValidAddress(
+					args.deliveryAddress,
+					retailerCountry,
+				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
 		}
 
+
 		// Customer waPhone: the storefront form requires it (86eyf1rck — the
 		// confirmation push needs a reachable number), but it stays optional at
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
-		// WhatsApp webhook stamps the number on the inbound message. MY-aware
-		// normalization (assertValidMyMobile): buyers type local numbers
-		// ("012-345 6789"), and the stored form must match what Meta delivers
-		// inbound (60…) or the customer record would fork.
+		// WhatsApp webhook stamps the number on the inbound message.
+		// Country-aware normalization (assertValidMobileForCountry, keyed off
+		// the STORE's country): buyers type local numbers ("012-345 6789" /
+		// "9123 4567"), and the stored form must match what Meta delivers
+		// inbound (60… / 65…) or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMyMobile(args.customer.waPhone);
+				customerWaPhone = assertValidMobileForCountry(
+					args.customer.waPhone,
+					retailerCountry,
+				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
@@ -735,9 +782,6 @@ export const create = mutation({
 			);
 		const sanitizedCustomerNote =
 			trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
-
-		const retailer = await ctx.db.get(args.retailerId);
-		if (!retailer) throw new ConvexError("Retailer not found");
 
 		// Fulfilment date is validated AFTER the item loop below — the effective
 		// notice window is max(store setting, every item's per-product override),
@@ -1285,6 +1329,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
 	retailerLocale: Locale;
+	// Store country (SG-lite), resolved (undefined rows read as "MY"). The track
+	// page keys the buyer phone-repair plate/validator arm and the address-edit
+	// dialog's variant off it — this payload is that page's ONLY retailer read,
+	// so the by-slug field alone can't reach it.
+	retailerCountry: Country;
 	// Store name + the vendor's own WhatsApp number, for the buyer "Message the
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
@@ -1424,6 +1473,7 @@ export const get = query({
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
+			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the
@@ -1999,6 +2049,14 @@ export const searchOrders = query({
 			unpaid: 0,
 			/** Sum of `total` across those unpaid open orders (RM outstanding). */
 			unpaidAmount: 0,
+			/**
+			 * Packed + paid parcel orders waiting to go out (86eyp63mp) — the
+			 * one-click "print all despatch labels" queue. Computed here, over the
+			 * FULL set like every other count, precisely so the control's number is
+			 * the store's real backlog and doesn't move when the seller filters the
+			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
+			 */
+			readyToShip: 0,
 		};
 		for (const o of all) {
 			const b = orderBucket(o);
@@ -2020,6 +2078,7 @@ export const searchOrders = query({
 				counts.unpaid++;
 				counts.unpaidAmount += o.total;
 			}
+			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
@@ -3177,9 +3236,18 @@ export const updateDeliveryAddress = mutation({
 			throw new ConvexError("Self-collect orders do not have a delivery address");
 		}
 
+		// The retailer resolves first because the address SHAPE follows the
+		// store's country (SG-lite): SG orders re-validate against the 6-digit
+		// postal-code + "Singapore" arm, MY against the classic shape.
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+
 		let sanitized: ReturnType<typeof assertValidAddress>;
 		try {
-			sanitized = assertValidAddress(deliveryAddress);
+			sanitized = assertValidAddress(
+				deliveryAddress,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -3194,8 +3262,6 @@ export const updateDeliveryAddress = mutation({
 		// drop the buyer onto a seller-calculates path. Pending-only gate above
 		// means no payment has been asked for yet, so the total is still safe to
 		// move.
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new ConvexError("Store not found");
 		const liveQuote = await loadCheckoutDeliveryQuote(
 			ctx,
 			order.retailerId,

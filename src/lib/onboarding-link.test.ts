@@ -48,6 +48,19 @@ describe("onboarding invite token", () => {
 		expect(without?.founding).toBeFalsy();
 	});
 
+	it("carries SG country when set; MY rides as the default shape (SG-lite)", () => {
+		const sg = decodeOnboardingPrefill(
+			encodeOnboardingPrefill({ storeName: "SG Store", country: "SG" }),
+		);
+		expect(sg?.country).toBe("SG");
+		// MY is the default — it never rides the token, so old links stay valid
+		// and the common shape stays unchanged.
+		const my = decodeOnboardingPrefill(
+			encodeOnboardingPrefill({ storeName: "MY Store", country: "MY" }),
+		);
+		expect(my?.country).toBeUndefined();
+	});
+
 	it("handles unicode store names", () => {
 		const token = encodeOnboardingPrefill({ storeName: "Kuih Niçe 🍡" });
 		expect(decodeOnboardingPrefill(token)).toEqual({ store: "Kuih Niçe 🍡" });
