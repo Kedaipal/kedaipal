@@ -612,7 +612,8 @@ function CounterCheckoutActions({
 						<DialogTitle>Enter buyer's number</DialogTitle>
 						<DialogDescription>
 							We'll message their WhatsApp with the confirmation and receipt —
-							no scan needed.
+							no scan needed. Their first message includes our privacy-policy
+							link.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-3">

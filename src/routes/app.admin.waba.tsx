@@ -218,10 +218,107 @@ function AdminWabaContent() {
 				</ul>
 			)}
 
+			<GlobalOptOutPanel />
+
 			{target ? (
 				<ConfirmDialog vendor={target} onClose={() => setTarget(null)} />
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Manual global opt-out (86eyn25gu). STOP only works for buyers who text the
+ * shared number themselves — a counter buyer whose number the cashier typed
+ * has no self-serve path. Status is fetched before any action so the button
+ * always says what it will actually do, and the status line never echoes the
+ * full number back (the input is already auto-masked in session replay;
+ * rendered text would not be).
+ */
+function GlobalOptOutPanel() {
+	const [phone, setPhone] = useState("");
+	const valid = phone.replace(/\D/g, "").length >= 8;
+	const status = useQuery(
+		convexQuery(
+			api.wabaProtection.adminOptOutStatus,
+			valid ? { waPhone: phone } : "skip",
+		),
+	).data;
+	const registerOptOut = useMutation(api.wabaProtection.adminRegisterOptOut);
+	const reactivate = useMutation(api.wabaProtection.adminReactivateOptIn);
+	const [submitting, setSubmitting] = useState(false);
+	// The server is the judge of what counts as a valid MY mobile (PR #191
+	// review — the key must canonicalize to the 60… form the send gate checks).
+	const invalid =
+		status !== undefined && !status.optedOut && status.invalid === true;
+
+	async function act() {
+		if (!status) return;
+		setSubmitting(true);
+		try {
+			if (status.optedOut) {
+				await reactivate({ waPhone: phone });
+				toast.success("Number re-activated — non-transactional sends resume.");
+			} else {
+				await registerOptOut({ waPhone: phone });
+				toast.success("Number opted out across all stores.");
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div>
+				<h3 className="font-semibold">Manual opt-out</h3>
+				<p className="text-sm text-muted-foreground">
+					For buyers who can't text STOP themselves — e.g. a counter buyer
+					whose number the cashier typed. Suppresses marketing/broadcast sends
+					from every store on the shared number; order confirmations and
+					status updates keep delivering. The buyer can reply START (or be
+					re-activated here) to undo it.
+				</p>
+			</div>
+			<div className="flex flex-col gap-2 sm:flex-row">
+				<Input
+					type="tel"
+					inputMode="tel"
+					value={phone}
+					onChange={(e) => setPhone(e.target.value)}
+					placeholder="Buyer's WhatsApp number, e.g. 011-2345 6789"
+					className="sm:max-w-xs"
+				/>
+				<Button
+					variant={status?.optedOut ? "outline" : "destructive"}
+					onClick={act}
+					disabled={!valid || status === undefined || invalid || submitting}
+				>
+					{status?.optedOut ? (
+						<>
+							<Play className="size-4" /> Re-activate
+						</>
+					) : (
+						<>
+							<UserMinus className="size-4" /> Opt out this number
+						</>
+					)}
+				</Button>
+			</div>
+			{valid && status ? (
+				<p className="text-xs text-muted-foreground">
+					{status.optedOut
+						? `Currently opted out (${status.source.replaceAll("_", " ")}, since ${new Date(
+								status.since,
+							).toLocaleDateString("en-MY")}).`
+						: invalid
+							? "Enter a valid Malaysian mobile number (e.g. 011-2345 6789)."
+							: "This number is not currently opted out."}
+				</p>
+			) : null}
+		</section>
 	);
 }
 

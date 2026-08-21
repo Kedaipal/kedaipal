@@ -1738,7 +1738,10 @@ export default defineSchema({
 	// known at write time (updates/deletes); omitted for creates.
 	adminAuditLog: defineTable({
 		adminUserId: v.string(), // Clerk subject of the acting admin
-		retailerId: v.id("retailers"), // store acted upon
+		// Store acted upon. Optional since 86eyn25gu: global actions (the manual
+		// WABA opt-out) have no store in scope — those rows simply don't appear
+		// in per-retailer audit views.
+		retailerId: v.optional(v.id("retailers")),
 		action: v.string(), // e.g. "products.create", "retailers.updateSettings"
 		targetId: v.optional(v.string()),
 		ts: v.number(),

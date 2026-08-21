@@ -97,6 +97,34 @@ keying the opt-out itself on the canonical form means a STOP suppresses later
 sends even if some future write path stores a `+`/spaced number — opt-out
 compliance never silently depends on every caller having normalized first.
 
+### Manual opt-out (admin, 2026-08-17, ClickUp 86eyn25gu)
+
+The keyword path only serves buyers who text the shared number themselves — a
+counter buyer whose number the cashier typed has no self-serve way to withdraw
+consent (PDPA audit finding L3). The Admin Console's WABA page now carries a
+**Manual opt-out** panel: type a number → live status (`adminOptOutStatus`) →
+one button that either opts it out (`adminRegisterOptOut`, the first caller of
+the `manual_admin` source declared in the schema from day one) or re-activates
+it (`adminReactivateOptIn`). Same scope as a STOP; idempotent both ways.
+
+**Input is canonicalized to the international `60…` form** via
+`assertValidMyMobile` — the same rule as the counter manual-phone dialog,
+whose buyers are this panel's whole audience (PR #191 review). Every key the
+send gate checks is international (Meta's inbound `from`, checkout/counter
+numbers), so an opt-out keyed on a bare local-digits strip would never match
+`isOptedOut` and fail silently while the panel claimed otherwise. Invalid /
+non-MY input disables the button with a reason instead of registering an
+unmatchable key; canonicalization also keeps buyer-texted `START` able to undo
+an admin opt-out (one key, both paths — pinned by test).
+
+Every manual action is audited via **`logGlobalAdminAction`** — a new
+`adminAuditLog` shape with **no `retailerId`** (the field widened to optional),
+because the opt-out is global to the shared number, not a store action. The
+audit `targetId` carries the phone's **last four digits only**: the audit log
+has no retention, so a full phone must never land in it — the `optOuts` row
+holds the full number for correlation. Pinned by test in
+`wabaProtection.test.ts` ("admin manual opt-out").
+
 ## WABA health webhooks (auto-throttle)
 
 Meta posts health changes to the **same** webhook URL as inbound messages, keyed
