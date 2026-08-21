@@ -9,7 +9,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { AWB_BATCH_MAX } from "./lib/pdf/awb";
 import { capsForPlan, type Plan } from "./lib/plans";
@@ -497,5 +497,243 @@ describe("generateAwbBatchPdf (ready to ship)", () => {
 		await expect(
 			asUser.action(api.awb.generateAwbBatchPdf, { retailerId: retailer._id }),
 		).rejects.toThrow(/pro/i);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// labelPrintedAt — the print-queue stamp
+// ---------------------------------------------------------------------------
+
+describe("labelPrintedAt (the print-queue stamp)", () => {
+	// `t.run` serializes its result through Convex value encoding, which turns a
+	// top-level `undefined` into `null` — so the helper's contract is explicit:
+	// null = never printed.
+	async function printedAt(
+		t: ReturnType<typeof setup>,
+		orderId: Id<"orders">,
+	): Promise<number | null> {
+		return t.run(
+			async (ctx) => (await ctx.db.get(orderId))?.labelPrintedAt ?? null,
+		);
+	}
+
+	test("a single print stamps the order; a re-print re-stamps", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		const order = await placeOrder(t, retailer._id, productId);
+		expect(await printedAt(t, order.id)).toBeNull();
+
+		const res = await asUser.action(api.awb.generateAwbPdf, {
+			shortId: order.shortId,
+		});
+		expect(res.ok).toBe(true);
+		const first = await printedAt(t, order.id);
+		expect(first).toBeTypeOf("number");
+
+		// Re-print re-stamps — latest print wins (it's a fact, not a one-shot).
+		// Backdate rather than sleeping so the comparison can't be flaky.
+		await patchOrder(t, order.id, { labelPrintedAt: 1_000 });
+		await asUser.action(api.awb.generateAwbPdf, { shortId: order.shortId });
+		const second = await printedAt(t, order.id);
+		expect(second).toBeTypeOf("number");
+		expect(second as number).toBeGreaterThan(1_000);
+	});
+
+	test("a failed single print stamps nothing", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		const order = await placeOrder(t, retailer._id, productId);
+		await patchOrder(t, order.id, { status: "cancelled" });
+
+		const res = await asUser.action(api.awb.generateAwbPdf, {
+			shortId: order.shortId,
+		});
+		expect(res.ok).toBe(false);
+		expect(await printedAt(t, order.id)).toBeNull();
+	});
+
+	test("a batch stamps only what it included — never the skipped orders", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		await asUser.mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			offerSelfCollect: true,
+		});
+		const printable = await placeOrder(t, retailer._id, productId);
+		const pickup = await placeOrder(t, retailer._id, productId, {
+			selfCollect: true,
+		});
+		const cancelled = await placeOrder(t, retailer._id, productId);
+		await patchOrder(t, cancelled.id, { status: "cancelled" });
+
+		const res = await asUser.action(api.awb.generateAwbBatchPdf, {
+			retailerId: retailer._id,
+			orderIds: [printable.id, pickup.id, cancelled.id],
+		});
+		expect(res.count).toBe(1);
+		expect(await printedAt(t, printable.id)).toBeTypeOf("number");
+		expect(await printedAt(t, pickup.id)).toBeNull();
+		expect(await printedAt(t, cancelled.id)).toBeNull();
+	});
+
+	test("the no-ids ready-to-ship run stamps what it printed", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		const ready = await placeOrder(t, retailer._id, productId);
+		await patchOrder(t, ready.id, {
+			status: "packed",
+			paymentStatus: "received",
+		});
+		const notReady = await placeOrder(t, retailer._id, productId);
+
+		await asUser.action(api.awb.generateAwbBatchPdf, {
+			retailerId: retailer._id,
+		});
+		expect(await printedAt(t, ready.id)).toBeTypeOf("number");
+		expect(await printedAt(t, notReady.id)).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// readyToShipQueue — the print-queue modal's rows
+// ---------------------------------------------------------------------------
+
+describe("readyToShipQueue (the modal's rows)", () => {
+	async function seedReady(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	) {
+		const order = await placeOrder(t, retailerId, productId);
+		await patchOrder(t, order.id, {
+			status: "packed",
+			paymentStatus: "received",
+		});
+		return order;
+	}
+
+	test("rows carry what the modal shows, oldest first, printed flag included", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		const older = await seedReady(t, retailer._id, productId);
+		const newer = await seedReady(t, retailer._id, productId);
+		await placeOrder(t, retailer._id, productId); // pending — not in the queue
+
+		const before = await asUser.query(api.awb.readyToShipQueue, {
+			retailerId: retailer._id,
+		});
+		expect(before.remaining).toBe(0);
+		expect(before.rows.map((r) => r.shortId)).toEqual([
+			older.shortId,
+			newer.shortId,
+		]);
+		expect(before.rows[0]).toMatchObject({
+			orderId: older.id,
+			buyerName: "Aisha",
+			totalUnits: 1,
+			total: 2500,
+			currency: "MYR",
+		});
+		expect(before.rows[0].labelPrintedAt).toBeUndefined();
+
+		// After a print, the same query reports the stamp — the chip's data path.
+		await asUser.action(api.awb.generateAwbBatchPdf, {
+			retailerId: retailer._id,
+			orderIds: [older.id],
+		});
+		const after = await asUser.query(api.awb.readyToShipQueue, {
+			retailerId: retailer._id,
+		});
+		expect(after.rows.find((r) => r.orderId === older.id)?.labelPrintedAt)
+			.toBeTypeOf("number");
+		expect(after.rows.find((r) => r.orderId === newer.id)?.labelPrintedAt)
+			.toBeUndefined();
+	});
+
+	test("agrees with readyToShipIds — one scan, two views", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		await seedReady(t, retailer._id, productId);
+		await seedReady(t, retailer._id, productId);
+
+		const queue = await asUser.query(api.awb.readyToShipQueue, {
+			retailerId: retailer._id,
+		});
+		const ids = await asUser.query(internal.awb.readyToShipIds, {
+			retailerId: retailer._id,
+		});
+		expect(queue.rows.map((r) => r.orderId)).toEqual(ids.orderIds);
+		expect(queue.remaining).toBe(ids.remaining);
+	});
+
+	test("a stranger (and the unauthenticated) can't read the queue", async () => {
+		const t = setup();
+		const { retailer } = await seedStore(t);
+		await expect(
+			t
+				.withIdentity({ subject: STRANGER })
+				.query(api.awb.readyToShipQueue, { retailerId: retailer._id }),
+		).rejects.toThrow(/forbidden/i);
+		await expect(
+			t.query(api.awb.readyToShipQueue, { retailerId: retailer._id }),
+		).rejects.toThrow(/not authenticated/i);
+	});
+
+	test("rides the Order Inbox plan gate; admin act-as bypasses", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		await setPlan(t, retailer._id, "starter");
+		await seedReady(t, retailer._id, productId);
+
+		await expect(
+			asUser.query(api.awb.readyToShipQueue, { retailerId: retailer._id }),
+		).rejects.toThrow(/pro/i);
+		const admin = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.awb.readyToShipQueue, { retailerId: retailer._id });
+		expect(admin.rows).toHaveLength(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The QR payload — privacy pin
+// ---------------------------------------------------------------------------
+
+describe("the label QR payload", () => {
+	test("carries the storefront URL, never the buyer's /track capability", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedStore(t);
+		const order = await placeOrder(t, retailer._id, productId);
+		const token = await t.run(
+			async (ctx) => (await ctx.db.get(order.id))?.trackingToken,
+		);
+		expect(token).toBeTruthy();
+
+		const single = await asUser.query(internal.awb.singleLabelInputs, {
+			shortId: order.shortId,
+		});
+		expect(single.ok).toBe(true);
+		if (!single.ok) return;
+		expect(single.label.storeUrl).toBe(
+			`https://kedaipal.com/${retailer.slug}?src=awb`,
+		);
+
+		// THE PIN. The tracking token is the buyer's capability (live order
+		// detail + address/phone/payment mutations), and a parcel's outside is
+		// public — couriers and neighbours can scan it. If this test fails,
+		// someone pointed the label back at the buyer's order page: read
+		// docs/despatch-labels.md ("Why the QR is the storefront") before
+		// touching it.
+		const singleJson = JSON.stringify(single.label);
+		expect(singleJson).not.toContain("/track/");
+		expect(singleJson).not.toContain(token as string);
+
+		const page = await asUser.query(internal.awb.batchPageByIds, {
+			retailerId: retailer._id,
+			orderIds: [order.id],
+		});
+		const batchJson = JSON.stringify(page.items);
+		expect(batchJson).not.toContain("/track/");
+		expect(batchJson).not.toContain(token as string);
 	});
 });

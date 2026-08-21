@@ -708,16 +708,23 @@ function drawModuleRows(
 	});
 }
 
-/** The QR to the buyer's tracking page. A payload we can't encode simply
- * doesn't print — the order number printed beside it is the fallback. */
-function drawTrackingQr(page: PDFPage, url: string, x: number, yTop: number): void {
+/** The QR to the STOREFRONT (never the buyer's tracking page — see
+ * `AwbLabelData.storeUrl`). Returns whether it drew, so the caller knows to
+ * caption it; a payload we can't encode simply doesn't print. */
+function drawStoreQr(
+	page: PDFPage,
+	url: string,
+	x: number,
+	yTop: number,
+): boolean {
 	let matrix: ReturnType<typeof encodeQr>;
 	try {
 		matrix = encodeQr(url);
 	} catch {
-		return;
+		return false;
 	}
 	drawModuleRows(page, matrix.modules, x, yTop, QR_SIDE / matrix.size);
+	return true;
 }
 
 /** Code 128 bars plus the human-readable number under them. */
@@ -872,8 +879,8 @@ function drawLabel(
 		borderWidth: 0.75,
 	});
 
-	// --- Header: brand + order number left, tracking QR right ----------------
-	if (data.trackUrl) drawTrackingQr(page, data.trackUrl, right - QR_SIDE, top);
+	// --- Header: brand + order number left, storefront QR right --------------
+	if (data.storeUrl) drawStoreQr(page, data.storeUrl, right - QR_SIDE, top);
 	const headWidth = width - QR_SIDE - 12;
 	let y = top;
 	if (logo) {

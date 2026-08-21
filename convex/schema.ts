@@ -1061,6 +1061,13 @@ export default defineSchema({
 		// 2026 — late-added tracking is track-page-only). Delivery orders only.
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// When a despatch label carrying this order was last generated (86eyp63mp).
+		// "Printed" means "label PDF built and handed to the seller" — we can't see
+		// the physical printer, and that's close enough for the print queue's
+		// "Printed · 2h ago" chip. Re-prints re-stamp (latest wins; it's a fact,
+		// not a one-shot), and a batch stamps only the orders actually included,
+		// never the skipped ones. Undefined = never printed.
+		labelPrintedAt: v.optional(v.number()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.

@@ -17,7 +17,9 @@
  * Both render ON DEMAND and store nothing (the order-receipt precedent — the
  * bytes are deterministic from the order, so persisting a blob nobody may ever
  * download buys nothing). The subscription invoice's render-and-store is the
- * exception, not the rule.
+ * exception, not the rule. The ONE thing a print leaves behind is the
+ * `labelPrintedAt` stamp (`stampLabelsPrinted`), which feeds the ready-queue
+ * modal's "Printed · 2h ago" chips (`readyToShipQueue`).
  *
  * Pagination discipline mirrors `orders.exportOrders`: the batch resolves its
  * orders a page at a time so no single transaction has to hold 100 orders plus
@@ -29,7 +31,9 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
+	internalMutation,
 	internalQuery,
+	query,
 	type QueryCtx,
 } from "./_generated/server";
 import { requireRetailerAccess } from "./lib/auth";
@@ -46,6 +50,7 @@ import {
 	isReadyToShipForLabel,
 	labelSkipReason,
 	orderToAwbLabelData,
+	recipientDisplayName,
 	sortAwbItems,
 } from "./lib/pdf/awb";
 import { buildAwbPdf } from "./lib/pdf/render";
@@ -64,11 +69,22 @@ const awbSortValidator = v.union(
 	v.literal("area"),
 );
 
-/** The `/track/<token>` URL the label's QR points at. */
-function trackUrlFor(order: Doc<"orders">): string | undefined {
-	if (!order.trackingToken) return undefined;
+/**
+ * The STOREFRONT URL the label's QR points at — never the buyer's tracking
+ * page. `/track/<token>` is the buyer's capability (live order detail plus its
+ * token-gated mutations), and a parcel's outside is public: couriers and
+ * neighbours can scan it. The buyer already gets their tracking link privately
+ * in WhatsApp, so the parcel QR is the reorder loop instead — the recipient
+ * scans and lands on the shop, the store-poster posture.
+ *
+ * `?src=` is the repo's reserved attribution query param (see
+ * `src/lib/storefront-url.ts`, which owns the client-side construction — it
+ * reads `window.location.origin`, so the server builds the same shape from
+ * APP_URL here).
+ */
+function storeUrlFor(retailer: Doc<"retailers">): string {
 	const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-	return `${appUrl}/track/${order.trackingToken}`;
+	return `${appUrl}/${retailer.slug}?src=awb`;
 }
 
 /**
@@ -105,7 +121,7 @@ async function buildLabel(
 		order,
 		retailer,
 		config: resolveAwbConfig(retailer.awbConfig),
-		trackUrl: trackUrlFor(order),
+		storeUrl: storeUrlFor(retailer),
 		weightGrams: await resolveWeightGrams(ctx, order),
 	});
 }
@@ -138,7 +154,15 @@ async function fetchLogoBytes(
 // --- Single label ----------------------------------------------------------
 
 type SingleLabelResult =
-	| { ok: true; label: AwbLabelData; paperSize: "a6" | "a4-4up"; logoUrl: string | null }
+	| {
+			ok: true;
+			/** For the printed-at stamp once the PDF actually builds. */
+			orderId: Id<"orders">;
+			retailerId: Id<"retailers">;
+			label: AwbLabelData;
+			paperSize: "a6" | "a4-4up";
+			logoUrl: string | null;
+	  }
 	| { ok: false; reason: "not_found" | "cancelled" | "no_address" };
 
 /** Auth + view-model for one order's label. Owner-or-admin by `shortId` — a
@@ -155,10 +179,40 @@ export const singleLabelInputs = internalQuery({
 		if (!retailer) return { ok: false, reason: "not_found" };
 		return {
 			ok: true,
+			orderId: order._id,
+			retailerId: retailer._id,
 			label: await buildLabel(ctx, order, retailer),
 			paperSize: resolveAwbConfig(retailer.awbConfig).paperSize,
 			logoUrl: await loadLogoUrl(ctx, retailer),
 		};
+	},
+});
+
+/**
+ * Record that a label PDF carrying these orders was just generated. "Printed"
+ * here means "PDF built and handed to the seller" — we can't see the physical
+ * printer, and that's what the print queue's "Printed · 2h ago" chip is for.
+ * Re-prints re-stamp (latest print wins; it's a fact, not a one-shot), and the
+ * callers pass only the orders actually INCLUDED in the PDF, never the skipped
+ * ones. `updatedAt` deliberately not bumped — printing is a despatch-queue
+ * fact, not an edit to the order.
+ *
+ * Internal: both callers have already authorised every id (single via
+ * `resolveSharedOrder`, batch via the per-page ownership re-check), and the
+ * per-order retailer check here is the same defence `batchPageByIds` runs.
+ */
+export const stampLabelsPrinted = internalMutation({
+	args: {
+		retailerId: v.id("retailers"),
+		orderIds: v.array(v.id("orders")),
+	},
+	handler: async (ctx, { retailerId, orderIds }) => {
+		const now = Date.now();
+		for (const id of orderIds) {
+			const order = await ctx.db.get(id);
+			if (!order || order.retailerId !== retailerId) continue;
+			await ctx.db.patch(id, { labelPrintedAt: now });
+		}
 	},
 });
 
@@ -183,6 +237,11 @@ export const generateAwbPdf = action({
 			paperSize: inputs.paperSize,
 			logo: await fetchLogoBytes(inputs.logoUrl),
 		});
+		// Only after the PDF really built — a failed render must not claim a print.
+		await ctx.runMutation(internal.awb.stampLabelsPrinted, {
+			retailerId: inputs.retailerId,
+			orderIds: [inputs.orderId],
+		});
 		return {
 			ok: true,
 			pdf: toArrayBuffer(bytes),
@@ -195,6 +254,9 @@ export const generateAwbPdf = action({
 
 type BatchPage = {
 	items: AwbBatchItem[];
+	/** Ids of the orders behind `items`, in the same order — what the printed-at
+	 * stamp covers once the PDF builds (never the skipped ones). */
+	includedIds: Array<Id<"orders">>;
 	skipped: AwbSkipCounts;
 	paperSize: "a6" | "a4-4up";
 	logoUrl: string | null;
@@ -228,6 +290,7 @@ export const batchPageByIds = internalQuery({
 		const retailer = await assertBatchAccess(ctx, retailerId);
 		const skipped = emptySkipCounts();
 		const items: AwbBatchItem[] = [];
+		const includedIds: Array<Id<"orders">> = [];
 		for (const id of orderIds) {
 			const order = await ctx.db.get(id);
 			if (!order || order.retailerId !== retailerId) {
@@ -243,9 +306,11 @@ export const batchPageByIds = internalQuery({
 				label: await buildLabel(ctx, order, retailer),
 				sort: awbSortKey(order),
 			});
+			includedIds.push(order._id);
 		}
 		return {
 			items,
+			includedIds,
 			skipped,
 			paperSize: resolveAwbConfig(retailer.awbConfig).paperSize,
 			logoUrl: await loadLogoUrl(ctx, retailer),
@@ -260,22 +325,82 @@ type ReadyIdsResult = {
 	remaining: number;
 };
 
-/** Ids of everything packed, paid and going out by parcel — the one-click queue.
- * Newest-first scan over the same window the inbox reads, then reversed so the
- * OLDEST ready orders print first (they have been waiting longest). */
+/** Everything packed, paid and going out by parcel, oldest first (they have
+ * been waiting longest), capped at one batch with the overflow counted.
+ * Newest-first scan over the same window the inbox reads, then reversed. */
+async function scanReadyOrders(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<{ ready: Array<Doc<"orders">>; remaining: number }> {
+	const scanned = await ctx.db
+		.query("orders")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.take(READY_SCAN_CAP);
+	const ready = scanned.filter(isReadyToShipForLabel).reverse();
+	return {
+		ready: ready.slice(0, AWB_BATCH_MAX),
+		remaining: Math.max(0, ready.length - AWB_BATCH_MAX),
+	};
+}
+
+/** Ids of everything packed, paid and going out by parcel — the no-ids arm of
+ * `generateAwbBatchPdf`, kept for any caller that wants "the server resolves
+ * the queue" semantics (the strip UI itself now always sends explicit ids
+ * through the print-queue modal). */
 export const readyToShipIds = internalQuery({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<ReadyIdsResult> => {
 		await assertBatchAccess(ctx, retailerId);
-		const scanned = await ctx.db
-			.query("orders")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.order("desc")
-			.take(READY_SCAN_CAP);
-		const ready = scanned.filter(isReadyToShipForLabel).reverse();
+		const { ready, remaining } = await scanReadyOrders(ctx, retailerId);
+		return { orderIds: ready.map((o) => o._id), remaining };
+	},
+});
+
+/** One row of the print-queue modal — light on purpose: who it's for and
+ * whether a label already went out, never the address or the items. */
+export type ReadyQueueRow = {
+	orderId: Id<"orders">;
+	shortId: string;
+	/** Named exactly the way the label will name them (shared helper). */
+	buyerName: string;
+	/** Units across the order — the "3 items" column. */
+	totalUnits: number;
+	total: number;
+	currency: string;
+	/** See the schema comment: last time a label PDF carrying this order was
+	 * generated. Drives the "Printed · 2h ago" chip + the default-unchecked
+	 * state. Undefined = never printed. */
+	labelPrintedAt?: number;
+};
+
+/**
+ * The ready-to-ship queue as the modal lists it. Same rows `readyToShipIds`
+ * resolves (oldest first, one-batch cap, `remaining` counted) — one scan
+ * helper, so the modal can never disagree with what a no-ids print would do.
+ * Owner-or-admin plus the Order Inbox plan gate, exactly like the batch
+ * action it feeds. Reactive: the printed-at stamp lands in these rows live,
+ * so a just-printed order's chip appears without a refetch.
+ */
+export const readyToShipQueue = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ rows: ReadyQueueRow[]; remaining: number }> => {
+		await assertBatchAccess(ctx, retailerId);
+		const { ready, remaining } = await scanReadyOrders(ctx, retailerId);
 		return {
-			orderIds: ready.slice(0, AWB_BATCH_MAX).map((o) => o._id),
-			remaining: Math.max(0, ready.length - AWB_BATCH_MAX),
+			rows: ready.map((order) => ({
+				orderId: order._id,
+				shortId: order.shortId,
+				buyerName: recipientDisplayName(order.customer),
+				totalUnits: order.items.reduce((sum, i) => sum + i.quantity, 0),
+				total: order.total,
+				currency: order.currency,
+				labelPrintedAt: order.labelPrintedAt,
+			})),
+			remaining,
 		};
 	},
 });
@@ -335,6 +460,7 @@ export const generateAwbBatchPdf = action({
 		}
 
 		const items: AwbBatchItem[] = [];
+		const includedIds: Array<Id<"orders">> = [];
 		const skipped = emptySkipCounts();
 		let paperSize: "a6" | "a4-4up" = "a4-4up";
 		let logoUrl: string | null = null;
@@ -346,6 +472,7 @@ export const generateAwbBatchPdf = action({
 				orderIds: ids.slice(i, i + AWB_PAGE_SIZE),
 			});
 			items.push(...page.items);
+			includedIds.push(...page.includedIds);
 			for (const key of Object.keys(skipped) as Array<keyof AwbSkipCounts>) {
 				skipped[key] += page.skipped[key];
 			}
@@ -358,6 +485,14 @@ export const generateAwbBatchPdf = action({
 			ordered.map((i) => i.label),
 			{ paperSize, logo: await fetchLogoBytes(logoUrl) },
 		);
+		// Stamp printed-at for every order actually IN the PDF — never the
+		// skipped ones — and only after the render really succeeded.
+		if (includedIds.length > 0) {
+			await ctx.runMutation(internal.awb.stampLabelsPrinted, {
+				retailerId,
+				orderIds: includedIds,
+			});
+		}
 		const stamp = new Date().toISOString().slice(0, 10);
 		return {
 			pdf: toArrayBuffer(bytes),
