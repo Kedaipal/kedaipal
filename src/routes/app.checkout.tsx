@@ -30,6 +30,7 @@ import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { Country } from "../../convex/lib/country";
 import {
 	formatFulfilmentDate,
 	fulfilmentDateBounds,
@@ -37,7 +38,7 @@ import {
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
@@ -224,6 +225,7 @@ function ActiveSession({
 					customer: session.customer,
 				}}
 				currency={retailer.currency ?? "MYR"}
+				country={retailer.country}
 				draft={session.draft}
 				onCreated={onCreated}
 				onCancel={onCancelActive}
@@ -402,12 +404,31 @@ function EmptyCheckouts() {
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
+
+// Manual-bind copy per store country (SG-lite, 86eynw28q). "We'll add the
+// country code automatically" is the loose server normalizer's promise: MY
+// bridges `012…`→`60…`, SG bridges a bare 8-digit `8/9…`→`65…` — while a
+// number typed WITH its own country code (a foreign walk-in) passes through.
+const MANUAL_BIND_PLACEHOLDER: Record<Country, string> = {
+	MY: "e.g. 012-345 6789",
+	SG: "e.g. 9123 4567",
+};
+const MANUAL_BIND_HELP: Record<Country, string> = {
+	MY: "Malaysian mobile number. We'll add the country code automatically.",
+	SG: "Singapore mobile number. We'll add the country code automatically.",
+};
 function CounterCheckoutActions({
 	onStarted,
 }: {
 	onStarted: (sessionId: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
+	// Store country drives the manual-bind helper copy + example (SG-lite). The
+	// input itself stays deliberately loose and plate-less — a cashier may key
+	// a foreign number for a walk-in — but the copy should name the store's own
+	// country, and the server prefixes bare local numbers with its dial code.
+	const retailer = useDashboardRetailer();
+	const country = retailer?.country ?? "MY";
 
 	// --- Store QR (the buyer-scan path) ---
 	const storeQr = useQuery(
@@ -644,12 +665,11 @@ function CounterCheckoutActions({
 									if (e.key === "Enter" && phoneReady && nameReady)
 										void submitPhone();
 								}}
-								placeholder="e.g. 012-345 6789"
+								placeholder={MANUAL_BIND_PLACEHOLDER[country]}
 								className="mt-1 h-12 text-base"
 							/>
 							<span className="mt-1 block text-xs text-muted-foreground">
-								Malaysian mobile number. We'll add the country code
-								automatically.
+								{MANUAL_BIND_HELP[country]}
 							</span>
 						</label>
 						<DialogFooter className="gap-2 sm:gap-2">
@@ -1210,6 +1230,7 @@ function BuildOrderScreen({
 	sessionId,
 	buyer,
 	currency,
+	country,
 	draft,
 	onCreated,
 	onCancel,
@@ -1227,6 +1248,9 @@ function BuildOrderScreen({
 		} | null;
 	};
 	currency: string;
+	/** Store country — decides which settlement rails the "Paid now" picker
+	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
+	country: Country;
 	draft: SessionDraft | undefined;
 	onCreated: (created: {
 		shortId: string;
@@ -1259,8 +1283,14 @@ function BuildOrderScreen({
 	const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [paidInPerson, setPaidInPerson] = useState(draft?.paidInPerson ?? true);
-	const [method, setMethod] = useState<OrderPaymentMethod>(
-		draft?.paymentMethod ?? "cash",
+	const methodChoices = COUNTRY_PAYMENT_METHODS[country];
+	// A resumed draft can hold a rail this store no longer offers (its country
+	// was switched mid-checkout) — seeding the <select> with a value that isn't
+	// an <option> renders it blank, so fall back to the country's first rail.
+	const [method, setMethod] = useState<OrderPaymentMethod>(() =>
+		draft?.paymentMethod && methodChoices.includes(draft.paymentMethod)
+			? draft.paymentMethod
+			: methodChoices[0],
 	);
 	// An anonymous walk-in (no phone) has no one to send a pay-later link to, so
 	// it's always settled in person — the pay-later toggle is disabled with that
@@ -1859,7 +1889,7 @@ function BuildOrderScreen({
 										}
 										className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 									>
-										{ORDER_PAYMENT_METHODS.map((m) => (
+										{methodChoices.map((m) => (
 											<option key={m} value={m}>
 												{PAYMENT_METHOD_LABELS[m]}
 											</option>

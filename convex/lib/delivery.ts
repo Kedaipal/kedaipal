@@ -22,6 +22,7 @@
 // module — the fee applies to deliveryMethod === "delivery" only.
 
 import { MY_STATES } from "./address";
+import type { Country } from "./country";
 
 export type DeliveryBand = {
 	/** Band upper bound in km, INCLUSIVE (distance == maxKm is inside). */
@@ -99,6 +100,43 @@ export type DeliveryConfig =
 			 * resolver ignores it. */
 			onUnquotable: "arrange" | "block";
 	  };
+
+/**
+ * Delivery pricing modes a store COUNTRY may use (SG-lite, 86eynw29u).
+ * "Free" is spelled as no config, so it's implicitly allowed everywhere.
+ * SG stores are flat-fee-only for now: radius/weight zone geography and the
+ * Lalamove integration (`LALAMOVE_MARKET = "MY"`) are all Malaysia-shaped, so
+ * storing one of those modes on an SG store would strand every order as
+ * fee-pending or block checkout outright. One author for three enforcement
+ * points: `retailers.updateSettings` (the write gate), `orders.create`'s
+ * resolver and the public `delivery.quote` (belt-and-braces read guards).
+ */
+export const COUNTRY_DELIVERY_MODES: Record<
+	Country,
+	ReadonlyArray<DeliveryConfig["mode"]>
+> = {
+	MY: ["flat", "radius", "weight", "lalamove"],
+	SG: ["flat"],
+};
+
+export function deliveryModeAllowed(
+	country: Country,
+	mode: DeliveryConfig["mode"],
+): boolean {
+	return COUNTRY_DELIVERY_MODES[country].includes(mode);
+}
+
+/**
+ * Human names for the pricing modes, for copy that has to tell a seller which
+ * one is in their way (the country card's blocked-switch explanation). Lives
+ * beside the allowlist so the rule and its wording can't drift apart.
+ */
+export const DELIVERY_MODE_LABELS: Record<DeliveryConfig["mode"], string> = {
+	flat: "flat fee",
+	radius: "distance-based",
+	weight: "weight-zone",
+	lalamove: "Lalamove live-quote",
+};
 
 export type Coordinates = { latitude: number; longitude: number };
 

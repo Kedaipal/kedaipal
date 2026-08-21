@@ -177,6 +177,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import {
+	sanitizeAwbConfig,
+	type StoredAwbConfig,
+} from "./lib/awbConfig";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
@@ -196,6 +200,7 @@ import {
 } from "./subscriptions";
 import {
 	type DeliveryConfig,
+	deliveryModeAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { isEncrypted } from "./lib/credentialCrypto";
@@ -230,10 +235,11 @@ import {
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
-	assertValidMyMobile,
+	assertValidMobileForCountry,
 	assertValidSlug,
 	assertValidStoreName,
 	normalizeWaPhone,
+	STORED_MOBILE_PATTERN,
 } from "./lib/slug";
 import {
 	AUP_VERSION,
@@ -267,6 +273,19 @@ const openingHoursValidator = v.array(
 		closed: v.optional(v.boolean()),
 	}),
 );
+
+// Despatch-label template (86eyp63mp). Wire validator for updateSettings; the
+// shape is validated/normalized by sanitizeAwbConfig in the handler (an
+// all-default object stores as unset). `v.null()` = reset to the defaults.
+const awbConfigValidator = v.object({
+	paperSize: v.optional(v.union(v.literal("a6"), v.literal("a4-4up"))),
+	showLogo: v.optional(v.boolean()),
+	showItems: v.optional(v.boolean()),
+	showCod: v.optional(v.boolean()),
+	showWeight: v.optional(v.boolean()),
+	showNote: v.optional(v.boolean()),
+	footerText: v.optional(v.string()),
+});
 
 // Delivery-charge config + business address (86extzdr8). Wire validators for
 // updateSettings; the shape is validated/normalized by sanitizeDeliveryConfig
@@ -593,7 +612,7 @@ type RetailerPublic = {
 	waPhone?: string;
 	notifyEmail?: string;
 	// Seller WhatsApp order alerts (86eyhw9zy) — OWNER-only alert config: the
-	// receiving MY mobile + the opt-in flag, plus two derived bits the settings
+	// receiving mobile (store's country) + the opt-in flag, plus two derived bits the settings
 	// card needs: `waOrderAlertsAvailable` (an approved seller template is
 	// configured on this deployment — card hidden otherwise) and
 	// `notifyWaPhoneOptedOut` (the saved number holds a global STOP opt-out, so
@@ -670,6 +689,10 @@ type RetailerPublic = {
 	// Undefined = open 24/7. Surfaced on both the owner read and the by-slug
 	// payload. See convex/lib/openingHours.ts.
 	openingHours?: OpeningHours;
+	// Despatch-label template (86eyp63mp) — OWNER-only: it says nothing a buyer
+	// needs, and the footer line is the seller's own returns copy. Undefined =
+	// every default. See convex/lib/awbConfig.ts.
+	awbConfig?: StoredAwbConfig;
 	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
 	// buyers must see the bar to reach it (checkout blocks below it). Undefined
 	// = no minimum. See convex/lib/minOrderRules.ts.
@@ -821,6 +844,7 @@ async function buildRetailerPublic(
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
+		awbConfig: row.awbConfig,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -1172,10 +1196,13 @@ export const createRetailer = mutation({
 		let storeName: string;
 		let slug: string;
 		let waPhone: string | undefined;
+		// The SAME-CALL country judges the phone — the row doesn't exist yet, so
+		// there is nothing stored to read (SG-lite, 86eynw2dy).
+		const country = args.country ?? DEFAULT_COUNTRY;
 		try { storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
 		try { slug = assertValidSlug(args.slug); } catch (err) { throw new ConvexError((err as Error).message); }
 		if (args.waPhone && args.waPhone.trim().length > 0) {
-			try { waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+			try { waPhone = assertValidMobileForCountry(args.waPhone, country); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 
 		// Prefill notifyEmail from Clerk identity if available. Swallow validation
@@ -1224,7 +1251,6 @@ export const createRetailer = mutation({
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
 		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
-		const country = args.country ?? DEFAULT_COUNTRY;
 		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -1287,8 +1313,9 @@ export const updateSettings = mutation({
 		notifyEmail: v.optional(v.string()),
 		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
 		// (and switches the alerts off with it); undefined = no change; validated
-		// as a MY mobile and normalized to the inbound "60…" form. orderWaAlerts:
-		// enabling is Pro-gated + requires a number; disabling always allowed.
+		// as a mobile in the store's country and normalized to the inbound
+		// "60…"/"65…" form. orderWaAlerts: enabling is Pro-gated + requires a
+		// number; disabling always allowed.
 		notifyWaPhone: v.optional(v.string()),
 		orderWaAlerts: v.optional(v.boolean()),
 		currency: v.optional(v.string()),
@@ -1333,6 +1360,10 @@ export const updateSettings = mutation({
 		// always allowed); undefined = no change. Validated + normalized by
 		// sanitizeOpeningHours (an all-24h week also stores as unset).
 		openingHours: v.optional(v.union(openingHoursValidator, v.null())),
+		// Despatch-label template (86eyp63mp). `null` resets to the defaults
+		// (always allowed); undefined = no change. All-tier — printing a label
+		// for a parcel you're already shipping is correctness, not an upsell.
+		awbConfig: v.optional(v.union(awbConfigValidator, v.null())),
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
 		// undefined = no change. See convex/lib/minOrderRules.ts.
 		minOrderValue: v.optional(v.number()),
@@ -1389,9 +1420,15 @@ export const updateSettings = mutation({
 			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
 			openingHours: OpeningHours | undefined;
+			awbConfig: StoredAwbConfig | undefined;
 			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
+
+		// Which validator arm judges the seller's own numbers: a same-call country
+		// change wins over the stored row, so "switch to SG + save the SG number"
+		// in one call validates coherently instead of bouncing off the old arm.
+		const effectiveCountry = args.country ?? retailer.country ?? DEFAULT_COUNTRY;
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
@@ -1401,7 +1438,7 @@ export const updateSettings = mutation({
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {
-				try { patch.waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+				try { patch.waPhone = assertValidMobileForCountry(args.waPhone, effectiveCountry); } catch (err) { throw new ConvexError((err as Error).message); }
 			} else {
 				patch.waPhone = undefined;
 			}
@@ -1417,7 +1454,10 @@ export const updateSettings = mutation({
 			if (args.notifyWaPhone.trim().length > 0) {
 				let alertPhone: string;
 				try {
-					alertPhone = assertValidMyMobile(args.notifyWaPhone);
+					alertPhone = assertValidMobileForCountry(
+						args.notifyWaPhone,
+						effectiveCountry,
+					);
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
 				}
@@ -1465,6 +1505,52 @@ export const updateSettings = mutation({
 			try { patch.currency = assertSupportedCurrency(args.currency); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 		if (args.country !== undefined) {
+			// Flipping to a country the STORED delivery-charge mode doesn't
+			// support would strand every order (SG + radius/weight/lalamove:
+			// zone lookups miss, Lalamove is MY-market) — refuse with the fix
+			// named. A same-call deliveryConfig replacement is judged below in
+			// the config branch instead, against the incoming mode.
+			if (args.deliveryConfig === undefined) {
+				const storedConfig = retailer.deliveryConfig as
+					| DeliveryConfig
+					| undefined;
+				if (
+					storedConfig &&
+					!deliveryModeAllowed(args.country, storedConfig.mode)
+				) {
+					throw new ConvexError(
+						"Switch your delivery charge to Free or a Flat fee first — distance, weight-zone and Lalamove pricing are Malaysia-only for now.",
+					);
+				}
+			}
+			// Same posture for the store's own WhatsApp numbers (the SG-lite
+			// invariant: an SG store carries SG numbers, an MY store MY ones — the
+			// plate on every phone field is a promise about what's behind it). A
+			// stored number that doesn't match the NEW country blocks the switch
+			// unless this same call clears or replaces it; a same-call replacement
+			// is judged against the new country by the phone branches above
+			// (effectiveCountry). Without this, a switch left a contradictory row
+			// (SG store, MY contact) that only surfaced on the NEXT save of the
+			// field — the worst place to learn about it.
+			const carriedNumbers: ReadonlyArray<
+				[stored: string | undefined, label: string]
+			> = [
+				[
+					args.waPhone === undefined ? retailer.waPhone : undefined,
+					"WhatsApp contact number",
+				],
+				[
+					args.notifyWaPhone === undefined ? retailer.notifyWaPhone : undefined,
+					"order-alerts WhatsApp number",
+				],
+			];
+			for (const [stored, label] of carriedNumbers) {
+				if (stored && !STORED_MOBILE_PATTERN[args.country].test(stored)) {
+					throw new ConvexError(
+						`Your ${label} isn't a ${args.country === "SG" ? "Singapore" : "Malaysian"} number — replace or remove it when switching the store's country.`,
+					);
+				}
+			}
 			patch.country = args.country;
 		}
 		if (args.locale !== undefined) {
@@ -1571,6 +1657,20 @@ export const updateSettings = mutation({
 					clean = sanitizeDeliveryConfig(args.deliveryConfig);
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
+				}
+				// Country allowlist FIRST (SG-lite, 86eynw29u) — before the
+				// mode-specific requirements below, so an SG seller picking
+				// Lalamove is told the mode itself is unavailable rather than
+				// being sent off to configure booking credentials for nothing.
+				// Judged against the effective country so "flip to SG + switch
+				// to flat" lands in one save.
+				const effectiveCountry =
+					(args.country !== undefined ? args.country : retailer.country) ??
+					DEFAULT_COUNTRY;
+				if (!deliveryModeAllowed(effectiveCountry, clean.mode)) {
+					throw new ConvexError(
+						"Distance, weight-zone and Lalamove pricing are Malaysia-only for now — Singapore stores can use Free or a Flat fee.",
+					);
 				}
 				if (clean.mode === "radius") {
 					// Radius pricing measures FROM the business address — without one
@@ -1858,6 +1958,16 @@ export const updateSettings = mutation({
 			// removes the field (open 24/7 has one spelling).
 			try {
 				patch.openingHours = sanitizeOpeningHours(args.openingHours);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
+		if (args.awbConfig !== undefined) {
+			// null and an all-default object both sanitize to undefined → the
+			// patch removes the field (the defaults have one spelling).
+			try {
+				patch.awbConfig = sanitizeAwbConfig(args.awbConfig);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}

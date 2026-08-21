@@ -25,12 +25,13 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
-		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
-		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
-		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
-		// route alerts to whoever runs orders — same split as notifyEmail vs the
-		// Clerk email. Stored in the normalized inbound form ("60…", via
-		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		// Seller WhatsApp order alerts (86eyhw9zy): the mobile (in the store's
+		// country — SG-lite 86eynw2dy) that receives them. Deliberately SEPARATE
+		// from `waPhone` (the buyer-facing store contact / wa.me fallback /
+		// Lalamove sender) so a multi-person store can route alerts to whoever
+		// runs orders — same split as notifyEmail vs the Clerk email. Stored in
+		// the normalized inbound form ("60…"/"65…", via
+		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
 		// Opt-in switch for the seller WhatsApp order alerts (new order +
 		// payment claim, sent as Meta utility templates to notifyWaPhone).
@@ -417,6 +418,30 @@ export default defineSchema({
 					closed: v.optional(v.boolean()),
 				}),
 			),
+		),
+		// Despatch-label template (86eyp63mp) — what this store's printed parcel
+		// label shows, and on what paper. Undefined = every default (a4-4up,
+		// logo/COD/weight/note on, contents off) — every pre-existing store, zero
+		// migration. EVERY field is optional so a future toggle is a widen rather
+		// than a migration, and `sanitizeAwbConfig` drops any field that equals
+		// its default (an all-default save normalises the whole object back to
+		// unset) so "the defaults" has one spelling. All-tier and owner-only —
+		// never in the public storefront payload. NOTE: this is Kedaipal's own
+		// despatch label, NOT a courier-issued consignment note; it carries the
+		// courier name + tracking number the seller records manually (86eyehvk4).
+		// See convex/lib/awbConfig.ts + docs/despatch-labels.md.
+		awbConfig: v.optional(
+			v.object({
+				paperSize: v.optional(
+					v.union(v.literal("a6"), v.literal("a4-4up")),
+				),
+				showLogo: v.optional(v.boolean()),
+				showItems: v.optional(v.boolean()),
+				showCod: v.optional(v.boolean()),
+				showWeight: v.optional(v.boolean()),
+				showNote: v.optional(v.boolean()),
+				footerText: v.optional(v.string()),
+			}),
 		),
 		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
 		// subtotal a storefront order must reach before checkout. Undefined = no
@@ -1036,6 +1061,13 @@ export default defineSchema({
 		// 2026 — late-added tracking is track-page-only). Delivery orders only.
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// When a despatch label carrying this order was last generated (86eyp63mp).
+		// "Printed" means "label PDF built and handed to the seller" — we can't see
+		// the physical printer, and that's close enough for the print queue's
+		// "Printed · 2h ago" chip. Re-prints re-stamp (latest wins; it's a fact,
+		// not a one-shot), and a batch stamps only the orders actually included,
+		// never the skipped ones. Undefined = never printed.
+		labelPrintedAt: v.optional(v.number()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.

@@ -1307,3 +1307,56 @@ describe("counterCheckout — opening hours exemption (86eyp5rav)", () => {
 		expect(order?.status).toBe("confirmed");
 	});
 });
+
+describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () => {
+	async function seedSgRetailer(t: ReturnType<typeof setup>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Stall",
+			slug: "sg-stall",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		return retailer;
+	}
+
+	test("a bare 8-digit SG number is prefixed to the inbound 65… form (M3)", async () => {
+		// Before SG-lite this was stored UNPREFIXED ("81234567") while Meta
+		// delivers the same buyer inbound as "6581234567" — forking the
+		// (retailerId, waPhone) customer row.
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		await seedCustomer(t, retailer._id, "6581234567", "Wei Ling");
+
+		const { sessionId, reclaimed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "81234567",
+				name: "Wei Ling",
+			});
+		expect(reclaimed).toBe(false);
+
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("6581234567");
+		// Keyed identically to what a scan bind would store → existing customer
+		// matched instead of forked.
+		expect(session?.isNewCustomer).toBe(false);
+		expect(session?.customerId).toBeDefined();
+	});
+
+	test("a foreign number still passes through for a walk-in from anywhere", async () => {
+		// The counter bind stays loose on purpose — an MY tourist at an SG stall
+		// keys their full international number and it is stored as typed.
+		const t = setup();
+		await seedSgRetailer(t);
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "+60 12-345 6789",
+				name: "Aiman",
+			});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("60123456789");
+	});
+});
