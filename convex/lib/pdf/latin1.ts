@@ -15,9 +15,16 @@
  * confident nonsense.
  */
 
-/** Typographic glyphs with a faithful ASCII spelling — folded, never lost. */
+/** Typographic glyphs with a faithful ASCII spelling — folded, never lost.
+ * Line breaks and tabs fold to a space for the same reason: the PDF draws
+ * single lines, so `"Ring bell\nGate 4321"` (a two-line textarea note, which
+ * `sanitizeAddress` deliberately keeps) means exactly `"Ring bell Gate 4321"`
+ * on paper. Treating `\n` as LOST would fire the address-incomplete warning on
+ * a perfectly clean note — and false alarms teach sellers to ignore the one
+ * warning that matters. */
 function fold(text: string): string {
 	return text
+		.replace(/[\r\n\t]+/g, " ")
 		.replace(/[‘’‚‛]/g, "'")
 		.replace(/[“”„]/g, '"')
 		.replace(/[–—]/g, "-")
