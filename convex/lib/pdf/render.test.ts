@@ -278,6 +278,31 @@ describe("buildAwbPdf", () => {
 		expect(isPdf(bytes)).toBe(true);
 	});
 
+	// The warning is an EXTRA line in a block sized to fit without one, so the
+	// arithmetic is the risk: it must come out of the address budget rather than
+	// pushing the block down over the payment strip. Both parties carrying one,
+	// on the smaller sheet, with a long address still to place, is the worst
+	// case the layout can be handed.
+	test("an address warning stays inside the block it belongs to", async () => {
+		const bytes = await buildAwbPdf(
+			[
+				{
+					...labelBase,
+					sender: {
+						...labelBase.sender,
+						warning: "! Return address incomplete - check Settings",
+					},
+					recipient: {
+						...labelBase.recipient,
+						warning: "! Address incomplete - check the order",
+					},
+				},
+			],
+			{ paperSize: "a6" },
+		);
+		expect(await pages(bytes)).toEqual([{ width: 298, height: 420 }]);
+	});
+
 	test("an empty batch is still a valid, explanatory PDF", async () => {
 		const bytes = await buildAwbPdf([], { paperSize: "a4-4up" });
 		expect(isPdf(bytes)).toBe(true);

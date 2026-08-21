@@ -26,6 +26,7 @@ import {
 	type PaymentBlock,
 	type SubscriptionInvoiceData,
 } from "./document";
+import { toLatin1 } from "./latin1";
 import { KEDAIPAL_LOGO_PNG_SIZE, kedaipalLogoPngBytes } from "./logo";
 import { encodeQr } from "./qr";
 
@@ -45,23 +46,6 @@ const GREEN = rgb(0.063, 0.725, 0.506); // #10B981
 const GREEN_INK = rgb(0.03, 0.5, 0.36); // green text on light
 const GREEN_TINT = rgb(0.9, 0.97, 0.94); // total bar fill
 const AMBER = rgb(0.96, 0.62, 0.07);
-
-// pdf-lib's standard fonts encode WinAnsi (Latin-1) only and THROW on anything
-// outside it. Normalize common typographic glyphs to ASCII, then drop any
-// remaining non-Latin-1 code points so a store name with emoji/CJK never crashes
-// generation (it degrades to the encodable characters instead).
-function sanitize(text: string): string {
-	return (
-		text
-			.replace(/[‘’‚‛]/g, "'")
-			.replace(/[“”„]/g, '"')
-			.replace(/[–—]/g, "-")
-			.replace(/…/g, "...")
-			.replace(/×/g, "x")
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional WinAnsi clamp
-			.replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
-	);
-}
 
 /** Everything the drawing helpers need. The despatch label is the SELLER's
  * document, so it draws with a `Pen` and never sees the Kedaipal lockup. */
@@ -98,11 +82,11 @@ function draw(
 	size: number,
 	color = INK,
 ): void {
-	page.drawText(sanitize(s), { x, y, size, font, color });
+	page.drawText(toLatin1(s), { x, y, size, font, color });
 }
 
 function widthOf(font: PDFFont, s: string, size: number): number {
-	return font.widthOfTextAtSize(sanitize(s), size);
+	return font.widthOfTextAtSize(toLatin1(s), size);
 }
 
 function drawRight(
@@ -178,7 +162,7 @@ function pill(d: Doc, label: string, xRight: number, yTop: number, fill: ReturnT
 
 /** Longest prefix of `s` that fits `maxWidth`, with "..." when it was cut. */
 function clip(font: PDFFont, s: string, size: number, maxWidth: number): string {
-	const clean = sanitize(s);
+	const clean = toLatin1(s);
 	if (font.widthOfTextAtSize(clean, size) <= maxWidth) return clean;
 	let out = clean;
 	while (out.length > 1 && font.widthOfTextAtSize(`${out}...`, size) > maxWidth) {
@@ -188,7 +172,7 @@ function clip(font: PDFFont, s: string, size: number, maxWidth: number): string 
 }
 
 function wrap(font: PDFFont, s: string, size: number, maxWidth: number): string[] {
-	const words = sanitize(s).split(/\s+/).filter(Boolean);
+	const words = toLatin1(s).split(/\s+/).filter(Boolean);
 	const lines: string[] = [];
 	let line = "";
 	for (const w of words) {
@@ -806,9 +790,24 @@ function layoutParty(
 			advance: bodySize + 3,
 		});
 	}
+	// The warning goes ABOVE the address, not below it: it tells the reader how
+	// to treat the lines that follow, and a caution printed after the thing it
+	// cautions about has already been trusted. Bold ink rather than AMBER —
+	// amber on white is ~2:1 contrast, and this is the one line that must be
+	// legible at arm's length on a warehouse bench.
+	if (party.warning) {
+		lines.push({
+			text: clip(bold, party.warning, bodySize, maxWidth),
+			size: bodySize,
+			bold: true,
+			color: INK,
+			advance: bodySize + 3,
+		});
+	}
 	// Reserve one line for the address notes when there are any, so a gate code
-	// never gets dropped by a long street address.
-	const addressBudget = party.notes ? bodyLines - 1 : bodyLines;
+	// never gets dropped by a long street address — and one for the warning, so
+	// adding it can never push the block down into the payment strip.
+	const addressBudget = bodyLines - (party.notes ? 1 : 0) - (party.warning ? 1 : 0);
 	let used = 0;
 	for (const line of party.lines) {
 		if (used >= addressBudget) break;
