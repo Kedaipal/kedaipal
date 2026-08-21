@@ -800,6 +800,46 @@ Fixed in `BookDeliveryCard`:
   previously discarded); the dialog shows a live `Price locked for 4:32`
   countdown and falls back to its own 5-minute clock if the provider omits it.
 
+### Dispatch can't be tapped by accident (21 Aug 2026, ClickUp `86eypjfuf`)
+
+Reported as: a seller on a tablet reached the booking dialog mid-scroll and a
+booking went out. **The reported mechanism doesn't hold** — worth recording so
+the repro steps aren't chased again:
+
+- A Motorcycle/Car tap calls `prepareBooking`, a **quote**. It writes no
+  `deliveryJobs` row and spends nothing. `reserveBooking` — the only writer —
+  is reached exclusively from `confirmBooking`, so every failed row is a real
+  press of **Confirm & dispatch**.
+- The nine attempts on `ORD-W4AH` are **10–23 seconds apart**. Scroll-slop taps
+  fire in milliseconds; those gaps are a human retrying.
+- Radix wraps the overlay in `RemoveScroll` and `DialogContent` is `fixed` /
+  `overflow-hidden` with no `overflow-y-auto`, so **neither the page nor the
+  dialog scrolls while it's open** — there is no gesture there to mistake for a
+  tap.
+- That store had `promptBookOnPacked: false`, so the auto-open path was never
+  active on it.
+
+What the seller actually hit was the dead-quote trap above: the modal stayed
+open on a spent quotation and Confirm was the only visible action.
+
+**The underlying concern is still real, and is now fixed.** "Confirm &
+dispatch" spends from the seller's wallet on a single tap with no second step,
+and the dialog *can* appear under a finger — `promptBookOnPacked` opens it on
+the packed transition, and the stepper's `bookRequestToken` on a manual
+advance. So the button **arms 600ms after it appears** (`SPEND_ARM_DELAY_MS`):
+
+- Keyed on quote **presence**, not identity — it arms once when the button
+  first appears and stays armed across vehicle/time re-quotes, so switching
+  Motorcycle→Car never re-disables dispatch.
+- Genuinely `disabled`, not an inert click handler: a button that silently
+  swallows a real tap reads as broken.
+- Deliberately **not** applied to Book delivery / Get a fresh price / the
+  vehicle pills — those cost a quote, which is free.
+
+Rejected: pointer-move scroll-vs-tap discrimination (it would guard a gesture
+that can't happen, per the scroll-lock above) and hold-to-confirm (friction on
+every seller's happy path for an accident the arm delay already covers).
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys

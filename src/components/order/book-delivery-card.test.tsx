@@ -859,7 +859,12 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 		fireEvent.click(screen.getByText("Use this time"));
 		await screen.findByRole("checkbox");
 
-		fireEvent.click(screen.getByText("Confirm & dispatch"));
+		// Spend guard (86eypjfuf) — dispatch arms a beat after the price lands.
+		const dispatchBtn = screen
+			.getByText("Confirm & dispatch")
+			.closest("button") as HTMLButtonElement;
+		await waitFor(() => expect(dispatchBtn.disabled).toBe(false));
+		fireEvent.click(dispatchBtn);
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith({
 				orderId: bookableOrder._id,
@@ -1058,6 +1063,8 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 		const confirm = await screen.findByRole("button", {
 			name: /Confirm & dispatch/i,
 		});
+		// Spend guard (86eypjfuf) — dispatch is inert for a beat after it appears.
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
 		fireEvent.click(confirm);
 
 		// The reason survives where the seller can act on it...
@@ -1080,9 +1087,11 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 		render(<BookDeliveryCard order={bookableOrder} />);
 
 		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
-		fireEvent.click(
-			await screen.findByRole("button", { name: /Confirm & dispatch/i }),
-		);
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
 		const fresh = await screen.findByRole("button", {
 			name: /Get a fresh price/i,
 		});
@@ -1107,5 +1116,47 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 			).toBeTruthy(),
 		);
 		expect(screen.queryByText(/didn't go through/i)).toBeNull();
+	});
+});
+
+
+describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)", () => {
+	/** The reported incident was a seller on a tablet reaching a live money
+	 * dialog mid-scroll. "Confirm & dispatch" spends from his Lalamove wallet on
+	 * one tap, and the dialog can auto-open under a finger (promptBookOnPacked,
+	 * or the stepper's manual-advance path) — so the gesture that opens it must
+	 * not be able to carry through into a booking. */
+	it("is disabled the instant the price lands, then arms on its own", async () => {
+		state.dispatch = bookableDispatch();
+		const action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		state.action = action;
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+
+		// The window that matters: the button exists but must refuse a tap.
+		expect(confirm.hasAttribute("disabled")).toBe(true);
+		fireEvent.click(confirm);
+		// One call — the quote. No confirmBooking (which would carry quotationId).
+		expect(action).toHaveBeenCalledTimes(1);
+		expect(action.mock.calls[0][0]).not.toHaveProperty("quotationId");
+
+		// ...and it lets a deliberate seller through a beat later.
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+		await waitFor(() => expect(action).toHaveBeenCalledTimes(2));
+		expect(action.mock.calls[1][0]).toHaveProperty("quotationId", "q1");
 	});
 });

@@ -42,6 +42,12 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 
+/** How long "Confirm & dispatch" stays inert after it appears (86eypjfuf).
+ * Long enough that a tap already in flight — the one that opened the dialog,
+ * or a scroll-flick on the page behind it — can't land on a money action;
+ * short enough that a seller reading the price never meets it. */
+const SPEND_ARM_DELAY_MS = 600;
+
 /** A live quotation the confirm dialog is holding. Mirrors `prepareBooking`'s
  * success payload, except `expiresAt` is resolved to a definite moment here —
  * see applyQuote. */
@@ -159,6 +165,15 @@ export function BookDeliveryCard({
 	// Ticks only while the dialog is open, so a quote can visibly lapse instead
 	// of silently rotting behind a button that still looks armed.
 	const [now, setNow] = useState<number>(() => Date.now());
+	// Spend guard (86eypjfuf): "Confirm & dispatch" is the one control here that
+	// moves real money out of the seller's Lalamove wallet, on a single tap with
+	// no second step. It can also appear UNDER a finger — the dialog auto-opens
+	// on the packed transition (promptBookOnPacked) and on a manual advance —
+	// so the tap that opened it, or a scroll-flick on the page behind, can carry
+	// straight through into a dispatch. Arming it a beat after it appears makes
+	// that impossible while costing a deliberate seller nothing: they still have
+	// to read the price.
+	const [spendArmed, setSpendArmed] = useState(false);
 
 	// Prompt-to-book-on-packed (opt-in): when the seller marks a PAID, due-today
 	// delivery order Packed, auto-open the confirm dialog (today's price) so they
@@ -210,6 +225,20 @@ export function BookDeliveryCard({
 		const id = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(id);
 	}, [quote]);
+
+	// Keyed on quote PRESENCE, not identity: the button arms once when it first
+	// appears and stays armed across vehicle/time re-quotes, so switching
+	// Motorcycle→Car doesn't keep re-disabling dispatch. Re-arms on a fresh
+	// open because `quote` returns to null in between.
+	const hasQuote = quote !== null;
+	useEffect(() => {
+		if (!hasQuote) {
+			setSpendArmed(false);
+			return;
+		}
+		const id = setTimeout(() => setSpendArmed(true), SPEND_ARM_DELAY_MS);
+		return () => clearTimeout(id);
+	}, [hasQuote]);
 
 	// External book request — the stepper raises it when the seller advances a
 	// bookable order by hand, so THIS modal answers "how is it going out?".
@@ -1201,7 +1230,11 @@ export function BookDeliveryCard({
 							<Button
 								type="button"
 								onClick={handleConfirm}
-								disabled={booking || requoting || quote === null}
+								// Disabled rather than an inert click handler: a button that
+								// silently swallows a real tap reads as broken.
+								disabled={
+									booking || requoting || quote === null || !spendArmed
+								}
 							>
 								{booking ? "Booking…" : "Confirm & dispatch"}
 							</Button>
