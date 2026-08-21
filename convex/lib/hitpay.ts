@@ -156,8 +156,19 @@ export function mapHitpayPaymentType(
 		case "card":
 		case "cards":
 			return "card";
+		// SG rails (86eyph341). HitPay names PayNow `paynow_online`; the bare
+		// form is accepted too so a naming change upstream can't silently
+		// demote a real settlement to "other".
+		case "paynow_online":
+		case "paynow":
+			return "paynow";
+		// GrabPay is stamped in BOTH markets — the order tag follows the money,
+		// not the store's picker (MY doesn't offer GrabPay by hand).
+		case "grabpay":
+		case "grabpay_direct":
+			return "grabpay";
 		default:
-			// paynow_online (sandbox SG), grabpay, shopee_pay, boost, atome, …
+			// shopee_pay, boost, atome, apple/google pay, …
 			return "other";
 	}
 }

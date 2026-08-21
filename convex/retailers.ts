@@ -239,6 +239,7 @@ import {
 	assertValidSlug,
 	assertValidStoreName,
 	normalizeWaPhone,
+	STORED_MOBILE_PATTERN,
 } from "./lib/slug";
 import {
 	AUP_VERSION,
@@ -1519,6 +1520,34 @@ export const updateSettings = mutation({
 				) {
 					throw new ConvexError(
 						"Switch your delivery charge to Free or a Flat fee first — distance, weight-zone and Lalamove pricing are Malaysia-only for now.",
+					);
+				}
+			}
+			// Same posture for the store's own WhatsApp numbers (the SG-lite
+			// invariant: an SG store carries SG numbers, an MY store MY ones — the
+			// plate on every phone field is a promise about what's behind it). A
+			// stored number that doesn't match the NEW country blocks the switch
+			// unless this same call clears or replaces it; a same-call replacement
+			// is judged against the new country by the phone branches above
+			// (effectiveCountry). Without this, a switch left a contradictory row
+			// (SG store, MY contact) that only surfaced on the NEXT save of the
+			// field — the worst place to learn about it.
+			const carriedNumbers: ReadonlyArray<
+				[stored: string | undefined, label: string]
+			> = [
+				[
+					args.waPhone === undefined ? retailer.waPhone : undefined,
+					"WhatsApp contact number",
+				],
+				[
+					args.notifyWaPhone === undefined ? retailer.notifyWaPhone : undefined,
+					"order-alerts WhatsApp number",
+				],
+			];
+			for (const [stored, label] of carriedNumbers) {
+				if (stored && !STORED_MOBILE_PATTERN[args.country].test(stored)) {
+					throw new ConvexError(
+						`Your ${label} isn't a ${args.country === "SG" ? "Singapore" : "Malaysian"} number — replace or remove it when switching the store's country.`,
 					);
 				}
 			}

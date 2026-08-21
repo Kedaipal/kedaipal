@@ -1,5 +1,7 @@
+import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
 import {
+	convexErrorMessage,
 	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
@@ -176,5 +178,68 @@ describe("formatMobile", () => {
 		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
 		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
 		expect(formatMobile("")).toBe("");
+	});
+});
+
+describe("convexErrorMessage — rate-limit payload", () => {
+	// The limiter throws ConvexError with an OBJECT payload. Before this was
+	// handled the generic branch stringified it and a throttled buyer read the
+	// literal "[object Object]" at checkout. Delete the isRateLimitError branch
+	// in format.ts and this test goes red on exactly that string.
+	function rateLimitError(retryAfterMs: number, name = "orderCreate") {
+		return new ConvexError({
+			kind: "RateLimited",
+			name,
+			retryAfter: retryAfterMs,
+		});
+	}
+
+	it("renders a human retry message, never [object Object]", () => {
+		const msg = convexErrorMessage(rateLimitError(4200));
+		expect(msg).not.toContain("[object Object]");
+		expect(msg).toContain("5s");
+	});
+
+	it("floors the wait at 1s so it never says 0s", () => {
+		expect(convexErrorMessage(rateLimitError(120))).toContain("1s");
+	});
+
+	// The daily order ceiling (orderCreateDaily) makes long retryAfter values
+	// reachable — "try again in 5400s" is a number nobody converts under
+	// checkout stress, so the wait renders in the largest sensible unit.
+	it("renders minute-scale waits in minutes, hour-scale in hours", () => {
+		expect(convexErrorMessage(rateLimitError(5 * 60_000))).toContain(
+			"5 minutes",
+		);
+		// 90s is the seconds/minutes boundary: 90s stays readable as "2 minutes".
+		expect(convexErrorMessage(rateLimitError(90_000))).toContain("2 minutes");
+		expect(convexErrorMessage(rateLimitError(89_000))).toContain("89s");
+		expect(convexErrorMessage(rateLimitError(3 * 60 * 60_000))).toContain(
+			"3 hours",
+		);
+		// Singulars read as words, not "1 hours".
+		expect(convexErrorMessage(rateLimitError(91 * 60_000))).toContain("2 hours");
+		expect(convexErrorMessage(rateLimitError(60.4 * 60_000))).toContain(
+			"61 minutes",
+		);
+	});
+
+	it("names the store, not 'the system', when the daily ceiling fires", () => {
+		// The burst limiter says "busy right now"; the daily order ceiling says
+		// what a buyer can act on — this store can't take more orders just yet.
+		const msg = convexErrorMessage(rateLimitError(180_000, "orderCreateDaily"));
+		expect(msg).toContain("getting a lot of orders");
+		expect(msg).toContain("3 minutes");
+		expect(msg).not.toContain("Busy right now");
+		// Every other limiter keeps the generic copy.
+		expect(convexErrorMessage(rateLimitError(4200, "paymentClaim"))).toContain(
+			"Busy right now",
+		);
+	});
+
+	it("still passes a plain string payload straight through", () => {
+		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
+			"Only 2 in stock",
+		);
 	});
 });

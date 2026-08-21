@@ -684,8 +684,16 @@ export const create = mutation({
 		// = the legacy buyer-sends-first flow (phone missing or template env unset).
 		confirmedAtCreate?: boolean;
 	}> => {
-		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
+		// Rate limit FIRST — public endpoint, throttle per storefront before any
+		// DB reads. Two limits on one key: the burst bucket shapes a live drop,
+		// the daily ceiling bounds total confirmation-push spend (each order
+		// schedules a Meta-billed template send that bypasses WABA gating — see
+		// lib/rateLimiter.ts for the full cost model).
 		await rateLimiter.limit(ctx, "orderCreate", {
+			key: args.retailerId,
+			throws: true,
+		});
+		await rateLimiter.limit(ctx, "orderCreateDaily", {
 			key: args.retailerId,
 			throws: true,
 		});

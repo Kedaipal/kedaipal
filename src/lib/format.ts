@@ -6,6 +6,7 @@
  * Always divide by 100 before formatting for display.
  */
 
+import { isRateLimitError } from "@convex-dev/rate-limiter";
 import { ConvexError } from "convex/values";
 import { COUNTRIES, type Country } from "../../convex/lib/country";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
@@ -17,10 +18,45 @@ import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
  * ensures users see only the original message.
  */
 export function convexErrorMessage(err: unknown): string {
+	// Checked FIRST: the rate limiter throws a STRUCTURED payload ({kind, name,
+	// retryAfter}), not a string, so the generic branch below would stringify it
+	// to the literal "[object Object]" — which is what a buyer read when a busy
+	// storefront throttled their checkout. Every gated mutation shares this
+	// helper, so handling the shape here covers checkout, the address edit and
+	// the counter alike. (The guard does its own ConvexError + shape test, and
+	// running it ahead of the `instanceof` also keeps TS from narrowing the
+	// payload union to `never`.)
+	if (isRateLimitError(err)) {
+		const wait = retryWait(err.data.retryAfter);
+		// The daily order ceiling deserves its own words: "busy right now" blames
+		// the system vaguely, when the truth a buyer can act on is that THIS
+		// store is taking more orders than it can accept. (With the bucket's
+		// continuous refill, one slot frees up every ~3 minutes at the ceiling,
+		// so the wait shown is short and genuinely worth retrying.)
+		if (err.data.name === "orderCreateDaily") {
+			return `This store is getting a lot of orders right now and can't take more just yet — please try again in ${wait}. Nothing was submitted.`;
+		}
+		return `Busy right now — please try again in ${wait}. Nothing was submitted.`;
+	}
 	if (err instanceof ConvexError) {
 		return typeof err.data === "string" ? err.data : String(err.data);
 	}
 	return (err as Error).message;
+}
+
+/**
+ * `retryAfter` (ms) → words a person can act on. The burst limiter yields
+ * seconds, but the daily order ceiling (`orderCreateDaily`) can yield HOURS —
+ * and "try again in 5400s" is a number nobody converts under checkout stress.
+ * Always rounds UP, so the message never invites a retry that will fail again.
+ */
+function retryWait(retryAfterMs: number): string {
+	const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+	if (seconds < 90) return `${seconds}s`;
+	const minutes = Math.ceil(seconds / 60);
+	if (minutes < 90) return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+	const hours = Math.ceil(minutes / 60);
+	return hours === 1 ? "1 hour" : `${hours} hours`;
 }
 
 /**

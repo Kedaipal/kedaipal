@@ -70,6 +70,7 @@ import {
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
+import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { convexErrorMessage } from "../lib/format";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import {
@@ -655,8 +656,11 @@ function SettingsRoute() {
 								current={retailer.country}
 								currency={retailer.currency}
 								deliveryConfig={retailer.deliveryConfig}
+								waPhone={retailer.waPhone}
+								notifyWaPhone={retailer.notifyWaPhone}
 								onSave={(patch) => updateSettings(patch)}
 								onGoToFulfilment={() => setActiveTab("fulfilment")}
+								onGoToWhatsapp={() => setActiveTab("whatsapp")}
 							/>
 						</Card>
 						<Card>
@@ -724,6 +728,7 @@ function SettingsRoute() {
 							<OnlinePaymentsCard
 								hitpay={retailer.hitpay}
 								canUse={hasFeature(retailer.subscription, "onlinePayments")}
+								country={retailer.country}
 								onSave={(patch) => updateSettings(patch)}
 							/>
 						</Card>
@@ -2223,8 +2228,11 @@ function CountryForm({
 	current,
 	currency,
 	deliveryConfig,
+	waPhone,
+	notifyWaPhone,
 	onSave,
 	onGoToFulfilment,
+	onGoToWhatsapp,
 }: {
 	current: Country;
 	currency: string;
@@ -2232,11 +2240,21 @@ function CountryForm({
 	 * country switch that collides with one is refused server-side. Read here so
 	 * the collision is explained BEFORE the save, with a way out. */
 	deliveryConfig?: DeliveryConfig;
+	/** The store's own WhatsApp numbers. An SG store carries SG numbers and an
+	 * MY store MY ones (the plate on every phone field is a promise), so the
+	 * server refuses a switch that would carry a wrong-country number across.
+	 * Read here for the same reason as deliveryConfig — explain before, not
+	 * after. */
+	waPhone?: string;
+	notifyWaPhone?: string;
 	onSave: (patch: {
 		country: Country;
 		deliveryConfig?: null;
+		waPhone?: string;
+		notifyWaPhone?: string;
 	}) => Promise<unknown>;
 	onGoToFulfilment: () => void;
+	onGoToWhatsapp: () => void;
 }) {
 	const [clearing, setClearing] = useState(false);
 	const form = useAppForm({
@@ -2255,16 +2273,39 @@ function CountryForm({
 		submitThenFocusError(form, e);
 	}
 
-	// Switch the country AND drop the incompatible pricing in ONE mutation —
-	// the server accepts both fields together, so the seller never lands in the
-	// half-applied state a two-step would create.
-	async function switchWithFreeDelivery(country: Country) {
+	// A stored number that doesn't match the given country's shape. Same
+	// pattern module the validators run — client and server can't disagree.
+	function staleNumber(country: Country, value: string | undefined) {
+		return value && !STORED_MOBILE_PATTERN[country].test(value) ? value : null;
+	}
+
+	// Switch the country AND apply every needed fix in ONE mutation — clearing
+	// the incompatible pricing and/or the wrong-country numbers alongside the
+	// switch, so the seller never lands in the half-applied state a two-step
+	// would create (the server refuses the bare switch while either clash
+	// stands).
+	async function switchAndFix(country: Country) {
+		const dropDelivery =
+			deliveryConfig && !deliveryModeAllowed(country, deliveryConfig.mode);
+		const dropWaPhone = staleNumber(country, waPhone) !== null;
+		const dropNotify = staleNumber(country, notifyWaPhone) !== null;
 		setClearing(true);
 		try {
-			await onSave({ country, deliveryConfig: null });
-			toast.success(
-				"Country saved — delivery is now free. Set a flat fee any time in Fulfilment.",
-			);
+			await onSave({
+				country,
+				...(dropDelivery ? { deliveryConfig: null } : {}),
+				...(dropWaPhone ? { waPhone: "" } : {}),
+				...(dropNotify ? { notifyWaPhone: "" } : {}),
+			});
+			const fixes = [
+				...(dropDelivery ? ["delivery is now free"] : []),
+				...(dropWaPhone || dropNotify
+					? [
+							`the old WhatsApp number${dropWaPhone && dropNotify ? "s were" : " was"} removed — add the ${COUNTRY_LABELS[country]} one in the WhatsApp tab`,
+						]
+					: []),
+			];
+			toast.success(`Country saved — ${fixes.join("; ")}.`);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -2296,13 +2337,22 @@ function CountryForm({
 					const picked = values.country as Country;
 					const expectedCurrency = COUNTRY_CURRENCY[picked];
 					const dirty = values.country !== current;
-					// The stored pricing mode this switch would collide with. The
-					// server refuses the pair; surfacing it here turns a red toast
-					// after the fact into a choice made before it.
+					// The stored state this switch would collide with. The server
+					// refuses each pair; surfacing them here turns a red toast after
+					// the fact into a choice made before it.
 					const blockedMode =
 						deliveryConfig && !deliveryModeAllowed(picked, deliveryConfig.mode)
 							? deliveryConfig.mode
 							: null;
+					const staleNumbers = [
+						...(staleNumber(picked, waPhone)
+							? [`WhatsApp contact number (+${waPhone})`]
+							: []),
+						...(staleNumber(picked, notifyWaPhone)
+							? [`order-alerts number (+${notifyWaPhone})`]
+							: []),
+					];
+					const clashes = (blockedMode ? 1 : 0) + staleNumbers.length;
 					const busy = isSubmitting || clearing;
 					return (
 						<>
@@ -2313,43 +2363,96 @@ function CountryForm({
 									the Currency card below if that's not intentional.
 								</p>
 							) : null}
-							{blockedMode ? (
+							{!dirty && staleNumbers.length > 0 ? (
+								// Not a switch — the STORED country already disagrees with a
+								// stored number (rows from before the switch guard existed).
+								// Surface the contradiction with the repair path instead of
+								// letting it hide until the next save of that field.
 								<div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-3 dark:border-amber-800">
 									<p className="text-sm text-amber-800 dark:text-amber-300">
-										Your delivery charge is{" "}
-										<span className="font-medium">
-											{DELIVERY_MODE_LABELS[blockedMode]}
-										</span>{" "}
-										pricing, which only works in Malaysia for now.{" "}
-										{COUNTRY_LABELS[picked]} stores can charge a flat fee or
-										nothing at all.
+										Your {staleNumbers.join(" and ")}{" "}
+										{staleNumbers.length === 1 ? "isn't" : "aren't"} from{" "}
+										{COUNTRY_LABELS[current]} — buyers see{" "}
+										{staleNumbers.length === 1 ? "it" : "them"} as the store's
+										contact. Update{" "}
+										{staleNumbers.length === 1 ? "it" : "them"} in the WhatsApp
+										tab.
 									</p>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={onGoToWhatsapp}
+										className="h-11 sm:w-auto sm:self-start sm:px-5"
+									>
+										Update the number
+									</Button>
+								</div>
+							) : null}
+							{dirty && clashes > 0 ? (
+								<div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-3 dark:border-amber-800">
+									<div className="flex flex-col gap-2 text-sm text-amber-800 dark:text-amber-300">
+										<p>
+											Switching to {COUNTRY_LABELS[picked]} needs{" "}
+											{clashes === 1 ? "one change" : "a couple of changes"}{" "}
+											first:
+										</p>
+										<ul className="list-disc space-y-1 pl-5">
+											{blockedMode ? (
+												<li>
+													Your delivery charge is{" "}
+													<span className="font-medium">
+														{DELIVERY_MODE_LABELS[blockedMode]}
+													</span>{" "}
+													pricing, which only works in Malaysia for now — it
+													becomes free (set a flat fee after, in Fulfilment).
+												</li>
+											) : null}
+											{staleNumbers.map((label) => (
+												<li key={label}>
+													Your {label} isn't a {COUNTRY_LABELS[picked]} number
+													— it's removed; add the new one in the WhatsApp tab.
+												</li>
+											))}
+										</ul>
+									</div>
 									<div className="flex flex-col gap-2 sm:flex-row">
 										<Button
 											type="button"
-											onClick={() => switchWithFreeDelivery(picked)}
+											onClick={() => switchAndFix(picked)}
 											disabled={busy}
 											className="h-11 sm:w-auto sm:px-5"
 										>
 											{clearing
 												? "Saving…"
-												: `Switch to ${COUNTRY_LABELS[picked]} & make delivery free`}
+												: `Switch to ${COUNTRY_LABELS[picked]} & apply changes`}
 										</Button>
-										<Button
-											type="button"
-											variant="outline"
-											onClick={onGoToFulfilment}
-											disabled={busy}
-											className="h-11 sm:w-auto sm:px-5"
-										>
-											Set a flat fee first
-										</Button>
+										{blockedMode ? (
+											<Button
+												type="button"
+												variant="outline"
+												onClick={onGoToFulfilment}
+												disabled={busy}
+												className="h-11 sm:w-auto sm:px-5"
+											>
+												Set a flat fee first
+											</Button>
+										) : (
+											<Button
+												type="button"
+												variant="outline"
+												onClick={onGoToWhatsapp}
+												disabled={busy}
+												className="h-11 sm:w-auto sm:px-5"
+											>
+												Change the number first
+											</Button>
+										)}
 									</div>
 								</div>
 							) : null}
 							<Button
 								type="submit"
-								disabled={!dirty || !canSubmit || busy || blockedMode !== null}
+								disabled={!dirty || !canSubmit || busy || clashes > 0}
 								className={SAVE_BTN_CLASS}
 							>
 								{isSubmitting ? "Saving…" : "Save country"}

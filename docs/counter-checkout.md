@@ -253,14 +253,18 @@ way the buyer gets a WhatsApp confirmation with their tracking link, so the orde
 is WhatsApp-linked and status updates flow through the shared WABA.
 
 **Payment method (`order.paymentMethod`, `convex/lib/paymentMethod.ts`):** a
-structured enum — `cash | duitnow | tng | bank_transfer | card | other` — captured
+structured enum — `cash | duitnow | tng | bank_transfer | fpx | card | other |
+paynow | paylah | nets | grabpay` — captured
 **only where it's reliably known**: the Counter Checkout "Paid now" picker (the
 seller witnesses the payment) and the seller's "mark payment received" action (the
 seller has just verified the channel — an optional chip row on that dialog). The
 buyer's online "I've paid" self-claim **never** sets it, so an online order stays
 `undefined` = "online / unknown" (we don't fake a value). Surfaced on the seller
 order detail's "Payment received" line **and filterable on the orders inbox**
-("Method" chips → `searchOrders.paymentMethods`). Enables later analytics on the
+("Method" chips → `searchOrders.paymentMethods`). The picker + the filter chips
+offer **the store's country rails only** (`COUNTRY_PAYMENT_METHODS`, see
+[`sg-lite.md`](./sg-lite.md#payment-rails-86eyph341)) — the enum above is the
+wider set of what may be *stamped*. Enables later analytics on the
 reliable in-person data without adding buyer-side friction. Legacy counter orders
 that stored the method as a `"In-person (…)"` reference string are migrated by
 `migrations:backfillCounterPaymentMethod`.
