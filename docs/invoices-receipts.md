@@ -89,14 +89,19 @@ Backend:
   filename. Authorized through the same `resolveSharedOrder` seam as `orders.get`:
   buyer passes `token`, seller passes an owned `shortId`.
 - **A (send):** the receipt/invoice is sent to the buyer's WhatsApp as a
-  **`document`** attachment via the shared `deliverOrderDocument` (render → store
-  **transiently** to a URL Meta fetches → send `transactional` → scheduled
-  `deleteTransientStorage` reclaims the blob). Two entry points:
-  `orders.sendOrderDocument` (internal, `orderId` — the **automatic** send fired
-  after counter checkout by `whatsapp.notifyCounterOrderCreated`) and
-  `orders.sendOrderDocumentToBuyer` (seller-auth action, `shortId` — the **manual
-  resend** on the Done screen). Pay-later also pushes the payment methods
-  (`sendPaymentMessage`) alongside the invoice. See `docs/counter-checkout.md`.
+  ~~**`document`** attachment via the shared `deliverOrderDocument`~~ — **the
+  WhatsApp delivery of this PDF was removed** (2026-08-04,
+  [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)): a counter order's receipt
+  was that buyer's **second** billable message, and every order now sends exactly
+  one. `orders.sendOrderDocument`, `orders.sendOrderDocumentToBuyer`,
+  `deliverOrderDocument` and the transient-storage dance (which existed only so
+  Meta could fetch a URL) are all deleted. The document itself is unchanged and
+  still generated on demand: the cashier gets **Download / Share** on the Done
+  screen (`order-document-actions.tsx`), and the buyer gets a **Receipt** button
+  on their order page — reached from the one confirmation message's link. Both
+  call `orders.generateReceiptPdf` and get bytes directly. See
+  [`counter-checkout.md`](./counter-checkout.md) and
+  [`one-message-per-order.md`](./one-message-per-order.md).
 - **B:** `invoices.generateInvoicePdf` (internal action, scheduled from
   `issueInvoice`) renders + stores the blob; idempotent (skips if one exists).
   `invoices.getInvoicePdfUrl` returns an ownership-checked signed URL (owning

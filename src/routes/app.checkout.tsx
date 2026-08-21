@@ -41,7 +41,7 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
-import { SendOrderDocument } from "../components/order/send-order-document";
+import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -397,8 +397,8 @@ function EmptyCheckouts() {
  * grouping every way an order begins, so the control reads cleanly on mobile and
  * desktop instead of two competing pill buttons:
  *   1. Show the store QR — buyer scans, their checkout appears + auto-opens here.
- *   2. Enter the buyer's phone — manual bind, buyer still gets a WhatsApp
- *      confirmation + receipt (86ey8vqp6).
+ *   2. Enter the buyer's phone — manual bind, buyer still gets the one WhatsApp
+ *      confirmation (86ey8vqp6).
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
@@ -558,7 +558,7 @@ function CounterCheckoutActions({
 								Enter phone number
 							</span>
 							<span className="block text-xs text-muted-foreground">
-								Buyer gets confirmation & receipt on WhatsApp
+								Buyer gets one WhatsApp with their order link
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -605,14 +605,14 @@ function CounterCheckoutActions({
 				</DialogContent>
 			</Dialog>
 
-			{/* Manual phone bind — buyer still gets their confirmation + receipt. */}
+			{/* Manual phone bind — buyer still gets the one WhatsApp confirmation. */}
 			<Dialog open={phoneOpen} onOpenChange={changePhone}>
 				<DialogContent className="sm:max-w-sm">
 					<DialogHeader>
 						<DialogTitle>Enter buyer's number</DialogTitle>
 						<DialogDescription>
-							We'll message their WhatsApp with the confirmation and receipt —
-							no scan needed.
+							We'll send one WhatsApp confirming the order, with a link to their
+							order page — no scan needed.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-3">
@@ -801,8 +801,8 @@ function DoneScreen({
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
 	buyerName: string | undefined;
-	// Anonymous cash sale — no buyer to notify (86ey8vqp6). The receipt is still
-	// generated; the seller downloads/shares it rather than it being "sent".
+	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
+	// confirmation goes out and the document below is their only copy.
 	anonymous?: boolean;
 	onBackToList: () => void;
 }) {
@@ -815,6 +815,16 @@ function DoneScreen({
 	// through the status pipeline. Optional, not automatic: a paid deposit on an
 	// item that isn't ready yet is left as a normal confirmed order.
 	const canComplete = paidInPerson && !!orderId && !completed;
+
+	// Say exactly what left the building. A counter order sends the buyer ONE
+	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
+	// page — and an anonymous cash sale sends nothing at all. The receipt/invoice
+	// PDF is never messaged; it's handed over below.
+	const sentSummary = anonymous
+		? "is confirmed. Cash sale with no contact, so nothing was sent."
+		: paidInPerson
+			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
+			: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
 
 	async function markCompleted() {
 		if (!orderId) return;
@@ -847,18 +857,16 @@ function DoneScreen({
 						{shortId ? (
 							<>
 								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-								{completed
-									? "is marked completed."
-									: anonymous
-										? "is confirmed. It's a cash sale with no contact, so no WhatsApp was sent."
-										: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
+								{completed ? "is marked completed." : sentSummary}
 							</>
 						) : completed ? (
 							"The order is marked completed."
 						) : anonymous ? (
 							"The order is confirmed — a cash sale with no contact, so nothing was sent."
 						) : (
-							"The order is confirmed and the buyer has been notified on WhatsApp."
+							// Resumed a completed session: we don't have the created order's
+							// paid state here, so stay on what's true either way.
+							"The order is confirmed. We sent the buyer one WhatsApp with a link to their order."
 						)}
 					</p>
 				</div>
@@ -866,13 +874,9 @@ function DoneScreen({
 			{shortId ? (
 				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
 					<p className="text-sm font-semibold text-emerald-950">
-						{anonymous
-							? "Receipt"
-							: paidInPerson
-								? "Receipt sent to buyer"
-								: "Invoice & payment details sent"}
+						{paidInPerson ? "Receipt" : "Invoice"}
 					</p>
-					<SendOrderDocument
+					<OrderDocumentActions
 						shortId={shortId}
 						paid={paidInPerson}
 						buyerName={buyerName}
@@ -1868,7 +1872,8 @@ function BuildOrderScreen({
 								</label>
 							) : (
 								<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-									The buyer gets a WhatsApp link to pay and track their order.
+									We'll send one WhatsApp with how to pay and a link to track
+									the order.
 								</p>
 							)}
 						</div>
@@ -1932,7 +1937,7 @@ function BuildOrderScreen({
 				paymentLabel={
 					paid
 						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
-						: "Pay later — buyer pays via WhatsApp link"
+						: "Pay later — we send the buyer a payment link on WhatsApp"
 				}
 				submitting={submitting}
 				onConfirm={submit}

@@ -1,16 +1,83 @@
 # Proof / Mockup Approval — Feature Spec
 
 Design spec + implementation reference for a **made-to-order proof approval**
-workflow: the seller sends the buyer a mockup before producing the final item,
-and production is **gated** on the buyer's approval.
+workflow: the seller submits a mockup (and its price) before producing the final
+item, and production is **gated** on the buyer's approval — which the buyer gives
+on their order page, `/track/<token>`.
 
 **Status: implemented** on `zaki/<proof-approval branch>` — schema, the
 `confirmed→packed` gate, the mockup state machine + mutations, dashboard +
 tracking UI, custom-work quote pricing (§11), **payment-ask gating** (the
-"I've paid" prompt is deferred until the mockup gate opens — §11a), and
-notifications (WhatsApp mockup-image-to-buyer + seller email on
-approve/changes). Tests green. **Deferred:** proactive reminder *nudges* (the v1
-waiver is purely time-based — see the note below); per-round mockup images.
+"I've paid" prompt is deferred until the mockup gate opens — §11a), and seller
+email on approve/changes. Tests green. **Deferred:** proactive reminder *nudges*
+(the v1 waiver is purely time-based — see the note below); per-round mockup
+images.
+
+> ## ⚠️ The buyer's notification moved from APPROVE to SUBMIT (4 Aug 2026, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8))
+>
+> This is the biggest behavioural change this feature has taken since it
+> shipped. Read it before touching anything below.
+>
+> **What went away.** `whatsapp.notifyMockupSubmitted` — the mockup image +
+> "Review mockup" CTA that used to go to the buyer at submit — is **deleted**,
+> and so are the payment prompts that used to follow the gate opening
+> (`notifyPaymentDue` with its `paymentDueApproved` / `paymentDueWaived` /
+> `paymentDueDeclined` intros). An order now sends the buyer **exactly one**
+> outbound WhatsApp message. See
+> [`one-message-per-order.md`](./one-message-per-order.md).
+>
+> **What replaced it.** For a made-to-order storefront order, that single message
+> is the **confirmation push**, and it now fires from **`submitMockup`**
+> (`convex/orders.ts:2943` → `claimDeferredPush`) instead of at checkout or at
+> approval. The reasoning is a chain, and every link matters:
+>
+> 1. The template states `Total: {{3}}`, so it cannot go out while the price is
+>    RM 0.00 "on quote" — the order is stamped `confirmationPushStatus:
+>    "deferred"` at create.
+> 2. The seller enters the price **at submit** — `submitMockup({ storageIds,
+>    quotedAmount })` folds the quote into `total` in the same mutation (§11).
+>    So `submitted` is the earliest moment the message can state a true price.
+> 3. Its URL button is the **tracking token**, and `/track/<token>` is exactly
+>    where the buyer reviews the mockup and taps Approve / Request changes. The
+>    message that announces the price *is* the message that delivers the design.
+> 4. Firing on **approval** instead would deadlock the whole feature: with
+>    `notifyMockupSubmitted` gone, nothing would tell the buyer a design was
+>    waiting, so nobody would approve, and the gate would only ever open via the
+>    seller's 48-hour waiver (§8). Submit-time is not an optimisation — it is
+>    what keeps the loop alive.
+>
+> **The hold predicate changed with it.** `claimDeferredPush` asks
+> `isMockupPriceUnsettled` (`convex/lib/order.ts:129`) — *is there a quote?* —
+> **not** `isMockupGateClosed` — *has the buyer approved?*:
+>
+> | Predicate | Question | True while | Governs |
+> | --- | --- | --- | --- |
+> | `isMockupGateClosed` | Has the buyer approved? | `pending`, `submitted`, `changes_requested` | The **production** gate (`confirmed → packed`), `claimPayment`, `markPaymentReceived` — all unchanged. |
+> | `isMockupPriceUnsettled` | Is there a quote at all? | `pending` only | The **message** hold. |
+>
+> Both unwaived. The gap between them — `submitted` / `changes_requested`, where
+> a real price exists but sign-off doesn't — is precisely where the one message
+> belongs.
+>
+> **`approveMockup` / `waiveMockup` / `declineMockupItem` still call the claim.**
+> Normally a no-op (the message went out at submit). They are kept as the
+> **migration path** for orders that were already `deferred` under the old
+> approve-gate when this shipped — which is why **no backfill was needed** — and
+> as the backstop for a price settled *without* a submit: a waiver settles it at
+> the standing total, a decline settles it at the ready-made remainder. Together
+> they guarantee no order reaches a final price having sent nothing.
+>
+> **Re-submits after a change request are silent.** The claim can only be won
+> once, so a second, third or fourth round costs nothing and messages nobody. The
+> revised mockup appears on the buyer's order page reactively — which is the page
+> they were already on when they asked for the change, and the page the toast
+> now points at ("the updated mockup appears on this page").
+>
+> **The legacy edge.** At a store with `WHATSAPP_ORDER_CONFIRM_TEMPLATE` unset
+> there is no `deferred` stamp, so `claimDeferredPush` no-ops and submit sends
+> nothing. Those buyers were told at confirm time that a design is coming
+> (`mockupPendingConfirm`, still live) and see it on their order page. The
+> condition disappears the moment the template env is set.
 
 > **Naming (build decision, 2026-06-04):** code identifiers use **`mockup`**, not
 > `proof`, because the codebase already uses "proof" throughout for the buyer's
@@ -40,7 +107,7 @@ engraving, custom apparel all need the same proof loop. Solving it well opens th
 
 **Fit with existing infrastructure** — this is mostly *wiring*, not new systems:
 - Order pipeline + the "payment is a separate dimension" precedent ([`payment-handshake.md`](./payment-handshake.md)).
-- WhatsApp **image send** (already used for the payment QR — see [`order-lifecycle.md`](./order-lifecycle.md)).
+- ~~WhatsApp **image send**~~ — this was the original fit argument; since `86eyd63r8` the mockup is not sent over WhatsApp at all (see the banner). The buyer's order page carries the gallery.
 - **Customer tracking page** with buyer-facing actions (already has "I've paid").
 - **`orderEvents`** audit log.
 - **Automated Reminders Cron** (Sprint 4 roadmap) for nudges + the deadlock escape.
@@ -57,7 +124,7 @@ seller through a deliberate, audited waiver after reminders + a grace window.
 
 - As a retailer, I mark a product "needs proof approval" so its orders can't be produced before the buyer signs off.
 - As a retailer, I see at a glance which paid orders are **waiting on a mockup from me**.
-- As a retailer, I upload + send a mockup to the buyer in one step (it goes out over WhatsApp).
+- As a retailer, I upload + price a mockup in one step, and the buyer is pointed at it.
 - As a buyer, I review the mockup on the order page and **Approve** or **Request changes** with a note.
 - As a retailer, I'm notified the moment the buyer approves (or asks for changes) so I can act.
 - As a retailer, when a buyer goes silent, I can still proceed — but only deliberately, after they've been reminded.
@@ -92,7 +159,7 @@ proof:       (none) → pending → submitted → approved       (independent, N
 - Each **variant** has a `requiresProof` toggle (default off), set per-row in the variant-grid editor (alongside price/stock). Reads fall back to the deprecated product-level flag when a variant's own is unset. Independent of other settings. This lets a single listing pair ready-made fixed sizes (no proof) with a made-to-order "Custom" variant (proof required) — the art-on-print case.
 - **Whole-order gating:** an order containing **≥1** `requiresProof` **variant** is gated. Mixed orders (some custom, some ready-made) gate the **entire** order. Orders with no such variant are never gated (`proofStatus`/`mockupStatus` stays undefined).
 - A gated order starts at `proofStatus: "pending"` on creation and is **badged "Mockup needed"** in the dashboard.
-- The seller can upload an image mockup and send it; doing so sets `submitted`, stores the image, and **sends the mockup over WhatsApp** to the buyer with a tracking-page link.
+- The seller can upload an image mockup and submit it; doing so sets `submitted`, stores the image(s), folds the quote into `total`, and **releases the order's one WhatsApp message** — the confirmation template, carrying the true total and a link to the tracking page where the mockup is reviewed (`86eyd63r8`; it used to send a separate mockup image + CTA here, on top of the confirm).
 - The **tracking page** shows the current mockup and, while `submitted`, two buyer actions: **Approve** and **Request changes** (with a free-text note, capped length).
 - **Approve** → `approved`, stamps `proofApprovedAt`, writes an `orderEvents` row, notifies the seller (email; WhatsApp optional).
 - **Request changes** → `changes_requested`, stores `proofChangeNote`, writes an event, notifies the seller. Seller re-uploads → back to `submitted` (loop; each round is an event).
@@ -109,7 +176,7 @@ proof:       (none) → pending → submitted → approved       (independent, N
 **`orders`** — add the independent proof dimension (code uses `mockup*`, not `proof*`):
 - `mockupStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
 - `mockupImageStorageId: v.optional(v.string())` — kept in sync as `[0]` for legacy readers (the WhatsApp send + the quote guard).
-- `mockupImageStorageIds: v.optional(v.array(v.string()))` — **the source of truth: 1–5 mockup images** (added 2026-06-17 for richer / multi-part custom orders — multiple designs, angles, or one image per item). Reads resolve `mockupImageStorageIds ?? [mockupImageStorageId]` (`resolveMockupImageIds`). `submitMockup` accepts `storageIds: string[]` (and the single `storageId` as back-compat), writes both fields; `getMockupUrls` returns the resolved list; the seller composer (multi-select upload, replaces the set) and the buyer tracking page both render a gallery. WhatsApp still sends the first image as the CTA hero, with the full set on the tracking page. Additive optional column → no backfill. On a **failed multi-upload** (e.g. image 3 of 5 fails so `submitMockup` never runs), the client fires `discardMockupUploads(orderId, storageIds)` — an owner-only mutation that deletes the already-uploaded, now-unreferenced blobs (defensive: never deletes an id the order currently references) so they don't orphan in storage.
+- `mockupImageStorageIds: v.optional(v.array(v.string()))` — **the source of truth: 1–5 mockup images** (added 2026-06-17 for richer / multi-part custom orders — multiple designs, angles, or one image per item). Reads resolve `mockupImageStorageIds ?? [mockupImageStorageId]` (`resolveMockupImageIds`). `submitMockup` accepts `storageIds: string[]` (and the single `storageId` as back-compat), writes both fields; `getMockupUrls` returns the resolved list; the seller composer (multi-select upload, replaces the set) and the buyer tracking page both render a gallery. ~~WhatsApp still sends the first image as the CTA hero~~ — nothing is sent now (`86eyd63r8`); the full set renders on the tracking page, which is the only place the buyer sees it. Additive optional column → no backfill. On a **failed multi-upload** (e.g. image 3 of 5 fails so `submitMockup` never runs), the client fires `discardMockupUploads(orderId, storageIds)` — an owner-only mutation that deletes the already-uploaded, now-unreferenced blobs (defensive: never deletes an id the order currently references) so they don't orphan in storage.
 - `mockupChangeNote: v.optional(v.string())` — buyer's requested changes.
 - `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt`: `v.optional(v.number())`.
 - `mockupQuotedAmount: v.optional(v.number())` — **the seller's price for the custom work** (minor units), set on the mockup submission and folded into `total` via `computeOrderTotals`. See §11.
@@ -126,7 +193,7 @@ quote rides on the mockup approval — they're one decision for the buyer.
 
 **Flow (pay-once-after-quote):**
 1. Buyer orders the custom variant (snapshot price 0). In-stock lines are reserved as usual; nothing is paid yet.
-2. Seller **submits the mockup with a price** (`submitMockup({ storageId, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`. Sending a (new) image re-pings the buyer and restarts the 48h waiver clock. **Re-pricing only** (dashboard "Save price") goes through a separate `updateMockupQuote` mutation that patches `mockupQuotedAmount` + `total` **without** re-sending the image, re-notifying the buyer, or touching `mockupSubmittedAt` — the buyer sees the new price live, so adjusting it several times can't spam them or reset the grace.
+2. Seller **submits the mockup with a price** (`submitMockup({ storageIds, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`. **The first submit releases the order's one WhatsApp message** (`claimDeferredPush` — see the banner at the top of this doc); submitting a new image restarts the 48h waiver clock but sends nothing further, since the claim can only be won once. **Re-pricing only** (dashboard "Save price") goes through a separate `updateMockupQuote` mutation that patches `mockupQuotedAmount` + `total` **without** re-sending the image or touching `mockupSubmittedAt` — the buyer sees the new price live on their order page, so adjusting it several times can't reset the grace. **Note the consequence of one message:** a re-price after the first submit leaves the already-sent WhatsApp quoting the *old* total, because nothing re-sends. The order page is the live, authoritative figure and is where the buyer pays; the message is a pointer to it, not a receipt. A seller re-pricing is by definition mid-conversation with the buyer anyway.
 3. Buyer **approves** (design + price → gate opens, total locks), **requests changes** (loop), or **declines the item**.
 4. Buyer pays the finalized `total` through the existing payment flow — **but the payment ask is gated** (see below).
 
@@ -136,11 +203,12 @@ A custom order shouldn't be asked to pay before the buyer has seen and approved
 the design + price — otherwise they'd pay against an unknown (RM0) total. So the
 **"I've paid" prompt is deferred** for any order whose mockup gate is closed.
 
-- **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset. Defined once as `isMockupGateClosed` in **`convex/lib/order.ts`** and imported everywhere (server `orders.ts` + `whatsapp.ts`, and the dashboard/tracking pages) — change the gate rule in one place. Surfaced to the confirm flow as `getRetailerLocaleForOrder().mockupPending`.
-- **First bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect. Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** QR, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap).
-- **First bot reply (normal order):** unchanged — full confirm + payment block + "I've paid" CTA.
-- **Gate opens → payment prompt fires.** `approveMockup` (buyer), `waiveMockup` (seller deadlock escape), and `declineMockupItem` on a *mixed* order (buyer removed the custom line, leaving a payable remainder) all schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`). The decline nudge is skipped if payment was already taken.
-- **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`) takes the normal branch, so the pay button shows again — idempotent.
+- **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset. Defined once as `isMockupGateClosed` in **`convex/lib/order.ts`** and imported everywhere (server `orders.ts` + `whatsapp.ts`, and the dashboard/tracking pages) — change the gate rule in one place. Surfaced to the legacy confirm flow as `getRetailerLocaleForOrder().mockupPending`. **Not** the same question as the message hold `isMockupPriceUnsettled` — see the banner at the top of this doc.
+- **Push path (default).** There is no bot reply to gate: the order commits at "Place order" with `confirmationPushStatus: "deferred"`, and the buyer's page says a confirmation is coming once the price is confirmed. The message itself fires at **submit** and carries the quoted total.
+- **Legacy path first bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect. Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap). Still live, and still the one message those buyers get.
+- **Legacy path first bot reply (normal order):** unchanged — full confirm + "Make payment" CTA to the order page.
+- **~~Gate opens → payment prompt fires.~~ REMOVED (`86eyd63r8`).** `approveMockup`, `waiveMockup` and `declineMockupItem` used to schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })` with a `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined` intro. That action and all three intros are deleted. The gate opening is now a **page event**: the tracking page's "I've paid" button goes live the instant the gate opens, and "How to pay" is already sitting on the same screen. The three mutations still call `claimDeferredPush`, but only as the migration/backstop path described in the banner.
+- **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`): on the push path this is **suppressed** by `pushOwnsTheMessage` (`convex/whatsapp.ts:543`) — the order's message already went out, and a re-send must not cost a second one. On the legacy path it takes the normal branch as before, so the pay button shows again — idempotent.
 
 **Tracking page (`track.$token.tsx`) while the gate is closed:**
 - The **"I've paid" button is disabled** and relabelled — "Awaiting mockup" (pre-submission) / "Awaiting your mockup approval" (`submitted`), with a one-line hint — so the buyer can't claim payment before the price is final. It reverts to the live "I've paid" once approved/waived.
@@ -159,7 +227,7 @@ All three share the one helper, alongside the timeline / payment-button reads, s
 
 **Seller new-order / order-confirmed email** (`emailCopy.ts`, gated on `requiresMockup = mockupStatus !== undefined`) carries a "⚠️ Custom item — send a mockup… payment is held until they approve" line (EN + MS), so a seller scanning alerts knows the order needs a mockup before payment unlocks.
 
-**Buyer can also drop the custom item entirely** at any point before approval via `declineMockupItem` ("Remove this custom item" on the tracking page) — distinct from "Request changes" (the mockup-revision loop). On a mixed order it removes the custom line, the remainder proceeds, and the buyer gets a WhatsApp payment nudge for it; on a custom-only order it cancels. See §11.
+**Buyer can also drop the custom item entirely** at any point before approval via `declineMockupItem` ("Remove this custom item" on the tracking page) — distinct from "Request changes" (the mockup-revision loop). On a mixed order it removes the custom line and the remainder proceeds, payable on the same page (no WhatsApp nudge — deleted by `86eyd63r8`); on a custom-only order it cancels, silently. See §11.
 
 **Non-custom orders are entirely unaffected** — no `mockupStatus`, so every branch above falls through to the original behavior.
 
@@ -168,10 +236,14 @@ buyer's "Remove this custom item" action — distinct from "Request changes" (th
 mockup-revision loop). Drops every `requiresProof` line, recomputes `total`
 (quote cleared), and **re-evaluates the gate** — with no proof-required line
 left, `mockupStatus` clears and the ready-made remainder proceeds. A custom-only
-order that's removed is **cancelled** (stock restored, aggregates reversed). The
-seller is emailed (`notifyMockupDeclined`). On a **mixed** order, because the
-gate just opened on a still-unpaid remainder, the buyer is also nudged to pay
-over WhatsApp (`notifyPaymentDue` with `reason: "declined"`) — see §11a.
+order that's removed is **cancelled** (stock restored, aggregates reversed) —
+and, since 86eyd63r8, silently: a cancelled order sends nothing, and a
+custom-only order that never sent a confirmation never will. The seller is
+emailed (`notifyMockupDeclined`). On a **mixed** order the gate opens on a
+still-unpaid remainder; the buyer is **not** nudged over WhatsApp (the
+`notifyPaymentDue` "declined" nudge is deleted) — the remainder and its payment
+buttons are live on their order page, and `claimDeferredPush` fires here only
+for an order that somehow never sent its one message.
 
 **Why order-level, not per-line:** one mockup ⇒ one quote per order. Pricing the
 custom work at the order level (a single `mockupQuotedAmount` folded into the
@@ -190,13 +262,13 @@ absent. Revisit as its own feature if real demand appears.
 - **`convex/orders.ts`**
   - `create`: if any line's variant resolves `requiresProof` (override ?? product), set `mockupStatus: "pending"`.
   - `updateStatus`: **gate** `→ packed` on `proofStatus === "approved" || proofWaivedAt`.
-  - `submitProof(orderId, storageId)` (owner): set `submitted`, store image, event, schedule WhatsApp send.
+  - `submitMockup(orderId, storageIds, quotedAmount)` (owner): set `submitted`, store images, fold the quote into `total`, event, and `claimDeferredPush` — which releases the order's ONE confirmation message (`86eyd63r8`; this used to schedule a separate mockup WhatsApp send).
   - `approveMockup(token)` / `requestMockupChanges(token, note)` (public, capability = the tracking token, rate-limited like `claimPayment`): transition + event + notify seller. (`shortId` is not a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).)
   - `waiveProof(orderId)` (owner): set `proofWaivedAt`, event; server-guards the grace window (§8).
   - `generateProofUploadUrl(orderId)` (owner) — mockup upload URL.
-- **Channel adapter (`convex/lib/channels/`)** — outbound: send the mockup **image** + a "review your mockup" message with the tracking link; seller notifications on approve/changes. Render-only; no order-flow change.
+- ~~**Channel adapter (`convex/lib/channels/`)** — outbound: send the mockup **image** + a "review your mockup" message~~. Removed by `86eyd63r8`: the mockup never goes out over WhatsApp. The only outbound left on this flow is the order's single confirmation template, released at submit.
 - **`convex/email.ts` / `emailCopy.ts`** — seller alerts: "mockup approved", "changes requested".
-- **`convex/crons.ts`** — reminder sweeps (§8): nudge the buyer while `submitted`, nudge the seller while `pending`/`changes_requested`, and unlock the waiver after the grace window.
+- **`convex/crons.ts`** — reminder sweeps (§8) were never built, and a **WhatsApp** buyer nudge is now off the table entirely (`86eyd63r8`). If §8 is ever revived, the buyer half has to be a free channel (browser/PWA push, email); the seller half was always email-shaped anyway.
 - **Dashboard order detail (`src/routes/app.orders.$shortId.tsx`)** — "Mockup needed" badge, upload+send control, current proof state, the post-grace **"Proceed without approval"** waiver (with warning), and the `→ packed` button disabled with reason while gated.
 - **Dashboard orders list / index (`src/routes/app.orders.index.tsx`)** — a per-row "Mockup pending" badge **and** a "Mockup pending" filter pill (with a count badge from `countActionable.mockupPending`) so a high-volume seller sees them at a glance (the core anti-forgetting surface). The filter is backed by `listByRetailer({ mockupPending: true })`, which scans the seller-actionable range of the `by_retailer_mockup` index (`changes_requested`–`pending`, which are adjacent so the range is exactly those two states; `submitted`/`approved`/none fall outside). When set, it overrides the fulfilment-`status` arg.
 - **Tracking page (`src/routes/track.$token.tsx`)** — render the mockup + **Approve / Request changes** (note box) while `submitted`; show approved/awaiting states otherwise.
@@ -207,8 +279,11 @@ A hard gate + buyer approval can **stall forever** if the buyer ghosts (paid ord
 mockup sent, no response) — a worse failure than the original forgetting problem.
 The escape must keep a human in the loop and **never silently auto-produce**:
 
-1. **Reminders (Cron):** while `submitted`, nudge the **buyer** (WhatsApp) to review
-   — e.g. at +24h, +48h. While `pending`/`changes_requested`, nudge the **seller**.
+1. **Reminders (Cron) — never built, and the buyer half can no longer be WhatsApp**
+   (`86eyd63r8`). The original plan: while `submitted`, nudge the **buyer** to
+   review at +24h/+48h; while `pending`/`changes_requested`, nudge the
+   **seller**. The waiver's grace window is time-based and does not depend on a
+   reminder actually having been sent, so the escape below works without it.
 2. **Waiver unlock:** once the buyer has been reminded **and** a grace window has
    elapsed since the mockup was submitted (default **48h**, configurable), the
    dashboard surfaces **"Proceed without approval"** for that order.
@@ -230,12 +305,12 @@ The escape must keep a human in the loop and **never silently auto-produce**:
 - **Re-submission loop** — `changes_requested → submitted → …` any number of rounds; each is an `orderEvents` entry. Latest `proofImageStorageId` wins.
 - **Cancellation** — a gated order can still be cancelled at any time (proof gate only blocks *forward* production, not cancel).
 - **Toggle changed after order exists** — `mockupStatus` is stamped at order-create time from the then-current per-variant `requiresProof`; flipping a variant's toggle later doesn't retro-gate existing orders (frozen-intent, like other snapshots).
-- **No tracking phone / link-in-bio** — the buyer still reviews via the tracking page (capability = the tracking token); WhatsApp delivery of the mockup is best-effort, same as other notifications.
+- **No tracking phone / link-in-bio** — the buyer reviews via the tracking page (capability = the tracking token), which since `86eyd63r8` is the only mockup surface for *every* buyer, phone or not. A phone-less order simply never gets its one message; nothing else changes.
 - **Proof timing** — this seller's flow is **pay → mockup → produce**, so the gate sits post-confirm. (Some businesses approve *before* payment; configurable timing is a possible later extension, out of scope.)
 
 ## 10. Dependencies / relationships
 
-- **Reminders Cron** (Sprint 4) — the buyer/seller nudges + waiver unlock ride it. Can ship a manual-only v1 first, add reminders when the cron lands.
+- **Reminders Cron** (Sprint 4, unbuilt) — would have carried the buyer/seller nudges. Any revival must pick a free channel for the buyer side (`86eyd63r8`); the waiver unlock is time-based and already ships without it.
 - **Personalisation fields** (deferred "message on cake") — complementary: a personalised line item is exactly what you'd want a proof approved for. Same custom-order cohort.
 - **Channel adapter** — reuses outbound image send; no inbound changes.
 - Independent of Product Variants, but both serve the made-to-order vertical.

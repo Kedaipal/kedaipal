@@ -313,7 +313,7 @@ describe("whatsapp inbound", () => {
 		expect(text).toContain("confirmed");
 		// The confirm intro carries the order-page link once — no separate
 		// "💳 Payment details" block is appended (no duplicate link).
-		expect(text).toContain("make payment here");
+		expect(text).toContain("Progress & payment are on your order page");
 		expect(text).not.toContain("💳 Payment details");
 		expect(text).not.toContain("See how to pay and confirm your payment on your order page");
 		// The tracking link appears exactly once in the body.
@@ -349,7 +349,7 @@ describe("whatsapp inbound", () => {
 		const text = body.interactive.body.text;
 		expect(text).toContain("disahkan");
 		// BM confirm intro carries the order-page link; no separate CTA block.
-		expect(text).toContain("buat pembayaran di sini");
+		expect(text).toContain("Status & pembayaran ada di halaman pesanan anda");
 		expect(text).not.toContain("💳 Maklumat pembayaran");
 		expect(text.match(/\/track\//g)?.length).toBe(1);
 		expect(text).not.toContain("CIMB");
@@ -393,7 +393,7 @@ describe("whatsapp inbound", () => {
 		expect(confirmBody.type).toBe("interactive");
 		// The confirm carries the order-page link (no separate CTA block), and the
 		// QR is not re-sent as a chat image.
-		expect(confirmBody.interactive.body.text).toContain("make payment here");
+		expect(confirmBody.interactive.body.text).toContain("Progress & payment are on your order page");
 		expect(confirmBody.interactive.body.text).not.toContain("💳 Payment details");
 		expect(confirmBody.interactive.body.text.match(/\/track\//g)?.length).toBe(1);
 		// No image message sent.
@@ -507,225 +507,18 @@ describe("whatsapp confirm — custom item defers the payment ask", () => {
 		expect(body.image?.link).toBe("https://kedaipal.com/logo-2.png");
 		const caption = body.image?.caption ?? "";
 		expect(caption).toContain(shortId);
-		expect(caption).toContain("design to approve");
+		expect(caption).toContain("design for you to approve");
 		expect(caption).not.toContain("I've paid");
 		expect(caption).not.toContain("transfer reference");
 		expect(caption).not.toContain("Maybank");
 		fetchMock.restore();
 	});
 
-	test("notifyPaymentDue (approved) sends the deferred 'I've paid' prompt", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { orderId, shortId } = await seedCustomOrder(t);
 
-		await t.action(internal.whatsapp.notifyPaymentDue, {
-			orderId,
-			reason: "approved",
-		});
 
-		expect(fetchMock.waCalls().length).toBeGreaterThanOrEqual(1);
-		const body = fetchMock.waCalls()[0].body as {
-			type: string;
-			interactive: {
-				type: string;
-				body: { text: string };
-				action: { parameters: { display_text: string; url: string } };
-			};
-		};
-		expect(body.type).toBe("interactive");
-		expect(body.interactive.type).toBe("cta_url");
-		expect(body.interactive.action.parameters.display_text).toBe("Make payment");
-		expect(body.interactive.action.parameters.url).toContain(`/track/${await tk(t, shortId)}`);
-		expect(body.interactive.body.text).toContain("approved");
-		expect(body.interactive.body.text).toContain(
-			`Use ${shortId} as your transfer reference`,
-		);
-		// The intro carries the order-page link once — no separate "💳 Payment
-		// details" block, and the raw bank name never lands in chat (86ey98ju1).
-		expect(body.interactive.body.text).not.toContain("💳 Payment details");
-		expect(body.interactive.body.text.match(/\/track\//g)?.length).toBe(1);
-		expect(body.interactive.body.text).not.toContain("Maybank");
-		fetchMock.restore();
-	});
-
-	test("notifyPaymentDue (waived) sends the payment prompt with the waiver intro", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { orderId, shortId } = await seedCustomOrder(t);
-
-		await t.action(internal.whatsapp.notifyPaymentDue, {
-			orderId,
-			reason: "waived",
-		});
-
-		const body = fetchMock.waCalls()[0].body as {
-			interactive: {
-				body: { text: string };
-				action: { parameters: { display_text: string } };
-			};
-		};
-		expect(body.interactive.action.parameters.display_text).toBe("Make payment");
-		expect(body.interactive.body.text).toContain(
-			`Your order ${shortId}`,
-		);
-		expect(body.interactive.body.text).toContain("ready for payment");
-		// Intro carries the order-page link once — no separate CTA block.
-		expect(body.interactive.body.text.match(/\/track\//g)?.length).toBe(1);
-		fetchMock.restore();
-	});
-
-	test("notifyPaymentDue (declined) sends the payment prompt for the remainder", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { orderId, shortId } = await seedCustomOrder(t);
-
-		await t.action(internal.whatsapp.notifyPaymentDue, {
-			orderId,
-			reason: "declined",
-		});
-
-		const body = fetchMock.waCalls()[0].body as {
-			interactive: {
-				body: { text: string };
-				action: { parameters: { display_text: string } };
-			};
-		};
-		expect(body.interactive.action.parameters.display_text).toBe("Make payment");
-		expect(body.interactive.body.text).toContain("custom item was removed");
-		expect(body.interactive.body.text).toContain(shortId);
-		fetchMock.restore();
-	});
 });
 
-describe("whatsapp outbound on status change", () => {
-	test("notifyStatusChange sends localized message for each status", async () => {
-		const cases: Array<{
-			locale: "en" | "ms";
-			status: "packed" | "shipped" | "delivered" | "cancelled";
-			expect: RegExp;
-		}> = [
-			{ locale: "en", status: "packed", expect: /packed/ },
-			{ locale: "en", status: "shipped", expect: /on the way/ },
-			{ locale: "en", status: "delivered", expect: /delivered/ },
-			{ locale: "en", status: "cancelled", expect: /cancelled/ },
-			{ locale: "ms", status: "packed", expect: /dibungkus/ },
-			{ locale: "ms", status: "shipped", expect: /perjalanan/ },
-			{ locale: "ms", status: "delivered", expect: /sampai/ },
-			{ locale: "ms", status: "cancelled", expect: /dibatalkan/ },
-		];
-
-		for (const c of cases) {
-			const t = setup();
-			const fetchMock = installFetchMock();
-			const { retailerId, productId } = await seedRetailerWithLocale(
-				t,
-				c.locale,
-			);
-			const shortId = await createPendingOrder(t, retailerId, productId);
-			// Confirm via inbound to populate waPhone
-			await t.action(internal.whatsapp.handleInbound, {
-				fromPhone: "60123456789",
-				text: shortId,
-			});
-			fetchMock.calls.length = 0;
-
-			// Patch the order's status directly, then invoke the action.
-			// This avoids the scheduler so the test stays deterministic.
-			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-			await t.run(async (ctx) => {
-				await ctx.db.patch(order!._id, { status: c.status });
-			});
-			await t.action(internal.whatsapp.notifyStatusChange, {
-				orderId: order!._id,
-			});
-
-			const sent = fetchMock.calls.find((call) => {
-				const body = call.body as { text?: { body?: string } };
-				return body?.text?.body && c.expect.test(body.text.body);
-			});
-			expect(sent, `${c.locale}/${c.status}`).toBeDefined();
-			fetchMock.restore();
-		}
-	});
-
-	test("uses retailer custom template override with variable interpolation", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const asUser = t.withIdentity({ subject: USER });
-		await asUser.mutation(api.retailers.updateSettings, {
-			messageTemplates: {
-				en: {
-					confirm: "Yo {shortId}! Thanks from {storeName} 🙌",
-					packed: "Custom packed {shortId}",
-				},
-			},
-		});
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		
-
-		// Confirm via inbound — should use custom confirm template, with the
-		// non-overridable transfer-reference line appended below it, and the
-		// always-on "Powered by Kedaipal" growth line last (appended at the send
-		// site so a retailer's template override can never strip it — 86ey8zh3r).
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		const confirmBody = fetchMock.calls[0].body as {
-			type: string;
-			interactive: { body: { text: string } };
-		};
-		expect(confirmBody.type).toBe("interactive");
-		expect(confirmBody.interactive.body.text).toBe(
-			`Yo ${shortId}! Thanks from Test Outdoor 🙌\n\nUse ${shortId} as your transfer reference so we can match it.\n\nThis shop runs on Kedaipal 🛒 kedaipal.com`,
-		);
-		fetchMock.calls.length = 0;
-
-		// Packed via direct status patch — should use custom packed template
-		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-		await t.run(async (ctx) => {
-			await ctx.db.patch(order!._id, { status: "packed" });
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, {
-			orderId: order!._id,
-		});
-		const packedBody = (fetchMock.calls[0].body as { text: { body: string } })
-			.text.body;
-		expect(packedBody).toBe(`Custom packed ${shortId}`);
-		fetchMock.restore();
-	});
-
-	test("missing override key falls back to default catalog", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const asUser = t.withIdentity({ subject: USER });
-		await asUser.mutation(api.retailers.updateSettings, {
-			messageTemplates: { en: { confirm: "Custom confirm {shortId}" } },
-		});
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-		await t.run(async (ctx) => {
-			await ctx.db.patch(order!._id, { status: "shipped" });
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, {
-			orderId: order!._id,
-		});
-		const body = (fetchMock.calls[0].body as { text: { body: string } }).text
-			.body;
-		// shipped not overridden → default
-		expect(body).toMatch(/on the way/);
-		fetchMock.restore();
-	});
-
+describe("seller message-template overrides", () => {
 	test("empty string override is treated as reset", async () => {
 		const t = setup();
 		const asUser = t.withIdentity({ subject: USER });
@@ -746,116 +539,6 @@ describe("whatsapp outbound on status change", () => {
 				messageTemplates: { en: { confirm: "x".repeat(1001) } },
 			}),
 		).rejects.toThrow(/exceeds 1000/);
-	});
-
-	test("status change with no customer waPhone is a no-op (no send)", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		// Insert directly to bypass the mutation's required-waPhone validation —
-		// simulates a legacy/imported order missing a phone.
-		const orderId = await t.run(async (ctx) => {
-			const now = Date.now();
-			return ctx.db.insert("orders", {
-				retailerId,
-				shortId: "ORD-TEST",
-				items: [
-					{ productId, name: "Tent 2P", price: 12000, quantity: 1 },
-				],
-				subtotal: 12000,
-				total: 12000,
-				currency: "MYR",
-				status: "packed",
-				channel: "whatsapp",
-				customer: {},
-				createdAt: now,
-				updatedAt: now,
-			});
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, { orderId });
-		expect(fetchMock.calls).toHaveLength(0);
-		fetchMock.restore();
-	});
-});
-
-describe("whatsapp payment received", () => {
-	test("notifyPaymentReceived sends localized message to customer (en)", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		// Run an inbound to confirm + populate waPhone, then clear the mock.
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-		await t.action(internal.whatsapp.notifyPaymentReceived, {
-			orderId: order!._id,
-		});
-
-		const sent = fetchMock.calls.find((call) => {
-			const body = call.body as { text?: { body?: string } };
-			return body?.text?.body?.includes("Payment received");
-		});
-		expect(sent).toBeDefined();
-		const body = sent!.body as { to: string; text: { body: string } };
-		expect(body.to).toBe("60123456789");
-		expect(body.text.body).toContain(shortId);
-		fetchMock.restore();
-	});
-
-	test("notifyPaymentReceived uses Bahasa Malaysia for ms retailer", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-		await t.action(internal.whatsapp.notifyPaymentReceived, {
-			orderId: order!._id,
-		});
-
-		const sent = fetchMock.calls.find((call) => {
-			const body = call.body as { text?: { body?: string } };
-			return body?.text?.body?.includes("Pembayaran diterima");
-		});
-		expect(sent).toBeDefined();
-		fetchMock.restore();
-	});
-
-	test("notifyPaymentReceived skips when customer has no waPhone", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const orderId = await t.run(async (ctx) => {
-			const now = Date.now();
-			return ctx.db.insert("orders", {
-				retailerId,
-				shortId: "ORD-NOPH",
-				items: [
-					{ productId, name: "Tent 2P", price: 12000, quantity: 1 },
-				],
-				subtotal: 12000,
-				total: 12000,
-				currency: "MYR",
-				status: "pending",
-				channel: "whatsapp",
-				customer: {},
-				createdAt: now,
-				updatedAt: now,
-			});
-		});
-		await t.action(internal.whatsapp.notifyPaymentReceived, { orderId });
-		expect(fetchMock.calls).toHaveLength(0);
-		fetchMock.restore();
 	});
 });
 
@@ -1031,36 +714,6 @@ describe("whatsapp tracking-link token self-heal", () => {
 		fetchMock.restore();
 	});
 
-	test("status-update notification self-heals a missing token", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		// Move to a status that notifies (packed), then strip the token and fire
-		// the notify directly.
-		const orderId = await t.run(async (ctx) => {
-			const o = await ctx.db
-				.query("orders")
-				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-				.first();
-			if (!o) throw new Error("order missing");
-			await ctx.db.patch(o._id, {
-				status: "packed",
-				customer: { ...o.customer, waPhone: "60123456789" },
-				trackingToken: undefined,
-			});
-			return o._id;
-		});
-
-		await t.action(internal.whatsapp.notifyStatusChange, { orderId });
-
-		const url = (
-			fetchMock.calls[0].body as { text?: { body: string } }
-		).text?.body;
-		expect(url).toMatch(/\/track\/[A-Za-z0-9]{24}/);
-		expect(await tokenOf(t, shortId)).toMatch(/^[A-Za-z0-9]{24}$/);
-		fetchMock.restore();
-	});
 });
 
 describe("whatsapp inbound — Counter Checkout store QR routing", () => {
@@ -1141,11 +794,11 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		});
 	}
 
-	test("paid-in-person → confirmation text + the RECEIPT pdf", async () => {
+	test("paid-in-person → ONE confirmation text, no PDF document (86eyd63r8)", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		const shortId = await createPendingOrder(t, retailerId, productId);
-		// Settle it (as counter 'paid now' does) so the document is a receipt.
+		// Settle it (as counter 'paid now' does).
 		const orderId = await orderIdOf(t, shortId);
 		await t.run((ctx) =>
 			ctx.db.patch(orderId, {
@@ -1158,20 +811,17 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
 		const wa = fetchMock.waCalls();
 
-		const doc = wa.find(
-			(c) => (c.body as { type?: string })?.type === "document",
-		);
-		expect(doc).toBeTruthy();
-		expect(
-			(doc?.body as { document?: { filename?: string } }).document?.filename,
-		).toBe(`Receipt-${shortId}.pdf`);
+		// A counter walk-in gets one message like everyone else — the receipt PDF
+		// (previously auto-attached here) now lives on the Done screen + the
+		// buyer's order page instead.
+		expect(wa).toHaveLength(1);
+		expect((wa[0].body as { type?: string }).type).not.toBe("document");
 		// The buyer was told it's paid — no payment ask.
-		const combined = wa.map((c) => waText(c.body)).join("\n");
-		expect(combined).toMatch(/paid/i);
+		expect(waText(wa[0].body)).toMatch(/paid/i);
 		fetchMock.restore();
 	});
 
-	test("pay-later → amount + transfer reference + page CTA + INVOICE pdf, never raw bank details (86ey98ju1)", async () => {
+	test("pay-later → ONE payment ask, no invoice PDF, never raw bank details (86ey98ju1/86eyd63r8)", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		// Give the store a bank method. The order-create message points the buyer to
@@ -1198,13 +848,13 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
 		const wa = fetchMock.waCalls();
 
-		// Invoice (not receipt) document still sent — the formal payable document.
-		const doc = wa.find(
-			(c) => (c.body as { type?: string })?.type === "document",
-		);
+		// ONE message (86eyd63r8): the payment ask. The invoice PDF is no longer
+		// WhatsApp'd — it's downloadable from the Done screen + the order page,
+		// which the message links to.
+		expect(wa).toHaveLength(1);
 		expect(
-			(doc?.body as { document?: { filename?: string } }).document?.filename,
-		).toBe(`Invoice-${shortId}.pdf`);
+			wa.some((c) => (c.body as { type?: string })?.type === "document"),
+		).toBe(false);
 		// The order-create text message: intro carries the order-page link once,
 		// with no separate "💳 Payment details" block (no duplicate link).
 		const orderMsg = waText(
@@ -1293,145 +943,6 @@ describe("counter checkout — store QR scan (86ey5neg6 / 86ey98ju1)", () => {
 		const body = waText(fetchMock.waCalls()[0]?.body);
 		expect(body).not.toContain("connected to");
 		expect(body).not.toContain("Test Outdoor");
-		fetchMock.restore();
-	});
-});
-
-describe("drop-off + custom-stage status copy (86ey570am)", () => {
-	test("notifyStatusChange uses drop-off wording when the pickup snapshot is drop_off", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, {
-			token: await tk(t, shortId),
-		});
-		await t.run(async (ctx) => {
-			await ctx.db.patch(order!._id, {
-				status: "packed",
-				deliveryMethod: "self_collect",
-				pickupSnapshot: {
-					label: "Bearcamp HQ",
-					address: "LOT D, 2, JALAN MP54, Sungai Buloh",
-					locationType: "drop_off",
-				},
-			});
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, {
-			orderId: order!._id,
-		});
-		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
-			.text.body;
-		expect(body).toContain("ready for the drop-off point");
-		expect(body).not.toContain("ready for pickup");
-		fetchMock.restore();
-	});
-
-	test("notifyStatusChange uses the custom stage label + description on anchor crossings", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const asUser = t.withIdentity({ subject: USER });
-		await asUser.mutation(api.retailers.updateSettings, {
-			orderStages: [
-				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
-				{ anchor: "packed", label: { en: "Cleaning" }, notify: true },
-				{
-					anchor: "shipped",
-					label: { en: "Ready for Collection" },
-					description: { en: "Please collect within 14 days." },
-					notify: true,
-				},
-				{ anchor: "delivered", label: { en: "Collected" }, notify: true },
-			],
-		});
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, {
-			token: await tk(t, shortId),
-		});
-		await t.run(async (ctx) => {
-			await ctx.db.patch(order!._id, { status: "shipped" });
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, {
-			orderId: order!._id,
-		});
-		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
-			.text.body;
-		expect(body).toContain(`Order ${shortId} update: Ready for Collection.`);
-		expect(body).toContain("Please collect within 14 days.");
-		expect(body).not.toContain("on the way");
-		fetchMock.restore();
-	});
-
-	test("an authored template override still beats the custom stage copy", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const asUser = t.withIdentity({ subject: USER });
-		await asUser.mutation(api.retailers.updateSettings, {
-			orderStages: [
-				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
-				{ anchor: "packed", label: { en: "Cleaning" }, notify: true },
-			],
-			messageTemplates: { en: { packed: "Custom packed {shortId}" } },
-		});
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, {
-			token: await tk(t, shortId),
-		});
-		await t.run(async (ctx) => {
-			await ctx.db.patch(order!._id, { status: "packed" });
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, {
-			orderId: order!._id,
-		});
-		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
-			.text.body;
-		expect(body).toBe(`Custom packed ${shortId}`);
-		fetchMock.restore();
-	});
-
-	test("default stages keep the rich canonical copy (zero regression)", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const shortId = await createPendingOrder(t, retailerId, productId);
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: shortId,
-		});
-		fetchMock.calls.length = 0;
-
-		const order = await t.query(api.orders.get, {
-			token: await tk(t, shortId),
-		});
-		await t.run(async (ctx) => {
-			await ctx.db.patch(order!._id, { status: "shipped" });
-		});
-		await t.action(internal.whatsapp.notifyStatusChange, {
-			orderId: order!._id,
-		});
-		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
-			.text.body;
-		expect(body).toContain("on the way");
 		fetchMock.restore();
 	});
 });

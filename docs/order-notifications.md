@@ -165,3 +165,57 @@ Alerts require a Kedaipal tab open somewhere (foreground or background).
 True closed-browser Web Push (service worker + subscriptions + VAPID) is the
 existing roadmap item **"PWA + Push" (S4)** — the card's footnote tells
 sellers that upgrade is coming, so today's behavior never reads as broken.
+
+## WhatsApp replaces email for the two seller alerts (2026-08-08, `86eyd63r8`)
+
+The seller alerts shipped as a deliberate **double-notify** — WhatsApp *and*
+email on both events — while the WA path bedded in. That's now retired:
+**WhatsApp is the channel, email is the fallback.**
+
+Suppression is in **one place**, `internal.email.notifyRetailerOrderAlert` /
+`notifyPaymentClaimed`, not at the four call sites — so every caller (order
+create, `claimPayment`, and both inbound-confirm paths in `handleInbound`) is
+covered by construction and the rule can't drift between them.
+
+The decision runs in two steps, because "we scheduled a WhatsApp alert" is not
+the same as "the seller heard about it":
+
+1. **Schedule time** — the email no-ops when
+   `sellerWaAlertWillAttempt(retailer, …)` (pure, `convex/lib/sellerAlerts.ts`)
+   says the alert can actually be attempted: event template env set, the
+   seller's `orderWaAlerts` toggle on, `notifyWaPhone` saved, and — for the
+   **new-order** alert only — not a counter sale. Anything falsy and the email
+   fires exactly as before. That's every Starter seller (the toggle is
+   Pro-gated) and everyone who never opted in.
+2. **Failure time** — `notifySellerNewOrder` / `notifySellerPaymentClaim`
+   schedule the email with **`force: true`** when they give up: gateway-blocked
+   (opt-out / cap / quality pause) or a terminal / retries-exhausted send
+   failure. `force` bypasses step 1, which is the whole point — that email is
+   needed precisely when the suppression would otherwise silence it.
+
+Between them a seller never ends up with zero notification, which is the
+property the old unconditional email existed to guarantee. Browser alerts are
+untouched.
+
+**The counter asymmetry is load-bearing.** `isCounterOrder` suppresses the
+new-order WA alert (the seller rang it up in person), so the predicate must
+report `false` there or a counter order would notify nobody. A payment *claim*
+passes no counter flag at all — it lands hours after the sale, when nobody is
+standing at the counter.
+
+**Where the seller is told:** the WhatsApp-order-alerts card in Settings →
+Store ("While this is on, these two alerts come by WhatsApp instead of email; if
+one can't be delivered, the email goes out as backup"), and the Notification
+email field description, which now names the same relationship from the other
+side.
+
+**Tests:** `convex/lib/sellerAlerts.test.ts` asserts every falsy input
+explicitly — a wrong `true` is the dangerous direction, since it suppresses an
+email for an alert that never fires. `convex/oneMessagePerOrder.test.ts` asserts
+the seller alerts still fire *positively*, so excluding them from the
+buyer-message gate can't quietly become a hole.
+
+**Not covered by one-message-per-order.** That policy caps what we push at a
+**buyer**. A seller opting in to be pinged about their own shop is a different
+budget and a different consent — see
+[`one-message-per-order.md`](./one-message-per-order.md).

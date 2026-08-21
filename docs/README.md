@@ -18,6 +18,7 @@ How the product actually works. Read in this order.
 |---|---|
 | [data-model.md](./data-model.md) | Convex schema: entities, relationships, multi-tenancy, indexes, ER diagram. |
 | [order-lifecycle.md](./order-lifecycle.md) | Checkout → `wa.me` handoff → confirmation → fulfilment state machine. |
+| [one-message-per-order.md](./one-message-per-order.md) | **The messaging policy every other doc defers to:** an order sends the buyer exactly ONE WhatsApp, when its price goes final; everything after lives on `/track/<token>`. Read before adding anything buyer-facing. |
 | [order-note.md](./order-note.md) | Shopper's free-text note at checkout: persisted on the order, carried in the `wa.me` body, surfaced to the seller + echoed to the buyer. |
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |

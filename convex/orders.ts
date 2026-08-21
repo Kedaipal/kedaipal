@@ -4,8 +4,6 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
-	type ActionCtx,
-	internalAction,
 	internalMutation,
 	internalQuery,
 	mutation,
@@ -68,6 +66,7 @@ import {
 	generateTrackingToken,
 	isCollectionGateClosed,
 	isMockupGateClosed,
+	isMockupPriceUnsettled,
 } from "./lib/order";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
@@ -92,7 +91,6 @@ import {
 	type OrderStage,
 	resolveStages,
 	stageLabel,
-	stageNotifyPlan,
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
@@ -115,8 +113,6 @@ import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidMyMobile } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
-import { renderSystemMessage } from "./lib/whatsappCopy";
-import { makeGuardedSender } from "./wabaProtection";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
 const addressValidator = v.object({
@@ -438,19 +434,27 @@ export const ensureTrackingToken = internalMutation({
  */
 /**
  * Transactional claim for a deferred confirmation push (86eyfq0w5). Called by
- * the gate-open mutations (mockup approve/waive/decline-with-remainder,
- * setDeliveryFee) in the SAME transaction as their gate patch: it re-reads the
- * order (ctx.db.get sees this transaction's own writes), and only when NO hold
- * remains flips deferred → sending and schedules the one send.
+ * the price-settling mutations (mockup submit/approve/waive/decline-with-
+ * remainder, setDeliveryFee) in the SAME transaction as their patch: it
+ * re-reads the order (ctx.db.get sees this transaction's own writes), and only
+ * when NO price hold remains flips deferred → sending and schedules the one
+ * send.
  *
  * The flip IS the de-dup. Convex mutations are serializable, so exactly one
- * gate-open transaction can ever observe "deferred" with both holds clear —
- * a second gate event racing in (seller sets the fee a second after the buyer
- * approves the mockup) serializes after the winner, sees "sending", and
- * schedules nothing. That's what makes "double-hold sends exactly once" hold
- * under concurrency, not just under the tidy orderings tests produce; a claim
- * inside the ACTION couldn't guarantee it, because two in-flight actions read
- * their metadata before either outcome commits.
+ * transaction can ever observe "deferred" with both holds clear — a second
+ * event racing in (seller sets the fee a second after submitting the mockup)
+ * serializes after the winner, sees "sending", and schedules nothing. That's
+ * what makes "double-hold sends exactly once" hold under concurrency, not just
+ * under the tidy orderings tests produce; a claim inside the ACTION couldn't
+ * guarantee it, because two in-flight actions read their metadata before either
+ * outcome commits.
+ *
+ * The mockup hold is `isMockupPriceUnsettled`, NOT `isMockupGateClosed`
+ * (86eyd63r8): the price exists from `submitted` onward, so that's when the
+ * order's single message goes out — it carries the quote and the tracking link
+ * the buyer approves on. Approve/waive/decline still call this: they're the
+ * claim site for orders that were already `deferred` when the policy shipped
+ * (their mockup was submitted under the old gate), so no backfill is needed.
  */
 async function claimDeferredPush(
 	ctx: MutationCtx,
@@ -459,7 +463,7 @@ async function claimDeferredPush(
 	const fresh = await ctx.db.get(orderId);
 	if (!fresh || fresh.confirmationPushStatus !== "deferred") return;
 	if (fresh.status === "cancelled") return;
-	if (isMockupGateClosed(fresh) || fresh.deliveryFeePending === true) return;
+	if (isMockupPriceUnsettled(fresh) || fresh.deliveryFeePending === true) return;
 	await ctx.db.patch(orderId, {
 		confirmationPushStatus: "sending",
 		updatedAt: Date.now(),
@@ -1505,137 +1509,19 @@ export const generateReceiptPdf = action({
 	},
 });
 
-/** The resolved inputs needed to render + send an order's receipt/invoice PDF. */
-type OrderDocumentInputs = {
-	data: OrderReceiptData;
-	shortId: string;
-	paid: boolean;
-	waPhone: string;
-	retailerId: Id<"retailers">;
-	locale: Locale;
-};
-
-type OrderDocumentInputsResult =
-	| ({ ok: true } & OrderDocumentInputs)
-	| { ok: false; reason: "not_found" | "no_phone" };
-
-/**
- * Build the render+send inputs from an already-resolved order. Shared by the
- * auth'd (shortId) and trusted (orderId) input queries so the view-model shaping
- * lives in one place. `no_phone` is the one state that can't be sent.
- */
-async function buildOrderDocumentInputs(
-	ctx: QueryCtx,
-	order: Doc<"orders">,
-): Promise<({ ok: true } & OrderDocumentInputs) | { ok: false; reason: "no_phone" }> {
-	const waPhone = order.customer.waPhone?.trim();
-	if (!waPhone) return { ok: false, reason: "no_phone" };
-	const retailer = await ctx.db.get(order.retailerId);
-	return {
-		ok: true,
-		data: orderToReceiptData({
-			order,
-			storeName: retailer?.storeName ?? "",
-			paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
-		}),
-		shortId: order.shortId,
-		paid: (order.paymentStatus ?? "unpaid") === "received",
-		waPhone,
-		retailerId: order.retailerId,
-		locale: (retailer?.locale as Locale | undefined) ?? "en",
-	};
-}
-
-/**
- * Render the order's receipt (paid) / invoice (unpaid) PDF, host it transiently
- * (Convex storage → a URL Meta fetches), send it to the buyer's WhatsApp as a
- * `document` (transactional — bypasses per-seller caps like the order confirm),
- * then schedule the blob's cleanup (the PDF is deterministic, never persisted).
- * Shared by the manual "resend" button and the automatic post-checkout send.
- */
-async function deliverOrderDocument(
-	ctx: ActionCtx,
-	inputs: OrderDocumentInputs,
-): Promise<{ ok: boolean; reason?: string }> {
-	const bytes = await buildOrderReceiptPdf(inputs.data);
-	const storageId = await ctx.storage.store(
-		new Blob([bytes as BlobPart], { type: "application/pdf" }),
-	);
-	const url = await ctx.storage.getUrl(storageId);
-	if (!url) {
-		await ctx.storage.delete(storageId).catch(() => {});
-		return { ok: false, reason: "storage" };
-	}
-	const filename = `${inputs.paid ? "Receipt" : "Invoice"}-${inputs.shortId}.pdf`;
-	const caption = renderSystemMessage(
-		inputs.locale,
-		inputs.paid ? "orderReceiptCaption" : "orderInvoiceCaption",
-		{ shortId: inputs.shortId, storeName: inputs.data.storeName },
-	);
-	let sent = false;
-	try {
-		await makeGuardedSender(ctx, inputs.retailerId, "transactional").send(
-			inputs.waPhone,
-			{ kind: "document", documentUrl: url, filename, caption },
-		);
-		sent = true;
-	} catch (err) {
-		console.error("WA order-document send failed", err);
-	}
-	// Meta fetches the link within seconds; hold the blob briefly so that fetch
-	// (and any transient retry) succeeds, then reclaim the storage. Runs whether or
-	// not the send succeeded (a failed send already left it unreferenced).
-	await ctx.scheduler.runAfter(
-		10 * 60 * 1000,
-		internal.orders.deleteTransientStorage,
-		{ storageId },
-	);
-	return sent ? { ok: true } : { ok: false, reason: "send_failed" };
-}
-
-/**
- * Assemble the send inputs behind the auth seam — only the owning seller (or an
- * admin acting-as) with a valid `shortId` gets through (resolveSharedOrder). A
- * buyer's tracking token is intentionally NOT accepted: the manual send is a
- * dashboard action, and the buyer self-serves the receipt on their tracking page.
- */
-export const sendDocumentInputs = internalQuery({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<OrderDocumentInputsResult> => {
-		const order = await resolveSharedOrder(ctx, { shortId });
-		if (!order) return { ok: false, reason: "not_found" };
-		return buildOrderDocumentInputs(ctx, order);
-	},
-});
-
-/**
- * Seller-only manual "resend": render + send the order's receipt/invoice to the
- * buyer's WhatsApp. Auth via resolveSharedOrder (owned shortId). The document is
- * also sent AUTOMATICALLY right after counter checkout (see orders.sendOrderDocument
- * + whatsapp.notifyCounterOrderCreated); this is the re-send / recovery path.
- */
-export const sendOrderDocumentToBuyer = action({
-	args: { shortId: v.string() },
-	handler: async (
-		ctx,
-		{ shortId },
-	): Promise<{ ok: boolean; reason?: string }> => {
-		const inputs = await ctx.runQuery(internal.orders.sendDocumentInputs, {
-			shortId,
-		});
-		if (!inputs.ok) return { ok: false, reason: inputs.reason };
-		return deliverOrderDocument(ctx, inputs);
-	},
-});
-
 /**
  * Auth + eligibility + atomic cooldown stamp for a manual payment reminder, in
- * one mutation so two fast taps can't both slip past the 6h gate (compare on the
- * freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as via
- * resolveSharedOrder — the same seam the resend-document action uses; throws
+ * one mutation so two fast taps can't both slip past the 24h gate (compare on
+ * the freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as
+ * via resolveSharedOrder — the same seam the receipt PDF uses; throws
  * ConvexError on not-authenticated / forbidden. Returns the block reason (no
  * stamp) when the order isn't in a remindable state, else stamps and hands back
- * the orderId for the send. See docs/payment-reminder.md.
+ * the orderId for the send.
+ *
+ * The window rules (day 11–14, 24h cooldown — 86eyd63r8 revision) live in the
+ * pure `manualReminderEligibility`, shared verbatim with the dashboard button,
+ * so the disabled-with-reason UI and this lock can never disagree.
+ * See docs/payment-reminder.md.
  */
 export const prepareManualReminder = internalMutation({
 	args: { shortId: v.string() },
@@ -1672,15 +1558,17 @@ export const prepareManualReminder = internalMutation({
 });
 
 /**
- * Seller-triggered "Send payment reminder" — re-sends the buyer the full payment
- * message (amount + transfer ref + methods + QR + "I've paid" CTA) for an unpaid
- * order, on demand. Doubles as recovery when the buyer never received the first
- * bot confirmation. Auth + eligibility + the 6h cooldown stamp happen atomically
- * in prepareManualReminder; the actual send is best-effort through the WABA
- * `session_message` gateway (kill switch / caps / opt-outs apply, and may
- * silently not deliver outside Meta's 24h window — same caveat as every session
- * send). A blocked reason is returned WITHOUT sending, so the button can explain
- * why. See docs/payment-reminder.md.
+ * Seller-triggered "Send payment reminder" — the one deliberate exception to
+ * one-message-per-order (86eyd63r8): each send is a human tap, not an
+ * automation, and the window is boxed to days 11–14 of the open-payment window
+ * at most once per 24h (so an order can ever receive at most 4). Re-sends the
+ * buyer the full payment message (amount + transfer ref + "Make payment" CTA
+ * to their order page). Auth + eligibility + the cooldown stamp happen
+ * atomically in prepareManualReminder; the actual send is best-effort through
+ * the WABA `session_message` gateway (kill switch / caps / opt-outs apply, and
+ * may silently not deliver outside Meta's 24h service window — the button's
+ * helper says so). A blocked reason is returned WITHOUT sending, so the button
+ * can explain why. See docs/payment-reminder.md.
  */
 export const sendPaymentReminder = action({
 	args: { shortId: v.string() },
@@ -1700,53 +1588,12 @@ export const sendPaymentReminder = action({
 });
 
 /**
- * Inputs for the AUTOMATIC send — keyed by orderId, no auth: this runs from the
- * trusted post-checkout scheduler, not a client. Mirrors sendDocumentInputs but
- * skips the ownership check.
- */
-export const orderDocumentInputsById = internalQuery({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<OrderDocumentInputsResult> => {
-		const order = await ctx.db.get(orderId);
-		if (!order) return { ok: false, reason: "not_found" };
-		return buildOrderDocumentInputs(ctx, order);
-	},
-});
-
-/**
- * Automatic post-checkout send of the receipt/invoice PDF, scheduled by the
- * counter-order confirmation flow (whatsapp.notifyCounterOrderCreated). Internal
- * + orderId-keyed; delegates to the shared deliverOrderDocument. Best-effort —
- * the seller can resend from the Done screen if it fails.
- */
-export const sendOrderDocument = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (
-		ctx,
-		{ orderId },
-	): Promise<{ ok: boolean; reason?: string }> => {
-		const inputs = await ctx.runQuery(internal.orders.orderDocumentInputsById, {
-			orderId,
-		});
-		if (!inputs.ok) return { ok: false, reason: inputs.reason };
-		return deliverOrderDocument(ctx, inputs);
-	},
-});
-
-/** Reclaim a transiently-stored document blob (see deliverOrderDocument). */
-export const deleteTransientStorage = internalMutation({
-	args: { storageId: v.id("_storage") },
-	handler: async (ctx, { storageId }): Promise<void> => {
-		await ctx.storage.delete(storageId);
-	},
-});
-
-/**
  * Public: resolve the seller's payment methods for the buyer's tracking page,
- * keyed by the tracking token (the capability — same details already go to the
- * buyer in the WhatsApp confirm reply). Legacy-aware via `resolvePaymentMethods`;
- * QR storage ids resolved to URLs. Returns `null` when the seller has nothing
- * configured (track page hides it).
+ * keyed by the tracking token (the capability). This page is the ONLY place a
+ * buyer sees bank details — they left WhatsApp in 86ey98ju1, and the order's one
+ * message (86eyd63r8) carries the tracking link, not the numbers. Legacy-aware
+ * via `resolvePaymentMethods`; QR storage ids resolved to URLs. Returns `null`
+ * when the seller has nothing configured (track page hides it).
  */
 export const getPaymentMethods = query({
 	args: { token: v.string() },
@@ -2490,11 +2337,12 @@ export async function applyStatusTransition(
 		await stampRetailerActivation(ctx, order.retailerId, now);
 	}
 
-	// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
-	// mutation stays a pure transaction and the action runs with network access.
-	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
-		orderId: order._id,
-	});
+	// No WhatsApp here. Status changes — including cancellation — are silent by
+	// policy (86eyd63r8): an order gets exactly ONE outbound message, the
+	// confirmation push, and the tracking page carries every state after it. The
+	// seller is told plainly at each send-nothing surface (the advance stepper,
+	// the cancel dialog, the bulk bar) so "the buyer wasn't told" is never a
+	// surprise. See docs/one-message-per-order.md.
 
 	// NOTE: Lalamove dispatch is never triggered server-side. Marking a delivery
 	// order packed surfaces a "book a rider now?" prompt CLIENT-side (opt-in
@@ -3012,23 +2860,9 @@ export const advanceToStage = mutation({
 			createdAt: now,
 		});
 
-		const plan = stageNotifyPlan({
-			notify: stage.notify,
-			targetAnchor: targetStatus,
-			statusChanged,
-		});
-		if (plan === "canonical") {
-			// Anchor crossing → rich canonical copy (messageTemplates-aware).
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
-				orderId,
-			});
-		} else if (plan === "stage") {
-			// Within the same anchor → generic stage update.
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStageEntry, {
-				orderId,
-				stageId: stage.id,
-			});
-		}
+		// Custom stages are a seller-side vocabulary for the inbox and the buyer's
+		// tracking timeline — they never message the buyer (86eyd63r8). The old
+		// per-stage `notify` toggle and its MAX_NOTIFY_STAGES cap are gone with it.
 		await logAdminAction(ctx, access, "orders.advanceStage", orderId);
 	},
 });
@@ -3343,23 +3177,13 @@ export const setDeliveryFee = mutation({
 			note: `delivery_fee_set (fee ${fee})`,
 			createdAt: now,
 		});
-		// Release the held payment ask. A push-path order (86eyfq0w5) gets its
-		// DEFERRED confirmation template — the action re-checks the mockup hold,
-		// so a doubly-held order sends exactly once, after both clear. Legacy
-		// orders keep the free-form held-payment ask, with the original guards
-		// (fee actually resolved, buyer already confirmed, mockup not also
-		// holding — that path prompts via notifyPaymentDue).
-		if (wasPending && order.confirmationPushStatus === "deferred") {
+		// The price is now final — release the order's ONE message if it was held
+		// for this (86eyfq0w5). The claim re-checks the mockup hold, so a doubly
+		// held order still sends exactly once, after both clear. Legacy orders
+		// (no push) get nothing here: their one message was the free-form confirm
+		// they already received when they sent their ORD reference.
+		if (wasPending) {
 			await claimDeferredPush(ctx, orderId);
-		} else if (
-			wasPending &&
-			order.status !== "pending" &&
-			!isMockupGateClosed(order) &&
-			order.customer.waPhone
-		) {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryFeeSet, {
-				orderId,
-			});
 		}
 		await logAdminAction(ctx, access, "orders.setDeliveryFee", orderId);
 	},
@@ -3643,9 +3467,11 @@ export const claimPayment = mutation({
  * The one author of the payment-received state change, shared by the seller's
  * `markPaymentReceived` and the HitPay gateway's webhook receive (86eyb6z3a) so
  * the two paths can never drift: paymentStatus → received, pending orders
- * auto-confirm (+ the activation stamp), the orderEvents row is written, and
- * `notifyPaymentReceived` is scheduled — deliberately NOT `notifyStatusChange`,
- * so an auto-confirm sends exactly one WhatsApp message.
+ * auto-confirm (+ the activation stamp), and the orderEvents row is written.
+ * NO WhatsApp goes out here (86eyd63r8, one message per order): the buyer's
+ * order page flips to "Payment received" live, and both callers' seller
+ * surfaces say so — the confirm dialog for the manual path, the paid card for
+ * the gateway path.
  *
  * Callers own their guards: the seller path throws on the mockup/delivery-fee
  * holds (the money hasn't moved yet, so refusing is safe); the gateway path
@@ -3707,19 +3533,12 @@ async function applyPaymentReceived(
 			createdAt: now,
 		});
 	}
-
-	await ctx.scheduler.runAfter(
-		0,
-		internal.whatsapp.notifyPaymentReceived,
-		{ orderId: order._id },
-	);
 }
 
 /**
  * Retailer-only mutation: mark that the payment has landed in the bank app.
- * Auto-bumps `pending → confirmed` (the new payment-received WhatsApp message
- * already covers the shopper-facing handshake, so this skips the regular
- * `notifyStatusChange` to avoid sending two messages).
+ * Auto-bumps `pending → confirmed`. Nothing is WhatsApp'd (86eyd63r8) — the
+ * buyer's order page shows the received state live.
  */
 export const markPaymentReceived = mutation({
 	args: {
@@ -3774,7 +3593,7 @@ export const markPaymentReceived = mutation({
  *    checkout link paid after a re-price records an event + emails the seller
  *    instead of auto-receiving (the money moved; a human reconciles it);
  *  - otherwise it applies the exact `markPaymentReceived` semantics via
- *    `applyPaymentReceived` (auto-confirm, activation, WhatsApp receipt).
+ *    `applyPaymentReceived` (auto-confirm, activation — no WhatsApp, 86eyd63r8).
  * Deliberately NO hold guards here: checkout creation enforces them, and
  * money that has already moved must never be silently dropped.
  *
@@ -3818,8 +3637,8 @@ export const receiveGatewayPayment = internalMutation({
 			// Pay-after-cancel (PR #172 review, finding 2): createCheckout refuses
 			// cancelled orders, but a link minted BEFORE the cancel stays payable
 			// at HitPay for up to an hour. An authentic late payment must never
-			// resurrect the order or WhatsApp the buyer "payment received" — it
-			// needs a human and a refund. Event + seller email, no state flip.
+			// resurrect the order — it needs a human and a refund. Event + seller
+			// email, no state flip.
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: order.status,
@@ -4192,9 +4011,16 @@ export const submitMockup = mutation({
 					: "mockup_submitted",
 			createdAt: now,
 		});
-		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
-			orderId,
-		});
+		// THIS is where a made-to-order buyer's single message goes out
+		// (86eyd63r8): the quote above just made the total real, so the deferred
+		// confirmation template can finally state a true price — and its tracking
+		// link is the same page the buyer approves the mockup on. Firing here
+		// rather than on approval is what keeps the mockup flow alive under
+		// one-message-per-order: without it nothing would ever tell the buyer
+		// there's a design waiting, and the gate would only open on the 48h
+		// waiver. Re-submits after a change request are silent (the claim only
+		// ever wins once).
+		await claimDeferredPush(ctx, orderId);
 		await logAdminAction(ctx, access, "orders.submitMockup", orderId);
 	},
 });
@@ -4289,19 +4115,11 @@ export const approveMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
 			orderId: order._id,
 		});
-		// Gate is now open → the price is agreed. A push-path order (86eyfq0w5)
-		// gets its DEFERRED confirmation template now — first and only message,
-		// carrying the final quoted total (the action re-checks the fee hold, so
-		// a doubly-held order sends exactly once). Legacy orders keep the
-		// free-form payment prompt their open chat can actually receive.
-		if (order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, order._id);
-		} else {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-				orderId: order._id,
-				reason: "approved",
-			});
-		}
+		// Normally a no-op now: the buyer's one message went out when the seller
+		// SUBMITTED this mockup (86eyd63r8). Kept as the claim site for orders
+		// that were already `deferred` under the old approve-gate when the policy
+		// shipped — they fire here, exactly as before, so nothing needs a backfill.
+		await claimDeferredPush(ctx, order._id);
 	},
 });
 
@@ -4371,17 +4189,11 @@ export const waiveMockup = mutation({
 			note: "mockup_waived",
 			createdAt: now,
 		});
-		// Gate forced open without buyer approval → the buyer still needs to pay.
-		// Push-path orders get their deferred confirmation template (86eyfq0w5);
-		// legacy orders get the free-form payment prompt.
-		if (order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, orderId);
-		} else {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-				orderId,
-				reason: "waived",
-			});
-		}
+		// Gate forced open without buyer approval. Usually a no-op — the message
+		// went out at submit — but a waiver also SETTLES the price, so this is the
+		// backstop that guarantees any still-deferred order eventually sends its
+		// one message rather than going out silently (86eyd63r8).
+		await claimDeferredPush(ctx, orderId);
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
@@ -4518,17 +4330,12 @@ export const declineMockupItem = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
 			orderId: order._id,
 		});
-		// The gate is now open and the buyer owes for the ready-made remainder.
-		// Push-path orders get their deferred confirmation template now — even if
-		// somehow already paid, it's still the order's first (and correct)
-		// message. Legacy unpaid orders get the free-form payment nudge.
-		if (order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, order._id);
-		} else if ((order.paymentStatus ?? "unpaid") === "unpaid")
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-				orderId: order._id,
-				reason: "declined",
-			});
+		// Dropping the custom item settles the price at the ready-made remainder.
+		// A still-deferred order (declined before the seller ever submitted a
+		// mockup, so nothing has been sent) claims its one message here — the
+		// last of the four settle points, and the reason a never-quoted order
+		// can't slip through silently.
+		await claimDeferredPush(ctx, order._id);
 	},
 });
 

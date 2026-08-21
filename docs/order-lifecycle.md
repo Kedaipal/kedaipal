@@ -2,11 +2,19 @@
 
 How an order is created, confirmed, and driven through fulfilment. Payment is a separate dimension — see [`payment-handshake.md`](./payment-handshake.md).
 
+> **An order sends the buyer exactly ONE outbound WhatsApp message** — the
+> confirmation, fired the moment the price is final. Everything after it lives
+> on `/track/<token>`. That rule governs every section below; the canonical
+> statement of it (and the full list of what was deleted) is
+> [`one-message-per-order.md`](./one-message-per-order.md), ClickUp
+> [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8).
+
 **Primary source files:**
 - [`convex/orders.ts`](../convex/orders.ts) — mutations/queries (`create`, `updateStatus`, `updateDeliveryAddress`, …)
-- [`convex/lib/order.ts`](../convex/lib/order.ts) — pure helpers (`generateShortId`, `computeOrderTotals`)
-- [`convex/whatsapp.ts`](../convex/whatsapp.ts) — confirmation + status notifications
-- [`convex/lib/whatsappCopy.ts`](../convex/lib/whatsappCopy.ts) — bilingual message rendering
+- [`convex/lib/order.ts`](../convex/lib/order.ts) — pure helpers (`generateShortId`, `computeOrderTotals`, `isMockupPriceUnsettled`)
+- [`convex/whatsapp.ts`](../convex/whatsapp.ts) — the confirmation send + inbound handling
+- [`convex/lib/whatsappCopy.ts`](../convex/lib/whatsappCopy.ts) — trilingual message rendering
+- [`convex/lib/confirmationPush.ts`](../convex/lib/confirmationPush.ts) — retry policy + `pushOwnsTheMessage`
 
 ## Fulfilment state machine
 
@@ -31,7 +39,14 @@ Notes:
 - `orders.create` only ever produces `pending`. Validators in `updateStatus` (`transitionStatusValidator`) accept `confirmed | packed | shipped | delivered | cancelled` — `pending` is never a manual target.
 - The transition graph is **not hard-enforced** in code beyond the validators — retailer-driven transitions trust the dashboard UI. The one server-enforced rule is around stock and aggregates on the *first* entry into `cancelled` (see below).
 
-## End-to-end order flow
+## End-to-end order flow (the legacy / no-template path)
+
+> This is the **fallback** shape — a store with `WHATSAPP_ORDER_CONFIRM_TEMPLATE`
+> unset, where the buyer's own `ORD-` send is what confirms the order and the
+> reply to it is their one message. On the push path (the default once the
+> template is configured) the order commits at "Place order" and the
+> confirmation template goes out without the buyer sending anything — see the
+> section below.
 
 ```mermaid
 sequenceDiagram
@@ -52,10 +67,9 @@ sequenceDiagram
     WA->>WH: Inbound webhook (signed)
     WH->>CX: handleInbound(fromPhone, text, profileName)
     Note over CX: match ORD-XXXX → confirmOrderFromWhatsApp:\npending→confirmed, stamp waPhone,\nlate-link customer, refresh pushname
-    CX->>WA: CTA reply "I've paid" + payment instructions
-    CX->>WA: Payment QR image (if configured)
+    CX->>WA: ONE CTA reply — confirm + transfer ref + "Make payment" → order page
     CX-->>EM: notifyRetailerOrderAlert (first confirm only)
-    WA-->>S: Confirmation + how to pay
+    WA-->>S: Confirmation; everything after this is on /track/<token>
 ```
 
 ## `orders.create` — checkout
@@ -91,31 +105,51 @@ phone. So the storefront no longer depends on the buyer's send at all:
   `assertValidMyWaPhone` that also demands a MY **mobile** prefix, because a
   landline satisfies the 8–15-digit rule but can never receive WhatsApp.
 - **Every storefront order takes this path** — including custom/made-to-order
-  and fee-pending orders. What varies is push **timing** (86eyfq0w5): the
-  approved template states "Total: {{3}}", so an order whose total isn't final
-  yet (a price-on-quote line is RM 0.00 until quoted; a fee-pending total grows
-  by the arranged fee) commits identically at create but its push is stamped
-  **`deferred`** and fires once the price is confirmed — from the gate-open
-  sites (mockup approve / waive / decline-with-remainder, `setDeliveryFee`),
-  where it **replaces** the legacy free-form payment prompt (which a push-path
-  buyer's window-less chat couldn't receive anyway). The de-dup is the
-  **transactional claim** (`claimDeferredPush` in `convex/orders.ts`): inside
-  the same mutation that opened a gate, the order is re-read and — only when
-  NO hold remains — flipped `deferred → sending` and the send scheduled.
-  Mutations are serializable, so exactly one gate-open transaction can win the
-  flip; a second gate event racing in (fee set a second after the mockup
-  approval) serializes after the winner, sees `sending`, and schedules
-  nothing — that's what makes a doubly-held order send exactly once **under
-  concurrency**, not just in tidy orderings. `notifyStorefrontOrderCreated`
-  keeps a hold guard as defence-in-depth (a wrong "Total" is the one mistake
-  this feature must never make) plus a cancelled-order guard. **Cancelling a
+  and fee-pending orders. What varies is push **timing** (86eyfq0w5, re-tuned
+  by 86eyd63r8): the approved template states "Total: {{3}}", so an order whose
+  total isn't final yet (a price-on-quote line is RM 0.00 until quoted; a
+  fee-pending total grows by the arranged fee) commits identically at create
+  but its push is stamped **`deferred`** and fires from the **price-settling**
+  site instead:
+
+  | Hold | Settles at | Note |
+  | --- | --- | --- |
+  | Mockup / price-on-quote | **`submitMockup`** | The seller enters `quotedAmount` there, so `submitted` already carries a real total — and the message's tracking link is the page the buyer approves on. |
+  | Delivery fee pending | `setDeliveryFee` | Carries the agreed charge + final total. |
+  | Both | whichever settles **last** | The claim re-checks the other hold. |
+
+  Firing the mockup case at **submit** rather than on approval is what keeps
+  that flow alive under one-message-per-order: the mockup's own WhatsApp send
+  is gone, so approval-as-trigger would leave nothing to tell the buyer a
+  design was waiting. `approveMockup` / `waiveMockup` / `declineMockupItem`
+  still call the claim — as the **migration path** for orders already
+  `deferred` under the old approve-gate (hence no backfill), and as the
+  backstop for a price settled by waiver or decline without a submit.
+
+  The de-dup is the **transactional claim** (`claimDeferredPush`,
+  `convex/orders.ts:391`): inside the same mutation that settled the price, the
+  order is re-read and — only when NO hold remains — flipped
+  `deferred → sending` and the send scheduled. Mutations are serializable, so
+  exactly one transaction can win the flip; a second settle event racing in
+  (fee set a second after the mockup submit) serializes after the winner, sees
+  `sending`, and schedules nothing — that's what makes a doubly-held order send
+  exactly once **under concurrency**, not just in tidy orderings. The mockup
+  hold is `isMockupPriceUnsettled` (*is there a quote?*,
+  `convex/lib/order.ts:129`), deliberately **not** `isMockupGateClosed` (*has
+  the buyer approved?*) — the price exists from `submitted` onward even though
+  the production gate stays shut. `notifyStorefrontOrderCreated` keeps the same
+  hold guard as defence-in-depth (a wrong "Total" is the one mistake this
+  feature must never make) plus a cancelled-order guard. **Cancelling a
   deferred order clears the stamp** (both `applyStatusTransition` and
   `declineMockupItem`'s custom-only cancel): the stamp is a promise about a
   future message, and the promise dies with the order — the tracking page's
   deferred card additionally renders only while `confirmed`. A custom-only
   order whose buyer declines the item is a cancellation — no confirmation ever
-  exists. Legacy orders (env unset, buyer messaged first) keep the free-form
-  `notifyPaymentDue` / `notifyDeliveryFeeSet` prompts unchanged.
+  exists. **Legacy orders (env unset, buyer messaged first) get nothing at
+  settle time** — their one message was the free-form reply to their own `ORD-`
+  send; the free-form `notifyPaymentDue` / `notifyDeliveryFeeSet` prompts that
+  used to follow are deleted, and the price, mockup and payment details all
+  land on their order page instead.
 - **The order inserts as `confirmed`** and Kedaipal's WABA pushes the
   confirmation — the Meta-approved **utility template**
   `order_confirmation_utility` (EN + BM variants; body params `shortId`,
@@ -125,13 +159,16 @@ phone. So the storefront no longer depends on the buyer's send at all:
   `makeGuardedSender(ctx, retailerId, "transactional")`; the log row records
   category `utility_template` + the template name (per-template cost
   accounting for Meta's Oct-2026 per-message billing). This is the order's
-  **one** outbound message — payment details stay on the order page
-  (86ey98ju1 posture); the buyer's reply opens the free service window, from
-  which point the seller's custom confirm template copy applies (noted inline
-  in the Settings template editor).
+  **one** outbound message — and since 86eyd63r8 that is now literally true
+  rather than a storefront-path special case: no status update, payment ping,
+  mockup notice or reminder follows it on any path. Payment details stay on the
+  order page (86ey98ju1 posture).
 - **A seller's custom `confirm` template override does NOT apply to the
-  push** — template wording is fixed at Meta approval. Their copy takes over
-  from the first in-window message onward.
+  push** — template wording is fixed at Meta approval. The seller-editable
+  `confirm` copy now has exactly one sender left: the free-form reply to a
+  buyer who types their `ORD-` reference at a legacy (no-template) store. The
+  Settings editor is scoped and renamed accordingly ("Reply when a buyer
+  messages their order number").
 - **Config switch:** `WHATSAPP_ORDER_CONFIRM_TEMPLATE` (Convex env; set to the
   approved template name). Unset ⇒ everything below this point degrades to the
   legacy `pending` + `?send=1` handoff — the code ships decoupled from Meta
@@ -143,9 +180,9 @@ phone. So the storefront no longer depends on the buyer's send at all:
 `confirmationPushWamid` / `confirmationPushFailureKind`):
 
 - `"deferred"` — total not final at create (mockup quote / delivery fee
-  outstanding); the push fires when the price is confirmed. Flipped to
-  `"sending"` by the winning gate-open transaction (`claimDeferredPush`), so
-  the buyer's page never claims "sending…" mid-negotiation; cleared on
+  outstanding); the push fires when the price settles. Flipped to
+  `"sending"` by the winning price-settling transaction (`claimDeferredPush`),
+  so the buyer's page never claims "sending…" mid-negotiation; cleared on
   cancel.
 - `"sending"` — stamped in the **same transaction as the insert** (or on a
   deferred push passing its guards), so the state is never ambiguous while
@@ -291,7 +328,19 @@ Inbound flow lives in [`convex/whatsapp.ts`](../convex/whatsapp.ts), entered fro
 
 - `handleInbound` matches `SHORT_ID_REGEX` against the message text.
   - **No match** → friendly English fallback ("To place an order, browse our catalog…").
-  - **Match** → `confirmOrderFromWhatsApp`.
+  - **Match** → `confirmOrderFromWhatsApp`, then the **double-send guard**.
+- **Double-send guard (86eyd63r8, `convex/whatsapp.ts:543`).** If the order's
+  confirmation push already owns its one message —
+  `pushOwnsTheMessage(confirmationPushStatus)`, true for
+  `sent`/`sending`/`deferred`/`recovered` (`convex/lib/confirmationPush.ts:48`)
+  — the reply is **suppressed**. A stale `?send=1` link, a forwarded chat, or a
+  buyer re-sending their reference would otherwise cost a second billable
+  message on the same order. Suppression is outbound-only: the confirm mutation
+  still ran (status, customer link, pushname) and the seller's new-order email
+  still fires. **`failed` deliberately still replies** — that push reached
+  nobody, so this reply IS that buyer's one message and their recovery route.
+  `undefined` (legacy store) replies too: there, the reply has always been the
+  one message.
 - `confirmOrderFromWhatsApp` (internal mutation) is **idempotent**:
   - If `pending`, transitions to `confirmed` and writes a `"Confirmed via WhatsApp"` event.
   - Stamps `order.customer.waPhone` if it was empty (link-in-bio backfill).
@@ -303,7 +352,7 @@ Inbound flow lives in [`convex/whatsapp.ts`](../convex/whatsapp.ts), entered fro
     healthy order's number is never overwritten.
   - **Late customer link** — if `customerId` is still null, normalizes the phone and calls `linkOrderToCustomer`. Orders already linked at checkout are skipped (no double counting).
   - Refreshes the customer's `waProfileName` from the sender's pushname (never clobbers a retailer-edited `name`).
-- The reply is rendered in the retailer's locale (`en`/`ms`) and sent as a **CTA message** ("I've paid" button → tracking page). It degrades to plain text when interactive buttons aren't available (e.g. non-HTTPS `APP_URL` in dev). A **hard-coded, non-overridable** transfer-reference line is always appended (see [`payment-handshake.md`](./payment-handshake.md#transfer-reference)). A payment QR is sent as a follow-up image if configured.
+- The reply is rendered in the retailer's locale (`en`/`ms`/`zh`) and sent as a single **CTA message** ("Make payment" button → the order page's "How to pay"). It degrades to plain text when interactive buttons aren't available (e.g. non-HTTPS `APP_URL` in dev). A **hard-coded, non-overridable** transfer-reference line is always appended (see [`payment-handshake.md`](./payment-handshake.md#transfer-reference)). **Raw bank details and the payment QR are not in the chat** — they moved to the order page in 86ey98ju1, and the follow-up QR image that used to trail this reply is long gone. One message, then the page.
 
 ## `orders.updateStatus` — retailer transitions
 
@@ -314,12 +363,14 @@ Auth-gated (Clerk); ownership checked (`retailer.userId === identity.subject`). 
 - **Customer aggregate decrement on cancel** — same first-transition guard; reverses this order's contribution via `decrementAggregatesForCancel` (floors at zero).
 - **Carrier tracking URL** — accepted only when `status === "shipped"` (trimmed, non-empty). `setCarrierTrackingUrl` is a separate mutation for setting/clearing it later, intentionally not status-restricted.
 - **Audit** — every transition writes an `orderEvents` row.
-- **Notification** — schedules `notifyStatusChange` (fire-and-forget). It no-ops for `pending`/`confirmed` (those are covered by the confirmation flow) and when the order has no `customerWaPhone`. Messages are localized; `shipped` includes the carrier URL when set.
+- **Notification — none.** Status changes, including **cancellation**, are silent by policy (86eyd63r8): `notifyStatusChange` and the per-stage `notifyStageEntry` are deleted, along with `OrderStage.notify` and its `MAX_NOTIFY_STAGES` cap. The buyer's timeline on `/track/<token>` updates reactively and carries courier/tracking, POD photos and payment state. Because that is a real loss, the seller is told at every send-nothing surface: a line under the order-detail stepper (*"Moving the order along updates the buyer's order page — it doesn't send them a WhatsApp"*), the cancel dialog and the bulk-cancel dialog (both state the customer is NOT notified), and a note under the Settings → Order status stage editor. See [`one-message-per-order.md`](./one-message-per-order.md) and [`order-status-customization.md`](./order-status-customization.md).
 
 ## Hard delete — permanent erase (`deleteOrder` / `bulkDeleteOrders`)
 
-Separate from cancellation. **Cancel** keeps the row (a terminal `cancelled`
-status, buyer notified). **Hard delete** erases the order and everything derived
+Separate from cancellation. **Cancel** keeps the row — a terminal `cancelled`
+status the buyer can still open (86eyd63r8 made cancellation **silent**, so the
+distinction is now "a tombstone they can read" vs "nothing to read", not
+"notified" vs "not"). **Hard delete** erases the order and everything derived
 from it, leaving no tombstone — for test / spam / duplicate orders that need to
 disappear. **Kedaipal admin only** (support): both mutations resolve
 `requireOrderAccess`/`requireRetailerAccess` and then throw `Forbidden` unless
@@ -352,12 +403,15 @@ Per-order rows are correct across stores by construction.
 **Why admin-only:** a hard delete is irreversible (no tombstone) and wipes
 invoice / receipt / revenue-driving data. Leaving it in seller hands meant a
 disputed or fat-fingered order could vanish with no oversight. Sellers keep
-**Cancel** — tombstoned and buyer-notified — as their way to make an order go
+**Cancel** — tombstoned, and the buyer's order page shows the cancellation
+(nothing is WhatsApp'd, 86eyd63r8) — as their way to make an order go
 away; permanent erasure sits with Kedaipal.
 
-**It is silent** — unlike cancel, NO WhatsApp/email is sent. (That's the reason
-delete isn't "cancel-then-remove": you don't want to ping the buyer of a junk
-order.)
+**It leaves nothing behind.** Cancel is silent on WhatsApp too now, but a
+cancelled order still resolves at `/track/<token>` and says so; a hard-deleted
+one stops resolving entirely, so a buyer holding the link sees "Order not
+found". That is the real difference, and it's why the confirm dialog spells it
+out. No email is sent either way.
 
 The cascade lives in `deleteOrderCascade` (shared by both mutations so single and
 bulk can't drift):
@@ -384,8 +438,11 @@ bulk can't drift):
    ref rather than delete it).
 5. **Delete the order row.**
 
-Scheduled jobs that reference orders (e.g. the payment-reminder cron) already
-no-op on a missing order, so a delete between schedule and fire is safe.
+Scheduled jobs that reference orders (the confirmation push and its retries, the
+Lalamove POD fetch) already no-op on a missing order, so a delete between
+schedule and fire is safe. (The payment-reminder cron that used to be the
+example here no longer exists — see
+[`payment-reminder.md`](./payment-reminder.md).)
 
 **Access / tiering:** both `deleteOrder` and `bulkDeleteOrders` are **admin
 only** (any store), not plan-gated — permanent erasure is an ops action, not a

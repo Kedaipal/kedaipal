@@ -5,8 +5,12 @@
  * shared WABA as Meta utility templates: one when a new storefront order
  * lands, one when a buyer taps "I've paid". Off by default (each alert is a
  * billable Meta send, absorbed into Pro — no add-on); enabling is Pro-gated,
- * turning it off never is. Email + browser alerts keep working alongside —
- * replacing the email when WA succeeds is a follow-up ticket.
+ * turning it off never is.
+ *
+ * WhatsApp REPLACES the email for these two events while it's on (86eyd63r8):
+ * the email self-suppresses when this alert will actually be attempted, and
+ * comes back automatically if the alert is gated or fails. Browser alerts are
+ * untouched. The copy below states that so it isn't hidden behaviour.
  *
  * The card only mounts when the deployment has an approved template configured
  * (`retailer.waOrderAlertsAvailable`) — the mount site in app.settings.tsx
@@ -127,8 +131,9 @@ export function WaOrderAlertsCard({
 					and when a buyer says{" "}
 					<span className="font-medium text-foreground">they&apos;ve paid</span>{" "}
 					— with a button straight to the order. Counter sales don&apos;t alert
-					(you&apos;re already there), and email + browser alerts keep working
-					alongside.
+					(you&apos;re already there). While this is on, these two alerts come
+					by WhatsApp instead of email; if one can&apos;t be delivered, the
+					email goes out as backup so you never miss an order.
 				</p>
 				{/* The alert language isn't a separate setting — it follows the
 				    store's message language, same as the retailer emails. Said here
