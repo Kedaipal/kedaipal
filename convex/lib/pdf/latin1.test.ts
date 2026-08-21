@@ -30,6 +30,13 @@ describe("losesCharacters", () => {
 		expect(losesCharacters("Blk 123, #05-678")).toBe(false);
 	});
 
+	test("a multi-line textarea note is folded, never 'lost' (PR #205 review 2)", () => {
+		// Address notes come from a rows={2} textarea and sanitizeAddress keeps
+		// inner newlines — this must NOT raise the address-incomplete warning.
+		expect(losesCharacters("Ring bell\nGate 4321")).toBe(false);
+		expect(losesCharacters("col a\tcol b\r\nend")).toBe(false);
+	});
+
 	test("true the moment a character cannot be drawn", () => {
 		expect(losesCharacters("陈大文")).toBe(true);
 		// The dangerous case: mostly fine, quietly missing a word.
@@ -53,5 +60,10 @@ describe("printable", () => {
 	test("trims what does survive", () => {
 		expect(printable("  Wagyu Walid  ")).toBe("Wagyu Walid");
 		expect(printable("陈 Tan")).toBe("Tan");
+	});
+
+	test("a line break becomes a space, so the words are never welded", () => {
+		// Before the fold, dropping "\n" outright printed "bellGate".
+		expect(printable("Ring bell\nGate 4321")).toBe("Ring bell Gate 4321");
 	});
 });

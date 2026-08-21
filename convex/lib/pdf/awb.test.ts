@@ -339,6 +339,20 @@ describe("orderToAwbLabelData — text the page cannot draw", () => {
 		expect(l.recipient.warning).toBeUndefined();
 	});
 
+	test("a two-line delivery note is joined with a space, no false alarm", () => {
+		// The address textarea is rows={2} and sanitizeAddress keeps inner
+		// newlines — exactly the note a buyer writes. A clean English note must
+		// never print the incomplete-address warning (false alarms are how the
+		// real CJK warning gets ignored), and the joined words must keep a space.
+		const l = label(
+			order({
+				deliveryAddress: { ...myAddress, notes: "Ring bell\nGate 4321" },
+			}),
+		);
+		expect(l.recipient.notes).toBe("Ring bell Gate 4321");
+		expect(l.recipient.warning).toBeUndefined();
+	});
+
 	test("losing the gate code counts — it is addressing information", () => {
 		const l = label(
 			order({ deliveryAddress: { ...myAddress, notes: "门禁密码 1234" } }),

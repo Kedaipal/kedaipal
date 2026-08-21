@@ -293,6 +293,11 @@ Three rules now, all pinned by tests (`latin1.test.ts`, plus the
 
 Folding is not losing: curly quotes, en/em dashes, `…` and `×` have faithful
 ASCII spellings, so they are substituted and **do not** raise the warning.
+Line breaks and tabs fold to a single space for the same reason — the address
+notes field is a two-row textarea and `sanitizeAddress` keeps inner newlines,
+so `"Ring bell\nGate 4321"` prints as `"Ring bell Gate 4321"` (spaced, never
+welded) with **no** warning. A false alarm on a clean English note is how
+sellers learn to ignore the one warning that matters.
 
 The same clamp-then-decide fix was applied in passing to `orderToReceiptData`
 (receipts and invoices carried the identical `.trim() || undefined` pattern).
@@ -443,8 +448,8 @@ be handed back from an action.
 |---|---|
 | `convex/lib/pdf/qr.test.ts` (25) | GF(256) field, RS syndromes, capacity table vs the module formula, alignment positions, BCH format/version words, full decode round-trip, version selection, over-capacity throw. |
 | `convex/lib/pdf/barcode.test.ts` (16) | Pattern-table invariants, normalisation, decode round-trip incl. checksum, the too-long/unencodable `null` path. |
-| `convex/lib/pdf/awb.test.ts` (50) | Skip rules, ready-to-ship rule, MY + SG address lines, weight formatting, party swap on collection, all four payment states, every config toggle, the unnamed-buyer fallback, all four sorts + totality, the storefront QR payload, and the **text-the-page-cannot-draw** suite (Chinese name → phone → "Customer", no duplicate phone line, the incomplete-address warning on both blocks, curly quotes folded without warning, unprintable note/courier/item). |
-| `convex/lib/pdf/latin1.test.ts` (8) | The clamp itself: Latin-1 passthrough, typographic folding, dropped code points, `losesCharacters` telling folding apart from loss, and `printable` collapsing to `undefined` so fallbacks fire. |
+| `convex/lib/pdf/awb.test.ts` (51) | Skip rules, ready-to-ship rule, MY + SG address lines, weight formatting, party swap on collection, all four payment states, every config toggle, the unnamed-buyer fallback, all four sorts + totality, the storefront QR payload, and the **text-the-page-cannot-draw** suite (Chinese name → phone → "Customer", no duplicate phone line, the incomplete-address warning on both blocks, curly quotes folded without warning, unprintable note/courier/item). |
+| `convex/lib/pdf/latin1.test.ts` (10) | The clamp itself: Latin-1 passthrough, typographic folding, dropped code points, `losesCharacters` telling folding apart from loss, and `printable` collapsing to `undefined` so fallbacks fire. |
 | `convex/lib/awbConfig.test.ts` (12) | Defaults, default-drop normalisation, sanitize stability, footer cap, unknown paper size. |
 | `convex/awb.test.ts` (31) | Auth (owner / stranger / unauthenticated / admin act-as), the all-tier single vs Pro-gated batch, skip counts by reason, cross-store id rejection, both ceilings, the ready queue matching the inbox count, **that printing doesn't advance status**, the `labelPrintedAt` stamp (single + batch, skipped orders never stamped, failed prints stamp nothing), and **the QR pin — no payload ever contains `/track/`**. |
 | `convex/lib/pdf/render.test.ts` (18) | Page sizes for both papers, 4-up sheet count, everything-stripped, no-courier, over-long tracking number, absurd-text overflow, non-Latin-1, empty batch, unembeddable logo, 100-label file size. |
