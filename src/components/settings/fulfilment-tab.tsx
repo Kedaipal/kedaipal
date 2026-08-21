@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
+	FlaskConical,
 	MapPin,
 	Pencil,
 	Phone,
@@ -88,6 +89,9 @@ type DeliveryBookingSummary = {
 	promptBookOnPacked: boolean;
 	deliveryDirection: "standard" | "collection";
 	apiKeyHint?: string;
+	/** Sandbox vs production, from the key prefix (86eypncfy). Undefined = a
+	 * row the backfill hasn't stamped — badge nothing rather than imply live. */
+	env?: "sandbox" | "production";
 };
 
 interface FulfilmentTabProps {
@@ -1158,21 +1162,56 @@ function DeliveryChargeSection({
 							</a>
 						</div>
 						{hasStoredKey && !editingKeys ? (
-							<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
-								<span>
-									Key ending{" "}
-									<span className="font-mono">
-										…{deliveryBooking?.apiKeyHint}
-									</span>{" "}
-									stored
-								</span>
-								<button
-									type="button"
-									onClick={() => setEditingKeys(true)}
-									className="text-xs font-medium text-accent hover:underline"
-								>
-									Replace
-								</button>
+							<div className="flex flex-col gap-2">
+								<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
+									<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+										Key ending{" "}
+										<span className="font-mono">
+											…{deliveryBooking?.apiKeyHint}
+										</span>{" "}
+										stored
+										{deliveryBooking?.env === "sandbox" ? (
+											<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+												Test keys
+											</span>
+										) : deliveryBooking?.env === "production" ? (
+											<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
+												Live
+											</span>
+										) : null}
+									</span>
+									<button
+										type="button"
+										onClick={() => setEditingKeys(true)}
+										className="text-xs font-medium text-accent hover:underline"
+									>
+										Replace
+									</button>
+								</div>
+								{/* Say what the badge COSTS, not just what it is — a seller
+								    who doesn't know how sandbox differs from live reads a
+								    neutral "Test keys" chip as harmless (86eypncfy). */}
+								{deliveryBooking?.env === "sandbox" ? (
+									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+										<span>
+											<span className="font-medium">
+												No real rider will be dispatched.
+											</span>{" "}
+											Sandbox keys (
+											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+												pk_test_
+											</code>
+											) book simulated trips and quote your buyers test prices,
+											and the sandbox wallet can&apos;t be topped up with real
+											money. Replace them with your live{" "}
+											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+												pk_prod_
+											</code>{" "}
+											pair when you&apos;re ready to take real orders.
+										</span>
+									</p>
+								) : null}
 							</div>
 						) : (
 							<div className="flex flex-col gap-2">

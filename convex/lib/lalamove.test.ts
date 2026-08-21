@@ -13,6 +13,7 @@ import {
 	buildQuotationBody,
 	classifyQuoteFailure,
 	extractWebhookOrderId,
+	classifyBookingFailure,
 	isActiveJobStatus,
 	isOutOfServiceAreaError,
 	isRiderManagedTransition,
@@ -290,6 +291,64 @@ describe("status + webhook helpers", () => {
 			classifyQuoteFailure(422, '{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE"}]}'),
 		).toBe("unavailable");
 		expect(classifyQuoteFailure(undefined, "socket hang up")).toBe("unavailable");
+	});
+
+	test("classifyBookingFailure keys off the error id, not the body text", () => {
+		// The real refusal Wagyu Walid hit nine times (86eypncfy).
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INSUFFICIENT_BALANCE"}]}'),
+		).toBe("wallet");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INSUFFICIENT_CREDIT"}]}'),
+		).toBe("wallet");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INVALID_QUOTATION"}]}'),
+		).toBe("quote_expired");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INVALID_PHONE_NUMBER"}]}'),
+		).toBe("bad_phone");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA"}]}'),
+		).toBe("out_of_range");
+
+		// THE REGRESSION THIS EXISTS FOR: the old code lowercased the whole body
+		// and matched "balance"/"credit"/"insufficient" anywhere in it. Lalamove
+		// ships a free-text `message` beside the id, so an unrelated failure
+		// whose wording happens to contain one of those words was reported as a
+		// wallet problem — and a seller told to top up spends real money that
+		// fixes nothing. The id is the only thing we trust.
+		expect(
+			classifyBookingFailure(
+				'{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE","message":"Service not available on this credit account balance tier"}]}',
+			),
+		).toBe("unknown");
+		// A recognised-but-uncopied id stops at "unknown" rather than falling
+		// through to sniffing its message.
+		expect(
+			classifyBookingFailure(
+				'{"errors":[{"id":"ERR_SOMETHING_NEW","message":"insufficient balance"}]}',
+			),
+		).toBe("unknown");
+
+		// No parseable id (HTML error page, socket error) — text sniffing is the
+		// last resort, and only on the unambiguous phrases.
+		expect(classifyBookingFailure("Insufficient balance for this order")).toBe(
+			"wallet",
+		);
+		expect(classifyBookingFailure("<html>502 Bad Gateway</html>")).toBe(
+			"unknown",
+		);
+		expect(classifyBookingFailure("socket hang up")).toBe("unknown");
+	});
+
+	test("inferLalamoveEnv reads the key prefix, and only the prefix", () => {
+		expect(inferLalamoveEnv("pk_test_abc123")).toBe("sandbox");
+		expect(inferLalamoveEnv("pk_prod_abc123")).toBe("production");
+		// Ciphertext must NEVER read as sandbox-or-not by accident — it resolves
+		// to "production", which is exactly why `deliveryBooking.env` is stamped
+		// from plaintext at save and never derived from a stored value
+		// (86eypncfy).
+		expect(inferLalamoveEnv("enc.v1.abc.def")).toBe("production");
 	});
 
 	test("active vs terminal job statuses (one-active-job slot)", () => {

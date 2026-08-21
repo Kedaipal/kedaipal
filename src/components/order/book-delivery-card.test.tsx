@@ -859,7 +859,12 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 		fireEvent.click(screen.getByText("Use this time"));
 		await screen.findByRole("checkbox");
 
-		fireEvent.click(screen.getByText("Confirm & dispatch"));
+		// Spend guard (86eypjfuf) — dispatch arms a beat after the price lands.
+		const dispatchBtn = screen
+			.getByText("Confirm & dispatch")
+			.closest("button") as HTMLButtonElement;
+		await waitFor(() => expect(dispatchBtn.disabled).toBe(false));
+		fireEvent.click(dispatchBtn);
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith({
 				orderId: bookableOrder._id,
@@ -953,5 +958,205 @@ describe("BookDeliveryCard — past pickup moments are refused (86eyp63xn follow
 
 		const dateInput = screen.getByLabelText("Pickup date") as HTMLInputElement;
 		expect(dateInput.value >= ymdFromEpoch(todayMytMidnight())).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Sandbox keys + the dead-quote trap (86eypncfy)
+// ---------------------------------------------------------------------------
+
+const bookableOrder = {
+	shortId: "ORD-W4AH",
+	deliveryMethod: "delivery",
+	status: "confirmed",
+	currency: "MYR",
+	paymentStatus: "received",
+} as unknown as Doc<"orders">;
+
+function bookableDispatch(over: Record<string, unknown> = {}) {
+	return {
+		promptBookOnPacked: false,
+		blockReason: null,
+		bookingEnabled: true,
+		deliveryDirection: "standard",
+		job: null,
+		...over,
+	};
+}
+
+describe("BookDeliveryCard — sandbox keys", () => {
+	it("says test keys mean no real rider, on the card and in the confirm dialog", async () => {
+		state.dispatch = bookableDispatch({ env: "sandbox" });
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		// On the card: the consequence, not just a neutral "test mode" label.
+		expect(screen.getByText(/no real rider/i)).toBeTruthy();
+		expect(screen.getAllByText(/pk_test_/).length).toBeGreaterThan(0);
+
+		// And again at the point of spend — a seller who scrolled past the card
+		// banner still gets told before they commit money.
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		await waitFor(() =>
+			expect(screen.getByText(/simulated trip/i)).toBeTruthy(),
+		);
+	});
+
+	it("stays silent when the store is on live keys", () => {
+		state.dispatch = bookableDispatch({ env: "production" });
+		render(<BookDeliveryCard order={bookableOrder} />);
+		expect(screen.queryByText(/no real rider/i)).toBeNull();
+	});
+
+	it("stays silent when the environment isn't stamped yet, rather than implying live", () => {
+		state.dispatch = bookableDispatch({ env: undefined });
+		render(<BookDeliveryCard order={bookableOrder} />);
+		expect(screen.queryByText(/no real rider/i)).toBeNull();
+		expect(screen.queryByText(/Test mode/i)).toBeNull();
+	});
+});
+
+describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
+	/** prepareBooking succeeds, confirmBooking fails. Both hooks share one mock
+	 * in this harness, so branch on the args shape. */
+	function quoteThenFail(message: string) {
+		return vi.fn().mockImplementation((args: Record<string, unknown>) => {
+			if (args.quotationId) {
+				return Promise.resolve({
+					ok: false,
+					reason: "booking_failed",
+					message,
+				});
+			}
+			return Promise.resolve({
+				ok: true,
+				quotationId: "q1",
+				senderStopId: "s1",
+				recipientStopId: "s2",
+				fee: 2740,
+				buyerPaidFee: 2740,
+				vehicleType: "MOTORCYCLE",
+				buyerContactFallback: false,
+			});
+		});
+	}
+
+	it("keeps the reason in the dialog and swaps Confirm for a re-quote", async () => {
+		// The exact trap: Wagyu Walid pressed Confirm five times in 5m23s against
+		// ONE quotationId, because the failure was a toast and the button never
+		// changed. Fixing a wallet takes longer than the 5 minutes Lalamove holds
+		// a price, so the recovery has to be reachable from inside the dialog.
+		state.dispatch = bookableDispatch({ env: "sandbox" });
+		state.action = quoteThenFail("Your Lalamove wallet doesn't have enough.");
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+		// Spend guard (86eypjfuf) — dispatch is inert for a beat after it appears.
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+
+		// The reason survives where the seller can act on it...
+		await waitFor(() =>
+			expect(screen.getByText(/didn't go through/i)).toBeTruthy(),
+		);
+		expect(screen.getByText(/wallet doesn't have enough/i)).toBeTruthy();
+		// ...and the only primary action left is the one that can succeed.
+		expect(
+			screen.getByRole("button", { name: /Get a fresh price/i }),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /Confirm & dispatch/i }),
+		).toBeNull();
+	});
+
+	it("re-quotes on demand and re-arms Confirm", async () => {
+		state.dispatch = bookableDispatch();
+		state.action = quoteThenFail("Nope.");
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+		const fresh = await screen.findByRole("button", {
+			name: /Get a fresh price/i,
+		});
+
+		// A fresh quote clears the failure and puts dispatch back in reach —
+		// without the seller having to dismiss the dialog to find the button the
+		// old copy pointed at (which sat behind the overlay).
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q2",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		fireEvent.click(fresh);
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: /Confirm & dispatch/i }),
+			).toBeTruthy(),
+		);
+		expect(screen.queryByText(/didn't go through/i)).toBeNull();
+	});
+});
+
+
+describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)", () => {
+	/** The reported incident was a seller on a tablet reaching a live money
+	 * dialog mid-scroll. "Confirm & dispatch" spends from his Lalamove wallet on
+	 * one tap, and the dialog can auto-open under a finger (promptBookOnPacked,
+	 * or the stepper's manual-advance path) — so the gesture that opens it must
+	 * not be able to carry through into a booking. */
+	it("is disabled the instant the price lands, then arms on its own", async () => {
+		state.dispatch = bookableDispatch();
+		const action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		state.action = action;
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+
+		// The window that matters: the button exists but must refuse a tap.
+		expect(confirm.hasAttribute("disabled")).toBe(true);
+		fireEvent.click(confirm);
+		// One call — the quote. No confirmBooking (which would carry quotationId).
+		expect(action).toHaveBeenCalledTimes(1);
+		expect(action.mock.calls[0][0]).not.toHaveProperty("quotationId");
+
+		// ...and it lets a deliberate seller through a beat later.
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+		await waitFor(() => expect(action).toHaveBeenCalledTimes(2));
+		expect(action.mock.calls[1][0]).toHaveProperty("quotationId", "q1");
 	});
 });

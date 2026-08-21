@@ -331,6 +331,18 @@ export default defineSchema({
 				apiSecret: v.optional(v.string()),
 				// Last 4 chars of the plaintext key, for the settings UI.
 				apiKeyHint: v.optional(v.string()),
+				// Which Lalamove world these keys talk to (86eypncfy), stamped at
+				// save from the PLAINTEXT key (`pk_test_…` → sandbox). Ciphertext
+				// always reads as "production", so a query can no more derive this
+				// than it can the hint — and unlike the hint this one is
+				// load-bearing: a sandbox key books trips no rider will ever run
+				// and prices real buyers off the test environment, so every
+				// surface that spends money has to be able to say so. Undefined =
+				// not yet stamped (pre-backfill row), which the UI treats as
+				// "unknown", never as "production".
+				env: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
