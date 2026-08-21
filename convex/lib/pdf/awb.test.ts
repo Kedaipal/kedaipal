@@ -259,6 +259,140 @@ describe("orderToAwbLabelData", () => {
 	});
 });
 
+// The page can only draw Latin-1 (see ./latin1). Every fallback in the builder
+// therefore has to be chosen on the CLAMPED string — these pin that, because
+// the failure mode is silent: a label that looks plausible and cannot be
+// delivered. Singapore, where this stack is headed, writes names in Chinese as
+// a matter of course.
+describe("orderToAwbLabelData — text the page cannot draw", () => {
+	const cjkCustomer = { name: "陈大文", waPhone: "6587836127" };
+
+	test("a Chinese name prints the phone instead of a blank line", () => {
+		const l = label(order({ customer: cjkCustomer }));
+		expect(l.recipient.name).toBe("+65 87836127");
+		// …and only once: the phone line underneath would be the same digits.
+		expect(l.recipient.phone).toBeUndefined();
+	});
+
+	test("a printable name keeps its phone line", () => {
+		const l = label(order());
+		expect(l.recipient.name).toBe("Nur Aisyah");
+		expect(l.recipient.phone).toBe("+60 1159399791");
+	});
+
+	test("no name AND no printable phone still names the block", () => {
+		expect(label(order({ customer: { name: "陈大文" } })).recipient.name).toBe(
+			"Customer",
+		);
+	});
+
+	test("a Chinese address never prints orphaned house numbers alone", () => {
+		const l = label(
+			order({
+				customer: cjkCustomer,
+				deliveryAddress: {
+					line1: "新加坡乌节路238号",
+					line2: "第12层",
+					city: "新加坡",
+					state: "Singapore",
+					postcode: "238877",
+				},
+			}),
+		);
+		// Whatever survived may still be printed — a house number is worth having
+		// — but never on its own authority.
+		expect(l.recipient.warning).toBe("! Address incomplete - check the order");
+		expect(l.recipient.name).toBe("+65 87836127");
+	});
+
+	test("a partly-Chinese address keeps what it can and still warns", () => {
+		const l = label(
+			order({
+				deliveryAddress: {
+					line1: "Blk 123 Ang Mo Kio Ave 4, #05-678",
+					line2: "红山镇",
+					city: "Singapore",
+					state: "Singapore",
+					postcode: "560123",
+				},
+			}),
+		);
+		expect(l.recipient.lines).toEqual([
+			"Blk 123 Ang Mo Kio Ave 4, #05-678",
+			"560123 Singapore",
+		]);
+		expect(l.recipient.warning).toBe("! Address incomplete - check the order");
+	});
+
+	test("an address that prints in full carries no warning", () => {
+		expect(label(order()).recipient.warning).toBeUndefined();
+		expect(label(order()).sender.warning).toBeUndefined();
+	});
+
+	test("a curly apostrophe is folded, not lost — and never warns", () => {
+		const l = label(
+			order({
+				deliveryAddress: { ...myAddress, line1: "12 Jalan O’Brien" },
+			}),
+		);
+		expect(l.recipient.lines[0]).toBe("12 Jalan O'Brien");
+		expect(l.recipient.warning).toBeUndefined();
+	});
+
+	test("losing the gate code counts — it is addressing information", () => {
+		const l = label(
+			order({ deliveryAddress: { ...myAddress, notes: "门禁密码 1234" } }),
+		);
+		expect(l.recipient.notes).toBe("1234");
+		expect(l.recipient.warning).toBe("! Address incomplete - check the order");
+	});
+
+	test("the store's own unprintable address warns about Settings", () => {
+		const l = orderToAwbLabelData({
+			order: order(),
+			retailer: {
+				storeName: "🎂",
+				waPhone: "60123456789",
+				businessAddress: { label: "吉隆坡孟沙区" },
+			},
+			config: AWB_DEFAULTS,
+		});
+		// An emoji-only store name would have drawn as nothing at the top of the
+		// label; the neutral fallback has to fire.
+		expect(l.storeName).toBe("Store");
+		expect(l.sender.name).toBe("Store");
+		expect(l.sender.lines).toEqual([]);
+		expect(l.sender.warning).toBe("! Return address incomplete - check Settings");
+	});
+
+	test("a Chinese product name never prints as a bare quantity", () => {
+		const l = label(
+			order({
+				items: [
+					{ name: "肥牛", variantLabel: "大", quantity: 2 },
+					{ name: "Short rib", variantLabel: "1kg", quantity: 1 },
+				],
+			}),
+			{ showItems: true },
+		);
+		// The packing list is a hint, not addressing: what survives is printed,
+		// and what doesn't leaves a neutral word rather than "2 x" or "肥牛 ()".
+		expect(l.items).toEqual([
+			{ name: "Item", quantity: 2 },
+			{ name: "Short rib (1kg)", quantity: 1 },
+		]);
+	});
+
+	test("an unprintable note or courier drops out instead of printing empty", () => {
+		const l = label(
+			order({ customerNote: "请放在门口", courierName: "顺丰", trackingNo: "SF123456" }),
+		);
+		expect(l.note).toBeUndefined();
+		expect(l.courierName).toBeUndefined();
+		expect(l.trackingNo).toBe("SF123456");
+	});
+});
+
 describe("batch sorting", () => {
 	function item(
 		overrides: Partial<OrderForAwb>,

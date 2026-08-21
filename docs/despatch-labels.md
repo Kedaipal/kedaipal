@@ -250,20 +250,60 @@ unweighable — the label simply prints no weight instead of a number nobody can
 stand behind. Under a kilo reads in grams (`850 g`); above, two decimals of a
 kilo (`1.20 kg`).
 
-### Non-Latin-1 text — known limitation
+### Non-Latin-1 text — clamped, and said out loud
 
-pdf-lib's standard fonts are WinAnsi (Latin-1) only. The shared `sanitize()`
-normalises typographic glyphs and then **drops** anything outside Latin-1, so a
-Chinese store or buyer name degrades to the encodable characters rather than
-crashing generation — the exact behaviour the order receipt has always had
-([`i18n.md`](./i18n.md)). Two guards specific to the label: a recipient name
-that sanitises away entirely falls through to the phone number (a courier can
-call it) and then to "Customer", so the block never has a blank line where the
-name should be.
+pdf-lib's standard fonts are WinAnsi (Latin-1) only, so anything outside it is
+dropped before drawing. That clamp is `convex/lib/pdf/latin1.ts` — deliberately
+its own module rather than a private helper inside `render.ts`, because **the
+view-model builders have to clamp before they decide anything**:
 
-**The real fix is a v2 item:** embedding a CJK font via `fontkit`, which is a
-bundle-size and licensing decision, not a code change — and it would fix the
-receipt and invoice at the same time.
+```
+"陈大文"  → non-empty in the database, empty on the page
+```
+
+A fallback tested against the raw string ("no name? then print the phone")
+therefore never fires, and the block that a courier reads first comes out
+blank. Until PR #205's review this file described the guard as if it existed
+and the code only checked `.trim()`, so a Singapore buyer with a Chinese name
+got a nameless label and an address of orphaned house numbers — `238` left
+behind by `新加坡乌节路238号`, which reads like a real address line and is not
+one. Reachability is not theoretical: `zh` is a supported store locale and this
+stack onboards Singapore, where Chinese names are the norm.
+
+Three rules now, all pinned by tests (`latin1.test.ts`, plus the
+"text the page cannot draw" suite in `lib/pdf/awb.test.ts`):
+
+1. **Clamp, then decide.** `printable(s)` returns the clamped, trimmed string or
+   `undefined`, which is the shape every fallback wants. The recipient name
+   falls through to the phone and then to "Customer"; the store name to "Store";
+   an item name to "Item". When the name falls back to the phone, the phone line
+   underneath is suppressed — one identity, stated once.
+2. **Keep what survives, but never on its own authority.** A partly-clamped line
+   is still printed (a surviving `#12-345` is a real unit number), because the
+   danger is not a gap — it is a plausible-looking line. Any loss anywhere in
+   the address raises a warning **above** the address lines:
+   `! Address incomplete - check the order`, or
+   `! Return address incomplete - check Settings` for the store's own block.
+   Bold ink, not amber: amber on white is ~2:1 contrast and this is the one line
+   that must be legible at arm's length. Address notes count as addressing
+   information, so losing a gate code raises it too.
+3. **The warning comes out of the address budget.** `layoutParty` reserves a
+   line for it exactly as it does for notes, so adding it can never push the
+   recipient block down over the payment strip.
+
+Folding is not losing: curly quotes, en/em dashes, `…` and `×` have faithful
+ASCII spellings, so they are substituted and **do not** raise the warning.
+
+The same clamp-then-decide fix was applied in passing to `orderToReceiptData`
+(receipts and invoices carried the identical `.trim() || undefined` pattern).
+Receipts get no warning line — a receipt is a record, not a routing
+instruction.
+
+**The real fix is still a v2 item:** embedding a CJK font via `fontkit`, which
+is a bundle-size and licensing decision, not a code change — the same
+dependency the zh receipt work is blocked on ([`i18n.md`](./i18n.md)). Until
+then the documents say what they cannot carry instead of printing confident
+nonsense.
 
 ---
 
@@ -337,6 +377,7 @@ the dialog.
 | `convex/lib/pdf/awb.ts` | Pure view-model: eligibility, party mapping, address lines, weight, payment strip, sort keys, `AWB_BATCH_MAX`. |
 | `convex/lib/awbConfig.ts` | The store template: defaults, `resolveAwbConfig`, `sanitizeAwbConfig`. Shared client + server. |
 | `convex/lib/pdf/render.ts` | `buildAwbPdf` — the drawing, beside the receipt + invoice builders. |
+| `convex/lib/pdf/latin1.ts` | The WinAnsi clamp (`toLatin1`, `losesCharacters`, `printable`) shared by every builder and the renderer, so a fallback is chosen on what the page can actually draw. |
 | `convex/awb.ts` | `generateAwbPdf` (single), `generateAwbBatchPdf` (batch), the paged input queries. |
 | `src/components/order/print-label-button.tsx` | Single-order print + `canPrintLabel`. |
 | `src/components/dashboard/print-labels-dialog.tsx` | Selection print: sort, count, disabled-with-reason. |
@@ -402,10 +443,11 @@ be handed back from an action.
 |---|---|
 | `convex/lib/pdf/qr.test.ts` (25) | GF(256) field, RS syndromes, capacity table vs the module formula, alignment positions, BCH format/version words, full decode round-trip, version selection, over-capacity throw. |
 | `convex/lib/pdf/barcode.test.ts` (16) | Pattern-table invariants, normalisation, decode round-trip incl. checksum, the too-long/unencodable `null` path. |
-| `convex/lib/pdf/awb.test.ts` (39) | Skip rules, ready-to-ship rule, MY + SG address lines, weight formatting, party swap on collection, all four payment states, every config toggle, the unnamed-buyer fallback, all four sorts + totality, the storefront QR payload. |
-| `convex/lib/awbConfig.test.ts` (13) | Defaults, default-drop normalisation, sanitize stability, footer cap, unknown paper size. |
+| `convex/lib/pdf/awb.test.ts` (50) | Skip rules, ready-to-ship rule, MY + SG address lines, weight formatting, party swap on collection, all four payment states, every config toggle, the unnamed-buyer fallback, all four sorts + totality, the storefront QR payload, and the **text-the-page-cannot-draw** suite (Chinese name → phone → "Customer", no duplicate phone line, the incomplete-address warning on both blocks, curly quotes folded without warning, unprintable note/courier/item). |
+| `convex/lib/pdf/latin1.test.ts` (8) | The clamp itself: Latin-1 passthrough, typographic folding, dropped code points, `losesCharacters` telling folding apart from loss, and `printable` collapsing to `undefined` so fallbacks fire. |
+| `convex/lib/awbConfig.test.ts` (12) | Defaults, default-drop normalisation, sanitize stability, footer cap, unknown paper size. |
 | `convex/awb.test.ts` (31) | Auth (owner / stranger / unauthenticated / admin act-as), the all-tier single vs Pro-gated batch, skip counts by reason, cross-store id rejection, both ceilings, the ready queue matching the inbox count, **that printing doesn't advance status**, the `labelPrintedAt` stamp (single + batch, skipped orders never stamped, failed prints stamp nothing), and **the QR pin — no payload ever contains `/track/`**. |
-| `convex/lib/pdf/render.test.ts` (17) | Page sizes for both papers, 4-up sheet count, everything-stripped, no-courier, over-long tracking number, absurd-text overflow, non-Latin-1, empty batch, unembeddable logo, 100-label file size. |
+| `convex/lib/pdf/render.test.ts` (18) | Page sizes for both papers, 4-up sheet count, everything-stripped, no-courier, over-long tracking number, absurd-text overflow, non-Latin-1, empty batch, unembeddable logo, 100-label file size. |
 | `src/components/settings/despatch-label-card.test.tsx` (9) | Patch payloads, disabled-until-dirty, footer cap, discard, and the "not a courier's consignment note" copy. |
 | `src/lib/awb-labels.test.ts` (12) | Skip copy naming causes, stable reason order, sort options, and the queue modal's default-check rule (unprinted checked, printed listed-unchecked). |
 

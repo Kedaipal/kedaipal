@@ -20,6 +20,7 @@ import { displayAddressState } from "../address";
 import { formatPhone } from "../customer";
 import { formatFulfilmentDateTime } from "../fulfilmentDate";
 import type { AwbConfig } from "../awbConfig";
+import { losesCharacters, printable } from "./latin1";
 
 // --- The document ----------------------------------------------------------
 
@@ -35,6 +36,10 @@ export type AwbParty = {
 	/** Gate/landmark detail from the address itself — always printed, because
 	 * it is addressing information, not an order note. */
 	notes?: string;
+	/** Set when the address lost characters the page cannot carry (see
+	 * `./latin1`), so the block says so instead of letting a surviving house
+	 * number pass for a whole address. */
+	warning?: string;
 };
 
 export type AwbLabelData = {
@@ -310,8 +315,14 @@ export type RetailerForAwb = {
 	businessAddress?: { label: string };
 };
 
-/** Address → printable lines: street, then "postcode city", then the state
- * (dropped when it just repeats the city — see `displayAddressState`). */
+/**
+ * Address → lines: street, then "postcode city", then the state (dropped when
+ * it just repeats the city — see `displayAddressState`).
+ *
+ * Composition only. Clamping the result to what the page can draw is
+ * `clampLines`' job, deliberately kept separate so this stays a pure statement
+ * about how a Malaysian or Singaporean address is laid out.
+ */
 export function addressLines(address: AddressForAwb): string[] {
 	const lines = [address.line1.trim()];
 	const line2 = address.line2?.trim();
@@ -320,6 +331,34 @@ export function addressLines(address: AddressForAwb): string[] {
 	const state = displayAddressState(address);
 	if (state) lines.push(state);
 	return lines.filter((l) => l.length > 0);
+}
+
+/**
+ * Latin-1 has no warning glyph, so "!" carries the alarm. Two wordings because
+ * the two blocks send the reader to two different places to fix it.
+ */
+const RECIPIENT_ADDRESS_WARNING = "! Address incomplete - check the order";
+const SENDER_ADDRESS_WARNING = "! Return address incomplete - check Settings";
+
+/**
+ * Clamp a party's address lines to what the page can actually carry.
+ *
+ * A line that loses everything is DROPPED rather than drawn blank. A line that
+ * loses only some of its characters is KEPT — a surviving "#12-345" is still a
+ * unit number a courier can use — but either case sets `lost`, because the
+ * danger here is not a gap: it is the "238" left behind by "新加坡乌节路238号",
+ * which reads like a real address line and is not one. `lost` puts a warning in
+ * the block so nobody trusts what survived.
+ */
+function clampLines(raw: string[]): { lines: string[]; lost: boolean } {
+	const lines: string[] = [];
+	let lost = false;
+	for (const line of raw) {
+		if (losesCharacters(line)) lost = true;
+		const clean = printable(line);
+		if (clean) lines.push(clean);
+	}
+	return { lines, lost };
 }
 
 /** Grams → a printable weight. Grams below a kilo stay grams (a courier's
@@ -349,22 +388,40 @@ export function orderToAwbLabelData(args: {
 	const address = order.deliveryAddress;
 	const collection = order.deliveryDirection === "collection";
 
+	// EVERY string below is clamped BEFORE it is tested for emptiness — the whole
+	// point of `printable`. Testing the raw string first is the bug this file
+	// used to carry: "陈大文" is a perfectly non-empty name that draws as nothing,
+	// so the fallback never fired and the courier got a blank line where they
+	// look first.
+	const storeName = printable(retailer.storeName) ?? "Store";
+	const storeAddress = clampLines(
+		retailer.businessAddress ? [retailer.businessAddress.label] : [],
+	);
 	const storeParty: Omit<AwbParty, "heading"> = {
-		name: retailer.storeName.trim() || "Store",
+		name: storeName,
 		phone: retailer.waPhone ? formatPhone(retailer.waPhone) : undefined,
-		lines: retailer.businessAddress?.label.trim()
-			? [retailer.businessAddress.label.trim()]
-			: [],
+		lines: storeAddress.lines,
+		warning: storeAddress.lost ? SENDER_ADDRESS_WARNING : undefined,
 	};
+
+	const buyerAddress = clampLines(address ? addressLines(address) : []);
+	// Address notes are addressing information (gate codes, landmarks), so losing
+	// them counts against the same warning as losing a street.
+	const notesLost = address?.notes !== undefined && losesCharacters(address.notes);
+	const buyerName = recipientDisplayName(order.customer);
+	const buyerPhone = order.customer.waPhone
+		? formatPhone(order.customer.waPhone)
+		: undefined;
 	const buyerParty: Omit<AwbParty, "heading"> = {
-		// A name that is entirely non-Latin-1 survives sanitising as "" (see
-		// render.ts), which would leave a blank line where the courier looks
-		// first — fall through to the phone, then a neutral word, so the block
-		// always says who.
-		name: recipientDisplayName(order.customer),
-		phone: order.customer.waPhone ? formatPhone(order.customer.waPhone) : undefined,
-		lines: address ? addressLines(address) : [],
-		notes: address?.notes?.trim() || undefined,
+		name: buyerName,
+		// When the name FELL BACK to the phone (an unnamed buyer, or one whose
+		// name the page can't draw), printing the same digits again underneath
+		// reads as a glitch. One identity, stated once.
+		phone: buyerPhone === buyerName ? undefined : buyerPhone,
+		lines: buyerAddress.lines,
+		notes: printable(address?.notes),
+		warning:
+			buyerAddress.lost || notesLost ? RECIPIENT_ADDRESS_WARNING : undefined,
 	};
 
 	// A collection trip runs buyer → seller, so the parcel's two ends swap.
@@ -388,7 +445,7 @@ export function orderToAwbLabelData(args: {
 				: { kind: "cod", amount: order.total };
 
 	return {
-		storeName: retailer.storeName.trim() || "Store",
+		storeName,
 		sender,
 		recipient,
 		orderShortId: order.shortId,
@@ -400,8 +457,8 @@ export function orderToAwbLabelData(args: {
 						order.fulfilmentDate,
 						order.fulfilmentTimeMinutes,
 					)}`,
-		courierName: order.courierName?.trim() || undefined,
-		trackingNo: order.trackingNo?.trim() || undefined,
+		courierName: printable(order.courierName),
+		trackingNo: printable(order.trackingNo),
 		storeUrl,
 		payment,
 		currency: order.currency,
@@ -410,28 +467,45 @@ export function orderToAwbLabelData(args: {
 				? formatParcelWeight(weightGrams)
 				: undefined,
 		items: config.showItems
-			? order.items.map((i) => ({
-					name: i.variantLabel ? `${i.name} (${i.variantLabel})` : i.name,
-					quantity: i.quantity,
-				}))
+			? order.items.map((i) => {
+					// Composed from clamped parts, so a Chinese product name can never
+					// print as a bare "2 x" or a variant as "Ribeye ()".
+					const name = printable(i.name) ?? "Item";
+					const variant = printable(i.variantLabel);
+					return {
+						name: variant ? `${name} (${variant})` : name,
+						quantity: i.quantity,
+					};
+				})
 			: undefined,
 		totalUnits: units,
-		note: config.showNote ? order.customerNote?.trim() || undefined : undefined,
-		footerText: config.footerText,
+		note: config.showNote ? printable(order.customerNote) : undefined,
+		footerText: printable(config.footerText),
 	};
 }
 
 /**
- * Who the parcel is for — the buyer's name, else the phone a courier can call,
- * else a neutral word (mirrors `orderCustomerLabel`'s walk-in posture). Shared
- * by the label's recipient block and the print-queue rows, so the modal names
- * an order exactly the way its label will.
+ * Who the parcel is for — the buyer's PRINTABLE name, else the phone a courier
+ * can call, else a neutral word (mirrors `orderCustomerLabel`'s walk-in
+ * posture).
+ *
+ * "Printable" is load-bearing, not decoration. A name written in Chinese — the
+ * norm in Singapore, and this stack onboards Singapore — is non-empty in the
+ * database and empty on the page, so a fallback chosen on the raw string leaves
+ * the recipient block blank at the exact spot a courier reads first. Clamping
+ * first means such a buyer gets their phone number printed instead: still
+ * deliverable, and honest about what the page can carry.
+ *
+ * Shared by the label's recipient block and the print-queue rows, so the modal
+ * names an order exactly the way its label will — a seller who sees a phone
+ * number where they expected a name has learned something true before they
+ * print forty of them.
  */
 export function recipientDisplayName(customer: {
 	name?: string;
 	waPhone?: string;
 }): string {
-	const name = customer.name?.trim();
+	const name = printable(customer.name);
 	if (name) return name;
 	const phone = customer.waPhone?.trim();
 	return phone ? formatPhone(phone) : "Customer";
