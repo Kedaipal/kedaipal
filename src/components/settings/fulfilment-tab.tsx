@@ -22,6 +22,7 @@ import type { DeliveryConfig, DeliveryZone } from "../../../convex/lib/delivery"
 import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
+	deliveryModeAllowed,
 } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
@@ -86,8 +87,10 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
-	/** Store country — threaded to the pickup-point editor's manager-contact
-	 * phone plate/validator (SG-lite, 86eynw2dy). */
+	/** The store's country (SG-lite) — SG stores see only the Free/Flat
+	 * delivery-charge modes (the MY-only ones are server-refused), the address
+	 * pickers search the store's own country, and the pickup-point editor's
+	 * manager-contact phone plate/validator follows it. */
 	country: Country;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
@@ -365,6 +368,7 @@ export function FulfilmentTab({
 						// Remount when the saved config/address/keys change shape so
 						// local draft state re-seeds from the server truth after a save.
 						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}:${deliveryBooking?.apiKeyHint ?? ""}`}
+						country={country}
 						config={deliveryConfig}
 						businessAddress={businessAddress}
 						deliveryBooking={deliveryBooking}
@@ -495,8 +499,8 @@ export function FulfilmentTab({
 				onClose={() => setEditing(null)}
 				location={editing === "new" ? undefined : (editing ?? undefined)}
 				retailerId={retailerId}
-				canChargeFee={hasFeature(subscription, "chargeablePickup")}
 				country={country}
+				canChargeFee={hasFeature(subscription, "chargeablePickup")}
 			/>
 		</div>
 	);
@@ -622,12 +626,16 @@ function ModeRadioDot({ active }: { active: boolean }) {
  * seller who bands by road distance will undercharge.
  */
 function DeliveryChargeSection({
+	country,
 	config,
 	businessAddress,
 	deliveryBooking,
 	canUseRadius,
 	canUseLalamove,
 }: {
+	/** SG stores get only Free/Flat — the MY-only modes' cards don't render
+	 * and updateSettings refuses them (SG-lite, 86eynw29u). */
+	country: Country;
 	config: DeliveryConfig | undefined;
 	businessAddress: BusinessAddress | undefined;
 	/** Secret-free booking summary — Lalamove is set up INSIDE this section
@@ -691,6 +699,15 @@ function DeliveryChargeSection({
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
 	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 
+	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
+	// weight-zone / Lalamove) don't render and the server refuses storing them
+	// (convex/lib/delivery.ts COUNTRY_DELIVERY_MODES). The one-line reason
+	// below the grid says so, so the missing cards are never a mystery.
+	const myOnlyModesHidden = !deliveryModeAllowed(country, "radius");
+	// Defensive: a stored MY-only mode on an SG store (pre-guard data) has no
+	// card to select — name the situation instead of showing nothing picked.
+	const storedModeUnavailable =
+		config !== undefined && !deliveryModeAllowed(country, config.mode);
 	// A downgraded seller sitting on a radius config can still view it and
 	// switch away (clearing is un-gated server-side) — they just can't edit it.
 	const radiusLocked = !canUseRadius;
@@ -928,35 +945,39 @@ function DeliveryChargeSection({
 			    the others, but the promoted one: branded with the official
 			    wordmark so every tier SEES rider delivery exists. For a locked
 			    Starter it stays full-colour with a Pro chip + upgrade line
-			    (disabled-with-reason, not a washed-out ghost). */}
+			    (disabled-with-reason, not a washed-out ghost). SG stores see
+			    only Free + Flat (SG-lite) — the reason line below the grid
+			    names why the other modes are absent. */}
 			<div className="grid grid-cols-2 gap-2">
-				<button
-					type="button"
-					onClick={() => setMode("lalamove")}
-					disabled={lalamoveLocked && config?.mode !== "lalamove"}
-					aria-pressed={mode === "lalamove"}
-					className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-						mode === "lalamove"
-							? "border-accent bg-accent/5"
-							: "border-border bg-card hover:border-accent/40"
-					} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
-				>
-					<span className="flex items-center gap-1.5">
-						<AppImage
-							src="/img/lalamove-logo.svg"
-							alt="Lalamove"
-							aspect="h-4 w-auto"
-							fill={false}
-						/>
-						{lalamoveLocked ? <ProBadge /> : null}
-					</span>
-					<span className="text-xs text-muted-foreground">
-						{lalamoveLocked && config?.mode !== "lalamove"
-							? "Rider delivery — upgrade to Pro to turn on"
-							: "Live rider price, one-tap booking"}
-					</span>
-					<ModeRadioDot active={mode === "lalamove"} />
-				</button>
+				{myOnlyModesHidden ? null : (
+					<button
+						type="button"
+						onClick={() => setMode("lalamove")}
+						disabled={lalamoveLocked && config?.mode !== "lalamove"}
+						aria-pressed={mode === "lalamove"}
+						className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
+							mode === "lalamove"
+								? "border-accent bg-accent/5"
+								: "border-border bg-card hover:border-accent/40"
+						} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+					>
+						<span className="flex items-center gap-1.5">
+							<AppImage
+								src="/img/lalamove-logo.svg"
+								alt="Lalamove"
+								aspect="h-4 w-auto"
+								fill={false}
+							/>
+							{lalamoveLocked ? <ProBadge /> : null}
+						</span>
+						<span className="text-xs text-muted-foreground">
+							{lalamoveLocked && config?.mode !== "lalamove"
+								? "Rider delivery — upgrade to Pro to turn on"
+								: "Live rider price, one-tap booking"}
+						</span>
+						<ModeRadioDot active={mode === "lalamove"} />
+					</button>
+				)}
 				<ModeButton
 					active={mode === "free"}
 					onClick={() => setMode("free")}
@@ -969,26 +990,43 @@ function DeliveryChargeSection({
 					title="Flat fee"
 					subtitle="Same fee every order"
 				/>
-				<ModeButton
-					active={mode === "radius"}
-					// A seller already ON radius keeps access to the tab so they can
-					// switch away; a locked seller can't switch INTO it.
-					disabled={radiusLocked && config?.mode !== "radius"}
-					onClick={() => setMode("radius")}
-					title="By distance"
-					subtitle="Radius bands — you deliver"
-					badge={radiusLocked ? <ProBadge /> : undefined}
-				/>
+				{myOnlyModesHidden ? null : (
+					<ModeButton
+						active={mode === "radius"}
+						// A seller already ON radius keeps access to the tab so they can
+						// switch away; a locked seller can't switch INTO it.
+						disabled={radiusLocked && config?.mode !== "radius"}
+						onClick={() => setMode("radius")}
+						title="By distance"
+						subtitle="Radius bands — you deliver"
+						badge={radiusLocked ? <ProBadge /> : undefined}
+					/>
+				)}
 				{/* Weight/zone rate card (86eyeea1n) — all-tier: it's the correctness
 				    fix for outstation parcel sellers (J&T/DD/Ninja), with zero
 				    provider cost to Kedaipal. */}
-				<ModeButton
-					active={mode === "weight"}
-					onClick={() => setMode("weight")}
-					title="By weight & zone"
-					subtitle="Courier rate card — you ship"
-				/>
+				{myOnlyModesHidden ? null : (
+					<ModeButton
+						active={mode === "weight"}
+						onClick={() => setMode("weight")}
+						title="By weight & zone"
+						subtitle="Courier rate card — you ship"
+					/>
+				)}
 			</div>
+			{myOnlyModesHidden ? (
+				<p className="text-xs text-muted-foreground">
+					Distance, weight-zone and Lalamove pricing are Malaysia-only for now
+					— Singapore stores deliver free or at a flat fee.
+				</p>
+			) : null}
+			{storedModeUnavailable ? (
+				<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+					Your saved delivery pricing uses a Malaysia-only mode, so buyers
+					can&apos;t check out with delivery right now — pick Free or Flat fee
+					above and save.
+				</p>
+			) : null}
 
 			{mode === "lalamove" ? (
 				<div className="flex flex-col gap-4">
@@ -1027,6 +1065,7 @@ function DeliveryChargeSection({
 					{/* 1 · Pickup point */}
 					<div className="flex flex-col gap-1.5">
 						<GoogleAddressAutocomplete
+							country={country}
 							initialValue={businessAddress?.label ?? ""}
 							label={
 								collectionMode
@@ -1355,6 +1394,7 @@ function DeliveryChargeSection({
 					) : null}
 					<div className="flex flex-col gap-1.5">
 						<GoogleAddressAutocomplete
+							country={country}
 							initialValue={businessAddress?.label ?? ""}
 							label="Business address (measure from)"
 							required

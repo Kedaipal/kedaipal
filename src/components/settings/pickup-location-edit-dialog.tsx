@@ -5,7 +5,7 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import type { Country } from "../../../convex/lib/country";
+import { type Country, COUNTRY_LABELS } from "../../../convex/lib/country";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -32,12 +32,13 @@ interface PickupLocationEditDialogProps {
 	 */
 	location: Doc<"pickupLocations"> | undefined;
 	retailerId: Id<"retailers">;
+	/** The store's country (SG-lite) — the address search covers it (Places
+	 * region lock), the placeholder names it, and the manager-contact field
+	 * wears its plate + validator arm. */
+	country: Country;
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
-	/** Store country — the manager-contact plate + validator arm (SG-lite,
-	 * 86eynw2dy). */
-	country: Country;
 }
 
 /**
@@ -98,8 +99,8 @@ export function PickupLocationEditDialog({
 	onClose,
 	location,
 	retailerId,
-	canChargeFee,
 	country,
+	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
@@ -340,7 +341,8 @@ export function PickupLocationEditDialog({
 								initialValue={location?.address ?? ""}
 								label="Address"
 								required
-								placeholder="Start typing an address in Malaysia…"
+								country={country}
+								placeholder={`Start typing an address in ${COUNTRY_LABELS[country]}…`}
 								description={
 									hasCoords
 										? "✓ Pinned via Google Maps — buyers will get a tappable location pin in WhatsApp."

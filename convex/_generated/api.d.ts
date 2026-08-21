@@ -36,6 +36,7 @@ import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
 import type * as lib_confirmationPush from "../lib/confirmationPush.js";
 import type * as lib_contact from "../lib/contact.js";
+import type * as lib_country from "../lib/country.js";
 import type * as lib_couriers from "../lib/couriers.js";
 import type * as lib_credentialCrypto from "../lib/credentialCrypto.js";
 import type * as lib_currency from "../lib/currency.js";
@@ -131,6 +132,7 @@ declare const fullApi: ApiFromModules<{
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
   "lib/confirmationPush": typeof lib_confirmationPush;
   "lib/contact": typeof lib_contact;
+  "lib/country": typeof lib_country;
   "lib/couriers": typeof lib_couriers;
   "lib/credentialCrypto": typeof lib_credentialCrypto;
   "lib/currency": typeof lib_currency;

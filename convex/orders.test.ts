@@ -7821,6 +7821,182 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 	});
 });
 
+describe("SG addresses (SG-lite, 86eynw29u)", () => {
+	const sgAddress = {
+		line1: "12 Bedok North Ave 3",
+		city: "Singapore",
+		state: "Singapore",
+		postcode: "238859",
+	};
+	// Phone-less on purpose: the +65 phone arms are a sibling ticket — these
+	// orders ride the legacy no-phone protocol path so the address is the only
+	// thing under test.
+	const sgCustomer = { name: "Tan Wei Ming" };
+
+	/** SG retailer (born SGD) + one SGD product. */
+	async function seedSgStore(t: ReturnType<typeof setup>, slug: string) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Test Store",
+			slug,
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			currency: "SGD",
+		});
+		return { retailer, productId };
+	}
+
+	test("create accepts an SG address on an SG store and normalizes the state literal", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-ok");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "SGD",
+			channel: "whatsapp",
+			customer: sgCustomer,
+			deliveryAddress: { ...sgAddress, state: "singapore" },
+		});
+		const stored = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.deliveryAddress;
+		});
+		expect(stored?.state).toBe("Singapore");
+		expect(stored?.postcode).toBe("238859");
+	});
+
+	test("create on an SG store rejects MY-shaped addresses", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-my-shape");
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "SGD",
+				channel: "whatsapp",
+				customer: sgCustomer,
+				deliveryAddress: { ...sgAddress, postcode: "47301" },
+			}),
+		).rejects.toThrow(/Postal code must be 6 digits/);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "SGD",
+				channel: "whatsapp",
+				customer: sgCustomer,
+				deliveryAddress: { ...sgAddress, state: "Selangor" },
+			}),
+		).rejects.toThrow(/Singapore/);
+	});
+
+	test("create on an MY store rejects SG shapes exactly as before", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: { ...validAddress, postcode: "238859" },
+			}),
+		).rejects.toThrow(/Postcode must be 5 digits/);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: { ...validAddress, state: "Singapore" },
+			}),
+		).rejects.toThrow(/Unknown state/);
+	});
+
+	test("updateDeliveryAddress re-validates against the SG arm", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-edit");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "SGD",
+			channel: "whatsapp",
+			customer: sgCustomer,
+			deliveryAddress: sgAddress,
+		});
+		const token = await tk(t, shortId);
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: { ...sgAddress, line1: "5 Tampines Central" },
+		});
+		const stored = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.deliveryAddress;
+		});
+		expect(stored?.line1).toBe("5 Tampines Central");
+		// An MY-shaped edit is refused; the stored address stays put.
+		await expect(
+			t.mutation(api.orders.updateDeliveryAddress, {
+				token,
+				deliveryAddress: { ...sgAddress, postcode: "47301" },
+			}),
+		).rejects.toThrow(/Postal code must be 6 digits/);
+	});
+
+	test("read guards: an MY-only delivery mode stored on an SG store blocks instead of stranding", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t, "sg-orders-badmode");
+		// Hand-patch past updateSettings (which refuses this combination) — the
+		// read-side guards are the defence for exactly this bad data.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				deliveryConfig: {
+					mode: "weight",
+					zones: [
+						{
+							name: "West MY",
+							states: ["Selangor"],
+							bands: [{ maxKg: 5, fee: 1500 }],
+						},
+					],
+					onOutOfBands: "arrange",
+					onUnpriceable: "arrange",
+				},
+			});
+		});
+		// Public quote → seller-side blocked, never a nonsense state error.
+		const quote = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 12000,
+			state: "Singapore",
+		});
+		expect(quote).toEqual({ kind: "blocked", reason: "store_unavailable" });
+		// Order create refuses too — a silent fee-pending forever is the trap.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "SGD",
+				channel: "whatsapp",
+				customer: sgCustomer,
+				deliveryAddress: sgAddress,
+			}),
+		).rejects.toThrow(/store's side/);
+	});
+});
+
 describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 	/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
 	 * an order-vs-product currency mismatch, so the whole chain must be SGD. */
@@ -7850,7 +8026,15 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 			currency: "SGD",
 			channel: "whatsapp" as const,
 			customer: { name: "Wei Ling", waPhone },
-			deliveryAddress: validAddress,
+			// SG-shaped — the address arm (86eynw29u) judges by the SAME retailer
+			// country as the phone arm, so an MY `validAddress` would fail first
+			// and mask the phone assertion under test.
+			deliveryAddress: {
+				line1: "12 Bedok North Ave 3",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "238859",
+			},
 		};
 	}
 

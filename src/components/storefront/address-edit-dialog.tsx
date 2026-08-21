@@ -7,9 +7,12 @@ import { Dialog } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import type { Country } from "../../../convex/lib/country";
+import { displayAddressState } from "../../lib/address-display";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import {
-	addressEditFormSchema,
+	addressEditFormSchemaFor,
 	type CheckoutAddressValues,
 	emptyAddress,
 } from "../../lib/schemas";
@@ -31,6 +34,10 @@ interface AddressEditDialogProps {
 	 * tracking page itself), and to detect live-priced (Lalamove) stores.
 	 */
 	retailerId: Id<"retailers"> | undefined;
+	/** The store's country (SG-lite, 86eynw29u) — keys the address variant,
+	 * exactly like checkout. From the order payload's `retailerCountry` (the
+	 * tracking page's only retailer read). */
+	country: Country;
 	/** Order item subtotal (sen) — feeds the reactive delivery quote (the flat
 	 * mode's free-above threshold needs it; live-mode detection ignores it). */
 	subtotal: number;
@@ -72,6 +79,7 @@ export function AddressEditDialog({
 	token,
 	currentAddress,
 	retailerId,
+	country,
 	subtotal,
 	currency,
 	fulfilmentDate,
@@ -95,7 +103,7 @@ export function AddressEditDialog({
 
 	const form = useAppForm({
 		defaultValues: toFormValues(currentAddress),
-		validators: { onChange: addressEditFormSchema },
+		validators: { onChange: addressEditFormSchemaFor(country) },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
 			const line2 = value.line2.trim();
@@ -113,14 +121,17 @@ export function AddressEditDialog({
 				lngNum >= -180 &&
 				lngNum <= 180;
 			const placeId = value.placeId.trim();
+			// SG forms render no city/state inputs — stamp the canonical literal,
+			// never form state (mirrors checkout's sanitizeAddress).
+			const sgAddress = country === "SG";
 			try {
 				await updateAddress({
 					token,
 					deliveryAddress: {
 						line1: value.line1.trim(),
 						line2: line2.length > 0 ? line2 : undefined,
-						city: value.city.trim(),
-						state: value.state,
+						city: sgAddress ? SG_STATE_LABEL : value.city.trim(),
+						state: sgAddress ? SG_STATE_LABEL : value.state,
 						postcode: value.postcode.trim(),
 						notes: notes.length > 0 ? notes : undefined,
 						mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
@@ -152,7 +163,12 @@ export function AddressEditDialog({
 		longitude: hasCoords ? lngNum : undefined,
 		getAddressLabel: () => {
 			const v = form.store.state.values;
-			return [v.line1, v.line2, `${v.postcode} ${v.city}`.trim(), v.state]
+			return [
+				v.line1,
+				v.line2,
+				`${v.postcode} ${v.city}`.trim(),
+				displayAddressState(v),
+			]
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
 		},
@@ -212,6 +228,7 @@ export function AddressEditDialog({
 									placeId: "placeId",
 								}}
 								retailerId={retailerId}
+								country={country}
 								// The dialog's own title already says "Edit delivery address".
 								legend={undefined}
 								// A live-quoted (Lalamove) order is re-priced from the pin —

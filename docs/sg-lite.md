@@ -1,11 +1,12 @@
 # SG-lite — Singapore stores on Kedaipal
 
-**Status:** Phase 1 (country field + currency correctness, ClickUp
-[`86eynw27f`](https://app.clickup.com/t/86eynw27f)) and Phase 2 (phone +65 —
-buyer checkout [`86eynw28q`](https://app.clickup.com/t/86eynw28q) + seller-side
-fields [`86eynw2dy`](https://app.clickup.com/t/86eynw2dy), one PR) built. The
-address variant rides the remaining sibling `86eynw29u` and extends this doc
-when it lands.
+**Status:** all three SG-lite build slices are in — Phase 1 (country field +
+currency correctness, [`86eynw27f`](https://app.clickup.com/t/86eynw27f)),
+Phase 2 (phone +65 — buyer checkout
+[`86eynw28q`](https://app.clickup.com/t/86eynw28q) + seller-side fields
+[`86eynw2dy`](https://app.clickup.com/t/86eynw2dy), one PR), and Phase 3
+(address variant + Places unlock + delivery-mode guard,
+[`86eynw29u`](https://app.clickup.com/t/86eynw29u)).
 
 The first SG merchant (SG WhatsApp number, SG buyers, SGD pricing) goes live on
 the shared +60 WABA — Meta delivers internationally, so the messaging layer is
@@ -73,6 +74,89 @@ CSV, HitPay mint — all read `order.currency`). Three real gaps got fixed here:
    the Intl path. Also fixed in passing: the track-page address-edit dialog
    hardcoded `"MYR"` on the live rider-price line — it now takes the order's
    frozen currency.
+
+## Address (SG variant) — `86eynw29u`
+
+### The shapes
+
+One country-keyed validator on each side, MY byte-identical to pre-SG:
+
+- **Server** — `convex/lib/address.ts` `assertValidAddress(addr, country)`
+  (country omitted = MY, so every legacy caller/test is untouched). The MY arm
+  keeps `MY_STATES` + 5-digit postcode. The SG arm takes a **6-digit postal
+  code** and requires `state` to be the literal **`"Singapore"`**
+  (`SG_STATE_LABEL`, accepted case-insensitively, normalized on store).
+  Country resolves from the RETAILER row at both call sites —
+  `orders.create` and `updateDeliveryAddress` — never sniffed off the address.
+- **Client** — `src/lib/schemas.ts` `strictAddressSchemaFor(country)` /
+  `checkoutFormSchemaFor(country)` / `addressEditFormSchemaFor(country)`,
+  built once per country at module load (exhaustive over `COUNTRIES`).
+  Checkout reads the country off `getRetailerBySlug`; the tracking-page edit
+  dialog reads `order.retailerCountry`.
+
+### No state/city fields for SG
+
+Singapore has no state tier and one city, so the SG form renders **line1 + a
+6-digit postal-code input only** (`AddressFieldset`'s `country` prop) — no
+state dropdown, **no city field**. Both `city` and `state` are stamped with
+`"Singapore"` by the submit handlers (checkout's `sanitizeAddress`, the edit
+dialog's payload) — never read off form state — so downstream consumers keep
+the same required-string shape as MY. Display sites dedupe the repetition
+via `src/lib/address-display.ts` (`displayAddressState`: the state line is
+skipped when it merely repeats the city), so nothing prints
+"123456 Singapore, Singapore" — applied on the tracking/dashboard address
+block, the wa.me message, both live-quote address labels, and the confirmed
+card. Google picks parse through `parseGoogleAddress(components, formatted,
+country)` — the SG arm returns the literal for city/state, keyed off the
+country arg, never guessed from components.
+
+### Places region unlock
+
+`convex/google.ts` `autocompleteAddress` takes an optional `country`
+(validated `"MY" | "SG"`, default MY) mapped through
+`REGION_CODES: Record<Country, …>` → `includedRegionCodes` `["my"]`/`["sg"]`.
+Threaded from the buyer fieldset AND the three seller surfaces (business
+address ×2 in Settings → Fulfilment, the pickup-point dialog — whose
+placeholder now names the store's country). Place-details fetches carry no
+region (a place id is unambiguous).
+
+### Saved address is namespaced per country
+
+`src/lib/saved-address.ts`: MY keeps the original `kedaipal:lastAddress` key
+(existing buyers' saves survive), SG uses `kedaipal:lastAddress:SG`. This
+kills the cross-contamination bug (an MY save restoring `state: "Selangor"`
++ a 5-digit postcode invisibly into an SG form) while keeping BOTH prefills
+for a buyer who shops in both countries — chosen over discard-on-mismatch,
+which destroys a valid save to fix the same bug.
+
+### Delivery-mode allowlist: SG = `unset (free) | flat`
+
+`convex/lib/delivery.ts` `COUNTRY_DELIVERY_MODES` / `deliveryModeAllowed` is
+the one author; radius/weight/Lalamove are MY-shaped (zone lookups key off
+MY states; `LALAMOVE_MARKET = "MY"`), so on an SG store they'd strand every
+order fee-pending or kill checkout. Three enforcement points:
+
+1. **Write (primary)** — `retailers.updateSettings` refuses storing an
+   MY-only mode on an (effective) SG store — checked BEFORE the
+   mode-specific requirements, so an SG seller picking Lalamove hears "the
+   mode is MY-only", not "configure booking first" — and refuses flipping
+   `country` → SG while such a config is stored ("switch to Free or a Flat
+   fee first"; a same-call config replacement is judged against the incoming
+   mode, so flip-and-fix lands in one save). The `CountryForm` surfaces the
+   refusal via its existing `convexErrorMessage` toast.
+2. **Settings UI** — SG stores render only the Free + Flat cards with a
+   one-line reason; a store somehow stuck on a stored MY-only mode gets an
+   amber repair note instead of a silently unselected grid.
+3. **Read (belt-and-braces)** — the public `delivery.quote` answers
+   `{kind: "blocked", reason: "store_unavailable"}` (the existing
+   "it's on the store's side" buyer copy) and `orders.create` /
+   `updateDeliveryAddress` refuse via `resolveDeliveryForOrder`, so bad data
+   can never silently strand an order as fee-pending forever.
+
+### Deferred
+
+Lalamove SG market, SG weight zones (would need an SG-region concept — the
+current zones are sets of MY states), and Delyva/courier-registry SG entries.
 
 ## Phone (+65) — `86eynw28q` + `86eynw2dy`
 
@@ -167,19 +251,19 @@ verified to re-validate nothing.
 
 ## What deliberately did NOT change here
 
-- **Address validation / Places region / delivery-mode guards** — `86eynw29u`.
-  Until it lands, an SG store must stay on free/flat delivery or self-collect
-  (weight zones key off MY states; Lalamove is MY-market).
 - **Subscription billing currency** — per-invoice, chosen by the admin
   (PR #198); `86eyp7hn7` is parked until the SG prospect pays.
 - **Marketing/landing copy** (RM examples, MY JSON-LD) — not buyer-blocking.
 
 ## Adding a country later
 
-Append to `COUNTRIES`, fill the `Record` lookups (`COUNTRY_LABELS`,
-`COUNTRY_CURRENCY`, `COUNTRY_DIAL_CODE`, and the phone records in
-`convex/lib/slug.ts` — `MOBILE_NSN`/`STORED_MOBILE_PATTERN`/`MOBILE_MESSAGE`/
-`LOOSE_NORMALIZE` — plus the schema/copy/flag records in `src/lib/schemas.ts`,
-`src/lib/format.ts`, and `ui/my-phone-input.tsx`; compile errors walk you
-through every one), add the address arm in the SG-lite validators, and extend
-the Places `REGION_CODES` allowlist.
+Append to `COUNTRIES`, then let the compile errors walk you through the
+`Record` lookups: `COUNTRY_LABELS`, `COUNTRY_CURRENCY`, `COUNTRY_DIAL_CODE`,
+`COUNTRY_DELIVERY_MODES`, the Places `REGION_CODES`, the address
+`POSTCODE_RULES`, and the phone records in `convex/lib/slug.ts`
+(`MOBILE_NSN`/`STORED_MOBILE_PATTERN`/`MOBILE_MESSAGE`/`LOOSE_NORMALIZE`) plus
+the schema/copy/flag records in `src/lib/schemas.ts`, `src/lib/format.ts`, and
+`ui/my-phone-input.tsx`. Then add the address arms (client
+`STRICT_ADDRESS_SCHEMAS` + the server `assertValidState` switch) and widen the
+inline `v.union(v.literal(…))` country validators on `retailers` and
+`google.autocompleteAddress`.

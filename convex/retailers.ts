@@ -196,6 +196,7 @@ import {
 } from "./subscriptions";
 import {
 	type DeliveryConfig,
+	deliveryModeAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { isEncrypted } from "./lib/credentialCrypto";
@@ -1476,6 +1477,24 @@ export const updateSettings = mutation({
 			try { patch.currency = assertSupportedCurrency(args.currency); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 		if (args.country !== undefined) {
+			// Flipping to a country the STORED delivery-charge mode doesn't
+			// support would strand every order (SG + radius/weight/lalamove:
+			// zone lookups miss, Lalamove is MY-market) — refuse with the fix
+			// named. A same-call deliveryConfig replacement is judged below in
+			// the config branch instead, against the incoming mode.
+			if (args.deliveryConfig === undefined) {
+				const storedConfig = retailer.deliveryConfig as
+					| DeliveryConfig
+					| undefined;
+				if (
+					storedConfig &&
+					!deliveryModeAllowed(args.country, storedConfig.mode)
+				) {
+					throw new ConvexError(
+						"Switch your delivery charge to Free or a Flat fee first — distance, weight-zone and Lalamove pricing are Malaysia-only for now.",
+					);
+				}
+			}
 			patch.country = args.country;
 		}
 		if (args.locale !== undefined) {
@@ -1582,6 +1601,20 @@ export const updateSettings = mutation({
 					clean = sanitizeDeliveryConfig(args.deliveryConfig);
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
+				}
+				// Country allowlist FIRST (SG-lite, 86eynw29u) — before the
+				// mode-specific requirements below, so an SG seller picking
+				// Lalamove is told the mode itself is unavailable rather than
+				// being sent off to configure booking credentials for nothing.
+				// Judged against the effective country so "flip to SG + switch
+				// to flat" lands in one save.
+				const effectiveCountry =
+					(args.country !== undefined ? args.country : retailer.country) ??
+					DEFAULT_COUNTRY;
+				if (!deliveryModeAllowed(effectiveCountry, clean.mode)) {
+					throw new ConvexError(
+						"Distance, weight-zone and Lalamove pricing are Malaysia-only for now — Singapore stores can use Free or a Flat fee.",
+					);
 				}
 				if (clean.mode === "radius") {
 					// Radius pricing measures FROM the business address — without one
