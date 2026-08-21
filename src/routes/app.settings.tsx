@@ -32,6 +32,7 @@ import {
 	DELIVERY_MODE_LABELS,
 	type DeliveryConfig,
 	deliveryModeAllowed,
+	riderBookingAllowed,
 } from "../../convex/lib/delivery";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
@@ -656,6 +657,7 @@ function SettingsRoute() {
 								current={retailer.country}
 								currency={retailer.currency}
 								deliveryConfig={retailer.deliveryConfig}
+								deliveryBooking={retailer.deliveryBooking}
 								waPhone={retailer.waPhone}
 								notifyWaPhone={retailer.notifyWaPhone}
 								onSave={(patch) => updateSettings(patch)}
@@ -2224,10 +2226,26 @@ function LocaleForm({
 	);
 }
 
+/**
+ * A country switch clears pickup-point manager contacts that aren't numbers of
+ * the new country (see `retailers.updateSettings`). It happens server-side and
+ * silently, so the toast has to say it — a seller who isn't told will find the
+ * blank field weeks later and read it as data loss.
+ */
+function withPickupNote(
+	base: string,
+	result: { pickupContactsCleared?: number } | null | undefined,
+): string {
+	const cleared = result?.pickupContactsCleared ?? 0;
+	if (cleared === 0) return `${base}.`;
+	return `${base} — the manager contact on ${cleared} pickup point${cleared === 1 ? " was" : "s were"} cleared (add the new number in Fulfilment).`;
+}
+
 function CountryForm({
 	current,
 	currency,
 	deliveryConfig,
+	deliveryBooking,
 	waPhone,
 	notifyWaPhone,
 	onSave,
@@ -2240,6 +2258,10 @@ function CountryForm({
 	 * country switch that collides with one is refused server-side. Read here so
 	 * the collision is explained BEFORE the save, with a way out. */
 	deliveryConfig?: DeliveryConfig;
+	/** Rider booking, read for the same reason — and separately from the config
+	 * above, because pricing and booking are independent (`pricing ⊥ booking`):
+	 * a flat-fee store can still have Book-a-rider armed. */
+	deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
 	/** The store's own WhatsApp numbers. An SG store carries SG numbers and an
 	 * MY store MY ones (the plate on every phone field is a promise), so the
 	 * server refuses a switch that would carry a wrong-country number across.
@@ -2250,9 +2272,10 @@ function CountryForm({
 	onSave: (patch: {
 		country: Country;
 		deliveryConfig?: null;
+		deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
 		waPhone?: string;
 		notifyWaPhone?: string;
-	}) => Promise<unknown>;
+	}) => Promise<{ pickupContactsCleared?: number } | null | undefined>;
 	onGoToFulfilment: () => void;
 	onGoToWhatsapp: () => void;
 }) {
@@ -2261,8 +2284,8 @@ function CountryForm({
 		defaultValues: { country: current as string },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave({ country: value.country as Country });
-				toast.success("Country saved.");
+				const result = await onSave({ country: value.country as Country });
+				toast.success(withPickupNote("Country saved", result));
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
 			}
@@ -2287,25 +2310,41 @@ function CountryForm({
 	async function switchAndFix(country: Country) {
 		const dropDelivery =
 			deliveryConfig && !deliveryModeAllowed(country, deliveryConfig.mode);
+		// Turn booking OFF rather than clearing it: sending `null` would wipe the
+		// seller's stored Lalamove API keys, and switching country is not a reason
+		// to make them re-enter credentials they'll want again if they switch back.
+		const dropBooking =
+			deliveryBooking?.enabled === true && !riderBookingAllowed(country);
 		const dropWaPhone = staleNumber(country, waPhone) !== null;
 		const dropNotify = staleNumber(country, notifyWaPhone) !== null;
 		setClearing(true);
 		try {
-			await onSave({
+			const result = await onSave({
 				country,
 				...(dropDelivery ? { deliveryConfig: null } : {}),
+				...(dropBooking && deliveryBooking
+					? {
+							deliveryBooking: {
+								enabled: false,
+								vehicleType: deliveryBooking.vehicleType,
+							},
+						}
+					: {}),
 				...(dropWaPhone ? { waPhone: "" } : {}),
 				...(dropNotify ? { notifyWaPhone: "" } : {}),
 			});
 			const fixes = [
 				...(dropDelivery ? ["delivery is now free"] : []),
+				...(dropBooking ? ["Lalamove rider booking is off (keys kept)"] : []),
 				...(dropWaPhone || dropNotify
 					? [
 							`the old WhatsApp number${dropWaPhone && dropNotify ? "s were" : " was"} removed — add the ${COUNTRY_LABELS[country]} one in the WhatsApp tab`,
 						]
 					: []),
 			];
-			toast.success(`Country saved — ${fixes.join("; ")}.`);
+			toast.success(
+				withPickupNote(`Country saved — ${fixes.join("; ")}`, result),
+			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -2344,6 +2383,8 @@ function CountryForm({
 						deliveryConfig && !deliveryModeAllowed(picked, deliveryConfig.mode)
 							? deliveryConfig.mode
 							: null;
+					const blockedBooking =
+						deliveryBooking?.enabled === true && !riderBookingAllowed(picked);
 					const staleNumbers = [
 						...(staleNumber(picked, waPhone)
 							? [`WhatsApp contact number (+${waPhone})`]
@@ -2352,7 +2393,10 @@ function CountryForm({
 							? [`order-alerts number (+${notifyWaPhone})`]
 							: []),
 					];
-					const clashes = (blockedMode ? 1 : 0) + staleNumbers.length;
+					const clashes =
+						(blockedMode ? 1 : 0) +
+						(blockedBooking ? 1 : 0) +
+						staleNumbers.length;
 					const busy = isSubmitting || clearing;
 					return (
 						<>
@@ -2405,6 +2449,15 @@ function CountryForm({
 													</span>{" "}
 													pricing, which only works in Malaysia for now — it
 													becomes free (set a flat fee after, in Fulfilment).
+												</li>
+											) : null}
+											{blockedBooking ? (
+												<li>
+													<span className="font-medium">
+														Lalamove rider booking
+													</span>{" "}
+													is on, and rider dispatch only works in Malaysia for
+													now — it's switched off (your API keys are kept).
 												</li>
 											) : null}
 											{staleNumbers.map((label) => (
@@ -2503,7 +2556,7 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
-						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching."
+						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching. Orders already placed keep the currency they were placed in, but Insights and customer lifetime totals add those older amounts up as plain numbers, so totals that span the change won't convert."
 					/>
 				)}
 			</form.AppField>

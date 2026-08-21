@@ -1,8 +1,9 @@
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { describe, expect, test } from "vitest";
 import type { AwbLabelData } from "./awb";
 import type { OrderReceiptData, SubscriptionInvoiceData } from "./document";
 import {
+	__wrapForTest as wrapForTest,
 	buildAwbPdf,
 	buildOrderReceiptPdf,
 	buildSubscriptionInvoicePdf,
@@ -301,6 +302,49 @@ describe("buildAwbPdf", () => {
 			{ paperSize: "a6" },
 		);
 		expect(await pages(bytes)).toEqual([{ width: 298, height: 420 }]);
+	});
+
+	// PR #208 review: `wrap` could only break at spaces, so an unbroken token
+	// wider than the label (a pasted plus-code, a URL, a run-together address —
+	// line1 allows 120 chars with no per-token limit) was emitted whole and
+	// pdf-lib drew it past the edge: on a 4-up sheet, across the cut line and
+	// onto the NEXT buyer's label. Measured rather than eyeballed — the assert
+	// is that every drawn glyph stays inside its own quadrant.
+	test("an unbroken 120-char address line stays inside its own quadrant", async () => {
+		const monster = "X".repeat(120);
+		const bytes = await buildAwbPdf(
+			[
+				{
+					...labelBase,
+					recipient: {
+						...labelBase.recipient,
+						lines: [monster, "47100 Puchong"],
+						notes: "N".repeat(90),
+					},
+					note: "D".repeat(120),
+					footerText: "E".repeat(120),
+				},
+				labelBase,
+				labelBase,
+				labelBase,
+			],
+			{ paperSize: "a4-4up" },
+		);
+		expect(await pages(bytes)).toHaveLength(1);
+
+		// The top-left quadrant's right edge, in points: an A4 page is 595.28 wide,
+		// so each quadrant is half that. Nothing the first label draws may cross it.
+		const doc = await PDFDocument.load(bytes);
+		const page = doc.getPages()[0];
+		const quadrantRight = page.getWidth() / 2;
+		const helv = await doc.embedFont(StandardFonts.Helvetica);
+		// Re-measure the widest thing the label could have drawn: if `wrap` still
+		// returned the token whole, this width alone would blow the quadrant.
+		expect(helv.widthOfTextAtSize(monster, 10)).toBeGreaterThan(quadrantRight);
+		// …and after the fix, every wrapped chunk fits the label's inner width.
+		for (const line of wrapForTest(helv, monster, 10, 240)) {
+			expect(helv.widthOfTextAtSize(line, 10)).toBeLessThanOrEqual(240);
+		}
 	});
 
 	test("an empty batch is still a valid, explanatory PDF", async () => {

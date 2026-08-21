@@ -2012,3 +2012,133 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		).rejects.toThrow(/isn't a Malaysian number/);
 	});
 });
+
+describe("country switch and Lalamove rider booking (PR #208 review)", () => {
+	// Pricing and booking are independent by design (`pricing ⊥ booking`), so a
+	// FLAT-priced store passes the delivery-mode check while still carrying an
+	// armed Book-a-rider button — pointed at an integration hardcoded to
+	// Lalamove Malaysia, with prompt-book-on-packed able to spend money without
+	// being asked. That gap is what these pin.
+	// Enabling booking requires the rider pickup origin.
+	const originAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const booking = {
+		enabled: true,
+		vehicleType: "MOTORCYCLE" as const,
+		apiKey: "pk_test_abc",
+		apiSecret: "sk_test_def",
+	};
+
+	test("a bare MY→SG switch is refused while rider booking is enabled", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-booking-armed");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: originAddress,
+			deliveryConfig: { mode: "flat", fee: 500 },
+			deliveryBooking: booking,
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/rider booking/i);
+		// Refused save must not half-apply.
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("MY");
+	});
+
+	test("one save can switch AND disable booking, keeping the stored keys", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-booking-off");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: originAddress,
+			deliveryConfig: { mode: "flat", fee: 500 },
+			deliveryBooking: booking,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			deliveryBooking: { enabled: false, vehicleType: "MOTORCYCLE" },
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.deliveryBooking?.enabled).toBe(false);
+		// Switching country is not a reason to make a seller re-enter API keys
+		// they'll want back if they switch again.
+		expect(mine?.deliveryBooking?.hasCredentials).toBe(true);
+	});
+
+	test("booking already off never blocks the switch", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-booking-idle");
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryBooking: { enabled: false, vehicleType: "CAR" },
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		expect((await asA.query(api.retailers.getMyRetailer))?.country).toBe("SG");
+	});
+
+	test("SG→MY re-arms nothing but is never blocked by this rule", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-back-my");
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		expect((await asA.query(api.retailers.getMyRetailer))?.country).toBe("MY");
+	});
+});
+
+describe("country switch clears wrong-country pickup contacts (PR #208 review)", () => {
+	test("MY manager numbers are cleared on the switch and counted back", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-pickup-contacts");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Studio",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+			managerName: "Ali",
+			managerWaPhone: "012-345 6789",
+		});
+		// A second point with no contact must not be counted.
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Stall",
+			address: "5 Jln Bukit Bintang, 55100 Kuala Lumpur",
+		});
+
+		const result = await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+		});
+		expect(result.pickupContactsCleared).toBe(1);
+
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		for (const row of rows) expect(row.managerWaPhone).toBeUndefined();
+		// The rest of the location survives — only the invalid field goes.
+		expect(rows.find((r) => r.label === "Studio")?.managerName).toBe("Ali");
+	});
+
+	test("a matching number is left alone (no needless clearing)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-pickup-keep");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Studio",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+			managerWaPhone: "012-345 6789",
+		});
+		// MY→MY is not a country change at all.
+		const result = await asA.mutation(api.retailers.updateSettings, {
+			country: "MY",
+		});
+		expect(result.pickupContactsCleared).toBe(0);
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0]?.managerWaPhone).toBe("60123456789");
+	});
+});
