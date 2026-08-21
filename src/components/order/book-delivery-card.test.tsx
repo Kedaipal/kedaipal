@@ -1160,3 +1160,37 @@ describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)"
 		expect(action.mock.calls[1][0]).toHaveProperty("quotationId", "q1");
 	});
 });
+
+
+describe("BookDeliveryCard — a lapsed quote can't be dispatched (86eypncfy)", () => {
+	it("swaps to a re-quote with a reason once Lalamove's 5 minutes are up", async () => {
+		// Lalamove honours a quotation for exactly 5 minutes. Confirming against
+		// a dead one is the loop the seller was stuck in, so an expired price
+		// must not leave an armed-looking dispatch button.
+		state.dispatch = bookableDispatch();
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+			expiresAt: Date.now() - 1000, // already lapsed when it lands
+		});
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+
+		await waitFor(() =>
+			expect(screen.getByText(/price has expired/i)).toBeTruthy(),
+		);
+		expect(
+			screen.getByRole("button", { name: /Get a fresh price/i }),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /Confirm & dispatch/i }),
+		).toBeNull();
+	});
+});

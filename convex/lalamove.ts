@@ -37,6 +37,7 @@ import {
 	decryptLalamoveCredentials,
 	resolveDispatchSchedule,
 	resolveLalamoveCredentials,
+	bookingFailureMessage,
 	classifyBookingFailure,
 	resolveScheduleAt,
 	toLalamoveMyPhone,
@@ -862,21 +863,12 @@ function friendlyBookingError(
 	err: unknown,
 	env?: "sandbox" | "production",
 ): string {
-	if (err instanceof LalamoveApiError) {
-		switch (classifyBookingFailure(err.body)) {
-			case "wallet":
-				return env === "sandbox"
-					? "These are Lalamove TEST keys, so this booking is hitting the sandbox — its balance is play money and topping up your real wallet can't change it. Paste your live keys (they start with pk_prod_) in Settings → Fulfilment to book real riders."
-					: "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove Business account these API keys belong to — a top-up in the personal Lalamove app credits a different wallet — then book again.";
-			case "quote_expired":
-				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
-			case "bad_phone":
-				return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
-			case "out_of_range":
-				return "Lalamove doesn't serve this drop-off address. The order needs to go out another way.";
-		}
-	}
-	return "Lalamove couldn't process the booking right now. Please try again in a moment.";
+	return bookingFailureMessage(
+		err instanceof LalamoveApiError
+			? classifyBookingFailure(err.body)
+			: "unknown",
+		env,
+	);
 }
 
 /**

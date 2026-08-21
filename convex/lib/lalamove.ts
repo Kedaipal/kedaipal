@@ -331,6 +331,35 @@ export function classifyBookingFailure(body: string): BookingFailure {
 }
 
 /**
+ * Seller-facing copy for a failed booking. Lives here, beside the classifier,
+ * so the decision is a pure function a test can pin — the `env` branch below
+ * is the exact string that sent a vendor to top up a wallet that could never
+ * receive it, so it must not be able to regress silently.
+ */
+export function bookingFailureMessage(
+	failure: BookingFailure,
+	env?: "sandbox" | "production",
+): string {
+	switch (failure) {
+		case "wallet":
+			// On a sandbox key this is NOT a wallet problem: Lalamove's test
+			// environment has its own play-money balance that no real top-up can
+			// reach. Saying "top up" here is worse than saying nothing.
+			return env === "sandbox"
+				? "These are Lalamove TEST keys, so this booking is hitting the sandbox — no real rider will be dispatched, its balance is play money, and topping up your real wallet can't change it. Paste your live keys (they start with pk_prod_) in Settings → Fulfilment to book real riders."
+				: "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove Business account these API keys belong to — a top-up in the personal Lalamove app credits a different wallet — then book again.";
+		case "quote_expired":
+			return "The price quote expired — get a fresh price and confirm within 5 minutes.";
+		case "bad_phone":
+			return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+		case "out_of_range":
+			return "Lalamove doesn't serve this drop-off address. The order needs to go out another way.";
+		default:
+			return "Lalamove couldn't process the booking right now. Please try again in a moment.";
+	}
+}
+
+/**
  * Classify a failed quotation into the THREE buyer-facing stories, because
  * each demands different copy and only one is retryable:
  *

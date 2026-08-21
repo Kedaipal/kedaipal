@@ -13,6 +13,7 @@ import {
 	buildQuotationBody,
 	classifyQuoteFailure,
 	extractWebhookOrderId,
+	bookingFailureMessage,
 	classifyBookingFailure,
 	isActiveJobStatus,
 	isOutOfServiceAreaError,
@@ -339,6 +340,34 @@ describe("status + webhook helpers", () => {
 			"unknown",
 		);
 		expect(classifyBookingFailure("socket hang up")).toBe("unknown");
+	});
+
+	test("a wallet refusal on SANDBOX keys never asks for a top-up", () => {
+		// The string that cost us a vendor. On a test key the balance is play
+		// money no real top-up can reach, so "top it up" is actively harmful —
+		// Wagyu Walid followed exactly that instruction for 26 hours.
+		const sandbox = bookingFailureMessage("wallet", "sandbox");
+		expect(sandbox).toMatch(/TEST keys/);
+		expect(sandbox).toMatch(/no real rider/i);
+		expect(sandbox).toMatch(/pk_prod_/);
+		// It may only mention topping up in order to NEGATE it.
+		expect(sandbox).not.toMatch(/^(?!.*can't change it).*top it up/i);
+
+		// A live key keeps the real ask — and names the Business account, since
+		// a top-up in the personal Lalamove app credits a different wallet.
+		const live = bookingFailureMessage("wallet", "production");
+		expect(live).toMatch(/Business account/);
+		expect(live).not.toMatch(/TEST keys/);
+
+		// Un-stamped env (pre-backfill row) must not claim sandbox.
+		expect(bookingFailureMessage("wallet", undefined)).toBe(live);
+
+		// env only ever changes the wallet story.
+		for (const f of ["quote_expired", "bad_phone", "out_of_range", "unknown"] as const) {
+			expect(bookingFailureMessage(f, "sandbox")).toBe(
+				bookingFailureMessage(f, "production"),
+			);
+		}
 	});
 
 	test("inferLalamoveEnv reads the key prefix, and only the prefix", () => {
