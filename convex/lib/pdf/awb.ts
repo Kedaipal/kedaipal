@@ -48,9 +48,16 @@ export type AwbLabelData = {
 	fulfilmentLabel?: string;
 	courierName?: string;
 	trackingNo?: string;
-	/** Payload for the QR — the buyer's `/track/<token>` URL. Absent when the
-	 * order somehow has no tracking token (pre-migration rows). */
-	trackUrl?: string;
+	/**
+	 * Payload for the QR — the STOREFRONT URL (`<APP_URL>/<slug>?src=awb`),
+	 * deliberately NOT the buyer's `/track/<token>` page. The tracking token is
+	 * the buyer's capability (live order detail + address/phone/payment-claim
+	 * mutations), and this QR goes on the OUTSIDE of a parcel where couriers and
+	 * neighbours can scan it. The buyer already has their tracking link privately
+	 * in WhatsApp; the parcel QR is the reorder loop instead — the store-poster
+	 * posture. See docs/despatch-labels.md.
+	 */
+	storeUrl?: string;
 	/**
 	 * The payment strip, resolved cause-true at print time — or `undefined` when
 	 * the store's template hides payment status entirely.
@@ -334,11 +341,11 @@ export function orderToAwbLabelData(args: {
 	order: OrderForAwb;
 	retailer: RetailerForAwb;
 	config: AwbConfig;
-	/** `${APP_URL}/track/<token>` — omitted when the order has no token. */
-	trackUrl?: string;
+	/** `${APP_URL}/<slug>?src=awb` — see `AwbLabelData.storeUrl`. */
+	storeUrl?: string;
 	weightGrams?: number;
 }): AwbLabelData {
-	const { order, retailer, config, trackUrl, weightGrams } = args;
+	const { order, retailer, config, storeUrl, weightGrams } = args;
 	const address = order.deliveryAddress;
 	const collection = order.deliveryDirection === "collection";
 
@@ -354,7 +361,7 @@ export function orderToAwbLabelData(args: {
 		// render.ts), which would leave a blank line where the courier looks
 		// first — fall through to the phone, then a neutral word, so the block
 		// always says who.
-		name: order.customer.name?.trim() || fallbackRecipientName(order),
+		name: recipientDisplayName(order.customer),
 		phone: order.customer.waPhone ? formatPhone(order.customer.waPhone) : undefined,
 		lines: address ? addressLines(address) : [],
 		notes: address?.notes?.trim() || undefined,
@@ -395,7 +402,7 @@ export function orderToAwbLabelData(args: {
 					)}`,
 		courierName: order.courierName?.trim() || undefined,
 		trackingNo: order.trackingNo?.trim() || undefined,
-		trackUrl,
+		storeUrl,
 		payment,
 		currency: order.currency,
 		weightLabel:
@@ -414,10 +421,19 @@ export function orderToAwbLabelData(args: {
 	};
 }
 
-/** Last resort for an unnamed buyer — the phone a courier can call, else a
- * neutral word. Mirrors `orderCustomerLabel`'s walk-in posture. */
-function fallbackRecipientName(order: OrderForAwb): string {
-	const phone = order.customer.waPhone?.trim();
+/**
+ * Who the parcel is for — the buyer's name, else the phone a courier can call,
+ * else a neutral word (mirrors `orderCustomerLabel`'s walk-in posture). Shared
+ * by the label's recipient block and the print-queue rows, so the modal names
+ * an order exactly the way its label will.
+ */
+export function recipientDisplayName(customer: {
+	name?: string;
+	waPhone?: string;
+}): string {
+	const name = customer.name?.trim();
+	if (name) return name;
+	const phone = customer.waPhone?.trim();
 	return phone ? formatPhone(phone) : "Customer";
 }
 

@@ -21,7 +21,8 @@ gets printed in stacks.
 **It is Kedaipal's own despatch label.** It carries the courier name and
 consignment number the seller recorded themselves through the manual-courier
 flow ([`86eyehvk4`](./fulfilment.md#manual-courier--tracking-number-on-shipped-2026-07-29-clickup-86eyehvk4)),
-plus the addresses, the amount to collect and a QR to the buyer's tracking page.
+plus the addresses, the amount to collect and a QR to the seller's storefront
+(see "Why the QR is the storefront" below).
 
 **It is not a courier-issued Air Waybill.** A courier's official consignment note
 is minted by *their* booking API and carries *their* barcode symbology, routing
@@ -48,7 +49,7 @@ The ticket's three open questions were decided before the build:
 |---|---|---|---|
 | **One label** | Order detail — a `Print label` button *before* `Download receipt` (desktop header actions; mobile "More actions" panel) | Owner or admin act-as, by `shortId` | **All tier** |
 | **A selection** | Order inbox → select mode → the printer button on the bulk bar (carries the live count) → the print dialog | Owner or admin act-as | **Pro** (`orderInbox`) |
-| **Everything ready** | Order inbox → the **Ready to ship** strip, one tap, no selection | Owner or admin act-as | **Pro** (`orderInbox`) |
+| **Everything ready** | Order inbox → the **Ready to ship** strip → the print-queue modal (no prior selection) | Owner or admin act-as | **Pro** (`orderInbox`) |
 
 **Why single is all-tier and batch is Pro.** A seller shipping a parcel must
 always be able to put an address on it — that is correctness, not an upsell (the
@@ -79,6 +80,25 @@ deliveryAddress !== undefined            // convex/lib/pdf/awb.ts
   their rider travels buyer → seller, so "packed" there means work in progress,
   not a parcel waiting on a courier. An explicit selection still prints one, with
   the parties swapped (below).
+
+**The strip opens a queue modal, not a blind print.** The owner's own test found
+the gap: he printed 5 labels, 2 more orders came in paid+packed, and the strip's
+count became 7 with no way to print only the new ones. Tapping the strip now
+opens the print dialog in **queue mode**: every ready order listed with a
+checkbox (shortId, buyer, total), select/deselect all, and a printed-state
+memory —
+
+- **`orders.labelPrintedAt`** (optional epoch-ms, no backfill) is stamped by
+  BOTH generate actions after a successful PDF build — never on skipped orders,
+  re-stamped on re-print (it records a fact, not a one-shot). "Printed" means
+  "a label PDF containing this order was generated" — we can't see the physical
+  printer, and the modal's chip wording stays honest about that.
+- **Unprinted rows open CHECKED; previously-printed rows stay listed but
+  UNCHECKED**, wearing a "Printed · 2h ago" chip — so the 5+2 case opens with
+  exactly the 2 new orders selected, and a reprint is still one tap on its row.
+  The chips update live after a print (the queue query is reactive; the stamp
+  mutation makes that free). The default-check rule is a pure helper
+  (`defaultCheckedQueueIds`, `src/lib/awb-labels.ts`), unit-tested.
 
 **Printing never advances an order.** A label in the printer tray is not a parcel
 in a courier's hands, so nothing is stamped `shipped` — the seller does that from
@@ -143,7 +163,7 @@ delivery address), 1 cancelled"). Never a bare "skipped 4".
 ```
 ┌──────────────────────────────────────────┐
 │ [seller logo]                    ┌─────┐ │
-│ STORE NAME                       │ QR  │ │  → /track/<token>
+│ STORE NAME                       │ QR  │ │  → /<slug>?src=awb
 │ ORD-8FK2                         └─────┘ │
 │ ──────────────────────────────────────── │
 │ FROM      Store · +60 12-345 6789        │
@@ -178,6 +198,28 @@ items at one A6 page and asserts the document is still one page.
 **Everything degrades on its own** — no logo, no courier, no tracking number, no
 weight, no date, no note. Each simply doesn't print, because sellers print
 labels *before* the courier handover at least as often as after.
+
+### Why the QR is the storefront, not the tracking page
+
+The first cut encoded the buyer's `/track/<token>` URL — and that was a privacy
+bug, caught in owner review before launch. The tracking token is the buyer's
+**capability**, not just a link: whoever scans the outside of the parcel (courier
+staff, a sorting hub, a neighbour at the door) gets the live order page — items,
+prices, payment state — *and* its token-gated mutations: the address edit, the
+phone repair, the payment claim. The buyer gains nothing in exchange, because
+their tracking link already reaches them privately in WhatsApp at confirm time.
+
+So the QR encodes **`<APP_URL>/<slug>?src=awb`** instead (the reserved `?src=`
+attribution param): the recipient scans the box → lands on the shop → reorders.
+That makes every parcel the same growth surface as the store QR poster, at zero
+privacy cost — everything on the storefront is public by definition.
+
+This is deliberately **not a toggle**. A "put the tracking link back" option
+would be a footgun with no story for who it serves; if a future ticket wants a
+scannable per-parcel link, it needs a *new, read-only, capability-free* surface
+first. A test pins that no QR payload ever contains `/track/` again
+(`convex/awb.test.ts` — "carries the storefront URL, never the buyer's /track
+capability").
 
 ### Country correctness (SG-lite)
 
@@ -332,7 +374,8 @@ They are verified rather than trusted:
 
 Deliberate limits: QR is level M only (~15% recovery, the right trade for a
 laser-printed label that gets smudged and taped over) and version ≤ 10 (213
-bytes; a `/track/<token>` URL is 51 and lands on version 4) — a longer payload
+bytes; a `kedaipal.com/<slug>?src=awb` URL is ~40 and lands in version 3–4) — a
+longer payload
 **throws** rather than silently encoding the wrong URL, and the caller simply
 omits the QR. Code 128 is **code set B only** (set C would halve an all-numeric
 number's width, but a 12-digit consignment number is already ~26 mm on a 105 mm
@@ -359,12 +402,12 @@ be handed back from an action.
 |---|---|
 | `convex/lib/pdf/qr.test.ts` (25) | GF(256) field, RS syndromes, capacity table vs the module formula, alignment positions, BCH format/version words, full decode round-trip, version selection, over-capacity throw. |
 | `convex/lib/pdf/barcode.test.ts` (16) | Pattern-table invariants, normalisation, decode round-trip incl. checksum, the too-long/unencodable `null` path. |
-| `convex/lib/pdf/awb.test.ts` (34) | Skip rules, ready-to-ship rule, MY + SG address lines, weight formatting, party swap on collection, all four payment states, every config toggle, the unnamed-buyer fallback, all four sorts + totality. |
+| `convex/lib/pdf/awb.test.ts` (39) | Skip rules, ready-to-ship rule, MY + SG address lines, weight formatting, party swap on collection, all four payment states, every config toggle, the unnamed-buyer fallback, all four sorts + totality, the storefront QR payload. |
 | `convex/lib/awbConfig.test.ts` (13) | Defaults, default-drop normalisation, sanitize stability, footer cap, unknown paper size. |
-| `convex/awb.test.ts` (22) | Auth (owner / stranger / unauthenticated / admin act-as), the all-tier single vs Pro-gated batch, skip counts by reason, cross-store id rejection, both ceilings, the ready queue matching the inbox count, and **that printing doesn't advance status**. |
-| `convex/lib/pdf/render.test.ts` (+11) | Page sizes for both papers, 4-up sheet count, everything-stripped, no-courier, over-long tracking number, absurd-text overflow, non-Latin-1, empty batch, unembeddable logo, 100-label file size. |
+| `convex/awb.test.ts` (31) | Auth (owner / stranger / unauthenticated / admin act-as), the all-tier single vs Pro-gated batch, skip counts by reason, cross-store id rejection, both ceilings, the ready queue matching the inbox count, **that printing doesn't advance status**, the `labelPrintedAt` stamp (single + batch, skipped orders never stamped, failed prints stamp nothing), and **the QR pin — no payload ever contains `/track/`**. |
+| `convex/lib/pdf/render.test.ts` (17) | Page sizes for both papers, 4-up sheet count, everything-stripped, no-courier, over-long tracking number, absurd-text overflow, non-Latin-1, empty batch, unembeddable logo, 100-label file size. |
 | `src/components/settings/despatch-label-card.test.tsx` (9) | Patch payloads, disabled-until-dirty, footer cap, discard, and the "not a courier's consignment note" copy. |
-| `src/lib/awb-labels.test.ts` (6) | Skip copy naming causes, stable reason order, sort options. |
+| `src/lib/awb-labels.test.ts` (12) | Skip copy naming causes, stable reason order, sort options, and the queue modal's default-check rule (unprinted checked, printed listed-unchecked). |
 
 ---
 

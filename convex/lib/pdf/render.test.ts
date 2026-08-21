@@ -159,7 +159,7 @@ const labelBase: AwbLabelData = {
 	fulfilmentLabel: "Deliver on Fri, 21 Aug 2026 · 3:30 PM",
 	courierName: "J&T Express",
 	trackingNo: "630123456789",
-	trackUrl: "https://kedaipal.com/track/aB3xY7kQ2mNp9RtV5wZs",
+	storeUrl: "https://kedaipal.com/wagyu-walid?src=awb",
 	payment: { kind: "cod", amount: 12800 },
 	currency: "MYR",
 	weightLabel: "1.20 kg",
@@ -297,7 +297,7 @@ describe("buildAwbPdf", () => {
 		const many = Array.from({ length: 100 }, (_, i) => ({
 			...labelBase,
 			orderShortId: `ORD-${1000 + i}`,
-			trackUrl: `https://kedaipal.com/track/aB3xY7kQ2mNp9RtV5wZ${i % 10}`,
+			storeUrl: `https://kedaipal.com/wagyu-walid-${i % 10}?src=awb`,
 		}));
 		const bytes = await buildAwbPdf(many, { paperSize: "a4-4up" });
 		expect(await pages(bytes)).toHaveLength(25);

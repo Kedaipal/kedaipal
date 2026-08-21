@@ -6,6 +6,7 @@
  * batch — the print dialog and the ready-to-ship toast — say the same thing.
  */
 
+import type { AwbPaperSize } from "../../convex/lib/awbConfig";
 import type {
 	AwbSkipCounts,
 	AwbSkipReason,
@@ -40,6 +41,30 @@ export function describeAwbSkips(skipped: AwbSkipCounts): string | null {
 
 export function totalSkipped(skipped: AwbSkipCounts): number {
 	return Object.values(skipped).reduce((sum, n) => sum + n, 0);
+}
+
+/** The store's saved label size, in the seller's words — said wherever a print
+ * is about to happen, so nobody is surprised by what the printer produces. */
+export function describeAwbPaper(paperSize: AwbPaperSize): string {
+	return paperSize === "a6"
+		? "one A6 label per page"
+		: "four labels per A4 sheet";
+}
+
+/**
+ * Which print-queue rows start CHECKED: the never-printed ones. Rows that
+ * already have a label out (`labelPrintedAt` set) stay listed but UNCHECKED —
+ * the re-print path — so the default tap prints exactly the new work and a
+ * re-print is always a deliberate tick. Applied when the modal opens AND to
+ * any row that lands while it's open (a fresh order was never seen, so
+ * checking it is the same default, not an override of the seller's choice).
+ */
+export function defaultCheckedQueueIds<
+	T extends { orderId: string; labelPrintedAt?: number },
+>(rows: readonly T[]): Array<T["orderId"]> {
+	return rows
+		.filter((row) => row.labelPrintedAt === undefined)
+		.map((row) => row.orderId);
 }
 
 /** Batch sort options, in the order the dialog offers them. Fulfilment date

@@ -68,6 +68,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { canHardDeleteOrders } from "../lib/admin-actions";
+import { describeAwbPaper } from "../lib/awb-labels";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -782,6 +783,9 @@ function OrdersRoute() {
 				<ReadyToShipStrip
 					retailerId={retailer._id}
 					count={counts?.readyToShip ?? 0}
+					paperLabel={describeAwbPaper(
+						resolveAwbConfig(retailer.awbConfig).paperSize,
+					)}
 				/>
 			) : null}
 
@@ -1015,15 +1019,14 @@ function OrdersRoute() {
 			    print clears the selection. */}
 			{retailer ? (
 				<PrintLabelsDialog
+					mode="selection"
 					open={printOpen}
 					onOpenChange={setPrintOpen}
 					retailerId={retailer._id}
 					orderIds={[...selected] as Id<"orders">[]}
-					paperLabel={
-						resolveAwbConfig(retailer.awbConfig).paperSize === "a6"
-							? "one A6 label per page"
-							: "four labels per A4 sheet"
-					}
+					paperLabel={describeAwbPaper(
+						resolveAwbConfig(retailer.awbConfig).paperSize,
+					)}
 				/>
 			) : null}
 		</div>
