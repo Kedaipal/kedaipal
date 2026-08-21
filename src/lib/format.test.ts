@@ -186,10 +186,10 @@ describe("convexErrorMessage — rate-limit payload", () => {
 	// handled the generic branch stringified it and a throttled buyer read the
 	// literal "[object Object]" at checkout. Delete the isRateLimitError branch
 	// in format.ts and this test goes red on exactly that string.
-	function rateLimitError(retryAfterMs: number) {
+	function rateLimitError(retryAfterMs: number, name = "orderCreate") {
 		return new ConvexError({
 			kind: "RateLimited",
-			name: "orderCreate",
+			name,
 			retryAfter: retryAfterMs,
 		});
 	}
@@ -221,6 +221,19 @@ describe("convexErrorMessage — rate-limit payload", () => {
 		expect(convexErrorMessage(rateLimitError(91 * 60_000))).toContain("2 hours");
 		expect(convexErrorMessage(rateLimitError(60.4 * 60_000))).toContain(
 			"61 minutes",
+		);
+	});
+
+	it("names the store, not 'the system', when the daily ceiling fires", () => {
+		// The burst limiter says "busy right now"; the daily order ceiling says
+		// what a buyer can act on — this store can't take more orders just yet.
+		const msg = convexErrorMessage(rateLimitError(180_000, "orderCreateDaily"));
+		expect(msg).toContain("getting a lot of orders");
+		expect(msg).toContain("3 minutes");
+		expect(msg).not.toContain("Busy right now");
+		// Every other limiter keeps the generic copy.
+		expect(convexErrorMessage(rateLimitError(4200, "paymentClaim"))).toContain(
+			"Busy right now",
 		);
 	});
 

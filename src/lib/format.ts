@@ -27,7 +27,16 @@ export function convexErrorMessage(err: unknown): string {
 	// running it ahead of the `instanceof` also keeps TS from narrowing the
 	// payload union to `never`.)
 	if (isRateLimitError(err)) {
-		return `Busy right now — please try again in ${retryWait(err.data.retryAfter)}. Nothing was submitted.`;
+		const wait = retryWait(err.data.retryAfter);
+		// The daily order ceiling deserves its own words: "busy right now" blames
+		// the system vaguely, when the truth a buyer can act on is that THIS
+		// store is taking more orders than it can accept. (With the bucket's
+		// continuous refill, one slot frees up every ~3 minutes at the ceiling,
+		// so the wait shown is short and genuinely worth retrying.)
+		if (err.data.name === "orderCreateDaily") {
+			return `This store is getting a lot of orders right now and can't take more just yet — please try again in ${wait}. Nothing was submitted.`;
+		}
+		return `Busy right now — please try again in ${wait}. Nothing was submitted.`;
 	}
 	if (err instanceof ConvexError) {
 		return typeof err.data === "string" ? err.data : String(err.data);
