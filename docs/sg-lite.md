@@ -238,6 +238,33 @@ verified to re-validate nothing.
 - Counter manual bind stays **loose and plate-less** (cashiers key foreign
   numbers); its helper copy + placeholder are country-aware records.
 
+### The country-switch guard — what a switch refuses, clears, and leaves alone
+
+A switch is where every country-shaped stored value can go stale at once, so
+`retailers.updateSettings` judges the whole row against the NEW country in one
+transaction. Three different treatments, chosen by blast radius:
+
+| Stored value | On a switch to a country it doesn't fit | Why |
+|---|---|---|
+| `deliveryConfig.mode` (radius / weight / lalamove) | **Refuses** — "switch your delivery charge to Free or a Flat fee first" | Zone lookups miss and Lalamove is MY-market, so every order would strand fee-pending or blocked. |
+| `deliveryBooking.enabled` | **Refuses** — "turn off Lalamove rider booking first" | Pricing and booking are independent (`pricing ⊥ booking`), so a FLAT-priced store passes the row above while still carrying an armed Book-a-rider button plus prompt-book-on-packed, which spends money without being asked. Own capability table `COUNTRY_RIDER_BOOKING`, deliberately not derived from the pricing allowlist. |
+| `waPhone`, `notifyWaPhone` | **Refuses** — "replace or remove it when switching" | The store's buyer-facing identity: one field, worth stopping for. |
+| `pickupLocations[].managerWaPhone` | **Cleared**, counted, and named in the toast | Internal operational contacts on N rows, never in the public pickup payload. Refusing the switch until a seller hand-edits every location would be a chore with no buyer impact — but leaving them would hold numbers the same form now refuses, surfacing only on the seller's next edit of that location. |
+
+Every refusal is a **same-call escape hatch**: passing the fix alongside
+`country` in one mutation is judged against the new country, so the Settings
+country card's one-tap "switch and fix" never leaves a half-applied row. It
+disables booking rather than clearing it — a country switch is not a reason to
+make a seller re-enter Lalamove API keys they'll want back if they switch again.
+
+**Known gap (follow-up, not a blocker):** Insights KPIs/trend and customer
+`totalSpent` sum frozen minor units across orders and label the result with the
+store's LIVE currency, so totals spanning a currency change mix MYR sen with
+SGD cents. Order-level surfaces are all clean (orders freeze `currency` at
+create; track page, order detail, CSV and HitPay all read the frozen field).
+The Currency card says so in as many words; making the aggregates return a
+currency (or a mixed flag) is the real fix.
+
 ### What stayed MY on purpose
 
 - `convex/lib/contact.ts` — Kedaipal's own support line (platform, not seller

@@ -171,22 +171,64 @@ function clip(font: PDFFont, s: string, size: number, maxWidth: number): string 
 	return `${out}...`;
 }
 
+/**
+ * Split a token that is itself wider than the box into box-width chunks.
+ *
+ * Word wrapping can only break at spaces, so a single unbroken token — a pasted
+ * plus-code, a URL, a run-together address line (all real buyer input, and
+ * `deliveryAddress.line1` allows 120 characters with no per-token limit) — has
+ * no break opportunity and would be emitted whole. pdf-lib does not clip, so it
+ * draws straight past the edge: on an A4 4-up sheet that means across the cut
+ * line and into the NEXT buyer's label, which is both a broken label and one
+ * buyer's address printed on another's parcel. Breaking mid-token is ugly;
+ * printing into the neighbour is worse.
+ */
+function breakLongToken(
+	font: PDFFont,
+	word: string,
+	size: number,
+	maxWidth: number,
+): string[] {
+	if (font.widthOfTextAtSize(word, size) <= maxWidth) return [word];
+	const chunks: string[] = [];
+	let chunk = "";
+	for (const ch of word) {
+		// The `chunk &&` guard means a single character wider than the box still
+		// forms its own chunk, so this always terminates.
+		if (chunk && font.widthOfTextAtSize(chunk + ch, size) > maxWidth) {
+			chunks.push(chunk);
+			chunk = ch;
+		} else {
+			chunk += ch;
+		}
+	}
+	if (chunk) chunks.push(chunk);
+	return chunks;
+}
+
 function wrap(font: PDFFont, s: string, size: number, maxWidth: number): string[] {
 	const words = toLatin1(s).split(/\s+/).filter(Boolean);
 	const lines: string[] = [];
 	let line = "";
-	for (const w of words) {
-		const candidate = line ? `${line} ${w}` : w;
-		if (line && font.widthOfTextAtSize(candidate, size) > maxWidth) {
-			lines.push(line);
-			line = w;
-		} else {
-			line = candidate;
+	for (const word of words) {
+		for (const w of breakLongToken(font, word, size, maxWidth)) {
+			const candidate = line ? `${line} ${w}` : w;
+			if (line && font.widthOfTextAtSize(candidate, size) > maxWidth) {
+				lines.push(line);
+				line = w;
+			} else {
+				line = candidate;
+			}
 		}
 	}
 	if (line) lines.push(line);
 	return lines.length > 0 ? lines : [""];
 }
+
+/** `wrap` is internal to the drawing code, but the "never draws outside its
+ * box" contract is worth asserting directly rather than only through rendered
+ * bytes (PR #208 review). Test-only export. */
+export const __wrapForTest = wrap;
 
 // --- Shared sections -------------------------------------------------------
 
@@ -634,6 +676,8 @@ export type AwbRenderOptions = {
 type Box = { x: number; y: number; w: number; h: number };
 
 const LABEL_PAD = 13;
+/** Code 128's mandated quiet zone, per side, in modules (the spec's own unit). */
+const QUIET_MODULES = 10;
 const QR_SIDE = 52;
 const BARCODE_H = 30;
 /** Fixed height of the sender block, so every label's "deliver to" lines up. */
@@ -719,8 +763,16 @@ function drawBarcode(
 	yTop: number,
 	maxWidth: number,
 ): void {
-	const module = maxWidth / code.modules;
-	let cursor = x;
+	// Code 128 requires a QUIET ZONE of at least 10 modules of white on each
+	// side; a scanner uses it to find the symbol's edges and can reject a code
+	// that runs to the edge of its band. Solve for a module width that fits the
+	// symbol PLUS both quiet zones inside `maxWidth`, rather than stretching the
+	// bars across the whole thing — the zone is defined in modules, so measuring
+	// it in modules is the only way it stays correct at every code length. On an
+	// A6 label this also pushes the outermost bar well clear of the cut-guide
+	// hairline, which previously sat inside the zone.
+	const module = maxWidth / (code.modules + QUIET_MODULES * 2);
+	let cursor = x + QUIET_MODULES * module;
 	// Runs alternate bar/space, starting with a bar.
 	code.runs.forEach((width, i) => {
 		if (i % 2 === 0) {

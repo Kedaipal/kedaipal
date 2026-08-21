@@ -201,6 +201,7 @@ import {
 import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
+	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { isEncrypted } from "./lib/credentialCrypto";
@@ -1371,7 +1372,11 @@ export const updateSettings = mutation({
 	handler: async (
 		ctx,
 		args,
-	): Promise<{ ok: true; productsCurrencySynced: number }> => {
+	): Promise<{
+		ok: true;
+		productsCurrencySynced: number;
+		pickupContactsCleared: number;
+	}> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
 		// path (owner-or-admin); otherwise it's the caller's own store.
 		let retailer: Doc<"retailers">;
@@ -1550,6 +1555,22 @@ export const updateSettings = mutation({
 						`Your ${label} isn't a ${args.country === "SG" ? "Singapore" : "Malaysian"} number — replace or remove it when switching the store's country.`,
 					);
 				}
+			}
+			// Rider BOOKING escapes the delivery-mode check above, because pricing
+			// and booking are independent by design (`pricing ⊥ booking`): a store
+			// on FLAT pricing with booking on passes that check and would carry a
+			// live Book-a-rider button — plus prompt-book-on-packed, which spends
+			// money without being asked — into a market our integration cannot
+			// serve. Same effective-state rule as everywhere else: a same-call
+			// clear or disable is the escape hatch.
+			const effectiveBooking =
+				args.deliveryBooking !== undefined
+					? args.deliveryBooking
+					: (retailer.deliveryBooking as DeliveryBooking | undefined);
+			if (effectiveBooking?.enabled && !riderBookingAllowed(args.country)) {
+				throw new ConvexError(
+					"Turn off Lalamove rider booking first — rider dispatch is Malaysia-only for now.",
+				);
 			}
 			patch.country = args.country;
 		}
@@ -2035,6 +2056,33 @@ export const updateSettings = mutation({
 			}
 		}
 
+		// Pickup points carry their OWN contact (`managerWaPhone`, validated
+		// against the store country on every write), so a country switch would
+		// leave them holding numbers the same form now refuses — surfacing only
+		// on the seller's next edit of that location, the worst place to learn
+		// about it. Cleared here rather than BLOCKING the switch the way the
+		// store's own numbers do, and the asymmetry is deliberate: `waPhone` is
+		// the store's buyer-facing identity, one field, worth stopping for;
+		// these are internal operational contacts on N rows (never in the public
+		// pickup payload), and refusing a country switch until a seller hand-
+		// edits every location would be a chore with no buyer impact. Bounded —
+		// pickup points are a short, seller-curated list. Inactive rows are
+		// cleared too, so reactivating one later can't resurrect a stale number.
+		let pickupContactsCleared = 0;
+		if (patch.country !== undefined) {
+			const locations = await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect();
+			for (const location of locations) {
+				const stored = location.managerWaPhone;
+				if (!stored) continue;
+				if (STORED_MOBILE_PATTERN[patch.country].test(stored)) continue;
+				await ctx.db.patch(location._id, { managerWaPhone: undefined });
+				pickupContactsCleared += 1;
+			}
+		}
+
 		await ctx.db.patch(retailer._id, patch);
 		// Encrypt-at-rest (86eyn25gk): a save that stored a plaintext credential
 		// schedules the encrypt action (mutations never touch crypto.subtle).
@@ -2053,7 +2101,7 @@ export const updateSettings = mutation({
 			);
 		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
-		return { ok: true, productsCurrencySynced };
+		return { ok: true, productsCurrencySynced, pickupContactsCleared };
 	},
 });
 

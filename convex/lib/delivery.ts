@@ -127,6 +127,32 @@ export function deliveryModeAllowed(
 }
 
 /**
+ * Whether a store COUNTRY may run Lalamove RIDER BOOKING (`deliveryBooking`).
+ *
+ * Deliberately its own table rather than derived from `COUNTRY_DELIVERY_MODES`,
+ * because pricing and booking are independent by design (a flat-fee store can
+ * still dispatch riders — the `pricing ⊥ booking` rule). Derive one from the
+ * other and the next country's decision gets made silently by a mode list.
+ *
+ * It happens to encode the SAME market fact — our integration is hardcoded to
+ * Lalamove Malaysia (`LALAMOVE_MARKET = "MY"`, and `toLalamoveMyPhone` rejects
+ * a +65 number outright) — but it is enforced in a different place: the
+ * country-switch guard in `retailers.updateSettings`. Without it an MY store on
+ * FLAT pricing with booking on switched to SG cleanly and kept Book-a-rider and
+ * prompt-book-on-packed armed, so every quote failed at the point of spend
+ * (the 86eypncfy lesson: a broken Lalamove state must be visible BEFORE a
+ * seller reaches for it, never after).
+ */
+export const COUNTRY_RIDER_BOOKING: Record<Country, boolean> = {
+	MY: true,
+	SG: false,
+};
+
+export function riderBookingAllowed(country: Country): boolean {
+	return COUNTRY_RIDER_BOOKING[country];
+}
+
+/**
  * Human names for the pricing modes, for copy that has to tell a seller which
  * one is in their way (the country card's blocked-switch explanation). Lives
  * beside the allowlist so the rule and its wording can't drift apart.
