@@ -34,6 +34,9 @@ interface AddressEditDialogProps {
 	/** Order item subtotal (sen) — feeds the reactive delivery quote (the flat
 	 * mode's free-above threshold needs it; live-mode detection ignores it). */
 	subtotal: number;
+	/** The order's frozen currency — prices the live re-quote line ("S$ 12.00
+	 * to this address"), same source every other money line on the page uses. */
+	currency: string;
 	/** The order's fulfilment day (epoch-ms MYT midnight) — a live re-quote is
 	 * priced for THAT day, matching how the original checkout quoted it. */
 	fulfilmentDate?: number;
@@ -70,6 +73,7 @@ export function AddressEditDialog({
 	currentAddress,
 	retailerId,
 	subtotal,
+	currency,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
 	collectsFromCustomer = false,
@@ -234,7 +238,7 @@ export function AddressEditDialog({
 										<b>
 											{liveQuote.fee === 0
 												? "Free"
-												: formatPrice(liveQuote.fee, "MYR")}
+												: formatPrice(liveQuote.fee, currency)}
 										</b>{" "}
 										— your order total updates when you save.
 									</p>

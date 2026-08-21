@@ -22,6 +22,11 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
+	COUNTRIES,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../convex/lib/country";
+import {
 	BILLING_CURRENCIES,
 	type BillingCurrency,
 	planPrice,
@@ -293,6 +298,9 @@ function OnboardClientCard() {
 	const [slugEdited, setSlugEdited] = useState(false);
 	const [waPhone, setWaPhone] = useState("");
 	const [email, setEmail] = useState("");
+	// Store country (SG-lite): rides the invite token so the client's onboarding
+	// form opens pre-set — an SG store must be born SG (currency follows it).
+	const [country, setCountry] = useState<Country>("MY");
 	const [founding, setFounding] = useState(false);
 	const [copied, setCopied] = useState(false);
 
@@ -336,6 +344,7 @@ function OnboardClientCard() {
 					slug: derivedSlug,
 					waPhone,
 					founding: founding && foundingAvailable,
+					country,
 				});
 
 	async function handleCopy() {
@@ -393,6 +402,31 @@ function OnboardClientCard() {
 					<SlugHint state={availability} />
 				) : null}
 			</label>
+
+			<div className="flex flex-col gap-1">
+				<span className="text-sm font-medium">Country</span>
+				<div className="grid max-w-xs grid-cols-2 gap-2">
+					{COUNTRIES.map((c) => (
+						<button
+							key={c}
+							type="button"
+							aria-pressed={country === c}
+							onClick={() => setCountry(c)}
+							className={`min-h-10 rounded-xl border px-4 text-sm font-medium transition-colors ${
+								country === c
+									? "border-accent bg-accent/10 text-foreground"
+									: "border-input bg-background text-muted-foreground hover:border-ring"
+							}`}
+						>
+							{COUNTRY_LABELS[c]}
+						</button>
+					))}
+				</div>
+				<span className="text-xs text-muted-foreground">
+					An SG store is created with SGD pricing — set this before they add
+					products.
+				</span>
+			</div>
 
 			<div className="grid gap-4 sm:grid-cols-2">
 				<label

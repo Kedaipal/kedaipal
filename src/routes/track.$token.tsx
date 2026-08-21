@@ -1198,6 +1198,7 @@ function TrackingRoute() {
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
 				subtotal={order.subtotal}
+				currency={order.currency}
 				fulfilmentDate={order.fulfilmentDate}
 				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
 				collectsFromCustomer={isCollection}

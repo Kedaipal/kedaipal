@@ -156,8 +156,29 @@ export function normalizePriceInput(v: string): string {
 	return n.toFixed(2);
 }
 
+/**
+ * Currencies the `en-MY` Intl locale renders as the bare ISO code ("SGD 41.00")
+ * instead of a human symbol. Pinned here to the same symbol the PDF renderer
+ * uses (convex/lib/pdf/document.ts CURRENCY_PREFIX) so an order's web pages
+ * and its receipt never disagree ("S$ 41.00" on both). MYR stays on the Intl
+ * path untouched ("RM 1,234.50"); anything unmapped keeps the code prefix.
+ */
+const CURRENCY_SYMBOL_OVERRIDE: Record<string, string> = { SGD: "S$" };
+
+// Non-breaking space — what Intl's en-MY currency style separates "RM" from the
+// amount with; overridden symbols use the same so the two paths render alike.
+const NBSP = " ";
+
 export function formatPrice(minorUnits: number, currency: string): string {
 	const major = minorUnits / 100;
+	const symbol = CURRENCY_SYMBOL_OVERRIDE[currency];
+	if (symbol) {
+		const amount = new Intl.NumberFormat("en-MY", {
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2,
+		}).format(major);
+		return `${symbol}${NBSP}${amount}`;
+	}
 	try {
 		return new Intl.NumberFormat("en-MY", {
 			style: "currency",
@@ -187,19 +208,26 @@ export function formatPriceCompact(
 ): string {
 	const major = minorUnits / 100;
 	if (major < 10_000) return formatPrice(minorUnits, currency);
+	const digitOptions =
+		major < 1_000_000
+			? { maximumFractionDigits: 0 }
+			: {
+					notation: "compact" as const,
+					// min 0 so round millions read "RM 1M", not "RM 1.00M" (the
+					// currency default minimum of 2 leaks into compact notation).
+					minimumFractionDigits: 0,
+					maximumFractionDigits: 2,
+				};
+	const symbol = CURRENCY_SYMBOL_OVERRIDE[currency];
+	if (symbol) {
+		const amount = new Intl.NumberFormat("en-MY", digitOptions).format(major);
+		return `${symbol}${NBSP}${amount}`;
+	}
 	try {
 		return new Intl.NumberFormat("en-MY", {
 			style: "currency",
 			currency,
-			...(major < 1_000_000
-				? { maximumFractionDigits: 0 }
-				: {
-						notation: "compact" as const,
-						// min 0 so round millions read "RM 1M", not "RM 1.00M" (the
-						// currency default minimum of 2 leaks into compact notation).
-						minimumFractionDigits: 0,
-						maximumFractionDigits: 2,
-					}),
+			...digitOptions,
 		}).format(major);
 	} catch {
 		return `${currency} ${Math.round(major).toLocaleString("en-MY")}`;

@@ -47,6 +47,12 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
+		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
+		// rule reads: checkout phone plate/validator arm, address variant, Places
+		// autocomplete region, and the currency a new store defaults to. Undefined
+		// = MY (every pre-existing store, zero migration). Closed set in
+		// convex/lib/country.ts.
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),

@@ -22,6 +22,12 @@ import {
 import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	COUNTRIES,
+	COUNTRY_CURRENCY,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../convex/lib/country";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
@@ -79,6 +85,11 @@ import { hasFeature, tierPill } from "../lib/subscription";
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
 	label: c,
+}));
+
+const COUNTRY_OPTIONS = COUNTRIES.map((c) => ({
+	value: c,
+	label: `${COUNTRY_LABELS[c]} (${c})`,
 }));
 
 const LOCALE_OPTIONS = [
@@ -628,6 +639,13 @@ function SettingsRoute() {
 								onSave={(coverImageStorageId) =>
 									updateSettings({ coverImageStorageId })
 								}
+							/>
+						</Card>
+						<Card>
+							<CountryForm
+								current={retailer.country}
+								currency={retailer.currency}
+								onSave={(country) => updateSettings({ country })}
 							/>
 						</Card>
 						<Card>
@@ -2187,19 +2205,99 @@ function LocaleForm({
 	);
 }
 
+function CountryForm({
+	current,
+	currency,
+	onSave,
+}: {
+	current: Country;
+	currency: string;
+	onSave: (country: Country) => Promise<unknown>;
+}) {
+	const form = useAppForm({
+		defaultValues: { country: current as string },
+		onSubmit: async ({ value }) => {
+			try {
+				await onSave(value.country as Country);
+				toast.success("Country saved.");
+			} catch (err) {
+				toast.error(convexErrorMessage(err));
+			}
+		},
+	});
+
+	function handleSubmit(e: FormEvent) {
+		submitThenFocusError(form, e);
+	}
+
+	return (
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<form.AppField name="country">
+				{(field) => (
+					<field.SelectField
+						label="Store country"
+						options={COUNTRY_OPTIONS}
+						required
+						description="Where your store operates. Checkout accepts this country's phone numbers and addresses, and buyers see forms that match it."
+					/>
+				)}
+			</form.AppField>
+
+			<form.Subscribe
+				selector={(s) => ({
+					canSubmit: s.canSubmit,
+					isSubmitting: s.isSubmitting,
+					values: s.values,
+				})}
+			>
+				{({ canSubmit, isSubmitting, values }) => {
+					const picked = values.country as Country;
+					const expectedCurrency = COUNTRY_CURRENCY[picked];
+					const dirty = values.country !== current;
+					return (
+						<>
+							{expectedCurrency !== currency ? (
+								<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+									Stores in {COUNTRY_LABELS[picked]} usually price in{" "}
+									{expectedCurrency} — yours is set to {currency}. Change it in
+									the Currency card below if that's not intentional.
+								</p>
+							) : null}
+							<Button
+								type="submit"
+								disabled={!dirty || !canSubmit || isSubmitting}
+								className={SAVE_BTN_CLASS}
+							>
+								{isSubmitting ? "Saving…" : "Save country"}
+							</Button>
+						</>
+					);
+				}}
+			</form.Subscribe>
+		</form>
+	);
+}
+
 function CurrencyForm({
 	current,
 	onSave,
 }: {
 	current: string;
-	onSave: (currency: string) => Promise<unknown>;
+	onSave: (
+		currency: string,
+	) => Promise<{ productsCurrencySynced?: number } | null | undefined>;
 }) {
 	const form = useAppForm({
 		defaultValues: { currency: current },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave(value.currency);
-				toast.success("Currency saved.");
+				const result = await onSave(value.currency);
+				const synced = result?.productsCurrencySynced ?? 0;
+				toast.success(
+					synced > 0
+						? `Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
+						: "Currency saved.",
+				);
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
 			}
@@ -2218,7 +2316,7 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
-						description="Used for new products and order totals. Existing products keep their original currency."
+						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching."
 					/>
 				)}
 			</form.AppField>
