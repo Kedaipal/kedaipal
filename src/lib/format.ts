@@ -27,13 +27,27 @@ export function convexErrorMessage(err: unknown): string {
 	// running it ahead of the `instanceof` also keeps TS from narrowing the
 	// payload union to `never`.)
 	if (isRateLimitError(err)) {
-		const seconds = Math.max(1, Math.ceil(err.data.retryAfter / 1000));
-		return `Busy right now — please try again in ${seconds}s. Nothing was submitted.`;
+		return `Busy right now — please try again in ${retryWait(err.data.retryAfter)}. Nothing was submitted.`;
 	}
 	if (err instanceof ConvexError) {
 		return typeof err.data === "string" ? err.data : String(err.data);
 	}
 	return (err as Error).message;
+}
+
+/**
+ * `retryAfter` (ms) → words a person can act on. The burst limiter yields
+ * seconds, but the daily order ceiling (`orderCreateDaily`) can yield HOURS —
+ * and "try again in 5400s" is a number nobody converts under checkout stress.
+ * Always rounds UP, so the message never invites a retry that will fail again.
+ */
+function retryWait(retryAfterMs: number): string {
+	const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+	if (seconds < 90) return `${seconds}s`;
+	const minutes = Math.ceil(seconds / 60);
+	if (minutes < 90) return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+	const hours = Math.ceil(minutes / 60);
+	return hours === 1 ? "1 hour" : `${hours} hours`;
 }
 
 /**

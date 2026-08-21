@@ -204,6 +204,26 @@ describe("convexErrorMessage — rate-limit payload", () => {
 		expect(convexErrorMessage(rateLimitError(120))).toContain("1s");
 	});
 
+	// The daily order ceiling (orderCreateDaily) makes long retryAfter values
+	// reachable — "try again in 5400s" is a number nobody converts under
+	// checkout stress, so the wait renders in the largest sensible unit.
+	it("renders minute-scale waits in minutes, hour-scale in hours", () => {
+		expect(convexErrorMessage(rateLimitError(5 * 60_000))).toContain(
+			"5 minutes",
+		);
+		// 90s is the seconds/minutes boundary: 90s stays readable as "2 minutes".
+		expect(convexErrorMessage(rateLimitError(90_000))).toContain("2 minutes");
+		expect(convexErrorMessage(rateLimitError(89_000))).toContain("89s");
+		expect(convexErrorMessage(rateLimitError(3 * 60 * 60_000))).toContain(
+			"3 hours",
+		);
+		// Singulars read as words, not "1 hours".
+		expect(convexErrorMessage(rateLimitError(91 * 60_000))).toContain("2 hours");
+		expect(convexErrorMessage(rateLimitError(60.4 * 60_000))).toContain(
+			"61 minutes",
+		);
+	});
+
 	it("still passes a plain string payload straight through", () => {
 		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
 			"Only 2 in stock",

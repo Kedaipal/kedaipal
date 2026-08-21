@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { rateLimiter } from "./lib/rateLimiter";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
 import schema from "./schema";
 
@@ -8142,5 +8143,93 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 		);
 		expect(order?.customer.waPhone).toBe("6591234567");
 		expect(order?.confirmationPushStatus).toBe("sending");
+	});
+});
+
+describe("orders — creation rate limits (PR #206 review)", () => {
+	// Neither limiter had a test before this suite — the 5→60 burst change
+	// shipped unpinned. Both are exercised through the REAL `orders.create`
+	// wiring (credits drained via the component directly with `count`, so the
+	// tests don't loop hundreds of checkouts): delete either `rateLimiter.limit`
+	// call in orders.create and its test here goes red.
+
+	async function drain(
+		t: ReturnType<typeof setup>,
+		name: "orderCreate" | "orderCreateDaily",
+		key: string,
+		count: number,
+	) {
+		await t.run(async (ctx) => {
+			await rateLimiter.limit(ctx, name, { key, count });
+		});
+	}
+
+	function orderArgs(retailerId: Id<"retailers">, productId: Id<"products">) {
+		return {
+			retailerId,
+			customer,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			deliveryAddress: validAddress,
+		};
+	}
+
+	test("the daily ceiling refuses order 501 with the structured payload", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 1000,
+		});
+
+		// 499 of the day's 500 credits gone — the 500th order still lands…
+		await drain(t, "orderCreateDaily", retailer._id, 499);
+		await t.mutation(api.orders.create, orderArgs(retailer._id, productId));
+
+		// …and the 501st is refused BEFORE any state is written, with the
+		// structured payload `convexErrorMessage` renders (never a raw object).
+		const refused = await t
+			.mutation(api.orders.create, orderArgs(retailer._id, productId))
+			.then(() => null)
+			.catch((e: unknown) => e as { data?: unknown });
+		// convex-test round-trips ConvexError data as a JSON string (a real client
+		// receives the structured object `isRateLimitError` matches on) — assert
+		// the discriminants through the string so the test still pins WHICH
+		// limiter fired.
+		expect(String(refused?.data)).toContain('\\"kind\\":\\"RateLimited\\"');
+		expect(String(refused?.data)).toContain('\\"name\\":\\"orderCreateDaily\\"');
+		// The refused attempt held no stock.
+		expect(await getProductStock(t, productId)).toBe(999);
+	});
+
+	test("the burst bucket still guards the same door (60-capacity)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		await drain(t, "orderCreate", retailer._id, 60);
+		const refused = await t
+			.mutation(api.orders.create, orderArgs(retailer._id, productId))
+			.then(() => null)
+			.catch((e: unknown) => e as { data?: unknown });
+		expect(String(refused?.data)).toContain('\\"kind\\":\\"RateLimited\\"');
+		expect(String(refused?.data)).toContain('\\"name\\":\\"orderCreate\\"');
+	});
+
+	test("one drained storefront never throttles another (per-retailer keys)", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const productB = await seedProduct(t, USER_B, retailerB._id);
+
+		await drain(t, "orderCreateDaily", retailerA._id, 500);
+		await drain(t, "orderCreate", retailerA._id, 60);
+
+		// Store B checks out untouched.
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			orderArgs(retailerB._id, productB),
+		);
+		expect(shortId).toMatch(/^ORD-/);
 	});
 });
