@@ -97,6 +97,7 @@ describe("FulfilmentTab act-as wiring", () => {
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					minOrderValue={undefined}
+					awbConfig={undefined}
 					subscription={undefined}
 				/>
 			</ActAsProvider>,
@@ -202,6 +203,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					minOrderValue={undefined}
+					awbConfig={undefined}
 					subscription={undefined}
 				/>
 			</ActAsProvider>,
@@ -298,6 +300,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 					minFulfilmentNoticeDays={undefined}
 					openingHours={openingHours}
 					minOrderValue={undefined}
+					awbConfig={undefined}
 					subscription={undefined}
 				/>
 			</ActAsProvider>,
@@ -456,6 +459,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					minOrderValue={undefined}
+					awbConfig={undefined}
 					subscription={undefined}
 				/>
 			</ActAsProvider>,

@@ -750,6 +750,7 @@ function SettingsRoute() {
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}
+						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}
 					/>
 				) : null}

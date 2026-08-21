@@ -55,6 +55,10 @@ import {
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
+import {
+	canPrintLabel,
+	PrintLabelButton,
+} from "../components/order/print-label-button";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
 import {
@@ -654,10 +658,17 @@ function OrderDetailRoute() {
 				})}
 				back={{ to: "/app/orders", label: "Orders" }}
 				actions={
-					<ReceiptDownloadButton
-						shortId={order.shortId}
-						label="Download receipt"
-					/>
+					<>
+						{/* Label first: it's the operational step (the parcel is going
+						    out now); the receipt is bookkeeping, any time after. */}
+						{canPrintLabel(order) ? (
+							<PrintLabelButton shortId={order.shortId} />
+						) : null}
+						<ReceiptDownloadButton
+							shortId={order.shortId}
+							label="Download receipt"
+						/>
+					</>
 				}
 			/>
 			{/* Order header (mobile) — back button, title, status at a glance. The
@@ -1679,7 +1690,16 @@ function OrderDetailRoute() {
 					<>
 						{/* Separates the trigger header from its menu items. */}
 						<hr className="border-border" />
-						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
+						{/* Label + receipt on mobile (desktop has both in the PageHeader
+						    actions). Label first, same reasoning as the header. */}
+						{canPrintLabel(order) ? (
+							<PrintLabelButton
+								shortId={order.shortId}
+								variant="ghost"
+								size="default"
+								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
+							/>
+						) : null}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							label="Download receipt"
