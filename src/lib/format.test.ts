@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "vitest";
 import {
-	formatMyMobile,
+	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
 	formatPriceCompact,
@@ -150,23 +150,31 @@ describe("formatOrderTimestamp", () => {
 	});
 });
 
-describe("formatMyMobile", () => {
-	it("groups a 10-digit local mobile as +60 1X-XXX XXXX", () => {
-		expect(formatMyMobile("60123456789")).toBe("+60 12-345 6789");
+describe("formatMobile", () => {
+	it("groups a 10-digit MY mobile as +60 1X-XXX XXXX", () => {
+		expect(formatMobile("60123456789")).toBe("+60 12-345 6789");
 	});
 
-	it("groups an 11-digit local mobile (011/015) as +60 1X-XXXX XXXX", () => {
-		expect(formatMyMobile("601159399791")).toBe("+60 11-5939 9791");
-		expect(formatMyMobile("601549882211")).toBe("+60 15-4988 2211");
+	it("groups an 11-digit MY mobile (011/015) as +60 1X-XXXX XXXX", () => {
+		expect(formatMobile("601159399791")).toBe("+60 11-5939 9791");
+		expect(formatMobile("601549882211")).toBe("+60 15-4988 2211");
+	});
+
+	it("groups an SG mobile as +65 XXXX XXXX (86eynw28q)", () => {
+		// Keys off the stored digits — an SG number renders as SG wherever it
+		// appears, no country parameter to thread through display surfaces.
+		expect(formatMobile("6591234567")).toBe("+65 9123 4567");
+		expect(formatMobile("6581815321")).toBe("+65 8181 5321");
 	});
 
 	it("tolerates formatting already present in the input", () => {
-		expect(formatMyMobile("+60 11-5939 9791")).toBe("+60 11-5939 9791");
+		expect(formatMobile("+60 11-5939 9791")).toBe("+60 11-5939 9791");
+		expect(formatMobile("+65 9123 4567")).toBe("+65 9123 4567");
 	});
 
-	it("falls back to a plain +digits for non-MY / unexpected shapes", () => {
-		expect(formatMyMobile("6581815321")).toBe("+6581815321");
-		expect(formatMyMobile("60312345678")).toBe("+60312345678");
-		expect(formatMyMobile("")).toBe("");
+	it("falls back to a plain +digits for unexpected shapes", () => {
+		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
+		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
+		expect(formatMobile("")).toBe("");
 	});
 });

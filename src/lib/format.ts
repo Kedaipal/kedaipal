@@ -7,6 +7,8 @@
  */
 
 import { ConvexError } from "convex/values";
+import { COUNTRIES, type Country } from "../../convex/lib/country";
+import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
 /**
  * Extract a clean error message from a Convex mutation error.
@@ -78,8 +80,25 @@ export function sanitizeIntInput(v: string): string {
 }
 
 /**
- * Group a stored MY mobile (digits-only, `60…`) the way a Malaysian reads one:
- * `60123456789` → `+60 12-345 6789`, `601159399791` → `+60 11-5939 9791`.
+ * Per-country grouping of a stored mobile's digits, the way its owner reads
+ * one aloud. MY: a 2-digit network prefix (1X) then the subscriber number,
+ * split 3+4 (10-digit local) or 4+4 (11-digit local, e.g. 011/015). SG: the
+ * flat 4+4 every SG surface uses (`9123 4567`).
+ */
+const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
+	MY: (digits) => {
+		const national = digits.slice(2);
+		const prefix = national.slice(0, 2);
+		const rest = national.slice(2);
+		const split = rest.length === 8 ? 4 : 3;
+		return `+60 ${prefix}-${rest.slice(0, split)} ${rest.slice(split)}`;
+	},
+	SG: (digits) => `+65 ${digits.slice(2, 6)} ${digits.slice(6)}`,
+};
+
+/**
+ * Group a stored mobile (digits-only, `60…`/`65…`) the way its owner reads
+ * one: `60123456789` → `+60 12-345 6789`, `6591234567` → `+65 9123 4567`.
  *
  * Purpose is **typo-spotting**, not decoration: checkout echoes the number back
  * to the buyer before they commit (86eyf1rck), and a transposed digit is only
@@ -88,21 +107,26 @@ export function sanitizeIntInput(v: string): string {
  * (`+60 1159399791`) and is mirrored into `convex/` for the seller dashboard —
  * regrouping that shared helper is a cross-surface change, not this field's job.
  *
- * Non-MY / unexpected shapes fall back to `+<digits>` rather than guessing.
+ * Keys off the STORED digits, not a country parameter, on purpose: the input
+ * validators must branch on the retailer's country (typed input is ambiguous),
+ * but a stored number already carries its dialing code, so display can only be
+ * truthful by reading it — e.g. an MY number a store saved before switching its
+ * country to SG still renders as the MY number it is.
+ *
+ * Unrecognised shapes fall back to `+<digits>` rather than guessing.
  */
-export function formatMyMobile(waPhone: string): string {
+export function formatMobile(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
-	// Same shape the checkout schema accepts (myWaPhoneCheckoutSchema).
-	if (!/^601\d{8,9}$/.test(digits)) {
-		return digits.length > 0 ? `+${digits}` : "";
+	if (digits.length === 0) return "";
+	// Same accept patterns the plated fields validate against — exhaustive over
+	// the supported countries, so a new country grows a grouping arm or fails to
+	// compile.
+	for (const country of COUNTRIES) {
+		if (STORED_MOBILE_PATTERN[country].test(digits)) {
+			return MOBILE_GROUPING[country](digits);
+		}
 	}
-	// After the country code: a 2-digit network prefix (1X) then the subscriber
-	// number, split 3+4 (10-digit local) or 4+4 (11-digit local, e.g. 011/015).
-	const national = digits.slice(2);
-	const prefix = national.slice(0, 2);
-	const rest = national.slice(2);
-	const split = rest.length === 8 ? 4 : 3;
-	return `+60 ${prefix}-${rest.slice(0, split)} ${rest.slice(split)}`;
+	return `+${digits}`;
 }
 
 /**

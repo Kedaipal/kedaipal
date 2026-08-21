@@ -434,10 +434,13 @@ function OnboardClientCard() {
 					className="flex flex-col gap-1 text-sm font-medium"
 				>
 					<span className="min-h-5">WhatsApp number</span>
+					{/* Follows the country toggle above — the invite rides this number
+					    into createRetailer, which validates it with the same country. */}
 					<MyPhoneInput
 						id="new-retailer-wa-phone"
 						value={waPhone}
 						onChange={setWaPhone}
+						country={country}
 					/>
 				</label>
 				<label className="flex flex-col gap-1 text-sm font-medium">

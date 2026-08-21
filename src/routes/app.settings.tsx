@@ -52,7 +52,10 @@ import { OnlinePaymentsCard } from "../components/settings/online-payments-card"
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { MyPhonePrefix } from "../components/ui/my-phone-input";
+import {
+	MOBILE_PLACEHOLDER,
+	MyPhonePrefix,
+} from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
@@ -63,7 +66,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../lib/format";
-import { normalizeMyDigits, toMyNationalInput } from "../lib/phone";
+import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -608,6 +611,7 @@ function SettingsRoute() {
 									fallbackPhone={retailer.waPhone ?? ""}
 									optedOut={retailer.notifyWaPhoneOptedOut === true}
 									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
+									country={retailer.country}
 									onSave={(patch) => updateSettings(patch)}
 								/>
 							</Card>
@@ -680,6 +684,7 @@ function SettingsRoute() {
 						<Card>
 							<WaPhoneForm
 								current={retailer.waPhone ?? ""}
+								country={retailer.country}
 								onSave={(waPhone) => updateSettings({ waPhone })}
 							/>
 						</Card>
@@ -729,6 +734,7 @@ function SettingsRoute() {
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
 						retailerId={retailer._id}
+						country={retailer.country}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
 						deliveryConfig={retailer.deliveryConfig}
@@ -2407,18 +2413,30 @@ function NotifyEmailForm({
 	);
 }
 
+// The seller-contact description names the store's own mobile kind. The MY
+// line also names the Lalamove sender-contact role — Lalamove is MY-market, so
+// that sentence would be a false promise on an SG store.
+const WA_PHONE_DESCRIPTION: Record<Country, string> = {
+	MY: "Shown to buyers in order confirmations and updates so they can reach you directly. Malaysian mobile — it's also the sender contact when a rider collects from you.",
+	SG: "Shown to buyers in order confirmations and updates so they can reach you directly. Singapore mobile with WhatsApp.",
+};
+
 function WaPhoneForm({
 	current,
+	country,
 	onSave,
 }: {
 	current: string;
+	/** Store country — picks the plate + validator arm (SG-lite, 86eynw2dy). */
+	country: Country;
 	onSave: (waPhone: string) => Promise<unknown>;
 }) {
 	const form = useAppForm({
-		// Seeded as the national part — the field wears a fixed `+60` plate, so
-		// the stored `60…` form would render the country code twice.
-		defaultValues: { waPhone: toMyNationalInput(current) },
-		validators: { onChange: settingsWaPhoneFormSchema },
+		// Seeded as the national part — the field wears a fixed `+60`/`+65`
+		// plate, so the stored `60…`/`65…` form would render the country code
+		// twice.
+		defaultValues: { waPhone: toNationalPhoneInput(current, country) },
+		validators: { onChange: settingsWaPhoneFormSchema[country] },
 		onSubmit: async ({ value }) => {
 			try {
 				await onSave(value.waPhone);
@@ -2442,10 +2460,10 @@ function WaPhoneForm({
 						type="tel"
 						inputMode="tel"
 						autoComplete="tel"
-						prefix={<MyPhonePrefix />}
-						placeholder="12-345 6789"
+						prefix={<MyPhonePrefix country={country} />}
+						placeholder={MOBILE_PLACEHOLDER[country]}
 						required
-						description="Shown to buyers in order confirmations and updates so they can reach you directly. Malaysian mobile — it's also the sender contact when a rider collects from you."
+						description={WA_PHONE_DESCRIPTION[country]}
 					/>
 				)}
 			</form.AppField>
@@ -2458,11 +2476,12 @@ function WaPhoneForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting, values }) => {
-					// Compare digits-only, both normalized to the stored `60…` form:
-					// the field holds the national part beside the plate, `current`
+					// Compare digits-only, both normalized to the stored form: the
+					// field holds the national part beside the plate, `current`
 					// carries the country code.
 					const dirty =
-						normalizeMyDigits(values.waPhone) !== normalizeMyDigits(current);
+						normalizeMobileDigits(values.waPhone, country) !==
+						normalizeMobileDigits(current, country);
 					return (
 						<Button
 							type="submit"

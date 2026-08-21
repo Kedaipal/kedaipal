@@ -1,56 +1,91 @@
 import { z } from "zod";
-import { normalizeMyDigits } from "./phone";
+import type { Country } from "../../convex/lib/country";
+import {
+	MOBILE_MESSAGE,
+	normalizeMobileDigits,
+	STORED_MOBILE_PATTERN,
+} from "../../convex/lib/slug";
 
 /**
- * Client-side Zod schemas for forms. These mirror server-side validators in
- * `convex/lib/slug.ts` so we fail fast in the UI before round-tripping to
- * Convex. Server still re-validates — never trust the client.
+ * Client-side Zod schemas for forms. The phone schemas are BUILT FROM the
+ * server validators' own patterns, messages, and normalizer (`convex/lib/
+ * slug.ts` — pure, importable from the client) so we fail fast in the UI with
+ * exactly the acceptance the server enforces; the other schemas mirror their
+ * server counterparts by hand. Server still re-validates — never trust the
+ * client.
  */
 
-// The one MY-mobile schema, mirroring the server's `assertValidMyMobile`
-// (86eyf1rck buyer checkout; extended to every plated field by 86eyknr2r).
-// Normalizes the way a Malaysian actually types — local `0xx…` → `60xx…`, bare
-// NSN `1xx…` → `60xx…`, full `60xx…` untouched — then requires a Malaysian
-// MOBILE shape (601X plus 8–9 digits). A landline (`03-…`) clears a bare digit
-// count but can never receive WhatsApp, and every field using this schema
-// exists so a WhatsApp message reaches it. The server re-validates.
+// The one mobile schema per country, sharing the server's
+// `assertValidMobileForCountry` pieces (86eyf1rck buyer checkout; extended to
+// every plated field by 86eyknr2r; per-country since SG-lite 86eynw28q).
+// Normalizes the way a local actually types — MY `0xx…`/bare `1xx…`/full
+// `60xx…`, SG bare `9xxx xxxx`/full `65xx…` — then requires that country's
+// MOBILE shape. An MY landline (`03-…`) clears a bare digit count but can
+// never receive WhatsApp, and every field using this schema exists so a
+// WhatsApp message reaches it.
 //
-// The bare-NSN arm exists because these fields render a `+60` plate: someone
-// who reads that badge and types "12-345 6789" must not be rejected. Pinned to
-// 9–10 digits so it can't swallow a foreign number that merely starts with 1.
-export const myWaPhoneCheckoutSchema = z
-	.string()
-	.transform(normalizeMyDigits)
-	.pipe(
-		z
-			.string()
-			.regex(
-				/^601\d{8,9}$/,
-				"Enter a Malaysian mobile number (e.g. 012-345 6789)",
-			),
-	);
+// The bare-NSN arm exists because these fields render a `+60`/`+65` plate:
+// someone who reads that badge and types "12-345 6789" / "9123 4567" must not
+// be rejected. Each NSN window is pinned tight so it can't swallow a foreign
+// number.
+//
+// A Record keyed by the RETAILER's country, never a permissive both-countries
+// schema: an SG store rejects `+60` buyers with the SG message and vice versa,
+// keeping each side's typo protection as strict as when the app was MY-only.
+function buildWaPhoneCheckoutSchema(country: Country) {
+	return z
+		.string()
+		.transform((s) => normalizeMobileDigits(s, country))
+		.pipe(
+			z
+				.string()
+				.regex(STORED_MOBILE_PATTERN[country], MOBILE_MESSAGE[country]),
+		);
+}
 
-// Optional variant for a FORM field (blank is fine, anything typed must be a MY
-// mobile). Deliberately a `refine`, not `.optional().transform(…)`: TanStack
-// Form validates without replacing state, so a schema whose input type is
-// `string | undefined` no longer matches a field that is always a string — and
-// a transform here would describe a normalization that never happens. The
-// caller sends the raw text; the server normalizes.
-export const myWaPhoneFormOptionalSchema = z
-	.string()
-	.refine(
-		(s) =>
-			s.trim().length === 0 || /^601\d{8,9}$/.test(normalizeMyDigits(s)),
-		"Enter a Malaysian mobile number (e.g. 012-345 6789)",
-	);
+export const waPhoneCheckoutSchema: Record<
+	Country,
+	ReturnType<typeof buildWaPhoneCheckoutSchema>
+> = {
+	MY: buildWaPhoneCheckoutSchema("MY"),
+	SG: buildWaPhoneCheckoutSchema("SG"),
+};
 
-export const settingsWaPhoneFormSchema = z.object({
-	waPhone: myWaPhoneCheckoutSchema,
-});
+// Optional variant for a FORM field (blank is fine, anything typed must be a
+// mobile in the store's country). Deliberately a `refine`, not
+// `.optional().transform(…)`: TanStack Form validates without replacing state,
+// so a schema whose input type is `string | undefined` no longer matches a
+// field that is always a string — and a transform here would describe a
+// normalization that never happens. The caller sends the raw text; the server
+// normalizes.
+function buildWaPhoneFormOptionalSchema(country: Country) {
+	return z
+		.string()
+		.refine(
+			(s) =>
+				s.trim().length === 0 ||
+				STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country)),
+			MOBILE_MESSAGE[country],
+		);
+}
 
-export type SettingsWaPhoneFormValues = z.input<
-	typeof settingsWaPhoneFormSchema
->;
+export const waPhoneFormOptionalSchema: Record<
+	Country,
+	ReturnType<typeof buildWaPhoneFormOptionalSchema>
+> = {
+	MY: buildWaPhoneFormOptionalSchema("MY"),
+	SG: buildWaPhoneFormOptionalSchema("SG"),
+};
+
+// (The old `SettingsWaPhoneFormValues` export had no consumer — dropped
+// rather than re-anchored onto one arm.)
+export const settingsWaPhoneFormSchema: Record<
+	Country,
+	z.ZodObject<{ waPhone: ReturnType<typeof buildWaPhoneCheckoutSchema> }>
+> = {
+	MY: z.object({ waPhone: waPhoneCheckoutSchema.MY }),
+	SG: z.object({ waPhone: waPhoneCheckoutSchema.SG }),
+};
 
 // Notification email — empty string allowed (clears the field). When non-empty
 // it must look like an email. Mirrors `convex/lib/slug.ts` assertValidEmail.
@@ -154,53 +189,67 @@ export const addressFormFieldsSchema = z.object({
 	placeId: z.string(),
 });
 
-export const checkoutFormSchema = z
-	.object({
-		name: z
-			.string()
-			.trim()
-			.min(3, "Your name must be at least 3 characters")
-			.max(60, "Name must be at most 60 characters"),
-		// Required so the order is reachable the moment it's placed — the
-		// confirmation lands in THIS number's WhatsApp (86eyf1rck).
-		waPhone: myWaPhoneCheckoutSchema,
-		deliveryMethod: deliveryMethodSchema,
-		address: addressFormFieldsSchema,
-		// Convex id of the chosen pickup location when deliveryMethod is
-		// self_collect and the retailer has 2+ active locations. The
-		// "required" check lives in the submit handler because it depends on
-		// runtime data (the live location count) not knowable to the schema.
-		pickupLocationId: z.string(),
-		// When the buyer needs the order, as a native-date "YYYY-MM-DD" string.
-		// Required at checkout (the lean Date Picker spec). The actual [min, max]
-		// range depends on runtime data (today + the retailer's notice setting), so
-		// the precise range check lives in the submit handler — here we only require
-		// that a day was picked. Empty string = nothing chosen yet.
-		fulfilmentDate: z.string().min(1, "Pick when you need this order"),
-		// "HH:MM" — the delivery-order time (86eyg0n8e follow-up). Prefilled and
-		// only rendered for delivery, so emptiness is a cleared field; the form
-		// enforces it at submit (a schema .min here would block pickup orders,
-		// which never render the input).
-		fulfilmentTime: z.string(),
-		// Optional free-text instruction for the seller. Always a string in form
-		// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
-		// server (MAX_CUSTOMER_NOTE in convex/orders.ts).
-		note: z.string().max(500, "Note must be at most 500 characters"),
-	})
-	.superRefine((val, ctx) => {
-		if (val.deliveryMethod !== "delivery") return;
-		const result = strictAddressSchema.safeParse(val.address);
-		if (result.success) return;
-		for (const issue of result.error.issues) {
-			ctx.addIssue({
-				code: z.ZodIssueCode.custom,
-				message: issue.message,
-				path: ["address", ...issue.path],
-			});
-		}
-	});
+function buildCheckoutFormSchema(country: Country) {
+	return z
+		.object({
+			name: z
+				.string()
+				.trim()
+				.min(3, "Your name must be at least 3 characters")
+				.max(60, "Name must be at most 60 characters"),
+			// Required so the order is reachable the moment it's placed — the
+			// confirmation lands in THIS number's WhatsApp (86eyf1rck). Judged by
+			// the STORE's country (SG-lite) — same arm the server applies.
+			waPhone: waPhoneCheckoutSchema[country],
+			deliveryMethod: deliveryMethodSchema,
+			address: addressFormFieldsSchema,
+			// Convex id of the chosen pickup location when deliveryMethod is
+			// self_collect and the retailer has 2+ active locations. The
+			// "required" check lives in the submit handler because it depends on
+			// runtime data (the live location count) not knowable to the schema.
+			pickupLocationId: z.string(),
+			// When the buyer needs the order, as a native-date "YYYY-MM-DD" string.
+			// Required at checkout (the lean Date Picker spec). The actual [min, max]
+			// range depends on runtime data (today + the retailer's notice setting), so
+			// the precise range check lives in the submit handler — here we only require
+			// that a day was picked. Empty string = nothing chosen yet.
+			fulfilmentDate: z.string().min(1, "Pick when you need this order"),
+			// "HH:MM" — the delivery-order time (86eyg0n8e follow-up). Prefilled and
+			// only rendered for delivery, so emptiness is a cleared field; the form
+			// enforces it at submit (a schema .min here would block pickup orders,
+			// which never render the input).
+			fulfilmentTime: z.string(),
+			// Optional free-text instruction for the seller. Always a string in form
+			// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
+			// server (MAX_CUSTOMER_NOTE in convex/orders.ts).
+			note: z.string().max(500, "Note must be at most 500 characters"),
+		})
+		.superRefine((val, ctx) => {
+			if (val.deliveryMethod !== "delivery") return;
+			const result = strictAddressSchema.safeParse(val.address);
+			if (result.success) return;
+			for (const issue of result.error.issues) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: issue.message,
+					path: ["address", ...issue.path],
+				});
+			}
+		});
+}
 
-export type CheckoutFormValues = z.input<typeof checkoutFormSchema>;
+// One schema instance per country, built once at module scope — TanStack Form
+// gets a stable validator identity, and the Record stays exhaustive when a
+// country is added.
+export const checkoutFormSchema: Record<
+	Country,
+	ReturnType<typeof buildCheckoutFormSchema>
+> = {
+	MY: buildCheckoutFormSchema("MY"),
+	SG: buildCheckoutFormSchema("SG"),
+};
+
+export type CheckoutFormValues = z.input<typeof checkoutFormSchema.MY>;
 export type CheckoutAddressValues = z.input<typeof addressFormFieldsSchema>;
 
 // Standalone form schema for the tracking-page edit dialog: validates the

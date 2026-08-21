@@ -26,6 +26,17 @@ export const COUNTRY_LABELS: Record<Country, string> = {
 };
 
 /**
+ * International dialing code, digits only ("60" / "65") — what a stored
+ * WhatsApp number starts with and what the phone-input plate renders as
+ * `+{code}`. The phone validators in `./slug.ts` key their per-country arms
+ * off this.
+ */
+export const COUNTRY_DIAL_CODE: Record<Country, string> = {
+	MY: "60",
+	SG: "65",
+};
+
+/**
  * The currency a store in this country is born with (createRetailer). A
  * default only — currency stays its own setting and can diverge afterwards.
  */
