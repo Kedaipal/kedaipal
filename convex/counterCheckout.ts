@@ -27,6 +27,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
@@ -48,7 +49,7 @@ import {
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyWaPhone, assertValidWaPhone } from "./lib/slug";
+import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
@@ -268,9 +269,13 @@ export const getCheckoutSession = query({
 /**
  * Bind a walk-in session to a manually-keyed buyer phone — the "buyer won't/can't
  * scan" path. Normalizes to the SAME E.164 digits an inbound scan produces
- * (assertValidMyWaPhone), so it resolves-or-creates the exact same
- * `(retailerId, waPhone)` customer as a scan would — a returning buyer is
- * recognised, never duplicated. Re-claims an already-open session for that phone
+ * (assertValidWaPhoneForCountry, keyed off the store's country — an SG store's
+ * bare `81234567` is prefixed to `6581234567`, the form Meta delivers inbound),
+ * so it resolves-or-creates the exact same `(retailerId, waPhone)` customer as
+ * a scan would — a returning buyer is recognised, never duplicated. Stays
+ * deliberately loose beyond that bridging: a cashier may legitimately key a
+ * foreign number for a walk-in, so no mobile-shape gate applies here.
+ * Re-claims an already-open session for that phone
  * (whether from an earlier manual bind or a scan) instead of forking a second
  * one. Owner-or-admin, admin-audited. Cashier-authenticated, so no public
  * rate-limit/cap applies (those guard the public poster token, not a logged-in
@@ -293,7 +298,10 @@ export const bindSessionManualPhone = mutation({
 
 		let normalizedPhone: string;
 		try {
-			normalizedPhone = assertValidMyWaPhone(waPhone);
+			normalizedPhone = assertValidWaPhoneForCountry(
+				waPhone,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}

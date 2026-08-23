@@ -20,12 +20,21 @@
 import { MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { convexErrorMessage, formatMyMobile } from "../../lib/format";
-import { toMyNationalInput } from "../../lib/phone";
-import { myWaPhoneCheckoutSchema } from "../../lib/schemas";
+import type { Country } from "../../../convex/lib/country";
+import { MOBILE_MESSAGE } from "../../../convex/lib/slug";
+import { convexErrorMessage, formatMobile } from "../../lib/format";
+import { toNationalPhoneInput } from "../../lib/phone";
+import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { MyPhoneInput } from "../ui/my-phone-input";
+
+/** The noun the helper line leads with — "Malaysian mobile", not "Malaysia
+ * mobile", so it can't be derived from COUNTRY_LABELS. */
+const MOBILE_KIND: Record<Country, string> = {
+	MY: "Malaysian mobile",
+	SG: "Singapore mobile",
+};
 
 type WaOrderAlertsPatch = {
 	notifyWaPhone?: string;
@@ -38,6 +47,7 @@ export function WaOrderAlertsCard({
 	fallbackPhone,
 	optedOut,
 	canUse,
+	country,
 	onSave,
 }: {
 	/** retailer.orderWaAlerts — the saved opt-in state. */
@@ -50,14 +60,16 @@ export function WaOrderAlertsCard({
 	optedOut: boolean;
 	/** Client mirror of PLAN_FEATURES.waOrderAlerts (server is the lock). */
 	canUse: boolean;
+	/** Store country — plate + validator arm (SG-lite, 86eynw2dy). */
+	country: Country;
 	onSave: (patch: WaOrderAlertsPatch) => Promise<unknown>;
 }) {
 	// Seed from the saved alert number, else the store's WhatsApp contact — the
 	// overwhelmingly common case is "alert me on my own number". Both are stored
-	// in the `60…` form, so they go through `toMyNationalInput` or the field
-	// would read `+60 | 601159399791`.
+	// in the international form, so they go through `toNationalPhoneInput` or
+	// the field would read `+60 | 601159399791`.
 	const [phone, setPhone] = useState(
-		toMyNationalInput(currentPhone || fallbackPhone),
+		toNationalPhoneInput(currentPhone || fallbackPhone, country),
 	);
 	const [phoneError, setPhoneError] = useState<string | null>(null);
 	const [editingNumber, setEditingNumber] = useState(false);
@@ -77,15 +89,14 @@ export function WaOrderAlertsCard({
 		}
 	}
 
-	/** Client-side mirror of the server's MY-mobile check for a friendlier
-	 * inline error; the server re-validates either way. Returns the normalized
-	 * "60…" form, or null after setting the inline error. */
+	/** Client-side mirror of the server's mobile check (store-country arm) for
+	 * a friendlier inline error; the server re-validates either way. Returns
+	 * the normalized "60…"/"65…" form, or null after setting the inline error. */
 	function normalizedPhone(): string | null {
-		const parsed = myWaPhoneCheckoutSchema.safeParse(phone);
+		const parsed = waPhoneCheckoutSchema[country].safeParse(phone);
 		if (!parsed.success) {
 			setPhoneError(
-				parsed.error.issues[0]?.message ??
-					"Enter a Malaysian mobile number (e.g. 012-345 6789)",
+				parsed.error.issues[0]?.message ?? MOBILE_MESSAGE[country],
 			);
 			return null;
 		}
@@ -97,6 +108,7 @@ export function WaOrderAlertsCard({
 		<div className="flex flex-col gap-1">
 			<MyPhoneInput
 				value={phone}
+				country={country}
 				disabled={!canUse || saving}
 				isError={phoneError !== null}
 				onChange={(next) => {
@@ -109,7 +121,7 @@ export function WaOrderAlertsCard({
 				<p className="text-xs font-medium text-destructive">{phoneError}</p>
 			) : (
 				<p className="text-xs text-muted-foreground">
-					Malaysian mobile with WhatsApp — usually your own number.
+					{MOBILE_KIND[country]} with WhatsApp — usually your own number.
 				</p>
 			)}
 		</div>
@@ -151,7 +163,7 @@ export function WaOrderAlertsCard({
 							<span className="text-sm">
 								On — alerts go to{" "}
 								<span className="font-medium">
-									{formatMyMobile(currentPhone)}
+									{formatMobile(currentPhone)}
 								</span>
 							</span>
 							<span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
@@ -195,7 +207,7 @@ export function WaOrderAlertsCard({
 									className="h-11"
 									onClick={() => {
 										setEditingNumber(false);
-										setPhone(toMyNationalInput(currentPhone || fallbackPhone));
+										setPhone(toNationalPhoneInput(currentPhone || fallbackPhone, country));
 										setPhoneError(null);
 									}}
 								>
@@ -223,7 +235,7 @@ export function WaOrderAlertsCard({
 									variant="outline"
 									className="h-11"
 									onClick={() => {
-										setPhone(toMyNationalInput(currentPhone || fallbackPhone));
+										setPhone(toNationalPhoneInput(currentPhone || fallbackPhone, country));
 										setEditingNumber(true);
 									}}
 								>

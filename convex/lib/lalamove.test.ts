@@ -6,12 +6,14 @@ import { encryptSecret } from "./credentialCrypto";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 import {
 	MIN_SCHEDULE_LEAD_MS,
+	resolveDispatchSchedule,
 	resolveScheduleAt,
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
 	classifyQuoteFailure,
 	extractWebhookOrderId,
+	classifyBookingFailure,
 	isActiveJobStatus,
 	isOutOfServiceAreaError,
 	isRiderManagedTransition,
@@ -291,6 +293,64 @@ describe("status + webhook helpers", () => {
 		expect(classifyQuoteFailure(undefined, "socket hang up")).toBe("unavailable");
 	});
 
+	test("classifyBookingFailure keys off the error id, not the body text", () => {
+		// The real refusal Wagyu Walid hit nine times (86eypncfy).
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INSUFFICIENT_BALANCE"}]}'),
+		).toBe("wallet");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INSUFFICIENT_CREDIT"}]}'),
+		).toBe("wallet");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INVALID_QUOTATION"}]}'),
+		).toBe("quote_expired");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_INVALID_PHONE_NUMBER"}]}'),
+		).toBe("bad_phone");
+		expect(
+			classifyBookingFailure('{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA"}]}'),
+		).toBe("out_of_range");
+
+		// THE REGRESSION THIS EXISTS FOR: the old code lowercased the whole body
+		// and matched "balance"/"credit"/"insufficient" anywhere in it. Lalamove
+		// ships a free-text `message` beside the id, so an unrelated failure
+		// whose wording happens to contain one of those words was reported as a
+		// wallet problem — and a seller told to top up spends real money that
+		// fixes nothing. The id is the only thing we trust.
+		expect(
+			classifyBookingFailure(
+				'{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE","message":"Service not available on this credit account balance tier"}]}',
+			),
+		).toBe("unknown");
+		// A recognised-but-uncopied id stops at "unknown" rather than falling
+		// through to sniffing its message.
+		expect(
+			classifyBookingFailure(
+				'{"errors":[{"id":"ERR_SOMETHING_NEW","message":"insufficient balance"}]}',
+			),
+		).toBe("unknown");
+
+		// No parseable id (HTML error page, socket error) — text sniffing is the
+		// last resort, and only on the unambiguous phrases.
+		expect(classifyBookingFailure("Insufficient balance for this order")).toBe(
+			"wallet",
+		);
+		expect(classifyBookingFailure("<html>502 Bad Gateway</html>")).toBe(
+			"unknown",
+		);
+		expect(classifyBookingFailure("socket hang up")).toBe("unknown");
+	});
+
+	test("inferLalamoveEnv reads the key prefix, and only the prefix", () => {
+		expect(inferLalamoveEnv("pk_test_abc123")).toBe("sandbox");
+		expect(inferLalamoveEnv("pk_prod_abc123")).toBe("production");
+		// Ciphertext must NEVER read as sandbox-or-not by accident — it resolves
+		// to "production", which is exactly why `deliveryBooking.env` is stamped
+		// from plaintext at save and never derived from a stored value
+		// (86eypncfy).
+		expect(inferLalamoveEnv("enc.v1.abc.def")).toBe("production");
+	});
+
 	test("active vs terminal job statuses (one-active-job slot)", () => {
 		expect(isActiveJobStatus("assigning")).toBe(true);
 		expect(isActiveJobStatus("picked_up")).toBe(true);
@@ -358,6 +418,16 @@ describe("toLalamoveMyPhone", () => {
 		expect(toLalamoveMyPhone("6581815321")).toBeNull();
 		expect(toLalamoveMyPhone("+6581815321")).toBeNull();
 		expect(toLalamoveMyPhone("14155551234")).toBeNull();
+	});
+
+	test("SG-lite (86eynw28q) must NOT loosen this: a stored SG number stays null", () => {
+		// Deliberate, not an oversight — Lalamove validates the area code per
+		// market (this integration is Lalamove MALAYSIA), so a +65 contact 422s
+		// the booking. Returning null routes dispatch to its fallback: the
+		// seller's own +60 number as rider contact, buyer number in the rider
+		// remarks. A future "accept 65 everywhere" sweep that touches this
+		// function breaks real bookings.
+		expect(toLalamoveMyPhone("6581234567")).toBeNull();
 	});
 
 	test("rejects junk: empty, undefined, too short/long", () => {
@@ -520,6 +590,60 @@ describe("decryptLalamoveCredentials (86eyn25gk)", () => {
 			apiKey: "pk_test_x",
 			apiSecret: "sk_x",
 			env: "sandbox",
+		});
+	});
+});
+
+describe("resolveDispatchSchedule — seller pickup-time override (86eyp5qd1)", () => {
+	const NOW = 1_785_000_000_000;
+	const MIN = 60_000;
+	const DAY = 24 * 60 * MIN;
+	const BUYER = NOW + 5 * 60 * MIN; // buyer's fulfilment moment, 5h out
+
+	test("no override delegates to the buyer's moment — byte-identical to the old path", () => {
+		expect(resolveDispatchSchedule(undefined, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: resolveScheduleAt(BUYER, NOW),
+		});
+		expect(resolveDispatchSchedule(undefined, undefined, NOW)).toEqual({
+			ok: true,
+			scheduleAt: undefined,
+		});
+	});
+
+	test('"now" forces an immediate booking even when the buyer\'s moment is ahead', () => {
+		expect(resolveDispatchSchedule("now", BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: undefined,
+		});
+	});
+
+	test("a comfortably future pick schedules for exactly then", () => {
+		expect(resolveDispatchSchedule(NOW + 90 * MIN, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: NOW + 90 * MIN,
+		});
+	});
+
+	test("an imminent pick degrades to book-now, same clamp the buyer path uses", () => {
+		expect(resolveDispatchSchedule(NOW + 14 * MIN, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: undefined,
+		});
+	});
+
+	test("an explicit pick beyond the 30-day window is REFUSED, never silently booked now", () => {
+		// Asymmetry with the buyer default (which degrades to now there): an
+		// immediate rider is the opposite of what the seller just asked for.
+		const result = resolveDispatchSchedule(NOW + 31 * DAY, BUYER, NOW);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.message).toMatch(/30 days/);
+	});
+
+	test("exactly at the 30-day boundary still schedules", () => {
+		expect(resolveDispatchSchedule(NOW + 30 * DAY, BUYER, NOW)).toEqual({
+			ok: true,
+			scheduleAt: NOW + 30 * DAY,
 		});
 	});
 });

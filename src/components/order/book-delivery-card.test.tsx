@@ -8,6 +8,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import {
+	mytMidnightFromYmd,
+	todayMytMidnight,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
 import { BookDeliveryCard } from "./book-delivery-card";
 
 // The card reads its job via `useQuery(convexQuery(...)).data` and books via
@@ -20,9 +25,12 @@ import { BookDeliveryCard } from "./book-delivery-card";
 const state = vi.hoisted(() => ({
 	dispatch: null as unknown,
 	action: undefined as unknown,
+	mutation: undefined as unknown,
 }));
 vi.mock("convex/react", () => ({
 	useAction: () => state.action ?? vi.fn(),
+	// Backs rescheduleFulfilment (the order-sync half of the rebook fix).
+	useMutation: () => state.mutation ?? vi.fn(),
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -37,6 +45,7 @@ vi.mock("@tanstack/react-router", () => ({
 afterEach(() => {
 	cleanup();
 	state.action = undefined;
+	state.mutation = undefined;
 });
 
 const deliveredOrder = {
@@ -688,5 +697,468 @@ describe("BookDeliveryCard — manual advance opens the booking modal", () => {
 			expect(onAdvanceBookUnavailable).toHaveBeenCalledTimes(1),
 		);
 		expect(screen.queryByText("Confirm & dispatch")).toBeNull();
+	});
+});
+
+describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () => {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const bookableOrder = {
+		_id: "order-rebook-1",
+		shortId: "ORD-WAGYU",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+		source: undefined,
+	} as unknown as Doc<"orders">;
+
+	function quoteResult(overrides: Record<string, unknown> = {}) {
+		return {
+			ok: true,
+			quotationId: "q-1",
+			senderStopId: "s-1",
+			recipientStopId: "r-1",
+			fee: 1200,
+			buyerPaidFee: 1200,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+			scheduledFor: undefined,
+			buyerRequestedMoment: undefined,
+			...overrides,
+		};
+	}
+
+	/** Amber failed-booking dispatch — the Wagyu Walid rebook entry state. */
+	function failedDispatch() {
+		return {
+			promptBookOnPacked: false,
+			blockReason: null,
+			deliveryDirection: "standard",
+			job: {
+				status: "canceled",
+				providerOrderId: "3545890794555130640",
+				costActual: 1170,
+				vehicleType: "MOTORCYCLE",
+				driver: undefined,
+				shareLink: undefined,
+				failureReason: "driver not found",
+				createdAt: 1_700_000_000_000,
+			},
+		};
+	}
+
+	it("Rebook opens the dialog with the time editor ALREADY showing — the stale schedule is never a hidden default", async () => {
+		state.dispatch = failedDispatch();
+		// Stale promise: the failed trip's moment is already past.
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ buyerRequestedMoment: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Rebook delivery"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("Pickup date")).toBeTruthy(),
+		);
+		expect(screen.getByLabelText("Pickup time")).toBeTruthy();
+	});
+
+	it("applying a picked time surfaces the order-sync checkbox, pre-checked on the rebook path", async () => {
+		state.dispatch = failedDispatch();
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ buyerRequestedMoment: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Rebook delivery"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("Pickup date")).toBeTruthy(),
+		);
+		const ymd = ymdFromEpoch(todayMytMidnight() + DAY_MS);
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymd },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		fireEvent.click(screen.getByText("Use this time"));
+
+		const checkbox = (await screen.findByRole(
+			"checkbox",
+		)) as HTMLInputElement;
+		expect(checkbox.checked).toBe(true);
+	});
+
+	it("a still-future buyer moment defaults the sync OFF and warns instead", async () => {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			deliveryDirection: "standard",
+			job: null,
+		};
+		const future = Date.now() + 5 * 60 * 60 * 1000;
+		// First call = the open-dialog prepare (buyer's own moment); later
+		// calls = the re-quote at the picked moment, which the real server
+		// returns as a DIFFERENT scheduledFor.
+		state.action = vi
+			.fn()
+			.mockResolvedValueOnce(
+				quoteResult({ buyerRequestedMoment: future, scheduledFor: future }),
+			)
+			.mockResolvedValue(
+				quoteResult({
+					buyerRequestedMoment: future,
+					scheduledFor: future + 2 * 60 * 60 * 1000,
+				}),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await waitFor(() => expect(screen.getByText("Change time")).toBeTruthy());
+		fireEvent.click(screen.getByText("Change time"));
+		const ymd = ymdFromEpoch(todayMytMidnight() + DAY_MS);
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymd },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		fireEvent.click(screen.getByText("Use this time"));
+
+		const checkbox = (await screen.findByRole(
+			"checkbox",
+		)) as HTMLInputElement;
+		expect(checkbox.checked).toBe(false);
+		// The promise-mismatch warning points at the box, not at a detour.
+		expect(screen.getByText(/Tick the box above/)).toBeTruthy();
+	});
+
+	it("confirming with sync ON reschedules the ORDER to the picked moment before dispatching", async () => {
+		state.dispatch = failedDispatch();
+		const mutate = vi.fn().mockResolvedValue(undefined);
+		state.mutation = mutate;
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ buyerRequestedMoment: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByText("Rebook delivery"));
+		await waitFor(() =>
+			expect(screen.getByLabelText("Pickup date")).toBeTruthy(),
+		);
+		const ymd = ymdFromEpoch(todayMytMidnight() + DAY_MS);
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymd },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		fireEvent.click(screen.getByText("Use this time"));
+		await screen.findByRole("checkbox");
+
+		// Spend guard (86eypjfuf) — dispatch arms a beat after the price lands.
+		const dispatchBtn = screen
+			.getByText("Confirm & dispatch")
+			.closest("button") as HTMLButtonElement;
+		await waitFor(() => expect(dispatchBtn.disabled).toBe(false));
+		fireEvent.click(dispatchBtn);
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith({
+				orderId: bookableOrder._id,
+				fulfilmentDate: mytMidnightFromYmd(ymd),
+				fulfilmentTimeMinutes: 9 * 60,
+			}),
+		);
+		// Dispatch still went through after the sync (3rd action call: prepare,
+		// re-quote, confirm).
+		await waitFor(() =>
+			expect((state.action as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3),
+		);
+	});
+});
+
+describe("BookDeliveryCard — past pickup moments are refused (86eyp63xn follow-up)", () => {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const order = {
+		_id: "order-past-1",
+		shortId: "ORD-PAST",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+		source: undefined,
+	} as unknown as Doc<"orders">;
+	const bookableDispatch = {
+		promptBookOnPacked: false,
+		blockReason: null,
+		deliveryDirection: "standard",
+		job: null,
+	};
+	function quoteResult(overrides: Record<string, unknown> = {}) {
+		return {
+			ok: true,
+			quotationId: "q-1",
+			senderStopId: "s-1",
+			recipientStopId: "r-1",
+			fee: 1200,
+			buyerPaidFee: 1200,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+			scheduledFor: undefined,
+			buyerRequestedMoment: undefined,
+			...overrides,
+		};
+	}
+
+	it("a past date/time shows an inline reason and never re-quotes", async () => {
+		state.dispatch = bookableDispatch;
+		const prepare = vi.fn().mockResolvedValue(quoteResult());
+		state.action = prepare;
+		render(<BookDeliveryCard order={order} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await waitFor(() => expect(screen.getByText("Change time")).toBeTruthy());
+		fireEvent.click(screen.getByText("Change time"));
+
+		// The native min only greys the picker — a typed/stepped value below it
+		// still lands in state, so the guard has to be ours.
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymdFromEpoch(todayMytMidnight() - DAY_MS) },
+		});
+		fireEvent.change(screen.getByLabelText("Pickup time"), {
+			target: { value: "09:00" },
+		});
+		const callsBefore = prepare.mock.calls.length;
+		fireEvent.click(screen.getByText("Use this time"));
+
+		expect(
+			await screen.findByText(/That time has already passed/),
+		).toBeTruthy();
+		expect(prepare.mock.calls.length).toBe(callsBefore); // no quote fired
+		// Correcting the input clears the reason.
+		fireEvent.change(screen.getByLabelText("Pickup date"), {
+			target: { value: ymdFromEpoch(todayMytMidnight() + DAY_MS) },
+		});
+		expect(screen.queryByText(/That time has already passed/)).toBeNull();
+	});
+
+	it("a stale scheduledFor never prefills a past day into the editor", async () => {
+		state.dispatch = bookableDispatch;
+		state.action = vi.fn().mockResolvedValue(
+			quoteResult({ scheduledFor: Date.now() - 3 * 60 * 60 * 1000 }),
+		);
+		render(<BookDeliveryCard order={order} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await waitFor(() => expect(screen.getByText("Change time")).toBeTruthy());
+		fireEvent.click(screen.getByText("Change time"));
+
+		const dateInput = screen.getByLabelText("Pickup date") as HTMLInputElement;
+		expect(dateInput.value >= ymdFromEpoch(todayMytMidnight())).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Sandbox keys + the dead-quote trap (86eypncfy)
+// ---------------------------------------------------------------------------
+
+const bookableOrder = {
+	shortId: "ORD-W4AH",
+	deliveryMethod: "delivery",
+	status: "confirmed",
+	currency: "MYR",
+	paymentStatus: "received",
+} as unknown as Doc<"orders">;
+
+function bookableDispatch(over: Record<string, unknown> = {}) {
+	return {
+		promptBookOnPacked: false,
+		blockReason: null,
+		bookingEnabled: true,
+		deliveryDirection: "standard",
+		job: null,
+		...over,
+	};
+}
+
+describe("BookDeliveryCard — sandbox keys", () => {
+	it("says test keys mean no real rider, on the card and in the confirm dialog", async () => {
+		state.dispatch = bookableDispatch({ env: "sandbox" });
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		// On the card: the consequence, not just a neutral "test mode" label.
+		expect(screen.getByText(/no real rider/i)).toBeTruthy();
+		expect(screen.getAllByText(/pk_test_/).length).toBeGreaterThan(0);
+
+		// And again at the point of spend — a seller who scrolled past the card
+		// banner still gets told before they commit money.
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		await waitFor(() =>
+			expect(screen.getByText(/simulated trip/i)).toBeTruthy(),
+		);
+	});
+
+	it("stays silent when the store is on live keys", () => {
+		state.dispatch = bookableDispatch({ env: "production" });
+		render(<BookDeliveryCard order={bookableOrder} />);
+		expect(screen.queryByText(/no real rider/i)).toBeNull();
+	});
+
+	it("stays silent when the environment isn't stamped yet, rather than implying live", () => {
+		state.dispatch = bookableDispatch({ env: undefined });
+		render(<BookDeliveryCard order={bookableOrder} />);
+		expect(screen.queryByText(/no real rider/i)).toBeNull();
+		expect(screen.queryByText(/Test mode/i)).toBeNull();
+	});
+});
+
+describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
+	/** prepareBooking succeeds, confirmBooking fails. Both hooks share one mock
+	 * in this harness, so branch on the args shape. */
+	function quoteThenFail(message: string) {
+		return vi.fn().mockImplementation((args: Record<string, unknown>) => {
+			if (args.quotationId) {
+				return Promise.resolve({
+					ok: false,
+					reason: "booking_failed",
+					message,
+				});
+			}
+			return Promise.resolve({
+				ok: true,
+				quotationId: "q1",
+				senderStopId: "s1",
+				recipientStopId: "s2",
+				fee: 2740,
+				buyerPaidFee: 2740,
+				vehicleType: "MOTORCYCLE",
+				buyerContactFallback: false,
+			});
+		});
+	}
+
+	it("keeps the reason in the dialog and swaps Confirm for a re-quote", async () => {
+		// The exact trap: Wagyu Walid pressed Confirm five times in 5m23s against
+		// ONE quotationId, because the failure was a toast and the button never
+		// changed. Fixing a wallet takes longer than the 5 minutes Lalamove holds
+		// a price, so the recovery has to be reachable from inside the dialog.
+		state.dispatch = bookableDispatch({ env: "sandbox" });
+		state.action = quoteThenFail("Your Lalamove wallet doesn't have enough.");
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+		// Spend guard (86eypjfuf) — dispatch is inert for a beat after it appears.
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+
+		// The reason survives where the seller can act on it...
+		await waitFor(() =>
+			expect(screen.getByText(/didn't go through/i)).toBeTruthy(),
+		);
+		expect(screen.getByText(/wallet doesn't have enough/i)).toBeTruthy();
+		// ...and the only primary action left is the one that can succeed.
+		expect(
+			screen.getByRole("button", { name: /Get a fresh price/i }),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /Confirm & dispatch/i }),
+		).toBeNull();
+	});
+
+	it("re-quotes on demand and re-arms Confirm", async () => {
+		state.dispatch = bookableDispatch();
+		state.action = quoteThenFail("Nope.");
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+		const fresh = await screen.findByRole("button", {
+			name: /Get a fresh price/i,
+		});
+
+		// A fresh quote clears the failure and puts dispatch back in reach —
+		// without the seller having to dismiss the dialog to find the button the
+		// old copy pointed at (which sat behind the overlay).
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q2",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		fireEvent.click(fresh);
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: /Confirm & dispatch/i }),
+			).toBeTruthy(),
+		);
+		expect(screen.queryByText(/didn't go through/i)).toBeNull();
+	});
+});
+
+
+describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)", () => {
+	/** The reported incident was a seller on a tablet reaching a live money
+	 * dialog mid-scroll. "Confirm & dispatch" spends from his Lalamove wallet on
+	 * one tap, and the dialog can auto-open under a finger (promptBookOnPacked,
+	 * or the stepper's manual-advance path) — so the gesture that opens it must
+	 * not be able to carry through into a booking. */
+	it("is disabled the instant the price lands, then arms on its own", async () => {
+		state.dispatch = bookableDispatch();
+		const action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 2740,
+			buyerPaidFee: 2740,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		state.action = action;
+		render(<BookDeliveryCard order={bookableOrder} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /Book delivery/i }));
+		const confirm = await screen.findByRole("button", {
+			name: /Confirm & dispatch/i,
+		});
+
+		// The window that matters: the button exists but must refuse a tap.
+		expect(confirm.hasAttribute("disabled")).toBe(true);
+		fireEvent.click(confirm);
+		// One call — the quote. No confirmBooking (which would carry quotationId).
+		expect(action).toHaveBeenCalledTimes(1);
+		expect(action.mock.calls[0][0]).not.toHaveProperty("quotationId");
+
+		// ...and it lets a deliberate seller through a beat later.
+		await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+		fireEvent.click(confirm);
+		await waitFor(() => expect(action).toHaveBeenCalledTimes(2));
+		expect(action.mock.calls[1][0]).toHaveProperty("quotationId", "q1");
 	});
 });

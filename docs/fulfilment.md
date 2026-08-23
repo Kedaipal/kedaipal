@@ -306,6 +306,12 @@ existing WhatsApp update + tracking-page pipeline. No booking, no courier API, n
 polling (EasyParcel integration is the separate phase-2 card). Driver: Haziq (Lopes Viral
 JB) + Wagyu Walid, 28 Jul.
 
+> The courier name + consignment number captured here are what the printed **despatch
+> label** carries (as text and as a Code 128 barcode) — see
+> [`despatch-labels.md`](./despatch-labels.md). That label is Kedaipal's own, never a
+> courier-issued AWB; an order with no consignment number yet still prints, just without
+> the barcode row.
+
 ### Data model
 
 Two new optional order fields beside the pre-existing `orders.carrierTrackingUrl`:

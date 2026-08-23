@@ -47,3 +47,26 @@ describe("StorefrontHeader", () => {
 		expect(screen.getByText("Browse & order on WhatsApp")).toBeTruthy();
 	});
 });
+
+describe("StorefrontHeader — opening hours line (86eyp5rav)", () => {
+	// An all-day week keeps the assertion clock-independent: whatever minute
+	// the test runs at, the status is "Open 24 hours today".
+	const allDayWeek = Array.from({ length: 7 }, () => ({
+		open: 0,
+		close: 1439,
+	}));
+
+	it("renders the live status line when the store configured hours", () => {
+		render(
+			<StorefrontHeader
+				retailer={{ ...retailer, openingHours: allDayWeek }}
+			/>,
+		);
+		expect(screen.getByText("Open 24 hours today")).toBeTruthy();
+	});
+
+	it("renders nothing for the 24/7 default (no configured hours)", () => {
+		render(<StorefrontHeader retailer={retailer} />);
+		expect(screen.queryByText(/Open 24 hours|Closed ·|Open now/)).toBeNull();
+	});
+});

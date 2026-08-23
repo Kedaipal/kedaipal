@@ -182,9 +182,17 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import {
+	sanitizeAwbConfig,
+	type StoredAwbConfig,
+} from "./lib/awbConfig";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
+import {
+	type OpeningHours,
+	sanitizeOpeningHours,
+} from "./lib/openingHours";
 import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
@@ -197,10 +205,12 @@ import {
 } from "./subscriptions";
 import {
 	type DeliveryConfig,
+	deliveryModeAllowed,
+	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { isEncrypted } from "./lib/credentialCrypto";
-import { resolveLalamoveCredentials } from "./lib/lalamove";
+import { inferLalamoveEnv, resolveLalamoveCredentials } from "./lib/lalamove";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -218,6 +228,11 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
+	type Country,
+	COUNTRY_CURRENCY,
+	DEFAULT_COUNTRY,
+} from "./lib/country";
+import {
 	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
@@ -227,10 +242,11 @@ import {
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
-	assertValidMyMobile,
+	assertValidMobileForCountry,
 	assertValidSlug,
 	assertValidStoreName,
 	normalizeWaPhone,
+	STORED_MOBILE_PATTERN,
 } from "./lib/slug";
 import {
 	AUP_VERSION,
@@ -252,6 +268,31 @@ import {
 	type StatusLabelMap,
 	type StatusLabels,
 } from "./lib/orderStatus";
+
+// Store opening hours (86eyp5rav). Wire validator for updateSettings; the
+// shape is validated/normalized by sanitizeOpeningHours in the handler
+// (7 entries, 0 ≤ open < close ≤ 1439, ≥1 open day; an all-24h week
+// normalizes to unset). `v.null()` = clear back to open-24/7.
+const openingHoursValidator = v.array(
+	v.object({
+		open: v.number(),
+		close: v.number(),
+		closed: v.optional(v.boolean()),
+	}),
+);
+
+// Despatch-label template (86eyp63mp). Wire validator for updateSettings; the
+// shape is validated/normalized by sanitizeAwbConfig in the handler (an
+// all-default object stores as unset). `v.null()` = reset to the defaults.
+const awbConfigValidator = v.object({
+	paperSize: v.optional(v.union(v.literal("a6"), v.literal("a4-4up"))),
+	showLogo: v.optional(v.boolean()),
+	showItems: v.optional(v.boolean()),
+	showCod: v.optional(v.boolean()),
+	showWeight: v.optional(v.boolean()),
+	showNote: v.optional(v.boolean()),
+	footerText: v.optional(v.string()),
+});
 
 // Delivery-charge config + business address (86extzdr8). Wire validators for
 // updateSettings; the shape is validated/normalized by sanitizeDeliveryConfig
@@ -313,6 +354,10 @@ type DeliveryBooking = {
 	/** Stamped at save from the plaintext key (86eyn25gk) — the stored key may
 	 * be ciphertext, which a query can't slice a hint from. */
 	apiKeyHint?: string;
+	/** Sandbox vs production, stamped at save from the plaintext key
+	 * (86eypncfy) for the same reason as the hint — ciphertext has no prefix
+	 * to read. */
+	env?: "sandbox" | "production";
 };
 
 /** Owner-read summary of the booking config — the API secret NEVER crosses
@@ -329,6 +374,11 @@ export type DeliveryBookingSummary = {
 	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
 	 * show which key is stored without exposing it. */
 	apiKeyHint?: string;
+	/** Which Lalamove environment the stored keys talk to (86eypncfy).
+	 * Undefined = a pre-backfill row we can't judge; the UI says "unknown"
+	 * rather than assuming production, because assuming wrong is exactly the
+	 * failure this field exists to stop. */
+	env?: "sandbox" | "production";
 };
 
 function summarizeDeliveryBooking(
@@ -347,6 +397,15 @@ function summarizeDeliveryBooking(
 			booking.apiKeyHint ??
 			(booking.apiKey && !isEncrypted(booking.apiKey)
 				? booking.apiKey.slice(-4)
+				: undefined),
+		// Same rule for the environment: the stored stamp wins, and inferring is
+		// only sound on a still-plaintext row (a ciphertext prefix would read
+		// "production" and quietly clear a sandbox warning — the one mistake
+		// this field must never make).
+		env:
+			booking.env ??
+			(booking.apiKey && !isEncrypted(booking.apiKey)
+				? inferLalamoveEnv(booking.apiKey)
 				: undefined),
 	};
 }
@@ -564,7 +623,7 @@ type RetailerPublic = {
 	waPhone?: string;
 	notifyEmail?: string;
 	// Seller WhatsApp order alerts (86eyhw9zy) — OWNER-only alert config: the
-	// receiving MY mobile + the opt-in flag, plus two derived bits the settings
+	// receiving mobile (store's country) + the opt-in flag, plus two derived bits the settings
 	// card needs: `waOrderAlertsAvailable` (an approved seller template is
 	// configured on this deployment — card hidden otherwise) and
 	// `notifyWaPhoneOptedOut` (the saved number holds a global STOP opt-out, so
@@ -595,6 +654,10 @@ type RetailerPublic = {
 	coverImageStorageId?: string;
 	coverImageUrl?: string;
 	currency: SupportedCurrency;
+	// Store country (SG-lite). Resolved — undefined rows read as "MY". Public-
+	// safe (which country a storefront operates in is not seller data): checkout
+	// keys the phone plate/validator arm and the address variant off it.
+	country: Country;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
 	// Per-retailer SHORT status labels (tracking timeline / dashboard). Omitted
@@ -632,6 +695,15 @@ type RetailerPublic = {
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
+	// Store opening hours (86eyp5rav). Public-safe — buyers see them on the
+	// storefront header, and checkout clamps the fulfilment date/time to them.
+	// Undefined = open 24/7. Surfaced on both the owner read and the by-slug
+	// payload. See convex/lib/openingHours.ts.
+	openingHours?: OpeningHours;
+	// Despatch-label template (86eyp63mp) — OWNER-only: it says nothing a buyer
+	// needs, and the footer line is the seller's own returns copy. Undefined =
+	// every default. See convex/lib/awbConfig.ts.
+	awbConfig?: StoredAwbConfig;
 	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
 	// buyers must see the bar to reach it (checkout blocks below it). Undefined
 	// = no minimum. See convex/lib/minOrderRules.ts.
@@ -769,6 +841,7 @@ async function buildRetailerPublic(
 		coverImageStorageId: row.coverImageStorageId,
 		coverImageUrl,
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+		country: row.country ?? DEFAULT_COUNTRY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
 		statusLabels: row.statusLabels as StatusLabels | undefined,
@@ -781,6 +854,8 @@ async function buildRetailerPublic(
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
+		openingHours: row.openingHours,
+		awbConfig: row.awbConfig,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -916,6 +991,7 @@ export const getRetailerBySlug = query({
 					coverImageUrl,
 					currency:
 						(active.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					country: active.country ?? DEFAULT_COUNTRY,
 					locale: active.locale ?? DEFAULT_LOCALE,
 					messageTemplates: active.messageTemplates as
 						| MessageTemplatesShape
@@ -923,6 +999,7 @@ export const getRetailerBySlug = query({
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
+					openingHours: active.openingHours,
 					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
@@ -1108,6 +1185,12 @@ export const createRetailer = mutation({
 		storeName: v.string(),
 		slug: v.string(),
 		waPhone: v.optional(v.string()),
+		// Store country (SG-lite). Optional — omitted/MY stores stay undefined on
+		// the row (the zero-migration posture); SG is stored explicitly and sets
+		// the store's currency to SGD at birth, BEFORE any product exists (products
+		// freeze their currency at create, so a wrong default here would strand
+		// the whole catalog — see docs/sg-lite.md).
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		// Best-effort client IP captured at the consent moment. Optional —
 		// onboarding never blocks if IP lookup fails.
 		acceptanceIp: v.optional(v.string()),
@@ -1124,10 +1207,13 @@ export const createRetailer = mutation({
 		let storeName: string;
 		let slug: string;
 		let waPhone: string | undefined;
+		// The SAME-CALL country judges the phone — the row doesn't exist yet, so
+		// there is nothing stored to read (SG-lite, 86eynw2dy).
+		const country = args.country ?? DEFAULT_COUNTRY;
 		try { storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
 		try { slug = assertValidSlug(args.slug); } catch (err) { throw new ConvexError((err as Error).message); }
 		if (args.waPhone && args.waPhone.trim().length > 0) {
-			try { waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+			try { waPhone = assertValidMobileForCountry(args.waPhone, country); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 
 		// Prefill notifyEmail from Clerk identity if available. Swallow validation
@@ -1182,7 +1268,11 @@ export const createRetailer = mutation({
 			storeName,
 			waPhone,
 			notifyEmail,
-			currency: DEFAULT_CURRENCY,
+			// Currency is born from the country (SG → SGD) so the first product a
+			// seller creates already carries the right currency — products freeze
+			// theirs at create and orders refuse a currency mismatch.
+			currency: COUNTRY_CURRENCY[country],
+			...(args.country !== undefined ? { country: args.country } : {}),
 			channel: "whatsapp",
 			// Default self-collect ON so new retailers discover the pickup feature
 			// in the onboarding checklist. They can toggle it off from Settings →
@@ -1234,11 +1324,16 @@ export const updateSettings = mutation({
 		notifyEmail: v.optional(v.string()),
 		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
 		// (and switches the alerts off with it); undefined = no change; validated
-		// as a MY mobile and normalized to the inbound "60…" form. orderWaAlerts:
-		// enabling is Pro-gated + requires a number; disabling always allowed.
+		// as a mobile in the store's country and normalized to the inbound
+		// "60…"/"65…" form. orderWaAlerts: enabling is Pro-gated + requires a
+		// number; disabling always allowed.
 		notifyWaPhone: v.optional(v.string()),
 		orderWaAlerts: v.optional(v.boolean()),
 		currency: v.optional(v.string()),
+		// Store country (SG-lite, 86eynw27f). No cascade onto currency — that
+		// stays its own setting; the settings UI hints when the two disagree
+		// instead of silently rewriting prices' denomination.
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -1272,11 +1367,26 @@ export const updateSettings = mutation({
 		hitpay: v.optional(v.union(hitpayValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store opening hours (86eyp5rav). `null` clears (back to open 24/7 —
+		// always allowed); undefined = no change. Validated + normalized by
+		// sanitizeOpeningHours (an all-24h week also stores as unset).
+		openingHours: v.optional(v.union(openingHoursValidator, v.null())),
+		// Despatch-label template (86eyp63mp). `null` resets to the defaults
+		// (always allowed); undefined = no change. All-tier — printing a label
+		// for a parcel you're already shipping is correctness, not an upsell.
+		awbConfig: v.optional(v.union(awbConfigValidator, v.null())),
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
 		// undefined = no change. See convex/lib/minOrderRules.ts.
 		minOrderValue: v.optional(v.number()),
 	},
-	handler: async (ctx, args): Promise<{ ok: true }> => {
+	handler: async (
+		ctx,
+		args,
+	): Promise<{
+		ok: true;
+		productsCurrencySynced: number;
+		pickupContactsCleared: number;
+	}> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
 		// path (owner-or-admin); otherwise it's the caller's own store.
 		let retailer: Doc<"retailers">;
@@ -1310,6 +1420,7 @@ export const updateSettings = mutation({
 			logoStorageId: string | undefined;
 			coverImageStorageId: string | undefined;
 			currency: SupportedCurrency;
+			country: Country;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
 			statusLabels: StatusLabels | undefined;
@@ -1323,9 +1434,16 @@ export const updateSettings = mutation({
 			deliveryBooking: DeliveryBooking | undefined;
 			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
+			openingHours: OpeningHours | undefined;
+			awbConfig: StoredAwbConfig | undefined;
 			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
+
+		// Which validator arm judges the seller's own numbers: a same-call country
+		// change wins over the stored row, so "switch to SG + save the SG number"
+		// in one call validates coherently instead of bouncing off the old arm.
+		const effectiveCountry = args.country ?? retailer.country ?? DEFAULT_COUNTRY;
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
@@ -1335,7 +1453,7 @@ export const updateSettings = mutation({
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {
-				try { patch.waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+				try { patch.waPhone = assertValidMobileForCountry(args.waPhone, effectiveCountry); } catch (err) { throw new ConvexError((err as Error).message); }
 			} else {
 				patch.waPhone = undefined;
 			}
@@ -1351,7 +1469,10 @@ export const updateSettings = mutation({
 			if (args.notifyWaPhone.trim().length > 0) {
 				let alertPhone: string;
 				try {
-					alertPhone = assertValidMyMobile(args.notifyWaPhone);
+					alertPhone = assertValidMobileForCountry(
+						args.notifyWaPhone,
+						effectiveCountry,
+					);
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
 				}
@@ -1397,6 +1518,71 @@ export const updateSettings = mutation({
 		}
 		if (args.currency !== undefined) {
 			try { patch.currency = assertSupportedCurrency(args.currency); } catch (err) { throw new ConvexError((err as Error).message); }
+		}
+		if (args.country !== undefined) {
+			// Flipping to a country the STORED delivery-charge mode doesn't
+			// support would strand every order (SG + radius/weight/lalamove:
+			// zone lookups miss, Lalamove is MY-market) — refuse with the fix
+			// named. A same-call deliveryConfig replacement is judged below in
+			// the config branch instead, against the incoming mode.
+			if (args.deliveryConfig === undefined) {
+				const storedConfig = retailer.deliveryConfig as
+					| DeliveryConfig
+					| undefined;
+				if (
+					storedConfig &&
+					!deliveryModeAllowed(args.country, storedConfig.mode)
+				) {
+					throw new ConvexError(
+						"Switch your delivery charge to Free or a Flat fee first — distance, weight-zone and Lalamove pricing are Malaysia-only for now.",
+					);
+				}
+			}
+			// Same posture for the store's own WhatsApp numbers (the SG-lite
+			// invariant: an SG store carries SG numbers, an MY store MY ones — the
+			// plate on every phone field is a promise about what's behind it). A
+			// stored number that doesn't match the NEW country blocks the switch
+			// unless this same call clears or replaces it; a same-call replacement
+			// is judged against the new country by the phone branches above
+			// (effectiveCountry). Without this, a switch left a contradictory row
+			// (SG store, MY contact) that only surfaced on the NEXT save of the
+			// field — the worst place to learn about it.
+			const carriedNumbers: ReadonlyArray<
+				[stored: string | undefined, label: string]
+			> = [
+				[
+					args.waPhone === undefined ? retailer.waPhone : undefined,
+					"WhatsApp contact number",
+				],
+				[
+					args.notifyWaPhone === undefined ? retailer.notifyWaPhone : undefined,
+					"order-alerts WhatsApp number",
+				],
+			];
+			for (const [stored, label] of carriedNumbers) {
+				if (stored && !STORED_MOBILE_PATTERN[args.country].test(stored)) {
+					throw new ConvexError(
+						`Your ${label} isn't a ${args.country === "SG" ? "Singapore" : "Malaysian"} number — replace or remove it when switching the store's country.`,
+					);
+				}
+			}
+			// Rider BOOKING escapes the delivery-mode check above, because pricing
+			// and booking are independent by design (`pricing ⊥ booking`): a store
+			// on FLAT pricing with booking on passes that check and would carry a
+			// live Book-a-rider button — plus prompt-book-on-packed, which spends
+			// money without being asked — into a market our integration cannot
+			// serve. Same effective-state rule as everywhere else: a same-call
+			// clear or disable is the escape hatch.
+			const effectiveBooking =
+				args.deliveryBooking !== undefined
+					? args.deliveryBooking
+					: (retailer.deliveryBooking as DeliveryBooking | undefined);
+			if (effectiveBooking?.enabled && !riderBookingAllowed(args.country)) {
+				throw new ConvexError(
+					"Turn off Lalamove rider booking first — rider dispatch is Malaysia-only for now.",
+				);
+			}
+			patch.country = args.country;
 		}
 		if (args.locale !== undefined) {
 			patch.locale = args.locale;
@@ -1503,6 +1689,20 @@ export const updateSettings = mutation({
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
 				}
+				// Country allowlist FIRST (SG-lite, 86eynw29u) — before the
+				// mode-specific requirements below, so an SG seller picking
+				// Lalamove is told the mode itself is unavailable rather than
+				// being sent off to configure booking credentials for nothing.
+				// Judged against the effective country so "flip to SG + switch
+				// to flat" lands in one save.
+				const effectiveCountry =
+					(args.country !== undefined ? args.country : retailer.country) ??
+					DEFAULT_COUNTRY;
+				if (!deliveryModeAllowed(effectiveCountry, clean.mode)) {
+					throw new ConvexError(
+						"Distance, weight-zone and Lalamove pricing are Malaysia-only for now — Singapore stores can use Free or a Flat fee.",
+					);
+				}
 				if (clean.mode === "radius") {
 					// Radius pricing measures FROM the business address — without one
 					// every order would silently ship free (the fail-open), so refuse
@@ -1605,6 +1805,19 @@ export const updateSettings = mutation({
 									? prev.apiKey.slice(-4)
 									: undefined))
 							: args.deliveryBooking.apiKey.trim().slice(-4) || undefined,
+					// Same stamp-on-type/keep-otherwise rule as the hint, on the
+					// value that decides which Lalamove world this store books in
+					// (86eypncfy). Clearing the key clears the stamp — an unset
+					// credential has no environment to report.
+					env:
+						args.deliveryBooking.apiKey === undefined
+							? (prev?.env ??
+								(prev?.apiKey && !isEncrypted(prev.apiKey)
+									? inferLalamoveEnv(prev.apiKey)
+									: undefined))
+							: args.deliveryBooking.apiKey.trim()
+								? inferLalamoveEnv(args.deliveryBooking.apiKey.trim())
+								: undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
 				// refuse half a credential up front so the failure is at save time
@@ -1784,6 +1997,25 @@ export const updateSettings = mutation({
 			// 0 sanitizes to undefined → the patch removes the field (rule cleared).
 			patch.minOrderValue = sanitizeMinOrderValue(args.minOrderValue);
 		}
+		if (args.openingHours !== undefined) {
+			// null and an all-24h week both sanitize to undefined → the patch
+			// removes the field (open 24/7 has one spelling).
+			try {
+				patch.openingHours = sanitizeOpeningHours(args.openingHours);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
+		if (args.awbConfig !== undefined) {
+			// null and an all-default object both sanitize to undefined → the
+			// patch removes the field (the defaults have one spelling).
+			try {
+				patch.awbConfig = sanitizeAwbConfig(args.awbConfig);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING
 		// way to receive orders. "Working" ≠ "toggled on": delivery works when
@@ -1821,6 +2053,59 @@ export const updateSettings = mutation({
 			}
 		}
 
+		// Currency change re-stamps every product with the new code (86eynw27f):
+		// products freeze their currency at create and `orders.create` refuses an
+		// order-vs-product mismatch, so leaving the catalog on the old code would
+		// brick checkout store-wide — the trap the old "existing products keep
+		// their original currency" posture set for the first SG store. Amounts are
+		// deliberately untouched (RM 12 becomes S$ 12; repricing is the seller's
+		// own pass — the settings card says exactly that). Bounded: the product
+		// cap holds every store at ≤200 rows, and archived rows sync too so a
+		// later restore can't resurrect a mismatched currency.
+		let productsCurrencySynced = 0;
+		if (
+			patch.currency !== undefined &&
+			patch.currency !==
+				((retailer.currency as SupportedCurrency) ?? DEFAULT_CURRENCY)
+		) {
+			const products = await ctx.db
+				.query("products")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect();
+			for (const product of products) {
+				if (product.currency === patch.currency) continue;
+				await ctx.db.patch(product._id, { currency: patch.currency });
+				productsCurrencySynced += 1;
+			}
+		}
+
+		// Pickup points carry their OWN contact (`managerWaPhone`, validated
+		// against the store country on every write), so a country switch would
+		// leave them holding numbers the same form now refuses — surfacing only
+		// on the seller's next edit of that location, the worst place to learn
+		// about it. Cleared here rather than BLOCKING the switch the way the
+		// store's own numbers do, and the asymmetry is deliberate: `waPhone` is
+		// the store's buyer-facing identity, one field, worth stopping for;
+		// these are internal operational contacts on N rows (never in the public
+		// pickup payload), and refusing a country switch until a seller hand-
+		// edits every location would be a chore with no buyer impact. Bounded —
+		// pickup points are a short, seller-curated list. Inactive rows are
+		// cleared too, so reactivating one later can't resurrect a stale number.
+		let pickupContactsCleared = 0;
+		if (patch.country !== undefined) {
+			const locations = await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect();
+			for (const location of locations) {
+				const stored = location.managerWaPhone;
+				if (!stored) continue;
+				if (STORED_MOBILE_PATTERN[patch.country].test(stored)) continue;
+				await ctx.db.patch(location._id, { managerWaPhone: undefined });
+				pickupContactsCleared += 1;
+			}
+		}
+
 		await ctx.db.patch(retailer._id, patch);
 		// Encrypt-at-rest (86eyn25gk): a save that stored a plaintext credential
 		// schedules the encrypt action (mutations never touch crypto.subtle).
@@ -1839,7 +2124,7 @@ export const updateSettings = mutation({
 			);
 		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
-		return { ok: true };
+		return { ok: true, productsCurrencySynced, pickupContactsCleared };
 	},
 });
 

@@ -29,10 +29,16 @@ business**, not just the orders.
   item's **snapshot** `name`/`variantLabel` — never a live-product join — so a
   since-deleted product still appears in history (thumbnail falls back to a
   placeholder). Line revenue is `price × quantity`.
-- **Payment donut** slices the *collected* figure by `paymentMethod`
-  (`cash`/`duitnow`/`tng`/`bank_transfer`/`card`/`other`, plus `unspecified` for
-  online self-claims with no recorded method). By construction Σ slices ===
-  collected.
+- **Payment donut** slices the *collected* figure by `paymentMethod` (any member
+  of `ORDER_PAYMENT_METHODS` — `cash`/`duitnow`/`tng`/`bank_transfer`/`fpx`/
+  `card`/`other` plus the SG rails `paynow`/`paylah`/`nets`/`grabpay`, and
+  `unspecified` for online self-claims with no recorded method). By construction
+  Σ slices === collected. The mint opacity ramp carries **one step per possible
+  slice** (11 methods + unspecified) so two ranks can never share a swatch; a
+  store draws from one country's rails, so the faint tail is unreachable in
+  practice. Slices are labelled off `PAYMENT_METHOD_LABELS`, which is
+  country-blind on purpose — a GrabPay payment HitPay stamped on a Malaysian
+  order still names itself.
 - **Trend** plots earned revenue per **MYT** day bucket (ranges ≤ 31 days) or
   week bucket (above). All bucketing is MYT (UTC+8, no DST) — a 00:30 MYT order
   lands in the right day.

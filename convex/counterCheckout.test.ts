@@ -1271,3 +1271,92 @@ describe("counterCheckout — minimum order rules exemption", () => {
 		expect(order?.total).toBe(500);
 	});
 });
+
+describe("counterCheckout — opening hours exemption (86eyp5rav)", () => {
+	test("a counter order on a CLOSED day still creates — the seller is standing there", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		// Close the store on TODAY's weekday (0 = Sunday, MYT), the min-notice
+		// exemption posture: storefront checkout would refuse this date.
+		const today =
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000;
+		const todayDow = new Date(today + 8 * 3600_000).getUTCDay();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: Array.from({ length: 7 }, (_, i) =>
+					i === todayDow
+						? { open: 540, close: 1080, closed: true }
+						: { open: 0, close: 1439 },
+				),
+			},
+		);
+		const sessionId = await boundSession(t, retailer._id);
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				fulfilmentDate: today,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.fulfilmentDate).toBe(today);
+		expect(order?.status).toBe("confirmed");
+	});
+});
+
+describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () => {
+	async function seedSgRetailer(t: ReturnType<typeof setup>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Stall",
+			slug: "sg-stall",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		return retailer;
+	}
+
+	test("a bare 8-digit SG number is prefixed to the inbound 65… form (M3)", async () => {
+		// Before SG-lite this was stored UNPREFIXED ("81234567") while Meta
+		// delivers the same buyer inbound as "6581234567" — forking the
+		// (retailerId, waPhone) customer row.
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		await seedCustomer(t, retailer._id, "6581234567", "Wei Ling");
+
+		const { sessionId, reclaimed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "81234567",
+				name: "Wei Ling",
+			});
+		expect(reclaimed).toBe(false);
+
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("6581234567");
+		// Keyed identically to what a scan bind would store → existing customer
+		// matched instead of forked.
+		expect(session?.isNewCustomer).toBe(false);
+		expect(session?.customerId).toBeDefined();
+	});
+
+	test("a foreign number still passes through for a walk-in from anywhere", async () => {
+		// The counter bind stays loose on purpose — an MY tourist at an SG stall
+		// keys their full international number and it is stored as typed.
+		const t = setup();
+		await seedSgRetailer(t);
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "+60 12-345 6789",
+				name: "Aiman",
+			});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("60123456789");
+	});
+});

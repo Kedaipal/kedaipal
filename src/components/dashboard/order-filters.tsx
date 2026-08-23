@@ -1,9 +1,10 @@
 import { CalendarDays, Palette, SlidersHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState } from "react";
+import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
@@ -205,6 +206,21 @@ export function clearedFilters(): OrderFilterValue {
 }
 
 /**
+ * Which method chips this store's seller is offered, in display order. The
+ * store's country list, plus anything ALREADY selected that it doesn't contain
+ * — a gateway-stamped rail (HitPay MY can settle a GrabPay order) or a
+ * deep-linked `?method=` can hold a value the picker never offers, and a
+ * selected chip the seller can't see is a filter they can't switch off.
+ */
+export function methodChoicesFor(
+	country: Country,
+	selected: readonly OrderPaymentMethod[],
+): OrderPaymentMethod[] {
+	const offered = COUNTRY_PAYMENT_METHODS[country];
+	return [...offered, ...selected.filter((m) => !offered.includes(m))];
+}
+
+/**
  * The one filter sheet for the order inbox — owns every secondary axis (due
  * window, payment status, method, order date, mockup toggle) so the page keeps
  * a single control row (search + this trigger). Filters apply live to the URL;
@@ -214,11 +230,15 @@ export function clearedFilters(): OrderFilterValue {
 export function OrderFilters({
 	value,
 	onChange,
+	country,
 	mockupCount,
 	resultCount,
 }: {
 	value: OrderFilterValue;
 	onChange: (next: OrderFilterValue) => void;
+	/** The store's country — decides which settlement rails are offered
+	 * (SG has no DuitNow/TnG/FPX; MY has no PayNow). See lib/paymentMethod.ts. */
+	country: Country;
 	/** Orders awaiting a mockup — drives the toggle's count badge. The toggle is
 	 * hidden when there are none (and it isn't already on). */
 	mockupCount?: number;
@@ -413,7 +433,7 @@ export function OrderFilters({
 								Payment method
 							</span>
 							<div className="flex flex-wrap gap-2">
-								{ORDER_PAYMENT_METHODS.map((m) => (
+								{methodChoicesFor(country, value.method).map((m) => (
 									<FilterChip
 										key={m}
 										tone="accent"

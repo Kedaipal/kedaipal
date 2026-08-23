@@ -5,13 +5,14 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { type Country, COUNTRY_LABELS } from "../../../convex/lib/country";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
-import { toMyNationalInput } from "../../lib/phone";
-import { myWaPhoneFormOptionalSchema } from "../../lib/schemas";
+import { toNationalPhoneInput } from "../../lib/phone";
+import { waPhoneFormOptionalSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
@@ -20,7 +21,7 @@ import {
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
-import { MyPhonePrefix } from "../ui/my-phone-input";
+import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
 
 interface PickupLocationEditDialogProps {
 	open: boolean;
@@ -31,6 +32,10 @@ interface PickupLocationEditDialogProps {
 	 */
 	location: Doc<"pickupLocations"> | undefined;
 	retailerId: Id<"retailers">;
+	/** The store's country (SG-lite) — the address search covers it (Places
+	 * region lock), the placeholder names it, and the manager-contact field
+	 * wears its plate + validator arm. */
+	country: Country;
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
@@ -94,6 +99,7 @@ export function PickupLocationEditDialog({
 	onClose,
 	location,
 	retailerId,
+	country,
 	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
@@ -136,8 +142,8 @@ export function PickupLocationEditDialog({
 			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
-			// National part only — the field wears a fixed `+60` plate.
-			managerWaPhone: toMyNationalInput(location?.managerWaPhone),
+			// National part only — the field wears the store-country plate.
+			managerWaPhone: toNationalPhoneInput(location?.managerWaPhone, country),
 		},
 		// Label errors render on the field itself (aria-invalid + message beneath);
 		// the address + fee inputs aren't shared fields, so they carry their own
@@ -149,10 +155,11 @@ export function PickupLocationEditDialog({
 				scheduleNote: z.string(),
 				notes: z.string(),
 				managerName: z.string(),
-				// Optional, but a number that IS typed must be a MY mobile — the
-				// field wears the `+60` plate and the server asserts the same shape,
-				// so failing fast here beats a round-trip to learn it.
-				managerWaPhone: myWaPhoneFormOptionalSchema,
+				// Optional, but a number that IS typed must be a mobile in the
+				// store's country — the field wears the matching plate and the
+				// server asserts the same shape, so failing fast here beats a
+				// round-trip to learn it.
+				managerWaPhone: waPhoneFormOptionalSchema[country],
 			}),
 		},
 		onSubmit: async ({ value }) => {
@@ -334,7 +341,8 @@ export function PickupLocationEditDialog({
 								initialValue={location?.address ?? ""}
 								label="Address"
 								required
-								placeholder="Start typing an address in Malaysia…"
+								country={country}
+								placeholder={`Start typing an address in ${COUNTRY_LABELS[country]}…`}
 								description={
 									hasCoords
 										? "✓ Pinned via Google Maps — buyers get one-tap Waze and Google Maps directions on their order page."
@@ -495,8 +503,8 @@ export function PickupLocationEditDialog({
 											type="tel"
 											inputMode="tel"
 											autoComplete="tel"
-											prefix={<MyPhonePrefix />}
-											placeholder="12-345 6789"
+											prefix={<MyPhonePrefix country={country} />}
+											placeholder={MOBILE_PLACEHOLDER[country]}
 											description="Optional — whoever is at this point when a buyer or rider needs to reach it."
 										/>
 									)}

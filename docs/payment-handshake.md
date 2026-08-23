@@ -107,9 +107,19 @@ paymentMethods?: Array<{
 ## Payment method (`order.paymentMethod`)
 
 Separate from `paymentStatus` (the handshake state) and from the retailer's payout
-config (`lib/payment.ts`): a structured tag of **how the buyer settled** —
-`cash | duitnow | tng | bank_transfer | card | other` (`convex/lib/paymentMethod.ts`).
-Captured **only where reliably known** — Counter Checkout "Paid now," and an
+config (`lib/payment.ts`): a structured tag of **how the buyer settled**
+(`convex/lib/paymentMethod.ts`). Two lists, deliberately not the same one:
+
+- **`ORDER_PAYMENT_METHODS` — what may be stamped.** `cash | duitnow | tng |
+  bank_transfer | fpx | card | other | paynow | paylah | nets | grabpay`. A set
+  spanning every country, because the HitPay gateway stamps whatever rail the
+  buyer really used — an MY order settled through GrabPay is `grabpay` even
+  though MY's picker doesn't offer it by hand.
+- **`COUNTRY_PAYMENT_METHODS` — what the seller is offered**, per
+  `retailers.country` (see [`sg-lite.md`](./sg-lite.md#payment-rails-86eyph341)).
+
+Never gate a label, a filter match, or a stamp on the country list — only the
+pickers. Captured **only where reliably known** — Counter Checkout "Paid now," and an
 optional chip on the seller's "mark payment received" dialog (they've just verified
 the channel). The buyer's "I've paid" self-claim never sets it, so online orders
 stay `undefined` = online/unknown. **Filterable on the orders inbox** (the

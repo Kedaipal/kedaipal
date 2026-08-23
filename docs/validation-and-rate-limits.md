@@ -20,7 +20,8 @@ Defined in [`convex/lib/rateLimiter.ts`](../convex/lib/rateLimiter.ts) using `@c
 
 | Limit | Kind | Rate | Capacity (burst) | Keyed by | Why |
 |---|---|---|---|---|---|
-| `orderCreate` | token bucket | 30/min | 5 | `retailerId` | Each storefront throttled independently; absorbs a small checkout burst. |
+| `orderCreate` | token bucket | 120/min | 60 | `retailerId` | Shapes traffic *within* a live sale — the old 5-burst silently capped a drop at five near-simultaneous checkouts, and a throttled buyer costs a real sale (raised in `86eyph341`). |
+| `orderCreateDaily` | token bucket | 500/day | 500 | `retailerId` | Bounds *total* exposure: every order schedules a Meta-billed confirmation template to a caller-chosen number via the `transactional` category, which **bypasses WABA protection by design** — so the burst bucket alone would allow ~172k attacker-driven sends/day on the shared WABA. 500/day exceeds the top tier's *monthly* order cap, so no legitimate store can hit it; continuous refill, no midnight reset to time an attack against. |
 | `productWrite` | fixed window | 20/min | — | Clerk subject | One user can't bulk-trash inventory (beta: tightened from 60). |
 | `productBulkImport` | token bucket | 5/min | 2 | Clerk subject | Heavy per call (many writes/txn) but bursty during an import session (beta: tightened from 20). |
 | `addressUpdate` | token bucket | 5/min | 3 | `shortId` | Abuse on one order can't starve others; typical edits are 1–2. |

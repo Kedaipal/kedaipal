@@ -76,7 +76,7 @@ sequenceDiagram
 
 Public mutation (no auth — the storefront is anonymous). Steps, in order ([`convex/orders.ts`](../convex/orders.ts)):
 
-1. **Rate limit first** — `orderCreate` keyed by `retailerId` (token bucket: burst 5, 30/min). Throttle before any DB reads. See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md).
+1. **Rate limit first** — two limiters, both keyed by `retailerId`, throttling before any DB reads: `orderCreate` (burst 60, 120/min — sized for a live drop) and `orderCreateDaily` (500/day — bounds the confirmation-push spend an attacker can drive, since that template send bypasses WABA gating as `transactional`). See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md).
 2. **Delivery-method invariant** — `delivery` requires `deliveryAddress`; `self_collect` forbids it. Default method is `delivery`.
 3. **Address validation** — `assertValidAddress` (Malaysia-only) sanitizes and trims.
 4. **Phone validation** — `assertValidMyMobile` if a phone was provided (MY-aware: a local `012-345 6789` normalizes to the `60…` form Meta delivers inbound, so the customer record can't fork). The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number, gated client-side by the mirrored `myWaPhoneCheckoutSchema`; both require a MY **mobile** shape, since a landline can never receive WhatsApp); the arg stays optional at the protocol level so legacy callers/tests ride the old flow.

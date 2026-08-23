@@ -13,6 +13,12 @@ export:
   selection) to **CSV** — the right tool for bookkeeping, where a stack of PDFs
   isn't.
 
+> A **third** document now shares this pdf-lib pipeline: the parcel **despatch
+> label** ([`despatch-labels.md`](./despatch-labels.md), `86eyp63mp`). It follows
+> the order receipt's generate-on-demand-never-store posture, adds the only
+> non-A4 page sizes in the codebase (A6 and an A4 4-up imposition), and brings
+> in-repo QR + Code 128 encoders that `render.ts` draws.
+
 ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
 ## Reconciliation with the existing codebase
