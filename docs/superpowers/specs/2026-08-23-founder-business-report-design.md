@@ -66,16 +66,55 @@ schema, no snapshot table. Trend-over-time is provided by the *output file*
 
 | Metric | Definition |
 |---|---|
-| MRR | Sum over `subscriptions` where `status === "active"` of the monthly-equivalent price: `planPrice(plan, billingCycle, retailer.isFoundingMember)`, annual ÷ 12. MYR only for v1 (no real SGD revenue yet). |
-| Active / past_due / cancelled counts | Count of `subscriptions` by `status`, via the existing `by_status` index. |
+| MRR, **per currency** | For each `subscriptions` row where `status === "active"` **and `comped !== true`**, take that retailer's most recent `paid` invoice and reduce its `total` to a monthly equivalent (`total ÷ months in [periodStart, periodEnd]`). Sum **separately per `invoice.currency`**; never blend MYR and SGD into one figure. See "Why MRR reads invoices" below. An active subscription with no paid invoice is counted in a `activeWithoutPaidInvoice` field rather than silently contributing 0. |
+| Subscription counts by status | `trialing` / `active` / `past_due` counts of `subscriptions`, via the existing `by_status` index. |
 | New signups this week | `retailers` with `createdAt` in the last 7 days (MYT week boundary, matching the rest of the codebase's MYT-midnight convention — see `convex/lib/fulfilmentDate.ts` for the existing pattern to reuse). |
-| Churned this week | `subscriptions` with `status === "cancelled"` and `cancelledAt` in the last 7 days. |
-| Order volume this week | Count + GMV of orders across all retailers in the last 7 days, via a bounded indexed scan — same shape as the existing `analytics.getInsightsRange` scan, not a full table scan. Excludes `pending`/`cancelled` orders, matching the existing Insights feature's revenue convention (`docs/insights.md`), so a burst of abandoned checkouts can't inflate the count. |
+| Founding slots | Taken + remaining, from the existing `foundingMembers.getSpotsRemaining` (already live, already tracked by hand in the monthly deck). |
+| Order volume this week | Count + GMV of orders across all retailers in the last 7 days. `orders` has **no cross-retailer time index** (every index is `by_retailer`-prefixed), so this reads Convex's system `by_creation_time` index — a *different* shape from `analytics.getInsightsRange`, which is `by_retailer`-scoped and skew-widened. Bounded scan with an explicit `capped` flag in the response, same discipline as Insights. Excludes `pending`/`cancelled` orders, matching the existing Insights revenue convention (`docs/insights.md`), so abandoned checkouts can't inflate the count. |
+
+### Deliberately NOT reported: churn
+
+`subscriptions.cancelledAt` is **never written anywhere in the codebase**, and
+`status: "cancelled"` is never set by any mutation — it exists only as a member
+of the type union (`convex/subscriptions.ts`). Manual billing v1 flips a lapsed
+subscription `trialing`/`active` → `past_due` via the daily cron and never
+reaches `cancelled`.
+
+A "churned this week" metric would therefore print `0` every week forever and
+read as good news. That is worse than an absent metric. The truthful signal
+available today is the **`past_due` count**, which the cron genuinely
+maintains; its week-over-week movement comes from the report file, not from
+the server.
+
+Making churn-over-time measurable would require stamping the moment the cron
+flips a subscription to `past_due` (`updatedAt` is not usable — any patch
+bumps it). That is a deliberate follow-up, not part of this design, and it
+would only start producing data from the day it ships.
+
+### Why MRR reads invoices, not plan constants
+
+`subscriptions` has **no currency field**. Currency is chosen by the admin at
+invoice time (`currencyArg ?? "MYR"`, `convex/invoices.ts`) and stored on the
+**invoice**. Deriving MRR from `planPrice(plan, cycle, founding)` would
+therefore assume MYR for every store, so an SGD store's S$59 would be summed
+as RM59.
+
+More fundamentally: a plan constant is a *guess at* what was billed, while the
+last paid invoice is the *record of* what was billed. Reading invoices
+survives custom amounts, Scale's banded pricing, the founding discount, and
+any future price change without drifting from reality.
 
 **Exclusion list:** a small, documented denylist of internal/test retailer
 emails (mirrors what Arif already excludes by hand for the monthly-review
 deck: `matrep88*`, `kristofer`, unset-email test rows) lives as a named
 constant in `convex/lib/businessReport.ts`, not tribal knowledge.
+
+**Comped guard:** the schema defines `comped` as "full access, never charged",
+but `markPaid` sets `status: "active"` and never clears the flag. Nothing
+writes `comped: true` to the database today (the only occurrence is the
+in-memory fail-open descriptor in `convex/subscriptions.ts`), so this is a
+manual-dashboard scenario the schema explicitly anticipates for pilot stores.
+One predicate closes it, so it is not left to chance.
 
 ## Components
 
@@ -86,11 +125,15 @@ constant in `convex/lib/businessReport.ts`, not tribal knowledge.
   `internal`, not public — reachable only from the HTTP route below, never
   from the dashboard's public API surface.
 - **`convex/http.ts`** — new `GET /internal/business-report` route.
-  Validates a shared-secret header (`X-Report-Secret`, compared against a new
-  env var `BUSINESS_REPORT_SECRET`) before calling the internal query. `401`
-  on missing/invalid secret, mirroring the existing webhook auth failure
-  shape in this file. Returns a small JSON object: the metrics above plus the
-  MYT week window they cover.
+  Validates a shared-secret header (`X-Report-Secret`) against a new env var
+  `BUSINESS_REPORT_SECRET` using a **constant-time compare**, reusing the
+  `timingSafeEqual` pattern the codebase already implements three times
+  (`convex/lib/whatsappSignature.ts`, `lalamoveSignature.ts`, `hitpay.ts`) —
+  a raw `===` would be the odd one out. Returns `401 "invalid signature"` on a
+  bad secret and `500 "server misconfigured"` when the env var is unset,
+  matching the existing webhook failure shapes in this file exactly. On
+  success returns a small JSON object: the metrics above plus the MYT week
+  window they cover.
 - **`BUSINESS_REPORT_SECRET`** — new env var, **prod only** (`envSet` on the
   prod deployment selector). Dev has no real numbers worth protecting behind
   a schedule, so it isn't set there.
@@ -105,10 +148,14 @@ A weekly cloud routine (via the `schedule` skill), Monday 9am MYT:
    (reusing the trend-tracking file the `kedaipal-monthly-review` skill
    already maintains, rather than starting a parallel spreadsheet).
 3. Write a short `01_Strategy/Kedaipal_Business_Report_YYYYMMDD.md`: this
-   week's MRR + delta vs the prior row, active/churned/new counts, one-line
-   takeaway.
+   week's MRR per currency + delta vs the prior row, active/trialing/past_due
+   counts, new signups, founding slots, one-line takeaway.
 4. No push — the file is filed for Arif to open when he wants (his explicit
    delivery choice). No email, no WhatsApp send.
+
+The generated doc is Arif-facing prose, so it follows the same house style the
+`kedaipal-monthly-review` skill pins: no em-dashes, no Oxford comma, every
+metric labelled with the window it covers.
 
 The routine's copy of the secret lives in the routine's own config, never in
 the repo or in chat.
@@ -126,16 +173,33 @@ the repo or in chat.
 ## Testing
 
 - `convex/lib/businessReport.test.ts` (unit, no live deployment needed):
-  - MRR sums correctly across founding / non-founding / monthly / annual
-    mixes.
-  - MYT week-boundary correctness (a signup/cancellation exactly at the
-    boundary lands in the right week).
+  - MRR reduces monthly and annual invoice periods to the right monthly
+    equivalent, including a founding-discounted invoice.
+  - **MYR and SGD stay in separate buckets** and are never summed together.
+  - An active subscription with no paid invoice lands in
+    `activeWithoutPaidInvoice` rather than contributing 0 to MRR.
+  - A `comped` active subscription contributes nothing to MRR.
+  - MYT week-boundary correctness (a signup exactly at the boundary lands in
+    the right week).
   - Denylist accounts are excluded from every count.
-  - Order-volume scan respects its bound and doesn't silently under-report
-    without surfacing that it was capped.
-- One manual integration check during implementation: call the deployed
-  route once with `curl`/an authenticated fetch and sanity-check the numbers
-  against what the Convex dashboard shows before wiring the schedule.
+  - Order-volume scan respects its bound and surfaces `capped` rather than
+    silently under-reporting.
+
+### Verification gap (read before implementing)
+
+There is **no way to validate this against real numbers before deploying**:
+the dev deployment has zero `subscriptions` rows (verified 2026-08-23), and
+the Convex MCP server marks prod `readOnly`, rejecting `data` /
+`runOneoffQuery` there. Unit tests prove the arithmetic, not that it matches
+production reality.
+
+The manual check is therefore an ordered gate, not an optional sanity pass:
+
+1. Deploy the route to prod and set `BUSINESS_REPORT_SECRET`.
+2. Call it once by hand with the secret header.
+3. Reconcile every figure against the Convex dashboard by eye (subscription
+   counts by status, the paid-invoice totals behind MRR, retailer count).
+4. Only once those agree, wire the weekly schedule.
 
 ## Out of scope (this design)
 
@@ -146,3 +210,24 @@ the repo or in chat.
 - Per-retailer reporting — that's the existing `/app/insights` feature.
 - A custom Kedaipal MCP connector — noted as a reasonable later addition,
   not required for this report to work.
+- Churn over time — blocked on there being no cancellation flow at all (see
+  "Deliberately NOT reported: churn"). The enabling change is a
+  status-change stamp in the daily billing cron.
+
+## Review log
+
+**2026-08-23, self-review against the codebase.** The first draft specified
+two metrics this schema cannot truthfully produce, both caught by reading the
+code rather than the spec:
+
+- "Churned this week" would have been permanently `0` (`cancelledAt` is never
+  written; `status: "cancelled"` is never set). Removed, with `past_due`
+  reported instead.
+- MRR derived from `planPrice()` would have silently counted an SGD store's
+  S$59 as RM59 (`subscriptions` has no currency field; currency lives on the
+  invoice). Rewritten to read paid invoices, per currency.
+
+Also corrected: a comped-store revenue guard, a false claim that the
+cross-retailer order scan matches `analytics.getInsightsRange` (it cannot —
+no cross-retailer time index exists), a raw secret compare where the codebase
+already uses `timingSafeEqual`, and an under-stated verification gap.
