@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
+import { AppVersionRow } from "./app-version-row";
 import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
@@ -268,6 +269,12 @@ export function Sidebar({
 						</>
 					)}
 				</button>
+				{/* Support affordance (86eyqgxna) — bottom-most, the quietest slot in
+				    the chrome. Hidden while collapsed: the rail is icon-width, and a
+				    version string plus a copy button cannot degrade into it
+				    legibly. Expanding is one tap, and nobody reads a version off a
+				    collapsed sidebar. */}
+				{!collapsed ? <AppVersionRow className="px-2 pb-0.5" /> : null}
 			</div>
 		</aside>
 	);
