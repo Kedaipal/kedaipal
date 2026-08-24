@@ -2,13 +2,14 @@
 
 Central index for engineering docs. New here? Start with **[Onboarding](#start-here)** and follow the reading order.
 
-> Strategy and code conventions live at the repo root: [`PROJECT_CONTEXT.md`](../PROJECT_CONTEXT.md) (business strategy) and [`CLAUDE.md`](../CLAUDE.md) (conventions, MVP status, roadmap, architectural constraints).
+> Strategy and code conventions live at the repo root: [`PROJECT_CONTEXT.md`](../PROJECT_CONTEXT.md) (business strategy) and [`CLAUDE.md`](../CLAUDE.md) (conventions, MVP status, roadmap, architectural constraints). `CLAUDE.md` is **rules and pointers only** — the shipped-feature record lives in [`shipped-log.md`](./shipped-log.md), and feature detail in the per-feature docs below.
 
 ## Start here
 
 | Doc | What it covers |
 |---|---|
 | **[onboarding.md](./onboarding.md)** | KT path for a new CTO/engineer: strategy → architecture → local setup → codebase tour → domain reading order → conventions → first contribution. |
+| **[shipped-log.md](./shipped-log.md)** | Everything shipped since the April 2026 MVP, newest first — what shipped, why it was built that way, what was rejected, which trap was found. The project's decision history; read it to understand *why* the code looks like it does. |
 
 ## Domain logic
 
