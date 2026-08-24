@@ -231,3 +231,25 @@ Also corrected: a comped-store revenue guard, a false claim that the
 cross-retailer order scan matches `analytics.getInsightsRange` (it cannot —
 no cross-retailer time index exists), a raw secret compare where the codebase
 already uses `timingSafeEqual`, and an under-stated verification gap.
+
+**2026-08-24, superseded at implementation.** Two changes above what this spec
+says, both from reading the billing code more closely:
+
+- **`past_due` splits FOUR ways, not "report past_due only".** A row can be
+  `past_due` with a pending invoice **not yet due** — reached exactly when Arif
+  issues the renewal for a lapsed store, since `issueInvoice` deliberately does
+  not touch the subscription and only `markPaid` clears `past_due`. Filing that
+  as churn would manufacture a lost customer precisely when the right action was
+  taken. Buckets are now: lapsed customer / awaiting payment / awaiting your
+  invoice / trial expired.
+- **The exclusion denylist must not include "unset email".** This spec listed
+  "unset-email test rows". `notifyEmail` is optional and independent of the
+  Clerk auth email, so that rule would silently drop real paying retailers from
+  MRR and GMV. Replaced by an `ADMIN_USER_IDS` membership check (self-healing)
+  plus an email-fragment match and an explicit slug list, with the exclusion set
+  surfaced in the payload for auditing.
+
+Delivered scope also adds prod-readable Convex MCP
+(`--cautiously-allow-production-pii`), which turns this spec's "reconcile
+against the dashboard by eye" gate into an independent recomputation.
+See [`docs/founder-business-report.md`](../../founder-business-report.md).
