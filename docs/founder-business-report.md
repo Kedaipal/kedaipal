@@ -191,24 +191,55 @@ rails. At that point subscriptions gain genuine cancellation, and the four-bucke
 `past_due` reading becomes a legacy path — the report should be **replaced**
 there, not extended. Churn rate over time and dunning arrive with it.
 
-## Convex MCP and production
+## Convex MCP — two servers, so which deployment is legible
 
-`.mcp.json` runs the Convex MCP server with
-`--cautiously-allow-production-pii`, which unlocks the read-only tools (`data`,
-`logs`, `runOneoffQuery`) against the production deployment. This is what makes
-step 3 of the verification gate possible, and it serves prod forensics
-generally.
+`.mcp.json` defines **two** Convex MCP servers rather than one. Deployment
+choice is otherwise a per-call `deploymentSelector` argument carrying an opaque
+base64 blob, so nothing in a tool-approval prompt tells you whether an agent is
+about to read dev or live customer data. Splitting them puts the answer in the
+tool NAME (`mcp__convex__data` vs `mcp__convex-prod__data`).
 
-Two flags are deliberately **not** set:
+| Server | Deployments | Tools |
+|---|---|---|
+| `convex` | dev (full) + prod (`readOnly`, so schema/insights only) | `data`, `logs`, `runOneoffQuery`, `run`, `tables`, `functionSpec`, `insights`, `status` |
+| `convex-prod` | prod only, reads unlocked | the same, **minus `run`** |
 
-- `--dangerously-enable-production-deployments` would allow mutations and
-  `envSet`/`envRemove` against live prod.
-- `--prod` would restrict the server to production, losing dev as a safe
-  testing target.
+Neither server exposes any env-var tool.
+
+### Why the tools are pruned
+
+The two prod flags expose an **identical tool list** — gating is runtime, off
+each deployment's `readOnly` bit — and `--cautiously-allow-production-pii`
+flips prod to `readOnly: false`. The CLI help says that flag allows only
+read-only tools, but the `status` tool's own description says `readOnly: false`
+means *all* tools may be used. Those two statements conflict, and resolving it
+empirically would mean attempting a write against production.
+
+`--disable-tools` makes the question moot instead of answering it:
+
+- **`run` is disabled on `convex-prod`.** It can invoke mutations *and actions*,
+  and Kedaipal actions reach external networks (WhatsApp sends, Lalamove
+  bookings, HitPay). `runOneoffQuery` is the read path — it is sandboxed and
+  cannot write or make network calls. `run` stays enabled on `convex` because
+  exercising a mutation against dev is legitimate.
+- **`envGet` / `envList` are disabled on BOTH.** Deployment env vars hold
+  secrets (`WHATSAPP_APP_SECRET`, the credential-encryption key, HitPay salts,
+  `BUSINESS_REPORT_SECRET`) — a worse leak than the buyer PII this is otherwise
+  guarding, and one that would land in an agent transcript. Use
+  `npx convex env list --prod` in a terminal instead.
+- **`envSet` / `envRemove` are disabled on both** for the same reason, plus
+  they mutate.
+- **`--dangerously-enable-production-deployments` is never set.**
+
+Deliberate production writes go through `npx convex run --prod` /
+`npx convex env set --prod` in a terminal, where they are explicit and
+attributable to a person rather than to an agent turn.
+
+### Standing caution
 
 **This config is committed, so it applies to every agent session opened in this
 repo, including subagents — not just Arif's.** Production holds real buyer
 phone numbers, addresses and order history, which is PDPA-relevant personal
 data. Treat anything read from prod accordingly: it may be inspected to
 diagnose, and must not be copied into docs, tickets, commits or test fixtures.
-A flag change requires a session restart to take effect.
+A config change requires a session restart to take effect.
