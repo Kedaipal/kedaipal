@@ -618,12 +618,6 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						waPhone={order.customer.waPhone}
 					/>
-				) : order.confirmationPushStatus === "deferred" &&
-					order.status === "confirmed" ? (
-					// Confirmed-only, like the `sent` arm: the card promises a future
-					// message, which is false on a cancelled order (belt — cancel also
-					// clears the stamp) and stale noise once fulfilment moves on.
-					<PushDeferredCard ms={order.retailerLocale === "ms"} />
 				) : order.confirmationPushStatus === "sent" &&
 					order.status === "confirmed" ? (
 					<ConfirmationSentCard
@@ -1503,35 +1497,6 @@ function ConfirmationSentCard({
 					{ms ? "Buka WhatsApp" : "Open WhatsApp"}
 				</a>
 			</Button>
-		</section>
-	);
-}
-
-/**
- * Order committed but its price isn't final yet (86eyfq0w5) — a mockup quote
- * or an arranged delivery fee is outstanding, so the WhatsApp confirmation
- * (whose template states the total) deliberately waits. Say so, or the
- * checkout promise of "confirmation lands in your WhatsApp" looks broken.
- * The mockup/fee sections further down the page carry the actual next step.
- *
- * That deferred push is the order's one and only message (86eyd63r8), so the
- * card also tells the buyer to hold on to this page — it's where the price,
- * the mockup and the payment details actually land.
- */
-function PushDeferredCard({ ms }: { ms: boolean }) {
-	return (
-		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
-			<CheckCircle className="size-5 shrink-0 text-accent" />
-			<div className="min-w-0 flex-1">
-				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					{ms ? "Pesanan diterima" : "Order placed"}
-				</p>
-				<p className="text-sm">
-					{ms
-						? "Kami akan hantar satu pengesahan WhatsApp sebaik sahaja harga disahkan. Simpan pautan ini — pesanan anda ada di halaman ini."
-						: "We'll send one WhatsApp confirmation as soon as your price is confirmed. Keep this link — your order lives on this page."}
-				</p>
-			</div>
 		</section>
 	);
 }

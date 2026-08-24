@@ -67,7 +67,6 @@ import {
 	generateTrackingToken,
 	isCollectionGateClosed,
 	isMockupGateClosed,
-	isMockupPriceUnsettled,
 } from "./lib/order";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
@@ -447,47 +446,71 @@ export const ensureTrackingToken = internalMutation({
  * Drives the tracking page's state card and the seller-side delivery note.
  */
 /**
- * Transactional claim for a deferred confirmation push (86eyfq0w5). Called by
- * the price-settling mutations (mockup submit/approve/waive/decline-with-
- * remainder, setDeliveryFee) in the SAME transaction as their patch: it
- * re-reads the order (ctx.db.get sees this transaction's own writes), and only
- * when NO price hold remains flips deferred → sending and schedules the one
- * send.
+ * One-shot: release every order still stamped `deferred` (86eyd63r8).
  *
- * The flip IS the de-dup. Convex mutations are serializable, so exactly one
- * transaction can ever observe "deferred" with both holds clear — a second
- * event racing in (seller sets the fee a second after submitting the mockup)
- * serializes after the winner, sees "sending", and schedules nothing. That's
- * what makes "double-hold sends exactly once" hold under concurrency, not just
- * under the tidy orderings tests produce; a claim inside the ACTION couldn't
- * guarantee it, because two in-flight actions read their metadata before either
- * outcome commits.
+ * `deferred` was the 86eyfq0w5 state for an order whose total wasn't final —
+ * its confirmation waited for a price-settling mutation to claim it. Orders now
+ * push at create with the price named as words, so nothing produces `deferred`
+ * any more and nothing claims it either; without this, any row already in that
+ * state at deploy time would sit there forever and its buyer would never get
+ * their one message.
  *
- * The mockup hold is `isMockupPriceUnsettled`, NOT `isMockupGateClosed`
- * (86eyd63r8): the price exists from `submitted` onward, so that's when the
- * order's single message goes out — it carries the quote and the tracking link
- * the buyer approves on. Approve/waive/decline still call this: they're the
- * claim site for orders that were already `deferred` when the policy shipped
- * (their mockup was submitted under the old gate), so no backfill is needed.
+ * MUST RUN ON EVERY DEPLOYMENT that had the deferred path live:
+ *
+ *   npx convex run orders:releaseDeferredPushes
+ *
+ * Idempotent, and self-converging: every row it touches leaves the `deferred`
+ * state, so re-running picks up the next batch. `done: false` in the result
+ * means run it again. Batched rather than `.collect()`ed because `orders` is the
+ * largest table in the database and a full collect can breach Convex's
+ * per-query read limit on a busy deployment.
+ *
+ * Cancelled orders have their stamp cleared instead of released — the promise
+ * died with the order. A missing buyer number needs no special case here; the
+ * send action's own guard covers it.
  */
-async function claimDeferredPush(
-	ctx: MutationCtx,
-	orderId: Id<"orders">,
-): Promise<void> {
-	const fresh = await ctx.db.get(orderId);
-	if (!fresh || fresh.confirmationPushStatus !== "deferred") return;
-	if (fresh.status === "cancelled") return;
-	if (isMockupPriceUnsettled(fresh) || fresh.deliveryFeePending === true) return;
-	await ctx.db.patch(orderId, {
-		confirmationPushStatus: "sending",
-		updatedAt: Date.now(),
-	});
-	await ctx.scheduler.runAfter(
-		0,
-		internal.whatsapp.notifyStorefrontOrderCreated,
-		{ orderId },
-	);
-}
+const DEFERRED_RELEASE_BATCH = 200;
+
+export const releaseDeferredPushes = internalMutation({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ released: number; skipped: number; done: boolean }> => {
+		const deferred = await ctx.db
+			.query("orders")
+			.filter((q) => q.eq(q.field("confirmationPushStatus"), "deferred"))
+			.take(DEFERRED_RELEASE_BATCH);
+		let released = 0;
+		let skipped = 0;
+		for (const order of deferred) {
+			if (order.status === "cancelled") {
+				// Same reasoning as applyStatusTransition's cancel branch: a deferred
+				// stamp is a promise about a message, and there's no order to promise
+				// about. Clear it rather than leave the buyer's page claiming one is
+				// on the way.
+				await ctx.db.patch(order._id, {
+					confirmationPushStatus: undefined,
+					updatedAt: Date.now(),
+				});
+				skipped++;
+				continue;
+			}
+			await ctx.db.patch(order._id, {
+				confirmationPushStatus: "sending",
+				updatedAt: Date.now(),
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId: order._id },
+			);
+			released++;
+		}
+		const done = deferred.length < DEFERRED_RELEASE_BATCH;
+		console.log("[orders] deferred-push release", { released, skipped, done });
+		return { released, skipped, done };
+	},
+});
 
 export const recordConfirmationPush = internalMutation({
 	args: {
@@ -1114,18 +1137,15 @@ export const create = mutation({
 		// No step depends on the buyer surviving Meta's wa.me interstitial.
 		// Template env unset ⇒ exact legacy behaviour (pending + ?send=1 handoff).
 		//
-		// The push TIMING depends on whether the total is final (86eyfq0w5). The
-		// approved template states "Total: {{3}}" — false while a price is
-		// outstanding (a price-on-quote line is RM 0.00 until quoted; a
-		// fee-pending total grows by the arranged fee). So a non-final order still
-		// COMMITS here exactly like any other — confirmed, activation, customer
-		// link, no wa.me step anywhere — but its push is stamped "deferred" and
-		// fires from the gate-open sites (mockup approve/waive/decline,
-		// setDeliveryFee) once the price is agreed, replacing the free-form
-		// payment prompt those sites used to send (which a push-path buyer's
-		// window-less chat couldn't receive anyway). The message is then always
-		// sent with a true, final total.
-		const totalIsFinal = !requiresMockup && !deliveryFeePending;
+		// EVERY order pushes at create, whether or not its total is final
+		// (86eyd63r8, superseding the 86eyfq0w5 deferral). A price-on-quote line
+		// is RM 0.00 until quoted and a fee-pending total grows by the arranged
+		// fee, so the message can't always carry a number — but the fix for that
+		// is to SAY so in the money parameter (PENDING_TOTAL_LABEL), not to
+		// withhold the message. Deferring it meant a made-to-order buyer left
+		// checkout with no confirmation and no link to the order page they
+		// approve their mockup on, sometimes for days; and it bought nothing,
+		// since the price still isn't final when they read it.
 		const confirmedAtCreate =
 			customerWaPhone !== undefined &&
 			orderConfirmTemplateName() !== undefined;
@@ -1164,13 +1184,8 @@ export const create = mutation({
 			// Stamped in the SAME transaction as the insert so the push state is
 			// never ambiguous: a confirmed storefront order with no stamp would be
 			// indistinguishable from one whose send is still in flight, and the
-			// tracking page needs to tell the buyer which it is. Non-final totals
-			// start "deferred" — the send waits for the price to be confirmed.
-			confirmationPushStatus: confirmedAtCreate
-				? totalIsFinal
-					? "sending"
-					: "deferred"
-				: undefined,
+			// tracking page needs to tell the buyer which it is.
+			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -1236,9 +1251,9 @@ export const create = mutation({
 		// The buyer's WhatsApp confirmation — the ONE outbound message this order
 		// sends (Meta bills per message from Oct 2026). Fire-and-forget like the
 		// email; a send failure stamps confirmationPushStatus, never fails create.
-		// A deferred (non-final-total) order schedules nothing here — its push
-		// fires from the gate-open sites once the price is confirmed.
-		if (confirmedAtCreate && totalIsFinal) {
+		// Unconditional: a held price rides in the message as words, not as a
+		// reason to hold the message back.
+		if (confirmedAtCreate) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.whatsapp.notifyStorefrontOrderCreated,
@@ -2341,12 +2356,22 @@ export async function applyStatusTransition(
 		currentStageId: string | undefined;
 		confirmationPushStatus: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
-	// A deferred push is a PROMISE about the future ("your confirmation is
-	// coming once the price is confirmed") — cancelling the order invalidates
-	// it, so clear the stamp or the buyer's page keeps making a claim about an
-	// order that no longer exists. Terminal states (sent/failed/recovered) are
-	// history, not promises, and survive cancellation untouched.
-	if (status === "cancelled" && order.confirmationPushStatus === "deferred") {
+	// `sending` and `deferred` are PROMISES about a message ("your confirmation
+	// is on its way") — cancelling the order invalidates them, so clear the
+	// stamp or the buyer's page keeps promising a message that will never come:
+	// the send action returns early on a cancelled order, so a stamp left at
+	// `sending` would be stuck there forever. Terminal states
+	// (sent/failed/recovered) are history, not promises, and survive untouched
+	// — as does a send that races this and lands anyway, since
+	// recordConfirmationPush writes the true outcome after us.
+	//
+	// `deferred` is legacy (86eyfq0w5); nothing creates it any more, but rows
+	// can still be in it until `releaseDeferredPushes` has run.
+	if (
+		status === "cancelled" &&
+		(order.confirmationPushStatus === "sending" ||
+			order.confirmationPushStatus === "deferred")
+	) {
 		patch.confirmationPushStatus = undefined;
 	}
 	// Courier fields describe a parcel shipment, so they only apply to delivery
@@ -3202,7 +3227,6 @@ export const setDeliveryFee = mutation({
 		if (fee > DELIVERY_FEE_MAX)
 			throw new ConvexError("Delivery charge is unrealistically large — check the amount");
 
-		const wasPending = order.deliveryFeePending === true;
 		const snapshot: DeliverySnapshot | undefined =
 			fee > 0 ? { fee, mode: "manual" } : undefined;
 		const now = Date.now();
@@ -3236,14 +3260,11 @@ export const setDeliveryFee = mutation({
 			note: `delivery_fee_set (fee ${fee})`,
 			createdAt: now,
 		});
-		// The price is now final — release the order's ONE message if it was held
-		// for this (86eyfq0w5). The claim re-checks the mockup hold, so a doubly
-		// held order still sends exactly once, after both clear. Legacy orders
-		// (no push) get nothing here: their one message was the free-form confirm
-		// they already received when they sent their ORD reference.
-		if (wasPending) {
-			await claimDeferredPush(ctx, orderId);
-		}
+		// No WhatsApp here (86eyd63r8). The buyer's one message went out at
+		// checkout saying the total was still to be confirmed, and its button
+		// opens the order page — which is reading this fee live, the moment this
+		// mutation commits. A second send to restate a number they can already
+		// see is exactly what the one-message rule exists to stop.
 		await logAdminAction(ctx, access, "orders.setDeliveryFee", orderId);
 	},
 });
@@ -3777,6 +3798,21 @@ export const receiveGatewayPayment = internalMutation({
 				paymentReference: paymentId,
 			},
 		});
+
+		// Tell the seller their buyer paid (86eyd63r8). This is the ONE receive
+		// path no human on their side witnessed — `markPaymentReceived` is their
+		// own click and deliberately notifies nothing. Both are scheduled: the
+		// email self-suppresses whenever the WhatsApp alert will actually reach
+		// them, and the alert forces the email back if it gives up, so exactly one
+		// channel fires and it's never zero.
+		await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+			orderId,
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifySellerPaymentReceived,
+			{ orderId },
+		);
 		return { applied: true };
 	},
 });
@@ -4070,16 +4106,12 @@ export const submitMockup = mutation({
 					: "mockup_submitted",
 			createdAt: now,
 		});
-		// THIS is where a made-to-order buyer's single message goes out
-		// (86eyd63r8): the quote above just made the total real, so the deferred
-		// confirmation template can finally state a true price — and its tracking
-		// link is the same page the buyer approves the mockup on. Firing here
-		// rather than on approval is what keeps the mockup flow alive under
-		// one-message-per-order: without it nothing would ever tell the buyer
-		// there's a design waiting, and the gate would only open on the 48h
-		// waiver. Re-submits after a change request are silent (the claim only
-		// ever wins once).
-		await claimDeferredPush(ctx, orderId);
+		// No WhatsApp here (86eyd63r8). The buyer already has this order's one
+		// message — sent at checkout, with the total named as "to be confirmed"
+		// and a button onto the order page. That page is where the mockup and its
+		// quote appear and where the buyer approves them, live, so submitting is
+		// not an event that needs its own send. The seller is in that chat by hand
+		// anyway; a made-to-order design is a conversation, not a notification.
 		await logAdminAction(ctx, access, "orders.submitMockup", orderId);
 	},
 });
@@ -4174,11 +4206,6 @@ export const approveMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
 			orderId: order._id,
 		});
-		// Normally a no-op now: the buyer's one message went out when the seller
-		// SUBMITTED this mockup (86eyd63r8). Kept as the claim site for orders
-		// that were already `deferred` under the old approve-gate when the policy
-		// shipped — they fire here, exactly as before, so nothing needs a backfill.
-		await claimDeferredPush(ctx, order._id);
 	},
 });
 
@@ -4248,11 +4275,6 @@ export const waiveMockup = mutation({
 			note: "mockup_waived",
 			createdAt: now,
 		});
-		// Gate forced open without buyer approval. Usually a no-op — the message
-		// went out at submit — but a waiver also SETTLES the price, so this is the
-		// backstop that guarantees any still-deferred order eventually sends its
-		// one message rather than going out silently (86eyd63r8).
-		await claimDeferredPush(ctx, orderId);
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
@@ -4338,10 +4360,12 @@ export const declineMockupItem = mutation({
 				status: "cancelled",
 				mockupStatus: undefined,
 				mockupQuotedAmount: undefined,
-				// The deferred-push promise dies with the order (see
+				// The promise of a message dies with the order (see
 				// applyStatusTransition's cancel branch — this cancel path bypasses
-				// that helper, so it clears the stamp itself).
+				// that helper, so it clears the stamp itself; same two in-flight
+				// states, same reasoning).
 				confirmationPushStatus:
+					order.confirmationPushStatus === "sending" ||
 					order.confirmationPushStatus === "deferred"
 						? undefined
 						: order.confirmationPushStatus,
@@ -4389,12 +4413,6 @@ export const declineMockupItem = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
 			orderId: order._id,
 		});
-		// Dropping the custom item settles the price at the ready-made remainder.
-		// A still-deferred order (declined before the seller ever submitted a
-		// mockup, so nothing has been sent) claims its one message here — the
-		// last of the four settle points, and the reason a never-quoted order
-		// can't slip through silently.
-		await claimDeferredPush(ctx, order._id);
 	},
 });
 

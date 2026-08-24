@@ -76,6 +76,7 @@ const NOT_BUYER_SENDS = [
 	// consent. See docs/order-notifications.md.
 	"notifySellerNewOrder",
 	"notifySellerPaymentClaim",
+	"notifySellerPaymentReceived",
 	// Not order-scoped at all — a one-time welcome to a founding seller.
 	"notifyFoundingWelcome",
 	// Seller-DRIVEN, one human tap per send, window-boxed to days 11–14
@@ -239,8 +240,49 @@ describe("one message per order — the whole lifecycle", () => {
 			"whatsapp:notifySellerPaymentClaim",
 		]);
 		expect(await waJobs(t)).toEqual(["whatsapp:notifyStorefrontOrderCreated"]);
-		// Nothing about the seller being pinged reaches the buyer.
+		// The seller confirming the money by hand notifies NOBODY: the buyer sees
+		// it on their order page, and telling the seller what they just clicked is
+		// the definition of noise. Neither list grows.
 		await asUser.mutation(api.orders.markPaymentReceived, { orderId });
+		expect(await sellerAlertJobs(t)).toEqual([
+			"whatsapp:notifySellerNewOrder",
+			"whatsapp:notifySellerPaymentClaim",
+		]);
+		expect(await waJobs(t)).toEqual(["whatsapp:notifyStorefrontOrderCreated"]);
+	});
+
+	test("a settled HitPay payment alerts the seller — the one receive nobody witnessed", async () => {
+		// Before 86eyd63r8 this notified the seller on NO channel: there was no
+		// payment-received email either, so the only way to learn money had landed
+		// was to open the dashboard.
+		const t = setup();
+		const retailerId = await seedStore(t, "gateway-paid");
+		const productId = await seedProduct(t, retailerId);
+		const { orderId } = await placeOrder(t, retailerId, productId);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+
+		const result = await t.mutation(internal.orders.receiveGatewayPayment, {
+			orderId,
+			paymentId: "hitpay_abc123",
+			amountSen: order?.total ?? 0,
+			currency: "MYR",
+			paymentType: "fpx",
+		});
+		expect(result).toEqual({ applied: true });
+
+		expect(await sellerAlertJobs(t)).toEqual([
+			"whatsapp:notifySellerNewOrder",
+			"whatsapp:notifySellerPaymentReceived",
+		]);
+		// The email rides alongside and decides for itself whether to stay quiet —
+		// so the seller gets exactly one channel, never zero.
+		const emailJobs = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect())
+				.map((j) => j.name)
+				.filter((n) => n.includes("notifyPaymentReceived")),
+		);
+		expect(emailJobs).toEqual(["email:notifyPaymentReceived"]);
+		// And the buyer still has exactly their one message.
 		expect(await waJobs(t)).toEqual(["whatsapp:notifyStorefrontOrderCreated"]);
 	});
 
@@ -276,27 +318,33 @@ describe("one message per order — the whole lifecycle", () => {
 	});
 });
 
-describe("one message per order — made-to-order fires at SUBMIT", () => {
+describe("one message per order — made-to-order sends at CHECKOUT", () => {
 	async function seedCustomOrder(t: ReturnType<typeof setup>, slug: string) {
 		const retailerId = await seedStore(t, slug);
 		const productId = await seedProduct(t, retailerId, { requiresProof: true });
 		return await placeOrder(t, retailerId, productId);
 	}
 
-	test("nothing is sent at checkout — the price isn't known yet", async () => {
+	test("the one message goes out at checkout, unquoted price and all", async () => {
 		const t = setup();
 		const { orderId } = await seedCustomOrder(t, "custom-defer");
 
-		expect(await waJobs(t)).toEqual([]);
+		// 86eyd63r8: an unquoted total is SAID ("to be confirmed"), not waited
+		// for. Holding the message back left exactly the buyers who need the order
+		// page most — they approve their mockup on it — with no link to it.
+		expect(await waJobs(t)).toEqual([
+			"whatsapp:notifyStorefrontOrderCreated",
+		]);
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.confirmationPushStatus).toBe("deferred");
+		expect(order?.confirmationPushStatus).toBe("sending");
 		expect(order?.mockupStatus).toBe("pending");
 	});
 
-	test("submitting the mockup with a quote sends the one message", async () => {
+	test("submitting the mockup with a quote adds NO second message", async () => {
 		const t = setup();
 		const asUser = t.withIdentity({ subject: USER });
 		const { orderId } = await seedCustomOrder(t, "custom-submit");
+		const atCheckout = await waJobs(t);
 
 		await asUser.mutation(api.orders.submitMockup, {
 			orderId,
@@ -304,12 +352,9 @@ describe("one message per order — made-to-order fires at SUBMIT", () => {
 			quotedAmount: 18000,
 		});
 
-		expect(await waJobs(t)).toEqual([
-			"whatsapp:notifyStorefrontOrderCreated",
-		]);
+		expect(await waJobs(t)).toEqual(atCheckout);
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		// Claimed → the total the template will quote is the real one.
-		expect(order?.confirmationPushStatus).toBe("sending");
+		// The quote lands on the order page the checkout message linked to.
 		expect(order?.total).toBe(18000);
 	});
 

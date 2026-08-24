@@ -158,6 +158,33 @@ export const TEMPLATE_LANGUAGE: Record<Locale, "en" | "ms"> = {
 	zh: "en",
 };
 
+/**
+ * What the confirmation template's money parameter says when the order's total
+ * ISN'T final yet — a made-to-order line still awaiting its quote, or a delivery
+ * charge the seller has to arrange (86eyd63r8).
+ *
+ * Every order sends its one message at checkout, so this is the honest thing to
+ * put in `{{3}}` rather than a number we'd have to correct later. It is a plain
+ * TEXT parameter (the template body carries a bare `{{3}}` — the currency code
+ * rides inside the value we pass, which is why an SGD store already renders
+ * "SGD 40.00" and not "RM SGD 40.00"), so free text is valid here; Meta only
+ * rejects newlines, tabs and >1024 chars.
+ *
+ * Keyed on the STORE locale like every other template value, and written to
+ * read as a total rather than a status ("to be confirmed", not "pending") — the
+ * buyer sees it in the sentence "Total: …".
+ *
+ * Not sent again when the price settles: the button in this same message opens
+ * the order page, which carries the live total from that moment on.
+ */
+export const PENDING_TOTAL_LABEL: Record<Locale, string> = {
+	en: "to be confirmed",
+	ms: "akan disahkan",
+	// zh stores ride the EN template (TEMPLATE_LANGUAGE), so this must be a
+	// phrase that reads correctly inside an English sentence.
+	zh: "to be confirmed",
+};
+
 // ---------------------------------------------------------------------------
 // System messages — locale-aware, NOT retailer-overridable.
 //

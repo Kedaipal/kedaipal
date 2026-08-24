@@ -104,52 +104,46 @@ phone. So the storefront no longer depends on the buyer's send at all:
   server re-validates with `assertValidMyMobile` — the stricter sibling of
   `assertValidMyWaPhone` that also demands a MY **mobile** prefix, because a
   landline satisfies the 8–15-digit rule but can never receive WhatsApp.
-- **Every storefront order takes this path** — including custom/made-to-order
-  and fee-pending orders. What varies is push **timing** (86eyfq0w5, re-tuned
-  by 86eyd63r8): the approved template states "Total: {{3}}", so an order whose
-  total isn't final yet (a price-on-quote line is RM 0.00 until quoted; a
-  fee-pending total grows by the arranged fee) commits identically at create
-  but its push is stamped **`deferred`** and fires from the **price-settling**
-  site instead:
+- **Every storefront order takes this path, and every one of them pushes at
+  `orders.create`** — including custom/made-to-order and fee-pending orders.
+  There is no deferral and no timing question (86eyd63r8, superseding
+  86eyfq0w5's `deferred` state).
 
-  | Hold | Settles at | Note |
-  | --- | --- | --- |
-  | Mockup / price-on-quote | **`submitMockup`** | The seller enters `quotedAmount` there, so `submitted` already carries a real total — and the message's tracking link is the page the buyer approves on. |
-  | Delivery fee pending | `setDeliveryFee` | Carries the agreed charge + final total. |
-  | Both | whichever settles **last** | The claim re-checks the other hold. |
+  The approved template states "Total: {{3}}", and an order whose total isn't
+  final has no number for it (a price-on-quote line is RM 0.00 until quoted; a
+  fee-pending total grows by the arranged fee). So the money parameter carries
+  **`PENDING_TOTAL_LABEL`** instead — "to be confirmed" / "akan disahkan",
+  keyed on the store locale. It is a plain text parameter (the currency code
+  rides inside the value we pass, so the body is a bare `{{3}}`), chosen at
+  **send** time from the live hold state, so a quote entered between create and
+  send goes out as a real number.
 
-  Firing the mockup case at **submit** rather than on approval is what keeps
-  that flow alive under one-message-per-order: the mockup's own WhatsApp send
-  is gone, so approval-as-trigger would leave nothing to tell the buyer a
-  design was waiting. `approveMockup` / `waiveMockup` / `declineMockupItem`
-  still call the claim — as the **migration path** for orders already
-  `deferred` under the old approve-gate (hence no backfill), and as the
-  backstop for a price settled by waiver or decline without a submit.
+  Nothing re-sends when the price settles. `setDeliveryFee`, `submitMockup`,
+  `approveMockup`, `waiveMockup` and `declineMockupItem` schedule **no**
+  WhatsApp — the button in the message the buyer already has opens the order
+  page, which is reading the total live.
 
-  The de-dup is the **transactional claim** (`claimDeferredPush`,
-  `convex/orders.ts:391`): inside the same mutation that settled the price, the
-  order is re-read and — only when NO hold remains — flipped
-  `deferred → sending` and the send scheduled. Mutations are serializable, so
-  exactly one transaction can win the flip; a second settle event racing in
-  (fee set a second after the mockup submit) serializes after the winner, sees
-  `sending`, and schedules nothing — that's what makes a doubly-held order send
-  exactly once **under concurrency**, not just in tidy orderings. The mockup
-  hold is `isMockupPriceUnsettled` (*is there a quote?*,
-  `convex/lib/order.ts:129`), deliberately **not** `isMockupGateClosed` (*has
-  the buyer approved?*) — the price exists from `submitted` onward even though
-  the production gate stays shut. `notifyStorefrontOrderCreated` keeps the same
-  hold guard as defence-in-depth (a wrong "Total" is the one mistake this
-  feature must never make) plus a cancelled-order guard. **Cancelling a
-  deferred order clears the stamp** (both `applyStatusTransition` and
-  `declineMockupItem`'s custom-only cancel): the stamp is a promise about a
-  future message, and the promise dies with the order — the tracking page's
-  deferred card additionally renders only while `confirmed`. A custom-only
-  order whose buyer declines the item is a cancellation — no confirmation ever
-  exists. **Legacy orders (env unset, buyer messaged first) get nothing at
-  settle time** — their one message was the free-form reply to their own `ORD-`
-  send; the free-form `notifyPaymentDue` / `notifyDeliveryFeeSet` prompts that
-  used to follow are deleted, and the price, mockup and payment details all
-  land on their order page instead.
+  Deferring instead was tried and reversed: it stranded exactly the buyers who
+  need the order page most (a made-to-order buyer approves their mockup on it,
+  and could be waiting days for the link), it bought nothing (the price still
+  isn't final when they read the message), and it cost a state machine —
+  `claimDeferredPush`, five call sites and a buyer-facing card for the
+  in-between state, all now deleted. See
+  [`one-message-per-order.md`](./one-message-per-order.md#the-held-price-is-said-not-waited-for).
+
+  `deferred` remains a valid schema literal for rows still in it; the one-shot
+  **`orders:releaseDeferredPushes`** must run once per deployment to flip them
+  to `sending` and schedule their send (idempotent). **Cancelling clears an
+  in-flight stamp** (`sending` or `deferred`, in both `applyStatusTransition`
+  and `declineMockupItem`'s custom-only cancel): the stamp is a promise about a
+  message, and the promise dies with the order — the send action returns early
+  on a cancelled order, so a stamp left at `sending` would be stuck forever.
+  A custom-only order whose buyer declines the item is a cancellation, so no
+  confirmation ever exists. **Legacy orders (env unset, buyer messaged first)
+  get nothing at settle time** — their one message was the free-form reply to
+  their own `ORD-` send; the free-form `notifyPaymentDue` /
+  `notifyDeliveryFeeSet` prompts that used to follow are deleted, and the
+  price, mockup and payment details all land on their order page instead.
 - **The order inserts as `confirmed`** and Kedaipal's WABA pushes the
   confirmation — the Meta-approved **utility template**
   `order_confirmation_utility` (EN + BM variants; body params `shortId`,
@@ -179,16 +173,18 @@ phone. So the storefront no longer depends on the buyer's send at all:
 **Outcome stamps** (`orders.confirmationPushStatus` / `confirmationPushAt` /
 `confirmationPushWamid` / `confirmationPushFailureKind`):
 
-- `"deferred"` — total not final at create (mockup quote / delivery fee
-  outstanding); the push fires when the price settles. Flipped to
-  `"sending"` by the winning price-settling transaction (`claimDeferredPush`),
-  so the buyer's page never claims "sending…" mid-negotiation; cleared on
-  cancel.
-- `"sending"` — stamped in the **same transaction as the insert** (or on a
-  deferred push passing its guards), so the state is never ambiguous while
-  attempts (including retries) are in flight. Without it, a confirmed order
-  with no stamp is indistinguishable from one still sending, and the tracking
-  page can't tell the buyer which.
+- `"deferred"` — **legacy** (86eyfq0w5, retired by 86eyd63r8). Meant "total not
+  final at create; the push waits for the price to settle". Nothing creates it
+  any more and nothing claims it, so rows still in it must be released by the
+  one-shot `orders:releaseDeferredPushes`. The literal stays on the schema so
+  those rows validate until then.
+- `"sending"` — stamped in the **same transaction as the insert**, so the state
+  is never ambiguous while attempts (including retries) are in flight. Without
+  it, a confirmed order with no stamp is indistinguishable from one still
+  sending, and the tracking page can't tell the buyer which. **Cleared on
+  cancel**, along with `deferred`: both are promises about a message, the send
+  action returns early on a cancelled order, and a stamp left at `sending`
+  would be stuck there forever.
 - `"sent"` — Meta accepted the send; the wamid is stored because the
   **`statuses` webhook** (same `POST /webhook/whatsapp`, `value.statuses`)
   identifies messages only by it. A later `failed` event →

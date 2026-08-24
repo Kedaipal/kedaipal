@@ -18,8 +18,9 @@ open-payment window, at most once per 24h — every send is a human tap. See
 [`payment-reminder.md`](./payment-reminder.md).
 
 **Scope note — this governs BUYER messages.** The seller's own order alerts
-(`86eyhw9zy`: new order + payment claim, to the retailer's `notifyWaPhone`) are
-a separate budget and a separate consent, and are unaffected by this policy.
+(`86eyhw9zy`: new order, payment claim, and payment received, to the retailer's
+`notifyWaPhone`) are a separate budget and a separate consent, and are
+unaffected by this policy.
 They also now *replace* the equivalent seller emails rather than duplicating
 them — see [`order-notifications.md`](./order-notifications.md).
 
@@ -68,89 +69,92 @@ keep.
 
 ## When the one message fires
 
-Timing is the only thing that varies, and it varies on exactly one question:
-**is the total real yet?** The template states `Total: {{3}}`, so sending before
-the price settles would quote a number the buyer never agreed to.
+**At checkout. Always.** There is no timing question and no deferral: every
+storefront order schedules its confirmation from `orders.create`, in the same
+transaction that inserts the order.
 
-| Order shape | Fires at | Why there |
-| --- | --- | --- |
-| Normal storefront order | `orders.create` — the moment the buyer taps **Place order** | The total is final at checkout. Order inserts `confirmed`, push scheduled in the same breath. |
-| Delivery-fee-pending (radius "arrange", out of range) | `orders.setDeliveryFee` (`convex/orders.ts:2499`) | The seller agrees the charge with the buyer in chat, then sets it — that's the first moment the total is true. |
-| Mockup / made-to-order (price on quote) | **`orders.submitMockup`** (`convex/orders.ts:2943`) | The seller enters `quotedAmount` **at submit**, and `submitMockup` folds it into `total` right there. So `submitted` already carries a real price — and the message's tracking link is the very page the buyer reviews and approves the mockup on. |
-| Both holds at once | Whichever settles **last** | The claim (below) re-reads the order and only fires when *no* hold remains. |
-| Counter checkout | `createOrderFromSession` → `notifyCounterOrderCreated` | The cashier priced it in front of the buyer; nothing to wait for. |
+| Order shape | Fires at |
+| --- | --- |
+| Normal storefront order | `orders.create` — the moment the buyer taps **Place order** |
+| Delivery-fee-pending (radius "arrange", out of range) | `orders.create` |
+| Mockup / made-to-order (price on quote) | `orders.create` |
+| Both holds at once | `orders.create` |
+| Counter checkout | `createOrderFromSession` → `notifyCounterOrderCreated` |
+| Legacy / no-template store | the free-form reply to the buyer's own `ORD-XXXX` |
 
-An order still holding a price is stamped `confirmationPushStatus: "deferred"`
-and the buyer's page says so (`PushDeferredCard` in `src/routes/track.$token.tsx`) —
-they are told a confirmation is coming and told to keep the link. Cancelling a
-deferred order **clears** the stamp: the promise dies with the order.
+### The held price is SAID, not waited for
 
-### The mockup change: submit, not approve
+The template states `Total: {{3}}`, and an order whose price isn't settled has
+no number to put there — a price-on-quote line is RM 0.00 until quoted, and an
+"arrange" delivery total grows by a fee the seller hasn't set.
 
-This is the single most consequential behavioural change in the ticket.
+So `{{3}}` carries **`PENDING_TOTAL_LABEL`** instead (`convex/lib/whatsappCopy
+.ts`): *"to be confirmed"* / *"akan disahkan"*, keyed on the store locale like
+every other template value. It is a plain **text** parameter — the currency code
+already rides inside the value we pass (which is why an SGD store renders
+"SGD 40.00", not "RM SGD 40.00"), so the body carries a bare `{{3}}` and free
+text is valid. Meta only rejects newlines, tabs and >1024 chars.
 
-Before, a deferred mockup order pushed on **approve/waive/decline** — the gate
-opening. That was correct while the mockup itself had its own WhatsApp send
-(`notifyMockupSubmitted` carried the image + a "review this" CTA). With that
-send deleted, approving-as-the-trigger would have been a deadlock: nothing would
-ever tell the buyer a design was waiting, so nobody would approve, and the gate
-would only ever open on the seller's 48-hour waiver.
+`notifyStorefrontOrderCreated` picks between the two at **send** time, from the
+live hold state — so a mockup quoted in the seconds between create and send goes
+out with the real number.
 
-Firing at **submit** fixes it in the same move it saves the message: the buyer's
-one WhatsApp arrives exactly when there is something for them to do, carrying a
-true total and a link to the page where the mockup, the Approve button and the
-Request-changes box all live.
+**Nothing re-sends when the price settles.** The button in that same message
+opens the order page, which is reading the total live. Restating a number the
+buyer can already see is the exact thing this policy exists to stop.
 
-**Re-submits after a change request are silent** — the claim can only be won
-once. The revised mockup appears on the buyer's page, reactively, which is where
-they were already looking. See [`proof-approval.md`](./proof-approval.md).
+### Why not wait for the price (superseding 86eyfq0w5)
 
-## The claim mechanism
+The original design deferred the message until a price-settling mutation
+released it — `confirmationPushStatus: "deferred"`, claimed transactionally by
+`setDeliveryFee` / `submitMockup` / mockup approve / waive / decline. It was
+correct about one thing (never quote a total the buyer didn't agree to) and
+wrong about the remedy. Three problems, in order of severity:
 
-`claimDeferredPush` (`convex/orders.ts:391`) is a **transactional claim**, not a
-check-then-send. Called from inside the mutation that just settled a price, it:
+1. **It stranded the buyers who need the order page most.** A made-to-order
+   buyer left checkout with no confirmation and no link — and the tracking page
+   is where they approve their mockup. The link could be days away, or never, if
+   the seller went quiet. The whole design leans on "everything lives on the
+   order page"; withholding the only pointer to it undercut that.
+2. **It bought nothing.** The price still isn't final when they read the
+   message — the seller sets it afterwards either way. Waiting only moved
+   *when* the buyer learned their order existed.
+3. **It cost a state machine.** A deferred stamp, a serializable claim, five
+   call sites, a cancel-clears branch in two places, and a buyer-facing card for
+   the in-between state — all to defer something that could simply say what it
+   didn't know yet.
 
-1. re-reads the order (`ctx.db.get` sees this transaction's own writes),
-2. returns early if it isn't still `deferred`, or the order is cancelled, or
-   **either** price hold remains,
-3. otherwise patches `deferred → sending` **and** schedules the send.
+Saying "to be confirmed" is honest, arrives on time, and deletes all of it.
+`claimDeferredPush` and `PushDeferredCard` are gone; `orders.create` no longer
+produces `deferred`.
 
-**The flip IS the de-dup.** Convex mutations are serializable, so exactly one
-transaction can ever observe `deferred` with both holds clear. A second settle
-event racing in — the seller sets the delivery fee a second after submitting the
-mockup — serializes *after* the winner, sees `sending`, and schedules nothing.
-A claim inside the *action* could not guarantee this: two in-flight actions read
-their metadata before either outcome commits.
+**Migration:** `deferred` remains a valid schema literal because rows may still
+be in it. Run the one-shot **`orders:releaseDeferredPushes`** once per
+deployment — it flips every live deferred order to `sending` and schedules its
+send, and clears the stamp on cancelled ones. Idempotent; a second run finds
+nothing. Without it those buyers never get their message, since nothing claims
+them any more.
 
-### The mockup hold is `isMockupPriceUnsettled`, not `isMockupGateClosed`
+Cancelling still **clears** an in-flight stamp (`sending` or `deferred`) in both
+`applyStatusTransition` and the custom-only decline path: the promise dies with
+the order, and the send action returns early on a cancelled order, so a stamp
+left at `sending` would be stuck there forever. Terminal states
+(`sent` / `failed` / `recovered`) are history, not promises, and survive.
 
-`convex/lib/order.ts:129`. Two deliberately different questions:
+### The mockup flow sends nothing at all
 
-| Predicate | Asks | True while |
-| --- | --- | --- |
-| `isMockupGateClosed` | *Has the buyer approved?* — the **production** gate on `confirmed → packed` | `pending`, `submitted`, `changes_requested` (unwaived) |
-| `isMockupPriceUnsettled` | *Is there a quote at all?* — the **message** hold | `pending` only (unwaived) |
+Before this ticket, a mockup order pushed on **approve/waive/decline** (the gate
+opening); the 8 Aug revision moved it to **submit** (the quote landing). Neither
+survives: the message went out at checkout, and submitting, re-submitting,
+approving, requesting changes, waiving and declining are all page updates.
 
-`submitted` and `changes_requested` both follow a submit, so both carry a real
-total even though the gate is still shut. That gap is precisely where the one
-message belongs.
+That's the right answer even ignoring cost. For a made-to-order item the seller
+is already in that chat by hand discussing the design — that conversation is the
+notification, and it's better than any template we could send. The order page
+carries the mockup, the quote, the Approve button and the Request-changes box,
+and it's linked from the message the buyer already has.
 
-### Why approve / waive / decline still call the claim
-
-They are the **migration path**, and the reason no backfill was needed. Orders
-already stamped `deferred` when this shipped were deferred under the old
-approve-gate; their mockup may already be `submitted`. Leaving the claim call on
-those three sites means such an order fires its message on the next settle event
-exactly as it would have before, and then the site is a no-op forever after.
-
-`waiveMockup` and `declineMockupItem` earn their calls twice over: a waiver
-settles the price without a submit ever happening, and a decline settles it at
-the ready-made remainder. Together they guarantee no order can reach a final
-price without having sent its one message.
-
-`notifyStorefrontOrderCreated` (`convex/whatsapp.ts:904`) keeps its own hold
-guard as defence-in-depth. Sending a wrong `Total:` is the one mistake this
-feature must never make, whatever schedules it.
+See [`proof-approval.md`](./proof-approval.md).
 
 ## What was removed, and where the buyer gets it now
 
@@ -162,7 +166,7 @@ Every row below used to be an outbound WhatsApp send. All roads now lead to
 | `notifyStatusChange` — packed / shipped / delivered / **cancelled** | `applyStatusTransition`, `updateStatus` | Status timeline on the order page, live. |
 | `notifyStageEntry` — custom-stage pings | `advanceToStage` with `stage.notify` | The same timeline, in the seller's own stage vocabulary. |
 | `notifyPaymentReceived` | `markPaymentReceived` | Payment card flips to received on the page, live. |
-| `notifyMockupSubmitted` — mockup image + review CTA | `submitMockup` | **Replaced by the one confirmation**, which now fires at submit and links straight to the review UI. |
+| `notifyMockupSubmitted` — mockup image + review CTA | `submitMockup` | The confirmation the buyer already has links straight to the review UI; the mockup, quote and Approve button all render there. |
 | `notifyPaymentDue` (`approved` / `waived` / `declined` intros) | `approveMockup`, `waiveMockup`, `declineMockupItem` | The confirmation already went out at submit; "How to pay" lives on the page. |
 | `notifyDeliveryFeeSet` | `orders.setDeliveryFee` | **Replaced by the one confirmation**, which now fires there and carries the charge + final total. |
 | `notifyPaymentReminder` — automatic day-11 nudge | daily cron `paymentReminders.sendDuePaymentReminders` | The **seller's** day-11 reminder button (8 Aug revision): same timing, human finger — [`payment-reminder.md`](./payment-reminder.md). |
@@ -202,8 +206,9 @@ sent | sending | deferred | recovered  →  push owns it, stay silent
 failed | undefined                     →  reply
 ```
 
-- **`deferred` counts as owned.** The buyer has a message *coming*; two is still
-  two, whichever order they arrive in.
+- **`deferred` counts as owned.** Legacy only — nothing creates that state any
+  more — but a row still in it has a message *coming*, and two is still two
+  whichever order they arrive in.
 - **`failed` still replies — deliberately.** That push reached nobody, so this
   reply *is* that buyer's one message, and it is their recovery route.
 - **`undefined` is the legacy store**, where the reply has always been the one
@@ -238,6 +243,7 @@ NOT notified, and every new line below matches that tone.
 | **Cancellation is silent.** No tombstone message, no apology text. | The cancel confirm dialog (`src/routes/app.orders.$shortId.tsx`) and the inbox bulk-cancel dialog (`src/components/dashboard/order-bulk-bar.tsx`): *"The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."* |
 | **Advancing a status or stage tells the buyer nothing on WhatsApp.** | A line under the order-detail stepper: *"Moving the order along updates the buyer's order page — it doesn't send them a WhatsApp."* Plus a note under the Settings → Order status stage editor explaining what stages still do. |
 | **No AUTOMATIC payment chasing** — the day-11 cron is gone. What remains is the seller's own reminder button, window-boxed to days 11–14, once per 24h, closed forever after ([`payment-reminder.md`](./payment-reminder.md)). | Settings → Payments names the day-11 unlock; the unpaid Payment card on order detail carries the button, its cooldown state, and the day-14 closure copy. |
+| **Settling a held price sends nothing.** Setting the delivery charge, or quoting and approving a mockup, only updates the order page — the buyer's confirmation already went out saying the total was "to be confirmed". | The delivery-charge card (*"the new total shows on their order page… No further WhatsApp goes out"*), the mockup upload helper (*"The buyer sees it on their order page — no WhatsApp goes out"*), and both success toasts. |
 | **Confirming a payment doesn't ping the buyer.** | The mark-received confirm dialog says the buyer isn't messaged; the buyer's page carries *"This page updates the moment {store} confirms your payment."* |
 | **Counter orders no longer get the invoice/receipt PDF in chat.** | The Done screen (`src/components/order/order-document-actions.tsx`): *"Hand {buyer} their {receipt} now if they want one. It isn't sent on WhatsApp — they can open it any time from the order page we linked them to."* An anonymous cash sale says plainly that this is their only copy. |
 | **Courier + tracking number never ride a message.** | The mark-shipped prompt and the Shipment tracking card both state that the number lands on the buyer's order page. |
@@ -280,20 +286,26 @@ fine and costs nothing. Adding a `wa.send` is the thing to stop at.
   initiated and inside their own session window, so it isn't a proactive send —
   but it is technically another message on that order. Left alone rather than
   silencing a buyer who wrote in; revisit if the logs show it happening.
-- **Re-pricing after submit leaves a stale `Total:` in the sent message.**
-  `updateMockupQuote` (`convex/orders.ts:3038`) and a re-submit both recompute
-  `total`, but the claim has already been won, so nothing new goes out — the
-  buyer's WhatsApp still quotes the first price. This is the deliberate cost of
-  one message: the alternative is a send per re-price, which is exactly the
-  spend this policy removed. The order page is the live figure and is where the
-  buyer pays, and the seller is re-pricing *because* they are talking to the
-  buyer already. Worth knowing before assuming the message is authoritative —
+- **The sent message's `Total:` is never corrected.** A held price went out as
+  "to be confirmed" and stays that way; a settled one goes out as a number and
+  keeps it through any later re-price (`updateMockupQuote`, a re-submit,
+  `setDeliveryFee`, an address change). This is the deliberate cost of one
+  message — the alternative is a send per re-price, which is exactly the spend
+  this policy removed. The order page carries the live figure and is where the
+  buyer pays, and the seller is re-pricing *because* they are already talking to
+  the buyer. Worth knowing before treating the message as authoritative —
   **it is a pointer, not a receipt.**
-- **A legacy (no-template) mockup order gets nothing at submit.**
-  `claimDeferredPush` no-ops without a `deferred` stamp, and the deleted
-  `notifyMockupSubmitted` was that path's nudge. Those buyers were told at
-  confirm time that a design is coming (`mockupPendingConfirm`) and see it on
-  their order page. The condition disappears the moment the template env is set.
+- **Nothing tells a made-to-order buyer their price is ready.** They have to
+  open the link. Accepted deliberately: for a custom item the seller is in that
+  chat by hand agreeing the design, so a template would be a worse version of a
+  conversation that is already happening. If a real seller reports buyers going
+  cold at this step, the fix to weigh is unlocking the manual reminder earlier
+  for price-settled orders — not a new automatic send.
+- **A legacy (no-template) mockup order gets nothing at submit.** Those buyers
+  never had a push at all; the deleted `notifyMockupSubmitted` was that path's
+  nudge. They were told at confirm time that a design is coming
+  (`mockupPendingConfirm`) and see it on their order page. The condition
+  disappears the moment the template env is set.
 - **`orders.paymentReminderSentAt` and `orders.lastManualReminderAt` remain on
   the schema** with no writer. Harmless, and cheaper to leave than to migrate;
   drop them in the next narrowing pass.

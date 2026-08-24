@@ -1288,11 +1288,13 @@ describe("storefront confirmation push (86eyf1rck)", () => {
 describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 	const NEW_ORDER_TEMPLATE = "seller_new_order_utility";
 	const CLAIM_TEMPLATE = "seller_payment_claim_utility";
+	const RECEIVED_TEMPLATE = "seller_payment_received_utility";
 	const SELLER_PHONE = "60198765432";
 
 	afterEach(() => {
 		delete process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE;
 		delete process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE;
+		delete process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE;
 	});
 
 	async function orderIdOf(t: ReturnType<typeof setup>, shortId: string) {
@@ -1534,6 +1536,101 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 			.find((c) => c.type === "body")
 			?.parameters.map((p) => p.text);
 		expect(params).toEqual(["Ali", shortId, "MYR 120.00"]);
+		fetchMock.restore();
+	});
+
+	test("payment-received alert is its OWN template — a settled payment must not read like a claim", async () => {
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE = RECEIVED_TEMPLATE;
+		process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE = CLAIM_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			to: string;
+			template: {
+				name: string;
+				language: { code: string };
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		expect(body.to).toBe(SELLER_PHONE);
+		// The load-bearing assertion: NOT the claim template. A claim asks the
+		// seller to go check their bank; a settled HitPay charge already
+		// auto-confirmed the order and needs nothing from them.
+		expect(body.template.name).toBe(RECEIVED_TEMPLATE);
+		expect(body.template.name).not.toBe(CLAIM_TEMPLATE);
+		expect(body.template.language.code).toBe("ms");
+		// Params match the claim alert's three exactly, so the two stay
+		// interchangeable at the call site.
+		const params = body.template.components
+			.find((c) => c.type === "body")
+			?.parameters.map((p) => p.text);
+		expect(params).toEqual(["Ali", shortId, "MYR 120.00"]);
+		fetchMock.restore();
+	});
+
+	test("payment-received alert still fires on a cancelled order — money that moved is the urgent case", async () => {
+		// Deliberately unlike the claim alert, which skips cancelled orders. A
+		// claim on a dead order is noise; a real payment landing on one needs the
+		// seller to go refund it.
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE = RECEIVED_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { status: "cancelled" });
+		});
+
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(1);
+
+		// The claim alert, on the same order, stays silent.
+		process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE = CLAIM_TEMPLATE;
+		await t.action(internal.whatsapp.notifySellerPaymentClaim, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		fetchMock.restore();
+	});
+
+	test("payment-received: template unset or alerts off sends nothing and forces no email (the email decides for itself)", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		// Env unset.
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+
+		// Toggle off.
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE = RECEIVED_TEMPLATE;
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { orderWaAlerts: false });
+		});
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+
+		// Neither case force-schedules the email: `notifyPaymentReceived` shares
+		// the same reach predicate, so it has already decided not to suppress
+		// itself. Forcing here would send the seller two.
+		const forced = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter(
+				(j) => j.name.includes("notifyPaymentReceived"),
+			),
+		);
+		expect(forced).toHaveLength(0);
 		fetchMock.restore();
 	});
 

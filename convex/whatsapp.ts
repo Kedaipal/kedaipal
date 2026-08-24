@@ -15,6 +15,7 @@ import {
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
+	sellerPaymentReceivedTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
 import {
@@ -30,6 +31,7 @@ import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
 import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
+	PENDING_TOTAL_LABEL,
 	pickLocale,
 	poweredByLine,
 	privacyNoticeLine,
@@ -1218,6 +1220,96 @@ export const notifySellerPaymentClaim = internalAction({
 	},
 });
 
+/**
+ * The money-actually-landed sibling (86eyd63r8), scheduled ONLY by
+ * `orders.receiveGatewayPayment` — a verified HitPay settlement.
+ *
+ * Not scheduled by `markPaymentReceived`: that IS the seller, who just tapped
+ * the button. Telling someone what they just did is the definition of noise.
+ * So this alert exists for exactly the event no human on the seller's side
+ * witnessed — before it, a settled online payment notified them on NO channel
+ * at all (there was no payment-received email either) and the only way to learn
+ * of it was to open the dashboard.
+ *
+ * Unlike the claim alert this does NOT skip cancelled orders. A claim on a dead
+ * order is noise; real money landing on one is the most urgent thing a seller
+ * can be told. (`receiveGatewayPayment` refuses a payment on an
+ * already-cancelled order outright — that's the `paid_after_cancel` issue path
+ * — so this only fires on a cancel that raced the settlement, which is exactly
+ * the case worth shouting about.)
+ */
+export const notifySellerPaymentReceived = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		// Unset template / alerts off / no number: plain return, no email nudge.
+		// `notifyPaymentReceived` is scheduled alongside this action and shares the
+		// exact `sellerWaAlertWillAttempt` predicate, so in every one of those
+		// cases it has already decided NOT to suppress itself and the seller is
+		// covered. Forcing it here would send two.
+		const templateName = sellerPaymentReceivedTemplateName();
+		if (!templateName) return;
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderForSellerAlert, { orderId })
+			.catch((err) => {
+				console.error("WA seller payment-received lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
+				bodyParams: [meta.customerName, meta.shortId, money],
+				urlButtonParam: meta.shortId,
+			});
+			if (receipt?.blocked) {
+				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+					orderId,
+					force: true,
+				});
+				return;
+			}
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA seller payment-received alert failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifySellerPaymentReceived,
+					{ orderId, attempt: attempt + 1 },
+				);
+			} else {
+				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+					orderId,
+					force: true,
+				});
+			}
+		}
+	},
+});
+
 // --- Counter Checkout (docs/counter-checkout.md) ----------------------------
 
 /** Load the data needed to send a buyer their counter-order confirmation. */
@@ -1303,27 +1395,24 @@ export const notifyStorefrontOrderCreated = internalAction({
 		) {
 			return;
 		}
-		// Hold guard, defence-in-depth (86eyfq0w5): the transactional claim in
-		// orders.ts (claimDeferredPush) only stamps "sending" + schedules when no
-		// price hold remains, so a legitimate invocation never trips this. It
-		// stays because sending a wrong "Total: {{3}}" is the one mistake this
-		// feature must never make, whatever schedules us.
-		if (meta.mockupPriceUnsettled || meta.deliveryFeePending) {
-			console.warn("WA confirm push refused: price not final", {
-				shortId: meta.shortId,
-				mockupPriceUnsettled: meta.mockupPriceUnsettled,
-				deliveryFeePending: meta.deliveryFeePending,
-			});
-			return;
-		}
-
 		const trackingToken =
 			meta.trackingToken ??
 			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
 		const languageCode = TEMPLATE_LANGUAGE[locale];
-		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		// A held price is SAID, not waited for (86eyd63r8). A made-to-order line
+		// carries no quote until the seller enters one, and an "arrange" delivery
+		// total grows by a fee the seller hasn't set — printing either as a number
+		// would state a total that isn't owed. Earlier this deferred the whole
+		// message until the price settled, which left exactly the buyers who need
+		// the order page most (they approve their mockup on it) with no link to it
+		// at all, sometimes for days. Now the message always goes out on time and
+		// the money parameter tells the truth about itself.
+		const money =
+			meta.mockupPriceUnsettled || meta.deliveryFeePending
+				? PENDING_TOTAL_LABEL[locale]
+				: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		try {

@@ -133,8 +133,10 @@ on it, so it never claims "outside your delivery bands" when bands weren't the c
 - **WhatsApp confirm** sends `deliveryFeePendingConfirm` (EN+BM) — branded, no transfer
   reference / payment block / "I've paid" CTA. **This is the legacy free-form reply only**
   (a store with no confirmation template, answering an inbound `ORD-`). On the push path
-  the order is stamped `confirmationPushStatus: "deferred"` and **nothing is sent yet** —
-  the buyer's single message waits for the charge, and their order page tells them so.
+  the order's single message goes out at checkout like any other, with the total rendered
+  as **"to be confirmed"** rather than a figure that would grow by the arranged fee
+  (86eyd63r8) — and the button on it opens the order page, which shows the charge live the
+  moment the seller sets it.
 - **`claimPayment` + `markPaymentReceived` reject** while pending (tracking page shows a
   disabled "Awaiting delivery charge"; order detail disables mark-received with reason).
   ~~The payment-reminder cron skips pending orders~~ — that cron no longer exists
@@ -142,17 +144,15 @@ on it, so it never claims "outside your delivery bands" when bands weren't the c
 - The seller resolves it via **`orders.setDeliveryFee(orderId, fee)`** — an amber
   **"Delivery charge to confirm"** card on the order detail (with a one-tap "Discuss with
   buyer on WhatsApp" deep link). `fee: 0` = deliver free. Sets snapshot `mode: "manual"`,
-  recomputes the total, clears the flag, and **releases the order's one WhatsApp message**
-  via `claimDeferredPush` — the confirmation template, now carrying the charge and a true
-  final total. (It used to schedule `notifyDeliveryFeeSet`, a separate held payment ask;
-  that send is deleted — `86eyd63r8`.) Also usable pre-payment as typo insurance;
-  **locked once payment is claimed/received**.
-- **Double-hold ordering:** an order held by *both* the mockup quote and the delivery
-  charge sends its one message when the **second** hold clears, whichever that is.
-  This is no longer two send-sites each skipping while the other gate is shut — it is a
-  single **transactional claim** (`claimDeferredPush`, `convex/orders.ts:391`) that flips
-  `deferred → sending` only when no hold remains, so racing releases still send exactly
-  once. See [`one-message-per-order.md`](./one-message-per-order.md#the-claim-mechanism).
+  recomputes the total and clears the flag. **It sends no WhatsApp** (`86eyd63r8`): the
+  buyer's one message already went out at checkout, and the order page it links to is
+  reading this fee live. (It used to schedule `notifyDeliveryFeeSet`, a separate held
+  payment ask; that send is deleted, and the brief `claimDeferredPush` release with it.)
+  Also usable pre-payment as typo insurance; **locked once payment is claimed/received**.
+- **Double-hold ordering is a non-question now:** an order held by *both* the mockup
+  quote and the delivery charge still sends exactly one message, at checkout, priced as
+  "to be confirmed" — so there is no release to race and no claim to win. See
+  [`one-message-per-order.md`](./one-message-per-order.md#the-held-price-is-said-not-waited-for).
 - The seller learns about a pending charge three ways: the new-order/confirmed **email**
   gains a "Delivery charge to confirm" action line (EN+BM), the order-detail amber card, and
   the totals row ("To be set — see above").

@@ -21,6 +21,7 @@ export type RetailerEmailKey =
 	| "newOrder"
 	| "orderConfirmed"
 	| "paymentClaimed"
+	| "paymentReceived"
 	| "mockupApproved"
 	| "mockupChangesRequested"
 	| "mockupDeclined"
@@ -40,9 +41,10 @@ export type RetailerEmailVars = {
 	deliveryDirection?: "standard" | "collection";
 	storeName: string;
 	dashboardUrl: string;
-	// Optional — only set when key === "paymentClaimed". Reference the shopper
-	// typed into the "I've paid" form (e.g. their bank transaction ID) and a
-	// resolved Convex storage URL for the screenshot, if any.
+	// Optional — set on "paymentClaimed" (the reference the shopper typed into
+	// the "I've paid" form, e.g. their bank transaction ID, plus a resolved
+	// Convex storage URL for the screenshot) and on "paymentReceived" (the HitPay
+	// payment id, which is what the seller looks the charge up by).
 	paymentReference?: string;
 	proofUrl?: string;
 	// Optional — only set when key === "mockupChangesRequested".
@@ -280,6 +282,33 @@ const en = {
 		const text = `🪙 Payment claimed for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nVerify in your bank app, then confirm in your dashboard.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ Payment received for ${v.shortId} · ${v.totalFormatted}`;
+		const refLine = v.paymentReference
+			? `HitPay ref: <strong>${escapeHtml(v.paymentReference)}</strong>`
+			: undefined;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
+			`Customer: ${escapeHtml(v.customerName)}`,
+			...(refLine ? [refLine] : []),
+			// The load-bearing difference from paymentClaimed: nothing is asked of
+			// the seller. We verified this with HitPay ourselves and the order is
+			// already confirmed — sending them to their bank app would invent work.
+			`Paid online through HitPay. The order is confirmed — nothing to check.`,
+		];
+		const html = wrapHtml(
+			"✅",
+			`Payment received for ${v.shortId}`,
+			lines,
+			v.dashboardUrl,
+			"Open dashboard",
+		);
+		const refTextLine = v.paymentReference
+			? `\nHitPay ref: ${v.paymentReference}`
+			: "";
+		const text = `✅ Payment received for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}${refTextLine}\n\nPaid online through HitPay. The order is confirmed — nothing to check.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `🎨 Mockup approved for ${v.shortId}`;
 		const lines = [
@@ -416,7 +445,11 @@ const ms = {
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
-		const subject = `🪙 Pembayaran diterima untuk ${v.shortId} · ${v.totalFormatted}`;
+		// "Pelanggan kata dah bayar", not "Pembayaran diterima" — this is a CLAIM
+		// the seller still has to verify, and the money-really-landed sibling
+		// (paymentReceived) now owns "diterima". Fixed in passing; the old wording
+		// promised settlement the seller hadn't confirmed yet.
+		const subject = `🪙 Pelanggan kata dah bayar — ${v.shortId} · ${v.totalFormatted}`;
 		const refLine = v.paymentReference
 			? `Rujukan: <strong>${escapeHtml(v.paymentReference)}</strong>`
 			: `Rujukan: <em>tidak dinyatakan</em>`;
@@ -432,7 +465,7 @@ const ms = {
 		];
 		const html = wrapHtml(
 			"🪙",
-			`Pembayaran diterima untuk ${v.shortId}`,
+			`Pelanggan kata dah bayar — ${v.shortId}`,
 			lines,
 			v.dashboardUrl,
 			"Buka dashboard",
@@ -443,7 +476,31 @@ const ms = {
 		const proofTextLine = v.proofUrl
 			? `Tangkapan resit: ${v.proofUrl}`
 			: `Tangkapan resit: tidak dinyatakan`;
-		const text = `🪙 Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nSahkan di aplikasi bank anda, kemudian sahkan di dashboard.\n${v.dashboardUrl}`;
+		const text = `🪙 Pelanggan kata dah bayar — ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nSahkan di aplikasi bank anda, kemudian sahkan di dashboard.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ Pembayaran diterima untuk ${v.shortId} · ${v.totalFormatted}`;
+		const refLine = v.paymentReference
+			? `Rujukan HitPay: <strong>${escapeHtml(v.paymentReference)}</strong>`
+			: undefined;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
+			`Pelanggan: ${escapeHtml(v.customerName)}`,
+			...(refLine ? [refLine] : []),
+			`Dibayar dalam talian melalui HitPay. Pesanan sudah disahkan — tiada apa perlu disemak.`,
+		];
+		const html = wrapHtml(
+			"✅",
+			`Pembayaran diterima untuk ${v.shortId}`,
+			lines,
+			v.dashboardUrl,
+			"Buka dashboard",
+		);
+		const refTextLine = v.paymentReference
+			? `\nRujukan HitPay: ${v.paymentReference}`
+			: "";
+		const text = `✅ Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}${refTextLine}\n\nDibayar dalam talian melalui HitPay. Pesanan sudah disahkan — tiada apa perlu disemak.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
@@ -614,6 +671,30 @@ const zh = {
 			? `截图：${v.proofUrl}`
 			: `截图：未提供`;
 		const text = `🪙 已收到 ${v.shortId} 的付款提交\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}\n${refTextLine}\n${proofTextLine}\n\n请在银行 App 核实，然后在后台确认。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ ${v.shortId} 款项已入账 · ${v.totalFormatted}`;
+		const refLine = v.paymentReference
+			? `HitPay 单号：<strong>${escapeHtml(v.paymentReference)}</strong>`
+			: undefined;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
+			`顾客：${escapeHtml(v.customerName)}`,
+			...(refLine ? [refLine] : []),
+			`已通过 HitPay 在线支付，订单已确认 — 无需核实。`,
+		];
+		const html = wrapHtml(
+			"✅",
+			`${v.shortId} 款项已入账`,
+			lines,
+			v.dashboardUrl,
+			"打开后台",
+		);
+		const refTextLine = v.paymentReference
+			? `\nHitPay 单号：${v.paymentReference}`
+			: "";
+		const text = `✅ ${v.shortId} 款项已入账\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}${refTextLine}\n\n已通过 HitPay 在线支付，订单已确认 — 无需核实。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {

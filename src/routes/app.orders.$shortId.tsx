@@ -2005,10 +2005,6 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
 	const [feeInput, setFeeInput] = useState("");
 	const [saving, setSaving] = useState(false);
-	// This order's one WhatsApp confirmation is still held, waiting on the total
-	// to be real — setting the charge is what releases it. Anything else (a
-	// legacy order, or a push already sent) gets no message from this action.
-	const releasesConfirmation = order.confirmationPushStatus === "deferred";
 
 	const chatUrl = order.customer.waPhone
 		? `https://wa.me/${order.customer.waPhone}?text=${encodeURIComponent(
@@ -2021,9 +2017,7 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 		try {
 			await setDeliveryFee({ orderId: order._id, fee });
 			toast.success(fee > 0 ? "Delivery charge set" : "Set to free delivery", {
-				description: releasesConfirmation
-					? "The buyer's WhatsApp confirmation is on its way with the final total."
-					: "The buyer sees the new total on their order page.",
+				description: "The buyer sees the new total on their order page.",
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -2051,11 +2045,9 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 			</div>
 			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
 				{FEE_PENDING_REASON_COPY[order.deliveryFeePendingReason ?? "unknown"]}{" "}
-				Agree it with the buyer on WhatsApp, then set it here —{" "}
-				{releasesConfirmation
-					? "their WhatsApp confirmation is waiting on this and goes out once with the final total"
-					: "the new total shows on their order page"}
-				. Enter 0 to deliver free.
+				Agree it with the buyer on WhatsApp, then set it here — the new total
+				shows on their order page, where their confirmation message already
+				sent them. No further WhatsApp goes out. Enter 0 to deliver free.
 			</p>
 			<div className="flex items-end gap-2">
 				<div className="relative flex-1">
@@ -2116,14 +2108,6 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 
 	const status = order.mockupStatus;
 	const waived = order.mockupWaivedAt != null;
-	// Submitting the mockup is what releases this order's ONE WhatsApp
-	// (86eyd63r8) — the quote entered here is what finally makes the total real.
-	// It fires once: a replacement after a change request finds the push already
-	// claimed, and a fee-pending order still waits on the delivery charge. Copy
-	// branches on it so the seller is never promised a send that won't happen.
-	const releasesConfirmation =
-		order.confirmationPushStatus === "deferred" &&
-		order.deliveryFeePending !== true;
 
 	// Parse the typed quote into minor units. Empty = no quote sent (made-to-order
 	// items with a fixed storefront price don't need one). Invalid → undefined.
@@ -2174,9 +2158,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 					? `${storageIds.length} mockups sent to the buyer for approval`
 					: "Mockup sent to the buyer for approval",
 				{
-					description: releasesConfirmation
-						? "Their WhatsApp confirmation is on its way — price included, with the link they approve on."
-						: "They'll see it on their order page — no WhatsApp goes out.",
+					description:
+						"They'll see it on their order page — no WhatsApp goes out.",
 				},
 			);
 		} catch (err) {
@@ -2355,9 +2338,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 						) : null}
 					</div>
 					<p className="text-xs text-muted-foreground">
-						{releasesConfirmation
-							? "Goes out with the mockup, in the buyer's WhatsApp confirmation. They approve the design and price together; the order total updates automatically."
-							: "Sent with the mockup. The buyer approves the design and price together; the order total updates automatically."}
+						Sent with the mockup. The buyer approves the design and price
+						together; the order total updates automatically.
 					</p>
 				</div>
 			) : null}
@@ -2370,9 +2352,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							? "Sending…"
 							: status === "submitted"
 								? "Replace mockup"
-								: releasesConfirmation
-									? "Send mockup & WhatsApp the buyer"
-									: "Upload & send mockup"}
+								: "Upload & send mockup"}
 						<input
 							type="file"
 							accept="image/*"
@@ -2384,10 +2364,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 					</label>
 					<p className="text-center text-xs text-muted-foreground">
 						Up to {MAX_MOCKUP_IMAGES} images — e.g. different designs, angles,
-						or one per item. Sending replaces the current set.{" "}
-						{releasesConfirmation
-							? "This is the one WhatsApp this order sends: it carries the price above and the link the buyer approves on. Replacing the mockup later won't message them again."
-							: "The buyer sees it on their order page — no WhatsApp goes out."}
+						or one per item. Sending replaces the current set. The buyer sees it
+						on their order page — no WhatsApp goes out.
 					</p>
 				</div>
 			) : null}

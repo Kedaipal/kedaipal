@@ -18,6 +18,7 @@ import { sellerWaAlertWillAttempt } from "./lib/sellerAlerts";
 import {
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
+	sellerPaymentReceivedTemplateName,
 } from "./lib/whatsapp";
 import { deriveMapsUrl } from "./lib/mapsUrl";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
@@ -458,6 +459,105 @@ export const notifyPaymentClaimed = internalAction({
 		} catch (err) {
 			console.error(
 				`Email payment-claimed failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	},
+});
+
+/**
+ * Scheduled by orders.receiveGatewayPayment (86eyd63r8) — a verified HitPay
+ * settlement, i.e. money that actually landed rather than a buyer's claim that
+ * it did. Before this, a settled online payment notified the seller on NO
+ * channel at all.
+ *
+ * Same WhatsApp-first rule as its two siblings: quiet when
+ * `notifySellerPaymentReceived` is going to reach them, and `force: true` when
+ * that alert has already given up (or its template isn't approved yet), so the
+ * seller is never left with zero notification. Deliberately NOT scheduled by
+ * `markPaymentReceived` — that's the seller's own click.
+ */
+export const notifyPaymentReceived = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		/** See notifyRetailerOrderAlert.force — the WA-alert failure fallback. */
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, force }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			itemCount: number;
+			total: number;
+			currency: string;
+			customerName: string;
+			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			paymentReference: string | undefined;
+			orderWaAlerts: boolean | undefined;
+			notifyWaPhone: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("Email payment-received lookup failed", err);
+			return;
+		}
+		if (!meta) {
+			console.error(
+				`Email payment-received skipped: no order meta (orderId=${orderId})`,
+			);
+			return;
+		}
+		if (!meta.notifyEmail) {
+			console.warn(
+				`Email payment-received skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
+			);
+			return;
+		}
+		// No counter exclusion: a gateway payment is settled from the buyer's own
+		// phone at a moment nobody on the seller's side witnessed, wherever the
+		// order came from.
+		if (
+			force !== true &&
+			sellerWaAlertWillAttempt(meta, {
+				templateConfigured: sellerPaymentReceivedTemplateName() !== undefined,
+			})
+		) {
+			return;
+		}
+
+		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+
+		const { subject, html, text } = renderRetailerEmail(
+			meta.locale,
+			"paymentReceived",
+			{
+				shortId: meta.shortId,
+				itemCount: meta.itemCount,
+				totalFormatted,
+				customerName: meta.customerName,
+				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
+				storeName: meta.storeName,
+				dashboardUrl,
+				// receiveGatewayPayment writes the HitPay payment id here — the number
+				// the seller looks the charge up by in their own dashboard.
+				paymentReference: meta.paymentReference,
+			},
+		);
+
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Email payment-received failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
