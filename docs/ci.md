@@ -223,6 +223,24 @@ needs its own exclusion:
 If lint or tests fail in ways that don't match your diff, a stray nested
 worktree is the first thing to suspect.
 
+**Status (2026-08-24, ClickUp `86eyqgy05`): `.claude/worktrees/` is now empty.**
+Nine stale trees holding 1,929 duplicate test files were audited and removed.
+All nine had HEADs already reachable from `origin/staging`, so no committed
+work was at risk; every dirty tree was archive-committed first, so removal
+needed no `--force` and nothing was discarded. One genuinely unique piece of
+work — the in-progress inbound intent router (ClickUp `86ey0e80h`) — was
+committed to its own branch before removal.
+
+**Both exclusions are retained deliberately, and must not be removed as dead
+config.** They are now *preventative*: the directory regenerates the moment
+anyone uses Claude Code's `EnterWorktree`, and the failure it causes (phantom
+test failures from another branch, or a Biome "nested root configuration"
+abort) is confusing enough that it cost two separate debugging sessions to
+diagnose the first time. The exclusions cost nothing to keep.
+
+All task work belongs in a **sibling** worktree instead — `../kedaipal-wt-<id>`,
+branched from `origin/staging` — never inside the repo.
+
 ## Dependency pinning — TanStack is exact-pinned (2026-08-07, ClickUp 86eyjadx7)
 
 `package.json` used to spec six TanStack packages as the `latest` dist-tag.
