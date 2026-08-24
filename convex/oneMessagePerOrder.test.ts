@@ -267,6 +267,7 @@ describe("one message per order — the whole lifecycle", () => {
 			amountSen: order?.total ?? 0,
 			currency: "MYR",
 			paymentType: "fpx",
+		provider: "HitPay",
 		});
 		expect(result).toEqual({ applied: true });
 

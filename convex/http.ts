@@ -3,7 +3,11 @@ import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { getAdapter } from "./lib/channels/registry";
 import { decryptSecret } from "./lib/credentialCrypto";
-import { decimalStringToSen, verifyHitpayWebhook } from "./lib/hitpay";
+import {
+	decimalStringToSen,
+	HITPAY_PROVIDER_LABEL,
+	verifyHitpayWebhook,
+} from "./lib/hitpay";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
@@ -332,6 +336,7 @@ http.route({
 				paymentId: fields.payment_id,
 				amountSen,
 				currency: fields.currency ?? "",
+				provider: HITPAY_PROVIDER_LABEL,
 			},
 		);
 		if (result.applied) {

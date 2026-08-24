@@ -1241,9 +1241,14 @@ export const notifySellerPaymentClaim = internalAction({
 export const notifySellerPaymentReceived = internalAction({
 	args: {
 		orderId: v.id("orders"),
+		/** Gateway display name — `{{4}}`, "it landed in your {{4}} account". */
+		provider: v.string(),
 		attempt: v.optional(v.number()),
 	},
-	handler: async (ctx, { orderId, attempt: attemptArg }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ orderId, provider, attempt: attemptArg },
+	): Promise<void> => {
 		const attempt = attemptArg ?? 1;
 		// Unset template / alerts off / no number: plain return, no email nudge.
 		// `notifyPaymentReceived` is scheduled alongside this action and shares the
@@ -1267,12 +1272,18 @@ export const notifySellerPaymentReceived = internalAction({
 				kind: "template",
 				templateName,
 				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
-				bodyParams: [meta.customerName, meta.shortId, money],
+				// {{4}} is the gateway's NAME, not a hardcoded "HitPay": the template
+				// is approved once and a second gateway must be able to reuse it —
+				// telling a Billplz seller to check HitPay would send them to an
+				// account they don't have, and fixing it would cost a fresh Meta
+				// review. Never empty (Meta rejects empty parameters outright).
+				bodyParams: [meta.customerName, meta.shortId, money, provider],
 				urlButtonParam: meta.shortId,
 			});
 			if (receipt?.blocked) {
 				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
 					orderId,
+					provider,
 					force: true,
 				});
 				return;
@@ -1298,11 +1309,12 @@ export const notifySellerPaymentReceived = internalAction({
 				await ctx.scheduler.runAfter(
 					outcome.delayMs,
 					internal.whatsapp.notifySellerPaymentReceived,
-					{ orderId, attempt: attempt + 1 },
+					{ orderId, provider, attempt: attempt + 1 },
 				);
 			} else {
 				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
 					orderId,
+					provider,
 					force: true,
 				});
 			}

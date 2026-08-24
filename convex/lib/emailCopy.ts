@@ -41,10 +41,15 @@ export type RetailerEmailVars = {
 	deliveryDirection?: "standard" | "collection";
 	storeName: string;
 	dashboardUrl: string;
+	// Set on "paymentReceived": how the gateway is NAMED to the seller
+	// ("HitPay"), threaded from the provider-specific caller rather than
+	// hardcoded — the same value the WhatsApp alert puts in {{4}}, so the two
+	// channels can never name different accounts for one payment.
+	gatewayProvider?: string;
 	// Optional — set on "paymentClaimed" (the reference the shopper typed into
 	// the "I've paid" form, e.g. their bank transaction ID, plus a resolved
-	// Convex storage URL for the screenshot) and on "paymentReceived" (the HitPay
-	// payment id, which is what the seller looks the charge up by).
+	// Convex storage URL for the screenshot) and on "paymentReceived" (the
+	// gateway's payment id, which is what the seller looks the charge up by).
 	paymentReference?: string;
 	proofUrl?: string;
 	// Optional — only set when key === "mockupChangesRequested".
@@ -284,8 +289,9 @@ const en = {
 	},
 	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ Payment received for ${v.shortId} · ${v.totalFormatted}`;
+		const gateway = escapeHtml(v.gatewayProvider ?? "the gateway");
 		const refLine = v.paymentReference
-			? `HitPay ref: <strong>${escapeHtml(v.paymentReference)}</strong>`
+			? `${gateway} ref: <strong>${escapeHtml(v.paymentReference)}</strong>`
 			: undefined;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
@@ -294,7 +300,7 @@ const en = {
 			// The load-bearing difference from paymentClaimed: nothing is asked of
 			// the seller. We verified this with HitPay ourselves and the order is
 			// already confirmed — sending them to their bank app would invent work.
-			`Paid online through HitPay. The order is confirmed — nothing to check.`,
+			`Paid online through ${gateway}. The order is confirmed — nothing to check.`,
 		];
 		const html = wrapHtml(
 			"✅",
@@ -303,10 +309,11 @@ const en = {
 			v.dashboardUrl,
 			"Open dashboard",
 		);
+		const gatewayText = v.gatewayProvider ?? "the gateway";
 		const refTextLine = v.paymentReference
-			? `\nHitPay ref: ${v.paymentReference}`
+			? `\n${gatewayText} ref: ${v.paymentReference}`
 			: "";
-		const text = `✅ Payment received for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}${refTextLine}\n\nPaid online through HitPay. The order is confirmed — nothing to check.\n${v.dashboardUrl}`;
+		const text = `✅ Payment received for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}${refTextLine}\n\nPaid online through ${gatewayText}. The order is confirmed — nothing to check.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
@@ -481,14 +488,15 @@ const ms = {
 	},
 	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ Pembayaran diterima untuk ${v.shortId} · ${v.totalFormatted}`;
+		const gateway = escapeHtml(v.gatewayProvider ?? "gateway");
 		const refLine = v.paymentReference
-			? `Rujukan HitPay: <strong>${escapeHtml(v.paymentReference)}</strong>`
+			? `Rujukan ${gateway}: <strong>${escapeHtml(v.paymentReference)}</strong>`
 			: undefined;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
 			...(refLine ? [refLine] : []),
-			`Dibayar dalam talian melalui HitPay. Pesanan sudah disahkan — tiada apa perlu disemak.`,
+			`Dibayar dalam talian melalui ${gateway}. Pesanan sudah disahkan — tiada apa perlu disemak.`,
 		];
 		const html = wrapHtml(
 			"✅",
@@ -497,10 +505,11 @@ const ms = {
 			v.dashboardUrl,
 			"Buka dashboard",
 		);
+		const gatewayText = v.gatewayProvider ?? "gateway";
 		const refTextLine = v.paymentReference
-			? `\nRujukan HitPay: ${v.paymentReference}`
+			? `\nRujukan ${gatewayText}: ${v.paymentReference}`
 			: "";
-		const text = `✅ Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}${refTextLine}\n\nDibayar dalam talian melalui HitPay. Pesanan sudah disahkan — tiada apa perlu disemak.\n${v.dashboardUrl}`;
+		const text = `✅ Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}${refTextLine}\n\nDibayar dalam talian melalui ${gatewayText}. Pesanan sudah disahkan — tiada apa perlu disemak.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
@@ -675,14 +684,15 @@ const zh = {
 	},
 	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ ${v.shortId} 款项已入账 · ${v.totalFormatted}`;
+		const gateway = escapeHtml(v.gatewayProvider ?? "支付网关");
 		const refLine = v.paymentReference
-			? `HitPay 单号：<strong>${escapeHtml(v.paymentReference)}</strong>`
+			? `${gateway} 单号：<strong>${escapeHtml(v.paymentReference)}</strong>`
 			: undefined;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
 			`顾客：${escapeHtml(v.customerName)}`,
 			...(refLine ? [refLine] : []),
-			`已通过 HitPay 在线支付，订单已确认 — 无需核实。`,
+			`已通过 ${gateway} 在线支付，订单已确认 — 无需核实。`,
 		];
 		const html = wrapHtml(
 			"✅",
@@ -691,10 +701,11 @@ const zh = {
 			v.dashboardUrl,
 			"打开后台",
 		);
+		const gatewayText = v.gatewayProvider ?? "支付网关";
 		const refTextLine = v.paymentReference
-			? `\nHitPay 单号：${v.paymentReference}`
+			? `\n${gatewayText} 单号：${v.paymentReference}`
 			: "";
-		const text = `✅ ${v.shortId} 款项已入账\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}${refTextLine}\n\n已通过 HitPay 在线支付，订单已确认 — 无需核实。\n${v.dashboardUrl}`;
+		const text = `✅ ${v.shortId} 款项已入账\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}${refTextLine}\n\n已通过 ${gatewayText} 在线支付，订单已确认 — 无需核实。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {

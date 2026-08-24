@@ -418,7 +418,10 @@ describe("email payment received alert (86eyd63r8)", () => {
 			await ctx.db.patch(orderId, { paymentReference: "hitpay_abc123" });
 		});
 
-		await t.action(internal.email.notifyPaymentReceived, { orderId });
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 
 		const sends = fetchMock.resendCalls();
 		expect(sends).toHaveLength(1);
@@ -432,9 +435,37 @@ describe("email payment received alert (86eyd63r8)", () => {
 		expect(body.subject).toContain(shortId);
 		expect(body.text).toContain("hitpay_abc123");
 		expect(body.text).toContain("nothing to check");
+		expect(body.text).toContain("HitPay");
 		// The claim email's instruction must NOT appear here — we verified this
 		// payment ourselves, so sending them to their bank app invents work.
 		expect(body.text).not.toContain("Verify in your bank app");
+		fetchMock.restore();
+	});
+
+	test("names the gateway the caller passed — same value the WhatsApp {{4}} gets", async () => {
+		// Email and WhatsApp must never name different accounts for one payment
+		// (the cross-channel rule the locale switch already follows), so this is
+		// threaded rather than hardcoded on either side.
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithEmail(t, {
+			locale: "en",
+			notifyEmail: "ops@store.test",
+		});
+		const { orderId } = await createPendingOrder(t, retailerId, productId);
+
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "Billplz",
+		});
+
+		const body = fetchMock.resendCalls()[0].body as {
+			text: string;
+			html: string;
+		};
+		expect(body.text).toContain("Paid online through Billplz");
+		expect(body.text).not.toContain("HitPay");
+		expect(body.html).not.toContain("HitPay");
 		fetchMock.restore();
 	});
 
@@ -451,13 +482,17 @@ describe("email payment received alert (86eyd63r8)", () => {
 		await armWaAlerts(t, retailerId);
 
 		// WhatsApp is the channel for this event — one notification, not two.
-		await t.action(internal.email.notifyPaymentReceived, { orderId });
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 		expect(fetchMock.resendCalls()).toHaveLength(0);
 
 		// …until that alert gives up and hands back (`force`), so the seller is
 		// never left with zero notification.
 		await t.action(internal.email.notifyPaymentReceived, {
 			orderId,
+			provider: "HitPay",
 			force: true,
 		});
 		expect(fetchMock.resendCalls()).toHaveLength(1);
@@ -475,7 +510,10 @@ describe("email payment received alert (86eyd63r8)", () => {
 		});
 		const { orderId } = await createPendingOrder(t, retailerId, productId);
 		// Toggle never turned on → email is the only channel they have.
-		await t.action(internal.email.notifyPaymentReceived, { orderId });
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 		expect(fetchMock.resendCalls()).toHaveLength(1);
 		fetchMock.restore();
 	});

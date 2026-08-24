@@ -3691,10 +3691,16 @@ export const receiveGatewayPayment = internalMutation({
 		amountSen: v.number(),
 		currency: v.string(),
 		paymentType: v.optional(v.string()),
+		// How the gateway is NAMED to the seller ("HitPay") — passed in by the
+		// provider-specific caller rather than known here, like every other
+		// `gateway*` field on this table. It reaches the seller's alert and email
+		// verbatim, so it must never be empty (Meta rejects empty template
+		// parameters outright).
+		provider: v.string(),
 	},
 	handler: async (
 		ctx,
-		{ orderId, paymentId, amountSen, currency, paymentType },
+		{ orderId, paymentId, amountSen, currency, paymentType, provider },
 	): Promise<{
 		applied: boolean;
 		reason?: "duplicate" | "amount_mismatch" | "cancelled" | "gone";
@@ -3807,11 +3813,12 @@ export const receiveGatewayPayment = internalMutation({
 		// channel fires and it's never zero.
 		await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
 			orderId,
+			provider,
 		});
 		await ctx.scheduler.runAfter(
 			0,
 			internal.whatsapp.notifySellerPaymentReceived,
-			{ orderId },
+			{ orderId, provider },
 		);
 		return { applied: true };
 	},

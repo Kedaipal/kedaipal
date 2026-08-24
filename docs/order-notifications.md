@@ -35,7 +35,7 @@ the moments money moves:
 
 The two are different asks. A **claim** is the buyer's word for it: the seller
 has to open their bank app and confirm. A **gateway receive** is already
-verified — the order auto-confirmed itself, the money is in their HitPay
+verified — the order auto-confirmed itself, the money is in their gateway
 account, and nothing is required of them. Reusing the claim template (whose
 params happen to match exactly) would have told sellers to go check a payment
 Kedaipal had just checked for them, manufacturing work that doesn't exist.
@@ -70,13 +70,46 @@ decoupled from Meta template review.
 | --- | --- | --- | --- |
 | `WHATSAPP_SELLER_NEW_ORDER_TEMPLATE` | `seller_new_order_utility` | shortId, buyer name, total, fulfilment date-time ("—" when absent) | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 | `WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE` | `seller_payment_claim_utility` | buyer name, shortId, total | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
-| `WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE` | `seller_payment_received_utility` | buyer name, shortId, total | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
+| `WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE` | `seller_payment_received_utility` | buyer name, shortId, total, **gateway name** | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 
 The received template's body must say the payment is **settled and needs no
-action** — e.g. "{{1}} has paid {{3}} for order {{2}}. It landed in your HitPay
-account and the order is confirmed — nothing to check." Its params are the
-claim template's exact three so the two stay interchangeable at the call site;
-only the words differ, and the words are the whole point.
+action**, and must name the gateway through a **variable**:
+
+> {{1}} has paid {{3}} for order {{2}}. It landed in your **{{4}}** account and
+> the order is confirmed — nothing to check.
+
+`{{1}}`–`{{3}}` are the claim template's exact three, so the two stay
+interchangeable at the call site; only the words differ, and the words are the
+whole point.
+
+### Why the env var is `WHATSAPP_*` but the body says `{{4}}`
+
+Two different questions, and they resolve opposite ways:
+
+- **The env var is WhatsApp config**, so it takes the `WHATSAPP_` namespace
+  every other one takes (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_ORDER_CONFIRM_TEMPLATE`,
+  …). None of those are named after what the message is *about*, and there is no
+  `HITPAY_*` namespace to join — HitPay credentials are BYO, stored per-retailer
+  on `retailers.hitpay`, never in env. `HITPAY_SELLER_PAYMENT_RECEIVED_TEMPLATE`
+  would break the convention twice.
+- **The body must not be**, because a Meta template's text is frozen at
+  approval. Hardcoding "HitPay" means a second gateway needs a whole new
+  template and review cycle — and until it gets one, a Billplz seller is told to
+  go check a HitPay account they don't have, on a message whose entire value is
+  *"go look here"*. A variable costs nothing now and removes that failure mode.
+
+This matches the seam the order schema already draws: `gatewayPaymentId`,
+`gatewayRequestId`, `by_gateway_request` — never `hitpay*`, with the
+provider-specific code quarantined in `convex/hitpay.ts`. The template belongs on
+the generic side of it.
+
+`receiveGatewayPayment` therefore takes `provider` as a **required** arg (an
+empty `{{4}}` would make Meta reject the send outright) and passes it to both
+notifications; `convex/hitpay.ts` and the webhook route supply
+`HITPAY_PROVIDER_LABEL` from `convex/lib/hitpay.ts`, the one author of that
+string. The **email says the same word**, from the same value — email and
+WhatsApp naming different accounts for one payment is the cross-channel bug the
+locale switch already exists to prevent.
 
 Register the button URL via Meta's **Add variable** control — never hand-type
 `{{1}}` (the 86eyheqzv redirect-loop root cause). The deep link rides the
@@ -93,7 +126,7 @@ see [`buyer-page-resilience.md`](./buyer-page-resilience.md).
 
 ### Language: EN + BM, driven by `retailers.locale`
 
-Both templates are submitted with **English and Bahasa Malaysia** variants and
+All three templates are submitted with **English and Bahasa Malaysia** variants and
 the send picks one from the store's locale — the same switch the retailer's
 **email** alerts have always used (`renderRetailerEmail(meta.locale, …)`), so a
 BM seller reads BM on both channels. An EN-only WhatsApp alert next to a BM

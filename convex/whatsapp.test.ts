@@ -1549,7 +1549,10 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		const shortId = await createPendingOrder(t, retailerId, productId);
 		const orderId = await orderIdOf(t, shortId);
 
-		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 
 		const wa = fetchMock.waCalls();
 		expect(wa).toHaveLength(1);
@@ -1568,12 +1571,42 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		expect(body.template.name).toBe(RECEIVED_TEMPLATE);
 		expect(body.template.name).not.toBe(CLAIM_TEMPLATE);
 		expect(body.template.language.code).toBe("ms");
-		// Params match the claim alert's three exactly, so the two stay
-		// interchangeable at the call site.
+		// {{1}}–{{3}} match the claim alert exactly; {{4}} is the gateway's name.
 		const params = body.template.components
 			.find((c) => c.type === "body")
 			?.parameters.map((p) => p.text);
-		expect(params).toEqual(["Ali", shortId, "MYR 120.00"]);
+		expect(params).toEqual(["Ali", shortId, "MYR 120.00", "HitPay"]);
+		fetchMock.restore();
+	});
+
+	test("{{4}} is the caller's provider, not a hardcoded 'HitPay'", async () => {
+		// The template is approved ONCE. If the body hardcoded HitPay, a second
+		// gateway would need a fresh Meta review — and until it got one, a Billplz
+		// seller would be told to check a HitPay account they don't have. Prove
+		// the value is threaded end-to-end by passing one that isn't HitPay.
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE = RECEIVED_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, {
+			orderId,
+			provider: "Billplz",
+		});
+
+		const body = fetchMock.waCalls()[0].body as {
+			template: {
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		const params = body.template.components
+			.find((c) => c.type === "body")
+			?.parameters.map((p) => p.text);
+		expect(params?.[3]).toBe("Billplz");
+		expect(JSON.stringify(body)).not.toContain("HitPay");
 		fetchMock.restore();
 	});
 
@@ -1592,7 +1625,10 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 			await ctx.db.patch(orderId, { status: "cancelled" });
 		});
 
-		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 		expect(fetchMock.waCalls()).toHaveLength(1);
 
 		// The claim alert, on the same order, stays silent.
@@ -1611,7 +1647,10 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		const orderId = await orderIdOf(t, shortId);
 
 		// Env unset.
-		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 		expect(fetchMock.waCalls()).toHaveLength(0);
 
 		// Toggle off.
@@ -1619,7 +1658,10 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailerId, { orderWaAlerts: false });
 		});
-		await t.action(internal.whatsapp.notifySellerPaymentReceived, { orderId });
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
 		expect(fetchMock.waCalls()).toHaveLength(0);
 
 		// Neither case force-schedules the email: `notifyPaymentReceived` shares

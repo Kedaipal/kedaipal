@@ -481,10 +481,17 @@ export const notifyPaymentClaimed = internalAction({
 export const notifyPaymentReceived = internalAction({
 	args: {
 		orderId: v.id("orders"),
+		/**
+		 * Gateway display name ("HitPay"), passed in by the provider-specific
+		 * caller. Same value the WhatsApp alert puts in `{{4}}`, so the two
+		 * channels can't name different accounts for the same payment — the
+		 * cross-channel consistency rule the locale switch already follows.
+		 */
+		provider: v.string(),
 		/** See notifyRetailerOrderAlert.force — the WA-alert failure fallback. */
 		force: v.optional(v.boolean()),
 	},
-	handler: async (ctx, { orderId, force }): Promise<void> => {
+	handler: async (ctx, { orderId, provider, force }): Promise<void> => {
 		let meta: {
 			shortId: string;
 			itemCount: number;
@@ -547,9 +554,10 @@ export const notifyPaymentReceived = internalAction({
 				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
-				// receiveGatewayPayment writes the HitPay payment id here — the number
-				// the seller looks the charge up by in their own dashboard.
+				// receiveGatewayPayment writes the gateway's payment id here — the
+				// number the seller looks the charge up by in their own dashboard.
 				paymentReference: meta.paymentReference,
+				gatewayProvider: provider,
 			},
 		);
 
