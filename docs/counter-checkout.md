@@ -172,13 +172,48 @@ price are agreed face-to-face — so the block is lifted:
   `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
   No image is required either.
 - **Price trust boundary.** `createOrderFromSession` takes a per-item
-  `unitPrice`, but trusts it **only for `isCustom` lines** (validated as a
-  positive integer in sen — the **same rule as any product price**, no upper cap,
-  since the vendor's business could be high-value: watches, renovations, B2B
-  services); every normal line always uses the authoritative `variant.price`, so a
-  tampered client can't reprice a fixed product. That custom-only trust — not any
-  ceiling — is the actual security control. The vendor-set price is autosaved on
-  the draft (`unitPrice`) so a resume restores it.
+  `unitPrice` (validated as a positive integer in sen — the **same rule as any
+  product price**, no upper cap, since the vendor's business could be high-value:
+  watches, renovations, B2B services). It is **required** on an `isCustom` line
+  (no catalog price exists) and **optional** on a standard line — see "Seller
+  price adjustment" below. Trusting it is safe because this mutation is
+  **owner-or-admin only** (`requireSessionAccess`): the caller is the
+  authenticated seller pricing their own order, never a buyer — that auth gate,
+  not any ceiling, is the actual security control. (The buyer storefront path is
+  a different mutation and always charges the authoritative `variant.price`.)
+  The vendor-set price is autosaved on the draft (`unitPrice`) so a resume
+  restores it.
+
+## Seller price adjustment on standard lines (2026-08-20)
+
+Asked for by **Wagyu Walid**: create an order with the customer's details and a
+**negotiated price after picking the product** — a counter discount/bump on a
+normal fixed-price item, without the workaround of adding a custom line to every
+product.
+
+- **UI** (`app.checkout.tsx`): tapping a cart line opens the **line-edit sheet**
+  (`CartLineEditDialog`, keyed per line) — the single home for that line's
+  quantity stepper + RM price input (pre-selected on focus so typing replaces
+  it), with the catalog price named beneath and a one-tap `Reset` when the
+  typed price differs; `Remove` and `Save` sit in the footer. The row keeps a
+  **pencil icon** as the visible affordance (discoverability — never a
+  long-press). Everything commits **atomically on Save** — the running total
+  never flickers through half-typed values (the earlier inline editor applied
+  per-keystroke, so typing "9.50" walked the total through RM 9 → 9.5 → 9.50,
+  and its tap-to-toggle price row closed on double-taps). Save also **flushes
+  the draft immediately** instead of waiting out the 700 ms autosave debounce,
+  with a visible error toast on failure — the passive autosave is deliberately
+  silent, and a `BuildOrderScreen` remount inside that window would otherwise
+  rehydrate the last-saved draft and silently revert the adjustment (observed
+  in dev). An adjusted line shows the catalog price struck through, and the
+  review modal (`ConfirmCheckoutDialog`) prints `· was RM x̶` so the last-look
+  step catches a fat-fingered override.
+- **Wire format:** the client sends `unitPrice` only when the line is custom or
+  adjusted; an absent `unitPrice` means "charge the catalog price". Adjustments
+  autosave on the draft like custom prices, so a resume restores them.
+- **Server:** same validation as a custom price (positive integer sen, no cap).
+  The order item snapshot stores the charged price — same as custom lines, no
+  extra column.
 
 See [`custom-option.md`](./custom-option.md) and
 [`proof-approval.md`](./proof-approval.md).
@@ -242,7 +277,7 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | Session table + indexes | `convex/schema.ts` |
 | `createCheckoutSession` / `getCheckoutSession` / `cancelCheckoutSession` | `convex/counterCheckout.ts` |
 | `bindCheckoutSession` (internal, called by webhook) | `convex/counterCheckout.ts` |
-| `createOrderFromSession` (server-priced, pay-in-person, completes session) | `convex/counterCheckout.ts` |
+| `createOrderFromSession` (catalog-priced with optional seller adjustment, pay-in-person, completes session) | `convex/counterCheckout.ts` |
 | Inbound routing → bind + buyer reply | `convex/whatsapp.ts` (`handleInbound`) |
 | Buyer order confirmation + tracking link | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |

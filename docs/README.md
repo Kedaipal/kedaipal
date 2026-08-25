@@ -2,13 +2,14 @@
 
 Central index for engineering docs. New here? Start with **[Onboarding](#start-here)** and follow the reading order.
 
-> Strategy and code conventions live at the repo root: [`PROJECT_CONTEXT.md`](../PROJECT_CONTEXT.md) (business strategy) and [`CLAUDE.md`](../CLAUDE.md) (conventions, MVP status, roadmap, architectural constraints).
+> Strategy and code conventions live at the repo root: [`PROJECT_CONTEXT.md`](../PROJECT_CONTEXT.md) (business strategy) and [`CLAUDE.md`](../CLAUDE.md) (conventions, MVP status, roadmap, architectural constraints). `CLAUDE.md` is **rules and pointers only** — the shipped-feature record lives in [`shipped-log.md`](./shipped-log.md), and feature detail in the per-feature docs below.
 
 ## Start here
 
 | Doc | What it covers |
 |---|---|
 | **[onboarding.md](./onboarding.md)** | KT path for a new CTO/engineer: strategy → architecture → local setup → codebase tour → domain reading order → conventions → first contribution. |
+| **[shipped-log.md](./shipped-log.md)** | Everything shipped since the April 2026 MVP, newest first — what shipped, why it was built that way, what was rejected, which trap was found. The project's decision history; read it to understand *why* the code looks like it does. |
 
 ## Domain logic
 
@@ -34,6 +35,7 @@ How the product actually works. Read in this order.
 | [messaging-channels.md](./messaging-channels.md) | ChannelAdapter seam — WhatsApp as one of N channels; how a 2nd channel lands. |
 | [whatsapp-webhook-security.md](./whatsapp-webhook-security.md) | Inbound webhook signature verification (HMAC-SHA256), fail-closed. |
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
+| [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
 
 ## Roadmaps (designed / in-progress)
@@ -49,5 +51,9 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 | [marketplace-integration.md](./marketplace-integration.md) | Shopee / TikTok Shop integration research + phased roadmap. |
 
 ## Conventions
+
+| Doc | What it covers |
+|---|---|
+| [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
 
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

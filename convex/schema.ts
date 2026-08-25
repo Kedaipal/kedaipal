@@ -493,6 +493,27 @@ export default defineSchema({
 		// checklist's activation states. See docs/activation-checklist.md.
 		activatedAt: v.optional(v.number()),
 		linkSharedAt: v.optional(v.number()),
+		// Highest release version whose "What's new" notes this seller has seen
+		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
+		// a boolean can only answer "dismissed once", so the next release would
+		// be suppressed by the previous release's flag.
+		//
+		// Stored per-ACCOUNT rather than per-device (localStorage) so a seller on
+		// a phone and a tablet isn't shown the same modal twice, and so we can
+		// see which sellers have actually been told about a feature — the point
+		// of shipping an announcement at all.
+		//
+		// UNSET means "caught up", never "has seen nothing": every existing
+		// seller on rollout day, and every new signup, is stamped to the running
+		// version on first read and shown nothing. Replaying a backlog at someone
+		// who has been using the product for months reads like the product is
+		// talking to somebody else. That one rule covers both cohorts with no
+		// signup-flow change and no backfill.
+		//
+		// Written only by `releases.markSeen`, which resolves the retailer from
+		// the CALLER's own identity — so admin act-as can never consume the
+		// seller's announcement (the markLinkShared posture).
+		lastSeenReleaseVersion: v.optional(v.string()),
 		// Founding Member denormalized flags (fast storefront reads). Set once when
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
