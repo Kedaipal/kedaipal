@@ -1,5 +1,10 @@
 import { ImageOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	DEFAULT_IMAGE_WIDTH,
+	imageSrcSet,
+	proxiedImageUrl,
+} from "#/lib/image-proxy";
 import { cn } from "#/lib/utils";
 import { Skeleton } from "./skeleton";
 
@@ -49,6 +54,21 @@ function retryDelayMs(attempt: number): number {
 export interface AppImageProps {
 	/** Image URL. `undefined`/`null`/empty string renders the fallback — no `<img>` mounts, no request fires. */
 	src?: string | null;
+	/**
+	 * CSS `sizes` describing how wide this image actually paints, e.g.
+	 * `"(min-width: 768px) 25vw, 45vw"`.
+	 *
+	 * Supplying it turns on a full `srcset` so the browser downloads a file
+	 * matched to the real box instead of the default width. Set it on anything
+	 * that paints large or varies by breakpoint (covers, product galleries,
+	 * grid tiles); leave it off and the image is still proxied, just at one
+	 * fixed width.
+	 *
+	 * A `srcset` WITHOUT `sizes` is deliberately impossible here: the browser
+	 * would assume 100vw and pull the largest candidate, which on a grid of
+	 * 180 px tiles is worse than not proxying at all.
+	 */
+	sizes?: string;
 	/**
 	 * Accessible name. Also shown (truncated) as the error/empty-state caption.
 	 * Pass `""` for purely decorative images — the fallback then renders
@@ -116,17 +136,30 @@ export function AppImage({
 	rounded,
 	objectFit = "cover",
 	fill = true,
+	sizes,
 }: AppImageProps) {
 	const hasSrc = typeof src === "string" && src.length > 0;
 	const isLocalPreview = hasSrc && isLocalPreviewUrl(src);
+
+	// Convex storage URLs are rewritten onto our own `/img/` route so Cloudflare
+	// resizes and re-encodes them and the result is cached at the edge
+	// (86eypxght). Anything else — upload previews, bundled assets — passes
+	// through untouched. Doing this HERE, rather than at the ~45 server-side
+	// `storage.getUrl()` call sites, is what fixes the entire existing catalog
+	// with no backfill and no seller re-upload.
+	// `src` doubles as the srcset fallback, so the default width serves both the
+	// no-`sizes` case and browsers that ignore srcset.
+	const displaySrc = hasSrc ? proxiedImageUrl(src, DEFAULT_IMAGE_WIDTH) : src;
+	const srcSet = hasSrc && sizes ? imageSrcSet(src) : null;
 	const initialStatus: ImageStatus = isLocalPreview ? "loaded" : "loading";
 
 	const [status, setStatus] = useState<ImageStatus>(initialStatus);
 	// Bumped on each retry and folded into the <img> `key`, which remounts the
 	// element and issues a genuinely fresh request. Same URL on purpose: a
-	// failed load leaves no cache entry to bust, and a cache-busting query
-	// param would both re-download the full bytes and poison the 30-day cache
-	// with a duplicate entry for an image that is often several MB.
+	// failed load leaves no cache entry to bust, and a cache-busting param would
+	// miss the edge cache every time AND mint a brand-new unique transformation
+	// per retry — Cloudflare bills those (see lib/image-route.ts), so a retry
+	// storm would be a bill as well as a re-download.
 	const [reloadKey, setReloadKey] = useState(0);
 	const retriesUsedRef = useRef(0);
 	const retryTimerRef = useRef<number | null>(null);
@@ -225,7 +258,9 @@ export function AppImage({
 			<img
 				key={`${src}#${reloadKey}`}
 				ref={setImgRef}
-				src={src}
+				src={displaySrc ?? undefined}
+				srcSet={srcSet ?? undefined}
+				sizes={srcSet ? sizes : undefined}
 				alt={alt}
 				aria-hidden={alt === "" || undefined}
 				draggable={false}

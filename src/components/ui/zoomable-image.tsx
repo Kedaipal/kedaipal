@@ -119,11 +119,14 @@ export function ZoomableImage({
 	className,
 	wrapperClassName,
 	caption,
+	sizes,
 }: {
 	src: string;
 	alt: string;
 	/** Classes for the `<img>` thumbnail (same as you'd put on a plain img). */
 	className?: string;
+	/** `sizes` hint for the thumbnail — see AppImage. The lightbox ignores it. */
+	sizes?: string;
 	/** Classes for the wrapping button — use for layout (flex item, snap, etc.). */
 	wrapperClassName?: string;
 	/** Optional caption shown in the lightbox. */
@@ -143,8 +146,18 @@ export function ZoomableImage({
 				    plain img" contract) — reuse those classes verbatim on both the
 				    AppImage wrapper and the <img> itself rather than forcing the
 				    box-fill behavior AppImage defaults to. */}
-				<AppImage src={src} alt={alt} aspect={className} fill={false} />
+				<AppImage
+					src={src}
+					alt={alt}
+					aspect={className}
+					fill={false}
+					sizes={sizes}
+				/>
 			</button>
+			{/* The lightbox deliberately keeps the ORIGINAL, unproxied URL: it
+			    zooms to 3x, which is exactly the case a resized derivative would
+			    render soft. Those full-size bytes are only ever fetched when a
+			    buyer explicitly opens the zoom view. */}
 			<ImageLightbox
 				src={src}
 				alt={alt}
