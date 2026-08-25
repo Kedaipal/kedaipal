@@ -10,6 +10,8 @@
 // Money is stored in MINOR units (sen) everywhere — see src/lib/format.ts — so
 // every amount here is sen and `formatMoney` divides by 100.
 
+import { printable } from "./latin1";
+
 // Malaysia is UTC+8 with no DST, so a fixed offset renders the correct calendar
 // day without depending on the runtime's timezone database.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -41,17 +43,19 @@ export function formatPeriodLabel(epochMs: number): string {
 }
 
 /**
- * Minor units (sen) -> "RM 1,234.50". Falls back to a `<CODE> <amount>` prefix
- * for any non-MYR currency. Kept ASCII (no Unicode currency glyphs) so it encodes
- * cleanly in pdf-lib's standard WinAnsi fonts.
+ * Minor units (sen) -> "RM 1,234.50" / "S$ 59.00". Falls back to a
+ * `<CODE> <amount>` prefix for any unmapped currency. Kept ASCII (no Unicode
+ * currency glyphs) so it encodes cleanly in pdf-lib's standard WinAnsi fonts.
  */
+const CURRENCY_PREFIX: Record<string, string> = { MYR: "RM", SGD: "S$" };
+
 export function formatMoney(minorUnits: number, currency: string): string {
 	const negative = minorUnits < 0;
 	const major = Math.abs(minorUnits) / 100;
 	const fixed = major.toFixed(2);
 	const [intPart, frac] = fixed.split(".");
 	const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-	const prefix = currency === "MYR" ? "RM" : currency;
+	const prefix = CURRENCY_PREFIX[currency] ?? currency;
 	return `${negative ? "-" : ""}${prefix} ${grouped}.${frac}`;
 }
 
@@ -210,11 +214,14 @@ export function orderToReceiptData(args: {
 		paidDate: status === "received" ? order.paymentReceivedAt : undefined,
 		paid: status === "received",
 		paymentStatusLabel: PAYMENT_STATUS_LABEL[status] ?? "Awaiting payment",
-		customerName: order.customer.name?.trim() || undefined,
-		customerPhone: order.customer.waPhone?.trim() || undefined,
+		// Clamped BEFORE the emptiness test, not after: a name the page can't draw
+		// is non-empty here and blank on paper, so testing the raw string leaves a
+		// labelled field with nothing in it. Same rule as the despatch label.
+		customerName: printable(order.customer.name),
+		customerPhone: printable(order.customer.waPhone),
 		items: order.items.map((it) => ({
-			name: it.name,
-			variantLabel: it.variantLabel?.trim() || undefined,
+			name: printable(it.name) ?? "Item",
+			variantLabel: printable(it.variantLabel),
 			quantity: it.quantity,
 			unitPrice: it.price,
 		})),
@@ -234,7 +241,7 @@ export function orderToReceiptData(args: {
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,
-		customerNote: order.customerNote?.trim() || undefined,
+		customerNote: printable(order.customerNote),
 		paymentBlocks: paymentMethodsToBlocks(paymentMethods),
 	};
 }
@@ -326,6 +333,10 @@ export function invoiceToSubscriptionData(args: {
 		foundingDiscount: invoice.foundingDiscount,
 		total: invoice.total,
 		currency: invoice.currency,
-		issuerBank: billingConfigToBlocks(billingConfig),
+		// The billingConfig rails (MY bank + DuitNow) can only settle MYR — a
+		// non-MYR (cross-border) invoice prints no payment card, and the footer
+		// swaps to a "we'll confirm payment details on WhatsApp" note instead.
+		issuerBank:
+			invoice.currency === "MYR" ? billingConfigToBlocks(billingConfig) : [],
 	};
 }

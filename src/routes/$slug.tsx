@@ -3,6 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
+import {
+	type OpeningHours,
+	openingHoursSpecification,
+} from "../../convex/lib/openingHours";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
@@ -32,6 +36,9 @@ interface StorefrontLoaderData {
 	// cover image `StorefrontHeader` renders with `priority` — not whichever
 	// URL happens to win the OG-image precedence.
 	coverImageUrl: string | undefined;
+	// Store opening hours (86eyp5rav) — feeds the Store JSON-LD's
+	// openingHoursSpecification (local SEO). Undefined = open 24/7, no block.
+	openingHours: OpeningHours | undefined;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -94,6 +101,7 @@ export const Route = createFileRoute("/$slug")({
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
 			ogImageUrl,
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
+			openingHours: retailer.openingHours,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -106,6 +114,7 @@ export const Route = createFileRoute("/$slug")({
 			coverImageUrl,
 			checkoutPhone,
 			locale,
+			openingHours,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
 		const ogLocale = OG_LOCALE[locale];
@@ -144,6 +153,14 @@ export const Route = createFileRoute("/$slug")({
 			description,
 			...(ogImageUrl ? { image: ogImageUrl } : {}),
 			...(checkoutPhone ? { telephone: `+${checkoutPhone}` } : {}),
+			// Configured hours only — the 24/7 default claims nothing rather
+			// than asserting "always open" (86eyp5rav).
+			...(openingHours
+				? {
+						openingHoursSpecification:
+							openingHoursSpecification(openingHours),
+					}
+				: {}),
 		};
 
 		return {
