@@ -50,4 +50,8 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 
 ## Conventions
 
+| Doc | What it covers |
+|---|---|
+| [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
+
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

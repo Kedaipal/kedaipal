@@ -19,6 +19,7 @@ import { Dialog as MorePrimitive } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
+import { WhatsNewNavItem } from "./whats-new";
 
 export interface BottomNavProps {
 	// Orders the seller hasn't looked at yet (the inbox's "New" bucket). A badge
@@ -310,9 +311,14 @@ function MoreTab({
 						sub="Store, selling & billing"
 						onNavigate={close}
 					/>
-					{/* Support affordance, not navigation — so it sits below a rule
-					    rather than reading as a fifth destination (86eyqgxna). */}
-					<AppVersionRow className="mt-1 border-t border-border pt-1" />
+					{/* Support + info affordances, not navigation — so they sit below a
+					    rule rather than reading as further destinations. "What's new"
+					    is above the version because it's the one a seller might act on
+					    (86eyqgxna, 86eyqgxv9). */}
+					<div className="mt-1 flex flex-col gap-1 border-t border-border pt-1">
+						<WhatsNewNavItem variant="row" />
+						<AppVersionRow />
+					</div>
 				</MorePrimitive.Content>
 			</MorePrimitive.Portal>
 		</MorePrimitive.Root>

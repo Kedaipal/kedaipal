@@ -17,30 +17,24 @@
  * interrupt sellers with a "What's new" modal. Automating the bump would remove
  * the only natural checkpoint for that judgement. CI then tags `main` from the
  * same value, so a version always maps to a commit.
+ *
+ * Parsing and ordering live in `convex/lib/appVersion.ts` and are re-exported
+ * here, so the client and the Convex backend share ONE author (86eyqgxv9) — the
+ * server stores the seen-version and the client decides what is unseen, and a
+ * drift between two copies would make them disagree.
  */
+
+export {
+	CALENDAR_VERSION_RE,
+	compareCalendarVersions,
+	isCalendarVersion,
+} from "../../convex/lib/appVersion";
 
 /**
  * Injected by Vite's `define` at build time (see `vite.config.ts`), so runtime
  * code never imports `package.json` and drags it into the client bundle.
  */
 declare const __APP_VERSION__: string | undefined;
-
-/**
- * `YYYY.MM.N` — 4-digit year, zero-padded month `01`–`12`, then a release
- * ordinal of `1` or more with no leading zero.
- *
- * The month is range-checked rather than `\d\d` so a typo like `2026.13.1` or
- * `2026.00.1` fails the gate instead of shipping. The ordinal rejects `0` and
- * leading zeros so one release has exactly one spelling — `2026.08.01` and
- * `2026.08.1` must never both be valid, or the "have I seen this version?"
- * comparison the release-notes modal depends on has two answers for one build.
- */
-export const CALENDAR_VERSION_RE = /^\d{4}\.(0[1-9]|1[0-2])\.[1-9]\d*$/;
-
-/** True when `value` is a well-formed `YYYY.MM.N` calendar version. */
-export function isCalendarVersion(value: string): boolean {
-	return CALENDAR_VERSION_RE.test(value);
-}
 
 /**
  * The version this bundle was built from, or `"dev"` when the define is absent.

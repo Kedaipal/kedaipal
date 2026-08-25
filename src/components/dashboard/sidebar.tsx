@@ -19,6 +19,7 @@ import {
 import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { AppVersionRow } from "./app-version-row";
+import { WhatsNewNavItem } from "./whats-new";
 import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
@@ -274,6 +275,7 @@ export function Sidebar({
 				    version string plus a copy button cannot degrade into it
 				    legibly. Expanding is one tap, and nobody reads a version off a
 				    collapsed sidebar. */}
+				{!collapsed ? <WhatsNewNavItem variant="link" /> : null}
 				{!collapsed ? <AppVersionRow className="px-2 pb-0.5" /> : null}
 			</div>
 		</aside>
