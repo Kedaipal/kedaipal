@@ -674,6 +674,8 @@ export const createOrderFromSession = mutation({
 			variantLabel?: string;
 			price: number;
 			quantity: number;
+			/** Whether this line reserved stock at create — frozen (86eypn8ye). */
+			stockReserved: boolean;
 		}[] = [];
 		const requestedByVariant = new Map<
 			Id<"productVariants">,
@@ -730,6 +732,11 @@ export const createOrderFromSession = mutation({
 				onHand: variant.onHand,
 			});
 			snapshotItems.push({
+				// Frozen so cancel-restore can't go asymmetric if the flag is
+				// flipped later (86eypn8ye). Counter orders build their own
+				// snapshot, so this MUST be stamped here too — otherwise every
+				// new counter order silently takes the legacy re-resolve path.
+				stockReserved: block,
 				productId: variant.productId,
 				variantId: item.variantId,
 				name: product.name,

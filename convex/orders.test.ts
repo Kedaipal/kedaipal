@@ -435,6 +435,243 @@ describe("orders", () => {
 		expect(events[0].status).toBe("pending");
 	});
 
+	// ---- blockWhenOutOfStock freeze (86eypn8ye) ---------------------------
+	//
+	// Restore used to re-resolve the flag from the CURRENT docs, so flipping it
+	// between create and cancel broke the reversal in both directions. The flag
+	// is a property of the ORDER's moment, so it is frozen onto the line.
+
+	test("flag turned OFF after ordering still returns the reserved units", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 10,
+			blockWhenOutOfStock: true,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(await getProductStock(t, productId)).toBe(7);
+
+		// Seller switches the product to made-to-order after the sale.
+		await asA.mutation(api.products.update, {
+			productId,
+			blockWhenOutOfStock: false,
+		});
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Units WERE reserved, so they must come back — previously they were
+		// stranded because today's flag said "never reserved".
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	test("flag turned ON after ordering does not invent units", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 10,
+			blockWhenOutOfStock: false,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Made-to-order: nothing was reserved.
+		expect(await getProductStock(t, productId)).toBe(10);
+
+		await asA.mutation(api.products.update, {
+			productId,
+			blockWhenOutOfStock: true,
+		});
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Must NOT climb to 13 — those units were never taken.
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	// ---- Cancelled is terminal (86eypn8ye) -------------------------------
+	//
+	// Cancelling RESTORES reserved stock and nothing re-decrements on the way
+	// back out, so a revived order leaves its units counted as available while
+	// the goods are committed — and cancelling it AGAIN restores a second time.
+	// `onHand` has no ceiling, so the cycle inflates without limit until a later
+	// checkout passes its gate against a lie and the store oversells for real.
+	// Before this, no test asserted cancelled was terminal on any path.
+
+	test("updateStatus refuses to reopen a cancelled order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+		expect(await getProductStock(t, productId)).toBe(7);
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		expect(await getProductStock(t, productId)).toBe(10);
+
+		await expect(
+			asA.mutation(api.orders.updateStatus, {
+				orderId: order!._id,
+				status: "confirmed",
+			}),
+		).rejects.toThrow();
+		// Still cancelled, and stock is untouched by the refused call.
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(after?.status).toBe("cancelled");
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	test("re-cancelling a cancelled order stays a no-op for stock", async () => {
+		// The idempotence `applyStatusTransition` already had — pinned here
+		// because it is the other half of the invariant: restore fires on the
+		// FIRST transition into cancelled and never again.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	test("bulkUpdateStatus skips cancelled orders and names the reason", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const a = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const b = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const orderA = await t.query(api.orders.get, { token: await tk(t, a.shortId) });
+		const orderB = await t.query(api.orders.get, { token: await tk(t, b.shortId) });
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: orderA!._id,
+			status: "cancelled",
+		});
+		const stockAfterCancel = await getProductStock(t, productId);
+
+		// The inbox's Cancelled bucket is selectable and the bulk bar offers every
+		// forward status without filtering on the current one — this exact
+		// selection was two taps away.
+		const res = await asA.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [orderA!._id, orderB!._id],
+			status: "confirmed",
+		});
+		expect(res.updated).toBe(1);
+		expect(res.skipped).toBe(1);
+		expect(res.skippedCancelled).toBe(1);
+
+		const stillCancelled = await t.query(api.orders.get, {
+			token: await tk(t, a.shortId),
+		});
+		expect(stillCancelled?.status).toBe("cancelled");
+		expect(await getProductStock(t, productId)).toBe(stockAfterCancel);
+	});
+
+	test("the un-cancel loop can no longer inflate stock", async () => {
+		// The whole point of the ticket, end to end: cancel → revive → cancel
+		// used to restore a second time, and repeat without limit. Stock must
+		// never exceed what the product started with.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+
+		for (let i = 0; i < 3; i++) {
+			// Both revive paths, refused: one throws, one skips.
+			await expect(
+				asA.mutation(api.orders.updateStatus, {
+					orderId: order!._id,
+					status: "confirmed",
+				}),
+			).rejects.toThrow();
+			const res = await asA.mutation(api.orders.bulkUpdateStatus, {
+				orderIds: [order!._id],
+				status: "confirmed",
+			});
+			expect(res.skippedCancelled).toBe(1);
+			await asA.mutation(api.orders.updateStatus, {
+				orderId: order!._id,
+				status: "cancelled",
+			});
+			expect(await getProductStock(t, productId)).toBe(10);
+		}
+	});
+
 	test("updateStatus patches status and appends event", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -5829,6 +6066,7 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			skipped: 1,
 			skippedAwaitingCollection: 0,
 			skippedRiderManaged: 1,
+			skippedCancelled: 0,
 		});
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(

@@ -828,6 +828,23 @@ export default defineSchema({
 				variantLabel: v.optional(v.string()),
 				price: v.number(),
 				quantity: v.number(),
+				// Whether this line actually RESERVED stock at create — the resolved
+				// `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock`,
+				// frozen the way `price` and `variantLabel` already are (86eypn8ye).
+				//
+				// Restore used to re-resolve this from the CURRENT docs, so flipping
+				// the flag between create and cancel made the reversal asymmetric:
+				// ordered-while-tracked then flag off → units never come back;
+				// ordered-while-untracked then flag on → phantom units appear out of
+				// nothing. The flag is a property of the ORDER's moment, not of the
+				// product today.
+				//
+				// Optional for orders created before this field existed. Those fall
+				// back to re-resolving, which is the old behaviour — deliberately NOT
+				// backfilled, because backfilling from today's flag would bake in
+				// exactly the wrong answer for any product whose flag has since
+				// changed, and we cannot know what was true then.
+				stockReserved: v.optional(v.boolean()),
 			}),
 		),
 		subtotal: v.number(),
