@@ -52,6 +52,7 @@ import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
+import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
 import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
@@ -661,9 +662,11 @@ function SettingsRoute() {
 								waPhone={retailer.waPhone}
 								notifyWaPhone={retailer.notifyWaPhone}
 								onSave={(patch) => updateSettings(patch)}
-								onGoToFulfilment={() => setActiveTab("fulfilment")}
-								onGoToWhatsapp={() => setActiveTab("whatsapp")}
 							/>
+							{/* Directly under the picker, so "what did that just do?"
+							    is answered where the question was asked. Renders
+							    nothing for a store that has never switched. */}
+							<CountrySetupPanel onGoToTab={(tab) => setActiveTab(tab)} />
 						</Card>
 						<Card>
 							<CurrencyForm
@@ -2227,21 +2230,6 @@ function LocaleForm({
 	);
 }
 
-/**
- * A country switch clears pickup-point manager contacts that aren't numbers of
- * the new country (see `retailers.updateSettings`). It happens server-side and
- * silently, so the toast has to say it — a seller who isn't told will find the
- * blank field weeks later and read it as data loss.
- */
-function withPickupNote(
-	base: string,
-	result: { pickupContactsCleared?: number } | null | undefined,
-): string {
-	const cleared = result?.pickupContactsCleared ?? 0;
-	if (cleared === 0) return `${base}.`;
-	return `${base} — the manager contact on ${cleared} pickup point${cleared === 1 ? " was" : "s were"} cleared (add the new number in Fulfilment).`;
-}
-
 function CountryForm({
 	current,
 	currency,
@@ -2250,43 +2238,31 @@ function CountryForm({
 	waPhone,
 	notifyWaPhone,
 	onSave,
-	onGoToFulfilment,
-	onGoToWhatsapp,
 }: {
 	current: Country;
 	currency: string;
-	/** The store's delivery-charge config — some modes are Malaysia-only, and a
-	 * country switch that collides with one is refused server-side. Read here so
-	 * the collision is explained BEFORE the save, with a way out. */
+	/** Read only to warn BEFORE the save about what will need updating after
+	 * it. None of these block the switch any more, and none are cleared by it
+	 * (86eyqgujv) — the checklist below the card tracks them until fixed. */
 	deliveryConfig?: DeliveryConfig;
-	/** Rider booking, read for the same reason — and separately from the config
-	 * above, because pricing and booking are independent (`pricing ⊥ booking`):
-	 * a flat-fee store can still have Book-a-rider armed. */
+	/** Separate from the config above, because pricing and booking are
+	 * independent (`pricing ⊥ booking`): a flat-fee store can still have
+	 * Book-a-rider armed. */
 	deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
-	/** The store's own WhatsApp numbers. An SG store carries SG numbers and an
-	 * MY store MY ones (the plate on every phone field is a promise), so the
-	 * server refuses a switch that would carry a wrong-country number across.
-	 * Read here for the same reason as deliveryConfig — explain before, not
-	 * after. */
 	waPhone?: string;
 	notifyWaPhone?: string;
-	onSave: (patch: {
-		country: Country;
-		deliveryConfig?: null;
-		deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
-		waPhone?: string;
-		notifyWaPhone?: string;
-	}) => Promise<{ pickupContactsCleared?: number } | null | undefined>;
-	onGoToFulfilment: () => void;
-	onGoToWhatsapp: () => void;
+	onSave: (patch: { country: Country }) => Promise<unknown>;
 }) {
-	const [clearing, setClearing] = useState(false);
 	const form = useAppForm({
 		defaultValues: { country: current as string },
 		onSubmit: async ({ value }) => {
 			try {
-				const result = await onSave({ country: value.country as Country });
-				toast.success(withPickupNote("Country saved", result));
+				await onSave({ country: value.country as Country });
+				toast.success(
+					value.country === current
+						? "Country saved."
+						: `Country saved — check the list below for anything that still needs updating.`,
+				);
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
 			}
@@ -2301,56 +2277,6 @@ function CountryForm({
 	// pattern module the validators run — client and server can't disagree.
 	function staleNumber(country: Country, value: string | undefined) {
 		return value && !STORED_MOBILE_PATTERN[country].test(value) ? value : null;
-	}
-
-	// Switch the country AND apply every needed fix in ONE mutation — clearing
-	// the incompatible pricing and/or the wrong-country numbers alongside the
-	// switch, so the seller never lands in the half-applied state a two-step
-	// would create (the server refuses the bare switch while either clash
-	// stands).
-	async function switchAndFix(country: Country) {
-		const dropDelivery =
-			deliveryConfig && !deliveryModeAllowed(country, deliveryConfig.mode);
-		// Turn booking OFF rather than clearing it: sending `null` would wipe the
-		// seller's stored Lalamove API keys, and switching country is not a reason
-		// to make them re-enter credentials they'll want again if they switch back.
-		const dropBooking =
-			deliveryBooking?.enabled === true && !riderBookingAllowed(country);
-		const dropWaPhone = staleNumber(country, waPhone) !== null;
-		const dropNotify = staleNumber(country, notifyWaPhone) !== null;
-		setClearing(true);
-		try {
-			const result = await onSave({
-				country,
-				...(dropDelivery ? { deliveryConfig: null } : {}),
-				...(dropBooking && deliveryBooking
-					? {
-							deliveryBooking: {
-								enabled: false,
-								vehicleType: deliveryBooking.vehicleType,
-							},
-						}
-					: {}),
-				...(dropWaPhone ? { waPhone: "" } : {}),
-				...(dropNotify ? { notifyWaPhone: "" } : {}),
-			});
-			const fixes = [
-				...(dropDelivery ? ["delivery is now free"] : []),
-				...(dropBooking ? ["Lalamove rider booking is off (keys kept)"] : []),
-				...(dropWaPhone || dropNotify
-					? [
-							`the old WhatsApp number${dropWaPhone && dropNotify ? "s were" : " was"} removed — add the ${COUNTRY_LABELS[country]} one in the WhatsApp tab`,
-						]
-					: []),
-			];
-			toast.success(
-				withPickupNote(`Country saved — ${fixes.join("; ")}`, result),
-			);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setClearing(false);
-		}
 	}
 
 	return (
@@ -2377,28 +2303,29 @@ function CountryForm({
 					const picked = values.country as Country;
 					const expectedCurrency = COUNTRY_CURRENCY[picked];
 					const dirty = values.country !== current;
-					// The stored state this switch would collide with. The server
-					// refuses each pair; surfacing them here turns a red toast after
-					// the fact into a choice made before it.
-					const blockedMode =
-						deliveryConfig && !deliveryModeAllowed(picked, deliveryConfig.mode)
-							? deliveryConfig.mode
-							: null;
-					const blockedBooking =
-						deliveryBooking?.enabled === true && !riderBookingAllowed(picked);
-					const staleNumbers = [
+					// What the switch will LEAVE BEHIND. Nothing here blocks the
+					// save and nothing is deleted by it — this is the heads-up that
+					// turns "why is my delivery not quoting?" a week later into a
+					// decision made now, with the same list waiting underneath the
+					// card afterwards.
+					const carried = [
+						...(deliveryConfig &&
+						!deliveryModeAllowed(picked, deliveryConfig.mode)
+							? [
+									`your ${DELIVERY_MODE_LABELS[deliveryConfig.mode]} delivery pricing stops quoting (it's kept, and works again if you switch back)`,
+								]
+							: []),
+						...(deliveryBooking?.enabled === true &&
+						!riderBookingAllowed(picked)
+							? ["Lalamove booking goes quiet (your API keys are kept)"]
+							: []),
 						...(staleNumber(picked, waPhone)
-							? [`WhatsApp contact number (+${waPhone})`]
+							? ["your store's WhatsApp number stays a foreign number"]
 							: []),
 						...(staleNumber(picked, notifyWaPhone)
-							? [`order-alerts number (+${notifyWaPhone})`]
+							? ["your order-alerts number stays a foreign number"]
 							: []),
 					];
-					const clashes =
-						(blockedMode ? 1 : 0) +
-						(blockedBooking ? 1 : 0) +
-						staleNumbers.length;
-					const busy = isSubmitting || clearing;
 					return (
 						<>
 							{expectedCurrency !== currency ? (
@@ -2408,104 +2335,34 @@ function CountryForm({
 									the Currency card below if that's not intentional.
 								</p>
 							) : null}
-							{!dirty && staleNumbers.length > 0 ? (
-								// Not a switch — the STORED country already disagrees with a
-								// stored number (rows from before the switch guard existed).
-								// Surface the contradiction with the repair path instead of
-								// letting it hide until the next save of that field.
-								<div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-3 dark:border-amber-800">
-									<p className="text-sm text-amber-800 dark:text-amber-300">
-										Your {staleNumbers.join(" and ")}{" "}
-										{staleNumbers.length === 1 ? "isn't" : "aren't"} from{" "}
-										{COUNTRY_LABELS[current]} — buyers see{" "}
-										{staleNumbers.length === 1 ? "it" : "them"} as the store's
-										contact. Update {staleNumbers.length === 1 ? "it" : "them"}{" "}
-										in the WhatsApp tab.
+							{dirty ? (
+								<div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-3 text-sm">
+									<p className="font-medium">
+										Switching to {COUNTRY_LABELS[picked]} keeps everything you
+										have set up.
 									</p>
-									<Button
-										type="button"
-										variant="outline"
-										onClick={onGoToWhatsapp}
-										className="h-11 sm:w-auto sm:self-start sm:px-5"
-									>
-										Update the number
-									</Button>
-								</div>
-							) : null}
-							{dirty && clashes > 0 ? (
-								<div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-3 dark:border-amber-800">
-									<div className="flex flex-col gap-2 text-sm text-amber-800 dark:text-amber-300">
-										<p>
-											Switching to {COUNTRY_LABELS[picked]} needs{" "}
-											{clashes === 1 ? "one change" : "a couple of changes"}{" "}
-											first:
-										</p>
-										<ul className="list-disc space-y-1 pl-5">
-											{blockedMode ? (
-												<li>
-													Your delivery charge is{" "}
-													<span className="font-medium">
-														{DELIVERY_MODE_LABELS[blockedMode]}
-													</span>{" "}
-													pricing, which only works in Malaysia for now — it
-													becomes free (set a flat fee after, in Fulfilment).
-												</li>
-											) : null}
-											{blockedBooking ? (
-												<li>
-													<span className="font-medium">
-														Lalamove rider booking
-													</span>{" "}
-													is on, and rider dispatch only works in Malaysia for
-													now — it's switched off (your API keys are kept).
-												</li>
-											) : null}
-											{staleNumbers.map((label) => (
-												<li key={label}>
-													Your {label} isn't a {COUNTRY_LABELS[picked]} number —
-													it's removed; add the new one in the WhatsApp tab.
-												</li>
-											))}
-										</ul>
-									</div>
-									<div className="flex flex-col gap-2 sm:flex-row">
-										<Button
-											type="button"
-											onClick={() => switchAndFix(picked)}
-											disabled={busy}
-											className="h-11 sm:w-auto sm:px-5"
-										>
-											{clearing
-												? "Saving…"
-												: `Switch to ${COUNTRY_LABELS[picked]} & apply changes`}
-										</Button>
-										{blockedMode ? (
-											<Button
-												type="button"
-												variant="outline"
-												onClick={onGoToFulfilment}
-												disabled={busy}
-												className="h-11 sm:w-auto sm:px-5"
-											>
-												Set a flat fee first
-											</Button>
-										) : (
-											<Button
-												type="button"
-												variant="outline"
-												onClick={onGoToWhatsapp}
-												disabled={busy}
-												className="h-11 sm:w-auto sm:px-5"
-											>
-												Change the number first
-											</Button>
-										)}
-									</div>
+									{carried.length > 0 ? (
+										<>
+											<p className="text-muted-foreground">
+												Some of it only works in {COUNTRY_LABELS[current]}, so
+												after the switch:
+											</p>
+											<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+												{carried.map((line) => (
+													<li key={line}>{line}</li>
+												))}
+											</ul>
+										</>
+									) : null}
+									<p className="text-muted-foreground">
+										You'll get a checklist here of everything to update — bank
+										details and addresses first.
+									</p>
 								</div>
 							) : null}
 							<Button
 								type="submit"
-								disabled={!dirty || !canSubmit || busy || clashes > 0}
+								disabled={!dirty || !canSubmit || isSubmitting}
 								className={SAVE_BTN_CLASS}
 							>
 								{isSubmitting ? "Saving…" : "Save country"}

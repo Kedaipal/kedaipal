@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
@@ -37,6 +37,7 @@ import {
 } from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
+import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
@@ -136,6 +137,7 @@ function DashboardSkeleton() {
 
 function DashboardHome() {
 	const retailer = useDashboardRetailer();
+	const navigate = useNavigate();
 	const products = useQuery(
 		convexQuery(
 			api.products.listAll,
@@ -462,6 +464,14 @@ function DashboardHome() {
 				</Link>
 			</div>
 			<WhiteGloveCard slug={retailer.slug} />
+			{/* Above everything the seller does daily, because a wrong bank
+			    account or pickup address costs real money and they may have
+			    switched country and closed the tab. Renders nothing for a store
+			    that has never switched (86eyqgujv). */}
+			<CountrySetupPanel
+				variant="banner"
+				onGoToTab={(tab) => navigate({ to: "/app/settings", search: { tab } })}
+			/>
 			{/* Welcome banner — only for brand-new users */}
 			{isNew ? (
 				<section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent/20 via-accent/10 to-background p-6 lg:max-w-2xl">

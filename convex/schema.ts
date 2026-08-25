@@ -55,6 +55,25 @@ export default defineSchema({
 		// = MY (every pre-existing store, zero migration). Closed set in
 		// convex/lib/country.ts.
 		country: v.optional(countryValidator),
+		// The last country SWITCH (SG-lite, 86eyqgujv). Unset = this store has
+		// never moved country, which is every store born in its own market — the
+		// post-switch checklist skips them entirely, so it costs nothing to read.
+		//
+		// Switching is a different path from being created in a country: it
+		// leaves Malaysian addresses, bank details and rate cards behind on
+		// surfaces a buyer and a courier can see. Nothing is refused and nothing
+		// is deleted (refusing deadlocks — Places predictions are locked to the
+		// store's CURRENT country, so "fix your address first" is impossible);
+		// instead every carried value is inert where it matters and
+		// convex/lib/countrySetup.ts names what is left to fix.
+		countryChangedAt: v.optional(v.number()),
+		countryChangedFrom: v.optional(countryValidator),
+		// Checklist rows the seller has confirmed by hand. ONLY unverifiable
+		// items can be acknowledged — a bank account's country is free text we
+		// cannot judge, so the seller confirms it. A stamped wrong-country
+		// address is a fact and is never retired by a tick. Cleared on every
+		// switch (a new move re-opens every question).
+		countrySetupAcked: v.optional(v.array(v.string())),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
