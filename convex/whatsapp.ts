@@ -27,6 +27,7 @@ import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
+import { redactPhone } from "./lib/logRedaction";
 import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
 import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
@@ -418,10 +419,12 @@ export const handleInbound = internalAction({
 		profileName: v.optional(v.string()),
 	},
 	handler: async (ctx, { fromPhone, text, profileName }): Promise<void> => {
+		// Redacted: platform logs must never carry the buyer's phone or message
+		// body (see convex/lib/logRedaction.ts). Length + intent logs below give
+		// the same end-to-end observability the old preview did.
 		console.log("WA inbound received", {
-			fromPhone,
+			fromPhone: redactPhone(fromPhone),
 			textLength: text.length,
-			textPreview: text.slice(0, 120),
 		});
 
 		const fallback = (): string =>
@@ -486,7 +489,10 @@ export const handleInbound = internalAction({
 				internal.counterCheckout.startSessionFromStoreQr,
 				{ token: intent.token, waPhone: fromPhone, profileName },
 			);
-			console.log("WA store-qr scan", { fromPhone, result: start.result });
+			console.log("WA store-qr scan", {
+				fromPhone: redactPhone(fromPhone),
+				result: start.result,
+			});
 			if (start.result === "not_found") {
 				// Unknown/rotated poster token — generic hint, no store leaked.
 				try {
@@ -519,7 +525,9 @@ export const handleInbound = internalAction({
 		}
 
 		if (intent.kind === "unknown") {
-			console.log("WA inbound unknown intent → fallback", { fromPhone });
+			console.log("WA inbound unknown intent → fallback", {
+				fromPhone: redactPhone(fromPhone),
+			});
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
@@ -529,15 +537,25 @@ export const handleInbound = internalAction({
 		}
 
 		const shortId = intent.shortId;
-		console.log("WA inbound parsed shortId", { fromPhone, shortId });
+		console.log("WA inbound parsed shortId", {
+			fromPhone: redactPhone(fromPhone),
+			shortId,
+		});
 		const result = await ctx.runMutation(
 			internal.whatsapp.confirmOrderFromWhatsApp,
 			{ shortId, fromPhone, profileName },
 		);
-		console.log("WA confirm result", { fromPhone, shortId, ...result });
+		console.log("WA confirm result", {
+			fromPhone: redactPhone(fromPhone),
+			shortId,
+			...result,
+		});
 
 		if (!result.matched) {
-			console.log("WA confirm not matched → fallback", { shortId, fromPhone });
+			console.log("WA confirm not matched → fallback", {
+				shortId,
+				fromPhone: redactPhone(fromPhone),
+			});
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
@@ -858,12 +876,14 @@ export const sendTestRetailerAlert = internalAction({
 				kind: "text",
 				body: `Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
 			});
+			// Redacted like every other log (PR #189 review): a seller's number is
+			// still personal data, and storeName already identifies the store.
 			console.log(
-				`Diagnostic alert sent (storeName=${retailer.storeName}, to=${retailer.waPhone})`,
+				`Diagnostic alert sent (storeName=${retailer.storeName}, to=${redactPhone(retailer.waPhone)})`,
 			);
 		} catch (err) {
 			console.error(
-				`Diagnostic alert failed (storeName=${retailer.storeName}, to=${retailer.waPhone}): ${
+				`Diagnostic alert failed (storeName=${retailer.storeName}, to=${redactPhone(retailer.waPhone)}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
