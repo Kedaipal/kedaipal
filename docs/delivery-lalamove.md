@@ -265,7 +265,25 @@ mid-call (copy points the seller at their Lalamove app, since in the
 crash-mid-POST case the rider order may exist there untracked). Every blocked state renders disabled-with-reason on the
 card (`DispatchBlock` map): wrong status, no map pin on the address (with a
 fix path — never a dead end), booking off, plan gate (Pro chip), no
-credentials, missing buyer/seller phone. That copy lives in
+credentials, missing buyer/seller phone.
+
+**`country_unsupported` is the exception that renders nothing at all** (SG-lite,
+`86eyqgujv`). It is checked FIRST — ahead of even `not_delivery` — because
+every other reason names a fix, and in a market our integration doesn't serve
+there is no fix to name. Before it, a store switched MY→SG fell through to
+`no_seller_phone` and told the seller to *"add a Malaysian (+60) WhatsApp
+number in Settings → Store"*, which the country switch itself refuses to store:
+a closed loop. The card now returns null, **including when a job exists** — a
+switched store can hold a completed Malaysian trip, and that history belongs on
+the order timeline rather than under a live dispatch card that would re-offer a
+booking. `getDeliveryJob.bookingEnabled` agrees with it, so the mark-shipped
+prompt hands an SG seller the courier + consignment form instead of a rider
+prompt. Enabling `deliveryBooking` at all now runs the same country allowlist
+in `updateSettings` — previously that rule only bound a store while it was
+*switching*, so an already-SG store could arm rider booking with nothing in its
+way.
+
+That copy lives in
 `src/lib/dispatch-block.ts` (`dispatchBlockCopy`) because the **mark-shipped
 prompt** renders the same reasons — a rider vendor is never offered the manual
 parcel-courier form, so this copy is their whole explanation before they choose
