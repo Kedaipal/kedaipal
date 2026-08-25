@@ -969,6 +969,32 @@ function isAdjusted(l: CartLine): boolean {
 	);
 }
 
+/**
+ * The percentage pill beside an adjusted price — `−19%` in the brand mint for
+ * a cut (the normal negotiated-discount case), amber `+11%` for a price set
+ * ABOVE catalog so an accidental up-adjustment can't hide in the same green as
+ * a deal. Hidden when the delta rounds to 0% (the strikethrough still marks
+ * the line as adjusted).
+ */
+function PriceDeltaChip({ price, catalog }: { price: number; catalog: number }) {
+	const pct = Math.round(((catalog - price) / catalog) * 100);
+	if (pct === 0) return null;
+	const cut = price < catalog;
+	return (
+		<span
+			className={cn(
+				"rounded-full px-1.5 py-px text-[10px] font-semibold leading-4 tabular-nums",
+				cut
+					? "bg-accent/15 text-accent-emphasis"
+					: "bg-amber-500/15 text-amber-600 dark:text-amber-500",
+			)}
+		>
+			{cut ? "−" : "+"}
+			{Math.abs(pct)}%
+		</span>
+	);
+}
+
 type SessionDraft = {
 	items: Array<{
 		variantId: Id<"productVariants">;
@@ -1805,14 +1831,20 @@ function BuildOrderScreen({
 														aria-hidden
 													/>
 												</span>
-												<span className="flex items-center gap-1 text-xs text-muted-foreground">
+												<span className="flex items-center gap-1.5 text-xs text-muted-foreground">
 													<span>
 														{l.qty} × {formatPrice(l.price, currency)}
 													</span>
 													{adjusted && l.catalogPrice !== undefined ? (
-														<span className="line-through opacity-70">
-															{formatPrice(l.catalogPrice, currency)}
-														</span>
+														<>
+															<span className="line-through opacity-70">
+																{formatPrice(l.catalogPrice, currency)}
+															</span>
+															<PriceDeltaChip
+																price={l.price}
+																catalog={l.catalogPrice}
+															/>
+														</>
 													) : null}
 												</span>
 											</button>
@@ -2211,8 +2243,17 @@ function CartLineEditDialog({
 								}}
 								placeholder={centsToRm(line.price)}
 								variant="field"
-								className="h-12 pl-10 text-base"
+								// Spinners hidden: a ±RM0.01 step is useless for keying an
+								// agreed price, and the live delta chip lives in that corner.
+								className="h-12 pl-10 pr-16 text-base [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
 							/>
+							{/* The negotiation math, confirmed live at the point of typing —
+							    mint −% for a cut, amber +% for above-catalog. */}
+							{catalog !== undefined && differsFromCatalog ? (
+								<span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">
+									<PriceDeltaChip price={cents} catalog={catalog} />
+								</span>
+							) : null}
 						</div>
 						{/* The catalog price stays visible while adjusting, with a
 						    one-tap way back; a custom line has no catalog price. */}
@@ -2241,11 +2282,18 @@ function CartLineEditDialog({
 						) : null}
 					</label>
 					{validPrice ? (
-						<p className="text-sm text-muted-foreground">
+						<p className="flex items-baseline gap-1.5 text-sm text-muted-foreground">
 							Line total{" "}
 							<span className="font-semibold text-foreground tabular-nums">
 								{formatPrice(cents * qty, currency)}
 							</span>
+							{/* The money view of the same cut — what the whole line would
+							    have cost at catalog. */}
+							{catalog !== undefined && differsFromCatalog ? (
+								<span className="text-xs line-through opacity-70">
+									{formatPrice(catalog * qty, currency)}
+								</span>
+							) : null}
 						</p>
 					) : null}
 				</div>
