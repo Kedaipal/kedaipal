@@ -18,7 +18,13 @@
 export const TERMS_VERSION = "2026-07-01";
 // 2026-08-04: added Microsoft Clarity (session replay) as a sub-processor, and
 // disclosed session-recording collection + analytics cookies.
-export const PRIVACY_VERSION = "2026-08-04";
+// 2026-08-17 (86eyn25fu, PDPA audit truth pass): processor list corrected to
+// what actually ships (added Lalamove + Google, HitPay re-scoped to shopper
+// payments; dropped unshipped PostHog/Stripe/Calendly), disclosed the
+// localStorage address autofill, named Kedaipal as data user for analytics +
+// the global opt-out list, added the SG PDPA line (SG-incorporated operator)
+// and the DPO designation, and dropped the never-populated acceptanceIp field.
+export const PRIVACY_VERSION = "2026-08-17";
 export const AUP_VERSION = "2026-05-26";
 
 /** Contact address shown in Terms, Privacy, and the AUP. */

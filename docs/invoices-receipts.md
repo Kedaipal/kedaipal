@@ -126,9 +126,12 @@ Backend:
 Frontend:
 - `src/components/order/receipt-download-button.tsx` — used by the seller order
   detail (`shortId`) and the buyer tracking page (`token`).
-- `src/components/order/send-order-document.tsx` — the counter Done-screen
-  Send-to-WhatsApp / Download / Share block (`sharePdfBytes` + `canSharePdf` in
+- `src/components/order/order-document-actions.tsx` — the counter Done-screen
+  Download / Share block (`sharePdfBytes` + `canSharePdf` in
   `src/lib/download.ts` drive the OS share sheet, falling back to download).
+  Renamed from `send-order-document.tsx`, and the Send-to-WhatsApp button is
+  gone, when `86eyd63r8` cut the order to one outbound message — see
+  [`counter-checkout.md`](./counter-checkout.md).
 - `src/components/settings/invoice-download-button.tsx` — used by the billing tab
   and admin billing console.
 - `src/lib/download.ts` — `downloadPdfBytes` / `downloadCsv` (CSV gets a UTF-8 BOM
