@@ -471,7 +471,11 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(session?.status).toBe("buyer_identified");
 	});
 
-	test("a client price on a NON-custom line is ignored (server price wins)", async () => {
+	// Seller price adjustment on a STANDARD line (Wagyu Walid's ask): the counter
+	// mutation is owner-or-admin only, so a supplied unitPrice is the seller's own
+	// pricing call (negotiated discount/bump) and is honored — unlike the buyer
+	// storefront, where the catalog price is always authoritative.
+	test("a seller price adjustment on a standard line is honored", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const variantId = await seedVariant(t, USER_A, retailer._id, {
@@ -483,12 +487,61 @@ describe("counterCheckout — createOrderFromSession", () => {
 			.withIdentity({ subject: USER_A })
 			.mutation(api.counterCheckout.createOrderFromSession, {
 				sessionId,
-				items: [{ variantId, quantity: 1, unitPrice: 1 }], // tampered → ignored
+				items: [{ variantId, quantity: 2, unitPrice: 1000 }], // RM10 agreed vs RM12 catalog
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(1000);
+		expect(order?.total).toBe(2000);
+	});
+
+	test("a standard line without unitPrice still charges the catalog price", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
 				paidInPerson: true,
 				paymentMethod: "cash",
 			});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.items[0]?.price).toBe(1200);
+	});
+
+	test("an invalid adjusted price on a standard line is rejected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				paidInPerson: true,
+			}),
+		).rejects.toThrow(/Set a price/);
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 10.5 }], // not integer sen
+				paidInPerson: true,
+			}),
+		).rejects.toThrow(/Set a price/);
+		// Session survives the rejections — the vendor can fix and retry.
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
 	});
 });
 
