@@ -20,6 +20,7 @@ import {
 	downloadPdfBytes,
 	sharePdfBytes,
 } from "../../lib/download";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 
@@ -90,7 +91,8 @@ export function OrderDocumentActions({
 	}
 
 	return (
-		<div className={className}>
+		// MASK_PII: the buyer's name appears in the button label + helper copy.
+		<div {...MASK_PII} className={className}>
 			<div className="grid gap-2 sm:grid-cols-2">
 				<Button
 					type="button"

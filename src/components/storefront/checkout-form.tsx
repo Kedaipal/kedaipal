@@ -45,6 +45,7 @@ import {
 } from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
 import {
 	convexErrorMessage,
@@ -1202,7 +1203,13 @@ export function CheckoutPage({
 								if (!parsed.success) return null;
 								const pretty = formatMobile(parsed.data);
 								return (
-									<p className="text-sm font-medium text-accent-emphasis">
+									// MASK_PII: the one storefront surface that echoes the
+									// buyer's phone back as rendered text (inputs are already
+									// auto-masked by Clarity's Balanced mode).
+									<p
+										{...MASK_PII}
+										className="text-sm font-medium text-accent-emphasis"
+									>
 										{locale === "ms"
 											? confirmPushEnabled
 												? `Pengesahan akan dihantar ke ${pretty} — pastikan nombor ini betul.`
