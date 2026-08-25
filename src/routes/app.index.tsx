@@ -54,6 +54,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { hasFeature, hasSubscribed, trialDaysLeft } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -814,7 +815,7 @@ function DashboardHome() {
 										className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
 									>
 										<div className="flex min-w-0 flex-col gap-0.5">
-											<p className="truncate text-sm font-semibold">
+											<p {...MASK_PII} className="truncate text-sm font-semibold">
 												{order.customer?.name ?? "Anonymous"}
 											</p>
 											<p className="truncate text-xs text-muted-foreground">
