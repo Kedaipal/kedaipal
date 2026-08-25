@@ -409,6 +409,74 @@ describe("admin manual opt-out (86eyn25gu)", () => {
 		).toMatchObject({ optedOut: true, source: "manual_admin" });
 	});
 
+	// The register answers "who is currently opted out?" — the question a PDPA
+	// request asks, and the one the lookup field structurally cannot answer.
+	test("the register lists only live opt-outs, masked, newest first", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		await expect(
+			t
+				.withIdentity({ subject: "not_admin" })
+				.query(api.wabaProtection.adminOptOutList, {}),
+		).rejects.toThrow();
+
+		// Empty is a real state, not a loading one.
+		expect(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).toEqual({
+			rows: [],
+			capped: false,
+		});
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "9123 4567",
+		});
+
+		const listed = await asAdmin.query(api.wabaProtection.adminOptOutList, {});
+		expect(listed.capped).toBe(false);
+		// Newest first.
+		expect(listed.rows.map((r) => r.waPhone)).toEqual([
+			"6591234567",
+			BUYER,
+		]);
+		// Rendered form is last-4 only; the full number rides alongside for the
+		// row's copy action but is never what the panel paints.
+		expect(listed.rows[0].masked).toBe("…4567");
+		expect(listed.rows[1]).toMatchObject({
+			masked: "…2333",
+			source: "manual_admin",
+		});
+	});
+
+	// Re-activation is a list removal, never a row deletion: the stamped row is
+	// the consent ledger (withdrawn when, restored when).
+	test("re-activating drops the row from the register but keeps it in the table", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+		expect(
+			(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).rows,
+		).toHaveLength(1);
+
+		await asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+			waPhone: BUYER,
+		});
+
+		expect(
+			(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).rows,
+		).toHaveLength(0);
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].reactivatedAt).toEqual(expect.any(Number));
+	});
+
 	test("input matching no country's mobile shape is invalid: status says so, register refuses", async () => {
 		const t = setup();
 		process.env.ADMIN_USER_IDS = USER;

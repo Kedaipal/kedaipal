@@ -23,7 +23,7 @@
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { ActionCtx, MutationCtx } from "./_generated/server";
 import {
 	internalAction,
@@ -543,7 +543,7 @@ export const adminOptOutStatus = query({
 	handler: async (ctx, { waPhone }) => {
 		await requireAdmin(ctx);
 		const phone = canonicalOptOutPhone(waPhone);
-		// Not a valid MY mobile (yet) — tell the panel so the button can be
+		// Not a valid mobile (yet) — tell the panel so the button can be
 		// disabled-with-reason instead of registering an unmatchable key.
 		if (!phone) return { optedOut: false as const, invalid: true };
 		const latest = await ctx.db
@@ -558,6 +558,68 @@ export const adminOptOutStatus = query({
 					since: latest.createdAt,
 				}
 			: { optedOut: false as const, invalid: false };
+	},
+});
+
+/** How many live opt-outs the register renders. Opt-outs are rare (the vendor
+ * rows' 30-day counts are usually 0), so this is headroom rather than a page
+ * size — but it is reported when hit, never silently truncated. */
+const OPT_OUT_LIST_LIMIT = 100;
+
+export type AdminOptOutRow = {
+	_id: Id<"optOuts">;
+	/** Last four digits only — what the panel renders. See the note below. */
+	masked: string;
+	/** Full canonical number, for the row's copy action. Deliberately NOT
+	 * rendered: the value has to reach the clipboard, but session replay
+	 * captures the DOM, not the payload. */
+	waPhone: string;
+	source: Doc<"optOuts">["source"];
+	since: number;
+};
+
+/**
+ * The live do-not-message set: every number currently opted out of
+ * non-transactional sends across the shared number, newest first.
+ *
+ * Exists because `adminOptOutStatus` can only answer "is THIS number opted
+ * out?" — you have to know the number before you can look it up. An admin
+ * fielding a PDPA request cannot answer "who is currently opted out?", and
+ * cannot confirm their own opt-out registered without retyping it. The vendor
+ * rows already show a 30-day opt-out COUNT, so the data was teased and then
+ * unreachable.
+ *
+ * Re-activated numbers are absent by construction (the `by_active` index keys
+ * on the missing `reactivatedAt` stamp): the list is the live set, while the
+ * table underneath keeps every row forever as the consent ledger — when
+ * consent was withdrawn and when it was restored.
+ *
+ * Rows carry the phone MASKED. The panel's standing rule is that it never
+ * echoes a full number into the DOM (`adminOptOutStatus`'s status line doesn't
+ * either, and `adminAuditLog` stores last-4 only): rendered text is captured
+ * verbatim by session replay, and a list would render dozens at a time.
+ */
+export const adminOptOutList = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ rows: AdminOptOutRow[]; capped: boolean }> => {
+		await requireAdmin(ctx);
+		const active = await ctx.db
+			.query("optOuts")
+			.withIndex("by_active", (q) => q.eq("reactivatedAt", undefined))
+			.order("desc")
+			.take(OPT_OUT_LIST_LIMIT + 1);
+		return {
+			rows: active.slice(0, OPT_OUT_LIST_LIMIT).map((row) => ({
+				_id: row._id,
+				masked: redactPhone(row.waPhone),
+				waPhone: row.waPhone,
+				source: row.source,
+				since: row.createdAt,
+			})),
+			capped: active.length > OPT_OUT_LIST_LIMIT,
+		};
 	},
 });
 

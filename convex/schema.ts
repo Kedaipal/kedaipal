@@ -1736,7 +1736,15 @@ export default defineSchema({
 		triggeredByRetailerId: v.optional(v.id("retailers")),
 		reactivatedAt: v.optional(v.number()),
 		createdAt: v.number(),
-	}).index("by_phone", ["waPhone"]),
+	})
+		.index("by_phone", ["waPhone"])
+		// The live do-not-message set, for the admin register (86eyn25gu).
+		// Rows are never deleted — opting back in stamps `reactivatedAt`, which is
+		// the consent ledger — so "who is currently opted out" is exactly the rows
+		// where that stamp is absent. Indexed rather than scanned-and-filtered:
+		// re-activations accumulate forever, so a bounded newest-first scan would
+		// slowly start returning pages of re-activated rows and hiding live ones.
+		.index("by_active", ["reactivatedAt"]),
 
 	// WABA quality-rating history, one row per Meta health webhook
 	// (phone_number_quality_update / account_update). The gateway reads the LATEST

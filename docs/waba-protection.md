@@ -110,6 +110,15 @@ number. **START / MULA** re-opts-in (`reactivateOptIn` stamps `reactivatedAt`).
 Handled in `handleInbound` before any other intent; the ack reply is
 `transactional` so it isn't suppressed by the opt-out it's confirming.
 
+**The ack says out loud that order updates keep coming**, in both languages —
+the confirmation for an order the buyer placed is `transactional` and bypasses
+this gate by design (the category table above), so a buyer told only "you're
+unsubscribed" who then receives one reasonably concludes the STOP failed. The
+BM half omitted that sentence until `86eyn25gu`. Same reason the manual panel
+spells it out: post-`86eyd63r8` the confirmation is the buyer's *only*
+automatic message, so an opt-out has almost no visible buyer-side effect today
+— what it actually suppresses is session replies now and Broadcast later.
+
 Opt-out rows are keyed on the **canonical (digits-only) phone** via
 `normalizeWaPhone`, on both write (`registerOptOut`/`reactivateOptIn`) and read
 (`isOptedOut`). Stored numbers already normalize through `assertValidWaPhone`, but
@@ -146,6 +155,27 @@ withdrawal request we could not honour. Trying each arm is unambiguous rather
 than permissive: the mobile NSN windows are disjoint (MY starts `1`, SG starts
 `8`/`9`) and stored patterns carry the dial code, so no input satisfies two
 arms. MY is tried first, keeping every pre-SG input byte-identical.
+
+**The register lists who is currently opted out** (`adminOptOutList`), because
+the lookup field structurally cannot: it answers "is THIS number opted out?"
+and you have to know the number first, so "who is opted out?" — the question a
+PDPA request actually asks — had no answer, and an admin could not confirm
+their own opt-out registered without retyping it. The vendor rows already show
+a 30-day opt-out *count*, so the data was teased and then unreachable.
+
+Rows come off a new **`optOuts.by_active` index keyed on `reactivatedAt`**:
+opting back in stamps that field rather than deleting the row, so the live set
+is exactly the rows where it is absent, and re-activations that accumulate
+forever can never crowd a live row out of a bounded newest-first scan. The
+table underneath stays the **consent ledger** — when consent was withdrawn and
+when it was restored — which is why re-activating removes a row from the list
+and from nothing else.
+
+Numbers render **masked to last-4**, like the status line and the audit log:
+session replay captures rendered text, and a list paints many at once. The full
+number rides in the payload for the row's Copy action, which never paints it.
+The list renders at zero too, with the empty state explaining what would appear
+there — it is the only place this feature announces itself.
 
 Every manual action is audited via **`logGlobalAdminAction`** — a new
 `adminAuditLog` shape with **no `retailerId`** (the field widened to optional),
