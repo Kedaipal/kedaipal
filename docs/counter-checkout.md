@@ -183,11 +183,21 @@ Asked for by **Wagyu Walid**: create an order with the customer's details and a
 normal fixed-price item, without the workaround of adding a custom line to every
 product.
 
-- **UI** (`app.checkout.tsx`): in the cart panel each line's `qty × price` row is
-  a button with a **pencil icon** (discoverability — the affordance is visible,
-  not hidden behind a long-press). Tapping opens an inline **RM input**; a valid
-  price applies live to the line, `Reset` restores the catalog price, `Done`
-  closes. An adjusted line shows the catalog price struck through, and the
+- **UI** (`app.checkout.tsx`): tapping a cart line opens the **line-edit sheet**
+  (`CartLineEditDialog`, keyed per line) — the single home for that line's
+  quantity stepper + RM price input (pre-selected on focus so typing replaces
+  it), with the catalog price named beneath and a one-tap `Reset` when the
+  typed price differs; `Remove` and `Save` sit in the footer. The row keeps a
+  **pencil icon** as the visible affordance (discoverability — never a
+  long-press). Everything commits **atomically on Save** — the running total
+  never flickers through half-typed values (the earlier inline editor applied
+  per-keystroke, so typing "9.50" walked the total through RM 9 → 9.5 → 9.50,
+  and its tap-to-toggle price row closed on double-taps). Save also **flushes
+  the draft immediately** instead of waiting out the 700 ms autosave debounce,
+  with a visible error toast on failure — the passive autosave is deliberately
+  silent, and a `BuildOrderScreen` remount inside that window would otherwise
+  rehydrate the last-saved draft and silently revert the adjustment (observed
+  in dev). An adjusted line shows the catalog price struck through, and the
   review modal (`ConfirmCheckoutDialog`) prints `· was RM x̶` so the last-look
   step catches a fat-fingered override.
 - **Wire format:** the client sends `unitPrice` only when the line is custom or

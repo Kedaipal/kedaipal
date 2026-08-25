@@ -1331,12 +1331,12 @@ function BuildOrderScreen({
 	const [customPriceInput, setCustomPriceInput] = useState<
 		Record<string, string>
 	>({});
-	// Seller price adjustment — which cart line's inline price editor is open,
-	// plus its in-progress RM text. The line's `price` only moves on a valid
-	// parse, so a half-typed value never corrupts the total (Wagyu Walid's ask:
-	// key a negotiated/custom price on any line after picking the product).
-	const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
-	const [priceInput, setPriceInput] = useState("");
+	// Seller price adjustment (Wagyu Walid's ask: key a negotiated price on any
+	// line after picking the product) — which cart line's edit sheet is open.
+	// Editing happens in a dialog and commits ATOMICALLY on Save, so the running
+	// total never flickers through half-typed values and there is no in-between
+	// state for the debounced autosave to persist.
+	const [editingLineId, setEditingLineId] = useState<string | null>(null);
 
 	// Collection date — counter orders are self-collect, so this is "when will
 	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
@@ -1472,21 +1472,31 @@ function BuildOrderScreen({
 	// reconnect, or jumping to another customer never loses it. We only start
 	// saving once the initial draft has hydrated, so an empty cart never
 	// overwrites a saved one on first paint.
-	const draftPayload = useMemo<SessionDraft>(() => {
-		const epoch = mytMidnightFromYmd(fulfilmentDate);
-		return {
-			items: [...cart.entries()].map(([variantId, l]) => ({
-				variantId: variantId as Id<"productVariants">,
-				quantity: l.qty,
-				// Custom lines always carry their price; a standard line only when the
-				// seller adjusted it (otherwise the server charges the catalog price).
-				unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
-			})),
-			fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
-			paidInPerson: paid,
-			paymentMethod: paid ? method : undefined,
-		};
-	}, [cart, fulfilmentDate, paid, method]);
+	// One author for the draft shape: the debounced autosave memo below AND the
+	// line-edit dialog's immediate flush both build through this, so the two can
+	// never drift.
+	const buildDraftPayload = useCallback(
+		(fromCart: Map<string, CartLine>): SessionDraft => {
+			const epoch = mytMidnightFromYmd(fulfilmentDate);
+			return {
+				items: [...fromCart.entries()].map(([variantId, l]) => ({
+					variantId: variantId as Id<"productVariants">,
+					quantity: l.qty,
+					// Custom lines always carry their price; a standard line only when the
+					// seller adjusted it (otherwise the server charges the catalog price).
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+				})),
+				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
+				paidInPerson: paid,
+				paymentMethod: paid ? method : undefined,
+			};
+		},
+		[fulfilmentDate, paid, method],
+	);
+	const draftPayload = useMemo<SessionDraft>(
+		() => buildDraftPayload(cart),
+		[cart, buildDraftPayload],
+	);
 	const latestDraft = useRef(draftPayload);
 	latestDraft.current = draftPayload;
 	const debouncedDraftKey = useDebounce(JSON.stringify(draftPayload), 700);
@@ -1765,119 +1775,60 @@ function BuildOrderScreen({
 						) : (
 							<ul className="mt-3 flex max-h-72 flex-col divide-y divide-border overflow-y-auto">
 								{cartEntries.map(([variantId, l]) => {
-									const editing = editingPriceId === variantId;
 									const adjusted = isAdjusted(l);
 									return (
-										<li key={variantId} className="flex flex-col py-2.5">
-											<div className="flex items-center justify-between gap-3">
-												<div className="min-w-0">
-													<p className="truncate text-sm font-medium">
+										<li
+											key={variantId}
+											className="flex items-center justify-between gap-3 py-1"
+										>
+											{/* The whole line opens the edit sheet (qty + price in one
+											    place) — a full-row 44px+ target, with the pencil as
+											    the visible affordance (CLAUDE.md: every feature
+											    discoverable in-product). */}
+											<button
+												type="button"
+												onClick={() => setEditingLineId(variantId)}
+												aria-label={`Edit ${l.name}`}
+												className="-mx-2 flex min-h-11 min-w-0 flex-1 flex-col rounded-lg px-2 py-1.5 text-left hover:bg-muted/60"
+											>
+												<span className="flex items-center gap-1.5 truncate text-sm font-medium">
+													<span className="truncate">
 														{l.name}
 														{l.label ? (
 															<span className="ml-1 font-normal text-muted-foreground">
 																{l.label}
 															</span>
 														) : null}
-													</p>
-													{/* Tap the price to adjust it — the pencil makes the
-													    seller-pricing affordance visible (CLAUDE.md:
-													    every feature discoverable in-product). */}
-													<button
-														type="button"
-														onClick={() => {
-															if (editing) {
-																setEditingPriceId(null);
-																return;
-															}
-															setEditingPriceId(variantId);
-															setPriceInput(centsToRm(l.price));
-														}}
-														aria-label={`Adjust price for ${l.name}`}
-														className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-													>
-														<span>
-															{l.qty} × {formatPrice(l.price, currency)}
-														</span>
-														{adjusted && l.catalogPrice !== undefined ? (
-															<span className="line-through opacity-70">
-																{formatPrice(l.catalogPrice, currency)}
-															</span>
-														) : null}
-														<Pencil className="size-3" aria-hidden />
-													</button>
-												</div>
-												<div className="flex items-center gap-2">
-													<span className="text-sm font-semibold tabular-nums">
-														{formatPrice(l.price * l.qty, currency)}
 													</span>
-													<button
-														type="button"
-														onClick={() => setQty(variantId, l, 0)}
-														aria-label="Remove"
-														className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
-													>
-														<X className="size-4" />
-													</button>
-												</div>
-											</div>
-											{editing ? (
-												<div className="mt-2 flex items-center gap-2">
-													<div className="relative flex-1">
-														<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-															RM
-														</span>
-														<Input
-															type="number"
-															inputMode="decimal"
-															step="0.01"
-															min="0"
-															autoFocus
-															value={priceInput}
-															onChange={(e) => {
-																setPriceInput(e.target.value);
-																const c = rmToCents(e.target.value);
-																// Only a valid price moves the line; a blank or
-																// zero mid-type leaves the last good price.
-																if (!Number.isNaN(c))
-																	setQty(variantId, { ...l, price: c }, l.qty);
-															}}
-															onKeyDown={(e) => {
-																if (e.key === "Enter") setEditingPriceId(null);
-															}}
-															placeholder={centsToRm(l.price)}
-															variant="field"
-															className="h-10 pl-10"
-														/>
-													</div>
-													{/* Reset only exists for a standard line — a custom
-													    line has no catalog price to go back to. */}
+													<Pencil
+														className="size-3 shrink-0 text-muted-foreground"
+														aria-hidden
+													/>
+												</span>
+												<span className="flex items-center gap-1 text-xs text-muted-foreground">
+													<span>
+														{l.qty} × {formatPrice(l.price, currency)}
+													</span>
 													{adjusted && l.catalogPrice !== undefined ? (
-														<Button
-															variant="outline"
-															onClick={() => {
-																const catalog = l.catalogPrice;
-																if (catalog === undefined) return;
-																setQty(
-																	variantId,
-																	{ ...l, price: catalog },
-																	l.qty,
-																);
-																setPriceInput(centsToRm(catalog));
-															}}
-															className="h-10 px-3 text-xs"
-														>
-															Reset
-														</Button>
+														<span className="line-through opacity-70">
+															{formatPrice(l.catalogPrice, currency)}
+														</span>
 													) : null}
-													<Button
-														variant="secondary"
-														onClick={() => setEditingPriceId(null)}
-														className="h-10 px-3"
-													>
-														Done
-													</Button>
-												</div>
-											) : null}
+												</span>
+											</button>
+											<div className="flex shrink-0 items-center gap-2">
+												<span className="text-sm font-semibold tabular-nums">
+													{formatPrice(l.price * l.qty, currency)}
+												</span>
+												<button
+													type="button"
+													onClick={() => setQty(variantId, l, 0)}
+													aria-label="Remove"
+													className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+												>
+													<X className="size-4" />
+												</button>
+											</div>
 										</li>
 									);
 								})}
@@ -2060,6 +2011,40 @@ function BuildOrderScreen({
 				onConfirm={onCancel}
 			/>
 
+			<CartLineEditDialog
+				// Keyed per line so the sheet's local price/qty state re-seeds fresh
+				// each time it opens — never carrying a previous line's edits.
+				key={editingLineId ?? "closed"}
+				variantId={editingLineId}
+				line={editingLineId ? (cart.get(editingLineId) ?? null) : null}
+				currency={currency}
+				onClose={() => setEditingLineId(null)}
+				onRemove={(id) => {
+					const line = cart.get(id);
+					if (line) setQty(id, line, 0);
+					setEditingLineId(null);
+				}}
+				onSave={(id, price, qty) => {
+					const line = cart.get(id);
+					if (!line) return;
+					const next = new Map(cart);
+					next.set(id, { ...line, price, qty });
+					setCart(next);
+					setEditingLineId(null);
+					// Flush the save immediately instead of waiting out the 700ms
+					// debounce: an explicit Save is a promise the price is kept, and
+					// the passive autosave swallows failures — if this component ever
+					// remounts before a save lands, rehydration would silently revert
+					// the adjustment to the last-saved draft.
+					saveDraft({ sessionId, draft: buildDraftPayload(next) }).catch(
+						() => {
+							toast.error(
+								"Couldn't save the price change — check your connection.",
+							);
+						},
+					);
+				}}
+			/>
 			<ConfirmCheckoutDialog
 				open={confirmOpen}
 				onOpenChange={(o) => {
@@ -2148,6 +2133,143 @@ function BuildOrderScreen({
  * normal checkout gives you before paying, so a fat-fingered price/qty is caught
  * here, not after the buyer has handed over money.
  */
+/**
+ * Line-edit sheet for one cart line — the single home for qty + price on an
+ * in-progress counter order (Wagyu Walid's negotiated-price ask, 86eyphh8r).
+ * POS convention (tap the line → edit it), chosen over the earlier inline
+ * expander whose tap-to-toggle price row, live per-keystroke re-pricing, and
+ * cramped in-list controls all fought the cashier. Everything commits
+ * ATOMICALLY on Save: the running total never flickers through half-typed
+ * values, and Cancel/dismiss discards cleanly.
+ */
+function CartLineEditDialog({
+	variantId,
+	line,
+	currency,
+	onClose,
+	onRemove,
+	onSave,
+}: {
+	variantId: string | null;
+	line: CartLine | null;
+	currency: string;
+	onClose: () => void;
+	onRemove: (variantId: string) => void;
+	onSave: (variantId: string, price: number, qty: number) => void;
+}) {
+	// Seeded once per open — the parent keys this component on the line id.
+	const [priceText, setPriceText] = useState(() =>
+		line ? centsToRm(line.price) : "",
+	);
+	const [qty, setLocalQty] = useState(() => line?.qty ?? 1);
+
+	if (!variantId || !line) return null;
+
+	const cents = rmToCents(priceText);
+	const validPrice = !Number.isNaN(cents);
+	const catalog = line.isCustom ? undefined : line.catalogPrice;
+	const differsFromCatalog =
+		catalog !== undefined && validPrice && cents !== catalog;
+
+	return (
+		<Dialog open onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="sm:max-w-sm">
+				<DialogHeader>
+					<DialogTitle className="truncate">{line.name}</DialogTitle>
+					<DialogDescription>
+						{line.label || (line.isCustom ? "Custom line" : "Edit this line")}
+					</DialogDescription>
+				</DialogHeader>
+				<div className="space-y-4">
+					<div className="flex items-center justify-between gap-3">
+						<span className="text-sm font-medium">Quantity</span>
+						<Stepper
+							qty={qty}
+							onChange={(q) => setLocalQty(Math.max(1, q))}
+						/>
+					</div>
+					<label className="block">
+						<span className="text-sm font-medium">Unit price</span>
+						<div className="relative mt-1">
+							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+								RM
+							</span>
+							<Input
+								type="number"
+								inputMode="decimal"
+								step="0.01"
+								min="0"
+								autoFocus
+								value={priceText}
+								onChange={(e) => setPriceText(e.target.value)}
+								// Tap-in selects the old value so typing replaces it — the
+								// common case is keying a whole new agreed price.
+								onFocus={(e) => e.target.select()}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && validPrice)
+										onSave(variantId, cents, qty);
+								}}
+								placeholder={centsToRm(line.price)}
+								variant="field"
+								className="h-12 pl-10 text-base"
+							/>
+						</div>
+						{/* The catalog price stays visible while adjusting, with a
+						    one-tap way back; a custom line has no catalog price. */}
+						{catalog !== undefined ? (
+							<span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+								Catalog price {formatPrice(catalog, currency)}
+								{differsFromCatalog ? (
+									<button
+										type="button"
+										onClick={() => setPriceText(centsToRm(catalog))}
+										className="font-medium text-accent-emphasis underline underline-offset-2"
+									>
+										Reset
+									</button>
+								) : null}
+							</span>
+						) : (
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Agreed in person — no catalog price.
+							</span>
+						)}
+						{!validPrice ? (
+							<span className="mt-1 block text-xs text-destructive">
+								Enter a price above RM 0.00 to save.
+							</span>
+						) : null}
+					</label>
+					{validPrice ? (
+						<p className="text-sm text-muted-foreground">
+							Line total{" "}
+							<span className="font-semibold text-foreground tabular-nums">
+								{formatPrice(cents * qty, currency)}
+							</span>
+						</p>
+					) : null}
+				</div>
+				<DialogFooter className="gap-2 sm:justify-between">
+					<Button
+						variant="ghost"
+						onClick={() => onRemove(variantId)}
+						className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+					>
+						<Trash2 className="size-4" />
+						Remove
+					</Button>
+					<Button
+						disabled={!validPrice}
+						onClick={() => validPrice && onSave(variantId, cents, qty)}
+					>
+						Save
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 function ConfirmCheckoutDialog({
 	open,
 	onOpenChange,
