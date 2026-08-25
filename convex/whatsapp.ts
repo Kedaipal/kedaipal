@@ -1061,7 +1061,20 @@ export const notifySellerNewOrder = internalAction({
 				console.error("WA seller new-order lookup failed", err);
 				return null;
 			});
-		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		// Lookup FAILED — we can't tell whether this alert should have fired, and
+		// the email has already suppressed itself on the strength of a predicate
+		// that said it would. Silence here is the one outcome the fallback exists
+		// to prevent, so hand back to email. (Distinct from the guards below: a
+		// toggle that's off or a missing number are answers, and the email read
+		// the same ones and never suppressed.)
+		if (!meta) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyRetailerOrderAlert, {
+				orderId,
+				force: true,
+			});
+			return;
+		}
+		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
 		// Defence in depth: the create site never schedules this for counter
 		// orders in the first place.
 		if (meta.source === "counter") return;
@@ -1163,7 +1176,16 @@ export const notifySellerPaymentClaim = internalAction({
 				console.error("WA seller payment-claim lookup failed", err);
 				return null;
 			});
-		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		// See notifySellerNewOrder — a failed lookup must not leave the seller
+		// with nothing once the email has suppressed itself.
+		if (!meta) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyPaymentClaimed, {
+				orderId,
+				force: true,
+			});
+			return;
+		}
+		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
 		if (meta.status === "cancelled") return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
@@ -1263,7 +1285,17 @@ export const notifySellerPaymentReceived = internalAction({
 				console.error("WA seller payment-received lookup failed", err);
 				return null;
 			});
-		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		// See notifySellerNewOrder — money landed, so silence is the worst of the
+		// three to get wrong.
+		if (!meta) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+				orderId,
+				provider,
+				force: true,
+			});
+			return;
+		}
+		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");

@@ -1676,6 +1676,49 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		fetchMock.restore();
 	});
 
+	test("a failed lookup hands back to email — the seller is never left with nothing", async () => {
+		// 86eyk3qvb's core promise. The email suppresses itself at SCHEDULE time on
+		// `sellerWaAlertWillAttempt`, before this action runs — so if the action
+		// then can't read the order, silence means the seller learns about the
+		// order on no channel at all. A deleted order is the reachable version:
+		// the lookup answers `null` exactly as a thrown query does.
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE = CLAIM_TEMPLATE;
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE = RECEIVED_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run(async (ctx) => {
+			await ctx.db.delete(orderId);
+		});
+
+		// Count the DELTA, not the total: orders.create queued its own email job
+		// and fake timers never fire it, so an absolute count would already be 1.
+		const emailJobs = async (needle: string) =>
+			(
+				await t.run(async (ctx) =>
+					ctx.db.system.query("_scheduled_functions").collect(),
+				)
+			).filter((j) => j.name.includes(needle)).length;
+
+		const beforeNew = await emailJobs("notifyRetailerOrderAlert");
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(await emailJobs("notifyRetailerOrderAlert")).toBe(beforeNew + 1);
+
+		const beforeClaim = await emailJobs("notifyPaymentClaimed");
+		await t.action(internal.whatsapp.notifySellerPaymentClaim, { orderId });
+		expect(await emailJobs("notifyPaymentClaimed")).toBe(beforeClaim + 1);
+
+		const beforeRecv = await emailJobs("notifyPaymentReceived");
+		await t.action(internal.whatsapp.notifySellerPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
+		expect(await emailJobs("notifyPaymentReceived")).toBe(beforeRecv + 1);
+	});
+
 	test("claimPayment schedules the seller claim alert", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
