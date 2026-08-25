@@ -19,6 +19,7 @@ import { Dialog as MorePrimitive } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
+import { WhatsNewNavItem } from "./whats-new";
 
 export interface BottomNavProps {
 	// Orders the seller hasn't looked at yet (the inbox's "New" bucket). A badge
@@ -310,9 +311,28 @@ function MoreTab({
 						sub="Store, selling & billing"
 						onNavigate={close}
 					/>
-					{/* Support affordance, not navigation — so it sits below a rule
-					    rather than reading as a fifth destination (86eyqgxna). */}
-					<AppVersionRow className="mt-1 border-t border-border pt-1" />
+					{/* Support + info affordances, not navigation — so they sit below a
+					    rule rather than reading as further destinations. "What's new"
+					    is above the version because it's the one a seller might act on
+					    (86eyqgxna, 86eyqgxv9). */}
+					{/* One row, not two: "what changed" on the left, "what am I
+					    running" right-aligned beside it — the same pairing the
+					    desktop sidebar uses, so the two chromes answer the question
+					    the same way (86eyqgxv9). */}
+					<div className="mt-1 flex items-center gap-1 border-t border-border pt-1">
+						{/* `close` so shutting the notes returns the seller to the page
+						    they were on, not to a still-open More sheet — every sibling
+						    row here already closes it. */}
+						<WhatsNewNavItem
+							variant="row"
+							className="flex-1"
+							onOpen={close}
+						/>
+						{/* No extra right padding: the pill's 44px touch target already
+						    insets it from the panel edge, and `pr-3` on top pushed it
+						    visually adrift of the rows above. */}
+						<AppVersionRow compact />
+					</div>
 				</MorePrimitive.Content>
 			</MorePrimitive.Portal>
 		</MorePrimitive.Root>

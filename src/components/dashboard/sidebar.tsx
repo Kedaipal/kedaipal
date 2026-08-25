@@ -19,6 +19,7 @@ import {
 import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { AppVersionRow } from "./app-version-row";
+import { WhatsNewNavItem } from "./whats-new";
 import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
@@ -229,7 +230,30 @@ export function Sidebar({
 				) : null}
 			</nav>
 
-			<div className="flex flex-col gap-1 border-t border-border p-2">
+			{/* `relative` so the collapse control can pin to this block's top-right
+			    CORNER — the point where the footer's top border meets the sidebar's
+			    right border. Anchoring to the footer rather than the aside means it
+			    sits on that junction in both states and never drifts as the nav
+			    list grows. */}
+			<div className="relative flex flex-col gap-1 border-t border-border p-2">
+				{/* Centred on the junction: `top-0 right-0` is that corner, and the
+				    two 50% translates put the button's middle exactly on it.
+				    Always visible rather than hover-revealed — this sidebar renders
+				    from `lg` up, which includes iPad landscape at 1024px where there
+				    is no hover at all. */}
+				<button
+					type="button"
+					onClick={() => setCollapsed(!collapsed)}
+					aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+					title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+					className="absolute top-0 right-0 z-20 flex size-6 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+				>
+					{collapsed ? (
+						<ChevronRight className="size-3.5" strokeWidth={2.5} />
+					) : (
+						<ChevronLeft className="size-3.5" strokeWidth={2.5} />
+					)}
+				</button>
 				<div
 					className={cn(
 						"flex items-center gap-2 rounded-lg px-2 py-2",
@@ -250,31 +274,22 @@ export function Sidebar({
 						</div>
 					) : null}
 				</div>
-				<button
-					type="button"
-					onClick={() => setCollapsed(!collapsed)}
-					className={cn(
-						"flex h-9 items-center rounded-lg text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground",
-						collapsed ? "justify-center" : "gap-2 px-3",
-					)}
-					aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-					title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-				>
-					{collapsed ? (
-						<ChevronRight className="size-4" />
-					) : (
-						<>
-							<ChevronLeft className="size-4 shrink-0" />
-							<span>Collapse</span>
-						</>
-					)}
-				</button>
-				{/* Support affordance (86eyqgxna) — bottom-most, the quietest slot in
-				    the chrome. Hidden while collapsed: the rail is icon-width, and a
-				    version string plus a copy button cannot degrade into it
-				    legibly. Expanding is one tap, and nobody reads a version off a
-				    collapsed sidebar. */}
-				{!collapsed ? <AppVersionRow className="px-2 pb-0.5" /> : null}
+				{/* One meta line, not three stacked rows: "what changed" on the
+				    left, "what am I running" on the right — the two questions this
+				    corner of the chrome exists to answer (86eyqgxv9).
+				    Collapsed, neither fits, so it degrades to the sparkle alone with
+				    its unseen dot; the version drops out because nobody reads a
+				    version off a 68px rail and expanding is one click. */}
+				{collapsed ? (
+					<div className="flex justify-center">
+						<WhatsNewNavItem variant="icon" />
+					</div>
+				) : (
+					<div className="flex items-center justify-between gap-2 px-2 py-0.5">
+						<WhatsNewNavItem variant="meta" />
+						<AppVersionRow compact />
+					</div>
+				)}
 			</div>
 		</aside>
 	);
