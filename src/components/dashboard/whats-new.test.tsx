@@ -246,3 +246,70 @@ describe("WhatsNew — caught-up state", () => {
 		expect(screen.getByText("Small thing")).toBeTruthy();
 	});
 });
+
+describe("WhatsNew — host menu handoff", () => {
+	it("tells its host to close when the panel opens", async () => {
+		// PR #218 review. The More sheet passes its `close` here. Without it,
+		// shutting the notes drops the seller back onto a still-open sheet rather
+		// than the page they were on — every sibling row in that sheet closes it.
+		const onOpen = vi.fn();
+		mockSeen({ seenVersion: "2026.09.1" });
+		render(
+			<WhatsNewProvider locale="en">
+				<WhatsNewNavItem variant="row" onOpen={onOpen} />
+			</WhatsNewProvider>,
+		);
+
+		screen.getByRole("button", { name: "What's new" }).click();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+		expect(onOpen).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens fine without a host callback", async () => {
+		// The sidebar passes none — it is not a menu and has nothing to dismiss.
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		screen.getByRole("button", { name: "What's new" }).click();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+	});
+});
+
+describe("WhatsNew — entry keys", () => {
+	it("keys entries uniquely when two in one release share a title", async () => {
+		// PR #218 review: entries were keyed on their rendered title, which two
+		// entries in one release could legitimately share.
+		//
+		// Asserted via React's duplicate-key warning, NOT by counting rendered
+		// nodes: React renders both children regardless, so a count passes either
+		// way — an earlier version of this test did, which made it worthless. The
+		// warning is the only observable symptom, and duplicate keys make React's
+		// reconciliation on reorder undefined, so it is worth failing on.
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+		releasesUnderTest = [
+			{
+				version: "2026.09.1",
+				date: "2026-09-01",
+				notable: true,
+				entries: [
+					{ title: { en: "Same title" }, body: { en: "First body." } },
+					{ title: { en: "Same title" }, body: { en: "Second body." } },
+				],
+			},
+		];
+		mockSeen({ seenVersion: "2026.08.2" });
+		renderShell();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+
+		const keyWarning = spy.mock.calls.find((args) =>
+			args.some((a) => typeof a === "string" && a.includes("same key")),
+		);
+		expect(keyWarning, `React warned about duplicate keys: ${keyWarning?.[0]}`)
+			.toBeUndefined();
+		spy.mockRestore();
+
+		// Both entries still render, with their own bodies.
+		expect(screen.getAllByText("Same title")).toHaveLength(2);
+		expect(screen.getByText("First body.")).toBeTruthy();
+		expect(screen.getByText("Second body.")).toBeTruthy();
+	});
+});

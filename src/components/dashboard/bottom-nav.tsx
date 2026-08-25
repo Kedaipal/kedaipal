@@ -319,8 +319,18 @@ function MoreTab({
 					    running" right-aligned beside it — the same pairing the
 					    desktop sidebar uses, so the two chromes answer the question
 					    the same way (86eyqgxv9). */}
-					<div className="mt-1 flex items-center gap-2 border-t border-border pr-3 pt-1">
-						<WhatsNewNavItem variant="row" className="flex-1" />
+					<div className="mt-1 flex items-center gap-1 border-t border-border pt-1">
+						{/* `close` so shutting the notes returns the seller to the page
+						    they were on, not to a still-open More sheet — every sibling
+						    row here already closes it. */}
+						<WhatsNewNavItem
+							variant="row"
+							className="flex-1"
+							onOpen={close}
+						/>
+						{/* No extra right padding: the pill's 44px touch target already
+						    insets it from the panel edge, and `pr-3` on top pushed it
+						    visually adrift of the rows above. */}
 						<AppVersionRow compact />
 					</div>
 				</MorePrimitive.Content>

@@ -169,9 +169,24 @@ That button is **always visible, not hover-revealed**. The sidebar renders from
 `lg` up, which includes iPad landscape at exactly 1024px where there is no hover
 at all — a hover-only control would simply not exist there.
 
-Collapsed, the meta line degrades to the sparkle icon alone with its dot. The
-version drops out: nobody reads a version off a 68px rail, and expanding is one
-click.
+Collapsed, the meta line degrades to a sparkle icon alone with its dot — no
+label, since it wrapped to two lines and looked broken. The version drops out:
+nobody reads a version off a 68px rail, and expanding is one click.
+
+The **mobile More sheet uses the same meta pairing**, so both chromes answer
+"what changed / what am I running" the same way instead of diverging by
+breakpoint. The version pill's HIT AREA is not its visual size: the button
+carries `min-h-11 min-w-11`, released at `lg`. Below `lg` its only host is that
+touch-only sheet, where the ≥44px rule is hard and a miss lands on the adjacent
+"What's new" button; from `lg` up its only host is the desktop sidebar, where a
+44px row would bloat the footer. The breakpoint does the work because it exactly
+matches where each host lives — the sheet is `lg:hidden`, the sidebar is
+`hidden lg:flex` — so no call site passes a flag that could be forgotten.
+Pinned by test (PR #218 review).
+
+Opening the panel from the More sheet **closes the sheet**, so dismissing the
+notes returns the seller to their page rather than a still-open menu — every
+sibling row there already closes it.
 
 **The panel** gained a full-bleed navy header (`p-0` on `DialogContent`, since
 the default padding would inset the band and leave white gutters), entry cards

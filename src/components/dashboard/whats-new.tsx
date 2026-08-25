@@ -111,10 +111,12 @@ export function WhatsNewProvider({
 	const hasRetailer = seen !== undefined && seen !== null;
 	const suppressed = SUPPRESSED_PATHS.some((p) => pathname.startsWith(p));
 
-	// Stamping is skipped when APP_VERSION isn't a real calendar version — i.e.
-	// local dev, where the Vite define yields "dev". The server would reject it
-	// anyway; skipping means dev keeps re-showing the panel, which is what you
-	// want while writing release notes.
+	// Guard, not a dev switch. Vite's `define` applies in `serve` as well as
+	// `build`, so `pnpm dev` carries the REAL package.json version and this is
+	// true locally — stamping works in dev exactly as it does in prod. The only
+	// place APP_VERSION is "dev" is vitest, which runs from its own config and
+	// applies no define. Kept because `markSeen` rejects a non-calendar version
+	// server-side, so calling it with one would just throw.
 	const canStamp = hasRetailer && isCalendarVersion(APP_VERSION);
 	const stamped = useRef(false);
 	const stamp = useCallback(() => {
@@ -317,13 +319,18 @@ function WhatsNewDialog({
 								</div>
 
 								<div className="flex flex-col gap-2.5">
-									{release.entries.map((entry) => {
+									{release.entries.map((entry, index) => {
 										const Icon = entry.icon
 											? ENTRY_ICONS[entry.icon]
 											: Sparkles;
 										return (
 											<div
-												key={localized(entry.title, locale)}
+												// Version+index, not the title: two entries in one
+												// release could legitimately share a heading, and
+												// duplicate keys make React's reconciliation
+												// undefined (pinned by test).
+												// biome-ignore lint/suspicious/noArrayIndexKey: RELEASES is a build-time constant — this list never reorders, is never inserted into, and has no runtime identity to preserve, so the index IS stable. The rule guards against mutable lists.
+												key={`${release.version}-${index}`}
 												className={cn(
 													"flex gap-3 rounded-lg border border-border p-3",
 													// Seen releases sit back — that is what makes
@@ -418,6 +425,7 @@ function WhatsNewDialog({
 export function WhatsNewNavItem({
 	className,
 	variant,
+	onOpen,
 }: {
 	className?: string;
 	/**
@@ -425,9 +433,21 @@ export function WhatsNewNavItem({
 	 * line, `icon` = the collapsed rail, where a label cannot fit.
 	 */
 	variant: "row" | "meta" | "icon";
+	/**
+	 * Fired alongside opening the panel, so a host that is itself a menu can
+	 * dismiss. The More sheet passes its `close` here: without it, shutting the
+	 * notes drops the seller back onto the still-open sheet rather than the page
+	 * they were on — every sibling row in that sheet already closes it.
+	 */
+	onOpen?: () => void;
 }) {
 	const whatsNew = useWhatsNew();
 	if (!whatsNew?.available) return null;
+
+	const open = () => {
+		onOpen?.();
+		whatsNew.open();
+	};
 
 	const dot = whatsNew.hasUnseen ? (
 		<span
@@ -449,7 +469,7 @@ export function WhatsNewNavItem({
 		return (
 			<button
 				type="button"
-				onClick={whatsNew.open}
+				onClick={open}
 				aria-label={label}
 				title={label}
 				className={cn(
@@ -472,7 +492,7 @@ export function WhatsNewNavItem({
 		return (
 			<button
 				type="button"
-				onClick={whatsNew.open}
+				onClick={open}
 				aria-label={label}
 				className={cn(
 					"flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs font-medium text-foreground transition-colors hover:text-accent-emphasis focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
@@ -489,7 +509,7 @@ export function WhatsNewNavItem({
 	return (
 		<button
 			type="button"
-			onClick={whatsNew.open}
+			onClick={open}
 			aria-label={label}
 			className={cn(
 				"flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-muted",

@@ -25,10 +25,11 @@ export function AppVersionRow({
 }: {
 	className?: string;
 	/**
-	 * `true` renders just the number as a copy-on-tap pill, for the sidebar's
-	 * single meta line where "What's new" already owns the left-hand side.
-	 * `false` (default) is the full labelled row used in the mobile More panel,
-	 * where each item is its own list row.
+	 * `true` renders just the number as a copy-on-tap pill, for the single meta
+	 * line where "What's new" already owns the left-hand side — used by BOTH the
+	 * desktop sidebar and the mobile More panel so the two chromes answer
+	 * "what changed / what am I running" the same way.
+	 * `false` (default) is the full labelled row.
 	 */
 	compact?: boolean;
 }) {
@@ -62,13 +63,26 @@ export function AppVersionRow({
 
 /**
  * The compact pill. Hand-rolled rather than `CopyButton` because that primitive
- * is a 44px-tall labelled control — correct for a touch list row, far too tall
- * for the sidebar's meta line. This lives only in the desktop sidebar (`lg` and
- * up, pointer input), where the design system explicitly allows compact
- * mouse-only controls; the mobile More panel keeps the full-size row above.
+ * is a labelled control sized for a list row, far too tall for a meta line.
  *
  * The pill IS the copy affordance — no separate icon button — so one small
  * target does one thing.
+ *
+ * ## The hit area is 44px on touch and compact on desktop
+ *
+ * This renders in two chromes with different input models, and the visual size
+ * must not decide the hit size. Below `lg` its only host is the mobile More
+ * sheet — touch-only, where the mobile-first rule is a hard ≥44px and a
+ * fat-finger miss lands on the adjacent "What's new" button. From `lg` up its
+ * only host is the desktop sidebar's meta line, where a 44px-tall row would
+ * bloat the footer and the design system explicitly permits compact
+ * pointer-only controls.
+ *
+ * So the BUTTON carries the hit area (`min-h-11 min-w-11`, released at `lg`)
+ * and an inner span carries the pill's looks. The breakpoint does the work
+ * because it exactly matches where each host lives — the More sheet is
+ * `lg:hidden`, the sidebar is `hidden lg:flex` — so neither call site has to
+ * pass a flag that could be forgotten.
  */
 function VersionPill({ className }: { className?: string }) {
 	const [copied, setCopied] = useState(false);
@@ -95,15 +109,21 @@ function VersionPill({ className }: { className?: string }) {
 			aria-label={`App version ${APP_VERSION} — copy`}
 			title={`Version ${APP_VERSION} — click to copy`}
 			className={cn(
-				"flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-1 text-[11px] tabular-nums transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-				copied
-					? "text-accent-emphasis"
-					: "text-muted-foreground hover:text-foreground",
+				"group flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none lg:min-h-0 lg:min-w-0",
 				className,
 			)}
 		>
-			{copied ? <Check className="size-3" strokeWidth={2.5} /> : null}
-			{APP_VERSION}
+			<span
+				className={cn(
+					"flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-[11px] tabular-nums transition-colors",
+					copied
+						? "text-accent-emphasis"
+						: "text-muted-foreground group-hover:text-foreground",
+				)}
+			>
+				{copied ? <Check className="size-3" strokeWidth={2.5} /> : null}
+				{APP_VERSION}
+			</span>
 		</button>
 	);
 }

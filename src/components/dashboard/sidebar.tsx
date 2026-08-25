@@ -70,14 +70,11 @@ export function Sidebar({
 	return (
 		<aside
 			className={cn(
-				// `relative` anchors the collapse control, which straddles the right
-				// border rather than sitting in the footer (86eyqgxv9).
 				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
 				collapsed ? "w-[68px]" : "w-60",
 			)}
 			aria-label="Dashboard navigation"
 		>
-
 			<div
 				className={cn(
 					"flex h-16 items-center border-b border-border px-3",
