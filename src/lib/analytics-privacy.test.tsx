@@ -87,7 +87,7 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		["src/routes/app.index.tsx", 1],
 		["src/routes/app.customers.$customerId.tsx", 1],
 		["src/routes/app.checkout.tsx", 6],
-		["src/components/order/send-order-document.tsx", 1],
+		["src/components/order/order-document-actions.tsx", 1],
 		["src/components/order/book-delivery-card.tsx", 2],
 		["src/components/settings/fulfilment-tab.tsx", 1],
 		["src/components/storefront/checkout-form.tsx", 1],
@@ -99,19 +99,54 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		expect(spreads).toBeGreaterThanOrEqual(min);
 	});
 
-	// Toasts portal to document root — outside every masked subtree — so the
-	// convention there is "no buyer name in toast copy", not masking. Pin the
-	// two sites that used to interpolate one.
-	it("keeps buyer names out of portal-rendered toast copy", () => {
-		const orderDetail = readFileSync(
-			"src/routes/app.orders.$shortId.tsx",
-			"utf8",
-		);
-		const sendDoc = readFileSync(
-			"src/components/order/send-order-document.tsx",
-			"utf8",
-		);
-		expect(orderDetail).not.toContain("${who} will receive it");
-		expect(sendDoc).not.toContain("resent to ${who}");
-	});
+	/**
+	 * The text of every `toast.…(…)` call in a source file, paren-matched so a
+	 * multi-line call (title + `description`) is captured whole.
+	 */
+	function toastCalls(source: string): string[] {
+		const calls: string[] = [];
+		const opener = /toast\.\w+\(/g;
+		let match = opener.exec(source);
+		while (match !== null) {
+			let depth = 1;
+			let i = match.index + match[0].length;
+			while (i < source.length && depth > 0) {
+				if (source[i] === "(") depth++;
+				else if (source[i] === ")") depth--;
+				i++;
+			}
+			calls.push(source.slice(match.index, i));
+			match = opener.exec(source);
+		}
+		return calls;
+	}
+
+	// Toasts portal to the document root — outside every masked subtree — so the
+	// convention there is "no buyer name in toast copy", not masking. Asserted
+	// against the shape of the call rather than two literal strings: the two
+	// sites that originally interpolated a name were both deleted by 86eyd63r8
+	// (one message per order), and a guard pinned to deleted text passes for the
+	// wrong reason. This one still goes red if a future toast reaches for the
+	// buyer's name.
+	const TOAST_FILES = [
+		"src/routes/app.orders.$shortId.tsx",
+		"src/components/order/order-document-actions.tsx",
+		"src/routes/app.checkout.tsx",
+	];
+	const BUYER_NAME_INTERPOLATIONS = [
+		"${who}",
+		"${buyerName}",
+		"${customerName}",
+	];
+
+	it.each(TOAST_FILES)(
+		"%s keeps buyer names out of portal-rendered toast copy",
+		(file) => {
+			for (const call of toastCalls(readFileSync(file, "utf8"))) {
+				for (const token of BUYER_NAME_INTERPOLATIONS) {
+					expect(call).not.toContain(token);
+				}
+			}
+		},
+	);
 });

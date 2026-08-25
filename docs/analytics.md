@@ -115,7 +115,7 @@ dashboard setting for that subtree:
 | Orders inbox — buyer name on every card | `src/routes/app.orders.index.tsx` |
 | Home — recent-orders buyer names | `src/routes/app.index.tsx` |
 | Counter — open-sessions list, both BuyerCard branches, 3 dialog descriptions | `src/routes/app.checkout.tsx` |
-| Done screen — resend button label + helper copy | `src/components/order/send-order-document.tsx` |
+| Done screen — download/share button labels + helper copy | `src/components/order/order-document-actions.tsx` |
 | Lalamove rider name/plate (third-party PII) | `src/components/order/book-delivery-card.tsx` |
 | Pickup-point manager name + phone (third-party PII) | `src/components/settings/fulfilment-tab.tsx` |
 | Storefront checkout — the phone-echo line (the one rendered-text PII on the storefront; inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
