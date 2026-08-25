@@ -32,7 +32,6 @@ import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
-import { Input } from "../ui/input";
 import {
 	Dialog,
 	DialogContent,
@@ -41,6 +40,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../ui/dialog";
+import { Input } from "../ui/input";
 
 /** How long "Confirm & dispatch" stays inert after it appears (86eypjfuf).
  * Long enough that a tap already in flight — the one that opened the dialog,
@@ -274,6 +274,13 @@ export function BookDeliveryCard({
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
+	// Lalamove is a Malaysian market for us. On a Singapore store the card has
+	// nothing true to offer — not a Book button, and not the "set Lalamove up"
+	// hint either, since there is no setup that would work. Hidden outright,
+	// including when a job exists: a store switched from Malaysia can hold a
+	// completed MY trip, and that history belongs on the order timeline rather
+	// than under a live dispatch card (86eyqgujv).
+	if (blockReason === "country_unsupported") return null;
 	// TEST KEYS (86eypncfy). Not a warning we can afford to leave in Settings:
 	// a sandbox booking looks identical to a real one right up until no rider
 	// ever arrives, and the buyer has already been charged a fee the test
@@ -428,8 +435,7 @@ export function BookDeliveryCard({
 	}): Promise<boolean> {
 		if (!quote || requoting) return false;
 		const vehicleType =
-			next.vehicleType ??
-			(quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE");
+			next.vehicleType ?? (quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE");
 		const override =
 			next.scheduleOverride !== undefined
 				? next.scheduleOverride
@@ -482,9 +488,7 @@ export function BookDeliveryCard({
 		// Round to the input's 5-min step, clamped below midnight — a seed in
 		// the day's last minutes must not round up to the invalid "24:00".
 		setSchedTime(
-			hhmmFromMinutes(
-				Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5),
-			),
+			hhmmFromMinutes(Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5)),
 		);
 		setScheduleError(null);
 		setEditSchedule(true);
@@ -533,9 +537,7 @@ export function BookDeliveryCard({
 					await rescheduleFulfilment({
 						orderId: order._id,
 						fulfilmentDate: day,
-						fulfilmentTimeMinutes: Math.round(
-							(scheduleOverride - day) / 60000,
-						),
+						fulfilmentTimeMinutes: Math.round((scheduleOverride - day) / 60000),
 					});
 				} catch (err) {
 					toast.error(convexErrorMessage(err));
@@ -882,8 +884,8 @@ export function BookDeliveryCard({
 						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
 							<span>
-								<span className="font-medium">Test keys.</span> This dispatches a
-								simulated trip — no rider will come and nothing is charged.
+								<span className="font-medium">Test keys.</span> This dispatches
+								a simulated trip — no rider will come and nothing is charged.
 							</span>
 						</p>
 					) : null}
@@ -1057,10 +1059,10 @@ export function BookDeliveryCard({
 										</>
 									) : (
 										<>
-											. If you&apos;ve agreed a new delivery time with them,
-											use <span className="font-medium">Reschedule</span> on
-											this page before booking — their order page keeps the
-											old time otherwise.
+											. If you&apos;ve agreed a new delivery time with them, use{" "}
+											<span className="font-medium">Reschedule</span> on this
+											page before booking — their order page keeps the old time
+											otherwise.
 										</>
 									)}
 								</p>
@@ -1179,8 +1181,8 @@ export function BookDeliveryCard({
 								</span>
 							</p>
 							<p className="pl-6 text-xs opacity-80">
-								Nothing was charged and your buyer wasn&apos;t notified. Fix
-								it, then get a fresh price — this one is no longer valid.
+								Nothing was charged and your buyer wasn&apos;t notified. Fix it,
+								then get a fresh price — this one is no longer valid.
 							</p>
 						</div>
 					) : quoteStale ? (
@@ -1232,9 +1234,7 @@ export function BookDeliveryCard({
 								onClick={handleConfirm}
 								// Disabled rather than an inert click handler: a button that
 								// silently swallows a real tap reads as broken.
-								disabled={
-									booking || requoting || quote === null || !spendArmed
-								}
+								disabled={booking || requoting || quote === null || !spendArmed}
 							>
 								{booking ? "Booking…" : "Confirm & dispatch"}
 							</Button>

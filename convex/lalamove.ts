@@ -42,6 +42,8 @@ import {
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { DEFAULT_COUNTRY } from "./lib/country";
+import { riderBookingAllowed } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -615,6 +617,7 @@ export const applyWebhookEvent = internalMutation({
 /** Why the Book-delivery button is unavailable — rendered disabled-with-reason
  * on order detail (never a dead end; each reason maps to copy + a fix path). */
 export type DispatchBlock =
+	| "country_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -635,6 +638,14 @@ function dispatchBlockReason(args: {
 	planOk: boolean;
 }): DispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
+	// Country FIRST — ahead of even `not_delivery`, because every reason below
+	// names a fix, and in a market Lalamove doesn't serve there is no fix to
+	// name. A store switched from Malaysia keeps `deliveryBooking.enabled`, so
+	// without this the card fell through to `no_seller_phone` and told a
+	// Singapore seller to "add a Malaysian (+60) WhatsApp number" — advice the
+	// country switch itself refuses to let them take (86eyqgujv).
+	if (!riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
+		return "country_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
@@ -1695,7 +1706,12 @@ export const getDeliveryJob = query({
 		return {
 			promptBookOnPacked,
 			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
-			bookingEnabled: retailer.deliveryBooking?.enabled === true,
+			// Agrees with `blockReason` by construction: a stored `enabled` flag
+			// carried in from Malaysia is not a working booking setup, and the
+			// mark-shipped prompt keys off this to decide rider-vs-courier.
+			bookingEnabled:
+				retailer.deliveryBooking?.enabled === true &&
+				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
 			job: latest

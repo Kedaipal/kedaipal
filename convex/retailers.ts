@@ -1836,6 +1836,21 @@ export const updateSettings = mutation({
 					);
 				}
 				if (clean.enabled) {
+					// Country allowlist FIRST, mirroring the deliveryConfig branch
+					// above — otherwise the rule only bound a store while it was
+					// SWITCHING country. The stored-booking check inside the
+					// `args.country` branch catches "carry Lalamove into Singapore";
+					// this catches "turn Lalamove on while already in Singapore",
+					// which had no guard at all (86eyqgujv). Judged against the
+					// effective country so a same-call switch is honoured.
+					const effectiveCountry =
+						(args.country !== undefined ? args.country : retailer.country) ??
+						DEFAULT_COUNTRY;
+					if (!riderBookingAllowed(effectiveCountry)) {
+						throw new ConvexError(
+							"Lalamove rider booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+						);
+					}
 					const effectiveAddress =
 						args.businessAddress !== undefined
 							? patch.businessAddress

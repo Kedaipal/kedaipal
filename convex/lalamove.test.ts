@@ -789,6 +789,94 @@ describe("updateSettings — deliveryBooking guards", () => {
 		expect(dispatch?.env).toBe("sandbox");
 	});
 
+	test("Singapore: enabling rider booking is refused (86eyqgujv)", async () => {
+		// The hole the country-switch guard never covered. #210 refuses carrying
+		// an ENABLED booking INTO Singapore, but that check lives inside the
+		// `args.country !== undefined` branch — so a store already on SG could
+		// turn Lalamove on with nothing in its way. Same allowlist as the
+		// delivery-charge branch, judged on the effective country.
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			country: "SG",
+			waPhone: "",
+		});
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "pk_byo_abcd",
+					apiSecret: "sk_byo_secret",
+				},
+			}),
+		).rejects.toThrow(/Malaysia-only/i);
+	});
+
+	test("Singapore: a booking carried in from MY blocks with country_unsupported, not a phone fix (86eyqgujv)", async () => {
+		// Zaki's report. Patched straight onto the row because that is the real
+		// provenance: this store was switched to SG before the guards shipped,
+		// so it holds an enabled Lalamove booking no mutation would grant today.
+		// Before the fix the card fell through to `no_seller_phone` and told the
+		// seller to add a +60 number — advice the country switch itself refuses.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo_abcd",
+				apiSecret: "sk_byo_secret",
+			},
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { country: "SG", waPhone: undefined });
+		});
+
+		const orderId = await seedOrder(t, retailer._id, { currency: "SGD" });
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		expect(dispatch?.blockReason).toBe("country_unsupported");
+		// The mark-shipped prompt keys off this to choose rider-vs-courier: an
+		// SG seller must get the courier + consignment-number form.
+		expect(dispatch?.bookingEnabled).toBe(false);
+	});
+
+	test("Malaysia is untouched — the same setup still books (86eyqgujv)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			waPhone: "60123456789",
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo_abcd",
+				apiSecret: "sk_byo_secret",
+			},
+		});
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "1 Jalan Test",
+				city: "KL",
+				postcode: "50000",
+				state: "Kuala Lumpur",
+				latitude: 3.14,
+				longitude: 101.7,
+			},
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		expect(dispatch?.blockReason).toBeNull();
+		expect(dispatch?.bookingEnabled).toBe(true);
+	});
+
 	test("re-saving without keys keeps the stored ones; empty string clears", async () => {
 		const t = setup();
 		await seedRetailer(t);
