@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { Country } from "../../convex/lib/country";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	formatFulfilmentDate,
 	fulfilmentDateBounds,
@@ -69,7 +70,7 @@ import {
 } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
 import { cn } from "../lib/utils";
 
@@ -226,7 +227,7 @@ function ActiveSession({
 					isNewCustomer: session.isNewCustomer,
 					customer: session.customer,
 				}}
-				currency={retailer.currency ?? "MYR"}
+				currency={retailer.currency ?? DEFAULT_CURRENCY}
 				country={retailer.country}
 				draft={session.draft}
 				onCreated={onCreated}
@@ -977,7 +978,13 @@ function isAdjusted(l: CartLine): boolean {
  * a deal. Hidden when the delta rounds to 0% (the strikethrough still marks
  * the line as adjusted).
  */
-function PriceDeltaChip({ price, catalog }: { price: number; catalog: number }) {
+function PriceDeltaChip({
+	price,
+	catalog,
+}: {
+	price: number;
+	catalog: number;
+}) {
 	const delta = priceDelta(price, catalog);
 	if (!delta) return null;
 	return (
@@ -1178,7 +1185,7 @@ function ProductVariantRows({
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-										RM
+										{currencySymbol(currency)}
 									</span>
 									<Input
 										type="number"
@@ -2068,13 +2075,11 @@ function BuildOrderScreen({
 					// the passive autosave swallows failures — if this component ever
 					// remounts before a save lands, rehydration would silently revert
 					// the adjustment to the last-saved draft.
-					saveDraft({ sessionId, draft: buildDraftPayload(next) }).catch(
-						() => {
-							toast.error(
-								"Couldn't save the price change — check your connection.",
-							);
-						},
-					);
+					saveDraft({ sessionId, draft: buildDraftPayload(next) }).catch(() => {
+						toast.error(
+							"Couldn't save the price change — check your connection.",
+						);
+					});
 				}}
 			/>
 			<ConfirmCheckoutDialog
@@ -2215,16 +2220,13 @@ function CartLineEditDialog({
 				<div className="space-y-4">
 					<div className="flex items-center justify-between gap-3">
 						<span className="text-sm font-medium">Quantity</span>
-						<Stepper
-							qty={qty}
-							onChange={(q) => setLocalQty(Math.max(1, q))}
-						/>
+						<Stepper qty={qty} onChange={(q) => setLocalQty(Math.max(1, q))} />
 					</div>
 					<label className="block">
 						<span className="text-sm font-medium">Unit price</span>
 						<div className="relative mt-1">
 							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-								RM
+								{currencySymbol(currency)}
 							</span>
 							<Input
 								type="number"

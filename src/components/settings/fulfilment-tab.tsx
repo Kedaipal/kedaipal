@@ -17,9 +17,16 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import type { Country } from "../../../convex/lib/country";
 import { MY_STATES } from "../../../convex/lib/address";
-import type { DeliveryConfig, DeliveryZone } from "../../../convex/lib/delivery";
+import {
+	resolveAwbConfig,
+	type StoredAwbConfig,
+} from "../../../convex/lib/awbConfig";
+import type { Country } from "../../../convex/lib/country";
+import type {
+	DeliveryConfig,
+	DeliveryZone,
+} from "../../../convex/lib/delivery";
 import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
@@ -31,6 +38,7 @@ import {
 	MAX_NOTICE_DAYS,
 	timeMinutesFromHhmm,
 } from "../../../convex/lib/fulfilmentDate";
+import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	type DayHours,
 	formatDayWindow,
@@ -39,17 +47,13 @@ import {
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
-import {
-	resolveAwbConfig,
-	type StoredAwbConfig,
-} from "../../../convex/lib/awbConfig";
-import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
@@ -58,13 +62,13 @@ import { deriveMapsUrl } from "../../lib/google-address";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
-import { FilterChip } from "../ui/filter-chip";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
@@ -96,6 +100,10 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
+	/** Storefront currency — every money input on this tab wears its symbol.
+	 * Threaded rather than assumed: an SG store's delivery, pickup-fee and
+	 * minimum-order fields quoted "RM" before this (86eyqgujv). */
+	currency: string;
 	/** The store's country (SG-lite) — SG stores see only the Free/Flat
 	 * delivery-charge modes (the MY-only ones are server-refused), the address
 	 * pickers search the store's own country, and the pickup-point editor's
@@ -198,8 +206,20 @@ function ToggleSwitch({
 	);
 }
 
+/** The currency symbol worn by a money input, positioned for the shared
+ * `pl-9` inputs on this tab. One author so a new currency never leaves a
+ * stray "RM" behind on a field. */
+function MoneyPrefix({ currency }: { currency: string }) {
+	return (
+		<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+			{currencySymbol(currency)}
+		</span>
+	);
+}
+
 export function FulfilmentTab({
 	retailerId,
+	currency,
 	country,
 	offerSelfCollect,
 	offerDelivery,
@@ -348,7 +368,7 @@ export function FulfilmentTab({
 		<div className="flex flex-col gap-6 pt-2">
 			<OpeningHoursCard initial={openingHours} />
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
-			<MinOrderValueCard initial={minOrderValue} />
+			<MinOrderValueCard initial={minOrderValue} currency={currency} />
 
 			<Card>
 				<div className="flex items-start justify-between gap-4">
@@ -377,6 +397,7 @@ export function FulfilmentTab({
 
 				<div className="border-t border-border pt-4">
 					<DeliveryChargeSection
+						currency={currency}
 						// Remount when the saved config/address/keys change shape so
 						// local draft state re-seeds from the server truth after a save.
 						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}:${deliveryBooking?.apiKeyHint ?? ""}`}
@@ -473,6 +494,7 @@ export function FulfilmentTab({
 							) : (
 								<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
 									<LocationRowBody
+										currency={currency}
 										location={loc}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
@@ -501,6 +523,7 @@ export function FulfilmentTab({
 									<LocationRow
 										key={loc._id}
 										location={loc}
+										currency={currency}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
 									/>
@@ -520,6 +543,7 @@ export function FulfilmentTab({
 				onClose={() => setEditing(null)}
 				location={editing === "new" ? undefined : (editing ?? undefined)}
 				retailerId={retailerId}
+				currency={currency}
 				country={country}
 				canChargeFee={hasFeature(subscription, "chargeablePickup")}
 			/>
@@ -566,7 +590,9 @@ function zoneDraftsFromZones(
 	}));
 }
 
-function weightZonesFromConfig(config: DeliveryConfig | undefined): ZoneDraft[] {
+function weightZonesFromConfig(
+	config: DeliveryConfig | undefined,
+): ZoneDraft[] {
 	// Empty = the template/blank chooser renders instead of an empty form.
 	if (config?.mode !== "weight") return [];
 	return zoneDraftsFromZones(config.zones);
@@ -574,7 +600,12 @@ function weightZonesFromConfig(config: DeliveryConfig | undefined): ZoneDraft[] 
 
 /** A fresh zone draft — one starter band so the row structure is visible. */
 function blankZoneDraft(): ZoneDraft {
-	return { name: "", states: [], bands: [{ maxKg: "3", fee: "" }], freeAbove: "" };
+	return {
+		name: "",
+		states: [],
+		bands: [{ maxKg: "3", fee: "" }],
+		freeAbove: "",
+	};
 }
 
 /** Segmented mode button — same visual language as the pickup KindButton. */
@@ -653,6 +684,7 @@ function DeliveryChargeSection({
 	deliveryBooking,
 	canUseRadius,
 	canUseLalamove,
+	currency,
 }: {
 	/** SG stores get only Free/Flat — the MY-only modes' cards don't render
 	 * and updateSettings refuses them (SG-lite, 86eynw29u). */
@@ -664,6 +696,7 @@ function DeliveryChargeSection({
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	canUseRadius: boolean;
 	canUseLalamove: boolean;
+	currency: string;
 }) {
 	const updateSettings = useUpdateSettings();
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
@@ -1037,8 +1070,8 @@ function DeliveryChargeSection({
 			</div>
 			{myOnlyModesHidden ? (
 				<p className="text-xs text-muted-foreground">
-					Distance, weight-zone and Lalamove pricing are Malaysia-only for now
-					— Singapore stores deliver free or at a flat fee.
+					Distance, weight-zone and Lalamove pricing are Malaysia-only for now —
+					Singapore stores deliver free or at a flat fee.
 				</p>
 			) : null}
 			{storedModeUnavailable ? (
@@ -1393,9 +1426,7 @@ function DeliveryChargeSection({
 								Delivery fee
 							</label>
 							<div className="relative">
-								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-									RM
-								</span>
+								<MoneyPrefix currency={currency} />
 								<input
 									id="flat-delivery-fee"
 									type="text"
@@ -1416,9 +1447,7 @@ function DeliveryChargeSection({
 								Free for orders above (optional)
 							</label>
 							<div className="relative">
-								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-									RM
-								</span>
+								<MoneyPrefix currency={currency} />
 								<input
 									id="free-above"
 									type="text"
@@ -1512,9 +1541,7 @@ function DeliveryChargeSection({
 								/>
 								<span className="text-xs text-muted-foreground">km →</span>
 								<div className="relative">
-									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-										RM
-									</span>
+									<MoneyPrefix currency={currency} />
 									<input
 										type="text"
 										inputMode="decimal"
@@ -1626,17 +1653,18 @@ function DeliveryChargeSection({
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Sell nationwide with your parcel courier&apos;s own rate card (J&T,
-						DD Cold Chain, Ninja Cold…). Buyers pay by <b>where the order
-						goes</b> — their state&apos;s zone — and <b>what it weighs</b>:
-						each product&apos;s parcel weight × quantity. You book the courier
-						yourself as usual; Kedaipal prices the checkout.
+						DD Cold Chain, Ninja Cold…). Buyers pay by{" "}
+						<b>where the order goes</b> — their state&apos;s zone — and{" "}
+						<b>what it weighs</b>: each product&apos;s parcel weight × quantity.
+						You book the courier yourself as usual; Kedaipal prices the
+						checkout.
 					</p>
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						A band works like a box tier — <b>&ldquo;up to 5 kg =
-						RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg). Rates use{" "}
-						<b>actual weight only</b>; if your courier bills volumetric
-						(size-based) weight, pick the safer band when you copy your card
-						over.
+						A band works like a box tier —{" "}
+						<b>&ldquo;up to 5 kg = RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg).
+						Rates use <b>actual weight only</b>; if your courier bills
+						volumetric (size-based) weight, pick the safer band when you copy
+						your card over.
 					</p>
 
 					{zones.length === 0 ? (
@@ -1674,6 +1702,7 @@ function DeliveryChargeSection({
 						<div className="flex flex-col gap-3">
 							{zones.map((zone, zi) => (
 								<WeightZoneCard
+									currency={currency}
 									// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
 									key={zi}
 									zone={zone}
@@ -1691,7 +1720,9 @@ function DeliveryChargeSection({
 									variant="outline"
 									size="sm"
 									className="h-10 gap-1.5 self-start"
-									onClick={() => setZones((prev) => [...prev, blankZoneDraft()])}
+									onClick={() =>
+										setZones((prev) => [...prev, blankZoneDraft()])
+									}
 								>
 									<Plus className="size-4" />
 									Add zone
@@ -1798,8 +1829,9 @@ function DeliveryChargeSection({
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 						<b>Weights come from your products:</b> every product choice has a
 						&ldquo;Parcel weight&rdquo; field in the product editor, and the
-						bulk-import sheet has a <span className="font-mono">weight_grams</span>{" "}
-						column. Items without a weight follow the rule above.{" "}
+						bulk-import sheet has a{" "}
+						<span className="font-mono">weight_grams</span> column. Items
+						without a weight follow the rule above.{" "}
 						<Link to="/app/products" className="font-medium underline">
 							Open Products
 						</Link>
@@ -1842,12 +1874,14 @@ function DeliveryChargeSection({
  */
 function WeightZoneCard({
 	zone,
+	currency,
 	index,
 	claimed,
 	onPatch,
 	onRemove,
 }: {
 	zone: ZoneDraft;
+	currency: string;
 	index: number;
 	/** state → owning zone index across the whole draft. */
 	claimed: Map<string, number>;
@@ -1944,9 +1978,7 @@ function WeightZoneCard({
 						/>
 						<span className="text-xs text-muted-foreground">kg →</span>
 						<div className="relative">
-							<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-								RM
-							</span>
+							<MoneyPrefix currency={currency} />
 							<input
 								type="text"
 								inputMode="decimal"
@@ -2000,8 +2032,8 @@ function WeightZoneCard({
 				) : null}
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					An order at exactly a band&apos;s weight is inside it. Heavier than
-					your last band follows the rule below. A band fee of RM0 means free
-					up to that weight.
+					your last band follows the rule below. A band fee of RM0 means free up
+					to that weight.
 				</p>
 			</div>
 
@@ -2013,9 +2045,7 @@ function WeightZoneCard({
 					Free delivery for orders above (optional)
 				</label>
 				<div className="relative self-start">
-					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-						RM
-					</span>
+					<MoneyPrefix currency={currency} />
 					<input
 						id={`zone-${index}-free-above`}
 						type="text"
@@ -2107,7 +2137,9 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 
 	/** Same-mode range edit — one pair of pickers writes every day's times
 	 * (closed days included, so re-opening a chip inherits the range). */
-	function setAllDays(patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm">>) {
+	function setAllDays(
+		patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm">>,
+	) {
 		setDraft((prev) => prev.map((row) => ({ ...row, ...patch })));
 	}
 
@@ -2131,7 +2163,8 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	// Same-mode reads its range off the first open row (all rows are kept in
 	// sync); when every chip is off, fall back to Monday so the pickers keep
 	// showing the last times instead of blanking.
-	const rangeSource = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+	const rangeSource =
+		draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
 
 	async function save() {
 		if (!valid) return;
@@ -2277,9 +2310,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 											selected={!draft[i].closed}
 											disabled={saving}
 											aria-label={WEEKDAY_NAMES[i]}
-											onClick={() =>
-												setDay(i, { closed: !draft[i].closed })
-											}
+											onClick={() => setDay(i, { closed: !draft[i].closed })}
 											className="px-3"
 										>
 											{WEEKDAY_NAMES_SHORT[i]}
@@ -2323,9 +2354,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 											<div className="flex min-w-0 flex-1 items-center gap-1.5">
 												<TimePicker
 													value={row.openHhmm}
-													onChange={(next) =>
-														setDay(i, { openHhmm: next })
-													}
+													onChange={(next) => setDay(i, { openHhmm: next })}
 													disabled={saving}
 													isError={rowInvalid}
 													showIcon={false}
@@ -2340,9 +2369,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 												</span>
 												<TimePicker
 													value={row.closeHhmm}
-													onChange={(next) =>
-														setDay(i, { closeHhmm: next })
-													}
+													onChange={(next) => setDay(i, { closeHhmm: next })}
 													disabled={saving}
 													isError={rowInvalid}
 													showIcon={false}
@@ -2495,7 +2522,13 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
  * price-on-quote line are exempt (their value is settled by the seller's
  * quote). Blank or 0 = no minimum.
  */
-function MinOrderValueCard({ initial }: { initial: number | undefined }) {
+function MinOrderValueCard({
+	initial,
+	currency,
+}: {
+	initial: number | undefined;
+	currency: string;
+}) {
 	const updateSettings = useUpdateSettings();
 	const effective = initial ?? 0;
 	const [value, setValue] = useState(
@@ -2517,7 +2550,7 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
 			toast.success(
 				sen === 0
 					? "Minimum order value cleared."
-					: `Minimum order value set to ${formatPrice(sen, "MYR")}.`,
+					: `Minimum order value set to ${formatPrice(sen, currency)}.`,
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -2538,7 +2571,7 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
 						htmlFor="min-order-value"
 						className="text-xs font-medium text-muted-foreground"
 					>
-						Minimum subtotal (RM)
+						Minimum subtotal ({currencySymbol(currency)})
 					</label>
 					<Input
 						id="min-order-value"
@@ -2565,7 +2598,7 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
 			</div>
 			{trimmed.length > 0 && !valid ? (
 				<p className="text-xs text-destructive">
-					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, "MYR")}, or
+					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, currency)}, or
 					leave blank for no minimum.
 				</p>
 			) : null}
@@ -2581,11 +2614,13 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
  */
 function LocationRowBody({
 	location,
+	currency,
 	onEdit,
 	onToggleActive,
 	dragHandle,
 }: {
 	location: Doc<"pickupLocations">;
+	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
 	dragHandle?: ReactNode;
@@ -2606,7 +2641,7 @@ function LocationRowBody({
 						<PickupKindBadge kind={location.locationType ?? "self_collect"} />
 						{location.fee && location.fee > 0 ? (
 							<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-								+ {formatPrice(location.fee, "MYR")} fee
+								+ {formatPrice(location.fee, currency)} fee
 							</span>
 						) : null}
 					</div>
@@ -2686,10 +2721,12 @@ function LocationRowBody({
  */
 function LocationRow({
 	location,
+	currency,
 	onEdit,
 	onToggleActive,
 }: {
 	location: Doc<"pickupLocations">;
+	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
 }) {
@@ -2697,6 +2734,7 @@ function LocationRow({
 		<li className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 opacity-60">
 			<LocationRowBody
 				location={location}
+				currency={currency}
 				onEdit={onEdit}
 				onToggleActive={onToggleActive}
 			/>

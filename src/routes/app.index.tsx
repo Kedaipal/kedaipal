@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import { PageHeaderSkeleton } from "../components/dashboard/page-header";
@@ -377,7 +378,7 @@ function DashboardHome() {
 	const dueTodayCount = counts?.dueToday ?? 0;
 	const unpaidCount = counts?.unpaid ?? 0;
 	const unpaidAmount = counts?.unpaidAmount ?? 0;
-	const currency = retailer.currency ?? "MYR";
+	const currency = retailer.currency ?? DEFAULT_CURRENCY;
 	const recentOrders = recentOrdersPage?.page ?? [];
 	const anythingNeedsAttention =
 		newCount > 0 || dueTodayCount > 0 || unpaidCount > 0;

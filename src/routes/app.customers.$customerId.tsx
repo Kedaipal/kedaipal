@@ -4,6 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronLeft, Users } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { ProFeatureWall } from "../components/app/pro-gate";
 import { CustomerDetail } from "../components/dashboard/customer-detail";
 import {
@@ -76,7 +77,7 @@ function CustomerDetailRoute() {
 	}
 
 	const displayName = getDisplayName(customer);
-	const currency = retailer?.currency ?? "MYR";
+	const currency = retailer?.currency ?? DEFAULT_CURRENCY;
 
 	return (
 		<div className="flex flex-col gap-5 lg:gap-6">

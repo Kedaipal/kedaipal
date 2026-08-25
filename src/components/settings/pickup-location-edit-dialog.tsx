@@ -5,9 +5,10 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import { type Country, COUNTRY_LABELS } from "../../../convex/lib/country";
+import { COUNTRY_LABELS, type Country } from "../../../convex/lib/country";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
@@ -36,6 +37,8 @@ interface PickupLocationEditDialogProps {
 	 * region lock), the placeholder names it, and the manager-contact field
 	 * wears its plate + validator arm. */
 	country: Country;
+	/** Storefront currency — the fee field wears its symbol (86eyqgujv). */
+	currency: string;
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
@@ -100,6 +103,7 @@ export function PickupLocationEditDialog({
 	location,
 	retailerId,
 	country,
+	currency,
 	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
@@ -384,7 +388,7 @@ export function PickupLocationEditDialog({
 								</label>
 								<div className="relative">
 									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-										RM
+										{currencySymbol(currency)}
 									</span>
 									<input
 										id="pickup-fee-input"

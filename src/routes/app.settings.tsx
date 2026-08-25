@@ -28,13 +28,14 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
 import {
 	DELIVERY_MODE_LABELS,
 	type DeliveryConfig,
 	deliveryModeAllowed,
 	riderBookingAllowed,
 } from "../../convex/lib/delivery";
-import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
+import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
 	defaultTemplate,
@@ -53,8 +54,8 @@ import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
-import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
+import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -71,9 +72,7 @@ import {
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
-import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { convexErrorMessage } from "../lib/format";
-import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -85,6 +84,7 @@ import {
 	STAGE_LABEL_MAX_LENGTH,
 	type StageAnchor,
 } from "../lib/orderStatus";
+import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
 import {
 	settingsNotifyEmailFormSchema,
@@ -747,6 +747,7 @@ function SettingsRoute() {
 
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
+						currency={retailer.currency}
 						retailerId={retailer._id}
 						country={retailer.country}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
@@ -2418,9 +2419,8 @@ function CountryForm({
 										{staleNumbers.length === 1 ? "isn't" : "aren't"} from{" "}
 										{COUNTRY_LABELS[current]} — buyers see{" "}
 										{staleNumbers.length === 1 ? "it" : "them"} as the store's
-										contact. Update{" "}
-										{staleNumbers.length === 1 ? "it" : "them"} in the WhatsApp
-										tab.
+										contact. Update {staleNumbers.length === 1 ? "it" : "them"}{" "}
+										in the WhatsApp tab.
 									</p>
 									<Button
 										type="button"
@@ -2462,8 +2462,8 @@ function CountryForm({
 											) : null}
 											{staleNumbers.map((label) => (
 												<li key={label}>
-													Your {label} isn't a {COUNTRY_LABELS[picked]} number
-													— it's removed; add the new one in the WhatsApp tab.
+													Your {label} isn't a {COUNTRY_LABELS[picked]} number —
+													it's removed; add the new one in the WhatsApp tab.
 												</li>
 											))}
 										</ul>

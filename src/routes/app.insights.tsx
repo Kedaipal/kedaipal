@@ -4,6 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { AlertTriangle, Share2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
 import type { ProductMetric } from "../../convex/lib/insights";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -34,7 +35,7 @@ function InsightsRoute() {
 	const [range, setRange] = useState(initial);
 	const [metric, setMetric] = useState<ProductMetric>("revenue");
 
-	const currency = retailer?.currency ?? "MYR";
+	const currency = retailer?.currency ?? DEFAULT_CURRENCY;
 	const hasAccess = hasFeature(retailer?.subscription, "insights");
 
 	const { from, to } = range;

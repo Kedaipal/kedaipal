@@ -13,6 +13,7 @@ import { useMutation } from "convex/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
+import { COUNTRY_CURRENCY } from "../../../convex/lib/country";
 import { ActAsProvider } from "../../hooks/useActAs";
 import { FulfilmentTab } from "./fulfilment-tab";
 
@@ -89,6 +90,7 @@ describe("FulfilmentTab act-as wiring", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country="MY"
+					currency="MYR"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -184,6 +186,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country="MY"
+					currency="MYR"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={{ mode: "lalamove", onUnquotable: "block" }}
@@ -292,6 +295,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country="MY"
+					currency="MYR"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -309,12 +313,8 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	it("defaults to 'Open 24 hours, every day'; closing one day saves a 7-row schedule", async () => {
 		renderWithHours(undefined);
-		expect(
-			screen.getByText(/Open 24 hours, every day/),
-		).toBeTruthy();
-		fireEvent.click(
-			screen.getByRole("button", { name: "Set opening hours" }),
-		);
+		expect(screen.getByText(/Open 24 hours, every day/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
 		// The editor opens in "Same every day" seeded at the current truth
 		// (00:00–23:59 = all day). Tap Sunday's chip off, save.
 		fireEvent.click(screen.getByRole("button", { name: "Sunday" }));
@@ -332,9 +332,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	it("same-every-day: one range set through the themed picker writes the whole week", async () => {
 		renderWithHours(undefined);
-		fireEvent.click(
-			screen.getByRole("button", { name: "Set opening hours" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
 		fireEvent.click(screen.getByRole("button", { name: "Opening time" }));
 		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
 		fireEvent.click(screen.getByRole("button", { name: "Closing time" }));
@@ -353,9 +351,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	it("closing every day disables Save with the reason on screen", () => {
 		renderWithHours(undefined);
-		fireEvent.click(
-			screen.getByRole("button", { name: "Set opening hours" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
 		for (const day of [
 			"Monday",
 			"Tuesday",
@@ -413,9 +409,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		expect(screen.getAllByText("9:00 AM – 6:00 PM").length).toBe(6);
 		expect(screen.getByText("Closed")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
-		fireEvent.click(
-			screen.getByRole("button", { name: "Reset to open 24/7" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Reset to open 24/7" }));
 		await waitFor(() =>
 			expect(updateSettings).toHaveBeenCalledWith({
 				openingHours: null,
@@ -451,6 +445,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country={country}
+					currency={COUNTRY_CURRENCY[country]}
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={deliveryConfig}
@@ -488,14 +483,29 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 		expect(screen.queryByText(/Malaysia-only for now/)).toBeNull();
 	});
 
+	it("an SG store's money fields wear S$, never RM (86eyqgujv)", () => {
+		// Zaki's report: a Singapore store's delivery + minimum-order fields
+		// still quoted Malaysian ringgit. The symbol now comes from the store's
+		// currency, so the flat-fee prefix and the min-order label follow it.
+		renderTab("SG", { mode: "flat", fee: 500 });
+		expect(screen.getAllByText("S$").length).toBeGreaterThan(0);
+		expect(screen.queryByText("RM")).toBeNull();
+		expect(screen.getByText(/Minimum subtotal \(S\$\)/)).toBeTruthy();
+	});
+
+	it("an MY store is untouched — the same fields still wear RM", () => {
+		renderTab("MY", { mode: "flat", fee: 500 });
+		expect(screen.getAllByText("RM").length).toBeGreaterThan(0);
+		expect(screen.queryByText("S$")).toBeNull();
+		expect(screen.getByText(/Minimum subtotal \(RM\)/)).toBeTruthy();
+	});
+
 	it("an SG store stuck on a stored MY-only mode gets the amber repair note", () => {
 		renderTab("SG", {
 			mode: "radius",
 			bands: [{ maxKm: 5, fee: 500 }],
 			outOfRange: "arrange",
 		});
-		expect(
-			screen.getByText(/uses a Malaysia-only mode/),
-		).toBeTruthy();
+		expect(screen.getByText(/uses a Malaysia-only mode/)).toBeTruthy();
 	});
 });
