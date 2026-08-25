@@ -37,11 +37,8 @@ import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage, SendReceipt } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
 import { rateLimiter } from "./lib/rateLimiter";
-import {
-	assertValidMyMobile,
-	MOBILE_MESSAGE,
-	normalizeWaPhone,
-} from "./lib/slug";
+import { COUNTRIES } from "./lib/country";
+import { assertValidMobileForCountry, normalizeWaPhone } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
 import {
 	BURST_WINDOW_MS,
@@ -501,29 +498,44 @@ export const adminResumeRetailer = mutation({
 // ---------------------------------------------------------------------------
 
 /**
- * Canonicalize an admin-typed buyer number to the international `60…` form
- * (PR #191 review): every key the send gate checks is international —
- * `canSend` sees Meta's inbound `from` (always `60…`), and checkout/counter
- * numbers are stored via `assertValidMyMobile` — so an opt-out keyed on a
- * bare local-digits strip (`011…`) would never match `isOptedOut` and fail
- * SILENTLY, with the status panel agreeing with itself about the wrong key.
- * Same MY-mobile rule as the counter manual-phone dialog, whose buyers are
- * this panel's whole audience. Returns null on invalid input — the status
- * query runs per keystroke and must not throw.
+ * Canonicalize an admin-typed buyer number to the international form the send
+ * gate keys on (PR #191 review): `canSend` sees Meta's inbound `from` (always
+ * `60…`/`65…`), and checkout/counter numbers are stored through
+ * `assertValidMobileForCountry` — so an opt-out keyed on a bare local-digits
+ * strip (`011…`) would never match `isOptedOut` and fail SILENTLY, with the
+ * status panel agreeing with itself about the wrong key. Returns null on
+ * invalid input — the status query runs per keystroke and must not throw.
  *
- * Deliberately MY-ONLY for now, even though SG-lite (86eynw28q) made `Country`
- * a real axis: this is the one surface with no retailer and therefore no plate
- * to read a country off, and no SG store has buyers on the shared number yet.
- * The day one does, this becomes a loop over `COUNTRIES` — an SG buyer's STOP
- * keys on `65…`, which a MY-only canonicalizer can neither find nor register.
+ * **Every supported country, not just MY.** This is the one phone field in the
+ * app with no retailer behind it and therefore no country plate to read, and
+ * `optOuts` is global to the shared number — so an SG buyer's STOP lands under
+ * `65…` and a MY-only canonicalizer could neither find that row nor register a
+ * new one, i.e. a withdrawal request we could not honour. Trying each country
+ * in turn is unambiguous rather than permissive: the mobile NSN windows are
+ * disjoint (MY starts `1`, SG starts `8`/`9`) and the stored patterns are
+ * prefixed by dial code, so no input can satisfy two arms. MY is tried first,
+ * which keeps every pre-SG input byte-identical.
  */
 function canonicalOptOutPhone(raw: string): string | null {
-	try {
-		return assertValidMyMobile(raw);
-	} catch {
-		return null;
+	for (const country of COUNTRIES) {
+		try {
+			return assertValidMobileForCountry(raw, country);
+		} catch {
+			// Not this country's shape — try the next.
+		}
 	}
+	return null;
 }
+
+/**
+ * Rejection copy for the panel. Spelled out rather than derived from
+ * `MOBILE_MESSAGE`, whose per-country entries are each a complete sentence
+ * ("Enter a Malaysian mobile number…") that can't be joined into one; keep the
+ * examples in step with that record if a country's format ever changes. The
+ * client mirrors this string in `app.admin.waba.tsx`.
+ */
+const OPT_OUT_PHONE_MESSAGE =
+	"Enter a Malaysian (e.g. 012-345 6789) or Singapore (e.g. 9123 4567) mobile number";
 
 export const adminOptOutStatus = query({
 	args: { waPhone: v.string() },
@@ -553,7 +565,7 @@ export const adminRegisterOptOut = mutation({
 	handler: async (ctx, { waPhone }): Promise<void> => {
 		const adminId = await requireAdmin(ctx);
 		const phone = canonicalOptOutPhone(waPhone);
-		if (!phone) throw new ConvexError(MOBILE_MESSAGE.MY);
+		if (!phone) throw new ConvexError(OPT_OUT_PHONE_MESSAGE);
 		if (await isOptedOut(ctx, phone)) return; // idempotent
 		await ctx.db.insert("optOuts", {
 			waPhone: phone,
@@ -574,7 +586,7 @@ export const adminReactivateOptIn = mutation({
 	handler: async (ctx, { waPhone }): Promise<void> => {
 		const adminId = await requireAdmin(ctx);
 		const phone = canonicalOptOutPhone(waPhone);
-		if (!phone) throw new ConvexError(MOBILE_MESSAGE.MY);
+		if (!phone) throw new ConvexError(OPT_OUT_PHONE_MESSAGE);
 		const latest = await ctx.db
 			.query("optOuts")
 			.withIndex("by_phone", (q) => q.eq("waPhone", phone))

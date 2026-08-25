@@ -107,15 +107,25 @@ one button that either opts it out (`adminRegisterOptOut`, the first caller of
 the `manual_admin` source declared in the schema from day one) or re-activates
 it (`adminReactivateOptIn`). Same scope as a STOP; idempotent both ways.
 
-**Input is canonicalized to the international `60…` form** via
-`assertValidMyMobile` — the same rule as the counter manual-phone dialog,
-whose buyers are this panel's whole audience (PR #191 review). Every key the
-send gate checks is international (Meta's inbound `from`, checkout/counter
+**Input is canonicalized to the international form the send gate keys on**
+(`60…` / `65…`) via `assertValidMobileForCountry` (PR #191 review). Every key
+the send gate checks is international (Meta's inbound `from`, checkout/counter
 numbers), so an opt-out keyed on a bare local-digits strip would never match
-`isOptedOut` and fail silently while the panel claimed otherwise. Invalid /
-non-MY input disables the button with a reason instead of registering an
-unmatchable key; canonicalization also keeps buyer-texted `START` able to undo
-an admin opt-out (one key, both paths — pinned by test).
+`isOptedOut` and fail silently while the panel claimed otherwise. Input that
+matches no country's **mobile** shape (an MY landline, a partial number)
+disables the button with a reason instead of registering an unmatchable key;
+canonicalization also keeps buyer-texted `START` able to undo an admin opt-out
+(one key, both paths — pinned by test).
+
+This is the one phone field with **no retailer behind it**, so unlike every
+plated field (whose country comes from the retailer row — see `slug.ts`) it
+tries **each country in `COUNTRIES`** in turn. `optOuts` is global to the
+shared number, so an SG store's buyer holds their opt-out under `65…`; a
+MY-only canonicalizer could neither find that row nor register a new one — a
+withdrawal request we could not honour. Trying each arm is unambiguous rather
+than permissive: the mobile NSN windows are disjoint (MY starts `1`, SG starts
+`8`/`9`) and stored patterns carry the dial code, so no input satisfies two
+arms. MY is tried first, keeping every pre-SG input byte-identical.
 
 Every manual action is audited via **`logGlobalAdminAction`** — a new
 `adminAuditLog` shape with **no `retailerId`** (the field widened to optional),

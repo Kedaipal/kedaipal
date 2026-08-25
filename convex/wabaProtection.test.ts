@@ -381,22 +381,50 @@ describe("admin manual opt-out (86eyn25gu)", () => {
 		).toMatchObject({ optedOut: false });
 	});
 
-	test("non-MY / partial input is invalid: status says so, register refuses", async () => {
+	// SG-lite (86eynw27f) made `Country` a real axis and shipped to production,
+	// so an SG store's buyer can hold an opt-out on the shared number keyed
+	// `65…`. This panel has no retailer behind it and so no country plate to
+	// read — a MY-only canonicalizer could neither find that row nor register a
+	// new one, i.e. a withdrawal request we could not honour. Red before
+	// canonicalOptOutPhone looped over COUNTRIES.
+	test("a Singapore number opts out too, keyed on the 65… form", async () => {
 		const t = setup();
 		process.env.ADMIN_USER_IDS = USER;
 		const asAdmin = t.withIdentity({ subject: USER });
 
-		// A Singapore number is out of scope for this panel (counter buyers are
-		// MY-mobile validated); the panel disables with reason instead of
-		// registering a key no send-gate check would ever match.
+		// Typed the way an SG buyer writes it — bare NSN, no country code.
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "9123 4567",
+		});
+
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe("6591234567");
+
+		// The international spelling the send gate sees agrees with the local one.
 		expect(
 			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
 				waPhone: "+65 9123 4567",
 			}),
+		).toMatchObject({ optedOut: true, source: "manual_admin" });
+	});
+
+	test("input matching no country's mobile shape is invalid: status says so, register refuses", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// An MY landline: 8–15 digits, so the loose rule accepts it, but it can
+		// never receive WhatsApp. The panel disables with reason instead of
+		// registering a key no send-gate check would ever match.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "03-1234 5678",
+			}),
 		).toMatchObject({ optedOut: false, invalid: true });
 		await expect(
 			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
-				waPhone: "+65 9123 4567",
+				waPhone: "03-1234 5678",
 			}),
 		).rejects.toThrow();
 		expect(
