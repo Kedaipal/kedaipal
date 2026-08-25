@@ -1225,6 +1225,7 @@ describe("unapplied gateway payments are surfaced, not silent", () => {
 			paymentId: "pay_9999",
 			amountSen: 100,
 			currency: "MYR",
+		provider: "HitPay",
 		});
 		expect(result).toEqual({ applied: false, reason: "gone" });
 	});

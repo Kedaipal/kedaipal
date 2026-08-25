@@ -2426,18 +2426,20 @@ describe("orders — custom quote + decline", () => {
 		expect(after?.status).not.toBe("cancelled");
 		expect(await totalSpent(t, retailer._id)).toBe(10000);
 
-		// The buyer is nudged to pay for the remaining ready-made items over
-		// WhatsApp (the gate just opened on a still-unpaid order).
+		// No WhatsApp nudge (86eyd63r8): this legacy order (no push) already had
+		// its one message — the inbound confirm reply — and the recomputed total
+		// shows on the buyer's order page. Nothing new may be scheduled.
 		const jobs = await t.run((ctx) =>
 			ctx.db.system.query("_scheduled_functions").collect(),
 		);
+		// Buyer sends only — the seller's own alerts (86eyhw9zy) are a separate
+		// budget and DO fire on this order; see oneMessagePerOrder.test.ts.
 		expect(
-			jobs.some(
+			jobs.filter(
 				(j) =>
-					j.name.includes("notifyPaymentDue") &&
-					(j.args as Array<{ reason?: string }>)[0]?.reason === "declined",
+					j.name.startsWith("whatsapp") && !j.name.includes("notifySeller"),
 			),
-		).toBe(true);
+		).toEqual([]);
 
 		// Gate is open — the order can now be packed.
 		await asA(t).mutation(api.orders.updateStatus, {
@@ -2779,10 +2781,10 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 		const retailer = await seedRetailer(t, USER_A);
 		await asA(t).mutation(api.retailers.updateSettings, {
 			orderStages: [
-				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
-				{ anchor: "packed", label: { en: "Cleaning" }, notify: false },
-				{ anchor: "packed", label: { en: "Drying" }, notify: true },
-				{ anchor: "delivered", label: { en: "Collected" }, notify: true },
+				{ anchor: "confirmed", label: { en: "Accepted" }},
+				{ anchor: "packed", label: { en: "Cleaning" }},
+				{ anchor: "packed", label: { en: "Drying" }},
+				{ anchor: "delivered", label: { en: "Collected" }},
 			],
 		});
 		const me = await asA(t).query(api.retailers.getMyRetailer);
@@ -4289,113 +4291,6 @@ describe("fulfilment date", () => {
 			today + 1 * DAY_MS,
 			today,
 		]);
-	});
-});
-
-describe("sendOrderDocumentToBuyer", () => {
-	function installWaFetchMock() {
-		const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
-		const original = globalThis.fetch;
-		globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-			const body = init?.body ? JSON.parse(init.body as string) : {};
-			calls.push({ url: String(url), body });
-			return new Response("{}", { status: 200 });
-		}) as unknown as typeof fetch;
-		return {
-			calls,
-			restore: () => {
-				globalThis.fetch = original;
-			},
-		};
-	}
-
-	async function seedOrder(
-		t: ReturnType<typeof setup>,
-		retailerId: Id<"retailers">,
-		cust: { name?: string; waPhone?: string },
-	): Promise<string> {
-		const productId = await seedProduct(t, USER_A, retailerId);
-		const { shortId } = await t.mutation(api.orders.create, {
-			retailerId,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: cust,
-			deliveryAddress: validAddress,
-		});
-		return shortId;
-	}
-
-	test("paid order → sends a Receipt PDF document to the buyer's WhatsApp", async () => {
-		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
-		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const shortId = await seedOrder(t, retailer._id, customer);
-		// Settle it so the document renders as a receipt.
-		await t.run(async (ctx) => {
-			const o = await ctx.db
-				.query("orders")
-				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-				.first();
-			await ctx.db.patch(o!._id, {
-				paymentStatus: "received",
-				paymentReceivedAt: Date.now(),
-			});
-		});
-
-		const fetchMock = installWaFetchMock();
-		const res = await t
-			.withIdentity({ subject: USER_A })
-			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
-		expect(res.ok).toBe(true);
-		const doc = fetchMock.calls.find((c) => c.body.type === "document");
-		expect(doc).toBeTruthy();
-		const document = doc!.body.document as { filename: string; link: string };
-		expect(document.filename).toBe(`Receipt-${shortId}.pdf`);
-		expect(doc!.body.to).toBe(customer.waPhone);
-		fetchMock.restore();
-	});
-
-	test("unpaid order → sends an Invoice-named document", async () => {
-		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
-		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const shortId = await seedOrder(t, retailer._id, customer);
-
-		const fetchMock = installWaFetchMock();
-		const res = await t
-			.withIdentity({ subject: USER_A })
-			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
-		expect(res.ok).toBe(true);
-		const doc = fetchMock.calls.find((c) => c.body.type === "document");
-		expect((doc!.body.document as { filename: string }).filename).toBe(
-			`Invoice-${shortId}.pdf`,
-		);
-		fetchMock.restore();
-	});
-
-	test("returns no_phone when the order has no buyer phone", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const shortId = await seedOrder(t, retailer._id, { name: "Ali" });
-		const res = await t
-			.withIdentity({ subject: USER_A })
-			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
-		expect(res).toEqual({ ok: false, reason: "no_phone" });
-	});
-
-	test("a non-owner cannot send another store's order document", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		await seedRetailer(t, USER_B);
-		const shortId = await seedOrder(t, retailer._id, customer);
-		await expect(
-			t
-				.withIdentity({ subject: USER_B })
-				.action(api.orders.sendOrderDocumentToBuyer, { shortId }),
-		).rejects.toThrow(/Forbidden/);
 	});
 });
 
@@ -6357,7 +6252,7 @@ describe("orders — buyer repairs their number after a failed push (86eyf1rck)"
 	});
 });
 
-describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
+describe("orders — non-final totals push at create, priced in words (86eyd63r8)", () => {
 	// Fake timers: scheduled actions must NOT auto-fire (the suite asserts WHAT
 	// was scheduled via _scheduled_functions, then runs actions manually).
 	beforeEach(() => {
@@ -6453,30 +6348,80 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		return { retailer, ...result, orderId: await orderIdOf(t, result.shortId) };
 	}
 
-	test("mockup order COMMITS at create (no wa.me anywhere) with the push deferred, not scheduled", async () => {
+	/** The money parameter ({{3}}) of the one template send carrying `shortId`. */
+	async function sentMoneyParam(
+		t: ReturnType<typeof setup>,
+		orderId: Id<"orders">,
+		shortId: string,
+		wamid: string,
+	): Promise<string> {
+		const fetchMock = installWamidFetchMock(wamid);
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		// Scope to THIS order — leftover scheduled sends from earlier real-timer
+		// tests in this file can land in the same global fetch mock.
+		const wa = fetchMock
+			.waCalls()
+			.filter((c) => JSON.stringify(c.body).includes(shortId));
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			type: string;
+			template: {
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		expect(body.type).toBe("template");
+		fetchMock.restore();
+		return body.template.components[0].parameters[2].text;
+	}
+
+	test("mockup order COMMITS and PUSHES at create — the unquoted total rides as words", async () => {
 		const t = setup();
-		const { orderId, confirmedAtCreate } = await mockupOrder(t);
+		const { orderId, shortId, confirmedAtCreate } = await mockupOrder(t);
 		// The bug this ticket kills: this used to fall back to pending + ?send=1.
 		expect(confirmedAtCreate).toBe(true);
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(order?.status).toBe("confirmed");
 		expect(order?.mockupStatus).toBe("pending");
-		expect(order?.confirmationPushStatus).toBe("deferred");
-		// Nothing queued — the price isn't final, so no message may exist yet.
-		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+		// No longer deferred (86eyd63r8) — every order sends at checkout, and the
+		// money parameter tells the truth about itself instead of the send waiting
+		// for a price that may be days away.
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+
+		expect(await sentMoneyParam(t, orderId, shortId, "wamid.PEND1")).toBe(
+			"to be confirmed",
+		);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sent");
 	});
 
-	test("fee-pending order commits with the push deferred too", async () => {
+	test("fee-pending order pushes at create too, also priced in words", async () => {
 		const t = setup();
-		const { orderId, confirmedAtCreate } = await mockupOrder(t, {
+		const { orderId, shortId, confirmedAtCreate } = await mockupOrder(t, {
 			feePending: true,
 		});
 		expect(confirmedAtCreate).toBe(true);
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(order?.status).toBe("confirmed");
 		expect(order?.deliveryFeePending).toBe(true);
-		expect(order?.confirmationPushStatus).toBe("deferred");
-		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await sentMoneyParam(t, orderId, shortId, "wamid.PEND2")).toBe(
+			"to be confirmed",
+		);
+	});
+
+	test("the pending label follows the STORE locale, not English", async () => {
+		const t = setup();
+		const { retailer, orderId, shortId } = await mockupOrder(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { locale: "ms" });
+		});
+		expect(await sentMoneyParam(t, orderId, shortId, "wamid.PENDMS")).toBe(
+			"akan disahkan",
+		);
 	});
 
 	test("standard final-total order still pushes at create", async () => {
@@ -6497,10 +6442,15 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
 	});
 
-	test("mockup approval fires the deferred template with the final quoted total — and NOT the free-form prompt", async () => {
+	test("settling the price sends NOTHING — not the template, not the legacy prompt", async () => {
 		const t = setup();
 		const { orderId, shortId } = await mockupOrder(t);
+		// Spend the one message the order gets, so a later send would be a second.
+		expect(await sentMoneyParam(t, orderId, shortId, "wamid.SETTLE")).toBe(
+			"to be confirmed",
+		);
 		const asA = t.withIdentity({ subject: USER_A });
+
 		await asA.mutation(api.orders.submitMockup, {
 			orderId,
 			storageIds: ["m1"],
@@ -6508,51 +6458,22 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		// The gate-open transaction CLAIMED the push (deferred → sending) and
-		// scheduled it — not the legacy prompt. The claim being transactional is
-		// the double-send guard: a racing second gate event serializes after
-		// this, sees "sending", and schedules nothing.
-		expect(
-			(await t.run(async (ctx) => ctx.db.get(orderId)))
-				?.confirmationPushStatus,
-		).toBe("sending");
+		// Still exactly the ONE job create queued (fake timers never fire it, so a
+		// second send would show up as a second row here). Neither gate event
+		// scheduled anything: the buyer's page is already showing the quote live,
+		// and the legacy free-form prompt is gone too.
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
 		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
-
-		const fetchMock = installWamidFetchMock("wamid.DEF1");
-		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
-		const money = `MYR ${((order?.total ?? 0) / 100).toFixed(2)}`;
-		// Scope to THIS order's sends: scheduled jobs left over from earlier
-		// real-timer tests in this file can settle during this test's awaits and
-		// drop their (other-shortId) messages into the same global fetch mock.
-		// A free-form prompt for THIS order would still carry this shortId and
-		// fail the length check, so the "template, not prompt" claim holds.
-		const wa = fetchMock
-			.waCalls()
-			.filter((c) => JSON.stringify(c.body).includes(shortId));
-		expect(wa).toHaveLength(1);
-		const body = wa[0].body as {
-			type: string;
-			template: {
-				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
-			};
-		};
-		expect(body.type).toBe("template");
-		expect(body.template.components[0].parameters.map((x) => x.text)).toEqual([
-			shortId,
-			"Test Store",
-			money,
-		]);
-		// Quote folded into the announced total.
+		// Quote folded into the total the buyer reads on the order page.
 		expect(order?.total).toBe(12000 + 5000);
 		expect(order?.confirmationPushStatus).toBe("sent");
-		fetchMock.restore();
 	});
 
-	test("seller waiving the mockup fires the deferred push too", async () => {
+	test("seller waiving the mockup sends nothing either", async () => {
 		const t = setup();
-		const { orderId } = await mockupOrder(t);
+		const { orderId, shortId } = await mockupOrder(t);
+		await sentMoneyParam(t, orderId, shortId, "wamid.WAIVE");
 		const asA = t.withIdentity({ subject: USER_A });
 		// Waiver needs a submitted mockup + the 48h grace elapsed since
 		// submission — submit, then backdate the submission stamp.
@@ -6567,11 +6488,12 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 			});
 		});
 		await asA.mutation(api.orders.waiveMockup, { orderId });
+		// Unchanged: still just create's own job.
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
 		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
 	});
 
-	test("declining the custom item fires the push for the ready-made remainder; custom-only decline cancels and sends nothing", async () => {
+	test("declining the custom item sends nothing extra; custom-only decline cancels and clears the promise", async () => {
 		// Remainder case: custom line + a standard line in one order.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -6598,16 +6520,20 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		expect(
 			(await t.run(async (ctx) => ctx.db.get(orderId)))
 				?.confirmationPushStatus,
-		).toBe("deferred");
+		).toBe("sending");
+		// Spend the one message, then drop the custom line.
+		await sentMoneyParam(t, orderId, shortId, "wamid.DECLINE");
 		await t.mutation(api.orders.declineMockupItem, {
 			token: await tk(t, shortId),
 		});
+		// Re-pricing to the ready-made remainder is a page update, not a message —
+		// still only create's own job pending.
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
 		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
 
-		// Custom-only case: declining everything IS a cancellation — the order's
-		// confirmation must never exist. (The action's cancelled guard is the
-		// second line of defence; here the site simply never schedules it.)
+		// Custom-only case: declining everything IS a cancellation — the in-flight
+		// "your confirmation is coming" stamp must not outlive the order. (The
+		// action's cancelled guard is the second line of defence.)
 		const t2 = setup();
 		const { orderId: soloId, shortId: soloShort } = await mockupOrder(t2);
 		await t2.mutation(api.orders.declineMockupItem, {
@@ -6616,12 +6542,31 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		const solo = await t2.run(async (ctx) => ctx.db.get(soloId));
 		expect(solo?.status).toBe("cancelled");
 		expect(solo?.confirmationPushStatus).toBeUndefined();
-		expect(await scheduled(t2, "notifyStorefrontOrderCreated")).toEqual([]);
+		// Create's send job is still queued (fake timers), so the guard that
+		// matters is the action's own: run it and prove nothing leaves.
+		const soloMock = installWamidFetchMock("wamid.SOLO");
+		await t2.action(internal.whatsapp.notifyStorefrontOrderCreated, {
+			orderId: soloId,
+		});
+		expect(
+			soloMock.waCalls().filter((c) => JSON.stringify(c.body).includes(soloShort)),
+		).toHaveLength(0);
+		expect(
+			(await t2.run(async (ctx) => ctx.db.get(soloId)))
+				?.confirmationPushStatus,
+		).toBeUndefined();
+		soloMock.restore();
 	});
 
-	test("double hold (mockup + fee) sends exactly once, after BOTH clear", async () => {
+	test("double hold (mockup + fee) still sends exactly ONE message, at create", async () => {
 		const t = setup();
 		const { orderId, shortId } = await mockupOrder(t, { feePending: true });
+		// One send scheduled at create, and it names neither price.
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await sentMoneyParam(t, orderId, shortId, "wamid.DBL1")).toBe(
+			"to be confirmed",
+		);
+
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.orders.submitMockup, {
 			orderId,
@@ -6629,54 +6574,39 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 			quotedAmount: 5000,
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
-
-		// Gate 1 open, gate 2 (fee) still held → the site must NOT claim: the
-		// order stays deferred and nothing is scheduled at all.
-		expect(
-			(await t.run(async (ctx) => ctx.db.get(orderId)))
-				?.confirmationPushStatus,
-		).toBe("deferred");
-		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
-
-		// Seller sets the fee → BOTH gates now clear inside that transaction →
-		// it wins the claim and schedules the one send.
 		await asA.mutation(api.orders.setDeliveryFee, { orderId, fee: 700 });
-		expect(await scheduled(t, "notifyDeliveryFeeSet")).toEqual([]);
+
+		// Both gates opened and neither produced a message — the whole reason the
+		// deferred/claim machinery existed (making a double hold send exactly once)
+		// is now true by construction, since there is only ever the create send.
+		// Still the same single pending job counted above.
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
-		expect(
-			(await t.run(async (ctx) => ctx.db.get(orderId)))
-				?.confirmationPushStatus,
-		).toBe("sending");
-		const fetchMock = installWamidFetchMock("wamid.DBL1");
-		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		expect(await scheduled(t, "notifyDeliveryFeeSet")).toEqual([]);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
-		expect(fetchMock.waCalls()).toHaveLength(1);
 		expect(order?.confirmationPushStatus).toBe("sent");
-		// Announced total = base + quote + fee.
+		// Total on the ORDER PAGE = base + quote + fee, even though the message
+		// that went out couldn't name it.
 		expect(order?.total).toBe(12000 + 5000 + 700);
-		fetchMock.restore();
 	});
 
-	test("the action refuses to send while a hold is open, whoever schedules it", async () => {
+	test("a settled price sends a real number, not the placeholder", async () => {
 		const t = setup();
-		const { orderId } = await mockupOrder(t);
-		// Force the state a bug would need: sending-stamped but the mockup gate
-		// still closed. The claim path can't produce this; the action is the
-		// last line of defence against a wrong "Total: {{3}}" going out.
-		await t.run(async (ctx) => {
-			await ctx.db.patch(orderId, { confirmationPushStatus: "sending" });
+		const { orderId, shortId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Quote first, THEN send — proves the placeholder is chosen from the live
+		// hold state at send time, not baked in at create.
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
 		});
-		const fetchMock = installWamidFetchMock("wamid.HELD");
-		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
-		expect(fetchMock.waCalls()).toHaveLength(0);
-		expect(
-			(await t.run(async (ctx) => ctx.db.get(orderId)))
-				?.confirmationPushStatus,
-		).toBe("sending");
-		fetchMock.restore();
+		expect(await sentMoneyParam(t, orderId, shortId, "wamid.REAL1")).toBe(
+			`MYR ${((12000 + 5000) / 100).toFixed(2)}`,
+		);
 	});
 
-	test("cancelled while deferred → the confirmation never sends", async () => {
+	test("cancelled before the send runs → the confirmation never goes out", async () => {
 		const t = setup();
 		const { orderId } = await mockupOrder(t);
 		const asA = t.withIdentity({ subject: USER_A });
@@ -6684,8 +6614,9 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 			orderId,
 			status: "cancelled",
 		});
-		// The deferred stamp is cleared on cancel — the "confirmation coming"
-		// promise must not outlive the order (the tracking card keys on it).
+		// The in-flight stamp is cleared on cancel — the "confirmation coming"
+		// promise must not outlive the order (the tracking card keys on it), and
+		// the action below will never move it off `sending` on its own.
 		expect(
 			(await t.run(async (ctx) => ctx.db.get(orderId)))
 				?.confirmationPushStatus,
@@ -6700,7 +6631,49 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		fetchMock.restore();
 	});
 
-	test("legacy flow (env unset) is untouched: pending order, free-form prompt on approval", async () => {
+	test("releaseDeferredPushes rescues legacy deferred rows and clears cancelled ones", async () => {
+		const t = setup();
+		const live = await mockupOrder(t);
+		// A second order in the same store (one retailer per account).
+		const plainProduct = await seedProduct(t, USER_A, live.retailer._id);
+		const { shortId: deadShort } = await t.mutation(api.orders.create, {
+			retailerId: live.retailer._id,
+			items: [{ productId: plainProduct, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const deadId = await orderIdOf(t, deadShort);
+		// Put both back into the retired state nothing creates any more — these
+		// stand in for rows already `deferred` at deploy time, which nothing
+		// claims now that the mechanism is gone.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(live.orderId, { confirmationPushStatus: "deferred" });
+			await ctx.db.patch(deadId, {
+				confirmationPushStatus: "deferred",
+				status: "cancelled",
+			});
+		});
+
+		const first = await t.mutation(internal.orders.releaseDeferredPushes, {});
+		expect(first).toEqual({ released: 1, skipped: 1, done: true });
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(live.orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		// The cancelled one loses the promise instead of collecting a message.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(deadId)))?.confirmationPushStatus,
+		).toBeUndefined();
+
+		// Idempotent: nothing is left to find, and no second send is queued.
+		expect(await t.mutation(internal.orders.releaseDeferredPushes, {})).toEqual(
+			{ released: 0, skipped: 0, done: true },
+		);
+	});
+
+	test("legacy flow (env unset): pending order, and approval sends nothing (86eyd63r8)", async () => {
 		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -6732,8 +6705,19 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 			quotedAmount: 5000,
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
-		expect(await scheduled(t, "notifyPaymentDue")).toHaveLength(1);
+		// 86eyd63r8: the legacy free-form payment prompt is gone with every other
+		// follow-up send. A no-push order's one message stays the inbound confirm
+		// reply; approval only opens the gate, and payment lives on the order page.
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(
+			jobs.filter(
+				(j) =>
+					j.name.startsWith("whatsapp") && !j.name.includes("notifySeller"),
+			),
+		).toEqual([]);
 	});
 });
 

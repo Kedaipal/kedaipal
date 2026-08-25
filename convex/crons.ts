@@ -18,15 +18,10 @@ crons.daily(
 	internal.subscriptions.internalDailyBillingStatus,
 );
 
-// Unpaid-order payment reminders: one WhatsApp nudge at day 11 of the 14-day
-// open-payment window (3 days before it closes). 02:00 UTC = 10:00 MYT, a
-// humane hour for a buyer-facing message. See docs/payment-reminder.md.
-crons.daily(
-	"unpaid payment reminders",
-	{ hourUTC: 2, minuteUTC: 0 },
-	internal.paymentReminders.sendDuePaymentReminders,
-	{},
-);
+// NOTE: the day-11 unpaid-payment-reminder cron was removed with the
+// one-message-per-order policy (86eyd63r8) — an order gets exactly one outbound
+// WhatsApp, the confirmation push, and chasing payment is the seller's call from
+// the inbox. See docs/one-message-per-order.md.
 
 // Lalamove checkout-quote hygiene: abandoned deliveryQuotes rows (buyer never
 // completed checkout) are transient by design — purge anything older than a
