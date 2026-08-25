@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { myWaPhoneCheckoutSchema } from "../../lib/schemas";
-import { MyPhoneInput, MyPhonePrefix } from "./my-phone-input";
+import { waPhoneCheckoutSchema } from "../../lib/schemas";
+import { MOBILE_PLACEHOLDER, MyPhoneInput, MyPhonePrefix } from "./my-phone-input";
 
 /**
- * The one Malaysian phone control (86eyknr2r). These pin the two things that
- * make it safe to weld a fixed `+60` onto a field: the plate is actually
- * visible, and what a user types beside it is what the validator accepts.
+ * The one plated phone control (86eyknr2r; per-country since SG-lite
+ * 86eynw28q). These pin the things that make it safe to weld a fixed dial code
+ * onto a field: the plate is actually visible, it matches the country prop,
+ * and what a user types beside it is what that country's validator accepts.
  */
 
 describe("MyPhoneInput", () => {
@@ -17,6 +18,22 @@ describe("MyPhoneInput", () => {
 		render(<MyPhoneInput value="" onChange={() => {}} />);
 		expect(screen.getByText("+60")).toBeDefined();
 		expect(screen.getByRole("img", { name: "Malaysia" })).toBeDefined();
+	});
+
+	it("defaults to the MY plate — untouched call sites keep their behaviour", () => {
+		render(<MyPhoneInput value="" onChange={() => {}} />);
+		expect(
+			screen.getByRole("textbox").getAttribute("placeholder"),
+		).toBe(MOBILE_PLACEHOLDER.MY);
+	});
+
+	it("wears the SG plate when the store's country says so", () => {
+		render(<MyPhoneInput value="" onChange={() => {}} country="SG" />);
+		expect(screen.getByText("+65")).toBeDefined();
+		expect(screen.getByRole("img", { name: "Singapore" })).toBeDefined();
+		expect(
+			screen.getByRole("textbox").getAttribute("placeholder"),
+		).toBe(MOBILE_PLACEHOLDER.SG);
 	});
 
 	it("the plate is not editable — only one input exists in the control", () => {
@@ -35,15 +52,16 @@ describe("MyPhoneInput", () => {
 		expect(onChange).toHaveBeenCalledWith("12-345 6789");
 	});
 
-	it("its placeholder is a value the schema behind it accepts", () => {
+	it("each country's placeholder is a value its own schema accepts", () => {
 		// The plate is a promise about what the field takes. If the placeholder
 		// showed a shape the validator rejected, the control would be telling the
 		// user to do something the save then refuses.
-		render(<MyPhoneInput value="" onChange={() => {}} />);
-		const placeholder = screen
-			.getByRole("textbox")
-			.getAttribute("placeholder") as string;
-		expect(myWaPhoneCheckoutSchema.safeParse(placeholder).success).toBe(true);
+		expect(
+			waPhoneCheckoutSchema.MY.safeParse(MOBILE_PLACEHOLDER.MY).success,
+		).toBe(true);
+		expect(
+			waPhoneCheckoutSchema.SG.safeParse(MOBILE_PLACEHOLDER.SG).success,
+		).toBe(true);
 	});
 
 	it("carries the tel keyboard hints on mobile", () => {
@@ -70,5 +88,11 @@ describe("MyPhonePrefix", () => {
 		render(<MyPhonePrefix />);
 		expect(screen.getByText("+60")).toBeDefined();
 		expect(screen.getByRole("img", { name: "Malaysia" })).toBeDefined();
+	});
+
+	it("renders the SG badge for an SG store", () => {
+		render(<MyPhonePrefix country="SG" />);
+		expect(screen.getByText("+65")).toBeDefined();
+		expect(screen.getByRole("img", { name: "Singapore" })).toBeDefined();
 	});
 });

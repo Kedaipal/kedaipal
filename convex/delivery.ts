@@ -15,10 +15,12 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { MY_STATES } from "./lib/address";
+import { DEFAULT_COUNTRY } from "./lib/country";
 import {
 	type CartWeightItem,
 	type DeliveryConfig,
 	type DeliveryQuoteReason,
+	deliveryModeAllowed,
 	resolveDeliveryQuote,
 	summarizeCartWeight,
 } from "./lib/delivery";
@@ -33,8 +35,10 @@ export type PublicDeliveryQuote =
 	| { kind: "free"; reason?: "threshold" }
 	| { kind: "fee"; fee: number }
 	| { kind: "pending"; reason: DeliveryQuoteReason }
-	// "store_unavailable" is produced only by the live-quote client collapse
-	// (broken seller keys) — the static resolver never emits it.
+	// "store_unavailable" = seller-side breakage the buyer can't fix: the
+	// live-quote client collapse (broken seller keys), or — server-emitted —
+	// a stored delivery mode the store's country doesn't support (SG-lite
+	// read guard below; updateSettings refuses storing that combination).
 	| { kind: "blocked"; reason: DeliveryQuoteReason | "store_unavailable" }
 	// Pricing mode "lalamove": this reactive query can't fetch the provider —
 	// the client must call the lalamove.quoteForCheckout ACTION once the buyer
@@ -72,6 +76,19 @@ export const quote = query({
 	handler: async (ctx, args): Promise<PublicDeliveryQuote> => {
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) return { kind: "free" };
+		// Country/mode mismatch (SG-lite belt-and-braces — updateSettings refuses
+		// storing this): an MY-only pricing mode on an SG store can only misprice
+		// or strand every order fee-pending, so surface it as the seller-side
+		// blocked state ("it's on the store's side, not yours") instead.
+		if (
+			retailer.deliveryConfig &&
+			!deliveryModeAllowed(
+				retailer.country ?? DEFAULT_COUNTRY,
+				retailer.deliveryConfig.mode,
+			)
+		) {
+			return { kind: "blocked", reason: "store_unavailable" };
+		}
 		if (retailer.deliveryConfig?.mode === "lalamove") {
 			return { kind: "live" };
 		}

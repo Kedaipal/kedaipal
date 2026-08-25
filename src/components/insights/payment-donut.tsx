@@ -13,9 +13,19 @@ const RADIUS = 42;
 const STROKE = 16;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-// Opacity ramp — up to 7 methods (cash/duitnow/tng/bank_transfer/fpx/card/other)
-// plus "unspecified". Darkest = largest slice.
-const OPACITY_RAMP = [1, 0.72, 0.5, 0.36, 0.24, 0.16, 0.1, 0.06];
+// Opacity ramp — one step per possible slice: all 11 ORDER_PAYMENT_METHODS
+// (SG-lite added paynow/paylah/nets/grabpay, 86eyph341) plus "unspecified".
+// Darkest = largest slice.
+//
+// The first eight values are unchanged, so every store that could render a
+// donut before this renders it identically — a store lives in ONE country, so
+// in practice it draws from ~8 rails + unspecified and never reaches the tail.
+// The tail exists only so ranks 9–12 can't collide on one shade (the old
+// index clamp gave them all the same swatch, making the legend ambiguous);
+// they are faint by design — at that rank the label and % carry the meaning.
+const OPACITY_RAMP = [
+	1, 0.72, 0.5, 0.36, 0.24, 0.16, 0.1, 0.06, 0.05, 0.042, 0.036, 0.03,
+];
 
 function methodLabel(method: string): string {
 	if (method === "unspecified") return "Online / other";
