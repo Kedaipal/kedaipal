@@ -955,13 +955,13 @@ export function CheckoutPage({
 	// DESKTOP only. On mobile this rode along in the fixed bottom bar, where two
 	// full sentences of small print pushed the CTA up and buried the total; the
 	// bar gets `finePrintCompact` instead. Nothing is lost by dropping it there:
-	// "confirmation lands in your WhatsApp" is already the phone field's own
-	// description, three thumb-scrolls up.
+	// the one-confirmation promise is already the phone field's own description,
+	// three thumb-scrolls up.
 	const finePrint = (
 		<>
 			<p className="text-center text-xs text-muted-foreground">
 				{confirmPushEnabled
-					? `Your order goes straight to ${storeName} — confirmation lands in your WhatsApp. Nothing is paid yet.`
+					? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. Nothing is paid yet.`
 					: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
 			</p>
 			<p className="text-center text-xs text-muted-foreground">
@@ -972,7 +972,7 @@ export function CheckoutPage({
 	// The mobile bar's whole fine print: the consent line, which is the only
 	// part we can't drop, and which ends on the link so it reads as one
 	// sentence. The reassurance stays desktop-only (the phone field's own
-	// description already promises the WhatsApp confirmation).
+	// description already promises the single WhatsApp confirmation).
 	const finePrintCompact = (
 		<p className="text-center text-xs text-muted-foreground">
 			By placing this order, you agree to our {privacyPolicyLink}.
@@ -1152,7 +1152,13 @@ export function CheckoutPage({
 									placeholder="e.g. Aisyah"
 									autoComplete="name"
 									required
-									description={`Appears in your WhatsApp message so ${storeName} knows who this order is for.`}
+									description={
+										// Push path: the buyer never sends a WhatsApp message —
+										// the name reaches the seller on the order itself.
+										confirmPushEnabled
+											? `So ${storeName} knows who this order is for.`
+											: `Appears in your WhatsApp message so ${storeName} knows who this order is for.`
+									}
 								/>
 							)}
 						</form.AppField>
@@ -1173,9 +1179,12 @@ export function CheckoutPage({
 									placeholder={MOBILE_PLACEHOLDER[country]}
 									required
 									description={
+										// ONE message per order (86eyd63r8) — the confirmation.
+										// Everything after it lives on the order page, so the copy
+										// must not hint at a stream of WhatsApp updates.
 										confirmPushEnabled
-											? "Your order confirmation lands in this WhatsApp."
-											: `${storeName} reaches you on this WhatsApp about your order.`
+											? "We send one order confirmation here, with a link to follow your order."
+											: `${storeName} sends your order confirmation to this WhatsApp.`
 									}
 								/>
 							)}
@@ -1204,10 +1213,10 @@ export function CheckoutPage({
 										{locale === "ms"
 											? confirmPushEnabled
 												? `Pengesahan akan dihantar ke ${pretty} — pastikan nombor ini betul.`
-												: `${storeName} akan hubungi anda di ${pretty} — pastikan nombor ini betul.`
+												: `${storeName} akan hantar pengesahan ke ${pretty} — pastikan nombor ini betul.`
 											: confirmPushEnabled
 												? `We'll send your confirmation to ${pretty} — check it's right.`
-												: `${storeName} will reach you at ${pretty} — check it's right.`}
+												: `${storeName} will send your confirmation to ${pretty} — check it's right.`}
 									</p>
 								);
 							}}
@@ -1215,12 +1224,16 @@ export function CheckoutPage({
 						{/* PDPA notice-at-collection — the buyer-facing line the WhatsApp
 						    flows carry via privacyNoticeLine; localized to the store
 						    locale like the tracking page (rest of checkout copy is EN
-						    pending the storefront i18n phase). */}
+						    pending the storefront i18n phase).
+						    It promises exactly ONE message (86eyd63r8): status updates no
+						    longer go out on WhatsApp, they live on the order page — and a
+						    consent line is the last place that may overstate what we send. */}
 						<p className="text-xs text-muted-foreground">
 							{locale === "ms" ? (
 								<>
-									Nombor anda digunakan untuk pesanan ini sahaja — pengesahan
-									dan status pesanan dihantar ke WhatsApp anda.{" "}
+									Nombor anda digunakan untuk pesanan ini sahaja — anda akan
+									terima satu pengesahan WhatsApp dengan pautan ke halaman
+									pesanan, tempat anda boleh ikut pesanan selepas itu.{" "}
 									<a
 										href="/privacy"
 										target="_blank"
@@ -1232,8 +1245,9 @@ export function CheckoutPage({
 								</>
 							) : (
 								<>
-									Your number is used for this order only — confirmations and
-									status updates go to your WhatsApp.{" "}
+									Your number is used for this order only — you&apos;ll get one
+									WhatsApp confirmation with a link to your order page, where
+									you follow the order from there.{" "}
 									<a
 										href="/privacy"
 										target="_blank"

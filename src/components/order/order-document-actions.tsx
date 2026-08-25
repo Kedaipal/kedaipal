@@ -1,13 +1,17 @@
-// Counter-checkout Done-screen actions for getting the order's document to the
-// buyer: SEND it straight to their WhatsApp (they scanned the QR once, so we
-// have their number — no rescan), or DOWNLOAD / SHARE it via the OS sheet.
+// Counter-checkout Done-screen actions for handing the order's document to the
+// buyer while they're still standing there: DOWNLOAD it, or SHARE it via the OS
+// sheet (AirDrop, Files, WhatsApp — whatever they use).
 //
 // The document is a receipt when the order is already paid, an invoice when it's
-// pay-later — same PDF, adaptive title (see convex/lib/pdf/render.ts). Both the
-// send and the download/share go through orders.* keyed on the owned `shortId`.
+// pay-later — same PDF, adaptive title (see convex/lib/pdf/render.ts).
+//
+// It is NOT WhatsApp'd (86eyd63r8): an order sends the buyer exactly one
+// message, and for a counter order that's the confirmation carrying their order
+// link. The buyer can open (and download) this same document from that page
+// whenever they want, so this is purely the "here, take a copy now" tool.
 
 import { useAction } from "convex/react";
-import { Check, Download, Send, Share2 } from "lucide-react";
+import { Download, Share2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -20,14 +24,7 @@ import { MASK_PII } from "../../lib/analytics-privacy";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 
-const SEND_ERROR: Record<string, string> = {
-	no_phone: "No WhatsApp number on file for this buyer.",
-	not_found: "This order could no longer be found.",
-	send_failed: "Couldn't send on WhatsApp just now — try Download or Share.",
-	storage: "Couldn't prepare the document — please try again.",
-};
-
-export function SendOrderDocument({
+export function OrderDocumentActions({
 	shortId,
 	paid,
 	buyerName,
@@ -37,15 +34,12 @@ export function SendOrderDocument({
 	shortId: string;
 	paid: boolean;
 	buyerName?: string;
-	// Anonymous cash sale (86ey8vqp6) — there's no buyer WhatsApp to send to, so
-	// the send action is hidden and only Download / Share are offered.
+	// Anonymous cash sale (86ey8vqp6) — no WhatsApp went out, so there's no order
+	// page the buyer can reach on their own; this is their only copy.
 	hasBuyer?: boolean;
 	className?: string;
 }) {
-	const send = useAction(api.orders.sendOrderDocumentToBuyer);
 	const generate = useAction(api.orders.generateReceiptPdf);
-	const [sending, setSending] = useState(false);
-	const [sent, setSent] = useState(false);
 	const [downloading, setDownloading] = useState(false);
 	const [sharing, setSharing] = useState(false);
 
@@ -53,26 +47,6 @@ export function SendOrderDocument({
 	const Noun = paid ? "Receipt" : "Invoice";
 	const who = buyerName?.trim() ? buyerName.trim() : "the buyer";
 	const canShare = canSharePdf();
-
-	async function handleSend() {
-		setSending(true);
-		try {
-			const res = await send({ shortId });
-			if (res.ok) {
-				setSent(true);
-				// No buyer name in the toast — it portals outside every masked subtree.
-				toast.success(`${Noun} resent on WhatsApp.`);
-			} else {
-				toast.error(
-					SEND_ERROR[res.reason ?? ""] ?? `Couldn't send the ${noun}.`,
-				);
-			}
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSending(false);
-		}
-	}
 
 	async function fetchPdf(): Promise<{
 		pdf: ArrayBuffer;
@@ -120,32 +94,12 @@ export function SendOrderDocument({
 		// MASK_PII: the buyer's name appears in the button label + helper copy.
 		<div {...MASK_PII} className={className}>
 			<div className="grid gap-2 sm:grid-cols-2">
-				{hasBuyer ? (
-					<Button
-						type="button"
-						onClick={handleSend}
-						isLoading={sending}
-						disabled={sending || sent}
-						className="h-11 sm:col-span-2"
-					>
-						{sent ? (
-							<>
-								<Check className="size-4" /> {Noun} resent
-							</>
-						) : (
-							<>
-								<Send className="size-4" /> Resend {noun} to {who}
-							</>
-						)}
-					</Button>
-				) : null}
 				<Button
 					type="button"
-					variant={hasBuyer ? "outline" : "default"}
 					onClick={handleDownload}
 					isLoading={downloading}
 					disabled={downloading}
-					className={hasBuyer || canShare ? "h-11" : "h-11 sm:col-span-2"}
+					className={canShare ? "h-11" : "h-11 sm:col-span-2"}
 				>
 					{!downloading && <Download className="size-4" />}
 					Download
@@ -165,11 +119,9 @@ export function SendOrderDocument({
 				) : null}
 			</div>
 			<p className="mt-2 text-xs text-muted-foreground">
-				{!hasBuyer
-					? `Cash sale — no WhatsApp on file. Download or share ${who === "the buyer" ? "the" : `${who}'s`} ${noun} if they'd like a copy.`
-					: paid
-						? `We've already sent ${who} their receipt on WhatsApp. Resend or download it here if you need to.`
-						: `We've already sent ${who} their invoice and payment details on WhatsApp. Resend or download here if you need to.`}
+				{hasBuyer
+					? `Hand ${who} their ${noun} now if they want one. It isn't sent on WhatsApp — they can open it any time from the order page we linked them to.`
+					: `Cash sale — no WhatsApp on file, so this is ${who === "the buyer" ? "their" : `${who}'s`} only copy. Download or share the ${noun} if they'd like one.`}
 			</p>
 		</div>
 	);

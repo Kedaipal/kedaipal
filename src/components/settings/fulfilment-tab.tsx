@@ -1054,8 +1054,9 @@ function DeliveryChargeSection({
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Buyers pay the real Lalamove price for their address at checkout,
-						and you book the rider in one tap from the order — with automatic
-						shipped + live-tracking WhatsApp messages. There&apos;s{" "}
+						and you book the rider in one tap from the order — which then marks
+						itself Shipped and puts the rider&apos;s live tracking on the
+						buyer&apos;s order page, automatically. There&apos;s{" "}
 						<b>no delivery area to set</b>, and{" "}
 						<b>buyers always see the price before ordering</b> (an address
 						Lalamove can&apos;t price can&apos;t check out, so you never work
@@ -1304,8 +1305,9 @@ function DeliveryChargeSection({
 							</div>
 							<p className="text-xs text-muted-foreground">
 								Paste this in your Lalamove Partner Portal → Developers →
-								Webhook URL (choose version 3). It powers the automatic shipped
-								+ live-tracking messages — step 5 in the guide.
+								Webhook URL (choose version 3). It powers the automatic Shipped
+								and Delivered updates, and the live tracking on the buyer&apos;s
+								order page — step 5 in the guide.
 							</p>
 						</div>
 					) : null}
@@ -1594,9 +1596,11 @@ function DeliveryChargeSection({
 									Accept the order, arrange the charge on WhatsApp
 								</span>
 								<span className="text-xs text-muted-foreground">
-									The order comes in with the delivery charge pending — you
-									agree it with the buyer in chat, set it on the order, and the
-									payment request goes out with the final total.
+									The order comes in with the delivery charge pending, and the
+									buyer&apos;s WhatsApp confirmation waits with it — so message
+									them first. Agree the charge, set it on the order, and
+									that&apos;s when their confirmation goes out, with the charge
+									and the final total in it.
 								</span>
 							</span>
 						</label>
