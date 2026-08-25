@@ -37,15 +37,35 @@ must never break a buyer's *active order* updates.
 
 | Category | Used for today | Gated? |
 | --- | --- | --- |
-| `transactional` | order confirm, status updates, payment received, mockup, counter order, founding welcome, diagnostics | **No** — always sends (core promise) |
-| `session_message` | generic inbound replies (unknown fallback, checkout-bind, opt-out acks) | Yes |
-| `utility_template` / `marketing_template` | reserved for templates ([`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw)) + Broadcast | Yes |
+| `transactional` | the order's **one** outbound message (storefront confirmation template, or the counter-order confirmation), the free-form confirm reply to an inbound `ORD-`, founding welcome, diagnostics | **No** — always sends (core promise) |
+| `session_message` | generic inbound replies (unknown fallback, store-QR acks, opt-out acks) | Yes |
+| `utility_template` / `marketing_template` | the confirmation push logs as `utility_template` + template name (per-template cost accounting); `marketing_template` reserved for Broadcast | Yes |
 
-**Consequence to keep in mind:** pre-Broadcast, almost all real traffic is
-transactional, so the kill switch + caps mostly govern session replies *today*
-and become fully load-bearing once Broadcast ships — which is exactly the
+> **The `transactional` row shrank hard (2026-08-04,
+> [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).** It used to read "order
+> confirm, status updates, payment received, mockup, counter order…" — and that
+> list is now, almost exactly, the list of sends that were **deleted**. An order
+> sends the buyer exactly one WhatsApp message; status updates, payment-received
+> pings, mockup notices, payment prompts, both payment reminders, the counter
+> receipt PDF and the Lalamove POD photos are gone. See
+> [`one-message-per-order.md`](./one-message-per-order.md).
+>
+> **"One message" is enforced by code structure, not by this gateway.** The
+> confirmation is `transactional`, so it bypasses `canSend` entirely — the caps,
+> kill switch, opt-out and quality halt never see it and could never have
+> counted it. The only thing preventing a second send is that there is no second
+> `wa.send` call site left, plus the `pushOwnsTheMessage` guard on inbound `ORD-`
+> replies (`convex/whatsapp.ts:554`). Do not reach for the rate limiter to
+> enforce message budgets: an order message that a cap could block is an order
+> message that can silently fail to reach a paying buyer, which is the exact
+> trade this category policy exists to refuse.
+
+**Consequence to keep in mind:** pre-Broadcast, the surviving traffic is almost
+entirely transactional, so the kill switch + caps mostly govern session replies
+*today* and become fully load-bearing once Broadcast ships — which is exactly the
 boundary we drew. The opt-out, quality auto-throttle, and audit log are valuable
-immediately.
+immediately, and the audit log matters more than ever now that every logged row
+is a **billable** message from 1 Oct 2026.
 
 ## The gate
 

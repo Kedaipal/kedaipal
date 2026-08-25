@@ -4,15 +4,16 @@ How a seller learns something happened on an order, across three channels:
 
 | Channel | Events | Where configured | Requires |
 | --- | --- | --- | --- |
-| **Email** (`convex/email.ts`) | new order, payment claim, mockup loop, delivery-job failure, gateway mismatch | Settings → Store → Notification email | `retailers.notifyEmail` |
+| **Email** (`convex/email.ts`) | new order, payment claim, payment received, mockup loop, delivery-job failure, gateway mismatch | Settings → Store → Notification email | `retailers.notifyEmail` |
 | **Browser** (chime + system notification, below) | new order, rider booking failed | Settings → Store → "Order alerts on this device" | a Kedaipal tab open on that device |
-| **WhatsApp** (`86eyhw9zy`, below) | new order, payment claim | Settings → Store → "WhatsApp order alerts" | Pro + opt-in + approved Meta template |
+| **WhatsApp** (`86eyhw9zy`, below) | new order, payment claim, payment received | Settings → Store → "WhatsApp order alerts" | Pro + opt-in + approved Meta template |
 
 ## WhatsApp order alerts (86eyhw9zy, Aug 2026)
 
 The Sengloh request: a WhatsApp ping the moment a new order lands, because
-neither email nor an open dashboard tab is where a stall owner lives. Two
-alerts, both sent from the shared WABA to the seller's own number:
+neither email nor an open dashboard tab is where a stall owner lives. Three
+alerts, all sent from the shared WABA to the seller's own number — and all on
+the moments money moves:
 
 - **New order** — fired from `orders.create` beside the email alert
   (`whatsapp.notifySellerNewOrder`). **Storefront orders only**: counter
@@ -23,6 +24,38 @@ alerts, both sent from the shared WABA to the seller's own number:
   payment-claimed email (`whatsapp.notifySellerPaymentClaim`). **Counter
   pay-later orders ARE included** — a claim lands hours after the sale, when
   nobody is at the counter, so the standing-there rationale doesn't apply.
+- **Payment actually received** (86eyd63r8) — fired from
+  `orders.receiveGatewayPayment`, i.e. a HitPay settlement verified by webhook
+  HMAC or the redirect reconcile (`whatsapp.notifySellerPaymentReceived`).
+  Before this the event notified the seller on **no channel at all** — there
+  was no payment-received email either, so the only way to learn money had
+  landed was to open the dashboard.
+
+### Why "received" is a third template, not the claim one
+
+The two are different asks. A **claim** is the buyer's word for it: the seller
+has to open their bank app and confirm. A **gateway receive** is already
+verified — the order auto-confirmed itself, the money is in their gateway
+account, and nothing is required of them. Reusing the claim template (whose
+params happen to match exactly) would have told sellers to go check a payment
+Kedaipal had just checked for them, manufacturing work that doesn't exist.
+Pinned by test: the send asserts `template.name` is **not** the claim template.
+
+Two more deliberate asymmetries with the claim alert:
+
+- **It is NOT fired by `orders.markPaymentReceived`.** That mutation *is* the
+  seller, clicking. Telling someone what they just did is the definition of
+  noise, and the buyer sees the change on their order page either way.
+- **It does NOT skip cancelled orders.** A claim on a dead order is noise; real
+  money landing on one is the most urgent thing a seller can be told.
+  `receiveGatewayPayment` refuses a payment on an already-cancelled order
+  outright (that's the `paid_after_cancel` issue path), so this only fires on a
+  cancel that raced the settlement — exactly the case worth shouting about.
+
+The gateway **mismatch / paid-after-cancel** states stay **email-only**
+(`notifyGatewayPaymentIssue`). They're rare, they need an explanation a
+template can't carry, and the buyer's page already blocks a second payment
+while one is unresolved — see [`hitpay-gateway.md`](./hitpay-gateway.md).
 
 ### Why templates (and the env gate)
 
@@ -37,6 +70,46 @@ decoupled from Meta template review.
 | --- | --- | --- | --- |
 | `WHATSAPP_SELLER_NEW_ORDER_TEMPLATE` | `seller_new_order_utility` | shortId, buyer name, total, fulfilment date-time ("—" when absent) | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 | `WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE` | `seller_payment_claim_utility` | buyer name, shortId, total | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
+| `WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE` | `seller_payment_received_utility` | buyer name, shortId, total, **gateway name** | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
+
+The received template's body must say the payment is **settled and needs no
+action**, and must name the gateway through a **variable**:
+
+> {{1}} has paid {{3}} for order {{2}}. It landed in your **{{4}}** account and
+> the order is confirmed — nothing to check.
+
+`{{1}}`–`{{3}}` are the claim template's exact three, so the two stay
+interchangeable at the call site; only the words differ, and the words are the
+whole point.
+
+### Why the env var is `WHATSAPP_*` but the body says `{{4}}`
+
+Two different questions, and they resolve opposite ways:
+
+- **The env var is WhatsApp config**, so it takes the `WHATSAPP_` namespace
+  every other one takes (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_ORDER_CONFIRM_TEMPLATE`,
+  …). None of those are named after what the message is *about*, and there is no
+  `HITPAY_*` namespace to join — HitPay credentials are BYO, stored per-retailer
+  on `retailers.hitpay`, never in env. `HITPAY_SELLER_PAYMENT_RECEIVED_TEMPLATE`
+  would break the convention twice.
+- **The body must not be**, because a Meta template's text is frozen at
+  approval. Hardcoding "HitPay" means a second gateway needs a whole new
+  template and review cycle — and until it gets one, a Billplz seller is told to
+  go check a HitPay account they don't have, on a message whose entire value is
+  *"go look here"*. A variable costs nothing now and removes that failure mode.
+
+This matches the seam the order schema already draws: `gatewayPaymentId`,
+`gatewayRequestId`, `by_gateway_request` — never `hitpay*`, with the
+provider-specific code quarantined in `convex/hitpay.ts`. The template belongs on
+the generic side of it.
+
+`receiveGatewayPayment` therefore takes `provider` as a **required** arg (an
+empty `{{4}}` would make Meta reject the send outright) and passes it to both
+notifications; `convex/hitpay.ts` and the webhook route supply
+`HITPAY_PROVIDER_LABEL` from `convex/lib/hitpay.ts`, the one author of that
+string. The **email says the same word**, from the same value — email and
+WhatsApp naming different accounts for one payment is the cross-channel bug the
+locale switch already exists to prevent.
 
 Register the button URL via Meta's **Add variable** control — never hand-type
 `{{1}}` (the 86eyheqzv redirect-loop root cause). The deep link rides the
@@ -53,7 +126,7 @@ see [`buyer-page-resilience.md`](./buyer-page-resilience.md).
 
 ### Language: EN + BM, driven by `retailers.locale`
 
-Both templates are submitted with **English and Bahasa Malaysia** variants and
+All three templates are submitted with **English and Bahasa Malaysia** variants and
 the send picks one from the store's locale — the same switch the retailer's
 **email** alerts have always used (`renderRetailerEmail(meta.locale, …)`), so a
 BM seller reads BM on both channels. An EN-only WhatsApp alert next to a BM
@@ -165,3 +238,65 @@ Alerts require a Kedaipal tab open somewhere (foreground or background).
 True closed-browser Web Push (service worker + subscriptions + VAPID) is the
 existing roadmap item **"PWA + Push" (S4)** — the card's footnote tells
 sellers that upgrade is coming, so today's behavior never reads as broken.
+
+## WhatsApp replaces email for the seller alerts (2026-08-08, `86eyd63r8`)
+
+The seller alerts shipped as a deliberate **double-notify** — WhatsApp *and*
+email on the same event — while the WA path bedded in. That's now retired:
+**WhatsApp is the channel, email is the fallback.** Never both, never neither.
+
+Suppression is in **one place per event**,
+`internal.email.notifyRetailerOrderAlert` / `notifyPaymentClaimed` /
+`notifyPaymentReceived`, not at the call sites — so every caller (order create,
+`claimPayment`, `receiveGatewayPayment`, and both inbound-confirm paths in
+`handleInbound`) is covered by construction and the rule can't drift between
+them.
+
+The decision runs in two steps, because "we scheduled a WhatsApp alert" is not
+the same as "the seller heard about it":
+
+1. **Schedule time** — the email no-ops when
+   `sellerWaAlertWillAttempt(retailer, …)` (pure, `convex/lib/sellerAlerts.ts`)
+   says the alert can actually be attempted: event template env set, the
+   seller's `orderWaAlerts` toggle on, `notifyWaPhone` saved, and — for the
+   **new-order** alert only — not a counter sale. Anything falsy and the email
+   fires exactly as before. That's every Starter seller (the toggle is
+   Pro-gated) and everyone who never opted in.
+2. **Failure time** — `notifySellerNewOrder` / `notifySellerPaymentClaim` /
+   `notifySellerPaymentReceived` schedule the email with **`force: true`** when
+   they give up: gateway-blocked (opt-out / cap / quality pause) or a terminal /
+   retries-exhausted send failure. `force` bypasses step 1, which is the whole
+   point — that email is needed precisely when the suppression would otherwise
+   silence it.
+
+The WA actions deliberately **do not** force the email on their own early
+returns (template env unset, toggle off, no number). Those are the exact
+conditions `sellerWaAlertWillAttempt` reads, so the email has already decided
+not to suppress itself — forcing there would send the seller two. Pinned by
+test.
+
+Between them a seller never ends up with zero notification, which is the
+property the old unconditional email existed to guarantee. Browser alerts are
+untouched.
+
+**The counter asymmetry is load-bearing.** `isCounterOrder` suppresses the
+new-order WA alert (the seller rang it up in person), so the predicate must
+report `false` there or a counter order would notify nobody. A payment *claim*
+or *receive* passes no counter flag at all — both land hours after the sale,
+when nobody is standing at the counter.
+
+**Where the seller is told:** the WhatsApp-order-alerts card in Settings →
+Store (it names all three events, the counter exclusion, and "if one can't be
+delivered, the email goes out as backup"), and the Notification email field
+description, which names the same relationship from the other side.
+
+**Tests:** `convex/lib/sellerAlerts.test.ts` asserts every falsy input
+explicitly — a wrong `true` is the dangerous direction, since it suppresses an
+email for an alert that never fires. `convex/oneMessagePerOrder.test.ts` asserts
+the seller alerts still fire *positively*, so excluding them from the
+buyer-message gate can't quietly become a hole.
+
+**Not covered by one-message-per-order.** That policy caps what we push at a
+**buyer**. A seller opting in to be pinged about their own shop is a different
+budget and a different consent — see
+[`one-message-per-order.md`](./one-message-per-order.md).

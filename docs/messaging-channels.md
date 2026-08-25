@@ -19,7 +19,7 @@ A normalized messaging contract plus a delegating WhatsApp adapter. The orchestr
 | `convex/lib/channels/types.ts` | The contract: `Channel` union (`"whatsapp" \| "telegram" \| "wechat"`), normalized `OutboundMessage` (text / image / cta), `InboundEnvelope` (with reserved `callbackData` for future button-driven channels), `ChannelCapabilities`, and the `ChannelAdapter` interface. No Convex imports — edge-runtime safe. |
 | `convex/lib/channels/whatsapp/adapter.ts` | The WhatsApp adapter. **Thin delegation** to existing `lib/whatsapp.ts` (send), `lib/whatsappWebhook.ts` (parse), `lib/whatsappSignature.ts` (verify) — no wire logic reimplemented. Owns the CTA→image/text degrade. |
 | `convex/lib/channels/registry.ts` | `getAdapter(channel)` — the single Channel→adapter map. Only `whatsapp` wired; throws on an unregistered channel. |
-| `convex/whatsapp.ts` | `handleInbound`, `notifyStatusChange`, `notifyPaymentReceived`, and the diagnostic now emit normalized messages via `getAdapter("whatsapp").send(...)`. |
+| `convex/whatsapp.ts` | `handleInbound`, `notifyStorefrontOrderCreated`, `notifyCounterOrderCreated`, and the diagnostic emit normalized messages via `getAdapter("whatsapp").send(...)`. (This row used to list `notifyStatusChange` + `notifyPaymentReceived`; both were deleted by the one-message-per-order policy — see [`one-message-per-order.md`](./one-message-per-order.md). The seam is unchanged, it just has fewer callers.) |
 | `convex/http.ts` | Webhook POST routes through `adapter.verifySignature(...)` + `adapter.parseInbound(...)`. |
 | `convex/lib/channels/whatsapp/adapter.test.ts` | Unit tests: union→Meta-payload mapping, the full CTA degrade matrix, inbound parsing, signature verification. |
 

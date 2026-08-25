@@ -24,13 +24,14 @@ export type BulkAction = {
  * mounted lets those layers close cleanly.
  *
  * Destructive Cancel is gated behind a confirm dialog — bulk-cancel restores
- * stock, reverses customer aggregates, AND sends an unrecallable WhatsApp
- * cancellation to every selected customer, so a misclick is costly. Forward
- * transitions apply immediately.
+ * stock, reverses customer aggregates and can't be undone, and no status
+ * message goes out (an order sends the buyer exactly one WhatsApp, at
+ * confirmation), so a misclick is both costly and silent. Forward transitions
+ * apply immediately.
  *
  * `onDelete` (optional) adds a **permanent hard delete** below Cancel — its own
  * confirm dialog with harsher copy, since it erases the orders and their records
- * outright (no WhatsApp is sent).
+ * outright, leaving no tombstone for the buyer to open.
  *
  * `onPrint` (optional, 86eyp63mp) adds a compact printer button BESIDE the
  * dropdown rather than an item inside it: printing despatch labels isn't a
@@ -186,7 +187,7 @@ export function OrderBulkBar({
 					if (!o) setPendingDestructive(null);
 				}}
 				title={`Cancel ${count} ${orderWord}?`}
-				description={`${count === 1 ? "The customer" : "Customers"} will be notified over WhatsApp, and this can't be undone.`}
+				description={`${count === 1 ? "The customer is" : "Customers are"} NOT notified — the cancellation shows on their order page, so message them yourself if it can't wait. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
 				confirmLabel={`Cancel ${count} ${orderWord}`}
 				cancelLabel={`Keep ${orderWord}`}
 				destructive
@@ -199,7 +200,7 @@ export function OrderBulkBar({
 			/>
 
 			{/* Permanent hard delete — harsher confirm; erases the orders + records
-			    with no WhatsApp to the buyers. */}
+			    outright, so even the buyer's order page stops resolving. */}
 			<ConfirmDialog
 				open={pendingDelete}
 				onOpenChange={(o) => {

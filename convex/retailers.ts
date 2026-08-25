@@ -1,12 +1,15 @@
 import { v } from "convex/values";
 
+// One customisable key survives the one-message-per-order cut (86eyd63r8):
+// `confirm`, the write-in reply for a buyer who messages their ORD- reference
+// on an order the confirmation template never reached (legacy / failed-push).
+// The status keys' sends are deleted and `unknownFallback` was never actually
+// read (its render site hardcodes the defaults) — an override stored for any
+// of them could no longer render, so the wire stops accepting them. Old rows
+// keep their stored extras harmlessly (schema stays wide; the catalog just
+// never looks those keys up), and they drop off on the seller's next save.
 const localeOverridesValidator = v.object({
 	confirm: v.optional(v.string()),
-	packed: v.optional(v.string()),
-	shipped: v.optional(v.string()),
-	delivered: v.optional(v.string()),
-	cancelled: v.optional(v.string()),
-	unknownFallback: v.optional(v.string()),
 });
 
 const messageTemplatesValidator = v.object({
@@ -58,7 +61,10 @@ const orderStagesValidator = v.array(
 				zh: v.optional(v.string()),
 			}),
 		),
-		notify: v.boolean(),
+		// Accepted-and-ignored: older clients may still post the retired
+		// per-stage notify flag (86eyd63r8). Rejecting it would fail their save
+		// for no reason; sanitizeOrderStages simply drops it.
+		notify: v.optional(v.boolean()),
 		sortOrder: v.optional(v.number()),
 	}),
 );
@@ -69,7 +75,7 @@ type OrderStageInput = {
 	anchor: StageAnchor;
 	label: { en: string; ms?: string; zh?: string };
 	description?: { en?: string; ms?: string; zh?: string };
-	notify: boolean;
+	notify?: boolean;
 	sortOrder?: number;
 };
 
@@ -108,7 +114,6 @@ function sanitizeOrderStages(
 			anchor: s.anchor,
 			label: { en, ...(ms ? { ms } : {}), ...(zh ? { zh } : {}) },
 			...(description ? { description } : {}),
-			notify: Boolean(s.notify),
 			sortOrder: i,
 		};
 	});
@@ -215,6 +220,7 @@ import {
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
+import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -523,11 +529,6 @@ export { DEFAULT_LOCALE } from "./lib/locale";
 
 type LocaleOverrides = {
 	confirm?: string;
-	packed?: string;
-	shipped?: string;
-	delivered?: string;
-	cancelled?: string;
-	unknownFallback?: string;
 };
 
 type MessageTemplatesShape = {
@@ -536,21 +537,12 @@ type MessageTemplatesShape = {
 	zh?: LocaleOverrides;
 };
 
-const TEMPLATE_MAX_LENGTH = 1000;
-
 function sanitizeOverrides(
 	input: LocaleOverrides | undefined,
 ): LocaleOverrides | undefined {
 	if (!input) return undefined;
 	const out: LocaleOverrides = {};
-	for (const key of [
-		"confirm",
-		"packed",
-		"shipped",
-		"delivered",
-		"cancelled",
-		"unknownFallback",
-	] as const) {
+	for (const key of ["confirm"] as const) {
 		const raw = input[key];
 		if (raw === undefined) continue;
 		const trimmed = raw.trim();
