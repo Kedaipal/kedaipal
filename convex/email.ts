@@ -420,20 +420,6 @@ export const notifyPaymentClaimed = internalAction({
 			return;
 		}
 
-		let proofUrl: string | undefined;
-		if (meta.paymentProofStorageId) {
-			try {
-				const url = await ctx.storage.getUrl(meta.paymentProofStorageId);
-				proofUrl = url ?? undefined;
-			} catch (err) {
-				console.error(
-					`Email payment-claimed proof URL resolve failed (shortId=${meta.shortId}): ${
-						err instanceof Error ? err.message : String(err)
-					}`,
-				);
-			}
-		}
-
 		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
 
@@ -450,7 +436,10 @@ export const notifyPaymentClaimed = internalAction({
 				storeName: meta.storeName,
 				dashboardUrl,
 				paymentReference: meta.paymentReference,
-				proofUrl,
+				// The email links the dashboard to view the screenshot, never a raw
+				// storage URL (86eyn25gu) — those are long-lived and unauthenticated,
+				// so a forwarded email would hand the buyer's bank screenshot on.
+				hasProof: meta.paymentProofStorageId !== undefined,
 			},
 		);
 
