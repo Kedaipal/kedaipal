@@ -376,8 +376,145 @@ describe("email payment claimed alert", () => {
 			subject: string;
 			text: string;
 		};
-		expect(body.subject).toContain("Pembayaran diterima");
+		// "Kata dah bayar", not "diterima" — a claim is unverified, and the
+		// money-really-landed sibling (paymentReceived) owns "diterima".
+		expect(body.subject).toContain("Pelanggan kata dah bayar");
 		expect(body.text).toContain("Rujukan: TXN-9988");
+		fetchMock.restore();
+	});
+});
+
+describe("email payment received alert (86eyd63r8)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE;
+	});
+
+	/** Give the store a reachable WhatsApp alert number + toggle. */
+	async function armWaAlerts(
+		t: ReturnType<typeof convexTest>,
+		retailerId: Id<"retailers">,
+	) {
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				orderWaAlerts: true,
+				notifyWaPhone: "60198765432",
+			});
+		});
+	}
+
+	test("asks nothing of the seller — no 'check your bank', unlike a claim", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithEmail(t, {
+			locale: "en",
+			notifyEmail: "ops@store.test",
+		});
+		const { shortId, orderId } = await createPendingOrder(
+			t,
+			retailerId,
+			productId,
+		);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { paymentReference: "hitpay_abc123" });
+		});
+
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
+
+		const sends = fetchMock.resendCalls();
+		expect(sends).toHaveLength(1);
+		const body = sends[0].body as {
+			to: string[];
+			subject: string;
+			text: string;
+		};
+		expect(body.to).toEqual(["ops@store.test"]);
+		expect(body.subject).toContain("Payment received");
+		expect(body.subject).toContain(shortId);
+		expect(body.text).toContain("hitpay_abc123");
+		expect(body.text).toContain("nothing to check");
+		expect(body.text).toContain("HitPay");
+		// The claim email's instruction must NOT appear here — we verified this
+		// payment ourselves, so sending them to their bank app invents work.
+		expect(body.text).not.toContain("Verify in your bank app");
+		fetchMock.restore();
+	});
+
+	test("names the gateway the caller passed — same value the WhatsApp {{4}} gets", async () => {
+		// Email and WhatsApp must never name different accounts for one payment
+		// (the cross-channel rule the locale switch already follows), so this is
+		// threaded rather than hardcoded on either side.
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithEmail(t, {
+			locale: "en",
+			notifyEmail: "ops@store.test",
+		});
+		const { orderId } = await createPendingOrder(t, retailerId, productId);
+
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "Billplz",
+		});
+
+		const body = fetchMock.resendCalls()[0].body as {
+			text: string;
+			html: string;
+		};
+		expect(body.text).toContain("Paid online through Billplz");
+		expect(body.text).not.toContain("HitPay");
+		expect(body.html).not.toContain("HitPay");
+		fetchMock.restore();
+	});
+
+	test("stays quiet when the WhatsApp alert will reach them, and speaks when forced", async () => {
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE =
+			"seller_payment_received_utility";
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithEmail(t, {
+			locale: "en",
+			notifyEmail: "ops@store.test",
+		});
+		const { orderId } = await createPendingOrder(t, retailerId, productId);
+		await armWaAlerts(t, retailerId);
+
+		// WhatsApp is the channel for this event — one notification, not two.
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
+		expect(fetchMock.resendCalls()).toHaveLength(0);
+
+		// …until that alert gives up and hands back (`force`), so the seller is
+		// never left with zero notification.
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+			force: true,
+		});
+		expect(fetchMock.resendCalls()).toHaveLength(1);
+		fetchMock.restore();
+	});
+
+	test("speaks on its own when the WhatsApp alert can't reach them", async () => {
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE =
+			"seller_payment_received_utility";
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithEmail(t, {
+			locale: "en",
+			notifyEmail: "ops@store.test",
+		});
+		const { orderId } = await createPendingOrder(t, retailerId, productId);
+		// Toggle never turned on → email is the only channel they have.
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
+		expect(fetchMock.resendCalls()).toHaveLength(1);
 		fetchMock.restore();
 	});
 });

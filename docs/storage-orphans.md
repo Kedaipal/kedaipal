@@ -37,11 +37,14 @@ Anything that can leave an orphan on an abandoned upload:
 | `orders.mockupImageStorageId(s)` | single + array | N/A (set once at submit) |
 | `invoices.pdfStorageId` | single | N/A (system-generated, one-time) |
 
-Excluded from the sweep (self-cleaning by design, not part of this problem):
-the transient receipt/invoice PDF blobs created in `orders.deliverOrderDocument`
-— these are never attached to a document at all; they're deleted by a
-`ctx.scheduler.runAfter(10 * 60 * 1000, ...)` job unconditionally, whether or
-not the WhatsApp send succeeded.
+~~Excluded from the sweep (self-cleaning by design): the transient receipt/invoice
+PDF blobs created in `orders.deliverOrderDocument`.~~ **This blob class no longer
+exists** (2026-08-04, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)): the
+receipt/invoice is no longer WhatsApp'd, so `deliverOrderDocument` and its
+`deleteTransientStorage` cleanup job are both deleted. The PDF is now generated
+on demand and streamed as bytes to whoever asked (`orders.generateReceiptPdf`) —
+**never written to storage at all**, which removes the orphan risk rather than
+managing it. One fewer moving part; nothing to sweep.
 
 ## Where orphans actually accumulate
 

@@ -131,20 +131,28 @@ on it, so it never claims "outside your delivery bands" when bands weren't the c
 (26 Jul hotfix; orders from before the field show a mode-neutral generic line).
 
 - **WhatsApp confirm** sends `deliveryFeePendingConfirm` (EN+BM) — branded, no transfer
-  reference / payment block / "I've paid" CTA.
+  reference / payment block / "I've paid" CTA. **This is the legacy free-form reply only**
+  (a store with no confirmation template, answering an inbound `ORD-`). On the push path
+  the order's single message goes out at checkout like any other, with the total rendered
+  as **"to be confirmed"** rather than a figure that would grow by the arranged fee
+  (86eyd63r8) — and the button on it opens the order page, which shows the charge live the
+  moment the seller sets it.
 - **`claimPayment` + `markPaymentReceived` reject** while pending (tracking page shows a
   disabled "Awaiting delivery charge"; order detail disables mark-received with reason).
-  The **payment-reminder cron skips** pending orders (`isPaymentReminderDue`).
+  ~~The payment-reminder cron skips pending orders~~ — that cron no longer exists
+  (`86eyd63r8`; see [`payment-reminder.md`](./payment-reminder.md)).
 - The seller resolves it via **`orders.setDeliveryFee(orderId, fee)`** — an amber
   **"Delivery charge to confirm"** card on the order detail (with a one-tap "Discuss with
   buyer on WhatsApp" deep link). `fee: 0` = deliver free. Sets snapshot `mode: "manual"`,
-  recomputes the total, clears the flag, and schedules **`notifyDeliveryFeeSet`** — the held
-  payment ask (charge + final total + payment block, EN+BM). Also usable pre-payment as typo
-  insurance; **locked once payment is claimed/received**.
-- **Double-hold ordering:** each release path re-checks the other gate —
-  `notifyPaymentDue` skips while fee-pending, `notifyDeliveryFeeSet` skips while the mockup
-  gate is closed — so a doubly-held order gets exactly ONE payment prompt when the second
-  gate opens.
+  recomputes the total and clears the flag. **It sends no WhatsApp** (`86eyd63r8`): the
+  buyer's one message already went out at checkout, and the order page it links to is
+  reading this fee live. (It used to schedule `notifyDeliveryFeeSet`, a separate held
+  payment ask; that send is deleted, and the brief `claimDeferredPush` release with it.)
+  Also usable pre-payment as typo insurance; **locked once payment is claimed/received**.
+- **Double-hold ordering is a non-question now:** an order held by *both* the mockup
+  quote and the delivery charge still sends exactly one message, at checkout, priced as
+  "to be confirmed" — so there is no release to race and no claim to win. See
+  [`one-message-per-order.md`](./one-message-per-order.md#the-held-price-is-said-not-waited-for).
 - The seller learns about a pending charge three ways: the new-order/confirmed **email**
   gains a "Delivery charge to confirm" action line (EN+BM), the order-detail amber card, and
   the totals row ("To be set — see above").
@@ -437,20 +445,36 @@ chargeable pickup).
   downgrade-never-traps-the-seller line `chargeablePickup`/`categories`/`radiusDelivery`
   already hold.
 
-### Buyer surfaces — deliberately NO new WhatsApp sends
+### Buyer surfaces — the order page, and only the order page
 
-Meta bills every outbound message from 1 Oct 2026, so this feature adds **zero** new
-sends (owner call, 29 Jul): tracking entered **at** mark-shipped rides the shipped
-WhatsApp update that was already outgoing — a `📦 {courier} — tracking no. {number}` line
-(EN/MS/ZH) above the existing links, also in `renderStageUpdate` for custom-stage sellers,
-and `{courierName}`/`{trackingNo}` interpolate in authored templates. Tracking added
-**after** shipped surfaces on the buyer's tracking page only — no auto-send, no resend
-button. `/track/<token>` shows a courier + number card with one-tap copy (works for
-cold-chain couriers with no link) above the existing "Track with carrier" CTA. CSV export
-gains "Courier" + "Tracking no" columns beside Fulfilment.
+Meta bills every outbound message from 1 Oct 2026, so this feature shipped with
+**zero new sends** (owner call, 29 Jul): tracking entered at mark-shipped rode the
+shipped WhatsApp update that was already going out. **That update no longer exists**
+([`86eyd63r8`](https://app.clickup.com/t/86eyd63r8), 4 Aug) — an order sends the buyer
+exactly one message, the confirmation — so the feature's delivery channel is now
+uniform and simple: **courier + tracking number always land on the buyer's order page,
+whenever they're entered, and nothing is ever sent.**
 
-Tests: `convex/lib/couriers.test.ts`, shipped-courier-line cases in
-`convex/lib/whatsappCopy.test.ts`, end-to-end transition/set/clear/auth cases in
+That deleted the `📦 {courier} — tracking no. {number}` line along with the copy it rode
+in: the `status` catalog in `whatsappCopy.ts`, `renderStageUpdate`, and the
+`{courierName}`/`{trackingNo}` template placeholders are gone with the per-status
+templates themselves. **Nothing about the feature's value changed** — the ticket's whole
+point was TikTok-style tracking the buyer can follow, and `/track/<token>` was already
+carrying it: a courier + number card with one-tap copy (works for cold-chain couriers with
+no link) above the "Track with carrier" CTA, updating live. The at-ship and after-ship
+paths simply collapsed into one behaviour instead of two.
+
+**The seller is told, at both entry points** (this was a real behaviour change, so it is
+not left to inference): the mark-shipped prompt's helper line and the Shipment tracking
+card both state that the number appears on the buyer's order page — *"The buyer's order
+page gets a {courier} tracking link automatically"* / *"…has no public tracking page — the
+buyer's order page shows the number to copy instead."* No resend button, because there is
+nothing to resend.
+
+CSV export gains "Courier" + "Tracking no" columns beside Fulfilment (unchanged).
+
+Tests: `convex/lib/couriers.test.ts` (the registry + `resolveShipmentFields` — the
+part that survived), end-to-end transition/set/clear/auth cases in
 `convex/orders.test.ts` ("86eyehvk4" describe), CSV columns in
 `convex/lib/orderCsv.test.ts`. Rider-vendor prompt shapes + the read-only card in
 `src/components/order/shipment-tracking.test.tsx`, block copy in
@@ -548,11 +572,14 @@ The first live drop-off test (Bearcamp) surfaced surfaces that still said
   helper "Pick the date you'll meet at the drop-off point." (was "When will you
   collect?" for both kinds).
 - **WhatsApp status copy** (`convex/lib/whatsappCopy.ts`, EN + MS): `CopyVars`
-  gained `pickupKind`; `packed` → "ready for the drop-off point", `shipped` →
-  "see you at the drop-off point!" / "jumpa di lokasi penyerahan!"; `confirm` →
-  "ready at the drop-off point". `delivered` ("collected") already fit both
-  kinds. `getOrderWithRetailer` now returns the snapshot's kind so
-  `notifyStatusChange` + the confirm compose can pass it.
+  gained `pickupKind`, and the `packed` / `shipped` / `delivered` copy branched on
+  it. **Those status messages were deleted in `86eyd63r8`** (an order sends one
+  message), taking the drop-off wording with them; `pickupKind` survives on
+  `CopyVars` for the copy that remains — the `confirm` reply ("ready at the
+  drop-off point") and the pickup block. `getOrderWithRetailer` still returns the
+  snapshot's kind so the confirm compose can pass it. The drop-off vocabulary
+  the buyer now reads at every other step lives on their order page (next bullet),
+  which was always the richer surface for it.
 - **Tracking page + seller order detail**: fulfilment chip "Drop-off" (was
   "Self Collect"), date label "Meet on" (was "Collect on"), and the seller
   card's "Pick up at" heading → "Meet at" (matching the buyer page).
