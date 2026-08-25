@@ -1,7 +1,10 @@
+import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
 import {
-	formatMyMobile,
+	convexErrorMessage,
+	formatMobile,
 	formatOrderTimestamp,
+	formatPrice,
 	formatPriceCompact,
 	normalizePriceInput,
 	parsePriceInput,
@@ -102,6 +105,33 @@ describe("formatPriceCompact", () => {
 	test("unknown currency falls back to a plain rounded number", () => {
 		expect(formatPriceCompact(3_772_003, "NOPE")).toBe("NOPE 37,720");
 	});
+
+	test("SGD uses the pinned S$ symbol at every magnitude (SG-lite)", () => {
+		expect(formatPriceCompact(124_050, "SGD")).toBe(`S$${NB}1,240.50`);
+		expect(formatPriceCompact(3_772_003, "SGD")).toBe(`S$${NB}37,720`);
+		expect(formatPriceCompact(222_548_150, "SGD")).toBe(`S$${NB}2.23M`);
+	});
+});
+
+describe("formatPrice", () => {
+	// Intl separates "RM" from the number with a non-breaking space (U+00A0).
+	const NB = " ";
+
+	test("MYR stays on the Intl path, byte-identical to before", () => {
+		expect(formatPrice(123_450, "MYR")).toBe(`RM${NB}1,234.50`);
+		expect(formatPrice(0, "MYR")).toBe(`RM${NB}0.00`);
+	});
+
+	test("SGD renders the human symbol, not the bare code (SG-lite)", () => {
+		// en-MY Intl would say "SGD 41.00"; the PDF renderer says "S$ 41.00" —
+		// the web must agree with the receipt (convex/lib/pdf/document.ts).
+		expect(formatPrice(4_100, "SGD")).toBe(`S$${NB}41.00`);
+		expect(formatPrice(123_450, "SGD")).toBe(`S$${NB}1,234.50`);
+	});
+
+	test("unmapped currency keeps the code prefix", () => {
+		expect(formatPrice(4_100, "THB")).toBe(`THB${NB}41.00`);
+	});
 });
 
 describe("formatOrderTimestamp", () => {
@@ -122,23 +152,94 @@ describe("formatOrderTimestamp", () => {
 	});
 });
 
-describe("formatMyMobile", () => {
-	it("groups a 10-digit local mobile as +60 1X-XXX XXXX", () => {
-		expect(formatMyMobile("60123456789")).toBe("+60 12-345 6789");
+describe("formatMobile", () => {
+	it("groups a 10-digit MY mobile as +60 1X-XXX XXXX", () => {
+		expect(formatMobile("60123456789")).toBe("+60 12-345 6789");
 	});
 
-	it("groups an 11-digit local mobile (011/015) as +60 1X-XXXX XXXX", () => {
-		expect(formatMyMobile("601159399791")).toBe("+60 11-5939 9791");
-		expect(formatMyMobile("601549882211")).toBe("+60 15-4988 2211");
+	it("groups an 11-digit MY mobile (011/015) as +60 1X-XXXX XXXX", () => {
+		expect(formatMobile("601159399791")).toBe("+60 11-5939 9791");
+		expect(formatMobile("601549882211")).toBe("+60 15-4988 2211");
+	});
+
+	it("groups an SG mobile as +65 XXXX XXXX (86eynw28q)", () => {
+		// Keys off the stored digits — an SG number renders as SG wherever it
+		// appears, no country parameter to thread through display surfaces.
+		expect(formatMobile("6591234567")).toBe("+65 9123 4567");
+		expect(formatMobile("6581815321")).toBe("+65 8181 5321");
 	});
 
 	it("tolerates formatting already present in the input", () => {
-		expect(formatMyMobile("+60 11-5939 9791")).toBe("+60 11-5939 9791");
+		expect(formatMobile("+60 11-5939 9791")).toBe("+60 11-5939 9791");
+		expect(formatMobile("+65 9123 4567")).toBe("+65 9123 4567");
 	});
 
-	it("falls back to a plain +digits for non-MY / unexpected shapes", () => {
-		expect(formatMyMobile("6581815321")).toBe("+6581815321");
-		expect(formatMyMobile("60312345678")).toBe("+60312345678");
-		expect(formatMyMobile("")).toBe("");
+	it("falls back to a plain +digits for unexpected shapes", () => {
+		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
+		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
+		expect(formatMobile("")).toBe("");
+	});
+});
+
+describe("convexErrorMessage — rate-limit payload", () => {
+	// The limiter throws ConvexError with an OBJECT payload. Before this was
+	// handled the generic branch stringified it and a throttled buyer read the
+	// literal "[object Object]" at checkout. Delete the isRateLimitError branch
+	// in format.ts and this test goes red on exactly that string.
+	function rateLimitError(retryAfterMs: number, name = "orderCreate") {
+		return new ConvexError({
+			kind: "RateLimited",
+			name,
+			retryAfter: retryAfterMs,
+		});
+	}
+
+	it("renders a human retry message, never [object Object]", () => {
+		const msg = convexErrorMessage(rateLimitError(4200));
+		expect(msg).not.toContain("[object Object]");
+		expect(msg).toContain("5s");
+	});
+
+	it("floors the wait at 1s so it never says 0s", () => {
+		expect(convexErrorMessage(rateLimitError(120))).toContain("1s");
+	});
+
+	// The daily order ceiling (orderCreateDaily) makes long retryAfter values
+	// reachable — "try again in 5400s" is a number nobody converts under
+	// checkout stress, so the wait renders in the largest sensible unit.
+	it("renders minute-scale waits in minutes, hour-scale in hours", () => {
+		expect(convexErrorMessage(rateLimitError(5 * 60_000))).toContain(
+			"5 minutes",
+		);
+		// 90s is the seconds/minutes boundary: 90s stays readable as "2 minutes".
+		expect(convexErrorMessage(rateLimitError(90_000))).toContain("2 minutes");
+		expect(convexErrorMessage(rateLimitError(89_000))).toContain("89s");
+		expect(convexErrorMessage(rateLimitError(3 * 60 * 60_000))).toContain(
+			"3 hours",
+		);
+		// Singulars read as words, not "1 hours".
+		expect(convexErrorMessage(rateLimitError(91 * 60_000))).toContain("2 hours");
+		expect(convexErrorMessage(rateLimitError(60.4 * 60_000))).toContain(
+			"61 minutes",
+		);
+	});
+
+	it("names the store, not 'the system', when the daily ceiling fires", () => {
+		// The burst limiter says "busy right now"; the daily order ceiling says
+		// what a buyer can act on — this store can't take more orders just yet.
+		const msg = convexErrorMessage(rateLimitError(180_000, "orderCreateDaily"));
+		expect(msg).toContain("getting a lot of orders");
+		expect(msg).toContain("3 minutes");
+		expect(msg).not.toContain("Busy right now");
+		// Every other limiter keeps the generic copy.
+		expect(convexErrorMessage(rateLimitError(4200, "paymentClaim"))).toContain(
+			"Busy right now",
+		);
+	});
+
+	it("still passes a plain string payload straight through", () => {
+		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
+			"Only 2 in stock",
+		);
 	});
 });

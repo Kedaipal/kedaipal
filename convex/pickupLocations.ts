@@ -9,7 +9,8 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
-import { assertValidMyMobile } from "./lib/slug";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 const LABEL_MAX = 60;
@@ -167,16 +168,20 @@ function sanitizeFee(raw: number | undefined): number | undefined {
 }
 
 /**
- * The point's contact is a Malaysian mobile (86eyknr2r) — the field renders the
- * `+60` plate, and the number exists so a buyer or a rider can WhatsApp whoever
- * is standing at the pickup point.
+ * The point's contact is a mobile in the STORE's country (86eyknr2r; SG-lite
+ * 86eynw2dy) — the field renders the matching `+60`/`+65` plate, and the number
+ * exists so a buyer or a rider can WhatsApp whoever is standing at the pickup
+ * point.
  */
-function sanitizeManagerWaPhone(raw: string | undefined): string | undefined {
+function sanitizeManagerWaPhone(
+	raw: string | undefined,
+	country: Country,
+): string | undefined {
 	if (raw === undefined) return undefined;
 	const trimmed = raw.trim();
 	if (trimmed.length === 0) return undefined;
 	try {
-		return assertValidMyMobile(trimmed);
+		return assertValidMobileForCountry(trimmed, country);
 	} catch (err) {
 		throw new ConvexError((err as Error).message);
 	}
@@ -410,7 +415,10 @@ export const create = mutation({
 		const cleanCoords = sanitizeCoords(latitude, longitude);
 		const cleanPlaceId = sanitizePlaceId(placeId);
 		const cleanManagerName = sanitizeManagerName(managerName);
-		const cleanManagerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
+		const cleanManagerWaPhone = sanitizeManagerWaPhone(
+			managerWaPhone,
+			access.retailer.country ?? DEFAULT_COUNTRY,
+		);
 
 		// New rows go to the end of the list. Reading the current max sortOrder
 		// keeps numbers stable when the user reorders later — no need to renumber
@@ -552,7 +560,10 @@ export const update = mutation({
 		if (managerName !== undefined)
 			patch.managerName = sanitizeManagerName(managerName);
 		if (managerWaPhone !== undefined)
-			patch.managerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
+			patch.managerWaPhone = sanitizeManagerWaPhone(
+				managerWaPhone,
+				access.retailer.country ?? DEFAULT_COUNTRY,
+			);
 
 		// Coordinates flow together. null = clear, number = set. Undefined =
 		// don't touch. Either both lat AND lng must be numbers, or both null.

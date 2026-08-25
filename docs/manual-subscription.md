@@ -371,6 +371,47 @@ plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
 > on the page until recurring billing (`86eyb6z4r`) ships. See
 > [`pricing.md`](./pricing.md).
 
+## SGD invoices — billing a Singapore seller (Aug 2026)
+
+The first Singapore customer is invoiced in **SGD** through the same manual loop.
+Everything downstream of issue (`markPaid`, void, reminders, the cron, history)
+was already currency-agnostic — the work was the issue path and the pay surfaces:
+
+- **Price table:** `PLAN_MONTHLY_PRICES` in `convex/lib/plans.ts` is an exhaustive
+  `Record<BillingCurrency, Record<Plan, number>>` — MYR (unchanged) + SGD
+  **S$29 / S$59 / S$119** monthly (from the Aug 2026 SG pricing deck). Annual keeps
+  the same 10-months-charged rule. `planPrice` takes an optional trailing
+  `currency` (default `"MYR"`, so legacy call sites are byte-identical).
+- **Founding works in SGD too** (owner call, 19 Aug 2026): `FOUNDING_MONTHLY_PRICES`
+  holds a per-currency table — MYR RM104/RM209 (unchanged), SGD **S$41 / S$83**,
+  both derived by the same ~30%-off-rounded-down-to-a-whole-unit rule
+  (S$59 × 0.7 = S$41.30 → S$41). Rank claiming on `markPaid` is currency-agnostic.
+- **Issue:** `issueInvoice` takes an optional `currency` (`"MYR" | "SGD"`, default
+  MYR) — a segmented control on the admin issue form; the founding checkbox works
+  in either currency.
+- **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
+  DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
+  **amount only** everywhere — PDF (no "Payment instructions" card; footer says
+  "We'll confirm payment details with you on WhatsApp — quote INV-… as your
+  payment reference"), the invoice emails (same line replaces the pay panel,
+  en/ms/zh, via `BillingEmailVars.crossBorder`), and the seller billing tab (the
+  "How to pay" section shows the contact line instead of bank/DuitNow/QR; the
+  "I've paid — notify us" WhatsApp CTA stays). The seller pays however was agreed
+  over WhatsApp; the admin `markPaid` flow is unchanged.
+- The trigger for suppression is `invoice.currency !== "MYR"` — derived, not a
+  flag, so it can't drift from the amount it protects.
+- **Admin console:** the Outstanding stat tile sums **per currency** ("RM X +
+  S$ Y") since one flattened number across currencies would be a lie; pending
+  rows/history always rendered `invoice.currency`.
+- The invoice PDF's "From" block now names the legal entity — **Kedaipal Pte Ltd,
+  UEN 202630712C** (the operating entity is Singaporean; applies to all invoices)
+  — and the PDF money formatter maps SGD → `S$`.
+- Preview: `npx convex run billingEmail:sendSampleBillingEmail
+  '{"to":"you@email.com","key":"invoiceIssued","currency":"SGD"}'`.
+- **Not built (deliberate):** SGD on the public pricing page, PayNow/SG-bank
+  fields on `billingConfig`, SG phone (+65) / address support, HitPay buyer
+  payments in SGD — this slice is subscription invoicing only.
+
 ## `PaymentProvider` seam
 
 `convex/payments/provider.ts`. Entitlement/rank logic consumes a normalized

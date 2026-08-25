@@ -281,3 +281,53 @@ describe("wazeNavUrl", () => {
 		expect(wazeNavUrl({ placeId: "ChIJ_abc" })).toBeUndefined();
 	});
 });
+
+describe("parseGoogleAddress — SG arm (86eynw29u)", () => {
+	const sgComponents = [
+		{ types: ["street_number"], longText: "12", shortText: "12" },
+		{
+			types: ["route"],
+			longText: "Bedok North Ave 3",
+			shortText: "Bedok North Ave 3",
+		},
+		{ types: ["locality"], longText: "Bedok", shortText: "Bedok" },
+		{ types: ["country", "political"], longText: "Singapore", shortText: "SG" },
+		{ types: ["postal_code"], longText: "460512", shortText: "460512" },
+	];
+
+	test("keys off the country ARG: city and state are the 'Singapore' literal", () => {
+		const result = parseGoogleAddress(
+			sgComponents,
+			"12 Bedok North Ave 3, Singapore 460512",
+			"SG",
+		);
+		expect(result.line1).toBe("12 Bedok North Ave 3");
+		// Never Google's locality — SG stores the canonical literal in both.
+		expect(result.city).toBe("Singapore");
+		expect(result.state).toBe("Singapore");
+		expect(result.postcode).toBe("460512");
+	});
+
+	test("the same components parsed as MY do NOT invent a state", () => {
+		const result = parseGoogleAddress(
+			sgComponents,
+			"12 Bedok North Ave 3, Singapore 460512",
+			"MY",
+		);
+		expect(result.state).toBe("");
+	});
+
+	test("omitting the country stays on the MY arm (pre-SG behaviour)", () => {
+		const result = parseGoogleAddress(
+			[
+				{
+					types: ["administrative_area_level_1"],
+					longText: "Selangor",
+					shortText: "Selangor",
+				},
+			],
+			"Selangor",
+		);
+		expect(result.state).toBe("Selangor");
+	});
+});

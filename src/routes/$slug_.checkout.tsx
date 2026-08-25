@@ -185,6 +185,7 @@ function CheckoutRoute() {
 						storeSlug={retailer.slug}
 						checkoutPhone={retailer.checkoutPhone}
 						locale={retailer.locale}
+						country={retailer.country}
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
@@ -192,6 +193,7 @@ function CheckoutRoute() {
 							retailer.deliveryCollectsFromCustomer ?? false
 						}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
 					/>

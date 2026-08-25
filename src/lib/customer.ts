@@ -13,14 +13,17 @@ export type DisplayableCustomer = {
 };
 
 /**
- * Format a digits-only WhatsApp phone for display. Malaysian numbers (country
- * code 60) get a "+60 " prefix; everything else is prefixed with a bare "+".
+ * Format a digits-only WhatsApp phone for display. Malaysian (country code 60)
+ * and Singaporean (65 — SG-lite, 86eynw2dy) numbers get a "+60 " / "+65 "
+ * prefix; everything else is prefixed with a bare "+". Keyed off the STORED
+ * digits, not a country setting — a stored number already says what it is.
  * Returns an empty string for empty input.
  */
 export function formatPhone(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
 	if (digits.length === 0) return "";
 	if (digits.startsWith("60")) return `+60 ${digits.slice(2)}`;
+	if (digits.startsWith("65")) return `+65 ${digits.slice(2)}`;
 	return `+${digits}`;
 }
 
