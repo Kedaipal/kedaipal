@@ -23,8 +23,11 @@ const revealUp = {
 };
 
 function getMarqueeItems(): string[] {
-	return m
-		.hero_marquee()
+	// `String(...)` is load-bearing: paraglide compiles to untyped .js, so the
+	// message fn's return type is inferred (allowJs + strict) and can degrade to
+	// `any` purely because the surrounding program changed — which makes the
+	// callbacks below implicit-any and breaks the build on an unrelated branch.
+	return String(m.hero_marquee())
 		.split("·")
 		.map((item) => item.trim())
 		.filter(Boolean);
@@ -34,7 +37,8 @@ const secondaryLinkClass =
 	"inline-flex items-center gap-1 text-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline";
 
 function TrustLine() {
-	const items = m.hero_trust().split("·");
+	// See getMarqueeItems — pin the string rather than trust inferred JS types.
+	const items = String(m.hero_trust()).split("·");
 	return (
 		<ul className="flex flex-wrap gap-x-4 gap-y-1.5">
 			{items.map((item) => (

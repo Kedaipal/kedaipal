@@ -2,11 +2,16 @@
  * Seller WhatsApp order alerts card — Settings → Store (86eyhw9zy).
  *
  * Opt-in WhatsApp pings to the SELLER's own number, sent from Kedaipal's
- * shared WABA as Meta utility templates: one when a new storefront order
- * lands, one when a buyer taps "I've paid". Off by default (each alert is a
- * billable Meta send, absorbed into Pro — no add-on); enabling is Pro-gated,
- * turning it off never is. Email + browser alerts keep working alongside —
- * replacing the email when WA succeeds is a follow-up ticket.
+ * shared WABA as Meta utility templates, on the three events money moves
+ * around: a new storefront order, a buyer tapping "I've paid", and an online
+ * payment actually settling through HitPay (86eyd63r8). Off by default (each
+ * alert is a billable Meta send, absorbed into Pro — no add-on); enabling is
+ * Pro-gated, turning it off never is.
+ *
+ * WhatsApp REPLACES the email for those events while it's on (86eyd63r8): the
+ * email self-suppresses when this alert will actually be attempted, and comes
+ * back automatically if the alert is gated or fails. Browser alerts are
+ * untouched. The copy below states that so it isn't hidden behaviour.
  *
  * The card only mounts when the deployment has an approved template configured
  * (`retailer.waOrderAlertsAvailable`) — the mount site in app.settings.tsx
@@ -136,11 +141,17 @@ export function WaOrderAlertsCard({
 				<p className="text-sm text-muted-foreground">
 					Get a WhatsApp from Kedaipal the moment a{" "}
 					<span className="font-medium text-foreground">new order</span> lands,
-					and when a buyer says{" "}
-					<span className="font-medium text-foreground">they&apos;ve paid</span>{" "}
-					— with a button straight to the order. Counter sales don&apos;t alert
-					(you&apos;re already there), and email + browser alerts keep working
-					alongside.
+					when a buyer says{" "}
+					<span className="font-medium text-foreground">they&apos;ve paid</span>,
+					and when an{" "}
+					<span className="font-medium text-foreground">
+						online payment lands
+					</span>{" "}
+					in your HitPay account — each with a button straight to the order.
+					Counter sales don&apos;t alert on a new order (you&apos;re already
+					there), but a payment that arrives later does. While this is on, these
+					alerts come by WhatsApp instead of email; if one can&apos;t be
+					delivered, the email goes out as backup so you never miss an order.
 				</p>
 				{/* The alert language isn't a separate setting — it follows the
 				    store's message language, same as the retailer emails. Said here

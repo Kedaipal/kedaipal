@@ -14,6 +14,12 @@ import {
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
+import { sellerWaAlertWillAttempt } from "./lib/sellerAlerts";
+import {
+	sellerNewOrderTemplateName,
+	sellerPaymentClaimTemplateName,
+	sellerPaymentReceivedTemplateName,
+} from "./lib/whatsapp";
 import { deriveMapsUrl } from "./lib/mapsUrl";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
@@ -50,6 +56,13 @@ export const getOrderForRetailerEmail = internalQuery({
 		mockupChangeNote: string | undefined;
 		requiresMockup: boolean;
 		deliveryFeePending: boolean;
+		// Seller-alert reach (86eyd63r8): lets the email suppress itself when the
+		// seller's WhatsApp alert is going to cover this event. Raw ingredients,
+		// not a verdict — the two events have separate templates, so each action
+		// applies sellerWaAlertWillAttempt with its own env check.
+		orderWaAlerts: boolean | undefined;
+		notifyWaPhone: string | undefined;
+		isCounterOrder: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -78,6 +91,9 @@ export const getOrderForRetailerEmail = internalQuery({
 			// Delivery charge awaiting the seller — drives the action line on the
 			// newOrder / orderConfirmed alerts. See docs/fulfilment.md.
 			deliveryFeePending: order.deliveryFeePending === true,
+			orderWaAlerts: retailer.orderWaAlerts,
+			notifyWaPhone: retailer.notifyWaPhone,
+			isCounterOrder: order.source === "counter",
 		};
 	},
 });
@@ -224,8 +240,14 @@ export const notifyMockupDeclined = internalAction({
  * because of an outbound issue.
  */
 export const notifyRetailerOrderAlert = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		// Set by notifySellerNewOrder when the WhatsApp alert gives up, so the
+		// seller still hears about the order. Bypasses the suppression below —
+		// without it this email would no-op exactly when it's needed most.
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, force }): Promise<void> => {
 		let meta: {
 			shortId: string;
 			status: Doc<"orders">["status"];
@@ -243,6 +265,10 @@ export const notifyRetailerOrderAlert = internalAction({
 			locale: Locale;
 			requiresMockup: boolean;
 			deliveryFeePending: boolean;
+			// Seller-alert reach — drives the WhatsApp-first suppression below.
+			orderWaAlerts: boolean | undefined;
+			notifyWaPhone: string | undefined;
+			isCounterOrder: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
@@ -262,6 +288,18 @@ export const notifyRetailerOrderAlert = internalAction({
 			console.warn(
 				`Email retailer alert skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
 			);
+			return;
+		}
+		// WhatsApp is the seller's channel for this event; email is the fallback
+		// (86eyd63r8). Stay quiet when the WA alert is actually going out —
+		// unless it already tried and failed, which is what `force` means.
+		if (
+			force !== true &&
+			sellerWaAlertWillAttempt(meta, {
+				templateConfigured: sellerNewOrderTemplateName() !== undefined,
+				isCounterOrder: meta.isCounterOrder,
+			})
+		) {
 			return;
 		}
 
@@ -325,8 +363,12 @@ export const notifyRetailerOrderAlert = internalAction({
  * conditions and swallow-errors pattern as `notifyRetailerOrderAlert`.
  */
 export const notifyPaymentClaimed = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		/** See notifyRetailerOrderAlert.force — the WA-alert failure fallback. */
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, force }): Promise<void> => {
 		let meta: {
 			shortId: string;
 			status: Doc<"orders">["status"];
@@ -341,6 +383,10 @@ export const notifyPaymentClaimed = internalAction({
 			locale: Locale;
 			paymentReference: string | undefined;
 			paymentProofStorageId: string | undefined;
+			// Seller-alert reach — drives the WhatsApp-first suppression below.
+			orderWaAlerts: boolean | undefined;
+			notifyWaPhone: string | undefined;
+			isCounterOrder: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
@@ -360,6 +406,17 @@ export const notifyPaymentClaimed = internalAction({
 			console.warn(
 				`Email payment-claimed skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
 			);
+			return;
+		}
+		// Same WhatsApp-first rule as the new-order alert. NOTE: no counter
+		// exclusion here — a claim on a counter pay-later order lands hours after
+		// the sale, so the seller genuinely needs telling either way.
+		if (
+			force !== true &&
+			sellerWaAlertWillAttempt(meta, {
+				templateConfigured: sellerPaymentClaimTemplateName() !== undefined,
+			})
+		) {
 			return;
 		}
 
@@ -402,6 +459,113 @@ export const notifyPaymentClaimed = internalAction({
 		} catch (err) {
 			console.error(
 				`Email payment-claimed failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	},
+});
+
+/**
+ * Scheduled by orders.receiveGatewayPayment (86eyd63r8) — a verified HitPay
+ * settlement, i.e. money that actually landed rather than a buyer's claim that
+ * it did. Before this, a settled online payment notified the seller on NO
+ * channel at all.
+ *
+ * Same WhatsApp-first rule as its two siblings: quiet when
+ * `notifySellerPaymentReceived` is going to reach them, and `force: true` when
+ * that alert has already given up (or its template isn't approved yet), so the
+ * seller is never left with zero notification. Deliberately NOT scheduled by
+ * `markPaymentReceived` — that's the seller's own click.
+ */
+export const notifyPaymentReceived = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		/**
+		 * Gateway display name ("HitPay"), passed in by the provider-specific
+		 * caller. Same value the WhatsApp alert puts in `{{4}}`, so the two
+		 * channels can't name different accounts for the same payment — the
+		 * cross-channel consistency rule the locale switch already follows.
+		 */
+		provider: v.string(),
+		/** See notifyRetailerOrderAlert.force — the WA-alert failure fallback. */
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, provider, force }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			itemCount: number;
+			total: number;
+			currency: string;
+			customerName: string;
+			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			paymentReference: string | undefined;
+			orderWaAlerts: boolean | undefined;
+			notifyWaPhone: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("Email payment-received lookup failed", err);
+			return;
+		}
+		if (!meta) {
+			console.error(
+				`Email payment-received skipped: no order meta (orderId=${orderId})`,
+			);
+			return;
+		}
+		if (!meta.notifyEmail) {
+			console.warn(
+				`Email payment-received skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
+			);
+			return;
+		}
+		// No counter exclusion: a gateway payment is settled from the buyer's own
+		// phone at a moment nobody on the seller's side witnessed, wherever the
+		// order came from.
+		if (
+			force !== true &&
+			sellerWaAlertWillAttempt(meta, {
+				templateConfigured: sellerPaymentReceivedTemplateName() !== undefined,
+			})
+		) {
+			return;
+		}
+
+		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+
+		const { subject, html, text } = renderRetailerEmail(
+			meta.locale,
+			"paymentReceived",
+			{
+				shortId: meta.shortId,
+				itemCount: meta.itemCount,
+				totalFormatted,
+				customerName: meta.customerName,
+				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
+				storeName: meta.storeName,
+				dashboardUrl,
+				// receiveGatewayPayment writes the gateway's payment id here — the
+				// number the seller looks the charge up by in their own dashboard.
+				paymentReference: meta.paymentReference,
+				gatewayProvider: provider,
+			},
+		);
+
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Email payment-received failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);

@@ -1372,10 +1372,10 @@ describe("statusLabels (Phase 1 order status customization)", () => {
 
 describe("orderStages (Phase 2 custom stages)", () => {
 	const SUIT = [
-		{ anchor: "confirmed" as const, label: { en: "Accepted" }, notify: true },
-		{ anchor: "packed" as const, label: { en: "Cleaning", ms: "Mencuci" }, notify: false },
-		{ anchor: "packed" as const, label: { en: "Drying" }, notify: false, description: { en: "1–2 days" } },
-		{ anchor: "delivered" as const, label: { en: "Collected" }, notify: true },
+		{ anchor: "confirmed" as const, label: { en: "Accepted" }},
+		{ anchor: "packed" as const, label: { en: "Cleaning", ms: "Mencuci" }},
+		{ anchor: "packed" as const, label: { en: "Drying" }, description: { en: "1–2 days" } },
+		{ anchor: "delivered" as const, label: { en: "Collected" }},
 	];
 
 	test("saves stages; getMyRetailer surfaces them with ids + renumbered sortOrder", async () => {
@@ -1398,7 +1398,7 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const asA = await seed(t, USER_A, "stages-trim");
 		await asA.mutation(api.retailers.updateSettings, {
 			orderStages: [
-				{ anchor: "confirmed", label: { en: "  Accepted  ", ms: "   " }, notify: true, description: { en: "", ms: "  " } },
+				{ anchor: "confirmed", label: { en: "  Accepted  ", ms: "   " }, description: { en: "", ms: "  " } },
 			],
 		});
 		const me = await asA.query(api.retailers.getMyRetailer);
@@ -1414,13 +1414,11 @@ describe("orderStages (Phase 2 custom stages)", () => {
 				{
 					anchor: "confirmed",
 					label: { en: "Accepted", zh: "已确认" },
-					notify: true,
 					description: { en: "Order accepted", zh: "订单已接受" },
 				},
 				{
 					anchor: "packed",
 					label: { en: "Sewing", zh: "  " }, // whitespace-only zh → dropped
-					notify: false,
 				},
 			],
 		});
@@ -1462,8 +1460,8 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
 				orderStages: [
-					{ anchor: "packed", label: { en: "Cleaning" }, notify: false },
-					{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+					{ anchor: "packed", label: { en: "Cleaning" }},
+					{ anchor: "confirmed", label: { en: "Accepted" }},
 				],
 			}),
 		).rejects.toThrow(/out of order/i);
@@ -1475,7 +1473,6 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const many = Array.from({ length: 21 }, () => ({
 			anchor: "packed" as const,
 			label: { en: "Step" },
-			notify: false,
 		}));
 		await expect(
 			asA.mutation(api.retailers.updateSettings, { orderStages: many }),
@@ -1487,7 +1484,7 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const asA = await seed(t, USER_A, "stages-nolabel");
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
-				orderStages: [{ anchor: "confirmed", label: { en: "  " }, notify: true }],
+				orderStages: [{ anchor: "confirmed", label: { en: "  " }}],
 			}),
 		).rejects.toThrow(/English label/i);
 	});
@@ -1498,8 +1495,8 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
 				orderStages: [
-					{ anchor: "confirmed", label: { en: "Received" }, notify: false },
-					{ anchor: "confirmed", label: { en: "Reviewing" }, notify: false },
+					{ anchor: "confirmed", label: { en: "Received" }},
+					{ anchor: "confirmed", label: { en: "Reviewing" }},
 				],
 			}),
 		).rejects.toThrow(/Only one "Accepted"/);
@@ -1511,25 +1508,26 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
 				orderStages: [
-					{ anchor: "delivered", label: { en: "Collected" }, notify: true },
-					{ anchor: "delivered", label: { en: "Reviewed" }, notify: true },
+					{ anchor: "delivered", label: { en: "Collected" }},
+					{ anchor: "delivered", label: { en: "Reviewed" }},
 				],
 			}),
 		).rejects.toThrow(/Only one "Done"/);
 	});
 
-	test("rejects more than 5 notifying stages", async () => {
+	test("six same-band stages are fine — the old notify cap is gone (86eyd63r8)", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "stages-notifycap");
-		await expect(
-			asA.mutation(api.retailers.updateSettings, {
-				orderStages: Array.from({ length: 6 }, (_, i) => ({
-					anchor: "packed" as const,
-					label: { en: `Step ${i}` },
-					notify: true,
-				})),
-			}),
-		).rejects.toThrow(/can notify the buyer/i);
+		// MAX_NOTIFY_STAGES existed to bound per-stage WhatsApp cost; stages no
+		// longer message anyone, so only the 20-stage total cap remains.
+		await asA.mutation(api.retailers.updateSettings, {
+			orderStages: Array.from({ length: 6 }, (_, i) => ({
+				anchor: "packed" as const,
+				label: { en: `Step ${i}` },
+			})),
+		});
+		const r = await asA.query(api.retailers.getMyRetailer);
+		expect(r?.orderStages).toHaveLength(6);
 	});
 });
 
