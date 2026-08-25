@@ -455,7 +455,12 @@ export const handleInbound = internalAction({
 				try {
 					await ack.send(fromPhone, {
 						kind: "text",
-						body: "You've been unsubscribed from Kedaipal store marketing messages. Order updates for active orders still apply. Reply START to resubscribe.\n\nAnda telah berhenti melanggan mesej pemasaran kedai Kedaipal. Balas MULA untuk melanggan semula.",
+						// Both halves must carry the "order updates still apply" caveat:
+						// the confirmation for an order you placed is transactional and
+						// bypasses this opt-out by design (see canSend), so a buyer told
+						// only "you're unsubscribed" and then messaged anyway thinks the
+						// STOP failed. The BM half used to omit that sentence (86eyn25gu).
+						body: "You've been unsubscribed from Kedaipal store marketing messages. Order updates for active orders still apply. Reply START to resubscribe.\n\nAnda telah berhenti melanggan mesej pemasaran kedai Kedaipal. Kemas kini untuk pesanan yang sedang berjalan masih akan dihantar. Balas MULA untuk melanggan semula.",
 					});
 				} catch (err) {
 					console.error("WA opt-out ack failed", err);

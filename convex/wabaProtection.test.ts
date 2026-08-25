@@ -272,6 +272,245 @@ describe("admin vendor list + at-a-glance stats", () => {
 	});
 });
 
+describe("admin manual opt-out (86eyn25gu)", () => {
+	test("non-admin rejected; opt-out registers manual_admin + audits last-4 only; re-activate restores", async () => {
+		const t = setup();
+
+		// Non-admin is rejected (ADMIN_USER_IDS unset → no one is admin).
+		await expect(
+			t
+				.withIdentity({ subject: "not_admin" })
+				.mutation(api.wabaProtection.adminRegisterOptOut, { waPhone: BUYER }),
+		).rejects.toThrow();
+
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// Garbage input is refused before touching the table.
+		await expect(
+			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+				waPhone: "not-a-phone",
+			}),
+		).rejects.toThrow();
+
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: false });
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+		// Idempotent — a double-tap never inserts a second row.
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: true, source: "manual_admin" });
+		const optRows = await t.run(async (ctx) =>
+			ctx.db.query("optOuts").collect(),
+		);
+		expect(optRows).toHaveLength(1);
+
+		// Audited globally (no retailerId) with the LAST FOUR digits only — the
+		// audit log has no retention, so a full phone must never land in it.
+		const audits = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		const optOutAudits = audits.filter(
+			(a) => a.action === "wabaProtection.manualOptOut",
+		);
+		expect(optOutAudits).toHaveLength(1);
+		expect(optOutAudits[0].targetId).toBe(`…${BUYER.slice(-4)}`);
+		expect(optOutAudits[0].targetId).not.toContain(BUYER);
+		expect(optOutAudits[0].retailerId).toBeUndefined();
+
+		// Re-activate restores sends and is audited the same way.
+		await asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+			waPhone: BUYER,
+		});
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: false });
+		const audits2 = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		expect(
+			audits2.some((a) => a.action === "wabaProtection.manualOptIn"),
+		).toBe(true);
+	});
+
+	// PR #191 review finding: the panel's placeholder suggests the LOCAL format
+	// ("011-2345 6789"), but every key the send gate checks is international
+	// (Meta's inbound `from`, checkout/counter numbers) — so a local-keyed row
+	// would suppress nothing while the status panel claimed it did. Red on the
+	// digits-only-strip version, green with assertValidMyMobile canonicalization.
+	test("local-format input canonicalizes to the 60… form the send gate and START both key on", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// BUYER ("60111222333") typed the way the placeholder suggests.
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "011-1222 333",
+		});
+
+		// Stored under the INTERNATIONAL key — the one isOptedOut checks.
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe(BUYER);
+
+		// Both spellings of the same number agree on the status.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: true, source: "manual_admin" });
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "011-1222 333",
+			}),
+		).toMatchObject({ optedOut: true });
+
+		// The keyword path (buyer texts START — always the international form)
+		// can undo an admin opt-out: the two paths share one key.
+		await t.mutation(internal.wabaProtection.reactivateOptIn, {
+			waPhone: BUYER,
+		});
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "011-1222 333",
+			}),
+		).toMatchObject({ optedOut: false });
+	});
+
+	// SG-lite (86eynw27f) made `Country` a real axis and shipped to production,
+	// so an SG store's buyer can hold an opt-out on the shared number keyed
+	// `65…`. This panel has no retailer behind it and so no country plate to
+	// read — a MY-only canonicalizer could neither find that row nor register a
+	// new one, i.e. a withdrawal request we could not honour. Red before
+	// canonicalOptOutPhone looped over COUNTRIES.
+	test("a Singapore number opts out too, keyed on the 65… form", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// Typed the way an SG buyer writes it — bare NSN, no country code.
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "9123 4567",
+		});
+
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe("6591234567");
+
+		// The international spelling the send gate sees agrees with the local one.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "+65 9123 4567",
+			}),
+		).toMatchObject({ optedOut: true, source: "manual_admin" });
+	});
+
+	// The register answers "who is currently opted out?" — the question a PDPA
+	// request asks, and the one the lookup field structurally cannot answer.
+	test("the register lists only live opt-outs, masked, newest first", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		await expect(
+			t
+				.withIdentity({ subject: "not_admin" })
+				.query(api.wabaProtection.adminOptOutList, {}),
+		).rejects.toThrow();
+
+		// Empty is a real state, not a loading one.
+		expect(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).toEqual({
+			rows: [],
+			capped: false,
+		});
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "9123 4567",
+		});
+
+		const listed = await asAdmin.query(api.wabaProtection.adminOptOutList, {});
+		expect(listed.capped).toBe(false);
+		// Newest first.
+		expect(listed.rows.map((r) => r.waPhone)).toEqual([
+			"6591234567",
+			BUYER,
+		]);
+		// Rendered form is last-4 only; the full number rides alongside for the
+		// row's copy action but is never what the panel paints.
+		expect(listed.rows[0].masked).toBe("…4567");
+		expect(listed.rows[1]).toMatchObject({
+			masked: "…2333",
+			source: "manual_admin",
+		});
+	});
+
+	// Re-activation is a list removal, never a row deletion: the stamped row is
+	// the consent ledger (withdrawn when, restored when).
+	test("re-activating drops the row from the register but keeps it in the table", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+		expect(
+			(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).rows,
+		).toHaveLength(1);
+
+		await asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+			waPhone: BUYER,
+		});
+
+		expect(
+			(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).rows,
+		).toHaveLength(0);
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].reactivatedAt).toEqual(expect.any(Number));
+	});
+
+	test("input matching no country's mobile shape is invalid: status says so, register refuses", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// An MY landline: 8–15 digits, so the loose rule accepts it, but it can
+		// never receive WhatsApp. The panel disables with reason instead of
+		// registering a key no send-gate check would ever match.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: "03-1234 5678",
+			}),
+		).toMatchObject({ optedOut: false, invalid: true });
+		await expect(
+			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+				waPhone: "03-1234 5678",
+			}),
+		).rejects.toThrow();
+		expect(
+			await t.run(async (ctx) => ctx.db.query("optOuts").collect()),
+		).toHaveLength(0);
+	});
+});
+
 describe("guarded send end-to-end", () => {
 	test("transactional diagnostic still sends while the retailer is paused", async () => {
 		const t = setup();

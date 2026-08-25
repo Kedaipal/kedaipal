@@ -21,7 +21,7 @@
  * docs/waba-protection.md.
  */
 
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { ActionCtx, MutationCtx } from "./_generated/server";
@@ -32,19 +32,20 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
-import { requireAdmin } from "./lib/auth";
+import { logGlobalAdminAction, requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage, SendReceipt } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
 import { redactPhone } from "./lib/logRedaction";
 import { rateLimiter } from "./lib/rateLimiter";
+import { COUNTRIES } from "./lib/country";
 import {
 	LOG_PURGE_PAGE_SIZE,
 	OUTBOUND_MESSAGE_LOG_RETENTION_MS,
 	WABA_HEALTH_RETENTION_MS,
 	mytMonthKey,
 } from "./lib/retention";
-import { normalizeWaPhone } from "./lib/slug";
+import { assertValidMobileForCountry, normalizeWaPhone } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
 import {
 	BURST_WINDOW_MS,
@@ -503,6 +504,186 @@ export const adminResumeRetailer = mutation({
 	handler: async (ctx, { retailerId }): Promise<void> => {
 		await requireAdmin(ctx);
 		await doResume(ctx, retailerId);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Manual opt-out (86eyn25gu — PDPA audit L3). The keyword path only works for
+// buyers who text the shared number themselves; a counter buyer whose number
+// the cashier typed has no self-serve way to withdraw consent. Same scope as
+// a STOP: non-transactional sends suppressed across every store on the shared
+// number; transactional order updates keep delivering (core promise).
+// `manual_admin` was declared in the optOuts schema from day one — this is
+// its first caller. Audited via logGlobalAdminAction with the LAST FOUR
+// digits as targetId (the audit log has no retention, so it never carries a
+// full phone; the optOuts row holds the full number).
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonicalize an admin-typed buyer number to the international form the send
+ * gate keys on (PR #191 review): `canSend` sees Meta's inbound `from` (always
+ * `60…`/`65…`), and checkout/counter numbers are stored through
+ * `assertValidMobileForCountry` — so an opt-out keyed on a bare local-digits
+ * strip (`011…`) would never match `isOptedOut` and fail SILENTLY, with the
+ * status panel agreeing with itself about the wrong key. Returns null on
+ * invalid input — the status query runs per keystroke and must not throw.
+ *
+ * **Every supported country, not just MY.** This is the one phone field in the
+ * app with no retailer behind it and therefore no country plate to read, and
+ * `optOuts` is global to the shared number — so an SG buyer's STOP lands under
+ * `65…` and a MY-only canonicalizer could neither find that row nor register a
+ * new one, i.e. a withdrawal request we could not honour. Trying each country
+ * in turn is unambiguous rather than permissive: the mobile NSN windows are
+ * disjoint (MY starts `1`, SG starts `8`/`9`) and the stored patterns are
+ * prefixed by dial code, so no input can satisfy two arms. MY is tried first,
+ * which keeps every pre-SG input byte-identical.
+ */
+function canonicalOptOutPhone(raw: string): string | null {
+	for (const country of COUNTRIES) {
+		try {
+			return assertValidMobileForCountry(raw, country);
+		} catch {
+			// Not this country's shape — try the next.
+		}
+	}
+	return null;
+}
+
+/**
+ * Rejection copy for the panel. Spelled out rather than derived from
+ * `MOBILE_MESSAGE`, whose per-country entries are each a complete sentence
+ * ("Enter a Malaysian mobile number…") that can't be joined into one; keep the
+ * examples in step with that record if a country's format ever changes. The
+ * client mirrors this string in `app.admin.waba.tsx`.
+ */
+const OPT_OUT_PHONE_MESSAGE =
+	"Enter a Malaysian (e.g. 012-345 6789) or Singapore (e.g. 9123 4567) mobile number";
+
+export const adminOptOutStatus = query({
+	args: { waPhone: v.string() },
+	handler: async (ctx, { waPhone }) => {
+		await requireAdmin(ctx);
+		const phone = canonicalOptOutPhone(waPhone);
+		// Not a valid mobile (yet) — tell the panel so the button can be
+		// disabled-with-reason instead of registering an unmatchable key.
+		if (!phone) return { optedOut: false as const, invalid: true };
+		const latest = await ctx.db
+			.query("optOuts")
+			.withIndex("by_phone", (q) => q.eq("waPhone", phone))
+			.order("desc")
+			.first();
+		return latest && latest.reactivatedAt === undefined
+			? {
+					optedOut: true as const,
+					source: latest.source,
+					since: latest.createdAt,
+				}
+			: { optedOut: false as const, invalid: false };
+	},
+});
+
+/** How many live opt-outs the register renders. Opt-outs are rare (the vendor
+ * rows' 30-day counts are usually 0), so this is headroom rather than a page
+ * size — but it is reported when hit, never silently truncated. */
+const OPT_OUT_LIST_LIMIT = 100;
+
+export type AdminOptOutRow = {
+	_id: Id<"optOuts">;
+	/** Last four digits only — what the panel renders. See the note below. */
+	masked: string;
+	/** Full canonical number, for the row's copy action. Deliberately NOT
+	 * rendered: the value has to reach the clipboard, but session replay
+	 * captures the DOM, not the payload. */
+	waPhone: string;
+	source: Doc<"optOuts">["source"];
+	since: number;
+};
+
+/**
+ * The live do-not-message set: every number currently opted out of
+ * non-transactional sends across the shared number, newest first.
+ *
+ * Exists because `adminOptOutStatus` can only answer "is THIS number opted
+ * out?" — you have to know the number before you can look it up. An admin
+ * fielding a PDPA request cannot answer "who is currently opted out?", and
+ * cannot confirm their own opt-out registered without retyping it. The vendor
+ * rows already show a 30-day opt-out COUNT, so the data was teased and then
+ * unreachable.
+ *
+ * Re-activated numbers are absent by construction (the `by_active` index keys
+ * on the missing `reactivatedAt` stamp): the list is the live set, while the
+ * table underneath keeps every row forever as the consent ledger — when
+ * consent was withdrawn and when it was restored.
+ *
+ * Rows carry the phone MASKED. The panel's standing rule is that it never
+ * echoes a full number into the DOM (`adminOptOutStatus`'s status line doesn't
+ * either, and `adminAuditLog` stores last-4 only): rendered text is captured
+ * verbatim by session replay, and a list would render dozens at a time.
+ */
+export const adminOptOutList = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ rows: AdminOptOutRow[]; capped: boolean }> => {
+		await requireAdmin(ctx);
+		const active = await ctx.db
+			.query("optOuts")
+			.withIndex("by_active", (q) => q.eq("reactivatedAt", undefined))
+			.order("desc")
+			.take(OPT_OUT_LIST_LIMIT + 1);
+		return {
+			rows: active.slice(0, OPT_OUT_LIST_LIMIT).map((row) => ({
+				_id: row._id,
+				masked: redactPhone(row.waPhone),
+				waPhone: row.waPhone,
+				source: row.source,
+				since: row.createdAt,
+			})),
+			capped: active.length > OPT_OUT_LIST_LIMIT,
+		};
+	},
+});
+
+export const adminRegisterOptOut = mutation({
+	args: { waPhone: v.string() },
+	handler: async (ctx, { waPhone }): Promise<void> => {
+		const adminId = await requireAdmin(ctx);
+		const phone = canonicalOptOutPhone(waPhone);
+		if (!phone) throw new ConvexError(OPT_OUT_PHONE_MESSAGE);
+		if (await isOptedOut(ctx, phone)) return; // idempotent
+		await ctx.db.insert("optOuts", {
+			waPhone: phone,
+			source: "manual_admin",
+			createdAt: Date.now(),
+		});
+		await logGlobalAdminAction(
+			ctx,
+			adminId,
+			"wabaProtection.manualOptOut",
+			`…${phone.slice(-4)}`,
+		);
+	},
+});
+
+export const adminReactivateOptIn = mutation({
+	args: { waPhone: v.string() },
+	handler: async (ctx, { waPhone }): Promise<void> => {
+		const adminId = await requireAdmin(ctx);
+		const phone = canonicalOptOutPhone(waPhone);
+		if (!phone) throw new ConvexError(OPT_OUT_PHONE_MESSAGE);
+		const latest = await ctx.db
+			.query("optOuts")
+			.withIndex("by_phone", (q) => q.eq("waPhone", phone))
+			.order("desc")
+			.first();
+		if (!latest || latest.reactivatedAt !== undefined) return; // idempotent
+		await ctx.db.patch(latest._id, { reactivatedAt: Date.now() });
+		await logGlobalAdminAction(
+			ctx,
+			adminId,
+			"wabaProtection.manualOptIn",
+			`…${phone.slice(-4)}`,
+		);
 	},
 });
 

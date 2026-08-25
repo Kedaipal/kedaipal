@@ -6,6 +6,7 @@ import {
 	AlertOctagon,
 	Ban,
 	CircleCheck,
+	Copy,
 	type LucideIcon,
 	Pause,
 	Play,
@@ -19,6 +20,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { AdminOptOutRow } from "../../convex/wabaProtection";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import {
@@ -31,6 +33,7 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { convexErrorMessage } from "../lib/format";
 
 export const Route = createFileRoute("/app/admin/waba")({
@@ -219,8 +222,229 @@ function AdminWabaContent() {
 				</ul>
 			)}
 
+			<GlobalOptOutPanel />
+
 			{target ? (
 				<ConfirmDialog vendor={target} onClose={() => setTarget(null)} />
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * Manual global opt-out (86eyn25gu). STOP only works for buyers who text the
+ * shared number themselves — a counter buyer whose number the cashier typed
+ * has no self-serve path. Status is fetched before any action so the button
+ * always says what it will actually do, and the status line never echoes the
+ * full number back (the input is already auto-masked in session replay;
+ * rendered text would not be).
+ */
+function GlobalOptOutPanel() {
+	const [phone, setPhone] = useState("");
+	const valid = phone.replace(/\D/g, "").length >= 8;
+	const status = useQuery(
+		convexQuery(
+			api.wabaProtection.adminOptOutStatus,
+			valid ? { waPhone: phone } : "skip",
+		),
+	).data;
+	const registerOptOut = useMutation(api.wabaProtection.adminRegisterOptOut);
+	const reactivate = useMutation(api.wabaProtection.adminReactivateOptIn);
+	const [submitting, setSubmitting] = useState(false);
+	// The server is the judge of what counts as a valid mobile (PR #191 review —
+	// the key must canonicalize to the international form the send gate checks,
+	// in whichever supported country's shape the number fits).
+	const invalid =
+		status !== undefined && !status.optedOut && status.invalid === true;
+
+	async function act() {
+		if (!status) return;
+		setSubmitting(true);
+		try {
+			if (status.optedOut) {
+				await reactivate({ waPhone: phone });
+				toast.success("Number re-activated — non-transactional sends resume.");
+			} else {
+				await registerOptOut({ waPhone: phone });
+				toast.success("Number opted out across all stores.");
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div>
+				<h3 className="font-semibold">Manual opt-out</h3>
+				<p className="text-sm text-muted-foreground">
+					For buyers who can't text STOP themselves — e.g. a counter buyer
+					whose number the cashier typed. Suppresses marketing/broadcast sends
+					from every store on the shared number; the confirmation for an order
+					they placed still delivers. The buyer can reply START (or be
+					re-activated here) to undo it.
+				</p>
+			</div>
+			<div className="flex flex-col gap-2 sm:flex-row">
+				<Input
+					type="tel"
+					inputMode="tel"
+					value={phone}
+					onChange={(e) => setPhone(e.target.value)}
+					placeholder="Buyer's WhatsApp number, e.g. 012-345 6789"
+					className="sm:max-w-xs"
+				/>
+				<Button
+					variant={status?.optedOut ? "outline" : "destructive"}
+					onClick={act}
+					disabled={!valid || status === undefined || invalid || submitting}
+				>
+					{status?.optedOut ? (
+						<>
+							<Play className="size-4" /> Re-activate
+						</>
+					) : (
+						<>
+							<UserMinus className="size-4" /> Opt out this number
+						</>
+					)}
+				</Button>
+			</div>
+			{valid && status ? (
+				<p className="text-xs text-muted-foreground">
+					{status.optedOut
+						? `Currently opted out (${SOURCE_LABEL[status.source]}, since ${new Date(
+								status.since,
+							).toLocaleDateString("en-MY")}).`
+						: invalid
+							? "Enter a Malaysian (e.g. 012-345 6789) or Singapore (e.g. 9123 4567) mobile number."
+							: "This number is not currently opted out."}
+				</p>
+			) : null}
+			<OptOutRegister />
+		</section>
+	);
+}
+
+/** How each opt-out got there, in words. Exhaustive so a new `optOuts.source`
+ * is a compile error rather than a raw enum leaking into the UI. */
+const SOURCE_LABEL: Record<AdminOptOutRow["source"], string> = {
+	stop_keyword: "replied STOP",
+	berhenti_keyword: "replied BERHENTI",
+	unsub_keyword: "replied UNSUB",
+	zh_stop_keyword: "replied 停止",
+	zh_unsub_keyword: "replied 退订",
+	manual_admin: "added here by an admin",
+	meta_complaint: "Meta complaint",
+};
+
+/**
+ * The live do-not-message set. Without it the panel above can only answer "is
+ * THIS number opted out?" — you must already know the number, so "who is
+ * currently opted out?" (the question a PDPA request actually asks) has no
+ * answer, and an admin can't even confirm their own opt-out registered.
+ *
+ * Numbers render MASKED to last-4, the same rule the status line and the audit
+ * log follow: session replay captures rendered text, and this renders many at
+ * once. Copy puts the full number on the clipboard without ever painting it.
+ *
+ * Re-activating removes the row from this list but never from the table — the
+ * row keeps its `reactivatedAt` stamp as the consent ledger.
+ */
+function OptOutRegister() {
+	const list = useQuery(
+		convexQuery(api.wabaProtection.adminOptOutList, {}),
+	).data;
+	const reactivate = useMutation(api.wabaProtection.adminReactivateOptIn);
+	const [busy, setBusy] = useState<Id<"optOuts"> | null>(null);
+
+	async function copy(waPhone: string) {
+		try {
+			await navigator.clipboard.writeText(waPhone);
+			toast.success("Number copied");
+		} catch {
+			toast.error("Couldn't copy — clipboard unavailable.");
+		}
+	}
+
+	async function undo(row: AdminOptOutRow) {
+		setBusy(row._id);
+		try {
+			await reactivate({ waPhone: row.waPhone });
+			toast.success("Number re-activated — non-transactional sends resume.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(null);
+		}
+	}
+
+	return (
+		// MASK_PII: every row carries a buyer's number. Masked already, but the
+		// attribute keeps the whole region out of replay if a field is ever added.
+		<div {...MASK_PII} className="flex flex-col gap-2 border-border border-t pt-3">
+			<div className="flex items-baseline justify-between gap-2">
+				<h4 className="font-medium text-sm">Currently opted out</h4>
+				{list ? (
+					<span className="text-muted-foreground text-xs">
+						{list.rows.length}
+						{list.capped ? "+" : ""}
+					</span>
+				) : null}
+			</div>
+			{list === undefined ? (
+				<Skeleton className="h-12 w-full" />
+			) : list.rows.length === 0 ? (
+				// Rendered at zero on purpose: an empty register is the answer to
+				// "is anyone opted out?", and the only place this feature announces
+				// that it exists.
+				<p className="text-muted-foreground text-xs">
+					No numbers are opted out. A buyer replying STOP — or an opt-out added
+					above — appears here until they reply START or are re-activated.
+				</p>
+			) : (
+				<ul className="flex flex-col divide-y divide-border">
+					{list.rows.map((row) => (
+						<li
+							key={row._id}
+							className="flex flex-wrap items-center justify-between gap-2 py-2"
+						>
+							<div className="min-w-0">
+								<p className="font-mono text-sm">{row.masked}</p>
+								<p className="text-muted-foreground text-xs">
+									{SOURCE_LABEL[row.source]} ·{" "}
+									{new Date(row.since).toLocaleDateString("en-MY")}
+								</p>
+							</div>
+							<div className="flex items-center gap-1">
+								<Button
+									variant="ghost"
+									size="sm"
+									onClick={() => copy(row.waPhone)}
+									aria-label="Copy full number"
+								>
+									<Copy className="size-4" />
+								</Button>
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => undo(row)}
+									disabled={busy !== null}
+								>
+									<Play className="size-4" /> Re-activate
+								</Button>
+							</div>
+						</li>
+					))}
+				</ul>
+			)}
+			{list?.capped ? (
+				<p className="text-muted-foreground text-xs">
+					Showing the {list.rows.length} most recent. Look up an older number
+					with the field above.
+				</p>
 			) : null}
 		</div>
 	);

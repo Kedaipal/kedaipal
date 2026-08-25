@@ -1741,7 +1741,16 @@ export default defineSchema({
 		createdAt: v.number(),
 	})
 		.index("by_phone", ["waPhone"])
-		.index("by_created", ["createdAt"]),
+		// The 30-day opt-out stat on the admin vendor list (86eyetzt7). The table
+		// is append-only and NEVER purged, so that read must never be a full scan.
+		.index("by_created", ["createdAt"])
+		// The live do-not-message set, for the admin register (86eyn25gu).
+		// Rows are never deleted — opting back in stamps `reactivatedAt`, which is
+		// the consent ledger — so "who is currently opted out" is exactly the rows
+		// where that stamp is absent. Indexed rather than scanned-and-filtered:
+		// re-activations accumulate forever, so a bounded newest-first scan would
+		// slowly start returning pages of re-activated rows and hiding live ones.
+		.index("by_active", ["reactivatedAt"]),
 
 	// WABA quality-rating history, one row per Meta health webhook
 	// (phone_number_quality_update / account_update). The gateway reads the LATEST
@@ -1861,7 +1870,10 @@ export default defineSchema({
 	// 24 months (`by_ts` drives the purge cron) — see convex/lib/retention.ts.
 	adminAuditLog: defineTable({
 		adminUserId: v.string(), // Clerk subject of the acting admin
-		retailerId: v.id("retailers"), // store acted upon
+		// Store acted upon. Optional since 86eyn25gu: global actions (the manual
+		// WABA opt-out) have no store in scope — those rows simply don't appear
+		// in per-retailer audit views.
+		retailerId: v.optional(v.id("retailers")),
 		action: v.string(), // e.g. "products.create", "retailers.updateSettings"
 		targetId: v.optional(v.string()),
 		ts: v.number(),
