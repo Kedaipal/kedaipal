@@ -210,17 +210,18 @@ export default defineSchema({
 			),
 		),
 		// Legal consent tracking. Versions are ISO dates mirrored from
-		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time;
-		// acceptanceIp is a best-effort client IP captured at acceptance for
-		// legal defensibility. Stamped at onboarding (createRetailer) and on
-		// re-acceptance (recordConsentAcceptance).
+		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time.
+		// Stamped at onboarding (createRetailer) and on re-acceptance
+		// (recordConsentAcceptance). An `acceptanceIp` field existed here until
+		// 86eyn25fu but was dropped: no client ever passed it (provably always
+		// undefined) and Convex mutations can't observe the request IP, so a
+		// "legal defensibility" column that's always empty was worse than none.
 		termsAcceptedAt: v.optional(v.number()),
 		termsVersion: v.optional(v.string()),
 		privacyAcceptedAt: v.optional(v.number()),
 		privacyVersion: v.optional(v.string()),
 		aupAcceptedAt: v.optional(v.number()),
 		aupVersion: v.optional(v.string()),
-		acceptanceIp: v.optional(v.string()),
 		// Retailer opt-in for offering self-collect at checkout. Storefront only
 		// surfaces the self-collect option when this is true AND the retailer has
 		// at least one active pickup location. New retailers default to true
