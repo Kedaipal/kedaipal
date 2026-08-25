@@ -39,7 +39,7 @@ import { sendEmail } from "./lib/email";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	assertValidMyMobile,
-	MY_MOBILE_MESSAGE,
+	MOBILE_MESSAGE,
 	normalizeWaPhone,
 } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
@@ -510,6 +510,12 @@ export const adminResumeRetailer = mutation({
  * Same MY-mobile rule as the counter manual-phone dialog, whose buyers are
  * this panel's whole audience. Returns null on invalid input — the status
  * query runs per keystroke and must not throw.
+ *
+ * Deliberately MY-ONLY for now, even though SG-lite (86eynw28q) made `Country`
+ * a real axis: this is the one surface with no retailer and therefore no plate
+ * to read a country off, and no SG store has buyers on the shared number yet.
+ * The day one does, this becomes a loop over `COUNTRIES` — an SG buyer's STOP
+ * keys on `65…`, which a MY-only canonicalizer can neither find nor register.
  */
 function canonicalOptOutPhone(raw: string): string | null {
 	try {
@@ -547,7 +553,7 @@ export const adminRegisterOptOut = mutation({
 	handler: async (ctx, { waPhone }): Promise<void> => {
 		const adminId = await requireAdmin(ctx);
 		const phone = canonicalOptOutPhone(waPhone);
-		if (!phone) throw new ConvexError(MY_MOBILE_MESSAGE);
+		if (!phone) throw new ConvexError(MOBILE_MESSAGE.MY);
 		if (await isOptedOut(ctx, phone)) return; // idempotent
 		await ctx.db.insert("optOuts", {
 			waPhone: phone,
@@ -568,7 +574,7 @@ export const adminReactivateOptIn = mutation({
 	handler: async (ctx, { waPhone }): Promise<void> => {
 		const adminId = await requireAdmin(ctx);
 		const phone = canonicalOptOutPhone(waPhone);
-		if (!phone) throw new ConvexError(MY_MOBILE_MESSAGE);
+		if (!phone) throw new ConvexError(MOBILE_MESSAGE.MY);
 		const latest = await ctx.db
 			.query("optOuts")
 			.withIndex("by_phone", (q) => q.eq("waPhone", phone))
