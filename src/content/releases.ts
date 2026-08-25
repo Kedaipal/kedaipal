@@ -55,6 +55,24 @@ export type Localized = { en: string } & Partial<
 	Record<Exclude<Locale, "en">, string>
 >;
 
+/**
+ * Icons an entry may carry, rendered as a tinted tile beside its title.
+ *
+ * A closed allowlist rather than a free lucide name: it keeps the icon set
+ * coherent across releases, makes a typo a compile error, and stops the bundle
+ * pulling in an icon per entry forever. Omit it — most entries should — and the
+ * entry gets the neutral default.
+ */
+export type ReleaseIconName =
+	| "printer"
+	| "clock"
+	| "package"
+	| "truck"
+	| "wallet"
+	| "megaphone"
+	| "settings"
+	| "chart";
+
 export interface ReleaseEntry {
 	/** One line, benefit-first. Shown as the entry heading. */
 	title: Localized;
@@ -64,6 +82,8 @@ export interface ReleaseEntry {
 	href?: string;
 	/** Link text. Defaults to "Take a look" when omitted. */
 	hrefLabel?: Localized;
+	/** Optional icon tile. Omit for the neutral default — a wrong icon is worse than none. */
+	icon?: ReleaseIconName;
 }
 
 export interface Release {

@@ -187,3 +187,62 @@ describe("WhatsNew — acknowledgement", () => {
 		expect(screen.getByText("Small thing")).toBeTruthy();
 	});
 });
+
+describe("WhatsNew — panel structure", () => {
+	it("gives EVERY release its own divider row, including the newest", () => {
+		// Variant 2 of the design: one rule for every group, so a one-release
+		// panel and a six-release panel are the same object. The cost is the
+		// newest version appearing in both the header and its divider — the
+		// "New" chip is what earns that back. If someone later "tidies" the
+		// duplicate away, this goes red.
+		mockSeen({ seenVersion: "2026.08.2" });
+		renderShell();
+		// The header renders "Version 2026.09.1 · …" as one string, so an exact
+		// match only ever hits divider rows.
+		const dividers = screen.getAllByText(/^2026\.\d\d\.\d+$/);
+		expect(dividers).toHaveLength(2);
+	});
+
+	it("marks only the unseen release New", () => {
+		mockSeen({ seenVersion: "2026.08.2" });
+		renderShell();
+		expect(screen.getAllByText("New")).toHaveLength(1);
+	});
+
+	it("names the release and date in the header when something is unseen", () => {
+		mockSeen({ seenVersion: "2026.08.2" });
+		renderShell();
+		expect(screen.getByText("Version 2026.09.1 · 1 Sep")).toBeTruthy();
+	});
+});
+
+describe("WhatsNew — caught-up state", () => {
+	it("reframes the header and softens the action when nothing is unseen", async () => {
+		// Opened from the menu with everything seen. It has to read as a finished
+		// screen, not a broken one: the header answers "what am I running", the
+		// footer confirms there is nothing to catch up on, and the mint "Got it"
+		// becomes a plain Close because there is nothing to acknowledge.
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		screen.getByRole("button", { name: "What's new" }).click();
+
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+		expect(screen.getByText("You're on 2026.09.1 · up to date")).toBeTruthy();
+		expect(screen.getByText("You've seen everything")).toBeTruthy();
+		// "Done", not "Close" — the header X already owns that accessible name,
+		// and two identically-named buttons in one dialog read as one control
+		// twice to a screen reader.
+		expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Got it" })).toBeNull();
+		expect(screen.queryByText("New")).toBeNull();
+	});
+
+	it("still lists the full history so a dismissed release stays readable", async () => {
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		screen.getByRole("button", { name: "What's new" }).click();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+		expect(screen.getByText("Big thing")).toBeTruthy();
+		expect(screen.getByText("Small thing")).toBeTruthy();
+	});
+});

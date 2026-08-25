@@ -133,6 +133,67 @@ one, so corruption degrades to "show the notes" rather than "suppress them
 forever": a note shown twice is a papercut, a note never shown defeats the
 feature.
 
+## The visual design (2026-08-25)
+
+Settled from a mockup canvas rather than in code. What was wrong with the first
+pass and what each fix answers:
+
+**The sidebar entry was painted like an active nav item.** `SidebarLink`'s
+active state is `bg-accent/12` plus a mint rail; the entry's `hover:bg-accent/10`
+landed close enough that it read as a destination the seller was currently on.
+And the footer had grown to four unrelated stacked rows — user, Collapse,
+What's new, Version.
+
+It is now **one meta line**: "What's new" (with its unseen dot) on the left, the
+version as a copy-on-tap pill on the right — the two questions that corner of
+the chrome exists to answer. The **Collapse row is gone**; collapsing moved to a
+24px chevron centred on the sidebar's right border, which rides the seam so it
+never moves vertically between states.
+
+That button is **always visible, not hover-revealed**. The sidebar renders from
+`lg` up, which includes iPad landscape at exactly 1024px where there is no hover
+at all — a hover-only control would simply not exist there.
+
+Collapsed, the meta line degrades to the sparkle icon alone with its dot. The
+version drops out: nobody reads a version off a 68px rail, and expanding is one
+click.
+
+**The panel** gained a full-bleed navy header (`p-0` on `DialogContent`, since
+the default padding would inset the band and leave white gutters), entry cards
+with tinted icon tiles, and a widening from `sm:max-w-sm` to `sm:max-w-lg` — an
+icon column plus two lines of copy reads cramped at 384px.
+
+**Every release carries a divider row, including the newest**, even though the
+header already names it. One rule for every group means a one-release panel and
+a six-release panel are the same object; the alternative formatted the newest
+group differently, and since most releases will have exactly one group, its
+divider would almost never have rendered. The repetition is what the "New" chip
+earns back. Pinned by test so nobody "tidies" the duplicate away.
+
+**Icons** come from a closed allowlist (`ReleaseIconName`), not a free lucide
+name: it keeps the set coherent, makes a typo a compile error, and stops the
+bundle carrying whatever any future entry names. Omit it — most entries should —
+and the entry gets the neutral sparkle.
+
+**Dates are parsed by hand**, not through `new Date(iso)`: that reads an ISO
+date-only string as UTC midnight and renders it in the viewer's zone, so a MYT
+seller would see the previous day.
+
+### The caught-up state is a designed state, not a leftover
+
+Opening the panel with nothing unseen is the *common* case — the dot is absent
+most of the time — so it has to read as finished rather than broken:
+
+- the header reframes to **"You're on 2026.08.1 · up to date"** instead of
+  naming a release;
+- the mint **"Got it"** softens to a quiet **"Done"**;
+- the footer picks up a **"You've seen everything"** confirmation where the CTA
+  used to sit, so the bar is not left half empty.
+
+"Done" rather than "Close" is deliberate: the header's X already owns the
+accessible name "Close", and two identically-named buttons inside one dialog
+read as the same control twice to a screen reader.
+
 ## Locale
 
 Entries are `{ en: "…" }` with optional `ms`/`zh` that fall back to English.

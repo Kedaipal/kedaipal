@@ -70,11 +70,33 @@ export function Sidebar({
 	return (
 		<aside
 			className={cn(
+				// `relative` anchors the collapse control, which straddles the right
+				// border rather than sitting in the footer (86eyqgxv9).
 				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
 				collapsed ? "w-[68px]" : "w-60",
 			)}
 			aria-label="Dashboard navigation"
 		>
+			{/* Collapse toggle, centred on the right border in BOTH states — it
+			    rides the seam as the sidebar narrows, so it never moves vertically
+			    and is always where the eye last left it.
+			    Always visible rather than hover-revealed: this sidebar renders from
+			    `lg` up, which includes iPad landscape at exactly 1024px where there
+			    is no hover at all — a hover-only control would simply not exist
+			    there. Quiet by default, darker on hover. */}
+			<button
+				type="button"
+				onClick={() => setCollapsed(!collapsed)}
+				aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+				title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+				className="absolute top-1/2 -right-3 z-20 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+			>
+				{collapsed ? (
+					<ChevronRight className="size-3.5" strokeWidth={2.5} />
+				) : (
+					<ChevronLeft className="size-3.5" strokeWidth={2.5} />
+				)}
+			</button>
 			<div
 				className={cn(
 					"flex h-16 items-center border-b border-border px-3",
@@ -251,32 +273,22 @@ export function Sidebar({
 						</div>
 					) : null}
 				</div>
-				<button
-					type="button"
-					onClick={() => setCollapsed(!collapsed)}
-					className={cn(
-						"flex h-9 items-center rounded-lg text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground",
-						collapsed ? "justify-center" : "gap-2 px-3",
-					)}
-					aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-					title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-				>
-					{collapsed ? (
-						<ChevronRight className="size-4" />
-					) : (
-						<>
-							<ChevronLeft className="size-4 shrink-0" />
-							<span>Collapse</span>
-						</>
-					)}
-				</button>
-				{/* Support affordance (86eyqgxna) — bottom-most, the quietest slot in
-				    the chrome. Hidden while collapsed: the rail is icon-width, and a
-				    version string plus a copy button cannot degrade into it
-				    legibly. Expanding is one tap, and nobody reads a version off a
-				    collapsed sidebar. */}
-				{!collapsed ? <WhatsNewNavItem variant="link" /> : null}
-				{!collapsed ? <AppVersionRow className="px-2 pb-0.5" /> : null}
+				{/* One meta line, not three stacked rows: "what changed" on the
+				    left, "what am I running" on the right — the two questions this
+				    corner of the chrome exists to answer (86eyqgxv9).
+				    Collapsed, neither fits, so it degrades to the sparkle alone with
+				    its unseen dot; the version drops out because nobody reads a
+				    version off a 68px rail and expanding is one click. */}
+				{collapsed ? (
+					<div className="flex justify-center py-1">
+						<WhatsNewNavItem variant="meta" className="gap-0 px-1.5" />
+					</div>
+				) : (
+					<div className="flex items-center justify-between gap-2 px-2 py-0.5">
+						<WhatsNewNavItem variant="meta" />
+						<AppVersionRow compact />
+					</div>
+				)}
 			</div>
 		</aside>
 	);
