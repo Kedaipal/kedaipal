@@ -110,12 +110,80 @@ number. **START / MULA** re-opts-in (`reactivateOptIn` stamps `reactivatedAt`).
 Handled in `handleInbound` before any other intent; the ack reply is
 `transactional` so it isn't suppressed by the opt-out it's confirming.
 
+**The ack says out loud that order updates keep coming**, in both languages —
+the confirmation for an order the buyer placed is `transactional` and bypasses
+this gate by design (the category table above), so a buyer told only "you're
+unsubscribed" who then receives one reasonably concludes the STOP failed. The
+BM half omitted that sentence until `86eyn25gu`. Same reason the manual panel
+spells it out: post-`86eyd63r8` the confirmation is the buyer's *only*
+automatic message, so an opt-out has almost no visible buyer-side effect today
+— what it actually suppresses is session replies now and Broadcast later.
+
 Opt-out rows are keyed on the **canonical (digits-only) phone** via
 `normalizeWaPhone`, on both write (`registerOptOut`/`reactivateOptIn`) and read
 (`isOptedOut`). Stored numbers already normalize through `assertValidWaPhone`, but
 keying the opt-out itself on the canonical form means a STOP suppresses later
 sends even if some future write path stores a `+`/spaced number — opt-out
 compliance never silently depends on every caller having normalized first.
+
+### Manual opt-out (admin, 2026-08-17, ClickUp 86eyn25gu)
+
+The keyword path only serves buyers who text the shared number themselves — a
+counter buyer whose number the cashier typed has no self-serve way to withdraw
+consent (PDPA audit finding L3). The Admin Console's WABA page now carries a
+**Manual opt-out** panel: type a number → live status (`adminOptOutStatus`) →
+one button that either opts it out (`adminRegisterOptOut`, the first caller of
+the `manual_admin` source declared in the schema from day one) or re-activates
+it (`adminReactivateOptIn`). Same scope as a STOP; idempotent both ways.
+
+**Input is canonicalized to the international form the send gate keys on**
+(`60…` / `65…`) via `assertValidMobileForCountry` (PR #191 review). Every key
+the send gate checks is international (Meta's inbound `from`, checkout/counter
+numbers), so an opt-out keyed on a bare local-digits strip would never match
+`isOptedOut` and fail silently while the panel claimed otherwise. Input that
+matches no country's **mobile** shape (an MY landline, a partial number)
+disables the button with a reason instead of registering an unmatchable key;
+canonicalization also keeps buyer-texted `START` able to undo an admin opt-out
+(one key, both paths — pinned by test).
+
+This is the one phone field with **no retailer behind it**, so unlike every
+plated field (whose country comes from the retailer row — see `slug.ts`) it
+tries **each country in `COUNTRIES`** in turn. `optOuts` is global to the
+shared number, so an SG store's buyer holds their opt-out under `65…`; a
+MY-only canonicalizer could neither find that row nor register a new one — a
+withdrawal request we could not honour. Trying each arm is unambiguous rather
+than permissive: the mobile NSN windows are disjoint (MY starts `1`, SG starts
+`8`/`9`) and stored patterns carry the dial code, so no input satisfies two
+arms. MY is tried first, keeping every pre-SG input byte-identical.
+
+**The register lists who is currently opted out** (`adminOptOutList`), because
+the lookup field structurally cannot: it answers "is THIS number opted out?"
+and you have to know the number first, so "who is opted out?" — the question a
+PDPA request actually asks — had no answer, and an admin could not confirm
+their own opt-out registered without retyping it. The vendor rows already show
+a 30-day opt-out *count*, so the data was teased and then unreachable.
+
+Rows come off a new **`optOuts.by_active` index keyed on `reactivatedAt`**:
+opting back in stamps that field rather than deleting the row, so the live set
+is exactly the rows where it is absent, and re-activations that accumulate
+forever can never crowd a live row out of a bounded newest-first scan. The
+table underneath stays the **consent ledger** — when consent was withdrawn and
+when it was restored — which is why re-activating removes a row from the list
+and from nothing else.
+
+Numbers render **masked to last-4**, like the status line and the audit log:
+session replay captures rendered text, and a list paints many at once. The full
+number rides in the payload for the row's Copy action, which never paints it.
+The list renders at zero too, with the empty state explaining what would appear
+there — it is the only place this feature announces itself.
+
+Every manual action is audited via **`logGlobalAdminAction`** — a new
+`adminAuditLog` shape with **no `retailerId`** (the field widened to optional),
+because the opt-out is global to the shared number, not a store action. The
+audit `targetId` carries the phone's **last four digits only**: the audit log
+has no retention, so a full phone must never land in it — the `optOuts` row
+holds the full number for correlation. Pinned by test in
+`wabaProtection.test.ts` ("admin manual opt-out").
 
 ## WABA health webhooks (auto-throttle)
 
