@@ -1,7 +1,15 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+	vi,
+} from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
@@ -548,50 +556,36 @@ describe("retailers legal consent", () => {
 		});
 	}
 
-	test("createRetailer stamps current versions + timestamps + IP", async () => {
+	test("createRetailer stamps current versions + timestamps", async () => {
 		const t = setup();
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.retailers.createRetailer, {
 			storeName: "Consent Store",
 			slug: "consent",
-			acceptanceIp: "203.0.113.7",
 		});
 
 		const row = await readRetailer(t, USER_A);
 		expect(row?.termsVersion).toBe(TERMS_VERSION);
 		expect(row?.privacyVersion).toBe(PRIVACY_VERSION);
 		expect(row?.aupVersion).toBe(AUP_VERSION);
-		expect(row?.acceptanceIp).toBe("203.0.113.7");
 		expect(typeof row?.termsAcceptedAt).toBe("number");
 		expect(typeof row?.privacyAcceptedAt).toBe("number");
 		expect(typeof row?.aupAcceptedAt).toBe("number");
+		// acceptanceIp was dropped in 86eyn25fu (no client ever passed it, and a
+		// mutation can't observe the request IP) — pin that nothing writes it.
+		expect("acceptanceIp" in (row ?? {})).toBe(false);
 	});
 
-	test("createRetailer omits IP when blank", async () => {
-		const t = setup();
-		const asA = t.withIdentity({ subject: USER_A });
-		await asA.mutation(api.retailers.createRetailer, {
-			storeName: "No IP Store",
-			slug: "no-ip",
-			acceptanceIp: "   ",
-		});
-		const row = await readRetailer(t, USER_A);
-		expect(row?.acceptanceIp).toBeUndefined();
-		// Consent is still stamped even without an IP.
-		expect(row?.termsVersion).toBe(TERMS_VERSION);
-	});
-
-	test("getMyRetailer exposes accepted versions but not IP", async () => {
+	test("getMyRetailer exposes accepted versions", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "expose");
 		const me = await asA.query(api.retailers.getMyRetailer);
 		expect(me?.termsVersion).toBe(TERMS_VERSION);
 		expect(me?.privacyVersion).toBe(PRIVACY_VERSION);
 		expect(me?.aupVersion).toBe(AUP_VERSION);
-		expect(me).not.toHaveProperty("acceptanceIp");
 	});
 
-	test("recordConsentAcceptance re-stamps versions and IP", async () => {
+	test("recordConsentAcceptance re-stamps versions", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "restamp");
 		// Simulate a stale prior acceptance.
@@ -599,22 +593,16 @@ describe("retailers legal consent", () => {
 			const rows = await ctx.db.query("retailers").collect();
 			const row = rows.find((r) => r.userId === USER_A);
 			if (row) {
-				await ctx.db.patch(row._id, {
-					termsVersion: "2000-01-01",
-					acceptanceIp: undefined,
-				});
+				await ctx.db.patch(row._id, { termsVersion: "2000-01-01" });
 			}
 		});
 
-		await asA.mutation(api.retailers.recordConsentAcceptance, {
-			acceptanceIp: "198.51.100.4",
-		});
+		await asA.mutation(api.retailers.recordConsentAcceptance, {});
 
 		const row = await readRetailer(t, USER_A);
 		expect(row?.termsVersion).toBe(TERMS_VERSION);
 		expect(row?.privacyVersion).toBe(PRIVACY_VERSION);
 		expect(row?.aupVersion).toBe(AUP_VERSION);
-		expect(row?.acceptanceIp).toBe("198.51.100.4");
 	});
 
 	test("recordConsentAcceptance errors when the user has no store", async () => {
@@ -859,6 +847,217 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(await ctx.storage.getUrl(bIds.logoId)).not.toBeNull();
 			expect(await ctx.storage.getUrl(bIds.proofId)).not.toBeNull();
 		});
+	});
+
+	/**
+	 * The 86eyetzbk sweep: every table that used to be orphaned, the two
+	 * retained-by-DECISION tables, the optOut attribution clear, and all three
+	 * order blob kinds (the account cascade used to free only the proof).
+	 */
+	test("erases every previously-orphaned table, keeps the two retained by decision", async () => {
+		const t = setup();
+		const ids = await seedFullTenant(t, USER_A, "orphan-sweep");
+
+		const extra = await t.run(async (ctx) => {
+			const now = Date.now();
+			const store = () =>
+				ctx.storage.store(
+					new Blob([new Uint8Array([9, 9, 9])], { type: "image/png" }),
+				);
+			// The two order blobs the old cascade leaked.
+			const buyerImgId = await store();
+			const mockupId = await store();
+			await ctx.db.patch(ids.orderId, {
+				customerImageStorageId: buyerImgId,
+				mockupImageStorageIds: [mockupId],
+				mockupImageStorageId: mockupId,
+			});
+
+			const pickupId = await ctx.db.insert("pickupLocations", {
+				retailerId: ids.retailerId,
+				label: "Stall",
+				address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+				// Third-party PII the cascade must not leave behind.
+				managerName: "Pak Din",
+				managerWaPhone: "60129998888",
+				isActive: true,
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const sessionId = await ctx.db.insert("counterCheckoutSessions", {
+				retailerId: ids.retailerId,
+				sellerUserId: USER_A,
+				token: "KPS-testtoken0001",
+				// `completed` deliberately: the 30-day stale-session cron exempts
+				// completed rows, so before this ticket they held buyer phone +
+				// pushname forever — the reason this table was a PDPA bug.
+				status: "completed",
+				waPhone: "60123456789",
+				waProfileName: "Ali",
+				expiresAt: now + 60_000,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const usageId = await ctx.db.insert("subscriptionUsage", {
+				retailerId: ids.retailerId,
+				monthStart: now,
+				orders: 3,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const foundingId = await ctx.db.insert("foundingMembers", {
+				retailerId: ids.retailerId,
+				rank: 1,
+				plan: "pro",
+			});
+			const limitsId = await ctx.db.insert("retailerSendingLimits", {
+				retailerId: ids.retailerId,
+				updatedAt: now,
+			});
+			const logId = await ctx.db.insert("outboundMessageLog", {
+				retailerId: ids.retailerId,
+				toWaPhone: "60123456789", // buyer PII
+				category: "transactional",
+				status: "sent",
+				sentAt: now,
+			});
+			// Retained by decision — financial record + audit trail.
+			const subscriptionRow = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+				.first();
+			if (!subscriptionRow) throw new Error("seed has no subscription");
+			const invoiceId = await ctx.db.insert("invoices", {
+				retailerId: ids.retailerId,
+				subscriptionId: subscriptionRow._id,
+				invoiceNumber: "INV-DEL-0001",
+				amount: 9900,
+				total: 9900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 24 * 60 * 60 * 1000,
+				dueDate: now + 14 * 24 * 60 * 60 * 1000,
+				status: "paid",
+				createdAt: now,
+			});
+			const auditId = await ctx.db.insert("adminAuditLog", {
+				adminUserId: "admin_user",
+				retailerId: ids.retailerId,
+				action: "retailers.updateSettings",
+				ts: now,
+			});
+			// Global suppression instruction: the ROW survives, only its
+			// attribution to this retailer is cleared.
+			const optOutId = await ctx.db.insert("optOuts", {
+				waPhone: "60123456789",
+				source: "stop_keyword",
+				triggeredByRetailerId: ids.retailerId,
+				createdAt: now,
+			});
+			return {
+				buyerImgId,
+				mockupId,
+				pickupId,
+				sessionId,
+				usageId,
+				foundingId,
+				limitsId,
+				logId,
+				invoiceId,
+				auditId,
+				optOutId,
+				subscriptionId: subscriptionRow._id,
+			};
+		});
+
+		const result = await t.mutation(internal.retailers.deleteUser, {
+			userId: USER_A,
+		});
+		expect(result.deleted).toBe(true);
+		if (!result.deleted) throw new Error("expected the tenant to be deleted");
+		// A small tenant fits one batch, so the cascade finishes in-invocation.
+		expect(result.done).toBe(true);
+
+		await t.run(async (ctx) => {
+			// Previously orphaned — now all gone.
+			expect(await ctx.db.get(extra.pickupId)).toBeNull();
+			expect(await ctx.db.get(extra.sessionId)).toBeNull();
+			expect(await ctx.db.get(extra.usageId)).toBeNull();
+			expect(await ctx.db.get(extra.foundingId)).toBeNull();
+			expect(await ctx.db.get(extra.limitsId)).toBeNull();
+			expect(await ctx.db.get(extra.logId)).toBeNull();
+			expect(await ctx.db.get(extra.subscriptionId)).toBeNull();
+
+			// The two blobs the old cascade leaked, plus the one it did free.
+			expect(await ctx.storage.getUrl(extra.buyerImgId)).toBeNull();
+			expect(await ctx.storage.getUrl(extra.mockupId)).toBeNull();
+			expect(await ctx.storage.getUrl(ids.proofId)).toBeNull();
+
+			// RETAINED BY DECISION — a financial record and an audit trail must
+			// outlive the tenant. If this ever flips, it must be a decision, not
+			// a silent cascade addition.
+			expect(await ctx.db.get(extra.invoiceId)).not.toBeNull();
+			expect(await ctx.db.get(extra.auditId)).not.toBeNull();
+
+			// The opt-out itself survives (the buyer's standing instruction), with
+			// no dangling reference to the deleted store.
+			const optOut = await ctx.db.get(extra.optOutId);
+			expect(optOut).not.toBeNull();
+			expect(optOut?.triggeredByRetailerId).toBeUndefined();
+		});
+	});
+
+	test("completes for a tenant far past one transaction's batch", async () => {
+		// Fake timers must be installed BEFORE the convexTest instance exists, or
+		// scheduled continuations crash with "Transaction not started" (the
+		// gotcha documented at convex/whatsapp.test.ts:112-114).
+		vi.useFakeTimers();
+		const t = setup();
+		const ids = await seedFullTenant(t, USER_A, "big-tenant");
+		// Well past DELETE_USER_BATCH (25) so the cascade must self-chain.
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			for (let i = 0; i < 60; i++) {
+				const orderId = await ctx.db.insert("orders", {
+					retailerId: ids.retailerId,
+					shortId: `ORD-9${String(i).padStart(3, "0")}`,
+					items: [],
+					subtotal: 100,
+					total: 100,
+					currency: "MYR",
+					status: "pending",
+					channel: "whatsapp",
+					customer: { name: "Bulk", waPhone: "60123456789" },
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("orderEvents", {
+					orderId,
+					status: "pending",
+					createdAt: now,
+				});
+			}
+		});
+
+		// One invocation can't finish this — it hands off to scheduled
+		// continuations, which finishAllScheduledFunctions drains.
+		const first = await t.mutation(internal.retailers.deleteUser, {
+			userId: USER_A,
+		});
+		expect(first.deleted).toBe(true);
+		if (!first.deleted) throw new Error("expected the tenant to be deleted");
+		expect(first.done).toBe(false);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.get(ids.retailerId)).toBeNull();
+			const orders = await ctx.db.query("orders").collect();
+			expect(orders).toHaveLength(0);
+			const events = await ctx.db.query("orderEvents").collect();
+			expect(events).toHaveLength(0);
+		});
+		vi.useRealTimers();
 	});
 });
 
@@ -1153,10 +1352,10 @@ describe("statusLabels (Phase 1 order status customization)", () => {
 
 describe("orderStages (Phase 2 custom stages)", () => {
 	const SUIT = [
-		{ anchor: "confirmed" as const, label: { en: "Accepted" }, notify: true },
-		{ anchor: "packed" as const, label: { en: "Cleaning", ms: "Mencuci" }, notify: false },
-		{ anchor: "packed" as const, label: { en: "Drying" }, notify: false, description: { en: "1–2 days" } },
-		{ anchor: "delivered" as const, label: { en: "Collected" }, notify: true },
+		{ anchor: "confirmed" as const, label: { en: "Accepted" }},
+		{ anchor: "packed" as const, label: { en: "Cleaning", ms: "Mencuci" }},
+		{ anchor: "packed" as const, label: { en: "Drying" }, description: { en: "1–2 days" } },
+		{ anchor: "delivered" as const, label: { en: "Collected" }},
 	];
 
 	test("saves stages; getMyRetailer surfaces them with ids + renumbered sortOrder", async () => {
@@ -1179,7 +1378,7 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const asA = await seed(t, USER_A, "stages-trim");
 		await asA.mutation(api.retailers.updateSettings, {
 			orderStages: [
-				{ anchor: "confirmed", label: { en: "  Accepted  ", ms: "   " }, notify: true, description: { en: "", ms: "  " } },
+				{ anchor: "confirmed", label: { en: "  Accepted  ", ms: "   " }, description: { en: "", ms: "  " } },
 			],
 		});
 		const me = await asA.query(api.retailers.getMyRetailer);
@@ -1195,13 +1394,11 @@ describe("orderStages (Phase 2 custom stages)", () => {
 				{
 					anchor: "confirmed",
 					label: { en: "Accepted", zh: "已确认" },
-					notify: true,
 					description: { en: "Order accepted", zh: "订单已接受" },
 				},
 				{
 					anchor: "packed",
 					label: { en: "Sewing", zh: "  " }, // whitespace-only zh → dropped
-					notify: false,
 				},
 			],
 		});
@@ -1243,8 +1440,8 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
 				orderStages: [
-					{ anchor: "packed", label: { en: "Cleaning" }, notify: false },
-					{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+					{ anchor: "packed", label: { en: "Cleaning" }},
+					{ anchor: "confirmed", label: { en: "Accepted" }},
 				],
 			}),
 		).rejects.toThrow(/out of order/i);
@@ -1256,7 +1453,6 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const many = Array.from({ length: 21 }, () => ({
 			anchor: "packed" as const,
 			label: { en: "Step" },
-			notify: false,
 		}));
 		await expect(
 			asA.mutation(api.retailers.updateSettings, { orderStages: many }),
@@ -1268,7 +1464,7 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const asA = await seed(t, USER_A, "stages-nolabel");
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
-				orderStages: [{ anchor: "confirmed", label: { en: "  " }, notify: true }],
+				orderStages: [{ anchor: "confirmed", label: { en: "  " }}],
 			}),
 		).rejects.toThrow(/English label/i);
 	});
@@ -1279,8 +1475,8 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
 				orderStages: [
-					{ anchor: "confirmed", label: { en: "Received" }, notify: false },
-					{ anchor: "confirmed", label: { en: "Reviewing" }, notify: false },
+					{ anchor: "confirmed", label: { en: "Received" }},
+					{ anchor: "confirmed", label: { en: "Reviewing" }},
 				],
 			}),
 		).rejects.toThrow(/Only one "Accepted"/);
@@ -1292,25 +1488,26 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
 				orderStages: [
-					{ anchor: "delivered", label: { en: "Collected" }, notify: true },
-					{ anchor: "delivered", label: { en: "Reviewed" }, notify: true },
+					{ anchor: "delivered", label: { en: "Collected" }},
+					{ anchor: "delivered", label: { en: "Reviewed" }},
 				],
 			}),
 		).rejects.toThrow(/Only one "Done"/);
 	});
 
-	test("rejects more than 5 notifying stages", async () => {
+	test("six same-band stages are fine — the old notify cap is gone (86eyd63r8)", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "stages-notifycap");
-		await expect(
-			asA.mutation(api.retailers.updateSettings, {
-				orderStages: Array.from({ length: 6 }, (_, i) => ({
-					anchor: "packed" as const,
-					label: { en: `Step ${i}` },
-					notify: true,
-				})),
-			}),
-		).rejects.toThrow(/can notify the buyer/i);
+		// MAX_NOTIFY_STAGES existed to bound per-stage WhatsApp cost; stages no
+		// longer message anyone, so only the 20-stage total cap remains.
+		await asA.mutation(api.retailers.updateSettings, {
+			orderStages: Array.from({ length: 6 }, (_, i) => ({
+				anchor: "packed" as const,
+				label: { en: `Step ${i}` },
+			})),
+		});
+		const r = await asA.query(api.retailers.getMyRetailer);
+		expect(r?.orderStages).toHaveLength(6);
 	});
 });
 

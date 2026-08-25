@@ -8,6 +8,7 @@ import {
 import { ChevronDown } from "lucide-react";
 import { useMemo } from "react";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatPhone, getDisplayName } from "../../lib/customer";
 import { formatPrice, formatRelativeTime } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -118,8 +119,12 @@ export function CustomerList({
 				))}
 			</ul>
 
-			{/* Desktop: sortable table */}
-			<div className="hidden overflow-hidden rounded-2xl border border-border lg:block">
+			{/* Desktop: sortable table. MASK_PII here covers every row's name +
+			    phone cell — the mobile path inherits its mask from CustomerCard. */}
+			<div
+				{...MASK_PII}
+				className="hidden overflow-hidden rounded-2xl border border-border lg:block"
+			>
 				<table className="w-full border-collapse text-sm">
 					<thead>
 						{table.getHeaderGroups().map((headerGroup) => (

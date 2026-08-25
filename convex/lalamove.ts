@@ -1403,23 +1403,13 @@ export const fetchPodImages = internalAction({
 		});
 		if (!stored) return; // lost an idempotency race — mutation cleaned our blobs
 
-		// Collection jobs keep the photo as the SELLER's hand-over record only —
-		// it shows the rider dropping the buyer's gear at the seller's own
-		// doorstep, and the order isn't delivered, so the "Delivered! 📸"
-		// follow-up would be flatly wrong for the buyer.
-		if (context.deliveryDirection === "collection") return;
-
-		const imageUrls: string[] = [];
-		for (const id of storageIds) {
-			const url = await ctx.storage.getUrl(id);
-			if (url) imageUrls.push(url);
-		}
-		if (imageUrls.length > 0) {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
-				orderId: context.orderId,
-				imageUrls,
-			});
-		}
+		// The rider's drop-off photo is NOT WhatsApp'd (86eyd63r8) — for either
+		// trip direction. It was the one send in the codebase that produced N
+		// messages from a single event (up to 3 images), and the order's single
+		// message has long since gone out. Standard deliveries show the photos on
+		// the buyer's tracking page + the seller's dispatch card; collection jobs
+		// stay seller-only (86eyg0n8e — the shot is the rider at the SELLER's
+		// door, and orders.get already hides it from the track page).
 	},
 });
 
@@ -1477,19 +1467,7 @@ export const devInjectPodImage = internalAction({
 			storageIds: [storageId],
 		});
 		if (!stored) return "job already has POD images — nothing injected";
-		const url = await ctx.storage.getUrl(storageId);
-		if (url) {
-			const jobRow = await ctx.runQuery(internal.lalamove.getPodJobOrder, {
-				jobId,
-			});
-			if (jobRow) {
-				await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
-					orderId: jobRow.orderId,
-					imageUrls: [url],
-				});
-			}
-		}
-		return `injected 1 POD image onto job ${jobId} — check the order card + buyer WhatsApp`;
+		return `injected 1 POD image onto job ${jobId} — check the order card + the buyer's tracking page`;
 	},
 });
 

@@ -4,12 +4,17 @@ import { httpAction } from "./_generated/server";
 import { reportSecretMatches } from "./lib/businessReport";
 import { getAdapter } from "./lib/channels/registry";
 import { decryptSecret } from "./lib/credentialCrypto";
-import { decimalStringToSen, verifyHitpayWebhook } from "./lib/hitpay";
+import {
+	decimalStringToSen,
+	HITPAY_PROVIDER_LABEL,
+	verifyHitpayWebhook,
+} from "./lib/hitpay";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
+import { redactPhone } from "./lib/logRedaction";
 import { extractWabaHealthEvents } from "./lib/wabaWebhook";
 
 const http = httpRouter();
@@ -71,15 +76,16 @@ http.route({
 		// Signature OK — the adapter parses the raw body we already verified into
 		// channel-agnostic envelopes.
 		const messages = adapter.parseInbound(rawBody, req.headers);
-		// Log the inbound identity triplet (phone + pushname + a short text preview)
-		// so the WhatsApp identity-binding flow used by order confirmation — and the
-		// Counter Checkout `KP-<token>` flipped flow (ClickUp 86ey0e80x) — is
-		// observable end-to-end without decoding raw payloads.
+		// Redacted correlation data only (last-4 phone, text LENGTH, pushname
+		// presence): platform logs sit outside the schema with their own retention,
+		// so buyer phones, pushnames and message bodies never land in them. The
+		// identity-binding / counter-scan flows stay observable via handleInbound's
+		// intent logs, which are redacted the same way (86eyn25gd).
 		console.log("WA webhook POST", {
 			messageCount: messages.length,
-			firstFrom: messages[0]?.channelUserId,
-			firstProfileName: messages[0]?.profileName,
-			firstText: messages[0]?.text?.slice(0, 60),
+			firstFrom: redactPhone(messages[0]?.channelUserId),
+			firstHasProfileName: Boolean(messages[0]?.profileName),
+			firstTextLength: messages[0]?.text?.length ?? 0,
 		});
 		for (const msg of messages) {
 			await ctx.runAction(internal.whatsapp.handleInbound, {
@@ -97,7 +103,7 @@ http.route({
 			if (ev.status !== "failed") continue;
 			console.warn("WA outbound message failed", {
 				providerMessageId: ev.providerMessageId,
-				recipientId: ev.recipientId,
+				recipientId: redactPhone(ev.recipientId),
 				errorDetail: ev.errorDetail,
 			});
 			await ctx.runMutation(internal.orders.markConfirmationPushFailed, {
@@ -333,6 +339,7 @@ http.route({
 				paymentId: fields.payment_id,
 				amountSen,
 				currency: fields.currency ?? "",
+				provider: HITPAY_PROVIDER_LABEL,
 			},
 		);
 		if (result.applied) {

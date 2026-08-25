@@ -1,12 +1,15 @@
 import { v } from "convex/values";
 
+// One customisable key survives the one-message-per-order cut (86eyd63r8):
+// `confirm`, the write-in reply for a buyer who messages their ORD- reference
+// on an order the confirmation template never reached (legacy / failed-push).
+// The status keys' sends are deleted and `unknownFallback` was never actually
+// read (its render site hardcodes the defaults) — an override stored for any
+// of them could no longer render, so the wire stops accepting them. Old rows
+// keep their stored extras harmlessly (schema stays wide; the catalog just
+// never looks those keys up), and they drop off on the seller's next save.
 const localeOverridesValidator = v.object({
 	confirm: v.optional(v.string()),
-	packed: v.optional(v.string()),
-	shipped: v.optional(v.string()),
-	delivered: v.optional(v.string()),
-	cancelled: v.optional(v.string()),
-	unknownFallback: v.optional(v.string()),
 });
 
 const messageTemplatesValidator = v.object({
@@ -58,7 +61,10 @@ const orderStagesValidator = v.array(
 				zh: v.optional(v.string()),
 			}),
 		),
-		notify: v.boolean(),
+		// Accepted-and-ignored: older clients may still post the retired
+		// per-stage notify flag (86eyd63r8). Rejecting it would fail their save
+		// for no reason; sanitizeOrderStages simply drops it.
+		notify: v.optional(v.boolean()),
 		sortOrder: v.optional(v.number()),
 	}),
 );
@@ -69,7 +75,7 @@ type OrderStageInput = {
 	anchor: StageAnchor;
 	label: { en: string; ms?: string; zh?: string };
 	description?: { en?: string; ms?: string; zh?: string };
-	notify: boolean;
+	notify?: boolean;
 	sortOrder?: number;
 };
 
@@ -108,7 +114,6 @@ function sanitizeOrderStages(
 			anchor: s.anchor,
 			label: { en, ...(ms ? { ms } : {}), ...(zh ? { zh } : {}) },
 			...(description ? { description } : {}),
-			notify: Boolean(s.notify),
 			sortOrder: i,
 		};
 	});
@@ -185,10 +190,15 @@ import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
 import {
+	DELETION_PHASES,
+	type DeletionPhase,
+	deletionPhaseValidator,
+	runDeletionPhase,
+} from "./lib/accountDeletion";
+import {
 	type OpeningHours,
 	sanitizeOpeningHours,
 } from "./lib/openingHours";
-import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -220,6 +230,7 @@ import {
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
+import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -519,15 +530,6 @@ function sanitizeBusinessAddress(
 	};
 }
 
-/** Trim and bound a best-effort client IP before persisting. */
-function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
-	if (ip === undefined) return undefined;
-	const trimmed = ip.trim();
-	if (trimmed.length === 0) return undefined;
-	// IPv6 max textual length is 45 chars; clamp generously to avoid storing junk.
-	return trimmed.slice(0, 64);
-}
-
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
 // Trim outer whitespace (newlines INSIDE are preserved for multi-line blurbs),
@@ -549,11 +551,6 @@ export { DEFAULT_LOCALE } from "./lib/locale";
 
 type LocaleOverrides = {
 	confirm?: string;
-	packed?: string;
-	shipped?: string;
-	delivered?: string;
-	cancelled?: string;
-	unknownFallback?: string;
 };
 
 type MessageTemplatesShape = {
@@ -562,21 +559,12 @@ type MessageTemplatesShape = {
 	zh?: LocaleOverrides;
 };
 
-const TEMPLATE_MAX_LENGTH = 1000;
-
 function sanitizeOverrides(
 	input: LocaleOverrides | undefined,
 ): LocaleOverrides | undefined {
 	if (!input) return undefined;
 	const out: LocaleOverrides = {};
-	for (const key of [
-		"confirm",
-		"packed",
-		"shipped",
-		"delivered",
-		"cancelled",
-		"unknownFallback",
-	] as const) {
+	for (const key of ["confirm"] as const) {
 		const raw = input[key];
 		if (raw === undefined) continue;
 		const trimmed = raw.trim();
@@ -1229,9 +1217,6 @@ export const createRetailer = mutation({
 		// freeze their currency at create, so a wrong default here would strand
 		// the whole catalog — see docs/sg-lite.md).
 		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
-		// Best-effort client IP captured at the consent moment. Optional —
-		// onboarding never blocks if IP lookup fails.
-		acceptanceIp: v.optional(v.string()),
 		// Signup path. Both start a 14-day trial; "founding" additionally flags the
 		// store (`foundingIntent`) and reserves a Founding-10 rank, but the paid Pro
 		// plan still only starts at admin mark-paid. The real rank gate is mark-paid +
@@ -1299,7 +1284,6 @@ export const createRetailer = mutation({
 		// Consent is implied: the onboarding UI gates submission on a required,
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
-		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
 		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -1327,7 +1311,6 @@ export const createRetailer = mutation({
 			privacyVersion: PRIVACY_VERSION,
 			aupAcceptedAt: now,
 			aupVersion: AUP_VERSION,
-			acceptanceIp,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -2194,10 +2177,8 @@ export const updateSettings = mutation({
  * Like createRetailer, versions are taken server-side (never client-supplied).
  */
 export const recordConsentAcceptance = mutation({
-	args: {
-		acceptanceIp: v.optional(v.string()),
-	},
-	handler: async (ctx, args): Promise<{ ok: true }> => {
+	args: {},
+	handler: async (ctx): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
 		const retailer = await ctx.db
 			.query("retailers")
@@ -2213,7 +2194,6 @@ export const recordConsentAcceptance = mutation({
 			privacyVersion: PRIVACY_VERSION,
 			aupAcceptedAt: now,
 			aupVersion: AUP_VERSION,
-			acceptanceIp: sanitizeAcceptanceIp(args.acceptanceIp),
 			updatedAt: now,
 		});
 		return { ok: true };
@@ -2650,134 +2630,129 @@ type DeleteUserResult =
 	| {
 			deleted: true;
 			retailerId: Id<"retailers">;
-			counts: { orders: number; products: number; customers: number };
+			/** False ⇒ a continuation batch was scheduled — watch the logs. */
+			done: boolean;
+			/** Where the cascade is (the phase this invocation left off in). */
+			phase: DeletionPhase;
+			/** Documents processed by THIS invocation, not a running total. */
+			processed: number;
 	  };
+
+/** Rows processed per invocation before handing off to a scheduled
+ * continuation — sized so even the heaviest phase (orders: events + blobs per
+ * row) stays far inside the single-mutation read/write limits. */
+const DELETE_USER_BATCH = 25;
 
 /**
  * Hard-delete a user and every tenant artifact they own, keyed by Clerk
- * subject (`userId`). Cascades through orders (+ their orderEvents and payment
- * proof files), products (+ their image files), customers, and parked
- * slugHistory rows, then removes the retailer's logo / payment-QR blobs and the
- * retailer row itself. Runs as a single ACID mutation, so it's all-or-nothing.
+ * subject (`userId`) — the PDPA erasure path (86eyetzbk). Paginated and
+ * SELF-CHAINING: each invocation processes a bounded batch (~25 rows) and
+ * schedules itself via `ctx.scheduler` until every phase completes, so a large
+ * tenant can no longer exceed single-mutation transaction limits (the old
+ * one-shot ACID version failed outright on big stores). Invoke it ONCE with
+ * just `{ userId }` — `phase`/`cursor` are internal continuation state, never
+ * passed by hand. Progress is logged per phase (counts + ids only, never
+ * phone numbers or message bodies).
  *
- * Internal-only: there is no shopper/retailer-facing path to this. Invoke it
- * from a Clerk "user.deleted" webhook handler, a GDPR erasure job, or the
- * Convex dashboard.
+ * Sweeps, in order (see DELETION_PHASES in convex/lib/accountDeletion.ts):
+ * orders (+ events + buyer image / payment proof / mockup blobs via the shared
+ * `orderBlobs` helper), products (shared `deleteProductCascade`: variants +
+ * images + junctions), leftover junctions, categories (+ tile blobs),
+ * deliveryJobs (+ POD blobs), deliveryQuotes, customers, pickupLocations
+ * (manager name/phone), counterCheckoutSessions (buyer phone/pushname),
+ * subscriptions, subscriptionUsage, foundingMembers, retailerSendingLimits,
+ * outboundMessageLog (buyer phones), slugHistory, then optOuts attribution,
+ * and finally the retailer's own blobs + row.
+ *
+ * RETAINED BY DECISION (not omissions): `invoices` rows + their frozen PDF
+ * blobs (financial records of what Kedaipal charged the seller — no buyer
+ * PII) and `adminAuditLog` rows (an audit trail must outlive the tenant it
+ * audited). `optOuts` rows are the buyer's GLOBAL suppression instruction and
+ * are never deleted — only their `triggeredByRetailerId` attribution is
+ * cleared. Rationale lives in convex/lib/accountDeletion.ts + the doc below.
+ *
+ * The retailer row is deleted in the FINAL phase, so every continuation batch
+ * can re-resolve the tenant by userId; each phase is idempotent, so re-running
+ * a batch after a crash just resumes. Because the cascade now spans multiple
+ * transactions it is no longer all-or-nothing — invoke it once the tenant is
+ * inactive (a row created mid-cascade by a still-live storefront could survive
+ * as an orphan).
+ *
+ * Internal-only: no shopper/retailer-facing path. Invoked manually from the
+ * Convex dashboard today; wiring an automatic trigger (Clerk `user.deleted`
+ * webhook) is ticket 86eydwct5's scope, not this function's.
  *
  * Idempotent — returns `{ deleted: false }` when the user has no retailer.
- *
- * NOTE: deletion is bounded by the tenant's data volume. A single Convex
- * mutation has read/write-set limits, so a Scale-tier retailer with very large
- * order history could exceed them. If that becomes real, split this into a
- * paginated batch driven by `ctx.scheduler`. The slugHistory scan is a full
- * table read (no by-retailer index) but that table is small and TTL-pruned.
+ * See docs/account-deletion.md.
  */
 export const deleteUser = internalMutation({
-	args: { userId: v.string() },
-	handler: async (ctx, { userId }): Promise<DeleteUserResult> => {
+	args: {
+		userId: v.string(),
+		// Continuation state for the self-chaining batches — internal only.
+		phase: v.optional(deletionPhaseValidator),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, args): Promise<DeleteUserResult> => {
+		const { userId } = args;
 		const retailer = await ctx.db
 			.query("retailers")
 			.withIndex("by_user", (q) => q.eq("userId", userId))
 			.first();
 		if (!retailer) return { deleted: false };
-		const retailerId = retailer._id;
 
-		// Best-effort: a missing/already-deleted blob must not abort the cascade.
-		const deleteFile = async (storageId: string | undefined): Promise<void> => {
-			if (!storageId) return;
-			try {
-				await ctx.storage.delete(storageId as Id<"_storage">);
-			} catch {
-				// blob already gone — ignore
+		let phase: DeletionPhase = args.phase ?? DELETION_PHASES[0];
+		let cursor: string | null = args.cursor ?? null;
+		let budget = DELETE_USER_BATCH;
+		let processedTotal = 0;
+
+		while (true) {
+			const result = await runDeletionPhase(ctx, retailer, phase, budget, cursor);
+			processedTotal += result.processed;
+			budget -= result.processed;
+			console.log(
+				`deleteUser[${retailer._id}] phase=${phase} processed=${result.processed}${result.done ? " (phase complete)" : ""}`,
+			);
+			if (!result.done) {
+				// More rows in this phase — hand the position to a continuation.
+				await ctx.scheduler.runAfter(0, internal.retailers.deleteUser, {
+					userId,
+					phase,
+					cursor: result.cursor ?? null,
+				});
+				return {
+					deleted: true,
+					retailerId: retailer._id,
+					done: false,
+					phase,
+					processed: processedTotal,
+				};
 			}
-		};
-
-		// Orders → their events + payment proof files.
-		const orders = await ctx.db
-			.query("orders")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const order of orders) {
-			const events = await ctx.db
-				.query("orderEvents")
-				.withIndex("by_order", (q) => q.eq("orderId", order._id))
-				.collect();
-			for (const event of events) await ctx.db.delete(event._id);
-			await deleteFile(order.paymentProofStorageId);
-			await ctx.db.delete(order._id);
-		}
-
-		// Products → their variants (+ variant images), image files and category
-		// memberships, via the shared cascade so this can't drift from the
-		// surgical products.deletePermanently. Category `productCount` is
-		// deliberately NOT maintained here — the category rows themselves are
-		// deleted a few lines below, so decrementing them first is pure waste.
-		const products = await ctx.db
-			.query("products")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const product of products) await deleteProductCascade(ctx, product);
-
-		// Categories + product↔category junction rows (+ tile images).
-		const junctionRows = await ctx.db
-			.query("productCategories")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const junction of junctionRows) await ctx.db.delete(junction._id);
-		const categories = await ctx.db
-			.query("categories")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const category of categories) {
-			await deleteFile(category.imageStorageId);
-			await ctx.db.delete(category._id);
-		}
-
-		// Lalamove delivery ledger + transient checkout quotes.
-		const deliveryJobs = await ctx.db
-			.query("deliveryJobs")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const job of deliveryJobs) {
-			for (const podId of job.podImageStorageIds ?? []) {
-				await ctx.storage.delete(podId);
+			const next = DELETION_PHASES[DELETION_PHASES.indexOf(phase) + 1];
+			if (next === undefined) break; // the final `retailer` phase just ran
+			phase = next;
+			cursor = null;
+			if (budget <= 0) {
+				await ctx.scheduler.runAfter(0, internal.retailers.deleteUser, {
+					userId,
+					phase,
+				});
+				return {
+					deleted: true,
+					retailerId: retailer._id,
+					done: false,
+					phase,
+					processed: processedTotal,
+				};
 			}
-			await ctx.db.delete(job._id);
-		}
-		const deliveryQuotes = await ctx.db
-			.query("deliveryQuotes")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const quote of deliveryQuotes) await ctx.db.delete(quote._id);
-
-		// Customers.
-		const customers = await ctx.db
-			.query("customers")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const customer of customers) await ctx.db.delete(customer._id);
-
-		// Parked slug-history rows (no by-retailer index; small, TTL-pruned table).
-		const history = await ctx.db.query("slugHistory").collect();
-		for (const row of history) {
-			if (row.retailerId === retailerId) await ctx.db.delete(row._id);
 		}
 
-		// Retailer-level storage, then the retailer row. Delete every QR image —
-		// across the methods array AND the legacy single object.
-		await deleteFile(retailer.logoStorageId);
-		await deleteFile(retailer.coverImageStorageId);
-		for (const qrId of collectQrStorageIds(retailer)) await deleteFile(qrId);
-		await ctx.db.delete(retailerId);
-
+		console.log(`deleteUser[${retailer._id}] tenant fully erased`);
 		return {
 			deleted: true,
-			retailerId,
-			counts: {
-				orders: orders.length,
-				products: products.length,
-				customers: customers.length,
-			},
+			retailerId: retailer._id,
+			done: true,
+			phase,
+			processed: processedTotal,
 		};
 	},
 });

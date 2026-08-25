@@ -26,6 +26,7 @@ import {
 	todayMytMidnight,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
@@ -645,7 +646,8 @@ export function BookDeliveryCard({
 				<div className="flex flex-col gap-2 text-sm">
 					{activeJob.driver ? (
 						<div className="flex items-center justify-between gap-3">
-							<span className="flex items-center gap-2">
+							{/* MASK_PII: the rider is a third party. */}
+							<span {...MASK_PII} className="flex items-center gap-2">
 								<Bike className="size-4 text-accent" />
 								<span className="font-medium">{activeJob.driver.name}</span>
 								{activeJob.driver.plateNumber ? (
@@ -679,7 +681,7 @@ export function BookDeliveryCard({
 						<p className="text-muted-foreground">
 							{jobCollection
 								? "Finding a rider… this usually takes a few minutes. They'll collect from your customer's address and bring it here — you advance the order status yourself once it arrives."
-								: "Finding a rider… this usually takes a few minutes. When one picks up, the buyer gets the shipped message with live tracking automatically."}
+								: "Finding a rider… this usually takes a few minutes. When one picks up, the order moves itself to Shipped and the live tracking link appears on the buyer's order page — nothing for you to do."}
 						</p>
 					)}
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -731,7 +733,10 @@ export function BookDeliveryCard({
 						</p>
 					) : null}
 					{completedJob.driver ? (
-						<div className="flex items-center gap-2 text-xs text-muted-foreground">
+						<div
+							{...MASK_PII}
+							className="flex items-center gap-2 text-xs text-muted-foreground"
+						>
 							<Bike className="size-3.5 text-accent" />
 							<span className="font-medium text-foreground">
 								{completedJob.driver.name}
@@ -759,15 +764,16 @@ export function BookDeliveryCard({
 							</a>
 						) : null}
 					</div>
-					{/* Rider's drop-off photo (proof of delivery). Standard: the buyer
-					    got the same shot on WhatsApp. Collection: seller-only — it
-					    shows the hand-over at THIS outlet, never sent to the buyer. */}
+					{/* Rider's drop-off photo (proof of delivery) — never WhatsApp'd
+					    (86eyd63r8). Standard: the same shot renders on the buyer's order
+					    page. Collection (86eyg0n8e): seller-only — it shows the
+					    hand-over at THIS outlet, and orders.get hides it from the buyer. */}
 					{completedJob.podImageUrls?.length ? (
 						<div className="flex flex-col gap-1.5">
 							<p className="text-xs text-muted-foreground">
 								{jobCollection
 									? "Drop-off photo from the rider (kept for your records — not sent to the buyer)"
-									: "Delivery photo from the rider"}
+									: "Delivery photo from the rider — the buyer sees this on their order page too"}
 							</p>
 							<div className="flex gap-2">
 								{completedJob.podImageUrls.map((url) => (
