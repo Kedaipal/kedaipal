@@ -153,7 +153,12 @@ client price (preserves the existing `{ productId, quantity }`-only trust model 
 - **Partial selection on storefront:** compute the valid value-set client-side as the buyer
   narrows; disable impossible combos (reason 1 above).
 - **Concurrency:** two buyers, last unit — handled by the Convex transactional mutation on
-  `onHand`. No locking tricks needed.
+  `onHand`. No locking tricks needed. The real hazard turned out to be
+  *non*-concurrent: paths that wrote `onHand` as a stale absolute could inflate
+  it above physical reality, after which that transactional gate passes against
+  a lie. Fixed in `86eypn8ye` — **`onHand` is no longer part of the product
+  save**, and the rules for every write path live in
+  [`stock-adjustments.md`](./stock-adjustments.md).
 - **Out-of-stock vs made-to-order:** the `blockWhenOutOfStock` toggle (§5), now **per-variant**.
   A hard 0-block kills the orders the "nothing gets missed" promise covers, so frozen-food
   pack-to-order and metal prints stay never-block — and a "Custom" row can be made-to-order

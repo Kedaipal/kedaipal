@@ -23,9 +23,9 @@ import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
-import { cartesian } from "../../lib/variant";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
+import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
@@ -35,6 +35,7 @@ import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	type CustomLineDraft,
+	type LiveVariantStock,
 	reconcileForSubmit,
 	VariantEditor,
 	type VariantEditorState,
@@ -148,6 +149,11 @@ interface ProductFormProps {
 	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
 	 * variant parcel-weight inputs out of Advanced (see VariantEditor). */
 	weightMode?: boolean;
+	/** Saved variants + their LIVE stock counts — edit mode only (86eypn8ye).
+	 * Their stock renders read-only with an Adjust button, because the product
+	 * save no longer writes `onHand`. Absent on create, where every row is new
+	 * and its stock IS set by this form. */
+	liveStock?: LiveVariantStock[];
 	/**
 	 * Optional secondary control rendered beside Save in the sticky action bar
 	 * (e.g. the edit page's archive icon) — rare actions ride along without
@@ -352,9 +358,8 @@ export function buildSubmitVariants(
 			active: row.active,
 			blockWhenOutOfStock: row.blockWhenOutOfStock,
 			requiresProof: row.requiresProof,
-			parcelWeightG: weightOk && weightStr.length > 0
-				? Number.parseInt(weightStr, 10)
-				: 0,
+			parcelWeightG:
+				weightOk && weightStr.length > 0 ? Number.parseInt(weightStr, 10) : 0,
 			imageStorageIds: row.imageStorageIds,
 		});
 	});
@@ -575,6 +580,7 @@ export function ProductForm({
 	submitLabel,
 	onSubmit,
 	weightMode = false,
+	liveStock,
 	stickyAction,
 	mode,
 	draftRef,
@@ -846,6 +852,8 @@ export function ProductForm({
 					currency={currency}
 					issues={editorIssues}
 					weightMode={weightMode}
+					liveStock={liveStock}
+					productName={liveStock ? form.state.values.name : undefined}
 				/>
 
 				<Link

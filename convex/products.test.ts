@@ -611,33 +611,268 @@ describe("products", () => {
 
 	// --- Per-variant edits ---------------------------------------------------
 
-	test("updateVariant changes price + stock", async () => {
+	test("updateVariant changes price, and cannot touch stock at all", async () => {
+		// Stock has exactly one door (`adjustStock`, 86eypn8ye). `updateVariant`
+		// writes whatever it is handed, so accepting `onHand` here would be a
+		// second absolute-write path onto the field the ticket exists to protect.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
 		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
 		const product = await asA.query(api.products.get, { productId: id });
 		const variantId = product?.variants[0]?._id as Id<"productVariants">;
-		await asA.mutation(api.products.updateVariant, {
-			variantId,
-			price: 13500,
-			onHand: 9,
-		});
+		const before = product?.variants[0]?.onHand as number;
+
+		await asA.mutation(api.products.updateVariant, { variantId, price: 13500 });
+
 		const after = await asA.query(api.products.get, { productId: id });
 		expect(after?.variants[0]?.price).toBe(13500);
-		expect(after?.variants[0]?.onHand).toBe(9);
+		expect(after?.variants[0]?.onHand).toBe(before);
+		// The argument does not exist — a caller that still sends it is rejected
+		// by the validator rather than silently ignored.
+		await expect(
+			asA.mutation(
+				api.products.updateVariant,
+				{ variantId, onHand: 9 } as unknown as { variantId: Id<"productVariants"> },
+			),
+		).rejects.toThrow();
 	});
 
-	test("updateVariant rejects negative stock", async () => {
+	// --- Stock is its own control (86eypn8ye) --------------------------------
+
+	/** Create a product and return its single variant id + starting count. */
+	async function seedStock(
+		t: ReturnType<typeof setup>,
+		stock: number,
+	): Promise<{
+		asA: ReturnType<ReturnType<typeof setup>["withIdentity"]>;
+		productId: Id<"products">;
+		variantId: Id<"productVariants">;
+	}> {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { stock }),
+		);
+		const product = await asA.query(api.products.get, { productId });
+		return {
+			asA,
+			productId,
+			variantId: product?.variants[0]?._id as Id<"productVariants">,
+		};
+	}
+
+	test("saveVariantGrid never writes stock onto an existing variant", async () => {
+		// THE bug (86eypn8ye Hole 2). The seller opens the editor at 14:00 with 50
+		// rendered into the form, 30 units sell, and at 14:04 they fix a typo in
+		// the name and tap Save. The old code wrote 50 back, resurrecting all 30.
+		const t = setup();
+		const { asA, productId, variantId } = await seedStock(t, 50);
+
+		// 30 sell while the form is open.
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: -30 }],
+		});
+
+		// The seller saves the stale form — its stock field still says 50.
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId,
+			options: [],
+			variants: [
+				{
+					optionValues: [],
+					price: 12000,
+					onHand: 50,
+					blockWhenOutOfStock: true,
+				},
+			],
+		});
+
+		const after = await asA.query(api.products.get, { productId });
+		expect(after?.variants[0]?.onHand).toBe(20);
+	});
+
+	test("saveVariantGrid DOES set stock on a combination it inserts", async () => {
+		// The other half of the rule: a brand-new row has no stock of its own to
+		// protect, so the number the seller just typed is the only truth there is.
+		const t = setup();
+		const { asA, productId } = await seedStock(t, 5);
+
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 12000, onHand: 5, blockWhenOutOfStock: true },
+				{ optionValues: ["M"], price: 14000, onHand: 33, blockWhenOutOfStock: true },
+			],
+		});
+
+		const after = await asA.query(api.products.get, { productId });
+		const m = after?.variants.find((vr) => vr.optionValues[0] === "M");
+		expect(m?.onHand).toBe(33);
+	});
+
+	test("adjustStock moves by a delta and floors at zero", async () => {
+		const t = setup();
+		const { asA, productId, variantId } = await seedStock(t, 5);
+
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: 20 }],
+		});
+		expect(
+			(await asA.query(api.products.get, { productId }))?.variants[0]?.onHand,
+		).toBe(25);
+
+		// Over-subtracting self-heals to 0 rather than dead-ending the seller —
+		// matching decrementAggregatesForCancel and the usage meter.
+		const res = await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: -999 }],
+		});
+		expect(res).toEqual([{ variantId, onHand: 0 }]);
+	});
+
+	test("adjustStock refuses an exact count that reality has moved past", async () => {
+		// The stale-overwrite guard. Deliberately NOT a silent merge: only the
+		// seller knows whether they counted before or after those units left.
+		const t = setup();
+		const { asA, productId, variantId } = await seedStock(t, 20);
+
+		// Two sell after the seller's screen last painted 20.
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: -2 }],
+		});
+
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [{ variantId, setTo: 17, expectedOnHand: 20 }],
+			}),
+		).rejects.toThrow(/changed to 18/);
+		// Nothing was written — the count still reflects the sales.
+		expect(
+			(await asA.query(api.products.get, { productId }))?.variants[0]?.onHand,
+		).toBe(18);
+
+		// Re-confirming against the number they can now see goes through.
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, setTo: 17, expectedOnHand: 18 }],
+		});
+		expect(
+			(await asA.query(api.products.get, { productId }))?.variants[0]?.onHand,
+		).toBe(17);
+	});
+
+	test("adjustStock requires expectedOnHand for an exact count", async () => {
+		const t = setup();
+		const { asA, variantId } = await seedStock(t, 20);
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [{ variantId, setTo: 17 }],
+			}),
+		).rejects.toThrow(/expectedOnHand/);
+	});
+
+	test("adjustStock rejects an adjustment that is neither a delta nor a set", async () => {
+		const t = setup();
+		const { asA, variantId } = await seedStock(t, 20);
+		await expect(
+			asA.mutation(api.products.adjustStock, { adjustments: [{ variantId }] }),
+		).rejects.toThrow(/exactly one/);
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [{ variantId, delta: 1, setTo: 5, expectedOnHand: 20 }],
+			}),
+		).rejects.toThrow(/exactly one/);
+	});
+
+	test("a batch applies whole or not at all", async () => {
+		// Why the mutation takes a LIST: the multi-variant sheet moves several
+		// counts in one pass, and half-applying would leave the seller with some
+		// rows moved, some not, and no way to tell which.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
-		const product = await asA.query(api.products.get, { productId: id });
-		const variantId = product?.variants[0]?._id as Id<"productVariants">;
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Lekor",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Flavour", values: ["Original", "Pedas"] }],
+			variants: [
+				{ optionValues: ["Original"], price: 1200, onHand: 20 },
+				{ optionValues: ["Pedas"], price: 1200, onHand: 8 },
+			],
+		});
+		const before = await asA.query(api.products.get, { productId });
+		const [a, b] = (before?.variants ?? []).map(
+			(vr) => vr._id as Id<"productVariants">,
+		);
+
 		await expect(
-			asA.mutation(api.products.updateVariant, { variantId, onHand: -3 }),
-		).rejects.toThrow(/non-negative integer/);
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId: a, delta: -12 }, // fine
+					{ variantId: b, setTo: 3 }, // missing expectedOnHand
+				],
+			}),
+		).rejects.toThrow();
+
+		const after = await asA.query(api.products.get, { productId });
+		expect(after?.variants.map((vr) => vr.onHand)).toEqual([20, 8]);
+	});
+
+	test("adjustStock refuses a custom line and a non-owner", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const asB = t.withIdentity({ subject: USER_B });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [
+				{ optionValues: [], price: 12000, onHand: 5 },
+				{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+			],
+		});
+		const product = await asA.query(api.products.get, { productId });
+		const custom = product?.variants.find((vr) => vr.isCustom);
+		const normal = product?.variants.find((vr) => !vr.isCustom);
+
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId: custom?._id as Id<"productVariants">, delta: 3 },
+				],
+			}),
+		).rejects.toThrow(/no stock to count/);
+
+		await expect(
+			asB.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId: normal?._id as Id<"productVariants">, delta: 3 },
+				],
+			}),
+		).rejects.toThrow(/Forbidden/);
+	});
+
+	test("adjustStock rejects a duplicated variant in one batch", async () => {
+		// Two entries for the same row would apply in array order and the seller
+		// would have no idea which one won.
+		const t = setup();
+		const { asA, variantId } = await seedStock(t, 20);
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId, delta: 1 },
+					{ variantId, delta: 2 },
+				],
+			}),
+		).rejects.toThrow(/only once/);
 	});
 
 	// --- saveVariantGrid reconcile ------------------------------------------
@@ -952,8 +1187,98 @@ describe("products", () => {
 		const s = after?.variants.find((vr) => vr.sku === "TEE-S");
 		const m = after?.variants.find((vr) => vr.sku === "TEE-M");
 		expect(s?.price).toBe(5500); // updated
-		expect(s?.onHand).toBe(1);
+		// Stock is NOT applied without `updateStock` (86eypn8ye): the sheet was
+		// exported hours ago, so its count would undo every sale made since.
+		expect(s?.onHand).toBe(3);
 		expect(m?.onHand).toBe(9); // untouched
+	});
+
+	test("bulkUpsert applies the sheet's stock only when updateStock is set", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [{ optionValues: [], sku: "TEE-1", price: 5000, onHand: 3 }],
+		});
+		const sheet = [
+			{
+				name: "Tee",
+				options: [],
+				variants: [
+					{ optionValues: [], sku: "TEE-1", price: 5000, onHand: 40, active: true },
+				],
+			},
+		];
+
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: sheet,
+			updateStock: false,
+		});
+		let after = await asA.query(api.products.get, { productId: id });
+		expect(after?.variants[0]?.onHand).toBe(3);
+
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: sheet,
+			updateStock: true,
+		});
+		after = await asA.query(api.products.get, { productId: id });
+		expect(after?.variants[0]?.onHand).toBe(40);
+	});
+
+	test("bulkUpsertPreview counts the stock it would overwrite, and which way", async () => {
+		// The numbers the import screen puts on the checkbox before the seller
+		// ticks it. `stockIncreases` is the load-bearing one — that direction
+		// INVENTS units, and its likeliest cause is a sale made after the export.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M", "L"] }],
+			variants: [
+				{ optionValues: ["S"], sku: "TEE-S", price: 5000, onHand: 3 },
+				{ optionValues: ["M"], sku: "TEE-M", price: 5000, onHand: 9 },
+				{ optionValues: ["L"], sku: "TEE-L", price: 5000, onHand: 7 },
+			],
+		});
+
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [
+				{
+					name: "Tee",
+					options: [{ name: "Size", values: ["S", "M", "L"] }],
+					variants: [
+						// up: the resurrection direction
+						{ optionValues: ["S"], sku: "TEE-S", price: 5000, onHand: 12, active: true },
+						// down: a deliberate reduction
+						{ optionValues: ["M"], sku: "TEE-M", price: 5000, onHand: 4, active: true },
+						// unchanged
+						{ optionValues: ["L"], sku: "TEE-L", price: 5000, onHand: 7, active: true },
+					],
+				},
+			],
+		});
+
+		expect(preview.summary.stockChanges).toBe(2);
+		expect(preview.summary.stockIncreases).toBe(1);
+		expect(preview.plan[0]?.stockIncreaseSamples).toEqual([
+			{ sku: "TEE-S", from: 3, to: 12 },
+		]);
 	});
 
 	test("bulkUpsert rejects intra-batch duplicate sku", async () => {

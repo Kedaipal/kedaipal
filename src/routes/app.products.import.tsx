@@ -26,6 +26,7 @@ import {
 	type GroupedProductImport,
 	VARIANT_IMPORT_COLUMNS,
 } from "../lib/product-import";
+import { cn } from "../lib/utils";
 import { parseProductsXlsx } from "../lib/xlsx";
 
 export const Route = createFileRoute("/app/products/import")({
@@ -72,7 +73,12 @@ const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
 			required: true,
 			notes: "Major units, rounded to 2 dp (e.g. 120 or 120.50)",
 		},
-		{ column: "stock", required: true, notes: "Whole number ≥ 0" },
+		{
+			column: "stock",
+			required: true,
+			notes:
+				'Whole number ≥ 0. Applied to NEW products; for products you already have, only if you tick "Update stock too"',
+		},
 		{
 			column: "weight_grams",
 			required: false,
@@ -133,6 +139,8 @@ function ImportProductsRoute() {
 	const [fileName, setFileName] = useState<string | null>(null);
 	const [importing, setImporting] = useState(false);
 	const [previewing, setPreviewing] = useState(false);
+	// OFF by default — see `StockChoice` and convex/products.ts `bulkUpsert`.
+	const [updateStock, setUpdateStock] = useState(false);
 	const [preview, setPreview] = useState<{
 		plan: PlanEntry[];
 		summary: PreviewSummary;
@@ -163,6 +171,9 @@ function ImportProductsRoute() {
 		setParsed(null);
 		setPreview(null);
 		setFileName(null);
+		// A tick made against one sheet must never carry to the next — the counts
+		// it was consented to no longer describe anything.
+		setUpdateStock(false);
 	}
 
 	async function handlePreview() {
@@ -176,6 +187,8 @@ function ImportProductsRoute() {
 				updates: 0,
 				variants: 0,
 				autoFilled: 0,
+				stockChanges: 0,
+				stockIncreases: 0,
 			};
 			// Identical on every chunk (a preview writes nothing), so the last one
 			// stands for all — kept out of the summary because it describes the
@@ -192,6 +205,8 @@ function ImportProductsRoute() {
 				summary.updates += res.summary.updates;
 				summary.variants += res.summary.variants;
 				summary.autoFilled += res.summary.autoFilled;
+				summary.stockChanges += res.summary.stockChanges;
+				summary.stockIncreases += res.summary.stockIncreases;
 				cap = res.cap;
 			}
 			if (cap) setPreview({ plan, summary, cap });
@@ -211,6 +226,7 @@ function ImportProductsRoute() {
 					retailerId: retailer._id,
 					currency: retailer.currency,
 					products: chunk.map(toApiProduct),
+					updateStock,
 				});
 			}
 			toast.success("Import complete");
@@ -306,7 +322,10 @@ function ImportProductsRoute() {
 						price / 0 stock. Re-activate it from the product editor when you
 						have stock. Rows with a SKU matching an existing variant{" "}
 						<strong>update</strong> it; unlisted variants are never deleted.
-						Images aren't imported — add them per product. Prices use{" "}
+						Stock is the exception: for products you already have it changes
+						only if you tick <strong>Update stock too</strong> after the
+						preview, so a sheet you exported hours ago can't undo sales made
+						since. Images aren't imported — add them per product. Prices use{" "}
 						{retailer.currency}.
 					</span>
 				</div>
@@ -365,6 +384,15 @@ function ImportProductsRoute() {
 				<PreviewSection plan={preview.plan} summary={preview.summary} />
 			) : null}
 
+			{preview && preview.summary.stockChanges > 0 ? (
+				<StockChoice
+					checked={updateStock}
+					onChange={setUpdateStock}
+					summary={preview.summary}
+					plan={preview.plan}
+				/>
+			) : null}
+
 			{/* The cap is only mentioned when it actually bears on this import —
 			    a 12-product shop adding 5 more hears nothing. */}
 			{capOverflow ? (
@@ -374,10 +402,9 @@ function ImportProductsRoute() {
 					</p>
 					<p className="mt-1 text-[13px] leading-snug text-muted-foreground">
 						Your shop holds {preview?.cap.used} of {preview?.cap.cap} products
-						(archived ones count), so there's room for{" "}
-						{preview?.cap.remaining} more — but this sheet adds{" "}
-						{preview?.summary.creates}. Delete products you no longer sell, or
-						take rows out of the sheet.
+						(archived ones count), so there's room for {preview?.cap.remaining}{" "}
+						more — but this sheet adds {preview?.summary.creates}. Delete
+						products you no longer sell, or take rows out of the sheet.
 					</p>
 				</section>
 			) : preview && preview.summary.creates > 0 && preview.cap.showCounter ? (
@@ -547,5 +574,129 @@ function Badge({ action }: { action: PlanEntry["action"] }) {
 		<span className={`rounded-full px-2 py-0.5 text-xs ${map[action]}`}>
 			{label[action]}
 		</span>
+	);
+}
+
+/**
+ * "Update stock too" — the import's stock decision (86eypn8ye).
+ *
+ * Import is the third door onto `onHand`, and the widest: the seller exports at
+ * 10am, edits the sheet over lunch and imports at 3pm, so every unit sold in
+ * those five hours comes back. The editor's answer — never write stock here —
+ * doesn't transfer, because export → edit → re-import is a documented
+ * round-trip and `stock` is a required column: a genuine stock take pasted into
+ * a spreadsheet has to keep working.
+ *
+ * So the side effect becomes a choice, defaulting to the safe answer. Ticking
+ * it is not a leap of faith: the box states how many counts it replaces, how
+ * many would go UP (the direction that invents units, and the likeliest sign of
+ * a sale made after the export), and names them.
+ *
+ * Products being CREATED always take the sheet's stock — no orders, nothing to
+ * overwrite — so this only ever speaks about updates.
+ */
+function StockChoice({
+	checked,
+	onChange,
+	summary,
+	plan,
+}: {
+	checked: boolean;
+	onChange: (next: boolean) => void;
+	summary: PreviewSummary;
+	plan: PlanEntry[];
+}) {
+	const [showList, setShowList] = useState(false);
+	const increases = plan.filter((e) => e.stockIncreaseSamples.length > 0);
+	// Every listed row is a sample, so the cap can hide some of them — say so
+	// rather than letting a short list read as the whole story.
+	const listed = increases.reduce(
+		(n, e) => n + e.stockIncreaseSamples.length,
+		0,
+	);
+
+	return (
+		<section
+			className={cn(
+				"rounded-2xl border-2 p-4",
+				checked
+					? "border-amber-300 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/30"
+					: "border-primary/70",
+			)}
+		>
+			<label className="flex cursor-pointer items-start gap-3">
+				<input
+					type="checkbox"
+					checked={checked}
+					onChange={(e) => onChange(e.target.checked)}
+					className="mt-0.5 size-5 shrink-0 accent-accent"
+				/>
+				<span className="flex min-w-0 flex-col gap-1">
+					<span className="text-sm font-semibold text-foreground">
+						Update stock too
+					</span>
+					<span className="text-[13px] leading-relaxed text-muted-foreground">
+						{checked ? (
+							<>
+								Your sheet's counts will <strong>replace</strong> what Kedaipal
+								holds for{" "}
+								<strong>
+									{summary.stockChanges}{" "}
+									{summary.stockChanges === 1 ? "choice" : "choices"}
+								</strong>
+								.
+							</>
+						) : (
+							<>
+								Off — your sheet's <strong>stock</strong> column is ignored for
+								products you already have, so sales made since you exported are
+								kept. Prices, names, descriptions and weights update either way.
+							</>
+						)}
+					</span>
+				</span>
+			</label>
+
+			{checked && summary.stockIncreases > 0 ? (
+				<div className="mt-3 rounded-xl border border-amber-300 bg-background/60 p-3 dark:border-amber-800">
+					<p className="text-[13px] leading-relaxed text-amber-800 dark:text-amber-300">
+						<strong className="font-bold">
+							{summary.stockIncreases} would go up
+						</strong>{" "}
+						— your sheet holds more than the store does. If that's because they
+						sold after you exported, importing writes those sales out of the
+						count.
+					</p>
+					<Button
+						type="button"
+						variant="secondary"
+						onClick={() => setShowList((v) => !v)}
+						className="mt-2 h-9 text-xs"
+					>
+						{showList ? "Hide" : `See ${summary.stockIncreases}`}
+					</Button>
+					{showList ? (
+						<ul className="mt-2 flex flex-col gap-1.5">
+							{increases.map((entry) => (
+								<li key={entry.name} className="text-[12.5px]">
+									<span className="font-semibold">{entry.name}</span>
+									<span className="text-muted-foreground">
+										{" — "}
+										{entry.stockIncreaseSamples
+											.map((v) => `${v.sku}: ${v.from} → ${v.to}`)
+											.join(", ")}
+									</span>
+								</li>
+							))}
+							{listed < summary.stockIncreases ? (
+								<li className="text-[12.5px] text-muted-foreground">
+									…and {summary.stockIncreases - listed} more.
+								</li>
+							) : null}
+						</ul>
+					) : null}
+				</div>
+			) : null}
+		</section>
 	);
 }

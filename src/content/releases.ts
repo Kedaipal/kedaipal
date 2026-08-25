@@ -105,6 +105,26 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.08.2",
+		date: "2026-08-26",
+		// Notable: it changes where a daily job happens. A seller who types stock
+		// into the product form and finds it read-only deserves to have been told,
+		// not to discover it mid-edit.
+		notable: true,
+		entries: [
+			{
+				icon: "package",
+				title: {
+					en: "Stock has its own button now — and a save can't undo your sales",
+				},
+				body: {
+					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
+				},
+				href: "/app/products",
+			},
+		],
+	},
+	{
 		version: "2026.08.1",
 		date: "2026-08-25",
 		notable: false,
