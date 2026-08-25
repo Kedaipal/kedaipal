@@ -2,7 +2,27 @@
   "mcpServers": {
     "convex": {
       "command": "npx",
-      "args": ["-y", "convex@latest", "mcp", "start"]
+      "args": [
+        "-y",
+        "convex@latest",
+        "mcp",
+        "start",
+        "--disable-tools",
+        "envSet,envRemove,envGet,envList"
+      ]
+    },
+    "convex-prod": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "convex@latest",
+        "mcp",
+        "start",
+        "--prod",
+        "--cautiously-allow-production-pii",
+        "--disable-tools",
+        "run,envSet,envRemove,envGet,envList"
+      ]
     }
   }
 }

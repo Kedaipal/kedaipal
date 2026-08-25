@@ -27,6 +27,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
@@ -48,7 +49,7 @@ import {
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyWaPhone, assertValidWaPhone } from "./lib/slug";
+import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
@@ -268,9 +269,13 @@ export const getCheckoutSession = query({
 /**
  * Bind a walk-in session to a manually-keyed buyer phone — the "buyer won't/can't
  * scan" path. Normalizes to the SAME E.164 digits an inbound scan produces
- * (assertValidMyWaPhone), so it resolves-or-creates the exact same
- * `(retailerId, waPhone)` customer as a scan would — a returning buyer is
- * recognised, never duplicated. Re-claims an already-open session for that phone
+ * (assertValidWaPhoneForCountry, keyed off the store's country — an SG store's
+ * bare `81234567` is prefixed to `6581234567`, the form Meta delivers inbound),
+ * so it resolves-or-creates the exact same `(retailerId, waPhone)` customer as
+ * a scan would — a returning buyer is recognised, never duplicated. Stays
+ * deliberately loose beyond that bridging: a cashier may legitimately key a
+ * foreign number for a walk-in, so no mobile-shape gate applies here.
+ * Re-claims an already-open session for that phone
  * (whether from an earlier manual bind or a scan) instead of forking a second
  * one. Owner-or-admin, admin-audited. Cashier-authenticated, so no public
  * rate-limit/cap applies (those guard the public poster token, not a logged-in
@@ -293,7 +298,10 @@ export const bindSessionManualPhone = mutation({
 
 		let normalizedPhone: string;
 		try {
-			normalizedPhone = assertValidMyWaPhone(waPhone);
+			normalizedPhone = assertValidWaPhoneForCountry(
+				waPhone,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -578,7 +586,9 @@ export const listOpenSessions = query({
 
 /**
  * Seller confirms the order keyed off a bound session. Resolves catalog variants
- * server-side (price + stock are NEVER trusted from the client), creates a
+ * server-side (stock is authoritative; price defaults to the catalog but the
+ * seller — and only the seller, this is an owner-or-admin mutation — may adjust
+ * a line's price, e.g. a negotiated discount keyed at the counter), creates a
  * confirmed self-collect order linked to the bound buyer, optionally marks it
  * paid-in-person (cash / DuitNow-now), refreshes the customer aggregates, and
  * completes the session. Then sends the buyer a WhatsApp confirmation with their
@@ -591,11 +601,15 @@ export const createOrderFromSession = mutation({
 			v.object({
 				variantId: v.id("productVariants"),
 				quantity: v.number(),
-				// Vendor-entered unit price (sen) — REQUIRED for a custom/quote line
-				// (whose catalog price is 0; price is agreed in person), IGNORED for a
-				// normal line (which always uses the authoritative variant price, so a
-				// tampered client can't reprice a fixed product). Validated as a
-				// positive integer, no upper cap (same rule as any product price).
+				// Vendor-entered unit price (sen). REQUIRED for a custom/quote line
+				// (whose catalog price is 0; the price is agreed in person). OPTIONAL
+				// on a standard line — when present it's a seller price ADJUSTMENT (a
+				// discount or negotiated price keyed at the counter); when absent the
+				// authoritative catalog price is charged. Trusting it here is safe:
+				// this mutation is owner-or-admin only (requireSessionAccess), so the
+				// "client" IS the seller pricing their own order — a buyer never
+				// reaches this path. Validated as a positive integer, no upper cap
+				// (same rule as any product price).
 				unitPrice: v.optional(v.number()),
 			}),
 		),
@@ -683,10 +697,12 @@ export const createOrderFromSession = mutation({
 			// the buyer is present, so design + price are agreed in person and the
 			// storefront's mockup-approval round-trip is moot. Counter orders are
 			// created `confirmed` with no mockup gate. A CUSTOM (quote) line carries
-			// no catalog price, so the vendor supplies it; everything else stays on
-			// the authoritative variant price. See docs/custom-option.md.
+			// no catalog price, so the vendor MUST supply it; a standard line MAY
+			// carry a seller price adjustment (see the arg comment above) and falls
+			// back to the authoritative variant price. See docs/custom-option.md +
+			// docs/counter-checkout.md ("Seller price adjustment").
 			let unitPrice: number;
-			if (variant.isCustom === true) {
+			if (variant.isCustom === true || item.unitPrice !== undefined) {
 				// A positive integer in sen — the SAME rule as any other price
 				// (products.ts). No artificial ceiling: we can't know the vendor's
 				// business (watches, renovations, B2B services can run six figures+),

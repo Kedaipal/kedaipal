@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { Search, Users, X } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -50,12 +52,21 @@ function CustomersRoute() {
 		{ initialNumItems: 30 },
 	);
 
+	// Search is a plain (non-paginated) read, so it goes through the TanStack
+	// adapter like every other one — only `usePaginatedQuery` above stays on
+	// native `convex/react`, because the adapter has no pagination wrapper.
+	// This read was missed by the caching migration (86eydh0dy): the note
+	// exempting this file was about the paginated list, and it swallowed the
+	// non-paginated neighbour sitting beside it. `.data` keeps the exact
+	// `undefined`-means-loading semantics the render below still checks for.
 	const searchResults = useQuery(
-		api.customers.search,
-		retailer && !crmLocked && searching
-			? { retailerId: retailer._id, term: debouncedTerm }
-			: "skip",
-	);
+		convexQuery(
+			api.customers.search,
+			retailer && !crmLocked && searching
+				? { retailerId: retailer._id, term: debouncedTerm }
+				: "skip",
+		),
+	).data;
 
 	if (!retailer) return null;
 
