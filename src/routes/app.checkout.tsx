@@ -16,6 +16,7 @@ import {
 	LayoutGrid,
 	List,
 	Minus,
+	Pencil,
 	Phone,
 	Plus,
 	QrCode,
@@ -30,6 +31,7 @@ import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { Country } from "../../convex/lib/country";
 import {
 	formatFulfilmentDate,
 	fulfilmentDateBounds,
@@ -37,7 +39,7 @@ import {
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
@@ -69,6 +71,7 @@ import { useDebounce } from "../hooks/useDebounce";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { priceDelta } from "../lib/price-delta";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
@@ -225,6 +228,7 @@ function ActiveSession({
 					customer: session.customer,
 				}}
 				currency={retailer.currency ?? "MYR"}
+				country={retailer.country}
 				draft={session.draft}
 				onCreated={onCreated}
 				onCancel={onCancelActive}
@@ -408,12 +412,31 @@ function EmptyCheckouts() {
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
+
+// Manual-bind copy per store country (SG-lite, 86eynw28q). "We'll add the
+// country code automatically" is the loose server normalizer's promise: MY
+// bridges `012…`→`60…`, SG bridges a bare 8-digit `8/9…`→`65…` — while a
+// number typed WITH its own country code (a foreign walk-in) passes through.
+const MANUAL_BIND_PLACEHOLDER: Record<Country, string> = {
+	MY: "e.g. 012-345 6789",
+	SG: "e.g. 9123 4567",
+};
+const MANUAL_BIND_HELP: Record<Country, string> = {
+	MY: "Malaysian mobile number. We'll add the country code automatically.",
+	SG: "Singapore mobile number. We'll add the country code automatically.",
+};
 function CounterCheckoutActions({
 	onStarted,
 }: {
 	onStarted: (sessionId: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
+	// Store country drives the manual-bind helper copy + example (SG-lite). The
+	// input itself stays deliberately loose and plate-less — a cashier may key
+	// a foreign number for a walk-in — but the copy should name the store's own
+	// country, and the server prefixes bare local numbers with its dial code.
+	const retailer = useDashboardRetailer();
+	const country = retailer?.country ?? "MY";
 
 	// --- Store QR (the buyer-scan path) ---
 	const storeQr = useQuery(
@@ -650,12 +673,11 @@ function CounterCheckoutActions({
 									if (e.key === "Enter" && phoneReady && nameReady)
 										void submitPhone();
 								}}
-								placeholder="e.g. 012-345 6789"
+								placeholder={MANUAL_BIND_PLACEHOLDER[country]}
 								className="mt-1 h-12 text-base"
 							/>
 							<span className="mt-1 block text-xs text-muted-foreground">
-								Malaysian mobile number. We'll add the country code
-								automatically.
+								{MANUAL_BIND_HELP[country]}
 							</span>
 						</label>
 						<DialogFooter className="gap-2 sm:gap-2">
@@ -938,9 +960,47 @@ type CartLine = {
 	price: number;
 	qty: number;
 	// True for an isCustom/quote line — `price` is the vendor-entered amount, sent
-	// as `unitPrice` to the server (which trusts it only for custom lines).
+	// as `unitPrice` to the server.
 	isCustom?: boolean;
+	// The variant's catalog price at add time (standard lines only; a custom line
+	// has no catalog price). When `price` differs from this the line is a seller
+	// price ADJUSTMENT — a negotiated discount/bump keyed at the counter — and the
+	// adjusted price is sent as `unitPrice` (the server trusts it because the
+	// caller is the authenticated seller, not a buyer).
+	catalogPrice?: number;
 };
+
+/** A standard line whose price the seller changed from the catalog price. */
+function isAdjusted(l: CartLine): boolean {
+	return (
+		!l.isCustom && l.catalogPrice !== undefined && l.price !== l.catalogPrice
+	);
+}
+
+/**
+ * The percentage pill beside an adjusted price — `−19%` in the brand mint for
+ * a cut (the normal negotiated-discount case), amber `+11%` for a price set
+ * ABOVE catalog so an accidental up-adjustment can't hide in the same green as
+ * a deal. Hidden when the delta rounds to 0% (the strikethrough still marks
+ * the line as adjusted).
+ */
+function PriceDeltaChip({ price, catalog }: { price: number; catalog: number }) {
+	const delta = priceDelta(price, catalog);
+	if (!delta) return null;
+	return (
+		<span
+			className={cn(
+				"rounded-full px-1.5 py-px text-[10px] font-semibold leading-4 tabular-nums",
+				delta.isCut
+					? "bg-accent/15 text-accent-emphasis"
+					: "bg-amber-500/15 text-amber-600 dark:text-amber-500",
+			)}
+		>
+			{delta.isCut ? "−" : "+"}
+			{delta.pct}%
+		</span>
+	);
+}
 
 type SessionDraft = {
 	items: Array<{
@@ -1195,7 +1255,13 @@ function ProductVariantRows({
 								onClick={() =>
 									setQty(
 										vr._id,
-										{ name: product.name, label, price: vr.price, qty: 0 },
+										{
+											name: product.name,
+											label,
+											price: vr.price,
+											qty: 0,
+											catalogPrice: vr.price,
+										},
 										1,
 									)
 								}
@@ -1217,6 +1283,7 @@ function BuildOrderScreen({
 	sessionId,
 	buyer,
 	currency,
+	country,
 	draft,
 	onCreated,
 	onCancel,
@@ -1234,6 +1301,9 @@ function BuildOrderScreen({
 		} | null;
 	};
 	currency: string;
+	/** Store country — decides which settlement rails the "Paid now" picker
+	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
+	country: Country;
 	draft: SessionDraft | undefined;
 	onCreated: (created: {
 		shortId: string;
@@ -1266,8 +1336,14 @@ function BuildOrderScreen({
 	const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [paidInPerson, setPaidInPerson] = useState(draft?.paidInPerson ?? true);
-	const [method, setMethod] = useState<OrderPaymentMethod>(
-		draft?.paymentMethod ?? "cash",
+	const methodChoices = COUNTRY_PAYMENT_METHODS[country];
+	// A resumed draft can hold a rail this store no longer offers (its country
+	// was switched mid-checkout) — seeding the <select> with a value that isn't
+	// an <option> renders it blank, so fall back to the country's first rail.
+	const [method, setMethod] = useState<OrderPaymentMethod>(() =>
+		draft?.paymentMethod && methodChoices.includes(draft.paymentMethod)
+			? draft.paymentMethod
+			: methodChoices[0],
 	);
 	// An anonymous walk-in (no phone) has no one to send a pay-later link to, so
 	// it's always settled in person — the pay-later toggle is disabled with that
@@ -1288,6 +1364,12 @@ function BuildOrderScreen({
 	const [customPriceInput, setCustomPriceInput] = useState<
 		Record<string, string>
 	>({});
+	// Seller price adjustment (Wagyu Walid's ask: key a negotiated price on any
+	// line after picking the product) — which cart line's edit sheet is open.
+	// Editing happens in a dialog and commits ATOMICALLY on Save, so the running
+	// total never flickers through half-typed values and there is no in-between
+	// state for the debounced autosave to persist.
+	const [editingLineId, setEditingLineId] = useState<string | null>(null);
 
 	// Collection date — counter orders are self-collect, so this is "when will
 	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
@@ -1335,14 +1417,16 @@ function BuildOrderScreen({
 		for (const it of items) {
 			const v = lookup.get(it.variantId);
 			if (!v) continue;
-			// Custom lines restore the vendor's saved price; normal lines the catalog price.
-			const price = v.isCustom ? (it.unitPrice ?? v.price) : v.price;
+			// A saved unitPrice restores the vendor's price — the agreed price on a
+			// custom line, or a seller price adjustment on a standard line; otherwise
+			// the catalog price.
 			next.set(it.variantId, {
 				name: v.name,
 				label: v.label,
-				price,
+				price: it.unitPrice ?? v.price,
 				qty: it.quantity,
 				isCustom: v.isCustom,
+				catalogPrice: v.isCustom ? undefined : v.price,
 			});
 		}
 		if (next.size > 0) setCart(next);
@@ -1421,19 +1505,31 @@ function BuildOrderScreen({
 	// reconnect, or jumping to another customer never loses it. We only start
 	// saving once the initial draft has hydrated, so an empty cart never
 	// overwrites a saved one on first paint.
-	const draftPayload = useMemo<SessionDraft>(() => {
-		const epoch = mytMidnightFromYmd(fulfilmentDate);
-		return {
-			items: [...cart.entries()].map(([variantId, l]) => ({
-				variantId: variantId as Id<"productVariants">,
-				quantity: l.qty,
-				unitPrice: l.isCustom ? l.price : undefined,
-			})),
-			fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
-			paidInPerson: paid,
-			paymentMethod: paid ? method : undefined,
-		};
-	}, [cart, fulfilmentDate, paid, method]);
+	// One author for the draft shape: the debounced autosave memo below AND the
+	// line-edit dialog's immediate flush both build through this, so the two can
+	// never drift.
+	const buildDraftPayload = useCallback(
+		(fromCart: Map<string, CartLine>): SessionDraft => {
+			const epoch = mytMidnightFromYmd(fulfilmentDate);
+			return {
+				items: [...fromCart.entries()].map(([variantId, l]) => ({
+					variantId: variantId as Id<"productVariants">,
+					quantity: l.qty,
+					// Custom lines always carry their price; a standard line only when the
+					// seller adjusted it (otherwise the server charges the catalog price).
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+				})),
+				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
+				paidInPerson: paid,
+				paymentMethod: paid ? method : undefined,
+			};
+		},
+		[fulfilmentDate, paid, method],
+	);
+	const draftPayload = useMemo<SessionDraft>(
+		() => buildDraftPayload(cart),
+		[cart, buildDraftPayload],
+	);
 	const latestDraft = useRef(draftPayload);
 	latestDraft.current = draftPayload;
 	const debouncedDraftKey = useDebounce(JSON.stringify(draftPayload), 700);
@@ -1457,7 +1553,7 @@ function BuildOrderScreen({
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
-					unitPrice: l.isCustom ? l.price : undefined,
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 				})),
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
@@ -1711,39 +1807,70 @@ function BuildOrderScreen({
 							</div>
 						) : (
 							<ul className="mt-3 flex max-h-72 flex-col divide-y divide-border overflow-y-auto">
-								{cartEntries.map(([variantId, l]) => (
-									<li
-										key={variantId}
-										className="flex items-center justify-between gap-3 py-2.5"
-									>
-										<div className="min-w-0">
-											<p className="truncate text-sm font-medium">
-												{l.name}
-												{l.label ? (
-													<span className="ml-1 font-normal text-muted-foreground">
-														{l.label}
-													</span>
-												) : null}
-											</p>
-											<p className="text-xs text-muted-foreground">
-												{l.qty} × {formatPrice(l.price, currency)}
-											</p>
-										</div>
-										<div className="flex items-center gap-2">
-											<span className="text-sm font-semibold tabular-nums">
-												{formatPrice(l.price * l.qty, currency)}
-											</span>
+								{cartEntries.map(([variantId, l]) => {
+									const adjusted = isAdjusted(l);
+									return (
+										<li
+											key={variantId}
+											className="flex items-center justify-between gap-3 py-1"
+										>
+											{/* The whole line opens the edit sheet (qty + price in one
+											    place) — a full-row 44px+ target, with the pencil as
+											    the visible affordance (CLAUDE.md: every feature
+											    discoverable in-product). */}
 											<button
 												type="button"
-												onClick={() => setQty(variantId, l, 0)}
-												aria-label="Remove"
-												className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+												onClick={() => setEditingLineId(variantId)}
+												aria-label={`Edit ${l.name}`}
+												className="-mx-2 flex min-h-11 min-w-0 flex-1 flex-col rounded-lg px-2 py-1.5 text-left hover:bg-muted/60"
 											>
-												<X className="size-4" />
+												<span className="flex items-center gap-1.5 truncate text-sm font-medium">
+													<span className="truncate">
+														{l.name}
+														{l.label ? (
+															<span className="ml-1 font-normal text-muted-foreground">
+																{l.label}
+															</span>
+														) : null}
+													</span>
+													<Pencil
+														className="size-3 shrink-0 text-muted-foreground"
+														aria-hidden
+													/>
+												</span>
+												<span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+													<span>
+														{l.qty} × {formatPrice(l.price, currency)}
+													</span>
+													{adjusted && l.catalogPrice !== undefined ? (
+														<>
+															<span className="line-through opacity-70">
+																{formatPrice(l.catalogPrice, currency)}
+															</span>
+															<PriceDeltaChip
+																price={l.price}
+																catalog={l.catalogPrice}
+															/>
+														</>
+													) : null}
+												</span>
 											</button>
-										</div>
-									</li>
-								))}
+											<div className="flex shrink-0 items-center gap-2">
+												<span className="text-sm font-semibold tabular-nums">
+													{formatPrice(l.price * l.qty, currency)}
+												</span>
+												<button
+													type="button"
+													onClick={() => setQty(variantId, l, 0)}
+													aria-label="Remove"
+													className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+												>
+													<X className="size-4" />
+												</button>
+											</div>
+										</li>
+									);
+								})}
 							</ul>
 						)}
 					</div>
@@ -1866,7 +1993,7 @@ function BuildOrderScreen({
 										}
 										className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 									>
-										{ORDER_PAYMENT_METHODS.map((m) => (
+										{methodChoices.map((m) => (
 											<option key={m} value={m}>
 												{PAYMENT_METHOD_LABELS[m]}
 											</option>
@@ -1927,6 +2054,40 @@ function BuildOrderScreen({
 				onConfirm={onCancel}
 			/>
 
+			<CartLineEditDialog
+				// Keyed per line so the sheet's local price/qty state re-seeds fresh
+				// each time it opens — never carrying a previous line's edits.
+				key={editingLineId ?? "closed"}
+				variantId={editingLineId}
+				line={editingLineId ? (cart.get(editingLineId) ?? null) : null}
+				currency={currency}
+				onClose={() => setEditingLineId(null)}
+				onRemove={(id) => {
+					const line = cart.get(id);
+					if (line) setQty(id, line, 0);
+					setEditingLineId(null);
+				}}
+				onSave={(id, price, qty) => {
+					const line = cart.get(id);
+					if (!line) return;
+					const next = new Map(cart);
+					next.set(id, { ...line, price, qty });
+					setCart(next);
+					setEditingLineId(null);
+					// Flush the save immediately instead of waiting out the 700ms
+					// debounce: an explicit Save is a promise the price is kept, and
+					// the passive autosave swallows failures — if this component ever
+					// remounts before a save lands, rehydration would silently revert
+					// the adjustment to the last-saved draft.
+					saveDraft({ sessionId, draft: buildDraftPayload(next) }).catch(
+						() => {
+							toast.error(
+								"Couldn't save the price change — check your connection.",
+							);
+						},
+					);
+				}}
+			/>
 			<ConfirmCheckoutDialog
 				open={confirmOpen}
 				onOpenChange={(o) => {
@@ -2015,6 +2176,159 @@ function BuildOrderScreen({
  * normal checkout gives you before paying, so a fat-fingered price/qty is caught
  * here, not after the buyer has handed over money.
  */
+/**
+ * Line-edit sheet for one cart line — the single home for qty + price on an
+ * in-progress counter order (Wagyu Walid's negotiated-price ask, 86eyphh8r).
+ * POS convention (tap the line → edit it), chosen over the earlier inline
+ * expander whose tap-to-toggle price row, live per-keystroke re-pricing, and
+ * cramped in-list controls all fought the cashier. Everything commits
+ * ATOMICALLY on Save: the running total never flickers through half-typed
+ * values, and Cancel/dismiss discards cleanly.
+ */
+function CartLineEditDialog({
+	variantId,
+	line,
+	currency,
+	onClose,
+	onRemove,
+	onSave,
+}: {
+	variantId: string | null;
+	line: CartLine | null;
+	currency: string;
+	onClose: () => void;
+	onRemove: (variantId: string) => void;
+	onSave: (variantId: string, price: number, qty: number) => void;
+}) {
+	// Seeded once per open — the parent keys this component on the line id.
+	const [priceText, setPriceText] = useState(() =>
+		line ? centsToRm(line.price) : "",
+	);
+	const [qty, setLocalQty] = useState(() => line?.qty ?? 1);
+
+	if (!variantId || !line) return null;
+
+	const cents = rmToCents(priceText);
+	const validPrice = !Number.isNaN(cents);
+	const catalog = line.isCustom ? undefined : line.catalogPrice;
+	const differsFromCatalog =
+		catalog !== undefined && validPrice && cents !== catalog;
+
+	return (
+		<Dialog open onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="sm:max-w-sm">
+				<DialogHeader>
+					<DialogTitle className="truncate">{line.name}</DialogTitle>
+					<DialogDescription>
+						{line.label || (line.isCustom ? "Custom line" : "Edit this line")}
+					</DialogDescription>
+				</DialogHeader>
+				<div className="space-y-4">
+					<div className="flex items-center justify-between gap-3">
+						<span className="text-sm font-medium">Quantity</span>
+						<Stepper
+							qty={qty}
+							onChange={(q) => setLocalQty(Math.max(1, q))}
+						/>
+					</div>
+					<label className="block">
+						<span className="text-sm font-medium">Unit price</span>
+						<div className="relative mt-1">
+							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+								RM
+							</span>
+							<Input
+								type="number"
+								inputMode="decimal"
+								step="0.01"
+								min="0"
+								autoFocus
+								value={priceText}
+								onChange={(e) => setPriceText(e.target.value)}
+								// Tap-in selects the old value so typing replaces it — the
+								// common case is keying a whole new agreed price.
+								onFocus={(e) => e.target.select()}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && validPrice)
+										onSave(variantId, cents, qty);
+								}}
+								placeholder={centsToRm(line.price)}
+								variant="field"
+								// Spinners hidden: a ±RM0.01 step is useless for keying an
+								// agreed price, and the live delta chip lives in that corner.
+								className="h-12 pl-10 pr-16 text-base [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+							/>
+							{/* The negotiation math, confirmed live at the point of typing —
+							    mint −% for a cut, amber +% for above-catalog. */}
+							{catalog !== undefined && differsFromCatalog ? (
+								<span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">
+									<PriceDeltaChip price={cents} catalog={catalog} />
+								</span>
+							) : null}
+						</div>
+						{/* The catalog price stays visible while adjusting, with a
+						    one-tap way back; a custom line has no catalog price. */}
+						{catalog !== undefined ? (
+							<span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+								Catalog price {formatPrice(catalog, currency)}
+								{differsFromCatalog ? (
+									<button
+										type="button"
+										onClick={() => setPriceText(centsToRm(catalog))}
+										className="font-medium text-accent-emphasis underline underline-offset-2"
+									>
+										Reset
+									</button>
+								) : null}
+							</span>
+						) : (
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Agreed in person — no catalog price.
+							</span>
+						)}
+						{!validPrice ? (
+							<span className="mt-1 block text-xs text-destructive">
+								Enter a price above RM 0.00 to save.
+							</span>
+						) : null}
+					</label>
+					{validPrice ? (
+						<p className="flex items-baseline gap-1.5 text-sm text-muted-foreground">
+							Line total{" "}
+							<span className="font-semibold text-foreground tabular-nums">
+								{formatPrice(cents * qty, currency)}
+							</span>
+							{/* The money view of the same cut — what the whole line would
+							    have cost at catalog. */}
+							{catalog !== undefined && differsFromCatalog ? (
+								<span className="text-xs line-through opacity-70">
+									{formatPrice(catalog * qty, currency)}
+								</span>
+							) : null}
+						</p>
+					) : null}
+				</div>
+				<DialogFooter className="gap-2 sm:justify-between">
+					<Button
+						variant="ghost"
+						onClick={() => onRemove(variantId)}
+						className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+					>
+						<Trash2 className="size-4" />
+						Remove
+					</Button>
+					<Button
+						disabled={!validPrice}
+						onClick={() => validPrice && onSave(variantId, cents, qty)}
+					>
+						Save
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 function ConfirmCheckoutDialog({
 	open,
 	onOpenChange,
@@ -2070,6 +2384,16 @@ function ConfirmCheckoutDialog({
 									<p className="text-xs text-muted-foreground">
 										{l.qty} × {formatPrice(l.price, currency)}
 										{l.isCustom ? " · custom" : ""}
+										{/* An adjusted line shows the catalog price it replaced, so
+										    the last-look review catches a fat-fingered override. */}
+										{isAdjusted(l) && l.catalogPrice !== undefined ? (
+											<>
+												{" · was "}
+												<span className="line-through">
+													{formatPrice(l.catalogPrice, currency)}
+												</span>
+											</>
+										) : null}
 									</p>
 								</div>
 								<span className="shrink-0 text-sm font-semibold tabular-nums">

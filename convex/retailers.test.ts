@@ -1548,3 +1548,597 @@ describe("retailers.updateSettings — waPhone is a Malaysian mobile", () => {
 		expect(retailer?.waPhone).toBeUndefined();
 	});
 });
+
+describe("retailers — store opening hours (86eyp5rav)", () => {
+	/** A week open 24h everywhere, with per-weekday overrides (0 = Sunday). */
+	function weekWith(
+		overrides: Record<
+			number,
+			{ open: number; close: number; closed?: boolean }
+		> = {},
+	) {
+		return Array.from(
+			{ length: 7 },
+			(_, i) => overrides[i] ?? { open: 0, close: 1439 },
+		);
+	}
+
+	test("saves a schedule, exposes it on BOTH reads, and null clears it", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "hours-store");
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: weekWith({
+				0: { open: 540, close: 1080, closed: true },
+				1: { open: 540, close: 1080 },
+			}),
+		});
+
+		// Public storefront payload — buyers must see the hours to plan around
+		// them (header line + checkout clamp read this).
+		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "hours-store",
+		});
+		expect(bySlug.status).toBe("ok");
+		if (bySlug.status === "ok") {
+			expect(bySlug.retailer.openingHours?.[0]).toEqual({
+				open: 540,
+				close: 1080,
+				closed: true,
+			});
+			expect(bySlug.retailer.openingHours?.[1]).toEqual({
+				open: 540,
+				close: 1080,
+			});
+		}
+		// Owner read — the settings card prefills from it.
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.openingHours).toHaveLength(7);
+
+		// null = the explicit clear, back to open 24/7 (field removed).
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: null,
+		});
+		const cleared = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "hours-store",
+		});
+		if (cleared.status === "ok") {
+			expect(cleared.retailer.openingHours).toBeUndefined();
+		}
+	});
+
+	test("an all-24h week normalizes to unset — open 24/7 has one spelling", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "always-open");
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: weekWith(),
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.openingHours).toBeUndefined();
+	});
+
+	test("rejects an all-closed week and an inverted window", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "bad-hours");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				openingHours: Array.from({ length: 7 }, () => ({
+					open: 540,
+					close: 1080,
+					closed: true,
+				})),
+			}),
+		).rejects.toThrow(/at least one day/);
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				openingHours: weekWith({ 2: { open: 1080, close: 540 } }),
+			}),
+		).rejects.toThrow(/Tuesday/);
+	});
+});
+
+describe("retailer country (SG-lite, 86eynw27f)", () => {
+	test("createRetailer without a country stays MY: no stored field, MYR currency, resolved MY on reads", async () => {
+		const t = setup();
+		await seed(t, USER_A, "my-default-store");
+		const row = await t.run(async (ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "my-default-store"))
+				.first(),
+		);
+		// Zero-migration posture: MY stores keep no stored country field.
+		expect(row?.country).toBeUndefined();
+		expect(row?.currency).toBe("MYR");
+
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "my-default-store",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.country).toBe("MY");
+	});
+
+	test("createRetailer with SG stores the country and is born with SGD", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-store",
+			country: "SG",
+		});
+		const row = await t.run(async (ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "sg-store"))
+				.first(),
+		);
+		expect(row?.country).toBe("SG");
+		// Currency is born from the country — products freeze theirs at create,
+		// so a wrong default here would strand the whole catalog on MYR.
+		expect(row?.currency).toBe("SGD");
+
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "sg-store",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.country).toBe("SG");
+		expect(result.retailer.currency).toBe("SGD");
+	});
+
+	test("updateSettings sets country and both payloads expose it", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "country-flip");
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+
+		const mine = await asA.query(api.retailers.getMyRetailer, {});
+		expect(mine?.country).toBe("SG");
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "country-flip",
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status !== "ok") return;
+		expect(pub.retailer.country).toBe("SG");
+	});
+
+	test("currency change re-stamps every product (archived too) and reports the count", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "currency-sync");
+		const retailerId = await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "currency-sync"))
+				.first();
+			if (!row) throw new Error("no retailer");
+			const now = Date.now();
+			const base = {
+				retailerId: row._id,
+				currency: "MYR",
+				imageStorageIds: [] as string[],
+				channel: "whatsapp" as const,
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			};
+			await ctx.db.insert("products", { ...base, name: "Active", active: true });
+			await ctx.db.insert("products", {
+				...base,
+				name: "Archived",
+				active: false,
+			});
+			return row._id;
+		});
+
+		const result = await asA.mutation(api.retailers.updateSettings, {
+			currency: "SGD",
+		});
+		expect(result.productsCurrencySynced).toBe(2);
+		const currencies = await t.run(async (ctx) => {
+			const products = await ctx.db
+				.query("products")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return products.map((p) => p.currency);
+		});
+		// Archived rows sync too — a later restore must not resurrect a
+		// mismatched currency (orders refuse an order-vs-product mismatch).
+		expect(currencies).toEqual(["SGD", "SGD"]);
+
+		// Saving anything else (or the same currency) syncs nothing.
+		const again = await asA.mutation(api.retailers.updateSettings, {
+			currency: "SGD",
+		});
+		expect(again.productsCurrencySynced).toBe(0);
+	});
+});
+
+/** Seed an SG-country store — shared by the SG-lite suites below. */
+async function seedSg(t: ReturnType<typeof setup>, slug: string) {
+	const asUser = t.withIdentity({ subject: USER_A });
+	await asUser.mutation(api.retailers.createRetailer, {
+		storeName: "SG Store",
+		slug,
+		country: "SG",
+	});
+	return asUser;
+}
+
+describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
+	const weightConfig = {
+		mode: "weight" as const,
+		zones: [
+			{
+				name: "West MY",
+				states: ["Selangor", "Johor"],
+				bands: [{ maxKg: 5, fee: 1500 }],
+			},
+		],
+		onOutOfBands: "arrange" as const,
+		onUnpriceable: "arrange" as const,
+	};
+
+	test("an SG store can save flat and clear back to free", async () => {
+		const t = setup();
+		const asSg = await seedSg(t, "sg-flat-ok");
+		await asSg.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "flat", fee: 500 },
+		});
+		let mine = await asSg.query(api.retailers.getMyRetailer);
+		expect(mine?.deliveryConfig).toMatchObject({ mode: "flat", fee: 500 });
+		await asSg.mutation(api.retailers.updateSettings, { deliveryConfig: null });
+		mine = await asSg.query(api.retailers.getMyRetailer);
+		expect(mine?.deliveryConfig).toBeUndefined();
+	});
+
+	test("an SG store is refused radius, weight AND lalamove configs", async () => {
+		const t = setup();
+		const asSg = await seedSg(t, "sg-mode-refusals");
+		await expect(
+			asSg.mutation(api.retailers.updateSettings, {
+				deliveryConfig: {
+					mode: "radius",
+					bands: [{ maxKm: 5, fee: 500 }],
+					outOfRange: "arrange",
+				},
+			}),
+		).rejects.toThrow(/Malaysia-only/);
+		await expect(
+			asSg.mutation(api.retailers.updateSettings, {
+				deliveryConfig: weightConfig,
+			}),
+		).rejects.toThrow(/Malaysia-only/);
+		// Lalamove must hit the COUNTRY refusal, not "turn on booking first" —
+		// the booking-credentials chase is a dead path for an SG seller.
+		await expect(
+			asSg.mutation(api.retailers.updateSettings, {
+				deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
+			}),
+		).rejects.toThrow(/Malaysia-only/);
+	});
+
+	test("flipping an MY store to SG is refused while an MY-only config is stored", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-weight-flip");
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryConfig: weightConfig,
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/Switch your delivery charge/);
+		// Still MY — the refused save must not half-apply.
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("MY");
+	});
+
+	test("one save can flip to SG AND clear/replace the config together", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-flip-with-clear");
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryConfig: weightConfig,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			deliveryConfig: { mode: "flat", fee: 300 },
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.deliveryConfig).toMatchObject({ mode: "flat", fee: 300 });
+	});
+
+	test("flipping to SG with a stored flat (or no) config just works", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-flat-flip");
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "flat", fee: 700 },
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.deliveryConfig).toMatchObject({ mode: "flat", fee: 700 });
+	});
+});
+
+describe("seller-side phone arms (SG-lite, 86eynw2dy)", () => {
+	test("createRetailer with country SG accepts a +65 waPhone in the bare local form", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-phone-create",
+			country: "SG",
+			// The SAME-CALL country must judge this — the row doesn't exist yet.
+			waPhone: "9123 4567",
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.waPhone).toBe("6591234567");
+	});
+
+	test("createRetailer without a country keeps rejecting +65 (MY arm intact)", async () => {
+		const t = setup();
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(
+				api.retailers.createRetailer,
+				{
+					storeName: "MY Store",
+					slug: "my-phone-create",
+					waPhone: "+65 9123 4567",
+				},
+			),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("updateSettings on an SG store accepts +65 waPhone + notifyWaPhone, rejects MY", async () => {
+		const t = setup();
+		const asUser = await seedSg(t, "sg-phone-settings");
+		await asUser.mutation(api.retailers.updateSettings, {
+			waPhone: "+65 8123 4567",
+			notifyWaPhone: "9123 4567",
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.waPhone).toBe("6581234567");
+		expect(mine?.notifyWaPhone).toBe("6591234567");
+
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				notifyWaPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+	});
+
+	test("a same-call country switch + phone save validates coherently", async () => {
+		// "Switch to Singapore and save my SG number" arrives as ONE updateSettings
+		// call — the new country must judge the phone, or the save bounces off the
+		// stored (old) arm and the two fields can never be changed together.
+		const t = setup();
+		const asUser = await seed(t, USER_A, "country-and-phone");
+		await asUser.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "9123 4567",
+		});
+		const mine = await asUser.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.waPhone).toBe("6591234567");
+	});
+
+	test("an MY store's settings keep rejecting +65 exactly as before", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "my-phone-settings");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				waPhone: "+65 9123 4567",
+			}),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+});
+
+describe("country switch carries no wrong-country WhatsApp numbers (SG-lite invariant)", () => {
+	test("a bare MY→SG switch is refused while an MY waPhone is stored", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-stale-wa");
+		await asA.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/WhatsApp contact number isn't a Singapore number/);
+		// Refused save must not half-apply.
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("MY");
+		expect(mine?.waPhone).toBe("60123456789");
+	});
+
+	test("one save can switch AND clear the number together", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-clear-wa");
+		await asA.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.waPhone).toBeUndefined();
+	});
+
+	test("one save can switch AND replace with the new country's number", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-replace-wa");
+		await asA.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "9123 4567",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.waPhone).toBe("6591234567");
+	});
+
+	test("a stored notifyWaPhone blocks the switch too; clearing it in-call auto-disables alerts", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-stale-notify");
+		await asA.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "011-2345 6789",
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/order-alerts WhatsApp number isn't a Singapore number/);
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			notifyWaPhone: "",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.notifyWaPhone).toBeUndefined();
+		expect(mine?.orderWaAlerts).toBeFalsy();
+	});
+
+	test("the guard is symmetric — SG→MY refuses a stored SG number", async () => {
+		const t = setup();
+		const asSg = await seedSg(t, "switch-back-my");
+		await asSg.mutation(api.retailers.updateSettings, {
+			waPhone: "9123 4567",
+		});
+		await expect(
+			asSg.mutation(api.retailers.updateSettings, { country: "MY" }),
+		).rejects.toThrow(/isn't a Malaysian number/);
+	});
+});
+
+describe("country switch and Lalamove rider booking (PR #208 review)", () => {
+	// Pricing and booking are independent by design (`pricing ⊥ booking`), so a
+	// FLAT-priced store passes the delivery-mode check while still carrying an
+	// armed Book-a-rider button — pointed at an integration hardcoded to
+	// Lalamove Malaysia, with prompt-book-on-packed able to spend money without
+	// being asked. That gap is what these pin.
+	// Enabling booking requires the rider pickup origin.
+	const originAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const booking = {
+		enabled: true,
+		vehicleType: "MOTORCYCLE" as const,
+		apiKey: "pk_test_abc",
+		apiSecret: "sk_test_def",
+	};
+
+	test("a bare MY→SG switch is refused while rider booking is enabled", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-booking-armed");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: originAddress,
+			deliveryConfig: { mode: "flat", fee: 500 },
+			deliveryBooking: booking,
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
+		).rejects.toThrow(/rider booking/i);
+		// Refused save must not half-apply.
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("MY");
+	});
+
+	test("one save can switch AND disable booking, keeping the stored keys", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-booking-off");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: originAddress,
+			deliveryConfig: { mode: "flat", fee: 500 },
+			deliveryBooking: booking,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			deliveryBooking: { enabled: false, vehicleType: "MOTORCYCLE" },
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.deliveryBooking?.enabled).toBe(false);
+		// Switching country is not a reason to make a seller re-enter API keys
+		// they'll want back if they switch again.
+		expect(mine?.deliveryBooking?.hasCredentials).toBe(true);
+	});
+
+	test("booking already off never blocks the switch", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-booking-idle");
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryBooking: { enabled: false, vehicleType: "CAR" },
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		expect((await asA.query(api.retailers.getMyRetailer))?.country).toBe("SG");
+	});
+
+	test("SG→MY re-arms nothing but is never blocked by this rule", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-back-my");
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		expect((await asA.query(api.retailers.getMyRetailer))?.country).toBe("MY");
+	});
+});
+
+describe("country switch clears wrong-country pickup contacts (PR #208 review)", () => {
+	test("MY manager numbers are cleared on the switch and counted back", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-pickup-contacts");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Studio",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+			managerName: "Ali",
+			managerWaPhone: "012-345 6789",
+		});
+		// A second point with no contact must not be counted.
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Stall",
+			address: "5 Jln Bukit Bintang, 55100 Kuala Lumpur",
+		});
+
+		const result = await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+		});
+		expect(result.pickupContactsCleared).toBe(1);
+
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		for (const row of rows) expect(row.managerWaPhone).toBeUndefined();
+		// The rest of the location survives — only the invalid field goes.
+		expect(rows.find((r) => r.label === "Studio")?.managerName).toBe("Ali");
+	});
+
+	test("a matching number is left alone (no needless clearing)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-pickup-keep");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Studio",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+			managerWaPhone: "012-345 6789",
+		});
+		// MY→MY is not a country change at all.
+		const result = await asA.mutation(api.retailers.updateSettings, {
+			country: "MY",
+		});
+		expect(result.pickupContactsCleared).toBe(0);
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0]?.managerWaPhone).toBe("60123456789");
+	});
+});

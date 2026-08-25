@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { MASK_PII } from "./analytics-privacy";
+import { isTrackingTokenPath, MASK_PII } from "./analytics-privacy";
 
 afterEach(cleanup);
 
@@ -35,6 +35,24 @@ describe("MASK_PII", () => {
 		expect(
 			screen.getByTestId("region").getAttribute("data-clarity-mask"),
 		).toBe("true");
+	});
+});
+
+describe("isTrackingTokenPath", () => {
+	// Shared by useClarity (refuses to boot) and useGoogleAnalytics (neither
+	// initializes nor sends) — the tracking URL is the buyer's capability
+	// secret, so both providers key off this single predicate.
+	it("matches the tracking routes", () => {
+		expect(isTrackingTokenPath("/track")).toBe(true);
+		expect(isTrackingTokenPath("/track/")).toBe(true);
+		expect(isTrackingTokenPath("/track/8f3c09b1a7e24d5c9b0e")).toBe(true);
+	});
+
+	it("leaves every other route alone", () => {
+		expect(isTrackingTokenPath("/")).toBe(false);
+		expect(isTrackingTokenPath("/tracking-guide")).toBe(false);
+		expect(isTrackingTokenPath("/app/orders")).toBe(false);
+		expect(isTrackingTokenPath("/k-frozen-food")).toBe(false);
 	});
 });
 

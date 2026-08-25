@@ -35,9 +35,10 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
@@ -55,7 +56,12 @@ import {
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
+import {
+	canPrintLabel,
+	PrintLabelButton,
+} from "../components/order/print-label-button";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
 import {
 	MarkShippedDialog,
 	type ShipmentFields,
@@ -328,6 +334,13 @@ function OrderDetailRoute() {
 	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
 	// the server is the guard.
 	const retailer = useDashboardRetailer();
+	// Settlement rails the seller may hand-pick on "Mark payment received" — the
+	// store's country decides them, so an SG seller is never made to file a
+	// PayNow transfer under "Other" (86eyph341). Undefined while the payload
+	// loads reads as MY, the app-wide default; the dialog only opens on a tap,
+	// long after it resolves.
+	const paymentMethodChoices =
+		COUNTRY_PAYMENT_METHODS[retailer?.country ?? DEFAULT_COUNTRY];
 	const amIAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	const canHardDelete = canHardDeleteOrders({
 		actingAsAdmin: retailer?.actingAsAdmin,
@@ -654,10 +667,17 @@ function OrderDetailRoute() {
 				})}
 				back={{ to: "/app/orders", label: "Orders" }}
 				actions={
-					<ReceiptDownloadButton
-						shortId={order.shortId}
-						label="Download receipt"
-					/>
+					<>
+						{/* Label first: it's the operational step (the parcel is going
+						    out now); the receipt is bookkeeping, any time after. */}
+						{canPrintLabel(order) ? (
+							<PrintLabelButton shortId={order.shortId} />
+						) : null}
+						<ReceiptDownloadButton
+							shortId={order.shortId}
+							label="Download receipt"
+						/>
+					</>
 				}
 			/>
 			{/* Order header (mobile) — back button, title, status at a glance. The
@@ -1316,52 +1336,62 @@ function OrderDetailRoute() {
 				) : null}
 			</section>
 
-			{/* Delivery method */}
-			<section className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
-				<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-					{isSelfCollect ? (
-						<Package className="size-4 text-muted-foreground" />
-					) : (
-						<Truck className="size-4 text-muted-foreground" />
-					)}
+			{/* Delivery method. Two stacked rows, not one — the date badge, time
+			    and Reschedule control all competed for one line on mobile and
+			    wrapped mid-badge (Zaki's 19 Aug screenshot); the date row now
+			    owns the card's full width under a separator. */}
+			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+				<div className="flex items-center gap-3">
+					<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+						{isSelfCollect ? (
+							<Package className="size-4 text-muted-foreground" />
+						) : (
+							<Truck className="size-4 text-muted-foreground" />
+						)}
+					</div>
+					<div className="flex min-w-0 flex-col">
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Fulfillment
+						</p>
+						<p className="text-sm font-medium">
+							{isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Drop-off"
+									: "Self Collect"
+								: collectionService
+									? "Collection"
+									: "Delivery"}
+						</p>
+					</div>
+					{/* Seller reschedule (86eyp5qd1) — renders only inside the
+					    reschedule window (pre-shipped, non-counter, not collected). */}
+					<div className="ml-auto shrink-0">
+						<RescheduleFulfilmentDialog order={order} />
+					</div>
 				</div>
-				<div className="flex flex-col gap-1">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Fulfillment
-					</p>
-					<p className="text-sm font-medium">
-						{isSelfCollect
-							? order.pickupSnapshot?.locationType === "drop_off"
-								? "Drop-off"
-								: "Self Collect"
-							: collectionService
-								? "Collection"
-								: "Delivery"}
-					</p>
-					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
-						<div className="flex items-center gap-1.5">
-							<span className="text-xs text-muted-foreground">
-								{isSelfCollect
-									? order.pickupSnapshot?.locationType === "drop_off"
-										? "Meet on"
-										: "Collect on"
-									: collectionService
-										? "Collect on"
-										: "Deliver on"}
+				{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
+					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3">
+						<span className="text-xs text-muted-foreground">
+							{isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Meet on"
+									: "Collect on"
+								: collectionService
+									? "Collect on"
+									: "Deliver on"}
+						</span>
+						<FulfilmentDateBadge
+							epoch={order.fulfilmentDate}
+							size="md"
+							muted={isTerminal || order.collectedAt !== undefined}
+						/>
+						{order.fulfilmentTimeMinutes !== undefined ? (
+							<span className="text-sm font-medium whitespace-nowrap">
+								{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
 							</span>
-							<FulfilmentDateBadge
-								epoch={order.fulfilmentDate}
-								size="md"
-								muted={isTerminal || order.collectedAt !== undefined}
-							/>
-							{order.fulfilmentTimeMinutes !== undefined ? (
-								<span className="text-sm font-medium">
-									{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
-								</span>
-							) : null}
-						</div>
-					) : null}
-				</div>
+						) : null}
+					</div>
+				) : null}
 			</section>
 
 			{/* Items */}
@@ -1672,7 +1702,16 @@ function OrderDetailRoute() {
 					<>
 						{/* Separates the trigger header from its menu items. */}
 						<hr className="border-border" />
-						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
+						{/* Label + receipt on mobile (desktop has both in the PageHeader
+						    actions). Label first, same reasoning as the header. */}
+						{canPrintLabel(order) ? (
+							<PrintLabelButton
+								shortId={order.shortId}
+								variant="ghost"
+								size="default"
+								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
+							/>
+						) : null}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							label="Download receipt"
@@ -1870,7 +1909,7 @@ function OrderDetailRoute() {
 							How did they pay? <span className="font-normal">(optional)</span>
 						</p>
 						<div className="flex flex-wrap gap-2">
-							{ORDER_PAYMENT_METHODS.map((m) => {
+							{paymentMethodChoices.map((m) => {
 								const active = paymentMethodChoice === m;
 								return (
 									<button

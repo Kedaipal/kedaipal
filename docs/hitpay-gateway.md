@@ -26,7 +26,7 @@ nothing here gets rebuilt.
 | Seller connect card | `src/components/settings/online-payments-card.tsx` (Settings → Payments) |
 | Buyer Pay-now + confirming state + collapsed manual methods | `src/routes/track.$token.tsx` |
 | Mismatch email | `convex/email.ts` `notifyGatewayPaymentMismatch` + `convex/lib/emailCopy.ts` `gatewayMismatch` (EN/MS/ZH) |
-| Credentials | `retailers.hitpay { enabled, apiKey, salt, connectedAt }` — server-only; clients get `HitpaySummary` (hasCredentials/mode/apiKeyHint) |
+| Credentials | `retailers.hitpay { enabled, apiKey, salt, connectedAt }` — server-only, **encrypted at rest since 86eyn25gk** (`mode`/`apiKeyHint` now stamped at save; see [`docs/credential-encryption.md`](./credential-encryption.md)); clients get `HitpaySummary` (hasCredentials/mode/apiKeyHint) |
 | Order fields | `orders.gatewayRequestId/-CheckoutUrl/-RequestedAmount/-RequestedCurrency/-RequestedAt/-PaymentId` + index `by_gateway_request` |
 
 ## Flow

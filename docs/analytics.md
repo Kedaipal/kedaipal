@@ -12,8 +12,9 @@ never pollute the production analytics.
 | Microsoft Clarity     | Session replays + heatmaps (UX/friction) | `@microsoft/clarity` | [`useClarity`](../src/hooks/useClarity.ts)      | `VITE_CLARITY_PROJECT_ID` |
 
 Both hooks are called in `RootDocument` ([`src/routes/__root.tsx`](../src/routes/__root.tsx)),
-so analytics load on every route (storefront + `/app`). ClickUp `86eyb7021`
-(Clarity).
+so analytics load on every route (storefront + `/app`) **except `/track/*`,
+which neither provider ever observes** — see Privacy §1. ClickUp `86eyb7021`
+(Clarity), `86eyn25fk` (GA tracking-token exclusion).
 
 ## Why the npm package, not a `<script>` snippet
 
@@ -32,7 +33,7 @@ sessions by seller or plan.
 ```ts
 const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
 if (!projectId || clarityInitialized) return;
-if (isClarityExcludedPath(pathname)) return;
+if (isTrackingTokenPath(pathname)) return;
 Clarity.init(projectId);
 ```
 
@@ -65,14 +66,28 @@ Session replay is materially more invasive than pageview analytics — it ships 
 reconstruction of the rendered page to a third party. Three controls, all in the
 repo rather than behind a dashboard toggle:
 
-### 1. `/track/*` is never recorded
+### 1. `/track/*` never reaches either provider
 
-`isClarityExcludedPath` refuses to boot Clarity on the buyer tracking page.
-Masking governs DOM content, not the **recorded page address**, and
+[`isTrackingTokenPath`](../src/lib/analytics-privacy.ts) is the single
+predicate both hooks share: `useClarity` refuses to boot on the buyer tracking
+page, and `useGoogleAnalytics` neither initializes nor sends a pageview there.
+Masking governs DOM content, not the **observed page address**, and
 `/track/<token>` carries the buyer's capability secret in the URL — that token
 grants reading the order, claiming payment, and editing the delivery
-address/phone with no auth (see CLAUDE.md). Recording it would export the secret
-to Microsoft and to anyone with Clarity dashboard access.
+address/phone with no auth (see CLAUDE.md). Recording it would export the
+secret to Microsoft/Google and to anyone with either dashboard's access.
+
+For GA specifically, full exclusion beats redacting the sent path: gtag
+auto-collects the real `page_location` from the browser on every hit once the
+library is loaded, so a redacted manual pageview would still leak the URL. The
+library simply never loads on token pages; a buyer who navigates from /track
+into the storefront boots GA on that first non-token pathname.
+
+**Ops note (GA property setting, not repo):** keep GA4 Enhanced Measurement's
+"Page changes based on browser history events" OFF — if enabled, gtag fires
+its own page_view with the full URL on SPA navigations, bypassing the hook.
+No client-side link navigates into `/track` today, so this is defence in
+depth, not a live hole.
 
 Nothing links to `/track` client-side (buyers arrive from a WhatsApp link, i.e.
 a fresh document load), so the exclusion is complete rather than best-effort.

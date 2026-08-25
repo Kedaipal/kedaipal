@@ -1,12 +1,13 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import {
 	Bike,
 	Car,
 	CircleAlert,
 	ExternalLink,
+	FlaskConical,
 	Loader2,
 	Phone,
 	RefreshCw,
@@ -18,15 +19,21 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import {
 	formatFulfilmentDateTime,
+	hhmmFromMinutes,
+	MAX_NOTICE_DAYS,
+	mytMidnightFromYmd,
+	timeMinutesFromHhmm,
 	todayMytMidnight,
+	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
-import { formatPrice } from "../../lib/format";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { Input } from "../ui/input";
 import {
 	Dialog,
 	DialogContent,
@@ -35,6 +42,36 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../ui/dialog";
+
+/** How long "Confirm & dispatch" stays inert after it appears (86eypjfuf).
+ * Long enough that a tap already in flight — the one that opened the dialog,
+ * or a scroll-flick on the page behind it — can't land on a money action;
+ * short enough that a seller reading the price never meets it. */
+const SPEND_ARM_DELAY_MS = 600;
+
+/** A live quotation the confirm dialog is holding. Mirrors `prepareBooking`'s
+ * success payload, except `expiresAt` is resolved to a definite moment here —
+ * see applyQuote. */
+type QuoteState = {
+	quotationId: string;
+	senderStopId: string;
+	recipientStopId: string;
+	fee: number;
+	buyerPaidFee: number;
+	vehicleType: string;
+	buyerContactFallback: boolean;
+	/** The pickup moment this quote is scheduled for — undefined = the rider
+	 * comes now (86eyg0n8e follow-up). */
+	scheduledFor?: number;
+	/** The buyer's own fulfilment moment, untouched by any override
+	 * (86eyp5qd1) — drives the promise-mismatch warning below. */
+	buyerRequestedMoment?: number;
+	/** Resolved, always-present expiry (86eypncfy): Lalamove's own `expiresAt`
+	 * when it gave one, else our own 5-minute clock from the moment the quote
+	 * landed. Never optional here — a quote whose death we can't name is
+	 * exactly the one that traps the seller. */
+	expiresAt: number;
+};
 
 /**
  * Lalamove dispatch card on order detail (86eyb5hrf) — the seller's one-tap
@@ -77,25 +114,38 @@ export function BookDeliveryCard({
 	const prepareBooking = useAction(api.lalamove.prepareBooking);
 	const confirmBooking = useAction(api.lalamove.confirmBooking);
 	const cancelBooking = useAction(api.lalamove.cancelBooking);
+	// AC2 of the rebook fix (86eyp63xn): booking at a seller-picked moment can
+	// also move the ORDER's promise in the same action — see syncOrderTime.
+	const rescheduleFulfilment = useMutation(api.orders.rescheduleFulfilment);
 
 	const [preparing, setPreparing] = useState(false);
-	const [quote, setQuote] = useState<{
-		quotationId: string;
-		senderStopId: string;
-		recipientStopId: string;
-		fee: number;
-		buyerPaidFee: number;
-		vehicleType: string;
-		buyerContactFallback: boolean;
-		/** The pickup moment this quote is scheduled for — undefined = the
-		 * rider comes now (86eyg0n8e follow-up). */
-		scheduledFor?: number;
-	} | null>(null);
+	const [quote, setQuote] = useState<QuoteState | null>(null);
 	const [booking, setBooking] = useState(false);
 	// In-dialog vehicle switch → fresh quote (prices are per-vehicle). Keeps
 	// the dialog open with the price row loading instead of bouncing the
 	// seller back to settings to change vehicle for one order.
 	const [requoting, setRequoting] = useState(false);
+	// Seller's pickup-time override (86eyp5qd1): null = the buyer's moment
+	// (the default), a number = "come at this exact moment", "now" = dispatch
+	// immediately. Quotes are bound to their scheduleAt, so a change re-quotes.
+	const [scheduleOverride, setScheduleOverride] = useState<
+		number | "now" | null
+	>(null);
+	const [editSchedule, setEditSchedule] = useState(false);
+	const [schedDate, setSchedDate] = useState("");
+	const [schedTime, setSchedTime] = useState("");
+	// Inline validation for the editor (86eyp63xn follow-up): the native
+	// input's min can be bypassed by typing/stepping, so past picks are
+	// refused here with a visible reason, never a silent book-now.
+	const [scheduleError, setScheduleError] = useState<string | null>(null);
+	// "Also update the delivery time the buyer sees": booking at a picked
+	// moment first reschedules the ORDER to it (86eyp63xn AC2), so the trip
+	// and the buyer's promise move together. Defaulted at prepare time —
+	// ON when the order's own moment is stale (past, or a failed booking
+	// exists: the rebook path, where the old time is wrong by definition),
+	// OFF when the buyer's moment is still ahead (a rider leaving earlier
+	// than the promise is legitimate and must not rewrite it silently).
+	const [syncOrderTime, setSyncOrderTime] = useState(false);
 	// Did this quote flow start from the seller trying to ADVANCE the order
 	// (vs. tapping the card's own book button / the packed prompt)? Only then
 	// does dismissing leave them stuck, so only then does the modal offer the
@@ -106,6 +156,25 @@ export function BookDeliveryCard({
 	const prepareGenRef = useRef(0);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
+	// A failed confirm used to be a toast and nothing else, while the dialog
+	// stayed open holding the dead quote — so the seller's obvious next move
+	// (press the same button again) re-sent an expired quotationId forever, and
+	// the copy pointed at a Book button hidden behind the overlay. Wagyu Walid
+	// did exactly this five times in 5m23s before giving up (86eypncfy). The
+	// reason now lives IN the dialog and swaps the primary action to a re-quote.
+	const [bookingError, setBookingError] = useState<string | null>(null);
+	// Ticks only while the dialog is open, so a quote can visibly lapse instead
+	// of silently rotting behind a button that still looks armed.
+	const [now, setNow] = useState<number>(() => Date.now());
+	// Spend guard (86eypjfuf): "Confirm & dispatch" is the one control here that
+	// moves real money out of the seller's Lalamove wallet, on a single tap with
+	// no second step. It can also appear UNDER a finger — the dialog auto-opens
+	// on the packed transition (promptBookOnPacked) and on a manual advance —
+	// so the tap that opened it, or a scroll-flick on the page behind, can carry
+	// straight through into a dispatch. Arming it a beat after it appears makes
+	// that impossible while costing a deliberate seller nothing: they still have
+	// to read the price.
+	const [spendArmed, setSpendArmed] = useState(false);
 
 	// Prompt-to-book-on-packed (opt-in): when the seller marks a PAID, due-today
 	// delivery order Packed, auto-open the confirm dialog (today's price) so they
@@ -149,6 +218,29 @@ export function BookDeliveryCard({
 		void handlePrepare();
 	}, [order.status, order.paymentStatus, dispatch]);
 
+	// Quote countdown — a 1s tick while the confirm dialog holds a quote, so
+	// "locked for 5 minutes" is a live fact rather than a claim.
+	useEffect(() => {
+		if (quote === null) return;
+		setNow(Date.now());
+		const id = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(id);
+	}, [quote]);
+
+	// Keyed on quote PRESENCE, not identity: the button arms once when it first
+	// appears and stays armed across vehicle/time re-quotes, so switching
+	// Motorcycle→Car doesn't keep re-disabling dispatch. Re-arms on a fresh
+	// open because `quote` returns to null in between.
+	const hasQuote = quote !== null;
+	useEffect(() => {
+		if (!hasQuote) {
+			setSpendArmed(false);
+			return;
+		}
+		const id = setTimeout(() => setSpendArmed(true), SPEND_ARM_DELAY_MS);
+		return () => clearTimeout(id);
+	}, [hasQuote]);
+
 	// External book request — the stepper raises it when the seller advances a
 	// bookable order by hand, so THIS modal answers "how is it going out?".
 	// Token baseline on mount so a remount never re-fires a stale request; the
@@ -183,6 +275,13 @@ export function BookDeliveryCard({
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
+	// TEST KEYS (86eypncfy). Not a warning we can afford to leave in Settings:
+	// a sandbox booking looks identical to a real one right up until no rider
+	// ever arrives, and the buyer has already been charged a fee the test
+	// environment priced. So it is stated on the card AND inside the confirm
+	// dialog — every surface where the seller is about to spend. Undefined env
+	// (row not yet stamped) renders nothing rather than a false all-clear.
+	const sandbox = dispatch.env === "sandbox";
 	// Collection service (86eyg0n8e): the rider collects FROM the customer and
 	// brings the goods here. TWO questions, two sources — they only diverge
 	// after a seller switches modes (and will diverge routinely once direction
@@ -257,8 +356,44 @@ export function BookDeliveryCard({
 	}
 	if (!job && !bookable) return null;
 
-	async function handlePrepare(opts?: { fromAdvance?: boolean }) {
+	/** Lalamove honours a quotation for exactly 5 minutes; used as the fallback
+	 * when the provider's own `expiresAt` is absent. */
+	const QUOTE_TTL_MS = 5 * 60 * 1000;
+
+	/** The single place an action result becomes quote state, so every path
+	 * (first quote, vehicle switch, time change, re-quote after a failure)
+	 * carries an expiry and none can reintroduce the deathless quote. */
+	function applyQuote(
+		result: Omit<QuoteState, "expiresAt"> & { expiresAt?: number },
+	) {
+		setQuote({
+			...result,
+			expiresAt: result.expiresAt ?? Date.now() + QUOTE_TTL_MS,
+		});
+		setBookingError(null);
+	}
+
+	/** Drop every schedule-editor state — a fresh open must start from the
+	 * buyer's moment, never a leftover override from a dismissed dialog. */
+	function resetScheduleState() {
+		setScheduleOverride(null);
+		setEditSchedule(false);
+		setSchedDate("");
+		setSchedTime("");
+		setScheduleError(null);
+		setSyncOrderTime(false);
+	}
+
+	async function handlePrepare(opts?: {
+		fromAdvance?: boolean;
+		/** Rebook path (86eyp63xn): the failed booking's schedule is stale by
+		 * definition, so the time editor opens straight away instead of hiding
+		 * behind "Change time". */
+		autoEditSchedule?: boolean;
+	}) {
 		setFromAdvance(opts?.fromAdvance === true);
+		resetScheduleState();
+		setBookingError(null);
 		setPreparing(true);
 		const gen = prepareGenRef.current;
 		try {
@@ -271,29 +406,112 @@ export function BookDeliveryCard({
 				if (opts?.fromAdvance) onAdvanceBookUnavailable?.();
 				return;
 			}
-			setQuote(result);
+			applyQuote(result);
+			// Default the order-sync choice from THIS quote's reality (the
+			// docblock on syncOrderTime): stale promise or a failed booking →
+			// moving the order with the trip is almost certainly the intent.
+			const promiseStale =
+				result.buyerRequestedMoment === undefined ||
+				result.buyerRequestedMoment <= Date.now();
+			setSyncOrderTime(failedJob !== null || promiseStale);
+			if (opts?.autoEditSchedule) openScheduleEditor(result);
 		} finally {
 			setPreparing(false);
 		}
 	}
 
-	// Vehicle switch inside the open dialog — re-quote for the chosen vehicle
-	// (each quotation is vehicle-bound). On failure the previous quote stays.
-	async function handleSwitchVehicle(vehicleType: "MOTORCYCLE" | "CAR") {
-		if (!quote || quote.vehicleType === vehicleType || requoting) return;
+	// In-dialog re-quote — a vehicle switch or a pickup-time change (each
+	// quotation is bound to both). On failure the previous quote (and its
+	// schedule) stays. Returns whether the fresh quote landed.
+	async function handleRequote(next: {
+		vehicleType?: "MOTORCYCLE" | "CAR";
+		scheduleOverride?: number | "now" | null;
+	}): Promise<boolean> {
+		if (!quote || requoting) return false;
+		const vehicleType =
+			next.vehicleType ??
+			(quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE");
+		const override =
+			next.scheduleOverride !== undefined
+				? next.scheduleOverride
+				: scheduleOverride;
 		setRequoting(true);
 		try {
 			const result = await prepareBooking({
 				shortId: order.shortId,
 				vehicleType,
+				scheduleAtOverride: override === null ? undefined : override,
 			});
 			if (!result.ok) {
 				toast.error(result.message ?? dispatchBlockCopy(result.reason));
-				return;
+				return false;
 			}
-			setQuote(result);
+			setScheduleOverride(override);
+			applyQuote(result);
+			return true;
 		} finally {
 			setRequoting(false);
+		}
+	}
+
+	function handleSwitchVehicle(vehicleType: "MOTORCYCLE" | "CAR") {
+		if (!quote || quote.vehicleType === vehicleType || requoting) return;
+		void handleRequote({ vehicleType });
+	}
+
+	/** Open the pickup-time editor prefilled with the moment the quote is
+	 * currently scheduled for (falling back to the buyer's ask, then "in an
+	 * hour" for orders with no time at all). `from` lets handlePrepare seed
+	 * off a fresh result before React state has settled (the rebook path). */
+	function openScheduleEditor(from?: {
+		scheduledFor?: number;
+		buyerRequestedMoment?: number;
+	}) {
+		const src = from ?? quote ?? undefined;
+		let seed =
+			src?.scheduledFor ??
+			(src?.buyerRequestedMoment !== undefined &&
+			src.buyerRequestedMoment > Date.now()
+				? src.buyerRequestedMoment
+				: Date.now() + 60 * 60 * 1000);
+		// Never prefill a moment that has already passed (a stale scheduledFor
+		// from an order whose day rolled over) — the editor would open onto a
+		// value its own validation rejects.
+		if (seed < Date.now()) seed = Date.now() + 60 * 60 * 1000;
+		const day = todayMytMidnight(seed);
+		setSchedDate(ymdFromEpoch(day));
+		// Round to the input's 5-min step, clamped below midnight — a seed in
+		// the day's last minutes must not round up to the invalid "24:00".
+		setSchedTime(
+			hhmmFromMinutes(
+				Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5),
+			),
+		);
+		setScheduleError(null);
+		setEditSchedule(true);
+	}
+
+	async function handleApplySchedule() {
+		const day = mytMidnightFromYmd(schedDate);
+		const minutes = timeMinutesFromHhmm(schedTime);
+		if (Number.isNaN(day) || Number.isNaN(minutes)) {
+			setScheduleError("Pick a valid date and time first.");
+			return;
+		}
+		const moment = day + minutes * 60000;
+		// The native input's `min` only greys the picker — typed, stepped or
+		// seeded values below it still land here. A past moment would silently
+		// degrade to an immediate booking (and offer the ORDER a past promise
+		// via the sync checkbox), so it is refused with the honest way out.
+		if (moment < Date.now()) {
+			setScheduleError(
+				"That time has already passed — pick a moment ahead, or use “Send the rider now” for an immediate pickup.",
+			);
+			return;
+		}
+		setScheduleError(null);
+		if (await handleRequote({ scheduleOverride: moment })) {
+			setEditSchedule(false);
 		}
 	}
 
@@ -301,6 +519,30 @@ export function BookDeliveryCard({
 		if (!quote) return;
 		setBooking(true);
 		try {
+			// Order-sync BEFORE the booking (86eyp63xn AC2): once the booking
+			// lands there is an ACTIVE job and rescheduleFulfilment refuses by
+			// design — this is the one moment both can move together. A failed
+			// sync aborts the dispatch: booking a trip whose promise update was
+			// refused would recreate exactly the mismatch this fix exists for.
+			if (
+				typeof scheduleOverride === "number" &&
+				syncOrderTime &&
+				order.source !== "counter"
+			) {
+				const day = todayMytMidnight(scheduleOverride);
+				try {
+					await rescheduleFulfilment({
+						orderId: order._id,
+						fulfilmentDate: day,
+						fulfilmentTimeMinutes: Math.round(
+							(scheduleOverride - day) / 60000,
+						),
+					});
+				} catch (err) {
+					toast.error(convexErrorMessage(err));
+					return;
+				}
+			}
 			const result = await confirmBooking({
 				shortId: order.shortId,
 				quotationId: quote.quotationId,
@@ -310,10 +552,16 @@ export function BookDeliveryCard({
 				scheduledFor: quote.scheduledFor,
 			});
 			if (!result.ok) {
-				toast.error(result.message ?? dispatchBlockCopy(result.reason));
+				// Deliberately NOT a toast: the seller's next action is decided by
+				// this message, and a toast is gone before they get back from the
+				// Lalamove app. It also retires the quote as a bookable thing —
+				// the primary action becomes "Get a fresh price" below.
+				setBookingError(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(null);
+			setBookingError(null);
+			resetScheduleState();
 			toast.success(
 				"Rider booking placed — you'll see the driver here once one accepts.",
 			);
@@ -334,6 +582,10 @@ export function BookDeliveryCard({
 	}
 
 	const variance = quote ? quote.fee - quote.buyerPaidFee : 0;
+	// A quote past its window can't be dispatched, and neither can one whose
+	// confirm already failed — both need a fresh price, not another press.
+	const quoteStale = quote !== null && now >= quote.expiresAt;
+	const needsFreshQuote = bookingError !== null || quoteStale;
 
 	return (
 		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -347,6 +599,30 @@ export function BookDeliveryCard({
 					<JobStatusPill status="completed" collection={jobCollection} />
 				) : null}
 			</div>
+
+			{sandbox ? (
+				<div className="flex items-start gap-2 rounded-xl bg-amber-100 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+					<FlaskConical className="mt-0.5 size-4 shrink-0" />
+					<span>
+						<span className="font-medium">Test mode — no real rider.</span> Your
+						Lalamove keys are sandbox keys (they start with{" "}
+						<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+							pk_test_
+						</code>
+						), so bookings are simulated and buyers are quoted test prices.
+						Topping up your real wallet won&apos;t change that — paste your live
+						keys in{" "}
+						<Link
+							to="/app/settings"
+							search={{ tab: "fulfilment" }}
+							className="font-medium underline underline-offset-2"
+						>
+							Settings → Fulfilment
+						</Link>
+						.
+					</span>
+				</div>
+			) : null}
 
 			{/* Failed booking — amber, with the one-tap rebook the ticket asks for. */}
 			{failedJob && !activeJob ? (
@@ -524,7 +800,11 @@ export function BookDeliveryCard({
 					<Button
 						type="button"
 						className="h-11 w-full"
-						onClick={() => handlePrepare()}
+						// Rebook (86eyp63xn): the failed trip's schedule is stale, so
+						// the dialog opens with the time editor already showing.
+						onClick={() =>
+							handlePrepare(failedJob ? { autoEditSchedule: true } : undefined)
+						}
 						disabled={preparing}
 					>
 						{preparing ? (
@@ -586,6 +866,8 @@ export function BookDeliveryCard({
 					// attempt stale and let its result land nowhere.
 					if (preparing) prepareGenRef.current += 1;
 					setQuote(null);
+					setBookingError(null);
+					resetScheduleState();
 				}}
 			>
 				<DialogContent>
@@ -601,6 +883,15 @@ export function BookDeliveryCard({
 								: "Today's price for this delivery. The price is locked for 5 minutes — confirm to dispatch."}
 						</DialogDescription>
 					</DialogHeader>
+					{sandbox ? (
+						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+							<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+							<span>
+								<span className="font-medium">Test keys.</span> This dispatches a
+								simulated trip — no rider will come and nothing is charged.
+							</span>
+						</p>
+					) : null}
 					{quote === null ? (
 						<div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
 							<Loader2 className="size-4 animate-spin" />
@@ -609,20 +900,176 @@ export function BookDeliveryCard({
 					) : (
 						<div className="flex flex-col gap-1.5 text-sm">
 							{/* A scheduled pickup and a rider-now dispatch are different
-							    purchases — say which one this confirm buys. */}
-							<p
-								className={`rounded-lg px-3 py-2 text-xs ${
+							    purchases — say which one this confirm buys, and let the
+							    seller buy a different slot (86eyp5qd1): advance-book a
+							    sane time, leave earlier than the promise, or send now. */}
+							<div
+								className={`flex items-start justify-between gap-2 rounded-lg px-3 py-2 text-xs ${
 									quote.scheduledFor
 										? "bg-accent/10 text-accent-emphasis"
 										: "bg-muted text-muted-foreground"
 								}`}
 							>
-								{quote.scheduledFor
-									? `Scheduled pickup — the rider comes ${formatScheduledMoment(
-											quote.scheduledFor,
-										)}, the time the buyer asked for.`
-									: "The rider comes now — the buyer's requested time is already here (or none was set)."}
-							</p>
+								<span>
+									{quote.scheduledFor
+										? `Scheduled pickup — the rider comes ${formatScheduledMoment(
+												quote.scheduledFor,
+											)}, ${
+												scheduleOverride !== null
+													? "the time you picked."
+													: "the time the buyer asked for."
+											}`
+										: scheduleOverride === "now"
+											? "The rider comes now — dispatching immediately, at your choice."
+											: scheduleOverride !== null
+												? "The rider comes now — the time you picked is less than 15 minutes away, so this books an immediate pickup."
+												: "The rider comes now — the buyer's requested time is already here (or none was set)."}
+								</span>
+								<button
+									type="button"
+									className="shrink-0 font-semibold underline-offset-2 hover:underline disabled:opacity-60"
+									disabled={requoting || booking}
+									onClick={() =>
+										editSchedule ? setEditSchedule(false) : openScheduleEditor()
+									}
+								>
+									{editSchedule ? "Close" : "Change time"}
+								</button>
+							</div>
+							{editSchedule ? (
+								<div className="flex flex-col gap-2 rounded-xl border border-border p-3">
+									{/* Inputs and actions share one 2-col grid rhythm and one
+									    height (field inputs are min-h-11), so the four controls
+									    read as a set instead of mismatched sizes. */}
+									<div className="grid grid-cols-2 gap-2">
+										<Input
+											type="date"
+											variant="field"
+											aria-label="Pickup date"
+											min={ymdFromEpoch(todayMytMidnight())}
+											max={ymdFromEpoch(
+												todayMytMidnight() +
+													MAX_NOTICE_DAYS * 24 * 60 * 60 * 1000,
+											)}
+											value={schedDate}
+											onChange={(e) => {
+												setSchedDate(e.target.value);
+												setScheduleError(null);
+											}}
+										/>
+										<Input
+											type="time"
+											variant="field"
+											aria-label="Pickup time"
+											step={300}
+											value={schedTime}
+											onChange={(e) => {
+												setSchedTime(e.target.value);
+												setScheduleError(null);
+											}}
+										/>
+									</div>
+									{scheduleError ? (
+										<p className="text-xs font-medium text-destructive">
+											{scheduleError}
+										</p>
+									) : null}
+									<div className="grid grid-cols-2 gap-2">
+										<Button
+											type="button"
+											className="h-11 w-full"
+											disabled={requoting || booking}
+											onClick={() => void handleApplySchedule()}
+										>
+											{requoting ? "Updating price…" : "Use this time"}
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											className="h-11 w-full"
+											disabled={requoting || booking}
+											onClick={() =>
+												void handleRequote({ scheduleOverride: "now" }).then(
+													(ok) => ok && setEditSchedule(false),
+												)
+											}
+										>
+											Send the rider now
+										</Button>
+									</div>
+									{scheduleOverride !== null ? (
+										<button
+											type="button"
+											className="flex min-h-9 items-center self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
+											disabled={requoting || booking}
+											onClick={() =>
+												void handleRequote({ scheduleOverride: null }).then(
+													(ok) => ok && setEditSchedule(false),
+												)
+											}
+										>
+											Use the buyer&apos;s time instead
+										</button>
+									) : null}
+								</div>
+							) : null}
+							{/* The one choice AC2 hangs on: a picked moment can also move
+							    the ORDER's promise (rescheduled just before dispatch, so
+							    the trip and the buyer's page agree). Own row outside the
+							    editor so it survives the editor closing and is visible at
+							    the moment of confirm. Never for "now" — an immediate
+							    dispatch is not a promise to write. */}
+							{typeof scheduleOverride === "number" &&
+							order.source !== "counter" ? (
+								<label className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-foreground">
+									<input
+										type="checkbox"
+										className="mt-0.5 size-4 shrink-0 accent-accent"
+										checked={syncOrderTime}
+										disabled={booking || requoting}
+										onChange={(e) => setSyncOrderTime(e.target.checked)}
+									/>
+									<span>
+										Also update the delivery time the buyer sees — the order
+										becomes{" "}
+										<span className="font-medium">
+											{formatScheduledMoment(scheduleOverride)}
+										</span>{" "}
+										when you book, and their order page follows instantly.
+									</span>
+								</label>
+							) : null}
+							{/* The trip being bought no longer matches what the order
+							    promises the buyer — say so BEFORE the money moves. With
+							    the sync checkbox ON the mismatch resolves itself at
+							    confirm, so the warning only fires when the seller has
+							    deliberately left the promise untouched (or chose "now",
+							    where there is nothing to write). */}
+							{scheduleOverride !== null &&
+							!(typeof scheduleOverride === "number" && syncOrderTime) &&
+							quote.buyerRequestedMoment !== undefined &&
+							quote.buyerRequestedMoment > Date.now() &&
+							quote.scheduledFor !== quote.buyerRequestedMoment ? (
+								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+									The order still promises the buyer{" "}
+									<span className="font-medium">
+										{formatScheduledMoment(quote.buyerRequestedMoment)}
+									</span>
+									{typeof scheduleOverride === "number" ? (
+										<>
+											. Tick the box above to update it when you book —
+											otherwise their order page keeps the old time.
+										</>
+									) : (
+										<>
+											. If you&apos;ve agreed a new delivery time with them,
+											use <span className="font-medium">Reschedule</span> on
+											this page before booking — their order page keeps the
+											old time otherwise.
+										</>
+									)}
+								</p>
+							) : null}
 							{/* Per-order vehicle choice — defaults to the settings vehicle;
 							    switching re-quotes (prices are per-vehicle). */}
 							<div className="grid grid-cols-2 gap-2">
@@ -713,28 +1160,90 @@ export function BookDeliveryCard({
 							disabled={booking || quote === null}
 							onClick={() => {
 								setQuote(null);
+								setBookingError(null);
 								advanceWithoutRider.onConfirm();
 							}}
 						>
 							{advanceWithoutRider.label}
 						</Button>
 					) : null}
+					{/* The failure the seller must act on, and the way out. A dead
+					    quote is the ordinary end state here: fixing a wallet or a
+					    phone number takes longer than the 5 minutes Lalamove holds a
+					    price, so the recovery action has to live in this dialog
+					    rather than on the card behind it (86eypncfy). */}
+					{bookingError ? (
+						<div className="flex flex-col gap-1.5 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+							<p className="flex items-start gap-2">
+								<CircleAlert className="mt-0.5 size-4 shrink-0" />
+								<span>
+									<span className="font-medium">
+										Booking didn&apos;t go through
+									</span>{" "}
+									— {bookingError}
+								</span>
+							</p>
+							<p className="pl-6 text-xs opacity-80">
+								Nothing was charged and your buyer wasn&apos;t notified. Fix
+								it, then get a fresh price — this one is no longer valid.
+							</p>
+						</div>
+					) : quoteStale ? (
+						<p className="rounded-xl bg-muted px-3 py-2 text-xs text-muted-foreground">
+							This price has expired — Lalamove only holds a quote for 5
+							minutes. Get a fresh one to dispatch.
+						</p>
+					) : quote !== null ? (
+						<p className="text-right text-xs text-muted-foreground tabular-nums">
+							Price locked for {formatCountdown(quote.expiresAt - now)}
+						</p>
+					) : null}
 					<DialogFooter>
 						<Button
 							type="button"
 							variant="outline"
-							onClick={() => setQuote(null)}
+							onClick={() => {
+								setQuote(null);
+								setBookingError(null);
+							}}
 							disabled={booking}
 						>
 							Not now
 						</Button>
-						<Button
-							type="button"
-							onClick={handleConfirm}
-							disabled={booking || requoting || quote === null}
-						>
-							{booking ? "Booking…" : "Confirm & dispatch"}
-						</Button>
+						{/* One primary action, and it is always the one that can
+						    actually succeed: dispatch while the price is live, a
+						    re-quote once it isn't. Re-pressing a dead "Confirm" was
+						    the trap. */}
+						{needsFreshQuote ? (
+							<Button
+								type="button"
+								onClick={() => void handleRequote({})}
+								disabled={booking || requoting || quote === null}
+							>
+								{requoting ? (
+									<>
+										<Loader2 className="size-4 animate-spin" /> Getting a fresh
+										price…
+									</>
+								) : (
+									<>
+										<RefreshCw className="size-4" /> Get a fresh price
+									</>
+								)}
+							</Button>
+						) : (
+							<Button
+								type="button"
+								onClick={handleConfirm}
+								// Disabled rather than an inert click handler: a button that
+								// silently swallows a real tap reads as broken.
+								disabled={
+									booking || requoting || quote === null || !spendArmed
+								}
+							>
+								{booking ? "Booking…" : "Confirm & dispatch"}
+							</Button>
+						)}
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
@@ -751,6 +1260,13 @@ export function BookDeliveryCard({
 			/>
 		</section>
 	);
+}
+
+/** "4:32" / "0:07" from a remaining-ms figure, floored at zero so a lapsed
+ * quote never renders a negative clock. */
+function formatCountdown(remainingMs: number): string {
+	const total = Math.max(0, Math.floor(remainingMs / 1000));
+	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 /** "4 Aug 2026 · 3:30 PM" from an epoch moment — the card's one spelling for

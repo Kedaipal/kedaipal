@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { resolveAwbConfig } from "../../convex/lib/awbConfig";
 import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
 import {
 	formatStatusAge,
@@ -49,6 +50,8 @@ import {
 	type PaymentStatus,
 } from "../components/dashboard/order-filters";
 import { PageHeader } from "../components/dashboard/page-header";
+import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
+import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
 import {
 	type OrderStatus,
 	StatusBadge,
@@ -66,6 +69,7 @@ import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
+import { describeAwbPaper } from "../lib/awb-labels";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -221,6 +225,8 @@ function OrdersRoute() {
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
 	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
 	const [exporting, setExporting] = useState(false);
+	// Despatch-label print dialog for the ticked selection (86eyp63mp).
+	const [printOpen, setPrintOpen] = useState(false);
 
 	const [searchInput, setSearchInput] = useState(q);
 	const debounced = useDebounce(searchInput.trim(), 250);
@@ -713,6 +719,7 @@ function OrdersRoute() {
 								source,
 							}}
 							onChange={setFilters}
+							country={retailer.country}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
 						/>
@@ -764,6 +771,23 @@ function OrdersRoute() {
 					</span>
 					<span className="shrink-0 text-sm font-bold text-accent">Show →</span>
 				</button>
+			) : null}
+
+			{/* Despatch queue (86eyp63mp) — below the due-today banner because a
+			    deadline outranks a task you can finish whenever you like. Shown
+			    even at zero (with a disabled button + the reason): the count is how
+			    a seller learns the feature exists. Held back until the counts land,
+			    so it never claims an empty queue before it knows. Hidden for
+			    pickup-only stores, which have no parcels to label, and it rides the
+			    same Order Inbox plan gate as the bulk actions it sits with. */}
+			{inboxEnabled && !loading && retailer && (retailer.offerDelivery ?? true) ? (
+				<ReadyToShipStrip
+					retailerId={retailer._id}
+					count={counts?.readyToShip ?? 0}
+					paperLabel={describeAwbPaper(
+						resolveAwbConfig(retailer.awbConfig).paperSize,
+					)}
+				/>
 			) : null}
 
 			{/* Select-mode hint — the persistent bottom bar carries the actions
@@ -988,9 +1012,26 @@ function OrdersRoute() {
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}
+					onPrint={retailer ? () => setPrintOpen(true) : undefined}
 					onToggleSelectAll={toggleSelectAll}
 					onExit={exitSelectMode}
 					busy={bulkBusy}
+				/>
+			) : null}
+
+			{/* Despatch labels for the ticked selection (86eyp63mp). Mounted
+			    outside select mode too so the dialog can finish closing after a
+			    print clears the selection. */}
+			{retailer ? (
+				<PrintLabelsDialog
+					mode="selection"
+					open={printOpen}
+					onOpenChange={setPrintOpen}
+					retailerId={retailer._id}
+					orderIds={[...selected] as Id<"orders">[]}
+					paperLabel={describeAwbPaper(
+						resolveAwbConfig(retailer.awbConfig).paperSize,
+					)}
 				/>
 			) : null}
 		</div>

@@ -26,6 +26,11 @@ export type BillingEmailVars = {
 	bankAccountName?: string;
 	bankAccountNumber?: string;
 	duitnowId?: string;
+	// Non-MYR invoice (e.g. an SGD-billed Singapore seller): the configured MY
+	// bank/DuitNow rails aren't payable in that currency, so the pay panel becomes
+	// a "we'll confirm payment details on WhatsApp" line instead. Callers must
+	// leave the bank fields unset alongside this flag.
+	crossBorder?: boolean;
 	billingUrl: string;
 };
 
@@ -44,6 +49,8 @@ const t = {
 		dueDate: "Due date",
 		qrNote: "Or scan the DuitNow QR on your billing page.",
 		noDetails: "Open your billing page for the payment details and QR.",
+		contactForPayment:
+			"We'll confirm payment details with you on WhatsApp — quote {invoiceNumber} as your payment reference.",
 		cta: "View invoice & pay",
 		wasPrefix: "was",
 		foundingDiscount: "founding discount",
@@ -63,6 +70,8 @@ const t = {
 		dueDate: "Tarikh akhir",
 		qrNote: "Atau imbas kod QR DuitNow di halaman bil anda.",
 		noDetails: "Buka halaman bil anda untuk butiran pembayaran dan QR.",
+		contactForPayment:
+			"Kami akan sahkan butiran pembayaran dengan anda melalui WhatsApp — gunakan {invoiceNumber} sebagai rujukan pembayaran.",
 		cta: "Lihat bil & bayar",
 		wasPrefix: "asal",
 		foundingDiscount: "diskaun pengasas",
@@ -82,6 +91,8 @@ const t = {
 		dueDate: "到期日",
 		qrNote: "或扫描账单页面上的 DuitNow QR 码。",
 		noDetails: "请打开您的账单页面查看付款详情和 QR 码。",
+		contactForPayment:
+			"我们会通过 WhatsApp 与您确认付款方式 —— 付款时请注明 {invoiceNumber} 作为参考。",
 		cta: "查看账单并付款",
 		wasPrefix: "原价",
 		foundingDiscount: "创始会员折扣",
@@ -91,9 +102,18 @@ const t = {
 	},
 } as const;
 
+/** The cross-border pay line with the invoice number substituted in. */
+function contactForPaymentLine(locale: Locale, v: BillingEmailVars): string {
+	return t[locale].contactForPayment.replace(
+		"{invoiceNumber}",
+		v.invoiceNumber,
+	);
+}
+
 /** Plain-text version of the pay lines (no HTML tags). */
 function payText(locale: Locale, v: BillingEmailVars): string {
 	const L = t[locale];
+	if (v.crossBorder) return contactForPaymentLine(locale, v);
 	const rows: string[] = [];
 	if (v.bankName) rows.push(`${L.bank}: ${v.bankName}`);
 	if (v.bankAccountName) rows.push(`${L.accountName}: ${v.bankAccountName}`);
@@ -159,6 +179,11 @@ function paymentRow(label: string, value: string, strong = false): string {
 
 function paymentPanel(locale: Locale, v: BillingEmailVars): string {
 	const L = t[locale];
+	if (v.crossBorder) {
+		return `<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
+<p style="margin:0;font-size:13px;line-height:1.6;color:#1e3a8a;">${escapeHtml(contactForPaymentLine(locale, v))}</p>
+</div>`;
+	}
 	const rows = [
 		v.bankName ? paymentRow(L.bank, v.bankName, true) : "",
 		v.bankAccountName ? paymentRow(L.accountName, v.bankAccountName) : "",

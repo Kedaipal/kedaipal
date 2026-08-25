@@ -87,3 +87,41 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+  # Tags `main` with the version in package.json so a version always maps to a
+  # commit — the anchor for "what are you running?" in support, and for the
+  # release-notes list (86eyqgxna). Runs AFTER the deploy so only what actually
+  # shipped ever gets tagged.
+  tag:
+    name: Tag release
+    runs-on: ubuntu-latest
+    needs: deploy
+    permissions:
+      # The only job that writes to the repo. Scoped here rather than
+      # workflow-wide so the build/deploy jobs stay read-only.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag main with the package.json version
+        run: |
+          VERSION="$(node -p "require('./package.json').version || ''")"
+          if [ -z "$VERSION" ]; then
+            echo "::error::package.json has no version field — cannot tag this release."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            # Deliberately a WARNING, not a failure. A hotfix to prod at 2am must
+            # never be blocked on remembering a version bump — shipping the fix
+            # matters more than the tag. But an un-bumped release silently ships
+            # under the previous version, which breaks the release-notes
+            # "show once per version" contract downstream, so it must be loud.
+            echo "::warning::$TAG already exists — this deploy did NOT bump the version in package.json. It has shipped under the previous version, so any new release notes will not be shown to sellers. Bump package.json (YYYY.MM.N) in the next release PR."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $VERSION"
+          git push origin "$TAG"
+          echo "::notice::Tagged $TAG"
