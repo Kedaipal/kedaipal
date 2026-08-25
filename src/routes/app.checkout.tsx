@@ -70,6 +70,7 @@ import {
 import { useDebounce } from "../hooks/useDebounce";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { priceDelta } from "../lib/price-delta";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
@@ -977,20 +978,19 @@ function isAdjusted(l: CartLine): boolean {
  * the line as adjusted).
  */
 function PriceDeltaChip({ price, catalog }: { price: number; catalog: number }) {
-	const pct = Math.round(((catalog - price) / catalog) * 100);
-	if (pct === 0) return null;
-	const cut = price < catalog;
+	const delta = priceDelta(price, catalog);
+	if (!delta) return null;
 	return (
 		<span
 			className={cn(
 				"rounded-full px-1.5 py-px text-[10px] font-semibold leading-4 tabular-nums",
-				cut
+				delta.isCut
 					? "bg-accent/15 text-accent-emphasis"
 					: "bg-amber-500/15 text-amber-600 dark:text-amber-500",
 			)}
 		>
-			{cut ? "−" : "+"}
-			{Math.abs(pct)}%
+			{delta.isCut ? "−" : "+"}
+			{delta.pct}%
 		</span>
 	);
 }
