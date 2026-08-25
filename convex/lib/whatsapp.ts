@@ -52,6 +52,22 @@ export function sellerPaymentClaimTemplateName(): string | undefined {
 }
 
 /**
+ * See sellerNewOrderTemplateName — the money-actually-landed sibling, fired by
+ * the HitPay gateway receive (86eyd63r8). Deliberately a THIRD template rather
+ * than a reuse of the claim one: a claim asks the seller to go check their bank
+ * and confirm, while a settled gateway payment has already auto-confirmed the
+ * order and needs nothing from them. Sending "please verify" on a payment we
+ * verified ourselves manufactures work that doesn't exist.
+ *
+ * Body params are the claim template's exact three — {{1}} customer, {{2}}
+ * shortId, {{3}} money — so the two stay interchangeable at the call site.
+ */
+export function sellerPaymentReceivedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * A failed Cloud API send, carrying the machine-readable bits a caller needs to
  * decide whether retrying could ever help: the HTTP status and Meta's own error
  * code. Without these a caller can only regex the message text, and the two

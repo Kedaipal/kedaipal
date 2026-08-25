@@ -15,32 +15,30 @@ import {
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
+	sellerPaymentReceivedTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
-import { classifyPushFailure } from "./lib/confirmationPush";
+import {
+	type ConfirmationPushStatus,
+	classifyPushFailure,
+	pushOwnsTheMessage,
+} from "./lib/confirmationPush";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { redactPhone } from "./lib/logRedaction";
-import { isMockupGateClosed } from "./lib/order";
-import {
-	type OrderStage,
-	resolveStages,
-	stageDescription,
-	stageLabel,
-	type StatusLabels,
-} from "./lib/orderStatus";
+import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
+import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
-	hasTemplateOverride,
+	PENDING_TOTAL_LABEL,
 	pickLocale,
 	poweredByLine,
 	privacyNoticeLine,
 	renderDeliveryFeeLine,
 	renderMessage,
 	renderPickupBlock,
-	renderStageUpdate,
 	renderSystemMessage,
 	TEMPLATE_LANGUAGE,
 	type DeliveryMethod,
@@ -50,15 +48,6 @@ import {
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
-
-const statusValidator = v.union(
-	v.literal("pending"),
-	v.literal("confirmed"),
-	v.literal("packed"),
-	v.literal("shipped"),
-	v.literal("delivered"),
-	v.literal("cancelled"),
-);
 
 /**
  * Internal mutation invoked by handleInbound when an ORD-XXXX is matched.
@@ -78,6 +67,14 @@ export const confirmOrderFromWhatsApp = internalMutation({
 	): Promise<{
 		matched: boolean;
 		alreadyConfirmed: boolean;
+		/**
+		 * This inbound rescued an order whose confirmation push had FAILED — we
+		 * just flipped it to "recovered". The caller needs this because the flip
+		 * happens before it re-reads the order, so by then the status alone can no
+		 * longer distinguish "already messaged, stay quiet" from "never reached
+		 * them, this reply is their one message". See the guard in handleInbound.
+		 */
+		pushRecovered: boolean;
 		orderId?: Id<"orders">;
 		retailerId?: Id<"retailers">;
 	}> => {
@@ -85,7 +82,8 @@ export const confirmOrderFromWhatsApp = internalMutation({
 			.query("orders")
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.first();
-		if (!order) return { matched: false, alreadyConfirmed: false };
+		if (!order)
+			return { matched: false, alreadyConfirmed: false, pushRecovered: false };
 
 		const now = Date.now();
 		const wasPending = order.status === "pending";
@@ -169,6 +167,7 @@ export const confirmOrderFromWhatsApp = internalMutation({
 		return {
 			matched: true,
 			alreadyConfirmed: !wasPending,
+			pushRecovered: pushFailed,
 			orderId: order._id,
 			retailerId: order.retailerId,
 		};
@@ -213,8 +212,11 @@ export const getOrderWithRetailer = internalQuery({
 		// already been reached (86eyf1rck).
 		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
 		// The two price holds (86eyfq0w5): while either is open the deferred
-		// push must NOT fire — the template's total would be wrong.
-		mockupGateClosed: boolean;
+		// push must NOT fire — the template's total would be wrong. The mockup
+		// hold asks whether a quote EXISTS (86eyd63r8), not whether the buyer has
+		// approved it: the message goes out at submit, so `submitted` and
+		// `changes_requested` both carry a real total.
+		mockupPriceUnsettled: boolean;
 		deliveryFeePending: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
@@ -247,7 +249,7 @@ export const getOrderWithRetailer = internalQuery({
 			statusLabels: retailer.statusLabels as StatusLabels | undefined,
 			currentStageId: order.currentStageId,
 			confirmationPushStatus: order.confirmationPushStatus,
-			mockupGateClosed: isMockupGateClosed(order),
+			mockupPriceUnsettled: isMockupPriceUnsettled(order),
 			deliveryFeePending: order.deliveryFeePending === true,
 		};
 	},
@@ -280,6 +282,10 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// True while the delivery charge awaits seller confirmation (radius
 		// "arrange" order) — payment is deferred until orders.setDeliveryFee.
 		deliveryFeePending: boolean;
+		// The order already has (or is about to get) its ONE message via the
+		// confirmation-push template, so this inbound reply must stay silent —
+		// see the `pushOwnsTheMessage` guard in handleInbound.
+		confirmationPushStatus: ConfirmationPushStatus | undefined;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -290,6 +296,9 @@ export const getRetailerLocaleForOrder = internalQuery({
 		if (!retailer) return null;
 		return {
 			retailerId: order.retailerId,
+			confirmationPushStatus: order.confirmationPushStatus as
+				| ConfirmationPushStatus
+				| undefined,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
 			trackingToken: order.trackingToken,
@@ -559,6 +568,30 @@ export const handleInbound = internalAction({
 			internal.whatsapp.getRetailerLocaleForOrder,
 			{ shortId },
 		);
+
+		// One message per order (86eyd63r8). On the push path the buyer's message
+		// is the confirmation template — already sent, in flight, or waiting on a
+		// final price — so replying here would be a SECOND billable send for the
+		// same order. That happens more than it looks: an old `?send=1` link, a
+		// forwarded chat, or the buyer simply re-sending their reference. The
+		// confirm above still ran (status/customer/pushname are updated) — only
+		// the outbound reply is suppressed. `failed` deliberately still replies:
+		// that push reached nobody, so this IS the buyer's one message and their
+		// recovery route (confirmOrderFromWhatsApp just re-stamped "recovered").
+		if (
+			pushOwnsTheMessage(meta?.confirmationPushStatus) &&
+			!result.pushRecovered
+		) {
+			if (!result.alreadyConfirmed && result.orderId) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.email.notifyRetailerOrderAlert,
+					{ orderId: result.orderId },
+				);
+			}
+			return;
+		}
+
 		// Order matched → attribute the confirm/payment sends to the seller so the
 		// per-seller guardrails + audit apply. These are transactional (order
 		// confirmation), so they bypass opt-out/pause/caps — the core promise.
@@ -688,286 +721,22 @@ export const handleInbound = internalAction({
 	},
 });
 
-/**
- * Scheduled by orders.updateStatus. Sends a localized status update to the
- * shopper. Errors are swallowed (logged) so the originating mutation never
- * fails because of an outbound network issue.
- */
-export const notifyStatusChange = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		type Meta = {
-			retailerId: Id<"retailers">;
-			shortId: string;
-			trackingToken: string | undefined;
-			status: Doc<"orders">["status"];
-			customerWaPhone: string | undefined;
-			storeName: string;
-			retailerWaPhone: string | undefined;
-			retailerSlug: string;
-			carrierTrackingUrl: string | undefined;
-			courierName: string | undefined;
-			trackingNo: string | undefined;
-			deliveryMethod: DeliveryMethod;
-			pickupKind: PickupKind | undefined;
-			locale: Locale;
-			messageTemplates: MessageTemplates | undefined;
-			orderStages: OrderStage[] | undefined;
-			statusLabels: StatusLabels | undefined;
-			currentStageId: string | undefined;
-		};
-		let meta: Meta | null = null;
-		try {
-			meta = await ctx.runQuery(internal.whatsapp.getOrderWithRetailer, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("WA notify lookup failed", err);
-			return;
-		}
-		if (!meta) return;
-		if (!meta.customerWaPhone) return;
-		const status = meta.status;
-		if (status === "pending" || status === "confirmed") return;
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const trackingUrl = `${appUrl}/track/${trackingToken}`;
-		const locale = pickLocale(meta.locale);
-
-		// A seller who configured custom stages expects THEIR vocabulary in the
-		// buyer message — "Ready for Collection" + its description, not the generic
-		// "packed and ready for pickup" (86ey570am). Precedence: an explicitly
-		// authored messageTemplates override still wins, then the custom stage's
-		// label/description, then the default catalog. Cancellation is never a
-		// stage (system-managed) and sellers on default stages keep the rich copy.
-		let stageBody: string | null = null;
-		if (
-			status !== "cancelled" &&
-			meta.orderStages &&
-			meta.orderStages.length > 0 &&
-			!hasTemplateOverride(meta.messageTemplates, locale, status)
-		) {
-			const stages = resolveStages({
-				orderStages: meta.orderStages,
-				labels: meta.statusLabels,
-				deliveryMethod: meta.deliveryMethod,
-			});
-			// Prefer the order's actual stage (advanceToStage sets it); fall back to
-			// the first stage on this anchor for plain updateStatus transitions.
-			const stage =
-				stages.find(
-					(s) => s.id === meta?.currentStageId && s.anchor === status,
-				) ?? stages.find((s) => s.anchor === status);
-			if (stage) {
-				stageBody = renderStageUpdate(locale, {
-					shortId: meta.shortId,
-					stageLabel: stageLabel(stage, locale),
-					stageDescription: stageDescription(stage, locale),
-					trackingUrl,
-					carrierTrackingUrl:
-						status === "shipped" ? meta.carrierTrackingUrl : undefined,
-					courierName: status === "shipped" ? meta.courierName : undefined,
-					trackingNo: status === "shipped" ? meta.trackingNo : undefined,
-					contactPhone: meta.retailerWaPhone,
-				});
-			}
-		}
-
-		const body =
-			stageBody ??
-			renderMessage(meta.messageTemplates, locale, status, {
-				shortId: meta.shortId,
-				storeName: meta.storeName,
-				contactPhone: meta.retailerWaPhone,
-				trackingUrl,
-				carrierTrackingUrl: meta.carrierTrackingUrl,
-				courierName: meta.courierName,
-				trackingNo: meta.trackingNo,
-				deliveryMethod: meta.deliveryMethod,
-				pickupKind: meta.pickupKind,
-			});
-		try {
-			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
-				kind: "text",
-				body,
-			});
-		} catch (err) {
-			console.error("WA status notify failed", err);
-		}
-	},
-});
+// NOTE (86eyd63r8, one message per order): every proactive AUTOMATIC buyer
+// notification that used to live here — status changes, custom stage pings,
+// payment received, mockup submitted, the payment-due prompts,
+// delivery-fee-set, the day-11 reminder cron and the Lalamove
+// proof-of-delivery photos — has been removed. An order gets exactly ONE
+// automatic outbound WhatsApp: the confirmation push below, sent once the
+// price is final. Everything that followed it is on the tracking page.
+// The single seller-DRIVEN exception is notifyManualPaymentReminder — one
+// human tap per send, window-boxed to days 11–14 (docs/payment-reminder.md).
+// See docs/one-message-per-order.md.
 
 /**
- * Rider drop-off photo (Lalamove proof of delivery) — sent as a follow-up to
- * the delivered message once lalamove.fetchPodImages has stored the blobs.
- * A photo of the parcel at the door is the strongest "it arrived" signal a
- * buyer can get, and it lands seconds after the delivered text (same rhythm
- * as the counter receipt PDF follow-up). Transactional: it's an order status
- * artifact, so the WABA caps never block it. No text fallback — without the
- * image there is nothing to say that the delivered message didn't already.
- */
-export const notifyDeliveryPhoto = internalAction({
-	args: { orderId: v.id("orders"), imageUrls: v.array(v.string()) },
-	handler: async (ctx, { orderId, imageUrls }): Promise<void> => {
-		if (imageUrls.length === 0) return;
-		let meta: {
-			retailerId: Id<"retailers">;
-			shortId: string;
-			storeName: string;
-			customerWaPhone: string | undefined;
-			locale: Locale;
-		} | null = null;
-		try {
-			meta = await ctx.runQuery(internal.whatsapp.getOrderWithRetailer, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("WA delivery-photo lookup failed", err);
-			return;
-		}
-		if (!meta?.customerWaPhone) return;
-		const locale = pickLocale(meta.locale);
-		const caption = renderSystemMessage(locale, "deliveryPhotoCaption", {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-		});
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
-		for (const [i, imageUrl] of imageUrls.entries()) {
-			try {
-				await wa.send(meta.customerWaPhone, {
-					kind: "image",
-					imageUrl,
-					// Caption only on the first photo — a rare multi-stop order
-					// shouldn't repeat the same line under every shot.
-					caption: i === 0 ? caption : undefined,
-				});
-			} catch (err) {
-				console.error("WA delivery-photo send failed", err);
-			}
-		}
-	},
-});
-
-/**
- * Phase 2: scheduled by orders.advanceToStage when a seller advances an order
- * into a custom stage that does NOT cross a canonical anchor (so the rich status
- * templates in `notifyStatusChange` don't fire) and the stage has `notify: true`
- * — e.g. Cleaning → Washing, both anchored to `packed`. Sends one generic
- * stage-update message built from the stage's (store-locale) label + optional
- * description. Same swallow-errors / no-op-on-missing-waPhone shape as the other
- * notify actions. Anchor-CROSSING moves go through notifyStatusChange instead,
- * so this never double-sends.
- */
-export const notifyStageEntry = internalAction({
-	args: { orderId: v.id("orders"), stageId: v.string() },
-	handler: async (ctx, { orderId, stageId }): Promise<void> => {
-		const meta = await ctx
-			.runQuery(internal.whatsapp.getOrderWithRetailer, { orderId })
-			.catch((err) => {
-				console.error("WA stage-update lookup failed", err);
-				return null;
-			});
-		if (!meta) return;
-		if (!meta.customerWaPhone) return;
-
-		const locale = pickLocale(meta.locale);
-		const stages = resolveStages({
-			orderStages: meta.orderStages,
-			labels: meta.statusLabels,
-			deliveryMethod: meta.deliveryMethod,
-		});
-		const stage = stages.find((s) => s.id === stageId);
-		if (!stage) return; // stage was deleted between schedule + run — drop silently
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const body = renderStageUpdate(locale, {
-			shortId: meta.shortId,
-			stageLabel: stageLabel(stage, locale),
-			stageDescription: stageDescription(stage, locale),
-			trackingUrl: `${appUrl}/track/${trackingToken}`,
-			carrierTrackingUrl:
-				stage.anchor === "shipped" ? meta.carrierTrackingUrl : undefined,
-			courierName: stage.anchor === "shipped" ? meta.courierName : undefined,
-			trackingNo: stage.anchor === "shipped" ? meta.trackingNo : undefined,
-			contactPhone: meta.retailerWaPhone,
-		});
-		try {
-			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
-				kind: "text",
-				body,
-			});
-		} catch (err) {
-			console.error("WA stage-update notify failed", err);
-		}
-	},
-});
-
-/**
- * Scheduled by paymentReminders.sendDuePaymentReminders (daily cron). Sends the
- * one-time "still awaiting payment" nudge 3 days before the 14-day open-payment
- * window closes — see docs/payment-reminder.md. Re-checks payment/status at
- * send time (the stamp is written at schedule time, so a buyer who paid in the
- * gap is never nagged). Sent as a gated `session_message` — the kill switch,
- * per-seller caps, and opt-outs all apply (a nudge is exactly what WABA
- * protection exists to govern, unlike transactional status updates).
- */
-export const notifyPaymentReminder = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		const meta = await ctx
-			.runQuery(internal.whatsapp.getOrderWithRetailer, { orderId })
-			.catch((err) => {
-				console.error("WA payment-reminder lookup failed", err);
-				return null;
-			});
-		if (!meta) return;
-		if (!meta.customerWaPhone) return;
-		// Order left the "open + unpaid" state between the cron stamp and this run.
-		// `delivered` does NOT close this out — F&B sellers routinely deliver on
-		// credit and settle at week's end, so goods-arrived ≠ goods-paid-for.
-		if (meta.status === "cancelled") return;
-		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
-			return;
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const locale = pickLocale(meta.locale);
-		const body = renderSystemMessage(locale, "paymentReminder", {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
-			trackingUrl: `${appUrl}/track/${trackingToken}`,
-			contactPhone: meta.retailerWaPhone,
-		});
-		try {
-			await makeGuardedSender(ctx, meta.retailerId, "session_message").send(
-				meta.customerWaPhone,
-				{ kind: "text", body },
-			);
-		} catch (err) {
-			console.error("WA payment-reminder send failed", err);
-		}
-	},
-});
-
-/**
- * Everything the manual payment-reminder send needs, in one read: the buyer's
- * phone + order amount (for the intro), whether the seller has payment methods
- * (gates the order-page CTA) + pickup snapshot, and the current
- * status/payment/mockup state so the action can re-check the order didn't leave
- * the remindable state between the seller's tap and this send. Keyed by orderId
- * (the seller-auth + cooldown gate already ran in orders.prepareManualReminder).
+ * Metadata for the seller's manual payment reminder. Only fields the send
+ * needs; the auth + eligibility + cooldown stamp already ran atomically in
+ * orders.prepareManualReminder — the re-checks here only cover the state
+ * changing between the seller's tap and this action running.
  */
 export const getManualReminderContext = internalQuery({
 	args: { orderId: v.id("orders") },
@@ -1012,15 +781,19 @@ export const getManualReminderContext = internalQuery({
 });
 
 /**
- * Scheduled by orders.sendPaymentReminder (the seller's "Send payment reminder"
- * button). Re-sends the FULL payment message — intro (paymentReminderIntro) →
- * [pickup] → transfer ref → order-page payment CTA, with a "Make payment" button
- * — so an unpaid buyer re-sees how to pay, and a buyer who missed the first bot
- * reply gets everything at once. Best-effort, gated `session_message` (the manual nudge
- * is exactly the traffic WABA protection governs). Re-checks that payment wasn't
- * claimed/received and the order didn't close or re-gate in the gap since the
- * seller tapped. No powered-by footer — this is a transactional re-send, not a
- * fresh storefront confirm. See docs/payment-reminder.md.
+ * The seller's "Send payment reminder" (orders.sendPaymentReminder) — the ONE
+ * deliberate exception to one-message-per-order, because each send is a human
+ * decision, not an automation: available only on days 11–14 of the open-payment
+ * window, at most once per 24h (both enforced in prepareManualReminder before
+ * this is ever invoked). Re-sends the full payment message — reminder intro →
+ * amount + transfer ref → "Make payment" CTA to the order page.
+ *
+ * Sent as a gated `session_message` (kill switch / caps / opt-outs apply) and
+ * best-effort: by day 11 the buyer's 24h service window is almost always
+ * closed, so a free-form send can silently not deliver (Meta 131047) unless
+ * the buyer has messaged recently. The button's helper copy says so — and
+ * moving this onto a registered utility template is part of the remaining
+ * 86eyd63r8 template work, which fixes the deliverability for good.
  */
 export const notifyManualPaymentReminder = internalAction({
 	args: { orderId: v.id("orders") },
@@ -1070,373 +843,6 @@ export const notifyManualPaymentReminder = internalAction({
 		);
 	},
 });
-
-/**
- * Scheduled by orders.markPaymentReceived. Sends a localized "payment received"
- * message to the shopper. Same swallow-errors / no-op-on-missing-waPhone shape
- * as `notifyStatusChange`. Bypasses the regular status pipeline because the
- * payment dimension is independent and we don't want to send two messages
- * when this fires alongside an auto-confirm.
- */
-export const notifyPaymentReceived = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		type Meta = {
-			retailerId: Id<"retailers">;
-			shortId: string;
-			trackingToken: string | undefined;
-			status: Doc<"orders">["status"];
-			customerWaPhone: string | undefined;
-			storeName: string;
-			retailerWaPhone: string | undefined;
-			retailerSlug: string;
-			carrierTrackingUrl: string | undefined;
-			deliveryMethod: DeliveryMethod;
-			locale: Locale;
-			messageTemplates: MessageTemplates | undefined;
-		};
-		let meta: Meta | null = null;
-		try {
-			meta = await ctx.runQuery(internal.whatsapp.getOrderWithRetailer, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("WA payment-received lookup failed", err);
-			return;
-		}
-		if (!meta) return;
-		if (!meta.customerWaPhone) return;
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const trackingUrl = `${appUrl}/track/${trackingToken}`;
-		const locale = pickLocale(meta.locale);
-		const body = renderSystemMessage(locale, "paymentReceived", {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			trackingUrl,
-		});
-		try {
-			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
-				kind: "text",
-				body,
-			});
-		} catch (err) {
-			console.error("WA payment-received send failed", err);
-		}
-	},
-});
-
-/**
- * Internal query: load the data needed to send a buyer the mockup for review.
- */
-export const getMockupNotifyMeta = internalQuery({
-	args: { orderId: v.id("orders") },
-	handler: async (
-		ctx,
-		{ orderId },
-	): Promise<{
-		retailerId: Id<"retailers">;
-		shortId: string;
-		trackingToken: string | undefined;
-		customerWaPhone: string | undefined;
-		customerName: string | undefined;
-		storeName: string;
-		locale: Locale;
-		mockupImageUrl: string | undefined;
-	} | null> => {
-		const order = await ctx.db.get(orderId);
-		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) return null;
-		let mockupImageUrl: string | undefined;
-		if (order.mockupImageStorageId) {
-			const url = await ctx.storage.getUrl(order.mockupImageStorageId);
-			mockupImageUrl = url ?? undefined;
-		}
-		return {
-			retailerId: order.retailerId,
-			shortId: order.shortId,
-			trackingToken: order.trackingToken,
-			customerWaPhone: order.customer.waPhone,
-			customerName: order.customer.name,
-			storeName: retailer.storeName,
-			locale: (retailer.locale as Locale | undefined) ?? "en",
-			mockupImageUrl,
-		};
-	},
-});
-
-// Mockup-ready nudge — inline (not in whatsappCopy.ts) because it's a one-off
-// system notification, not a retailer-overridable template.
-const mockupReadyBody: Record<
-	Locale,
-	(greeting: string, shortId: string, storeName: string, trackingUrl: string) => string
-> = {
-	en: (greeting, shortId, storeName, trackingUrl) =>
-		`Hi${greeting}! The mockup for your ${storeName} order ${shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`,
-	ms: (greeting, shortId, storeName, trackingUrl) =>
-		`Hai${greeting}! Mockup untuk pesanan ${shortId} dari ${storeName} sudah siap. Sila semak dan luluskan sebelum kami mula membuatnya: ${trackingUrl}`,
-	zh: (greeting, shortId, storeName, trackingUrl) =>
-		`您好${greeting}！您在${storeName}的订单 ${shortId} 设计稿已经准备好了，请查看并确认，我们才开始制作：${trackingUrl}`,
-};
-
-const mockupReviewButtonText: Record<Locale, string> = {
-	en: "Review mockup",
-	ms: "Semak mockup",
-	zh: "查看设计稿",
-};
-
-/**
- * Scheduled by orders.submitMockup. Sends the buyer the mockup image + a CTA to
- * review/approve it on the tracking page. Errors swallowed (logged) so the
- * originating mutation never fails on an outbound issue.
- */
-export const notifyMockupSubmitted = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		let meta: {
-			retailerId: Id<"retailers">;
-			shortId: string;
-			trackingToken: string | undefined;
-			customerWaPhone: string | undefined;
-			customerName: string | undefined;
-			storeName: string;
-			locale: Locale;
-			mockupImageUrl: string | undefined;
-		} | null = null;
-		try {
-			meta = await ctx.runQuery(internal.whatsapp.getMockupNotifyMeta, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("WA mockup-submitted lookup failed", err);
-			return;
-		}
-		if (!meta || !meta.customerWaPhone) return;
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const trackingUrl = `${appUrl}/track/${trackingToken}`;
-		const greeting = meta.customerName ? ` ${meta.customerName}` : "";
-		const body = mockupReadyBody[meta.locale](
-			greeting,
-			meta.shortId,
-			meta.storeName,
-			trackingUrl,
-		);
-		const buttonText = mockupReviewButtonText[meta.locale];
-
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
-		try {
-			await wa.send(
-				meta.customerWaPhone,
-				meta.mockupImageUrl
-					? {
-							kind: "cta",
-							body,
-							buttonText,
-							url: trackingUrl,
-							imageUrl: meta.mockupImageUrl,
-						}
-					: { kind: "text", body },
-			);
-		} catch (err) {
-			console.error("WA mockup-submitted send failed, falling back to text", err);
-			try {
-				await wa.send(meta.customerWaPhone, { kind: "text", body });
-			} catch (textErr) {
-				console.error("WA mockup-submitted send failed", textErr);
-			}
-		}
-	},
-});
-
-/** Shape returned by getPaymentPromptMeta — shared by the two release paths
- * (notifyPaymentDue / notifyDeliveryFeeSet) so their annotations can't drift. */
-type PaymentPromptMeta = {
-	retailerId: Id<"retailers">;
-	shortId: string;
-	trackingToken: string | undefined;
-	customerWaPhone: string | undefined;
-	locale: Locale;
-	storeName: string;
-	pickupSnapshot: PickupSnapshot | undefined;
-	deliverySnapshot: { fee: number } | undefined;
-	total: number;
-	currency: string;
-	mockupPending: boolean;
-	deliveryFeePending: boolean;
-};
-
-/**
- * Internal query: load everything needed to send the buyer a payment prompt
- * once the mockup gate opens. Distinct from getRetailerLocaleForOrder because
- * this path is keyed by orderId (scheduled from a mutation) and needs the
- * buyer's phone.
- */
-export const getPaymentPromptMeta = internalQuery({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<PaymentPromptMeta | null> => {
-		const order = await ctx.db.get(orderId);
-		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) return null;
-		return {
-			retailerId: order.retailerId,
-			shortId: order.shortId,
-			trackingToken: order.trackingToken,
-			customerWaPhone: order.customer.waPhone,
-			locale: (retailer.locale as Locale | undefined) ?? "en",
-			storeName: retailer.storeName,
-			pickupSnapshot: order.pickupSnapshot,
-			deliverySnapshot: order.deliverySnapshot,
-			total: order.total,
-			currency: order.currency,
-			mockupPending: isMockupGateClosed(order),
-			deliveryFeePending: order.deliveryFeePending === true,
-		};
-	},
-});
-
-/**
- * Scheduled by orders.approveMockup / orders.waiveMockup, and by
- * orders.declineMockupItem when a buyer drops the custom item from a mixed order
- * (the ready-made remainder is now payable). Now that the mockup gate is open,
- * send the buyer the payment ask (the "I've paid" prompt) that was deferred at
- * confirm time. `reason` only picks the intro line; the payment body is
- * identical to the standard confirm reply. Errors swallowed (logged).
- */
-export const notifyPaymentDue = internalAction({
-	args: {
-		orderId: v.id("orders"),
-		reason: v.union(
-			v.literal("approved"),
-			v.literal("waived"),
-			v.literal("declined"),
-		),
-	},
-	handler: async (ctx, { orderId, reason }): Promise<void> => {
-		let meta: PaymentPromptMeta | null = null;
-		try {
-			meta = await ctx.runQuery(internal.whatsapp.getPaymentPromptMeta, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("WA payment-due lookup failed", err);
-			return;
-		}
-		if (!meta || !meta.customerWaPhone) return;
-		// The delivery charge is still unconfirmed — keep holding the payment
-		// ask; notifyDeliveryFeeSet sends it once the seller sets the charge.
-		if (meta.deliveryFeePending) {
-			console.log("WA payment-due held: delivery fee pending", {
-				shortId: meta.shortId,
-			});
-			return;
-		}
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const trackingUrl = `${appUrl}/track/${trackingToken}`;
-		const introKey =
-			reason === "approved"
-				? "paymentDueApproved"
-				: reason === "waived"
-					? "paymentDueWaived"
-					: "paymentDueDeclined";
-		const introBody = renderSystemMessage(meta.locale, introKey, {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			// The intro carries the order-page link (no separate CTA block).
-			trackingUrl,
-		});
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
-		await sendPaymentMessage(wa, meta.customerWaPhone, {
-			introBody,
-			locale: meta.locale,
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			trackingUrl,
-			pickupSnapshot: meta.pickupSnapshot,
-			deliverySnapshot: meta.deliverySnapshot,
-			currency: meta.currency,
-		});
-	},
-});
-
-/**
- * Scheduled by orders.setDeliveryFee when the seller resolves a fee-pending
- * ("arrange via WhatsApp") delivery charge. Sends the payment ask that was
- * held at confirm time, leading with the confirmed charge + final total.
- * Skips while the mockup gate is still closed — that path sends its own
- * prompt via notifyPaymentDue (which re-checks the fee hold), so a
- * doubly-held order prompts exactly once. Errors swallowed (logged).
- */
-export const notifyDeliveryFeeSet = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		let meta: PaymentPromptMeta | null = null;
-		try {
-			meta = await ctx.runQuery(internal.whatsapp.getPaymentPromptMeta, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("WA delivery-fee-set lookup failed", err);
-			return;
-		}
-		if (!meta || !meta.customerWaPhone) return;
-		if (meta.deliveryFeePending) return; // re-flagged in the gap — stay held
-		if (meta.mockupPending) {
-			console.log("WA delivery-fee-set held: mockup pending", {
-				shortId: meta.shortId,
-			});
-			return;
-		}
-
-		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingToken =
-			meta.trackingToken ??
-			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
-		const trackingUrl = `${appUrl}/track/${trackingToken}`;
-		const formatAmount = (sen: number) =>
-			`${meta.currency} ${(sen / 100).toFixed(2)}`;
-		const introBody = renderSystemMessage(meta.locale, "deliveryFeeSet", {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			amount: formatAmount(meta.total),
-			feeAmount: meta.deliverySnapshot
-				? formatAmount(meta.deliverySnapshot.fee)
-				: undefined,
-			// The intro carries the order-page link (no separate CTA block).
-			trackingUrl,
-		});
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
-		await sendPaymentMessage(wa, meta.customerWaPhone, {
-			introBody,
-			locale: meta.locale,
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			trackingUrl,
-			// The intro already quotes the charge — no separate fee line needed.
-			pickupSnapshot: meta.pickupSnapshot,
-			currency: meta.currency,
-		});
-	},
-});
-
-// Re-export validator for tests / other modules.
-export { statusValidator };
 
 // ---------------------------------------------------------------------------
 // Diagnostic helpers
@@ -1675,7 +1081,20 @@ export const notifySellerNewOrder = internalAction({
 				console.error("WA seller new-order lookup failed", err);
 				return null;
 			});
-		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		// Lookup FAILED — we can't tell whether this alert should have fired, and
+		// the email has already suppressed itself on the strength of a predicate
+		// that said it would. Silence here is the one outcome the fallback exists
+		// to prevent, so hand back to email. (Distinct from the guards below: a
+		// toggle that's off or a missing number are answers, and the email read
+		// the same ones and never suppressed.)
+		if (!meta) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyRetailerOrderAlert, {
+				orderId,
+				force: true,
+			});
+			return;
+		}
+		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
 		// Defence in depth: the create site never schedules this for counter
 		// orders in the first place.
 		if (meta.source === "counter") return;
@@ -1707,11 +1126,21 @@ export const notifySellerNewOrder = internalAction({
 				// authenticated, so no capability token is involved).
 				urlButtonParam: meta.shortId,
 			});
-			if (receipt?.blocked) return; // gateway logged it; the email still fired
+			// Gateway refused (opt-out / cap / quality pause). It logged the reason,
+			// but the seller heard nothing — hand back to email (86eyd63r8).
+			if (receipt?.blocked) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.email.notifyRetailerOrderAlert,
+					{ orderId, force: true },
+				);
+				return;
+			}
 		} catch (err) {
 			// Retry a blip; give up immediately on anything Meta will reject
-			// identically next time. No stamp on final failure — the retailer
-			// email alert fired independently, so the seller was still notified.
+			// identically next time. On the LAST attempt the email fallback fires
+			// (86eyd63r8) — it no longer goes out unconditionally, so without this
+			// a failed alert would mean the seller never learns about the order.
 			const outcome = classifyPushFailure(
 				err instanceof WhatsAppSendError
 					? {
@@ -1733,6 +1162,12 @@ export const notifySellerNewOrder = internalAction({
 					outcome.delayMs,
 					internal.whatsapp.notifySellerNewOrder,
 					{ orderId, attempt: attempt + 1 },
+				);
+			} else {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.email.notifyRetailerOrderAlert,
+					{ orderId, force: true },
 				);
 			}
 		}
@@ -1761,7 +1196,16 @@ export const notifySellerPaymentClaim = internalAction({
 				console.error("WA seller payment-claim lookup failed", err);
 				return null;
 			});
-		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		// See notifySellerNewOrder — a failed lookup must not leave the seller
+		// with nothing once the email has suppressed itself.
+		if (!meta) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyPaymentClaimed, {
+				orderId,
+				force: true,
+			});
+			return;
+		}
+		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
 		if (meta.status === "cancelled") return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
@@ -1774,7 +1218,15 @@ export const notifySellerPaymentClaim = internalAction({
 				bodyParams: [meta.customerName, meta.shortId, money],
 				urlButtonParam: meta.shortId,
 			});
-			if (receipt?.blocked) return;
+			// Gateway refused — fall back to email so the claim isn't missed.
+			if (receipt?.blocked) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.email.notifyPaymentClaimed,
+					{ orderId, force: true },
+				);
+				return;
+			}
 		} catch (err) {
 			const outcome = classifyPushFailure(
 				err instanceof WhatsAppSendError
@@ -1798,6 +1250,125 @@ export const notifySellerPaymentClaim = internalAction({
 					internal.whatsapp.notifySellerPaymentClaim,
 					{ orderId, attempt: attempt + 1 },
 				);
+			} else {
+				// Same email fallback as the new-order alert.
+				await ctx.scheduler.runAfter(
+					0,
+					internal.email.notifyPaymentClaimed,
+					{ orderId, force: true },
+				);
+			}
+		}
+	},
+});
+
+/**
+ * The money-actually-landed sibling (86eyd63r8), scheduled ONLY by
+ * `orders.receiveGatewayPayment` — a verified HitPay settlement.
+ *
+ * Not scheduled by `markPaymentReceived`: that IS the seller, who just tapped
+ * the button. Telling someone what they just did is the definition of noise.
+ * So this alert exists for exactly the event no human on the seller's side
+ * witnessed — before it, a settled online payment notified them on NO channel
+ * at all (there was no payment-received email either) and the only way to learn
+ * of it was to open the dashboard.
+ *
+ * Unlike the claim alert this does NOT skip cancelled orders. A claim on a dead
+ * order is noise; real money landing on one is the most urgent thing a seller
+ * can be told. (`receiveGatewayPayment` refuses a payment on an
+ * already-cancelled order outright — that's the `paid_after_cancel` issue path
+ * — so this only fires on a cancel that raced the settlement, which is exactly
+ * the case worth shouting about.)
+ */
+export const notifySellerPaymentReceived = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		/** Gateway display name — `{{4}}`, "it landed in your {{4}} account". */
+		provider: v.string(),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, provider, attempt: attemptArg },
+	): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		// Unset template / alerts off / no number: plain return, no email nudge.
+		// `notifyPaymentReceived` is scheduled alongside this action and shares the
+		// exact `sellerWaAlertWillAttempt` predicate, so in every one of those
+		// cases it has already decided NOT to suppress itself and the seller is
+		// covered. Forcing it here would send two.
+		const templateName = sellerPaymentReceivedTemplateName();
+		if (!templateName) return;
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderForSellerAlert, { orderId })
+			.catch((err) => {
+				console.error("WA seller payment-received lookup failed", err);
+				return null;
+			});
+		// See notifySellerNewOrder — money landed, so silence is the worst of the
+		// three to get wrong.
+		if (!meta) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+				orderId,
+				provider,
+				force: true,
+			});
+			return;
+		}
+		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
+				// {{4}} is the gateway's NAME, not a hardcoded "HitPay": the template
+				// is approved once and a second gateway must be able to reuse it —
+				// telling a Billplz seller to check HitPay would send them to an
+				// account they don't have, and fixing it would cost a fresh Meta
+				// review. Never empty (Meta rejects empty parameters outright).
+				bodyParams: [meta.customerName, meta.shortId, money, provider],
+				urlButtonParam: meta.shortId,
+			});
+			if (receipt?.blocked) {
+				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+					orderId,
+					provider,
+					force: true,
+				});
+				return;
+			}
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA seller payment-received alert failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifySellerPaymentReceived,
+					{ orderId, provider, attempt: attempt + 1 },
+				);
+			} else {
+				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+					orderId,
+					provider,
+					force: true,
+				});
 			}
 		}
 	},
@@ -1888,27 +1459,24 @@ export const notifyStorefrontOrderCreated = internalAction({
 		) {
 			return;
 		}
-		// Hold guard, defence-in-depth (86eyfq0w5): the transactional claim in
-		// orders.ts (claimDeferredPush) only stamps "sending" + schedules when no
-		// price hold remains, so a legitimate invocation never trips this. It
-		// stays because sending a wrong "Total: {{3}}" is the one mistake this
-		// feature must never make, whatever schedules us.
-		if (meta.mockupGateClosed || meta.deliveryFeePending) {
-			console.warn("WA confirm push refused: price not final", {
-				shortId: meta.shortId,
-				mockupGateClosed: meta.mockupGateClosed,
-				deliveryFeePending: meta.deliveryFeePending,
-			});
-			return;
-		}
-
 		const trackingToken =
 			meta.trackingToken ??
 			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
 		const languageCode = TEMPLATE_LANGUAGE[locale];
-		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		// A held price is SAID, not waited for (86eyd63r8). A made-to-order line
+		// carries no quote until the seller enters one, and an "arrange" delivery
+		// total grows by a fee the seller hasn't set — printing either as a number
+		// would state a total that isn't owed. Earlier this deferred the whole
+		// message until the price settled, which left exactly the buyers who need
+		// the order page most (they approve their mockup on it) with no link to it
+		// at all, sometimes for days. Now the message always goes out on time and
+		// the money parameter tells the truth about itself.
+		const money =
+			meta.mockupPriceUnsettled || meta.deliveryFeePending
+				? PENDING_TOTAL_LABEL[locale]
+				: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		try {
@@ -2060,11 +1628,11 @@ export const notifyCounterOrderCreated = internalAction({
 			}
 		}
 
-		// Auto-send the receipt (paid) / invoice (pay-later) PDF to the buyer's chat.
-		await ctx
-			.runAction(internal.orders.sendOrderDocument, { orderId })
-			.catch((err) => {
-				console.error("WA counter-order document send failed", err);
-			});
+		// The receipt/invoice PDF is NOT WhatsApp'd (86eyd63r8) — that was this
+		// order's second message, and a walk-in gets one like everyone else. The
+		// PDF is still one tap away in both places it's actually wanted: the
+		// cashier's Done screen (Download / Share, for handing it over there and
+		// then) and the buyer's own tracking page, whose link is in the message
+		// above.
 	},
 });

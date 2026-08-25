@@ -2,13 +2,12 @@
 import { describe, expect, test } from "vitest";
 import { LOCALES, pickLocale } from "./locale";
 import {
-	hasTemplateOverride,
 	type MessageTemplates,
 	poweredByLine,
 	renderMessage,
 	renderPickupBlock,
-	renderStageUpdate,
 	renderSystemMessage,
+	TEMPLATE_KEYS,
 	TEMPLATE_LANGUAGE,
 	waCopy,
 } from "./whatsappCopy";
@@ -89,66 +88,7 @@ describe("renderMessage — locale override fallback (86eybjw5n)", () => {
 	});
 });
 
-// The payment-ask intros must each carry the order-page link themselves — no
-// separate "see how to pay" block is appended (ticket 86ey98ju1), so the buyer
-// sees the link exactly once and never a raw account number.
-describe("payment-ask intros carry the order-page link (86ey98ju1)", () => {
-	for (const key of [
-		"paymentDueApproved",
-		"paymentDueWaived",
-		"paymentDueDeclined",
-		"deliveryFeeSet",
-	] as const) {
-		for (const locale of LOCALES) {
-			test(`${key} (${locale}) embeds the tracking URL, no dangling "how to pay:"`, () => {
-				const out = renderSystemMessage(locale, key, {
-					shortId: "ORD-AB23",
-					storeName: "Acme Outdoor",
-					amount: "MYR 25.00",
-					trackingUrl: TRACK,
-				});
-				expect(out).toContain(TRACK);
-				// The old copy dangled a colon expecting a payment block to follow.
-				expect(out).not.toMatch(/how to pay[^:]*:\s*$/i);
-				expect(out).not.toMatch(/cara membayar[^:]*:\s*$/i);
-				// Never a raw account number / bank label.
-				expect(out).not.toContain("Account:");
-			});
-		}
-	}
-});
-
 describe("renderSystemMessage", () => {
-	test("paymentReceived (en) includes shortId, store, tracking link", () => {
-		const out = renderSystemMessage("en", "paymentReceived", {
-			shortId: "ORD-AB23",
-			storeName: "Acme Outdoor",
-			trackingUrl: "https://kedaipal.test/track/ORD-AB23",
-		});
-		expect(out).toContain("Payment received for ORD-AB23");
-		expect(out).toContain("Acme Outdoor");
-		expect(out).toContain("https://kedaipal.test/track/ORD-AB23");
-	});
-
-	test("paymentReceived (ms) renders Bahasa Malaysia copy", () => {
-		const out = renderSystemMessage("ms", "paymentReceived", {
-			shortId: "ORD-AB23",
-			storeName: "Acme Outdoor",
-			trackingUrl: "https://kedaipal.test/track/ORD-AB23",
-		});
-		expect(out).toContain("Pembayaran diterima untuk ORD-AB23");
-		expect(out).toContain("sedang menyediakan");
-	});
-
-	test("paymentReceived omits Track block when no trackingUrl supplied", () => {
-		const out = renderSystemMessage("en", "paymentReceived", {
-			shortId: "ORD-AB23",
-			storeName: "Acme",
-		});
-		expect(out).toContain("Payment received for ORD-AB23");
-		expect(out).not.toContain("Track:");
-	});
-
 	test("transferReferenceLine is locale-aware", () => {
 		expect(
 			renderSystemMessage("en", "transferReferenceLine", {
@@ -217,20 +157,6 @@ describe("renderSystemMessage", () => {
 		expect(out).toContain("https://kedaipal.test/track/tok");
 	});
 
-	test("order document captions name the doc type + order id", () => {
-		expect(
-			renderSystemMessage("en", "orderReceiptCaption", {
-				shortId: "ORD-AB23",
-				storeName: "Acme",
-			}),
-		).toContain("receipt for order ORD-AB23");
-		expect(
-			renderSystemMessage("en", "orderInvoiceCaption", {
-				shortId: "ORD-AB23",
-				storeName: "Acme",
-			}),
-		).toContain("invoice for order ORD-AB23");
-	});
 });
 
 describe("renderPickupBlock", () => {
@@ -419,188 +345,6 @@ describe("renderPickupBlock", () => {
 // wording only for self-collect orders at a drop-off point.
 // ---------------------------------------------------------------------------
 
-describe("drop-off-aware status copy", () => {
-	const base = { shortId: "ORD-TEST", storeName: "Bearcamp" };
-
-	test("packed EN: drop-off wording only when kind is drop_off", () => {
-		expect(
-			waCopy.en.status.packed({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("ready for the drop-off point");
-		expect(
-			waCopy.en.status.packed({ ...base, deliveryMethod: "self_collect" }),
-		).toContain("ready for pickup");
-		// pickupKind on a delivery order is stale data — never changes wording.
-		expect(
-			waCopy.en.status.packed({
-				...base,
-				deliveryMethod: "delivery",
-				pickupKind: "drop_off",
-			}),
-		).toContain("ready to ship");
-	});
-
-	test("shipped EN: drop-off meetup wording", () => {
-		expect(
-			waCopy.en.status.shipped({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("see you at the drop-off point");
-		expect(
-			waCopy.en.status.shipped({ ...base, deliveryMethod: "self_collect" }),
-		).toContain("ready for pickup");
-	});
-
-	test("confirm EN: drop-off orders promise the drop-off point, not pickup", () => {
-		expect(
-			waCopy.en.confirm({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("ready at the drop-off point");
-	});
-
-	test("packed/shipped MS: penyerahan wording for drop-off", () => {
-		expect(
-			waCopy.ms.status.packed({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("lokasi penyerahan");
-		expect(
-			waCopy.ms.status.shipped({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("jumpa di lokasi penyerahan");
-		// Default self-collect MS copy unchanged.
-		expect(
-			waCopy.ms.status.packed({ ...base, deliveryMethod: "self_collect" }),
-		).toContain("sedia untuk diambil");
-	});
-
-	test("packed/shipped ZH: 交收点 wording for drop-off", () => {
-		expect(
-			waCopy.zh.status.packed({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("交收点");
-		expect(
-			waCopy.zh.status.shipped({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind: "drop_off",
-			}),
-		).toContain("交收点见");
-		// Default self-collect ZH copy unchanged.
-		expect(
-			waCopy.zh.status.packed({ ...base, deliveryMethod: "self_collect" }),
-		).toContain("可以来拿了");
-	});
-});
-
-describe("renderStageUpdate carrier link", () => {
-	test("includes the carrier tracking line when provided", () => {
-		const out = renderStageUpdate("en", {
-			shortId: "ORD-TEST",
-			stageLabel: "On the lorry",
-			trackingUrl: "https://kedaipal.com/track/tok",
-			carrierTrackingUrl: "https://track.example/123",
-		});
-		expect(out).toContain("Track shipment: https://track.example/123");
-		expect(out).toContain("Track your order: https://kedaipal.com/track/tok");
-	});
-
-	test("omits the carrier line when absent (existing shape unchanged)", () => {
-		const out = renderStageUpdate("ms", {
-			shortId: "ORD-TEST",
-			stageLabel: "Siap",
-		});
-		expect(out).not.toContain("Jejak penghantaran");
-		expect(out).toContain("Kemaskini pesanan ORD-TEST: Siap.");
-	});
-
-	test("ZH renders the localized head + carrier/track labels", () => {
-		const out = renderStageUpdate("zh", {
-			shortId: "ORD-TEST",
-			stageLabel: "运输中",
-			trackingUrl: "https://kedaipal.com/track/tok",
-			carrierTrackingUrl: "https://track.example/123",
-		});
-		expect(out).toContain("订单 ORD-TEST 更新：运输中。");
-		expect(out).toContain("查看物流: https://track.example/123");
-		expect(out).toContain("查看订单状态: https://kedaipal.com/track/tok");
-	});
-});
-
-describe("hasTemplateOverride", () => {
-	test("true only for a non-empty authored override", () => {
-		expect(
-			hasTemplateOverride({ en: { packed: "Custom" } }, "en", "packed"),
-		).toBe(true);
-		expect(
-			hasTemplateOverride({ en: { packed: "   " } }, "en", "packed"),
-		).toBe(false);
-		expect(hasTemplateOverride({ en: {} }, "en", "packed")).toBe(false);
-		expect(hasTemplateOverride(undefined, "en", "packed")).toBe(false);
-		// Locale-scoped: an EN override is not an MS override, nor a ZH one.
-		expect(
-			hasTemplateOverride({ en: { packed: "Custom" } }, "ms", "packed"),
-		).toBe(false);
-		expect(
-			hasTemplateOverride({ en: { packed: "Custom" } }, "zh", "packed"),
-		).toBe(false);
-		expect(
-			hasTemplateOverride({ zh: { packed: "自定义" } }, "zh", "packed"),
-		).toBe(true);
-	});
-});
-
-describe("paymentReminder system message", () => {
-	test("EN includes store, amount, and the I've-paid CTA link", () => {
-		const out = renderSystemMessage("en", "paymentReminder", {
-			shortId: "ORD-TEST",
-			storeName: "Bearcamp",
-			amount: "MYR 120.00",
-			trackingUrl: "https://kedaipal.com/track/tok",
-			contactPhone: "60166210242",
-		});
-		expect(out).toContain("Friendly reminder from Bearcamp");
-		expect(out).toContain("ORD-TEST (MYR 120.00)");
-		expect(out).toContain("still awaiting payment");
-		expect(out).toContain("https://kedaipal.com/track/tok");
-		expect(out).toContain("wa.me/60166210242");
-	});
-
-	test("MS renders the localized nudge", () => {
-		const out = renderSystemMessage("ms", "paymentReminder", {
-			shortId: "ORD-TEST",
-			storeName: "Bearcamp",
-		});
-		expect(out).toContain("Peringatan mesra daripada Bearcamp");
-		expect(out).toContain("masih menunggu pembayaran");
-	});
-
-	test("ZH renders the localized nudge", () => {
-		const out = renderSystemMessage("zh", "paymentReminder", {
-			shortId: "ORD-TEST",
-			storeName: "Bearcamp",
-		});
-		expect(out).toContain("Bearcamp 温馨提醒");
-		expect(out).toContain("还在等待付款");
-	});
-});
-
 describe("poweredByLine growth footer", () => {
 	test("EN renders the branded line with the marketing domain", () => {
 		const out = poweredByLine("en");
@@ -635,117 +379,44 @@ describe("poweredByLine growth footer", () => {
 	});
 });
 
-describe("shipped courier line — manual courier + tracking no (86eyehvk4)", () => {
-	const base = { shortId: "ORD-TEST", storeName: "Bearcamp" };
-	const shipment = {
-		courierName: "J&T Express",
-		trackingNo: "630002864925",
-		carrierTrackingUrl: "https://www.jtexpress.my/tracking/630002864925",
-		trackingUrl: TRACK,
-	};
 
-	test("EN delivery shipped carries courier + number + both links", () => {
-		const out = waCopy.en.status.shipped({
-			...base,
-			deliveryMethod: "delivery",
-			...shipment,
-		});
-		expect(out).toContain("📦 J&T Express — tracking no. 630002864925");
-		expect(out).toContain(
-			"Track shipment: https://www.jtexpress.my/tracking/630002864925",
-		);
-		expect(out).toContain(`Order status: ${TRACK}`);
+// The seller-editable surface after 86eyd63r8: exactly one key. If this list
+// grows, something re-introduced a customisable send — check it against
+// docs/one-message-per-order.md before letting it through.
+describe("TEMPLATE_KEYS — the one-message-per-order editable surface", () => {
+	test("only `confirm` is seller-editable", () => {
+		expect(TEMPLATE_KEYS).toEqual(["confirm"]);
 	});
 
-	test("MS + ZH use localized tracking-number labels", () => {
-		expect(
-			waCopy.ms.status.shipped({
-				...base,
-				deliveryMethod: "delivery",
-				...shipment,
-			}),
-		).toContain("📦 J&T Express — no. penjejakan 630002864925");
-		expect(
-			waCopy.zh.status.shipped({
-				...base,
-				deliveryMethod: "delivery",
-				...shipment,
-			}),
-		).toContain("📦 J&T Express —— 快递单号 630002864925");
-	});
-
-	test("degrades to courier-only or number-only when one side is missing", () => {
-		expect(
-			waCopy.en.status.shipped({
-				...base,
-				deliveryMethod: "delivery",
-				courierName: "DD Express (cold chain)",
-			}),
-		).toContain("📦 DD Express (cold chain)");
-		expect(
-			waCopy.en.status.shipped({
-				...base,
-				deliveryMethod: "delivery",
-				trackingNo: "DD9",
-			}),
-		).toContain("📦 tracking no. DD9");
-	});
-
-	test("no courier line when nothing is attached (existing shape unchanged)", () => {
-		const out = waCopy.en.status.shipped({
-			...base,
-			deliveryMethod: "delivery",
-			trackingUrl: TRACK,
-		});
-		expect(out).not.toContain("📦");
-	});
-
-	test("self-collect / drop-off shipped never carries the courier line", () => {
-		for (const pickupKind of [undefined, "drop_off"] as const) {
-			const out = waCopy.en.status.shipped({
-				...base,
-				deliveryMethod: "self_collect",
-				pickupKind,
-				...shipment,
+	test("the default confirm reply points at the order page and promises no follow-up", () => {
+		for (const locale of LOCALES) {
+			const out = renderMessage(undefined, locale, "confirm", {
+				shortId: "ORD-AB23",
+				storeName: "Acme Outdoor",
+				trackingUrl: TRACK,
 			});
-			expect(out).not.toContain("J&T Express");
+			expect(out).toContain("ORD-AB23");
+			expect(out).toContain(TRACK);
+			// The old copy promised shipping updates that no longer exist.
+			expect(out).not.toMatch(/we'll (update|let you know)/i);
 		}
 	});
 
-	test("renderStageUpdate carries the courier line for shipped-anchored stages", () => {
-		const out = renderStageUpdate("en", {
-			shortId: "ORD-TEST",
-			stageLabel: "On the lorry",
-			trackingUrl: TRACK,
-			courierName: "J&T Express",
-			trackingNo: "630002864925",
-			carrierTrackingUrl: "https://www.jtexpress.my/tracking/630002864925",
-		});
-		expect(out).toContain("📦 J&T Express — tracking no. 630002864925");
-		expect(out).toContain(
-			"Track shipment: https://www.jtexpress.my/tracking/630002864925",
-		);
-	});
-
-	test("authored shipped templates can interpolate {courierName}/{trackingNo}", () => {
-		const overrides: MessageTemplates = {
-			en: { shipped: "Sent via {courierName}, track with {trackingNo}" },
-		};
-		expect(
-			renderMessage(overrides, "en", "shipped", {
-				...base,
-				deliveryMethod: "delivery",
-				courierName: "J&T Express",
-				trackingNo: "JT1",
-			}),
-		).toBe("Sent via J&T Express, track with JT1");
-		// Missing values interpolate to empty, never the literal placeholder.
-		expect(
-			renderMessage(overrides, "en", "shipped", {
-				...base,
-				deliveryMethod: "delivery",
-			}),
-		).toBe("Sent via , track with ");
+	test("the legacy hold replies point at the order page instead of promising a follow-up message", () => {
+		for (const key of ["mockupPendingConfirm", "deliveryFeePendingConfirm"] as const) {
+			for (const locale of LOCALES) {
+				const out = renderSystemMessage(locale, key, {
+					shortId: "ORD-AB23",
+					storeName: "Acme Outdoor",
+					trackingUrl: TRACK,
+				});
+				expect(out).toContain(TRACK);
+				// The old copy said "we'll send payment details right after" — a
+				// message that no longer exists on any path.
+				expect(out).not.toMatch(/we'll (send|share)/i);
+				expect(out).not.toMatch(/kami akan (hantar|kongsi)/i);
+			}
+		}
 	});
 });
 
@@ -765,14 +436,16 @@ describe("collection service (86eyg0n8e) — confirm wording", () => {
 			});
 			expect(collection).not.toBe(standard);
 		}
-		expect(
-			waCopy.en.confirm({
-				shortId: "ORD-AB23",
-				storeName: "Bearcamp",
-				deliveryMethod: "delivery",
-				deliveryDirection: "collection",
-			}),
-		).toContain("collection from your address");
+		const en = waCopy.en.confirm({
+			shortId: "ORD-AB23",
+			storeName: "Bearcamp",
+			deliveryMethod: "delivery",
+			deliveryDirection: "collection",
+		});
+		expect(en).toContain("arranging collection from your address");
+		// One message per order (86eyd63r8): the collection wording states the
+		// flow without promising a follow-up WhatsApp.
+		expect(en).not.toMatch(/we'll (update|let you know)/i);
 	});
 
 	test("direction never leaks into self-collect / drop-off branches", () => {
@@ -794,6 +467,6 @@ describe("collection service (86eyg0n8e) — confirm wording", () => {
 			deliveryMethod: "delivery",
 			deliveryDirection: "standard",
 		});
-		expect(out).toContain("when it ships");
+		expect(out).toContain("ready to ship");
 	});
 });

@@ -167,7 +167,13 @@ export default defineSchema({
 							zh: v.optional(v.string()),
 						}),
 					),
-					notify: v.boolean(),
+					// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle
+					// is gone: an order sends exactly ONE message (the confirmation
+					// push) and stages are a seller/timeline vocabulary only. Widened to
+					// optional so already-saved stage lists still validate; nothing
+					// writes it any more (sanitizeOrderStages drops it), so it decays to
+					// absent on the seller's next save. Narrow it away later.
+					notify: v.optional(v.boolean()),
 					sortOrder: v.number(),
 				}),
 			),
