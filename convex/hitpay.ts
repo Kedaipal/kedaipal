@@ -31,6 +31,7 @@ import {
 	decryptHitpayCredentials,
 	HITPAY_API_BASE,
 	HITPAY_MIN_AMOUNT_SEN,
+	HITPAY_PROVIDER_LABEL,
 	HITPAY_REQUEST_REUSE_MS,
 	type HitpayCredentials,
 	type HitpayPaymentRequest,
@@ -580,6 +581,7 @@ export const verifyCheckout = action({
 			amountSen: settled.amountSen,
 			currency: settled.currency,
 			paymentType: settled.paymentType,
+			provider: HITPAY_PROVIDER_LABEL,
 		});
 		// `duplicate` = this payment (or a manual mark) already settled the order,
 		// so "received" is the truth. `gone` is NOT that — the order was

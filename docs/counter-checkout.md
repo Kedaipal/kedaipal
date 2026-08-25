@@ -6,6 +6,14 @@
 > stays WhatsApp-linked, so confirmation / payment / tracking flow through the
 > shared WABA like any storefront order.
 >
+> **⚠️ One message per order (4 Aug 2026, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).**
+> A counter order sends the buyer **one** WhatsApp — the order confirmation —
+> and nothing else. The receipt/invoice **PDF is no longer WhatsApp'd**: it's
+> Download / Share on the cashier's Done screen, and a Receipt button on the
+> buyer's own order page (whose link is in that one message). The explicit
+> two-message contract this doc used to describe ("a text, then the PDF") is
+> now one. See [`one-message-per-order.md`](./one-message-per-order.md).
+>
 > **Status: V1 shipped** — backend spine (schema, session/token lifecycle,
 > inbound `KP-<token>` intent routing, live bind, expiry cron) **+** the
 > iPad-first seller UI, order-from-session, and pay-in-person. **V1.1 shipped**
@@ -275,7 +283,7 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
 | **iPad-first seller UI** (start → QR → live bind → catalog/cart → pay → done) | `src/routes/app.checkout.tsx` |
-| Receipt/invoice **send to buyer's WhatsApp** + download/share (Done screen) | `src/components/order/send-order-document.tsx`, `orders.sendOrderDocumentToBuyer` |
+| Receipt/invoice **download / share** (Done screen) — never sent on WhatsApp | `src/components/order/order-document-actions.tsx` |
 | Nav entry ("Counter") | `sidebar.tsx`, `bottom-nav.tsx` |
 | Tests | `counterCheckout.test.ts`, `inboundIntent.test.ts`, `whatsapp.test.ts` |
 
@@ -284,8 +292,9 @@ self_collect` (collected at the counter), customer linked from the bound session
 **Pay-in-person** → `paymentStatus: received` immediately + a structured
 `order.paymentMethod` (see below); **pay-later** → left `unpaid` and the buyer's
 WhatsApp confirmation carries a pay-&-track link (the normal handshake). Either
-way the buyer gets a WhatsApp confirmation with their tracking link, so the order
-is WhatsApp-linked and status updates flow through the shared WABA.
+way the buyer gets **one** WhatsApp confirmation with their tracking link — and
+that link is where everything after it happens, since status changes no longer
+message anyone (`86eyd63r8`).
 
 **Payment method (`order.paymentMethod`, `convex/lib/paymentMethod.ts`):** a
 structured enum — `cash | duitnow | tng | bank_transfer | fpx | card | other |
@@ -307,43 +316,55 @@ that stored the method as a `"In-person (…)"` reference string are migrated by
 ## Receipt / invoice to the buyer — scan once, no rescan ([`86ey4fz3w`](https://app.clickup.com/t/86ey4fz3w))
 
 The whole point of the QR is that the buyer scans it **once** to bind their
-WhatsApp number. Everything after — confirmation, receipt, invoice, payment
-details — rides that same chat **automatically**, so they never scan again and
-the seller doesn't have to remember a manual step.
+WhatsApp number. Everything after rides that same chat, so they never scan again
+and the seller doesn't have to remember a manual step.
+
+> **Revised by [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8) (4 Aug 2026):
+> "everything after" is now ONE message, not a message plus a PDF.** The
+> auto-send of the receipt/invoice document is deleted. That PDF was a walk-in
+> order's **second** billable message, and a walk-in gets one like every other
+> buyer. Nothing else about the flow changed — the buyer still scans once, still
+> gets the confirmation with their order link, and can still open (and download)
+> the document from that page any time.
 
 - **Humanized, localized copy.** The inline English bind reply + counter
   confirmation strings were moved into the `whatsappCopy` catalog as system
-  messages (`counterCheckoutBound` / `Expired` / `Used`, `counterOrderConfirmed{Paid,Unpaid}`),
-  warmed up, and **localized to the store's locale** (`bindCheckoutSession` now
-  returns `locale`; `not_found`, which has no store, stays English). Same
+  messages (`storeQrConnected` / `storeQrBusy`, `counterOrderConfirmed{Paid,Unpaid}`),
+  warmed up, and **localized to the store's locale**. Same
   transactional category — order messages bypass WABA gating.
-- **Automatic send on checkout** (`whatsapp.notifyCounterOrderCreated`, scheduled
+- **The one automatic send** (`whatsapp.notifyCounterOrderCreated`, scheduled
   by `createOrderFromSession`) — the buyer's chat gets, with no seller action:
-  - **Paid now** → a "confirmed & paid" text, then the **Receipt** PDF.
+  - **Paid now** → a "confirmed & paid" text with the order-page link.
   - **Pay later** → a lean payment ask — the amount + order-page link (in the
     intro copy) + transfer-reference line + the **"Make payment"** CTA button (via
-    `sendPaymentMessage`), then the **Invoice** PDF. Raw bank/QR details are
-    **never sent in the chat** (ticket 86ey98ju1) — the link points to the order
-    page's "How to pay", and the invoice PDF carries the actual details as the
-    formal document. The intro carries the link, so no separate "see how to pay"
-    block is appended (the buyer sees the link once, not twice).
+    `sendPaymentMessage`). Raw bank/QR details are **never sent in the chat**
+    (ticket 86ey98ju1) — the link points to the order page's "How to pay", which
+    is also where the invoice PDF is downloadable. The intro carries the link, so
+    no separate "see how to pay" block is appended (the buyer sees the link once,
+    not twice).
+  - **~~then the Receipt / Invoice PDF~~** — removed (`86eyd63r8`).
 - **One PDF, two faces:** `buildOrderReceiptPdf` keys off `OrderReceiptData.paid` —
   an unpaid order prints **"Invoice"** + the "How to pay" block, a settled one
-  prints **"Receipt"**. No separate invoice builder or table.
-- **Delivery plumbing:** `orders.sendOrderDocument` (internal, orderId-keyed, no
-  auth — trusted scheduler) and the manual `orders.sendOrderDocumentToBuyer`
-  (seller-auth via `resolveSharedOrder(shortId)`) both call the shared
-  `deliverOrderDocument`: render → store transiently (a URL Meta fetches) → send
-  as a WhatsApp **`document`** (channel-adapter outbound kind) `transactional` →
-  scheduled `deleteTransientStorage` reclaims the blob (deterministic, never
-  persisted).
-- **Done screen = resend + download/share** (`src/components/order/send-order-document.tsx`):
-  since the document is already sent automatically, the screen frames it as
-  *"already sent — resend or download here if you need to"* (Resend → the manual
-  action, Download/Share → `orders.generateReceiptPdf` bytes via the OS share
-  sheet, falling back to download on desktop). Only renders on the fresh-create
-  path (has the `shortId` + accurate paid state); a resend from **order detail**
-  is a noted follow-up.
+  prints **"Receipt"**. No separate invoice builder or table. Still generated on
+  demand from the order, still never persisted; only its delivery changed.
+- **~~Delivery plumbing~~ — deleted with the send** (`86eyd63r8`):
+  `orders.sendOrderDocument`, `orders.sendOrderDocumentToBuyer`,
+  `sendDocumentInputs`, `orderDocumentInputsById`, `deliverOrderDocument` and
+  `deleteTransientStorage` are gone, along with the transient-storage dance that
+  existed only so Meta could fetch a URL. The `document` outbound kind stays on
+  the channel adapter (unused for now). The two remaining readers of the PDF —
+  the Done screen and the buyer's order page — both call
+  `orders.generateReceiptPdf` and get bytes directly.
+- **Done screen = download / share, and it says so**
+  (`src/components/order/order-document-actions.tsx`, renamed from
+  `send-order-document.tsx`): no Resend button, because there is nothing to
+  resend. The screen frames the document as *hand it over now if they want one*
+  — Download, or Share via the OS sheet — and states plainly: *"It isn't sent on
+  WhatsApp — they can open it any time from the order page we linked them to."*
+  An **anonymous cash sale** gets different copy again: no WhatsApp went out at
+  all, so there is no order page for them to reach, and this is their only copy.
+  Only renders on the fresh-create path (has the `shortId` + accurate paid
+  state).
 
 ### Pay-at-bind — payment info right after the scan ([`86ey5kq7p`](https://app.clickup.com/t/86ey5kq7p))
 
@@ -594,8 +615,9 @@ normalized by
 scan produces** (`0xx…` → `60xx…`; `60…`/`+60…` kept) so it resolves-or-creates the
 exact same `(retailerId, waPhone)` customer — a returning buyer is recognised, never
 forked. The bind is direct (no webhook, no rate-limit/cap — those guard the public
-poster token, not a logged-in seller). The buyer still gets the WhatsApp confirmation
-+ receipt/invoice and a CRM row. **PDPA:** the buyer never scanned, so the confirmation
+poster token, not a logged-in seller). The buyer still gets the one WhatsApp
+confirmation (and a CRM row); the receipt/invoice is on the order page it links
+to, not in the chat (`86eyd63r8`). **PDPA:** the buyer never scanned, so the confirmation
 is our first message to them — it carries the same notice-at-collection line as the
 poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
 `includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
@@ -605,9 +627,10 @@ session window, so a free-form send may be rejected by Meta. Sends are best-effo
 fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
 **Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
 post-86ey98ju1) gets the order-page link + **"Make payment"** button on the
-order-create message plus the bank/QR details inside the **invoice PDF**
-(`How to pay` block) — never raw digits in the chat. (The old scan-time pay-ahead
-push was removed for everyone by 86ey98ju1.)
+order-create message; the bank/QR details live on the order page's `How to pay`
+block and in the downloadable **invoice PDF** — never raw digits in the chat.
+(The old scan-time pay-ahead push was removed for everyone by 86ey98ju1; the
+invoice PDF stopped being WhatsApp'd in 86eyd63r8.)
 
 **Anonymous** — `counterCheckout.startAnonymousSession`. A cash sale with **no phone
 contact**: the session has no `waPhone`/`customerId` (an optional name is allowed —
@@ -631,8 +654,9 @@ order is `customer: {name: undefined, waPhone: undefined}` (both already optiona
 
 ## Pending
 
-- **Resend from order detail** — the "Send receipt/invoice to buyer" action is
-  currently only on the counter Done screen; order detail has Download only.
+- ~~**Resend from order detail**~~ — moot: nothing sends the document any more
+  (`86eyd63r8`), so Download is the whole feature and order detail already has
+  it. The buyer self-serves the same PDF from `/track/<token>`.
 - ~~**Pay-at-scan message rework** ([`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1))~~
   — moot: the scan-time payment push was removed entirely by 86ey98ju1 (payment
   info now rides the order-create CTA + invoice PDF).

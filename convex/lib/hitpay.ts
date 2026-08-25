@@ -106,6 +106,21 @@ export function hitpayCheckoutConfigured(
 }
 
 /** HitPay's documented minimum request amount (0.30 in major units). */
+/**
+ * How HitPay is NAMED to a seller — the word that goes in the "it landed in
+ * your … account" line of the payment-received alert and email (86eyd63r8).
+ *
+ * It lives on the provider side of the seam on purpose. `receiveGatewayPayment`
+ * and both notifications take the provider as a plain value and know nothing
+ * about HitPay, matching the rest of the order schema (`gatewayPaymentId`,
+ * `by_gateway_request` — never `hitpay*`). A second gateway adds its own label
+ * beside this one and reuses the same Meta template, whose `{{4}}` is exactly
+ * this string. Getting that shape right BEFORE the template is approved is what
+ * saves a re-submission later — and stops a Billplz seller being sent to a
+ * HitPay dashboard they don't have.
+ */
+export const HITPAY_PROVIDER_LABEL = "HitPay";
+
 export const HITPAY_MIN_AMOUNT_SEN = 30;
 
 /** Requests are minted with a fixed expiry so an abandoned link dies on its
