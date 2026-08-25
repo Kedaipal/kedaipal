@@ -25,12 +25,13 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
-		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
-		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
-		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
-		// route alerts to whoever runs orders — same split as notifyEmail vs the
-		// Clerk email. Stored in the normalized inbound form ("60…", via
-		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		// Seller WhatsApp order alerts (86eyhw9zy): the mobile (in the store's
+		// country — SG-lite 86eynw2dy) that receives them. Deliberately SEPARATE
+		// from `waPhone` (the buyer-facing store contact / wa.me fallback /
+		// Lalamove sender) so a multi-person store can route alerts to whoever
+		// runs orders — same split as notifyEmail vs the Clerk email. Stored in
+		// the normalized inbound form ("60…"/"65…", via
+		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
 		// Opt-in switch for the seller WhatsApp order alerts (new order +
 		// payment claim, sent as Meta utility templates to notifyWaPhone).
@@ -47,6 +48,12 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
+		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
+		// rule reads: checkout phone plate/validator arm, address variant, Places
+		// autocomplete region, and the currency a new store defaults to. Undefined
+		// = MY (every pre-existing store, zero migration). Closed set in
+		// convex/lib/country.ts.
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -308,16 +315,34 @@ export default defineSchema({
 		// yet still book Lalamove riders). `enabled` requires `businessAddress`
 		// AND the seller's own key pair (enforced in updateSettings). BYO-ONLY
 		// (decision revised 21 Jul): `apiKey`/`apiSecret` are the seller's own
-		// Lalamove credentials (plain fields per current convention, accepted for
-		// v1) — there is NO platform fallback; Kedaipal never books or pays on a
-		// seller's behalf. Sandbox vs production is inferred from the key prefix.
-		// See docs/delivery-lalamove.md.
+		// Lalamove credentials — there is NO platform fallback; Kedaipal never
+		// books or pays on a seller's behalf. ENCRYPTED AT REST since 86eyn25gk
+		// (`enc.v1.` envelope, key = env CREDENTIALS_ENCRYPTION_KEY; legacy rows
+		// may hold plaintext until credentials:encryptExistingCredentials runs).
+		// Sandbox vs production is inferred from the PLAINTEXT key prefix at
+		// decrypt time in actions; `apiKeyHint` is stamped at save because
+		// queries can't derive it from ciphertext. See
+		// docs/credential-encryption.md + docs/delivery-lalamove.md.
 		deliveryBooking: v.optional(
 			v.object({
 				enabled: v.boolean(),
 				vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 				apiKey: v.optional(v.string()),
 				apiSecret: v.optional(v.string()),
+				// Last 4 chars of the plaintext key, for the settings UI.
+				apiKeyHint: v.optional(v.string()),
+				// Which Lalamove world these keys talk to (86eypncfy), stamped at
+				// save from the PLAINTEXT key (`pk_test_…` → sandbox). Ciphertext
+				// always reads as "production", so a query can no more derive this
+				// than it can the hint — and unlike the hint this one is
+				// load-bearing: a sandbox key books trips no rider will ever run
+				// and prices real buyers off the test environment, so every
+				// surface that spends money has to be able to say so. Undefined =
+				// not yet stamped (pre-backfill row), which the UI treats as
+				// "unknown", never as "production".
+				env: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
@@ -342,20 +367,28 @@ export default defineSchema({
 			}),
 		),
 		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
-		// `apiKey`/`salt` are the seller's OWN HitPay credentials (plain fields per
-		// current convention; never exposed to clients — reads emit only a
-		// HitpaySummary). Sandbox vs production is inferred from the key prefix
-		// ("test_" → sandbox, verified against a live sandbox key). `enabled` false
-		// pauses the buyer's Pay-now button WITHOUT wiping the keys, so a seller
-		// can switch online payments off and back on instantly. Enabling is
-		// Pro-gated; disabling/clearing never is (downgrade never traps), and an
-		// order's gateway fields keep working on every tier. `connectedAt` stamps
-		// the first save that stored a full credential. See docs/hitpay-gateway.md.
+		// `apiKey`/`salt` are the seller's OWN HitPay credentials (never exposed
+		// to clients — reads emit only a HitpaySummary). ENCRYPTED AT REST since
+		// 86eyn25gk (`enc.v1.` envelope, env CREDENTIALS_ENCRYPTION_KEY; legacy
+		// rows may hold plaintext until the one-shot backfill runs). Sandbox vs
+		// production ("test_" prefix) is judged on the PLAINTEXT key — `mode` +
+		// `apiKeyHint` are stamped at save because queries can't derive them
+		// from ciphertext. `enabled` false pauses the buyer's Pay-now button
+		// WITHOUT wiping the keys, so a seller can switch online payments off
+		// and back on instantly. Enabling is Pro-gated; disabling/clearing never
+		// is (downgrade never traps), and an order's gateway fields keep working
+		// on every tier. `connectedAt` stamps the first save that stored a full
+		// credential. See docs/credential-encryption.md + docs/hitpay-gateway.md.
 		hitpay: v.optional(
 			v.object({
 				enabled: v.boolean(),
 				apiKey: v.optional(v.string()),
 				salt: v.optional(v.string()),
+				// Stamped at save from the plaintext key (see comment above).
+				apiKeyHint: v.optional(v.string()),
+				mode: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				connectedAt: v.optional(v.number()),
 				// The ACCOUNT's enabled payment methods, as HitPay resolves them for
 				// this key (e.g. ["duitnow","touch_n_go"]). Learned from a throwaway
@@ -377,6 +410,51 @@ export default defineSchema({
 		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
 		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store opening hours (86eyp5rav) — 7 entries indexed by weekday (0 =
+		// Sunday, the getUTCDay index on a MYT-shifted date). Per day: open/close
+		// in minutes since MYT midnight (0 ≤ open < close ≤ 1439 — 23:59 is the
+		// ceiling, "24:00" isn't expressible in a time input), boundaries
+		// INCLUSIVE; `closed: true` = shut all day (open/close keep their last
+		// values so re-opening restores them). Undefined = open 24/7 (default —
+		// every pre-existing store; an all-24h week normalizes back to unset so
+		// "no constraint" has one spelling). Constrains ONLY the buyer's
+		// fulfilment date/time at storefront checkout — browsing/ordering stay
+		// 24/7, counter checkout is exempt. ≥1 open day enforced (the
+		// working-method-invariant posture). Public-safe (shown on the
+		// storefront header). See convex/lib/openingHours.ts.
+		openingHours: v.optional(
+			v.array(
+				v.object({
+					open: v.number(),
+					close: v.number(),
+					closed: v.optional(v.boolean()),
+				}),
+			),
+		),
+		// Despatch-label template (86eyp63mp) — what this store's printed parcel
+		// label shows, and on what paper. Undefined = every default (a4-4up,
+		// logo/COD/weight/note on, contents off) — every pre-existing store, zero
+		// migration. EVERY field is optional so a future toggle is a widen rather
+		// than a migration, and `sanitizeAwbConfig` drops any field that equals
+		// its default (an all-default save normalises the whole object back to
+		// unset) so "the defaults" has one spelling. All-tier and owner-only —
+		// never in the public storefront payload. NOTE: this is Kedaipal's own
+		// despatch label, NOT a courier-issued consignment note; it carries the
+		// courier name + tracking number the seller records manually (86eyehvk4).
+		// See convex/lib/awbConfig.ts + docs/despatch-labels.md.
+		awbConfig: v.optional(
+			v.object({
+				paperSize: v.optional(
+					v.union(v.literal("a6"), v.literal("a4-4up")),
+				),
+				showLogo: v.optional(v.boolean()),
+				showItems: v.optional(v.boolean()),
+				showCod: v.optional(v.boolean()),
+				showWeight: v.optional(v.boolean()),
+				showNote: v.optional(v.boolean()),
+				footerText: v.optional(v.string()),
+			}),
+		),
 		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
 		// subtotal a storefront order must reach before checkout. Undefined = no
 		// minimum (default; 0 normalizes to unset via sanitizeMinOrderValue).
@@ -409,6 +487,27 @@ export default defineSchema({
 		// checklist's activation states. See docs/activation-checklist.md.
 		activatedAt: v.optional(v.number()),
 		linkSharedAt: v.optional(v.number()),
+		// Highest release version whose "What's new" notes this seller has seen
+		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
+		// a boolean can only answer "dismissed once", so the next release would
+		// be suppressed by the previous release's flag.
+		//
+		// Stored per-ACCOUNT rather than per-device (localStorage) so a seller on
+		// a phone and a tablet isn't shown the same modal twice, and so we can
+		// see which sellers have actually been told about a feature — the point
+		// of shipping an announcement at all.
+		//
+		// UNSET means "caught up", never "has seen nothing": every existing
+		// seller on rollout day, and every new signup, is stamped to the running
+		// version on first read and shown nothing. Replaying a backlog at someone
+		// who has been using the product for months reads like the product is
+		// talking to somebody else. That one rule covers both cohorts with no
+		// signup-flow change and no backfill.
+		//
+		// Written only by `releases.markSeen`, which resolves the retailer from
+		// the CALLER's own identity — so admin act-as can never consume the
+		// seller's announcement (the markLinkShared posture).
+		lastSeenReleaseVersion: v.optional(v.string()),
 		// Founding Member denormalized flags (fast storefront reads). Set once when
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
@@ -995,6 +1094,13 @@ export default defineSchema({
 		// 2026 — late-added tracking is track-page-only). Delivery orders only.
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// When a despatch label carrying this order was last generated (86eyp63mp).
+		// "Printed" means "label PDF built and handed to the seller" — we can't see
+		// the physical printer, and that's close enough for the print queue's
+		// "Printed · 2h ago" chip. Re-prints re-stamp (latest wins; it's a fact,
+		// not a one-shot), and a batch stamps only the orders actually included,
+		// never the skipped ones. Undefined = never printed.
+		labelPrintedAt: v.optional(v.number()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.

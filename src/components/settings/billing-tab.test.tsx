@@ -13,6 +13,9 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
+// InvoiceDownloadButton (rendered inside the pending-invoice card) fetches the
+// PDF URL via useAction — stub it so the card renders without a ConvexProvider.
+vi.mock("convex/react", () => ({ useAction: () => vi.fn() }));
 
 afterEach(cleanup);
 
@@ -51,9 +54,11 @@ function mockQueries({
 	// component as `undefined`. Passing `undefined` here can't express that —
 	// the destructuring default would swallow it.
 	supportWa = CONFIGURED_WA,
+	invoices = [],
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
+	invoices?: unknown[];
 }) {
 	const NAME = {
 		amIAdmin: getFunctionName(api.billing.amIAdmin),
@@ -67,7 +72,7 @@ function mockQueries({
 		const name = getFunctionName(opts.__fn);
 		const data = (() => {
 			if (name === NAME.amIAdmin) return isAdmin;
-			if (name === NAME.invoices) return [];
+			if (name === NAME.invoices) return invoices;
 			// Bank/DuitNow details only — the support number has its own query.
 			if (name === NAME.instructions) return { bankName: "Maybank" };
 			if (name === NAME.supportWa) return supportWa ?? undefined;
@@ -159,5 +164,64 @@ describe("BillingTab support WhatsApp number", () => {
 		}) as unknown as typeof useQuery);
 		render(<BillingTab retailer={retailer()} />);
 		expect(screen.getByText("Contact support on WhatsApp")).toBeTruthy();
+	});
+});
+
+describe("BillingTab pending invoice — how to pay", () => {
+	/** Minimal `myInvoices` row for the pending-invoice card. */
+	function pendingInvoice(currency: string) {
+		return {
+			_id: "inv1",
+			status: "pending",
+			invoiceNumber: "INV-202608-SG01",
+			total: currency === "SGD" ? 5900 : 14900,
+			currency,
+			dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+		};
+	}
+
+	it("MYR invoice shows the configured MY rails", () => {
+		mockQueries({ isAdmin: false, invoices: [pendingInvoice("MYR")] });
+		render(<BillingTab retailer={retailer()} />);
+		// mockQueries wires paymentInstructions with only bankName ("Maybank"),
+		// which has no account number — so the fallback line renders; the point
+		// is the MYR branch still goes through the pay-details path.
+		expect(screen.getByText("How to pay")).toBeTruthy();
+		expect(
+			screen.queryByText(/confirm payment details with you on WhatsApp/i),
+		).toBeNull();
+	});
+
+	it("a cross-border (SGD) invoice hides the MY rails and points at WhatsApp", () => {
+		// Fully-configured MY rails must STILL not render — they can't settle SGD.
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => {
+			const name = getFunctionName(opts.__fn);
+			const data = (() => {
+				if (name === getFunctionName(api.invoices.myInvoices))
+					return [pendingInvoice("SGD")];
+				if (name === getFunctionName(api.billing.paymentInstructions))
+					return {
+						bankName: "Maybank",
+						bankAccountNumber: "5123 4567 8901",
+						duitnowId: "kedaipal",
+					};
+				if (name === getFunctionName(api.contact.supportWhatsapp))
+					return CONFIGURED_WA;
+				return false;
+			})();
+			return { data, isPending: false };
+		}) as unknown as typeof useQuery);
+		render(<BillingTab retailer={retailer()} />);
+		expect(
+			screen.getByText(/confirm payment details with you on WhatsApp/i),
+		).toBeTruthy();
+		// The number renders both in the card header and as the payment reference.
+		expect(
+			screen.getAllByText("INV-202608-SG01", { exact: false }).length,
+		).toBeGreaterThanOrEqual(2);
+		expect(screen.queryByText("Maybank")).toBeNull();
+		expect(screen.queryByText("DuitNow")).toBeNull();
 	});
 });

@@ -10,8 +10,12 @@ describe("formatPhone", () => {
 		expect(formatPhone("+60 12-345 6789")).toBe("+60 123456789");
 	});
 
-	test("prefixes a bare + for non-MY numbers", () => {
-		expect(formatPhone("6551234567")).toBe("+6551234567");
+	test("formats a Singaporean number with +65 prefix (SG-lite)", () => {
+		expect(formatPhone("6591234567")).toBe("+65 91234567");
+	});
+
+	test("prefixes a bare + for other countries' numbers", () => {
+		expect(formatPhone("14155550123")).toBe("+14155550123");
 	});
 
 	test("returns empty string for empty input", () => {

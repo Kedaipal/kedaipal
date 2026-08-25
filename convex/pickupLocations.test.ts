@@ -1432,3 +1432,45 @@ describe("pickupLocations — fee", () => {
 		expect(rows[0].fee).toBe(500);
 	});
 });
+
+describe("pickupLocations — SG store manager contact (SG-lite, 86eynw2dy)", () => {
+	async function seedSgRetailer(t: ReturnType<typeof convexTest>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-pickup-store",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		return retailer;
+	}
+
+	test("accepts a +65 manager number in the bare local form", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const { pickupLocationId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Bedok point",
+				address: "12 Bedok North Ave 1",
+				managerWaPhone: "9123 4567",
+			});
+		const row = await t.run((ctx) => ctx.db.get(pickupLocationId));
+		expect(row?.managerWaPhone).toBe("6591234567");
+	});
+
+	test("rejects an MY manager number with the SG copy", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Bedok point",
+				address: "12 Bedok North Ave 1",
+				managerWaPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+	});
+});

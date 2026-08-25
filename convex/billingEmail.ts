@@ -59,6 +59,10 @@ type InvoiceEmailMeta = {
 	bankAccountName: string | undefined;
 	bankAccountNumber: string | undefined;
 	duitnowId: string | undefined;
+	// Non-MYR invoice: the billingConfig rails are MYR-only, so the bank fields
+	// above are deliberately withheld and the email shows a "we'll confirm
+	// payment details on WhatsApp" line instead.
+	crossBorder: boolean;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -72,7 +76,13 @@ export const getInvoiceForEmail = internalQuery({
 		const retailer = await ctx.db.get(invoice.retailerId);
 		if (!retailer) return null;
 		const sub = await ctx.db.get(invoice.subscriptionId);
-		const config = await ctx.db.query("billingConfig").first();
+		// The billingConfig rails (MY bank + DuitNow) can only settle MYR — pointing
+		// an SGD-billed seller at them would be a lie, so non-MYR invoices carry no
+		// payment details and flag crossBorder instead.
+		const crossBorder = invoice.currency !== "MYR";
+		const config = crossBorder
+			? null
+			: await ctx.db.query("billingConfig").first();
 		return {
 			invoiceNumber: invoice.invoiceNumber,
 			amount: invoice.amount,
@@ -90,6 +100,7 @@ export const getInvoiceForEmail = internalQuery({
 			bankAccountName: config?.bankAccountName,
 			bankAccountNumber: config?.bankAccountNumber,
 			duitnowId: config?.duitnowId,
+			crossBorder,
 		};
 	},
 });
@@ -140,6 +151,7 @@ async function sendInvoiceEmail(
 		bankAccountName: meta.bankAccountName,
 		bankAccountNumber: meta.bankAccountNumber,
 		duitnowId: meta.duitnowId,
+		crossBorder: meta.crossBorder,
 		billingUrl: billingPageUrl(),
 	});
 
@@ -205,7 +217,8 @@ export const getRetailerForEmail = internalQuery({
  * and send it to `to`, so the template can be eyeballed in a real inbox without
  * touching the DB. CLI only (internalAction):
  *   npx convex run billingEmail:sendSampleBillingEmail '{"to":"you@email.com","key":"invoiceIssued"}'
- * Add "locale":"ms" or "founding":true to preview those variants.
+ * Add "locale":"ms" or "founding":true to preview those variants, or
+ * "currency":"SGD" for the cross-border (no pay-details) invoice variant.
  */
 export const sendSampleBillingEmail = internalAction({
 	args: {
@@ -221,19 +234,29 @@ export const sendSampleBillingEmail = internalAction({
 		),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		founding: v.optional(v.boolean()),
+		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
 	},
 	handler: async (
 		_ctx,
-		{ to, key, locale, founding },
+		{ to, key, locale, founding, currency },
 	): Promise<{ sent: string; key: string }> => {
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
+		const crossBorder = currency === "SGD";
+		const withDiscount = founding === true;
+		const sampleBase = crossBorder ? "SGD 59.00" : "MYR 149.00";
+		const sampleDiscount = crossBorder ? "SGD 18.00" : "MYR 45.00";
+		const sampleTotal = withDiscount
+			? crossBorder
+				? "SGD 41.00"
+				: "MYR 104.00"
+			: sampleBase;
 		const rendered =
 			key === "welcome" || key === "thanks"
 				? renderPaymentEmail(loc, key, {
 						storeName: "Sample Store",
 						planLabel: "Pro · Monthly",
-						totalFormatted: founding ? "MYR 104.00" : "MYR 149.00",
+						totalFormatted: sampleTotal,
 						dashboardUrl: url,
 					})
 				: key === "trialEndingSoon" || key === "trialEnded"
@@ -246,14 +269,15 @@ export const sendSampleBillingEmail = internalAction({
 						storeName: "Sample Store",
 						invoiceNumber: "INV-202607-SAMPLE",
 						planLabel: "Pro · Monthly",
-						totalFormatted: founding ? "MYR 104.00" : "MYR 149.00",
-						baseFormatted: founding ? "MYR 149.00" : undefined,
-						discountFormatted: founding ? "MYR 45.00" : undefined,
+						totalFormatted: sampleTotal,
+						baseFormatted: withDiscount ? sampleBase : undefined,
+						discountFormatted: withDiscount ? sampleDiscount : undefined,
 						dueDateFormatted: "5 Jul 2026",
-						bankName: "Maybank",
-						bankAccountName: "Kedaipal Sdn Bhd",
-						bankAccountNumber: "5123 4567 8901",
-						duitnowId: "kedaipal",
+						bankName: crossBorder ? undefined : "Maybank",
+						bankAccountName: crossBorder ? undefined : "Kedaipal Sdn Bhd",
+						bankAccountNumber: crossBorder ? undefined : "5123 4567 8901",
+						duitnowId: crossBorder ? undefined : "kedaipal",
+						crossBorder,
 						billingUrl: url,
 					});
 		await sendEmail(to, rendered.subject, rendered.html, rendered.text);

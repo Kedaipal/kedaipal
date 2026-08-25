@@ -265,7 +265,16 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 
 					<div className="border-t border-border pt-4">
 						<p className="text-sm font-medium">How to pay</p>
-						{hasPayDetails ? (
+						{pending.currency !== "MYR" ? (
+							// Cross-border invoice (e.g. SGD): the configured MY bank/DuitNow
+							// rails can't settle it, so never show them here — mirrors the
+							// invoice PDF and email.
+							<p className="mt-2 text-sm text-muted-foreground">
+								We'll confirm payment details with you on WhatsApp — quote{" "}
+								<span className="font-mono">{pending.invoiceNumber}</span> as
+								your payment reference.
+							</p>
+						) : hasPayDetails ? (
 							<div className="mt-2 flex flex-col gap-3">
 								{instructions?.bankAccountNumber ? (
 									<div className="flex items-start gap-2.5 text-sm">

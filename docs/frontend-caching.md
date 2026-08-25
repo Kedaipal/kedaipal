@@ -83,11 +83,30 @@ Rules that make it safe:
 
 - **Mutations / actions** — `useMutation`, `useAction` are unaffected everywhere.
 - **Imperative client** — `useConvex` (e.g. the orders/products CSV export paths).
-- **Pagination** — `usePaginatedQuery` has no adapter wrapper, so
-  `src/routes/app.customers.index.tsx` (the customer list) stays fully native.
+- **Pagination** — `usePaginatedQuery` has no adapter wrapper, so the customer
+  list's paginated read in `src/routes/app.customers.index.tsx` stays native.
+
+> **Corrected 2026-08-24 (86eyqgxe1).** This bullet used to say that route
+> "stays fully native", and that overstatement caused a real miss: the file also
+> holds a **non-paginated** read (`api.customers.search`) which kept plain
+> `useQuery` from `convex/react` for months, because the exemption written for
+> its paginated neighbour was read as covering the whole file. **The exemption is
+> per-read, never per-file.** A file may legitimately hold both — the customer
+> list does. The gate test below now catches this class of drift instead of
+> relying on anyone remembering the distinction.
 
 ## Tests
 
+- **`src/lib/convex-read-pattern.test.ts` — the gate that enforces the rule** (86eyqgxe1). Scans
+  every `.ts`/`.tsx` under `src/` and fails on a `useQuery`/`useQueries` import from
+  `convex/react`, naming the offending files and printing the correct pattern. Aliases
+  (`useQuery as x`) and namespace imports are covered too, so the gate can't be sidestepped by
+  accident. `usePaginatedQuery` + the mutation/action/client hooks are explicitly allowed, and an
+  **unclassified** `convex/react` export fails the test rather than escaping it silently — a new
+  read hook added upstream must be triaged, not ignored.
+  It found a real violation on its first run (see the correction above), which is the argument
+  for having it: the rule had been prose in `CLAUDE.md` for months, and prose doesn't fail a build.
+  Precedent for the scan-the-source shape: `dependency-pins.test.ts`, `landing-funnel.test.ts`.
 - `src/lib/convex.test.ts` — smoke test asserting `getQueryClient()` builds a singleton with the
   Convex `queryFn`/`queryKeyHashFn` defaults and `gcTime` of 10 min.
 - Component tests that render a migrated read mock the two adapter modules (pass-through

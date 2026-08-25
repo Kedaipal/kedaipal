@@ -13,6 +13,7 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { decryptSecret } from "./credentialCrypto";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 
 export type LalamoveEnv = "sandbox" | "production";
@@ -55,6 +56,19 @@ export function resolveLalamoveCredentials(
 	const apiKey = booking?.apiKey?.trim();
 	const apiSecret = booking?.apiSecret?.trim();
 	if (!apiKey || !apiSecret) return null;
+	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+}
+
+/** Decrypt-at-use (86eyn25gk): stored values may be ciphertext, so `env`
+ * must be re-inferred from the PLAINTEXT key (ciphertext never starts with
+ * `pk_test_`, so trusting the pre-decrypt env would point sandbox keys at
+ * the production host). Called by `callLalamove` right before every request;
+ * plaintext legacy rows pass through unchanged. */
+export async function decryptLalamoveCredentials(
+	credentials: LalamoveCredentials,
+): Promise<LalamoveCredentials> {
+	const apiKey = await decryptSecret(credentials.apiKey);
+	const apiSecret = await decryptSecret(credentials.apiSecret);
 	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
 }
 
@@ -255,6 +269,65 @@ export function parseLalamoveErrorCode(body: string): string | undefined {
 export function isOutOfServiceAreaError(body: string): boolean {
 	const code = parseLalamoveErrorCode(body);
 	return code === "ERR_OUT_OF_SERVICE_AREA" || code === "ERR_INVALID_MARKET";
+}
+
+/**
+ * Why a BOOKING attempt failed, as a stable machine-readable class
+ * (86eypncfy). Keyed off Lalamove's error `id`, never a substring of the raw
+ * body: the body carries a free-text `message` too, so matching "credit" or
+ * "balance" anywhere in it reports unrelated failures as a wallet problem —
+ * and a seller told to top up spends real money that fixes nothing. Only
+ * when there is NO parseable id do we fall back to sniffing the text, which
+ * is the case (HTML error pages, socket errors) where a guess beats silence.
+ */
+export type BookingFailure =
+	| "wallet"
+	| "quote_expired"
+	| "bad_phone"
+	| "out_of_range"
+	| "unknown";
+
+/** Lalamove's documented wallet/credit refusals. */
+const WALLET_ERROR_IDS: ReadonlySet<string> = new Set([
+	"ERR_INSUFFICIENT_BALANCE",
+	"ERR_INSUFFICIENT_CREDIT",
+	"ERR_PAYMENT_METHOD_NOT_ALLOWED",
+]);
+
+/** A quotation that no longer exists or has lapsed — Lalamove honours one for
+ * exactly 5 minutes, so this is the ordinary "the dialog sat open" failure. */
+const QUOTE_ERROR_IDS: ReadonlySet<string> = new Set([
+	"ERR_INVALID_QUOTATION",
+	"ERR_QUOTATION_EXPIRED",
+	"ERR_QUOTATION_NOT_FOUND",
+	"ERR_ORDER_ALREADY_PLACED",
+]);
+
+const PHONE_ERROR_IDS: ReadonlySet<string> = new Set([
+	"ERR_INVALID_PHONE_NUMBER",
+	"ERR_INVALID_SENDER_PHONE",
+	"ERR_INVALID_RECIPIENT_PHONE",
+]);
+
+export function classifyBookingFailure(body: string): BookingFailure {
+	const code = parseLalamoveErrorCode(body);
+	if (code) {
+		if (WALLET_ERROR_IDS.has(code)) return "wallet";
+		if (QUOTE_ERROR_IDS.has(code)) return "quote_expired";
+		if (PHONE_ERROR_IDS.has(code)) return "bad_phone";
+		if (code === "ERR_OUT_OF_SERVICE_AREA" || code === "ERR_INVALID_MARKET")
+			return "out_of_range";
+		// A recognised id we simply don't have copy for is still a KNOWN answer:
+		// falling through to substring-sniffing its message is how a wrong story
+		// gets told, so stop here.
+		return "unknown";
+	}
+	// No id — last-resort text sniffing on a body that isn't Lalamove's JSON.
+	const text = body.toLowerCase();
+	if (text.includes("insufficient balance") || text.includes("insufficient credit"))
+		return "wallet";
+	if (text.includes("quotation")) return "quote_expired";
+	return "unknown";
 }
 
 /**
@@ -607,4 +680,44 @@ export function resolveScheduleAt(
 	if (moment < now + MIN_SCHEDULE_LEAD_MS) return undefined;
 	if (moment > now + MAX_SCHEDULE_AHEAD_MS) return undefined;
 	return moment;
+}
+
+/**
+ * Seller override for the dispatch pickup moment (86eyp5qd1): the booking
+ * modal lets the vendor pick a different slot than the buyer's fulfilment
+ * moment — `"now"` forces an immediate booking, a number asks for that exact
+ * pickup time, `undefined` keeps the default (the buyer's moment).
+ */
+export type DispatchScheduleOverride = number | "now" | undefined;
+
+/**
+ * Turn a seller's schedule choice into the `scheduleAt` a quotation is built
+ * with. The default and an explicit moment share `resolveScheduleAt`'s clamps,
+ * with ONE deliberate asymmetry at the +30d ceiling: the buyer-derived default
+ * silently degrades to "now" there (it can only happen through clock edge
+ * cases — orders are capped at +30d at create — and an immediate booking is a
+ * safe dispatch), but an EXPLICIT seller pick beyond the window is refused
+ * with a message, because booking a rider right now is the opposite of what
+ * they just asked for. Past/imminent picks still degrade to "now" — that is
+ * what "come as soon as you can" means, and the modal says so before confirm.
+ */
+export function resolveDispatchSchedule(
+	override: DispatchScheduleOverride,
+	requestedMoment: number | undefined,
+	now: number = Date.now(),
+):
+	| { ok: true; scheduleAt: number | undefined }
+	| { ok: false; message: string } {
+	if (override === "now") return { ok: true, scheduleAt: undefined };
+	if (typeof override === "number") {
+		if (override > now + MAX_SCHEDULE_AHEAD_MS) {
+			return {
+				ok: false,
+				message:
+					"Lalamove can only schedule pickups up to 30 days ahead — pick an earlier time.",
+			};
+		}
+		return { ok: true, scheduleAt: resolveScheduleAt(override, now) };
+	}
+	return { ok: true, scheduleAt: resolveScheduleAt(requestedMoment, now) };
 }

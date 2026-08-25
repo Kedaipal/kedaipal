@@ -1,8 +1,10 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { encryptSecret } from "./credentialCrypto";
 import {
 	buildPaymentRequestParams,
 	computeHitpayHmac,
 	decimalStringToSen,
+	decryptHitpayCredentials,
 	describeGatewayMethods,
 	hitpayCheckoutConfigured,
 	inferHitpayMode,
@@ -79,9 +81,24 @@ describe("mapHitpayPaymentType", () => {
 		expect(mapHitpayPaymentType("TOUCH_N_GO")).toBe("tng");
 	});
 
+	test("maps SG rails onto the order method union (86eyph341)", () => {
+		// Before SG-lite these fell through to "other", so a PayNow-settled SG
+		// order told the Insights donut and the Method filter nothing.
+		expect(mapHitpayPaymentType("paynow_online")).toBe("paynow");
+		expect(mapHitpayPaymentType("paynow")).toBe("paynow");
+		expect(mapHitpayPaymentType("PAYNOW_ONLINE")).toBe("paynow");
+	});
+
+	test("GrabPay maps in both markets — the stamp follows the money", () => {
+		// MY's picker deliberately doesn't OFFER GrabPay, but HitPay MY can
+		// settle one; the tag is not gated on the seller's country list.
+		expect(mapHitpayPaymentType("grabpay")).toBe("grabpay");
+		expect(mapHitpayPaymentType("grabpay_direct")).toBe("grabpay");
+	});
+
 	test("unknown wallets degrade to other; absent stays undefined", () => {
-		expect(mapHitpayPaymentType("grabpay")).toBe("other");
-		expect(mapHitpayPaymentType("paynow_online")).toBe("other");
+		expect(mapHitpayPaymentType("shopee_pay")).toBe("other");
+		expect(mapHitpayPaymentType("boost")).toBe("other");
 		expect(mapHitpayPaymentType("some_new_wallet")).toBe("other");
 		expect(mapHitpayPaymentType(undefined)).toBeUndefined();
 	});
@@ -213,5 +230,41 @@ describe("v1 webhook hmac", () => {
 		expect(await verifyHitpayWebhook(payload, "other-salt")).toBe(false);
 		expect(await verifyHitpayWebhook(fields, salt)).toBe(false);
 		expect(await verifyHitpayWebhook(payload, "")).toBe(false);
+	});
+});
+
+describe("decryptHitpayCredentials (86eyn25gk)", () => {
+	test("re-infers mode from the PLAINTEXT key — ciphertext would always read production", async () => {
+		vi.stubEnv(
+			"CREDENTIALS_ENCRYPTION_KEY",
+			btoa("0123456789abcdef0123456789abcdef"),
+		);
+		try {
+			const stored = resolveHitpayCredentials({
+				apiKey: await encryptSecret("test_abc123"),
+				salt: await encryptSecret("s1"),
+			});
+			// Pre-decrypt, the sync resolver can only see ciphertext: presence is
+			// right, mode is not — which is exactly why actions must decrypt.
+			expect(stored).not.toBeNull();
+			expect(stored?.mode).toBe("production");
+			const live = await decryptHitpayCredentials(stored!);
+			expect(live).toEqual({
+				apiKey: "test_abc123",
+				salt: "s1",
+				mode: "sandbox",
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	test("legacy plaintext rows pass through unchanged", async () => {
+		const live = await decryptHitpayCredentials({
+			apiKey: "test_plain",
+			salt: "s2",
+			mode: "sandbox",
+		});
+		expect(live).toEqual({ apiKey: "test_plain", salt: "s2", mode: "sandbox" });
 	});
 });
