@@ -237,6 +237,15 @@ describe("admin vendor list + at-a-glance stats", () => {
 				triggeredByRetailerId: retailerId,
 				createdAt: now,
 			});
+			// An opt-out OUTSIDE the 30d stats window — the indexed by_created
+			// range read must exclude it from the count (optOuts is never purged,
+			// so old rows accumulate forever; see convex/lib/retention.ts).
+			await ctx.db.insert("optOuts", {
+				waPhone: "60999888777",
+				source: "berhenti_keyword",
+				triggeredByRetailerId: retailerId,
+				createdAt: now - 40 * 24 * 60 * 60 * 1000,
+			});
 		});
 
 		// Non-admin is rejected (ADMIN_USER_IDS unset → no one is admin).
@@ -256,8 +265,9 @@ describe("admin vendor list + at-a-glance stats", () => {
 			paused: false,
 			sent30d: 1,
 			blocked30d: 1,
-			optOuts30d: 1,
+			optOuts30d: 1, // the 40-day-old opt-out is outside the window
 			statsCapped: false,
+			optOutsCapped: false,
 		});
 	});
 });

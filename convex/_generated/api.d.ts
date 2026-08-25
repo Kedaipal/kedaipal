@@ -81,6 +81,7 @@ import type * as lib_productCap from "../lib/productCap.js";
 import type * as lib_productDelete from "../lib/productDelete.js";
 import type * as lib_productOrdered from "../lib/productOrdered.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
+import type * as lib_retention from "../lib/retention.js";
 import type * as lib_sellerAlerts from "../lib/sellerAlerts.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
@@ -187,6 +188,7 @@ declare const fullApi: ApiFromModules<{
   "lib/productDelete": typeof lib_productDelete;
   "lib/productOrdered": typeof lib_productOrdered;
   "lib/rateLimiter": typeof lib_rateLimiter;
+  "lib/retention": typeof lib_retention;
   "lib/sellerAlerts": typeof lib_sellerAlerts;
   "lib/slug": typeof lib_slug;
   "lib/storeProfile": typeof lib_storeProfile;

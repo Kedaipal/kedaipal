@@ -39,6 +39,12 @@ import { sendEmail } from "./lib/email";
 import { redactPhone } from "./lib/logRedaction";
 import { rateLimiter } from "./lib/rateLimiter";
 import { COUNTRIES } from "./lib/country";
+import {
+	LOG_PURGE_PAGE_SIZE,
+	OUTBOUND_MESSAGE_LOG_RETENTION_MS,
+	WABA_HEALTH_RETENTION_MS,
+	mytMonthKey,
+} from "./lib/retention";
 import { assertValidMobileForCountry, normalizeWaPhone } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
 import {
@@ -366,16 +372,24 @@ export const resumeRetailer = internalMutation({
 /** Cap on per-vendor log rows scanned for the at-a-glance stats. */
 const VENDOR_STATS_SCAN_CAP = 300;
 
+/** Cap on GLOBAL 30-day opt-out rows scanned for the at-a-glance stats. Bounds
+ * the read even in a pathological STOP-flood month; at the cap the per-vendor
+ * opt-out counts read "N+" (optOutsCapped), the statsCapped semantics. */
+const OPTOUT_STATS_SCAN_CAP = 1000;
+
 /**
  * List/search vendors with current pause status + at-a-glance 30-day stats
  * (sent / blocked / opt-outs-triggered) so an admin can eyeball who's misbehaving
  * without drilling in. All derived from data we already log — no Meta needed.
  *
- * PERF: stats are computed on demand — one global `optOuts` scan + a capped,
- * indexed per-vendor scan of `outboundMessageLog` (only for the ≤200 shown). Fine
- * at current vendor counts; before scaling to hundreds of high-volume vendors,
- * move to denormalized rolling counters (see docs/waba-protection.md). Counts max
- * out at the scan cap (shown as "N+").
+ * PERF: stats are computed on demand — a bounded, indexed 30-day `optOuts` read
+ * (by_created; the table is append-only and NEVER purged, so it must never be
+ * `.collect()`ed) + a capped, indexed per-vendor scan of `outboundMessageLog`
+ * (only for the ≤200 shown; raw rows live 90 days — see lib/retention.ts — so
+ * the 30-day window is always fully inside the retained range). Fine at current
+ * vendor counts; before scaling to hundreds of high-volume vendors, move to
+ * denormalized rolling counters (see docs/waba-protection.md). Counts max out
+ * at the scan caps (shown as "N+").
  */
 export const adminListVendors = query({
 	args: { search: v.optional(v.string()) },
@@ -414,12 +428,18 @@ export const adminListVendors = query({
 
 		const cutoff = Date.now() - 30 * DAY_MS;
 
-		// Opt-outs this vendor triggered in the last 30d — one scan of the global
-		// (small) opt-out list, bucketed by the triggering retailer.
-		const optOuts = await ctx.db.query("optOuts").collect();
+		// Opt-outs each vendor triggered in the last 30d — an indexed range read
+		// scoped to the window (newest first), bounded by the scan cap so this
+		// never scales with the table's lifetime.
+		const recentOptOuts = await ctx.db
+			.query("optOuts")
+			.withIndex("by_created", (q) => q.gte("createdAt", cutoff))
+			.order("desc")
+			.take(OPTOUT_STATS_SCAN_CAP);
+		const optOutsCapped = recentOptOuts.length === OPTOUT_STATS_SCAN_CAP;
 		const optOutsByVendor = new Map<string, number>();
-		for (const o of optOuts) {
-			if (o.createdAt >= cutoff && o.triggeredByRetailerId) {
+		for (const o of recentOptOuts) {
+			if (o.triggeredByRetailerId) {
 				const k = o.triggeredByRetailerId;
 				optOutsByVendor.set(k, (optOutsByVendor.get(k) ?? 0) + 1);
 			}
@@ -448,6 +468,7 @@ export const adminListVendors = query({
 					blocked30d: blocked,
 					optOuts30d: optOutsByVendor.get(v._id) ?? 0,
 					statsCapped: logs.length === VENDOR_STATS_SCAN_CAP,
+					optOutsCapped,
 				};
 			}),
 		);
@@ -829,5 +850,131 @@ export const listRecentOutbound = internalQuery({
 				.take(take);
 		}
 		return ctx.db.query("outboundMessageLog").order("desc").take(take);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Log retention (ClickUp 86eyetzt7, docs/data-retention.md) — daily purge
+// crons (convex/crons.ts). Windows live in convex/lib/retention.ts, the single
+// source of truth. Both purges are paginated self-chaining mutations (the
+// counterCheckout.purgeStaleSessions house pattern): delete up to
+// LOG_PURGE_PAGE_SIZE rows per transaction, then runAfter(0) to continue —
+// bounded index range reads, never a full scan.
+// ---------------------------------------------------------------------------
+
+/**
+ * Purge outboundMessageLog rows past their 90-day window — but FIRST fold each
+ * expiring row into its `messageLogRollups` (retailer × MYT month × category ×
+ * status) bucket, so the WhatsApp cost ledger survives the purge in aggregate.
+ * Rollup upsert + row delete happen in the SAME transaction: a crash between
+ * pages can neither double-count a row (it's deleted the moment it's counted)
+ * nor lose one (an uncounted row is still there for the next run) — which is
+ * also why re-running the purge is naturally idempotent.
+ *
+ * The admin console's 30-day stats (adminListVendors) read only rows well
+ * inside the 90-day window, so they are unaffected by construction.
+ */
+export const purgeExpiredOutboundLog = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const cutoff = Date.now() - OUTBOUND_MESSAGE_LOG_RETENTION_MS;
+		const page = await ctx.db
+			.query("outboundMessageLog")
+			.withIndex("by_sent", (q) => q.lt("sentAt", cutoff))
+			.take(LOG_PURGE_PAGE_SIZE);
+
+		// Aggregate the page in memory first — one rollup write per touched
+		// bucket, not one per row.
+		type Bucket = {
+			retailerId?: Id<"retailers">;
+			month: string;
+			category: Doc<"outboundMessageLog">["category"];
+			status: Doc<"outboundMessageLog">["status"];
+			count: number;
+		};
+		const buckets = new Map<string, Bucket>();
+		for (const row of page) {
+			const month = mytMonthKey(row.sentAt);
+			const key = `${row.retailerId ?? "system"}|${month}|${row.category}|${row.status}`;
+			const bucket = buckets.get(key);
+			if (bucket) {
+				bucket.count++;
+			} else {
+				buckets.set(key, {
+					retailerId: row.retailerId,
+					month,
+					category: row.category,
+					status: row.status,
+					count: 1,
+				});
+			}
+		}
+
+		const now = Date.now();
+		for (const bucket of buckets.values()) {
+			const existing = await ctx.db
+				.query("messageLogRollups")
+				.withIndex("by_retailer_month_category_status", (q) =>
+					q
+						.eq("retailerId", bucket.retailerId)
+						.eq("month", bucket.month)
+						.eq("category", bucket.category)
+						.eq("status", bucket.status),
+				)
+				.unique();
+			if (existing) {
+				await ctx.db.patch(existing._id, {
+					count: existing.count + bucket.count,
+					updatedAt: now,
+				});
+			} else {
+				await ctx.db.insert("messageLogRollups", { ...bucket, updatedAt: now });
+			}
+		}
+
+		for (const row of page) {
+			await ctx.db.delete(row._id);
+		}
+
+		if (page.length === LOG_PURGE_PAGE_SIZE) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.wabaProtection.purgeExpiredOutboundLog,
+				{},
+			);
+		}
+	},
+});
+
+/**
+ * Purge wabaHealth history past its 90-day window — EXCEPT the newest row,
+ * which is retained regardless of age: canSend reads the latest row as the
+ * live quality state (latestQuality), and Meta health webhooks can be months
+ * apart, so deleting it would silently fail the gateway open to HIGH.
+ */
+export const purgeExpiredWabaHealth = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const cutoff = Date.now() - WABA_HEALTH_RETENTION_MS;
+		const newest = await ctx.db
+			.query("wabaHealth")
+			.withIndex("by_observed")
+			.order("desc")
+			.first();
+		const page = await ctx.db
+			.query("wabaHealth")
+			.withIndex("by_observed", (q) => q.lt("observedAt", cutoff))
+			.take(LOG_PURGE_PAGE_SIZE);
+		for (const row of page) {
+			if (row._id === newest?._id) continue; // the live quality state
+			await ctx.db.delete(row._id);
+		}
+		if (page.length === LOG_PURGE_PAGE_SIZE) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.wabaProtection.purgeExpiredWabaHealth,
+				{},
+			);
+		}
 	},
 });

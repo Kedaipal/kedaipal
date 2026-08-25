@@ -76,6 +76,7 @@ type VendorRow = {
 	blocked30d: number;
 	optOuts30d: number;
 	statsCapped: boolean;
+	optOutsCapped: boolean;
 };
 
 /** Format a possibly-capped 30d count: 300 (capped) → "300+". */
@@ -195,7 +196,7 @@ function AdminWabaContent() {
 									<Stat
 										icon={UserMinus}
 										label="opt-outs"
-										value={String(v.optOuts30d)}
+										value={statCount(v.optOuts30d, v.optOutsCapped)}
 										alert={v.optOuts30d > 0}
 									/>
 								</div>
