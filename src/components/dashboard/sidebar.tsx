@@ -77,26 +77,7 @@ export function Sidebar({
 			)}
 			aria-label="Dashboard navigation"
 		>
-			{/* Collapse toggle, centred on the right border in BOTH states — it
-			    rides the seam as the sidebar narrows, so it never moves vertically
-			    and is always where the eye last left it.
-			    Always visible rather than hover-revealed: this sidebar renders from
-			    `lg` up, which includes iPad landscape at exactly 1024px where there
-			    is no hover at all — a hover-only control would simply not exist
-			    there. Quiet by default, darker on hover. */}
-			<button
-				type="button"
-				onClick={() => setCollapsed(!collapsed)}
-				aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-				title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-				className="absolute top-1/2 -right-3 z-20 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-			>
-				{collapsed ? (
-					<ChevronRight className="size-3.5" strokeWidth={2.5} />
-				) : (
-					<ChevronLeft className="size-3.5" strokeWidth={2.5} />
-				)}
-			</button>
+
 			<div
 				className={cn(
 					"flex h-16 items-center border-b border-border px-3",
@@ -252,7 +233,30 @@ export function Sidebar({
 				) : null}
 			</nav>
 
-			<div className="flex flex-col gap-1 border-t border-border p-2">
+			{/* `relative` so the collapse control can pin to this block's top-right
+			    CORNER — the point where the footer's top border meets the sidebar's
+			    right border. Anchoring to the footer rather than the aside means it
+			    sits on that junction in both states and never drifts as the nav
+			    list grows. */}
+			<div className="relative flex flex-col gap-1 border-t border-border p-2">
+				{/* Centred on the junction: `top-0 right-0` is that corner, and the
+				    two 50% translates put the button's middle exactly on it.
+				    Always visible rather than hover-revealed — this sidebar renders
+				    from `lg` up, which includes iPad landscape at 1024px where there
+				    is no hover at all. */}
+				<button
+					type="button"
+					onClick={() => setCollapsed(!collapsed)}
+					aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+					title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+					className="absolute top-0 right-0 z-20 flex size-6 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+				>
+					{collapsed ? (
+						<ChevronRight className="size-3.5" strokeWidth={2.5} />
+					) : (
+						<ChevronLeft className="size-3.5" strokeWidth={2.5} />
+					)}
+				</button>
 				<div
 					className={cn(
 						"flex items-center gap-2 rounded-lg px-2 py-2",
@@ -280,8 +284,8 @@ export function Sidebar({
 				    its unseen dot; the version drops out because nobody reads a
 				    version off a 68px rail and expanding is one click. */}
 				{collapsed ? (
-					<div className="flex justify-center py-1">
-						<WhatsNewNavItem variant="meta" className="gap-0 px-1.5" />
+					<div className="flex justify-center">
+						<WhatsNewNavItem variant="icon" />
 					</div>
 				) : (
 					<div className="flex items-center justify-between gap-2 px-2 py-0.5">

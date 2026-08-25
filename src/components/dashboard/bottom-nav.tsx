@@ -315,9 +315,13 @@ function MoreTab({
 					    rule rather than reading as further destinations. "What's new"
 					    is above the version because it's the one a seller might act on
 					    (86eyqgxna, 86eyqgxv9). */}
-					<div className="mt-1 flex flex-col gap-1 border-t border-border pt-1">
-						<WhatsNewNavItem variant="row" />
-						<AppVersionRow />
+					{/* One row, not two: "what changed" on the left, "what am I
+					    running" right-aligned beside it — the same pairing the
+					    desktop sidebar uses, so the two chromes answer the question
+					    the same way (86eyqgxv9). */}
+					<div className="mt-1 flex items-center gap-2 border-t border-border pr-3 pt-1">
+						<WhatsNewNavItem variant="row" className="flex-1" />
+						<AppVersionRow compact />
 					</div>
 				</MorePrimitive.Content>
 			</MorePrimitive.Portal>

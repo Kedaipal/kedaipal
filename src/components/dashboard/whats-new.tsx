@@ -420,8 +420,11 @@ export function WhatsNewNavItem({
 	variant,
 }: {
 	className?: string;
-	/** `row` = More panel (icon + label + sub), `meta` = sidebar's compact line. */
-	variant: "row" | "meta";
+	/**
+	 * `row` = More panel (icon + label + sub), `meta` = the sidebar's compact
+	 * line, `icon` = the collapsed rail, where a label cannot fit.
+	 */
+	variant: "row" | "meta" | "icon";
 }) {
 	const whatsNew = useWhatsNew();
 	if (!whatsNew?.available) return null;
@@ -438,6 +441,32 @@ export function WhatsNewNavItem({
 	const label = whatsNew.hasUnseen
 		? "What's new (unread updates)"
 		: "What's new";
+
+	if (variant === "icon") {
+		// Collapsed rail: the label wrapped to two lines and looked broken, so
+		// there is no label at all here — the `aria-label` is the whole
+		// accessible name, and the dot rides the icon's corner.
+		return (
+			<button
+				type="button"
+				onClick={whatsNew.open}
+				aria-label={label}
+				title={label}
+				className={cn(
+					"relative flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+					className,
+				)}
+			>
+				<Sparkles className="size-4.5 text-accent-emphasis" />
+				{whatsNew.hasUnseen ? (
+					<span
+						aria-hidden
+						className="absolute top-1 right-1 size-1.5 rounded-full bg-accent-emphasis ring-2 ring-card"
+					/>
+				) : null}
+			</button>
+		);
+	}
 
 	if (variant === "meta") {
 		return (
