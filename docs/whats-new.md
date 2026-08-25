@@ -54,7 +54,22 @@ worse than no entry at all. Keep them apart.
    beats *"added a6-4up paperSize option"*.
 4. Add an `href` wherever the feature has a home. **The deep link is what turns
    an announcement into adoption**; without it a seller reads the note, nods,
-   and never finds the setting. Must be an in-app `/app…` path (test-enforced).
+   and never finds the setting.
+
+   **Link to the exact place, not the nearest page.** Most settings live behind
+   a tab, so the page alone drops the seller somewhere they still have to
+   hunt — which is barely better than no link. Include the query string:
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Despatch labels | `/app/settings?tab=fulfilment` | `/app/orders` |
+   | Opening hours | `/app/settings?tab=fulfilment` | `/app/settings` |
+
+   Two tests guard this and **neither can check the tab**: one pins the `/app`
+   prefix, the other pins that the path before `?` is a real route in
+   `routeTree.gen.ts`. Both would pass a link to `/app/settings` that should
+   have carried `?tab=fulfilment`. Pointing at the right *part* of a page is an
+   authoring judgement — check it by tapping the link once before you merge.
 5. Set `notable: true` only if the change alters how the seller works.
 6. **Most releases earn no entry at all.** An empty release is simply absent
    from the array — nothing shown, nothing stamped.

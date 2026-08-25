@@ -1,3 +1,6 @@
+// @vitest-environment node
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compareCalendarVersions } from "../../convex/lib/appVersion";
 import type { Release } from "../content/releases";
@@ -188,6 +191,36 @@ describe("the shipped RELEASES content", () => {
 				expect(e.href.startsWith("/app"), `${e.href} must start with /app`).toBe(
 					true,
 				);
+			}
+		}
+	});
+
+	test("every href resolves to a route that actually exists", () => {
+		// A release note's deep link is the whole reason the note converts into
+		// adoption, and a dead one is worse than no link — the seller taps, lands
+		// nowhere, and learns not to trust the panel. `startsWith("/app")` above
+		// only proves the shape; this proves the destination.
+		//
+		// Matched against the GENERATED route tree (the `buyer-routes.test.ts`
+		// precedent) so a route rename breaks the note in CI rather than in a
+		// seller's face.
+		//
+		// NOTE what this deliberately cannot check: the query string. A link to
+		// `/app/settings` passes here even when the feature lives behind
+		// `?tab=fulfilment`, so pointing at the RIGHT part of a page stays an
+		// authoring judgement — see docs/whats-new.md.
+		const routeTree = readFileSync(
+			join(__dirname, "../routeTree.gen.ts"),
+			"utf8",
+		);
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				if (e.href === undefined) continue;
+				const path = e.href.split("?")[0].replace(/\/$/, "");
+				expect(
+					routeTree.includes(`'${path}'`),
+					`${e.href} points at ${path}, which is not a route in routeTree.gen.ts`,
+				).toBe(true);
 			}
 		}
 	});
