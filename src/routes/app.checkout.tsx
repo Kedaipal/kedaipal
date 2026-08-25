@@ -16,6 +16,7 @@ import {
 	LayoutGrid,
 	List,
 	Minus,
+	Pencil,
 	Phone,
 	Plus,
 	QrCode,
@@ -951,9 +952,22 @@ type CartLine = {
 	price: number;
 	qty: number;
 	// True for an isCustom/quote line — `price` is the vendor-entered amount, sent
-	// as `unitPrice` to the server (which trusts it only for custom lines).
+	// as `unitPrice` to the server.
 	isCustom?: boolean;
+	// The variant's catalog price at add time (standard lines only; a custom line
+	// has no catalog price). When `price` differs from this the line is a seller
+	// price ADJUSTMENT — a negotiated discount/bump keyed at the counter — and the
+	// adjusted price is sent as `unitPrice` (the server trusts it because the
+	// caller is the authenticated seller, not a buyer).
+	catalogPrice?: number;
 };
+
+/** A standard line whose price the seller changed from the catalog price. */
+function isAdjusted(l: CartLine): boolean {
+	return (
+		!l.isCustom && l.catalogPrice !== undefined && l.price !== l.catalogPrice
+	);
+}
 
 type SessionDraft = {
 	items: Array<{
@@ -1208,7 +1222,13 @@ function ProductVariantRows({
 								onClick={() =>
 									setQty(
 										vr._id,
-										{ name: product.name, label, price: vr.price, qty: 0 },
+										{
+											name: product.name,
+											label,
+											price: vr.price,
+											qty: 0,
+											catalogPrice: vr.price,
+										},
 										1,
 									)
 								}
@@ -1311,6 +1331,12 @@ function BuildOrderScreen({
 	const [customPriceInput, setCustomPriceInput] = useState<
 		Record<string, string>
 	>({});
+	// Seller price adjustment — which cart line's inline price editor is open,
+	// plus its in-progress RM text. The line's `price` only moves on a valid
+	// parse, so a half-typed value never corrupts the total (Wagyu Walid's ask:
+	// key a negotiated/custom price on any line after picking the product).
+	const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
+	const [priceInput, setPriceInput] = useState("");
 
 	// Collection date — counter orders are self-collect, so this is "when will
 	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
@@ -1358,14 +1384,16 @@ function BuildOrderScreen({
 		for (const it of items) {
 			const v = lookup.get(it.variantId);
 			if (!v) continue;
-			// Custom lines restore the vendor's saved price; normal lines the catalog price.
-			const price = v.isCustom ? (it.unitPrice ?? v.price) : v.price;
+			// A saved unitPrice restores the vendor's price — the agreed price on a
+			// custom line, or a seller price adjustment on a standard line; otherwise
+			// the catalog price.
 			next.set(it.variantId, {
 				name: v.name,
 				label: v.label,
-				price,
+				price: it.unitPrice ?? v.price,
 				qty: it.quantity,
 				isCustom: v.isCustom,
+				catalogPrice: v.isCustom ? undefined : v.price,
 			});
 		}
 		if (next.size > 0) setCart(next);
@@ -1450,7 +1478,9 @@ function BuildOrderScreen({
 			items: [...cart.entries()].map(([variantId, l]) => ({
 				variantId: variantId as Id<"productVariants">,
 				quantity: l.qty,
-				unitPrice: l.isCustom ? l.price : undefined,
+				// Custom lines always carry their price; a standard line only when the
+				// seller adjusted it (otherwise the server charges the catalog price).
+				unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 			})),
 			fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 			paidInPerson: paid,
@@ -1480,7 +1510,7 @@ function BuildOrderScreen({
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
-					unitPrice: l.isCustom ? l.price : undefined,
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 				})),
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
@@ -1734,39 +1764,123 @@ function BuildOrderScreen({
 							</div>
 						) : (
 							<ul className="mt-3 flex max-h-72 flex-col divide-y divide-border overflow-y-auto">
-								{cartEntries.map(([variantId, l]) => (
-									<li
-										key={variantId}
-										className="flex items-center justify-between gap-3 py-2.5"
-									>
-										<div className="min-w-0">
-											<p className="truncate text-sm font-medium">
-												{l.name}
-												{l.label ? (
-													<span className="ml-1 font-normal text-muted-foreground">
-														{l.label}
+								{cartEntries.map(([variantId, l]) => {
+									const editing = editingPriceId === variantId;
+									const adjusted = isAdjusted(l);
+									return (
+										<li key={variantId} className="flex flex-col py-2.5">
+											<div className="flex items-center justify-between gap-3">
+												<div className="min-w-0">
+													<p className="truncate text-sm font-medium">
+														{l.name}
+														{l.label ? (
+															<span className="ml-1 font-normal text-muted-foreground">
+																{l.label}
+															</span>
+														) : null}
+													</p>
+													{/* Tap the price to adjust it — the pencil makes the
+													    seller-pricing affordance visible (CLAUDE.md:
+													    every feature discoverable in-product). */}
+													<button
+														type="button"
+														onClick={() => {
+															if (editing) {
+																setEditingPriceId(null);
+																return;
+															}
+															setEditingPriceId(variantId);
+															setPriceInput(centsToRm(l.price));
+														}}
+														aria-label={`Adjust price for ${l.name}`}
+														className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+													>
+														<span>
+															{l.qty} × {formatPrice(l.price, currency)}
+														</span>
+														{adjusted && l.catalogPrice !== undefined ? (
+															<span className="line-through opacity-70">
+																{formatPrice(l.catalogPrice, currency)}
+															</span>
+														) : null}
+														<Pencil className="size-3" aria-hidden />
+													</button>
+												</div>
+												<div className="flex items-center gap-2">
+													<span className="text-sm font-semibold tabular-nums">
+														{formatPrice(l.price * l.qty, currency)}
 													</span>
-												) : null}
-											</p>
-											<p className="text-xs text-muted-foreground">
-												{l.qty} × {formatPrice(l.price, currency)}
-											</p>
-										</div>
-										<div className="flex items-center gap-2">
-											<span className="text-sm font-semibold tabular-nums">
-												{formatPrice(l.price * l.qty, currency)}
-											</span>
-											<button
-												type="button"
-												onClick={() => setQty(variantId, l, 0)}
-												aria-label="Remove"
-												className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
-											>
-												<X className="size-4" />
-											</button>
-										</div>
-									</li>
-								))}
+													<button
+														type="button"
+														onClick={() => setQty(variantId, l, 0)}
+														aria-label="Remove"
+														className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+													>
+														<X className="size-4" />
+													</button>
+												</div>
+											</div>
+											{editing ? (
+												<div className="mt-2 flex items-center gap-2">
+													<div className="relative flex-1">
+														<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+															RM
+														</span>
+														<Input
+															type="number"
+															inputMode="decimal"
+															step="0.01"
+															min="0"
+															autoFocus
+															value={priceInput}
+															onChange={(e) => {
+																setPriceInput(e.target.value);
+																const c = rmToCents(e.target.value);
+																// Only a valid price moves the line; a blank or
+																// zero mid-type leaves the last good price.
+																if (!Number.isNaN(c))
+																	setQty(variantId, { ...l, price: c }, l.qty);
+															}}
+															onKeyDown={(e) => {
+																if (e.key === "Enter") setEditingPriceId(null);
+															}}
+															placeholder={centsToRm(l.price)}
+															variant="field"
+															className="h-10 pl-10"
+														/>
+													</div>
+													{/* Reset only exists for a standard line — a custom
+													    line has no catalog price to go back to. */}
+													{adjusted && l.catalogPrice !== undefined ? (
+														<Button
+															variant="outline"
+															onClick={() => {
+																const catalog = l.catalogPrice;
+																if (catalog === undefined) return;
+																setQty(
+																	variantId,
+																	{ ...l, price: catalog },
+																	l.qty,
+																);
+																setPriceInput(centsToRm(catalog));
+															}}
+															className="h-10 px-3 text-xs"
+														>
+															Reset
+														</Button>
+													) : null}
+													<Button
+														variant="secondary"
+														onClick={() => setEditingPriceId(null)}
+														className="h-10 px-3"
+													>
+														Done
+													</Button>
+												</div>
+											) : null}
+										</li>
+									);
+								})}
 							</ul>
 						)}
 					</div>
@@ -2087,6 +2201,16 @@ function ConfirmCheckoutDialog({
 									<p className="text-xs text-muted-foreground">
 										{l.qty} × {formatPrice(l.price, currency)}
 										{l.isCustom ? " · custom" : ""}
+										{/* An adjusted line shows the catalog price it replaced, so
+										    the last-look review catches a fat-fingered override. */}
+										{isAdjusted(l) && l.catalogPrice !== undefined ? (
+											<>
+												{" · was "}
+												<span className="line-through">
+													{formatPrice(l.catalogPrice, currency)}
+												</span>
+											</>
+										) : null}
 									</p>
 								</div>
 								<span className="shrink-0 text-sm font-semibold tabular-nums">
