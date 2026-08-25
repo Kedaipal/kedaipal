@@ -2142,3 +2142,114 @@ describe("country switch clears wrong-country pickup contacts (PR #208 review)",
 		expect(rows[0]?.managerWaPhone).toBe("60123456789");
 	});
 });
+
+describe("address country stamps (SG-lite, 86eyqgujv)", () => {
+	const MY_ADDRESS = {
+		label: "55, Jalan Eco Majestic 7/1D, 43700 Beranang, Selangor",
+		latitude: 2.9,
+		longitude: 101.8,
+	};
+	const SG_ADDRESS = {
+		label: "661 Woodlands Ring Road, Singapore 730661",
+		latitude: 1.44,
+		longitude: 103.79,
+	};
+
+	test("a saved business address is stamped with the store's country", async () => {
+		// Server-stamped, never client-sent: `businessAddressValidator` has no
+		// country field, so a caller cannot claim one. Same posture as
+		// deliveryBooking.env / hitpay.mode.
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-my");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+
+	test("an SG store stamps SG — coordinates are never consulted", async () => {
+		// The reason this is stamped rather than derived: Singapore's bounding
+		// box (lat 1.13–1.47) contains Johor Bahru at 1.4655 N, so a geometric
+		// test would call a Malaysian seller's address Singaporean. Here an SG
+		// store saves a JB-adjacent coordinate and still stamps SG, because the
+		// Places picker it came from was locked to Singapore.
+		const t = setup();
+		const asA = await seedSg(t, "stamp-sg");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: { ...SG_ADDRESS, latitude: 1.4655, longitude: 103.757 },
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.country).toBe("SG");
+	});
+
+	test("switching country stamps carried addresses with the OLD country", async () => {
+		// The one moment the answer is known for certain: whatever the store was
+		// until this save ran. After it, "your return address is Malaysian" is a
+		// stored fact rather than a guess — which is what the AWB fail-safe and
+		// the post-switch checklist both read.
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-switch");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await t.run(async (ctx) => {
+			// Strip the stamp to model a row saved before this shipped.
+			const row = await ctx.db
+				.query("retailers")
+				.filter((q) => q.eq(q.field("slug"), "stamp-switch"))
+				.first();
+			if (!row?.businessAddress) throw new Error("seed failed");
+			await ctx.db.patch(row._id, {
+				businessAddress: {
+					label: row.businessAddress.label,
+					latitude: row.businessAddress.latitude,
+					longitude: row.businessAddress.longitude,
+				},
+			});
+		});
+
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+
+	test("a same-call switch + new address stamps the NEW country", async () => {
+		// "Flip to Singapore and pick my Singapore address" must land in one
+		// save correctly — the effective-country rule the rest of updateSettings
+		// already uses.
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-switch-fresh");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+			businessAddress: SG_ADDRESS,
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.country).toBe("SG");
+	});
+
+	test("an already-stamped address is never re-stamped by a switch", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-idempotent");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		// Stamped MY on save, and MY is still the truth — a round trip through
+		// SG must not rewrite it to SG on the way back.
+		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+});

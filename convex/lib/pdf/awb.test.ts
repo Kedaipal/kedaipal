@@ -501,3 +501,80 @@ describe("batch sorting", () => {
 		expect(input[0].label.orderShortId).toBe("ORD-0002");
 	});
 });
+
+describe("a country switch never leaves a foreign return address (86eyqgujv)", () => {
+	const MY_LABEL = "55, Jalan Eco Majestic 7/1D, 43700 Beranang, Selangor";
+
+	test("an SG store drops an address captured in Malaysia, and says why", () => {
+		// Zaki's ORD-Z932: an SG order delivering to Woodlands printed a
+		// Selangor address as its sender. A courier acting on that ships the
+		// parcel across a border; no return address stops it at the depot.
+		const l = orderToAwbLabelData({
+			order: order({ deliveryAddress: sgAddress }),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "6512345678",
+				country: "SG",
+				businessAddress: { label: MY_LABEL, country: "MY" },
+			},
+			config: AWB_DEFAULTS,
+		});
+		expect(l.sender.lines).toEqual([]);
+		expect(l.sender.lines.join(" ")).not.toContain("Selangor");
+		expect(l.sender.warning).toBe(
+			"! Return address not set for this country - check Settings",
+		);
+		// The store still names itself — a label with no sender at all is worse.
+		expect(l.sender.name).toBe("Wagyu Walid");
+	});
+
+	test("a matching stamp prints exactly as before", () => {
+		const l = orderToAwbLabelData({
+			order: order(),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "60123456789",
+				country: "MY",
+				businessAddress: { label: MY_LABEL, country: "MY" },
+			},
+			config: AWB_DEFAULTS,
+		});
+		expect(l.sender.lines).toEqual([MY_LABEL]);
+		expect(l.sender.warning).toBeUndefined();
+	});
+
+	test("an UN-stamped legacy address prints unchanged — fail open", () => {
+		// Every address that exists today predates the stamp. Treating unknown
+		// as "wrong" would blank the return address on every Malaysian store's
+		// labels at once, which is a far bigger outage than the bug.
+		const l = orderToAwbLabelData({
+			order: order(),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "60123456789",
+				country: "MY",
+				businessAddress: { label: MY_LABEL },
+			},
+			config: AWB_DEFAULTS,
+		});
+		expect(l.sender.lines).toEqual([MY_LABEL]);
+		expect(l.sender.warning).toBeUndefined();
+	});
+
+	test("collection labels drop it too — it is the same block, other heading", () => {
+		const l = orderToAwbLabelData({
+			order: order({ deliveryDirection: "collection" }),
+			retailer: {
+				storeName: "Bearcamp",
+				country: "SG",
+				businessAddress: { label: MY_LABEL, country: "MY" },
+			},
+			config: AWB_DEFAULTS,
+		});
+		expect(l.recipient.heading).toBe("Return to");
+		expect(l.recipient.lines).toEqual([]);
+		expect(l.recipient.warning).toBe(
+			"! Return address not set for this country - check Settings",
+		);
+	});
+});

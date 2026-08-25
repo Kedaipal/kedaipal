@@ -468,6 +468,11 @@ type BusinessAddress = {
 	latitude: number;
 	longitude: number;
 	placeId?: string;
+	/** The country this address was captured in — STAMPED by the server, never
+	 * accepted from the client (deliberately absent from
+	 * `businessAddressValidator`, the `apiKeyHint`/`env` posture). See the
+	 * schema comment for why coordinates can't answer this. */
+	country?: Country;
 };
 
 const BUSINESS_ADDRESS_LABEL_MAX = 300;
@@ -475,7 +480,10 @@ const BUSINESS_ADDRESS_LABEL_MAX = 300;
 /** Validate the settings-captured business address (the radius-mode origin).
  * Coordinates are required — the address exists to measure distance from, so
  * a coord-less capture is meaningless (the UI only saves autocomplete picks). */
-function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
+function sanitizeBusinessAddress(
+	raw: BusinessAddress,
+	capturedIn: Country,
+): BusinessAddress {
 	const label = raw.label.trim();
 	if (label.length === 0) throw new ConvexError("Business address is empty");
 	if (label.length > BUSINESS_ADDRESS_LABEL_MAX) {
@@ -499,6 +507,11 @@ function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
 		latitude: raw.latitude,
 		longitude: raw.longitude,
 		placeId: placeId && placeId.length > 0 ? placeId : undefined,
+		// Stamped from the store's country at the moment of capture. The Places
+		// proxy locks predictions to that country (convex/google.ts
+		// `includedRegionCodes`), so this is a fact about where the pick came
+		// from, not an inference about where it points.
+		country: capturedIn,
 	};
 }
 
@@ -1682,7 +1695,13 @@ export const updateSettings = mutation({
 			if (args.businessAddress === null) {
 				patch.businessAddress = undefined;
 			} else {
-				patch.businessAddress = sanitizeBusinessAddress(args.businessAddress);
+				// Stamped with the EFFECTIVE country so "switch to Singapore and
+				// pick the new address" lands in one save, correctly stamped SG.
+				patch.businessAddress = sanitizeBusinessAddress(
+					args.businessAddress,
+					(args.country !== undefined ? args.country : retailer.country) ??
+						DEFAULT_COUNTRY,
+				);
 			}
 		}
 		if (args.deliveryConfig !== undefined) {
@@ -2116,11 +2135,39 @@ export const updateSettings = mutation({
 		// cleared too, so reactivating one later can't resurrect a stale number.
 		let pickupContactsCleared = 0;
 		if (patch.country !== undefined) {
+			// A country switch is the ONE moment we know for certain which
+			// country the store's existing addresses were captured in: whatever
+			// it was until this line ran. Stamp that onto every row that has no
+			// stamp yet, and from here on "this address is in the wrong country"
+			// is a stored fact rather than a guess (86eyqgujv).
+			//
+			// Deliberately no backfill for stores that never switch: their
+			// addresses match by construction, so an un-stamped row there is
+			// correct and must not be flagged. A backfill would also have to
+			// guess for the stores that ALREADY switched before this shipped —
+			// and would guess wrong in exactly the direction that hides the bug.
+			const previousCountry = retailer.country ?? DEFAULT_COUNTRY;
+			const carriedAddress = retailer.businessAddress as
+				| BusinessAddress
+				| undefined;
+			if (
+				patch.businessAddress === undefined &&
+				carriedAddress &&
+				carriedAddress.country === undefined
+			) {
+				patch.businessAddress = {
+					...carriedAddress,
+					country: previousCountry,
+				};
+			}
 			const locations = await ctx.db
 				.query("pickupLocations")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 				.collect();
 			for (const location of locations) {
+				if (location.country === undefined) {
+					await ctx.db.patch(location._id, { country: previousCountry });
+				}
 				const stored = location.managerWaPhone;
 				if (!stored) continue;
 				if (STORED_MOBILE_PATTERN[patch.country].test(stored)) continue;
