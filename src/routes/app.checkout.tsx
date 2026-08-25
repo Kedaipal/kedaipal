@@ -68,6 +68,7 @@ import {
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
@@ -361,9 +362,14 @@ function OpenCheckoutsList({
 				}}
 				title="Cancel this checkout?"
 				description={
-					pendingCancel
-						? `${pendingCancel.label} and any items added to it will be removed. This can't be undone.`
-						: undefined
+					// Dialogs portal to document.body, so the mask must ride the
+					// description node itself — an ancestor tag can't reach it.
+					pendingCancel ? (
+						<>
+							<span {...MASK_PII}>{pendingCancel.label}</span> and any items
+							added to it will be removed. This can't be undone.
+						</>
+					) : undefined
 				}
 				confirmLabel="Cancel checkout"
 				cancelLabel="Keep it open"
@@ -741,7 +747,8 @@ function SessionRow({
 				<span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/15 font-mono text-sm font-bold text-accent">
 					{session.pairingCode ?? <UserCheck className="size-5" />}
 				</span>
-				<div className="min-w-0 flex-1">
+				{/* MASK_PII: the buyer's WA profile name — the pairing code stays readable. */}
+				<div {...MASK_PII} className="min-w-0 flex-1">
 					<div className="flex min-w-0 flex-wrap items-center gap-2">
 						<p className="truncate text-sm font-semibold">
 							{session.displayName ?? "Buyer connected"}
@@ -2040,9 +2047,13 @@ function BuildOrderScreen({
 				open={cancelOpen}
 				onOpenChange={setCancelOpen}
 				title="Cancel this checkout?"
-				description={`${
-					buyer.displayName ?? "This buyer"
-				}'s checkout and any items added to it will be removed. This can't be undone.`}
+				description={
+					<>
+						<span {...MASK_PII}>{buyer.displayName ?? "This buyer"}</span>
+						's checkout and any items added to it will be removed. This can't
+						be undone.
+					</>
+				}
 				confirmLabel="Cancel checkout"
 				cancelLabel="Keep it open"
 				destructive
@@ -2353,7 +2364,9 @@ function ConfirmCheckoutDialog({
 				<DialogHeader>
 					<DialogTitle>Confirm order</DialogTitle>
 					<DialogDescription>
-						Go through it with {buyerName ?? "the buyer"} before creating it.
+						Go through it with{" "}
+						<span {...MASK_PII}>{buyerName ?? "the buyer"}</span> before
+						creating it.
 					</DialogDescription>
 				</DialogHeader>
 
@@ -2521,7 +2534,7 @@ function BuyerCard({
 				<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
 					<UserX className="size-5" />
 				</span>
-				<div className="min-w-0 flex-1">
+				<div {...MASK_PII} className="min-w-0 flex-1">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Walk-in customer
 					</p>
@@ -2548,7 +2561,7 @@ function BuyerCard({
 			<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
 				<UserCheck className="size-5" />
 			</span>
-			<div className="min-w-0 flex-1">
+			<div {...MASK_PII} className="min-w-0 flex-1">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Buyer connected
 				</p>

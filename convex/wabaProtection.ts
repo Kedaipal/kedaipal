@@ -36,6 +36,7 @@ import { logGlobalAdminAction, requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage, SendReceipt } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
+import { redactPhone } from "./lib/logRedaction";
 import { rateLimiter } from "./lib/rateLimiter";
 import { COUNTRIES } from "./lib/country";
 import { assertValidMobileForCountry, normalizeWaPhone } from "./lib/slug";
@@ -631,7 +632,10 @@ export const registerOptOut = internalMutation({
 			triggeredByRetailerId,
 			createdAt: Date.now(),
 		});
-		console.warn("WABA: global opt-out registered", { waPhone: phone, source });
+		console.warn("WABA: global opt-out registered", {
+			waPhone: redactPhone(phone),
+			source,
+		});
 	},
 });
 
@@ -646,7 +650,9 @@ export const reactivateOptIn = internalMutation({
 			.first();
 		if (latest && latest.reactivatedAt === undefined) {
 			await ctx.db.patch(latest._id, { reactivatedAt: Date.now() });
-			console.warn("WABA: global opt-in (re-activated)", { waPhone: phone });
+			console.warn("WABA: global opt-in (re-activated)", {
+				waPhone: redactPhone(phone),
+			});
 		}
 	},
 });

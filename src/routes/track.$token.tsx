@@ -1362,6 +1362,21 @@ function TrackingRoute() {
 						: `Message ${order.storeName || "the store"}`}
 				</a>
 			) : null}
+
+			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
+			    only web surface after checkout — and the ONLY one for counter
+			    buyers, whose consent notice arrives on WhatsApp. Link the policy
+			    that notice names. */}
+			<p className="mt-8 text-center text-xs text-muted-foreground">
+				<a
+					href="/privacy"
+					target="_blank"
+					rel="noopener noreferrer"
+					className="underline hover:text-foreground"
+				>
+					{order.retailerLocale === "ms" ? "Dasar Privasi" : "Privacy Policy"}
+				</a>
+			</p>
 		</main>
 	);
 }
