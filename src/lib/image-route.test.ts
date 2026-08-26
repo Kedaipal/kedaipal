@@ -114,6 +114,27 @@ describe("handleImageRequest — transformation options", () => {
 		});
 	});
 
+	it("tells Cloudflare WebP is welcome — without it the transform silently returns PNG", async () => {
+		const { fetchImpl } = await get(`https://kedaipal.com/img/${UUID}?w=320`);
+		const init = fetchImpl.mock.calls[0][1] as { headers: Record<string, string> };
+		// Verified against the live zone: the identical `format=webp` transform
+		// returns image/png under `Accept: */*` and image/webp under
+		// `Accept: image/webp`. A subrequest carries no Accept of its own.
+		expect(init.headers.accept).toContain("image/webp");
+	});
+
+	it("sends a CONSTANT accept, so there is one cached variant per file+width", async () => {
+		// Forwarding the buyer's Accept would make the response vary by it
+		// (Cloudflare sets `Vary: Accept`), splitting the cache and risking a
+		// cached WebP being handed to a client that never asked for one.
+		const a = await get(`https://kedaipal.com/img/${UUID}?w=320`);
+		const b = await get(`https://kedaipal.com/img/${UUID}?w=320`);
+		const accepts = [a, b].map(
+			(r) => (r.fetchImpl.mock.calls[0][1] as { headers: Record<string, string> }).headers.accept,
+		);
+		expect(accepts[0]).toBe(accepts[1]);
+	});
+
 	it("clamps a hostile width to the whitelist — the unique-transformation bill is bounded", async () => {
 		const { fetchImpl } = await get(`https://kedaipal.com/img/${UUID}?w=99999`);
 		expect(cfOf(fetchImpl).image.width).toBe(1280);

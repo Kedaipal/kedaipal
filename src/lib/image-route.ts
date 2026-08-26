@@ -69,6 +69,21 @@ export async function handleImageRequest(
 
 	const upstream = await doFetch(origin, {
 		method: request.method,
+		// Cloudflare only honours `format` when the REQUEST's Accept header says
+		// that format is welcome — verified against the live zone: the identical
+		// `format=webp` transform returns image/png under `Accept: */*` and
+		// image/webp under `Accept: image/webp`. A subrequest carries no Accept
+		// of its own, so without this the proxy would quietly serve resized PNGs
+		// and drop ~2.7x of the saving (measured 15.9 KB vs 5.9 KB on one image).
+		//
+		// Sent as a CONSTANT rather than forwarded from the buyer's request, so
+		// the output is WebP for everyone and there is exactly one cached
+		// variant per (file, width). Forwarding would make the response vary by
+		// Accept — Cloudflare does set `Vary: Accept` — which splits the cache
+		// and, under `cacheEverything`, risks handing a cached WebP to a client
+		// that never asked for one. WebP is universal since Safari 14 (2020),
+		// which is why it was pinned in the first place.
+		headers: { accept: "image/webp,*/*" },
 		cf: {
 			image: {
 				width,
