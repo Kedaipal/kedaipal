@@ -28,13 +28,13 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
-import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
@@ -88,6 +88,7 @@ import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	formatPrice,
 	formatPriceCompact,
 	normalizePriceInput,
@@ -2055,7 +2056,7 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 			<div className="flex items-end gap-2">
 				<div className="relative flex-1">
 					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-						RM
+						{currencySymbol(order.currency)}
 					</span>
 					<input
 						type="text"

@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
@@ -218,7 +219,9 @@ describe("convexErrorMessage — rate-limit payload", () => {
 			"3 hours",
 		);
 		// Singulars read as words, not "1 hours".
-		expect(convexErrorMessage(rateLimitError(91 * 60_000))).toContain("2 hours");
+		expect(convexErrorMessage(rateLimitError(91 * 60_000))).toContain(
+			"2 hours",
+		);
 		expect(convexErrorMessage(rateLimitError(60.4 * 60_000))).toContain(
 			"61 minutes",
 		);
@@ -241,5 +244,28 @@ describe("convexErrorMessage — rate-limit payload", () => {
 		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
 			"Only 2 in stock",
 		);
+	});
+});
+
+describe("currencySymbol", () => {
+	test("returns the same symbol formatPrice puts in front of an amount", () => {
+		// The pairing is the whole point: a field's prefix and the total it
+		// feeds must not disagree ("RM" input, "S$ 41.00" total).
+		for (const currency of ["MYR", "SGD", "THB"]) {
+			expect(
+				formatPrice(4_100, currency).startsWith(currencySymbol(currency)),
+			).toBe(true);
+		}
+	});
+
+	test("MYR is RM and SGD is S$", () => {
+		expect(currencySymbol("MYR")).toBe("RM");
+		expect(currencySymbol("SGD")).toBe("S$");
+	});
+
+	test("an unknown code falls back to the code itself, never a guess", () => {
+		// Mirrors formatPrice's fallback — an input prefixed with a made-up
+		// symbol would be worse than one prefixed with the code.
+		expect(currencySymbol("ZZZ")).toBe("ZZZ");
 	});
 });
