@@ -67,6 +67,27 @@ export type CountrySetupItem = {
 	count?: number;
 };
 
+/**
+ * Whether we can judge a row ourselves, per key — the single author.
+ *
+ * Exported because the deep-link highlight needs it WITHOUT running the whole
+ * resolver: a verifiable row we know is wrong earns a red error ring, while a
+ * row we merely want checked earns amber. Deriving that from a second
+ * hand-written table on the client is how the two would drift.
+ */
+export const VERIFIABLE: Record<CountrySetupItemKey, boolean> = {
+	payment_methods: false,
+	hitpay: false,
+	message_copy: false,
+	business_address: true,
+	pickup_addresses: true,
+	delivery_mode: true,
+	pickup_contacts: true,
+	delivery_booking: true,
+	wa_phone: true,
+	notify_wa_phone: true,
+};
+
 /** Severity order — the sort key, and the reason `money` items keep the panel
  * open. Declared as a Record so a new severity is a compile error. */
 const SEVERITY_RANK: Record<CountrySetupSeverity, number> = {
@@ -121,9 +142,9 @@ export function resolveCountrySetup(
 	const add = (
 		key: CountrySetupItemKey,
 		severity: CountrySetupSeverity,
-		verifiable: boolean,
 		count?: number,
 	) => {
+		const verifiable = VERIFIABLE[key];
 		// An acknowledgement only ever retires an UNVERIFIABLE item. A stamped
 		// wrong-country address is a fact; letting a tick hide it would turn the
 		// checklist into a thing sellers learn to dismiss.
@@ -132,12 +153,12 @@ export function resolveCountrySetup(
 	};
 
 	// --- money: the buyer's payment goes somewhere unusable -----------------
-	if (input.hasPaymentMethods) add("payment_methods", "money", false);
-	if (input.hasHitpay) add("hitpay", "money", false);
+	if (input.hasPaymentMethods) add("payment_methods", "money");
+	if (input.hasHitpay) add("hitpay", "money");
 
 	// --- buyer- and courier-visible wrongness -------------------------------
 	if (foreign(input.businessAddress?.country, country)) {
-		add("business_address", "buyer_visible", true);
+		add("business_address", "buyer_visible");
 	}
 	// Deliberately NOT auto-hidden. Hiding every wrong-country pickup point
 	// would break the working-method invariant — a pickup-only store would lose
@@ -148,13 +169,13 @@ export function resolveCountrySetup(
 		(l) => l.isActive && foreign(l.country, country),
 	).length;
 	if (foreignPickups > 0) {
-		add("pickup_addresses", "buyer_visible", true, foreignPickups);
+		add("pickup_addresses", "buyer_visible", foreignPickups);
 	}
 	if (
 		input.deliveryConfigMode !== undefined &&
 		!deliveryModeAllowed(country, input.deliveryConfigMode)
 	) {
-		add("delivery_mode", "buyer_visible", true);
+		add("delivery_mode", "buyer_visible");
 	}
 
 	// --- cosmetic: reads as foreign, nothing breaks -------------------------
@@ -162,21 +183,21 @@ export function resolveCountrySetup(
 		(l) => l.managerWaPhone && !STORED_MOBILE_PATTERN[country].test(l.managerWaPhone),
 	).length;
 	if (stalePickupContacts > 0) {
-		add("pickup_contacts", "cosmetic", true, stalePickupContacts);
+		add("pickup_contacts", "cosmetic", stalePickupContacts);
 	}
 	if (input.deliveryBookingEnabled && !riderBookingAllowed(country)) {
-		add("delivery_booking", "cosmetic", true);
+		add("delivery_booking", "cosmetic");
 	}
 	if (input.waPhone && !STORED_MOBILE_PATTERN[country].test(input.waPhone)) {
-		add("wa_phone", "cosmetic", true);
+		add("wa_phone", "cosmetic");
 	}
 	if (
 		input.notifyWaPhone &&
 		!STORED_MOBILE_PATTERN[country].test(input.notifyWaPhone)
 	) {
-		add("notify_wa_phone", "cosmetic", true);
+		add("notify_wa_phone", "cosmetic");
 	}
-	if (input.hasCustomCopy) add("message_copy", "cosmetic", false);
+	if (input.hasCustomCopy) add("message_copy", "cosmetic");
 
 	return items.sort(
 		(a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],

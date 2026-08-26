@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type {
 	CountrySetupItem,
+	CountrySetupItemKey,
 	CountrySetupSeverity,
 } from "../../../convex/lib/countrySetup";
 import { useActAsRetailerId } from "../../hooks/useActAs";
@@ -33,11 +34,14 @@ import { Button } from "../ui/button";
  */
 export function CountrySetupPanel({
 	variant = "card",
-	onGoToTab,
+	onGoToFix,
 }: {
 	variant?: "card" | "banner";
-	/** Settings can switch tabs in place; the dashboard has to navigate. */
-	onGoToTab?: (tab: CountrySetupTab) => void;
+	/** Take the seller to the card that fixes this row — the TAB it lives on
+	 * plus the row KEY, so the page can scroll to the exact card and ring it
+	 * instead of dropping them at the top of a long tab (86eyqgujv). Settings
+	 * switches in place; the dashboard navigates. */
+	onGoToFix?: (tab: CountrySetupTab, key: CountrySetupItemKey) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
 	const setup = useQuery(
@@ -107,11 +111,11 @@ export function CountrySetupPanel({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								{copy.body}
 							</p>
-							{onGoToTab ? (
+							{onGoToFix ? (
 								<Button
 									type="button"
 									variant="outline"
-									onClick={() => onGoToTab(copy.tab)}
+									onClick={() => onGoToFix(copy.tab, item.key)}
 									className="h-10 sm:w-auto sm:self-start sm:px-4"
 								>
 									{copy.action}

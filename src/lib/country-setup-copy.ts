@@ -150,3 +150,78 @@ export function countrySetupHeadline(
 		? `${move} — one thing still needs your attention.`
 		: `${move} — ${items.length} things still need your attention.`;
 }
+
+/**
+ * Deep-link anchors — the id of the card that actually fixes each checklist
+ * row (86eyqgujv). Landing a seller at the top of a long settings tab and
+ * letting them hunt is the difference between a checklist they act on and one
+ * they close.
+ *
+ * Two pairs share a card on purpose: a pickup point's address and its manager
+ * number are edited in the same place, as are the delivery-charge mode and the
+ * Lalamove booking that rides it.
+ */
+export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
+	payment_methods: "settings-payment-methods",
+	hitpay: "settings-hitpay",
+	business_address: "settings-business-address",
+	pickup_addresses: "settings-pickup",
+	delivery_mode: "settings-delivery-charge",
+	pickup_contacts: "settings-pickup",
+	delivery_booking: "settings-delivery-charge",
+	wa_phone: "settings-wa-phone",
+	notify_wa_phone: "settings-wa-alerts",
+	message_copy: "settings-message-templates",
+};
+
+/**
+ * How hard to shout at the card we just scrolled to.
+ *
+ * The distinction is the same one the checklist itself is built on, and it
+ * matters here more than anywhere: a red error ring is a claim that something
+ * IS wrong. We can say that about an address stamped in the wrong country. We
+ * cannot say it about a bank account — nothing in the row tells us whether it
+ * is Malaysian, so ringing it red would be asserting something we don't know.
+ * Those get amber: "check this", not "this is broken".
+ */
+export type FixHighlight = "error" | "check";
+
+export function highlightFor(verifiable: boolean): FixHighlight {
+	return verifiable ? "error" : "check";
+}
+
+/** Ring classes for a highlighted card. Also supplies the default border, so
+ * `Card` can hand its whole border treatment to this one author. */
+export function highlightRingClass(
+	highlight: FixHighlight | undefined,
+): string {
+	if (highlight === "error") {
+		return "border-destructive ring-2 ring-destructive/25";
+	}
+	if (highlight === "check") {
+		return "border-amber-400 ring-2 ring-amber-400/25 dark:border-amber-500";
+	}
+	return "border-input";
+}
+
+/**
+ * Scroll a settings card into view. Honours `prefers-reduced-motion` — a long
+ * smooth scroll is exactly the motion that makes some people ill, and the
+ * destination matters more than the journey.
+ *
+ * Returns false when the anchor isn't on the page, so a caller can decide
+ * whether that's worth saying out loud.
+ */
+export function scrollToAnchor(anchorId: string): boolean {
+	if (typeof document === "undefined") return false;
+	const el = document.getElementById(anchorId);
+	if (!el) return false;
+	const reduced =
+		typeof window !== "undefined" &&
+		window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+	el.scrollIntoView({
+		behavior: reduced ? "auto" : "smooth",
+		block: "start",
+	});
+	return true;
+}

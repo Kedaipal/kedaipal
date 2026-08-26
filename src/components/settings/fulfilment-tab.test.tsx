@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
 import { COUNTRY_CURRENCY } from "../../../convex/lib/country";
 import { ActAsProvider } from "../../hooks/useActAs";
+import { SETTINGS_ANCHOR } from "../../lib/country-setup-copy";
 import { FulfilmentTab } from "./fulfilment-tab";
 
 // Act-as wiring regression (production bug): every settings write in this tab
@@ -498,6 +499,79 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 		expect(screen.getAllByText("RM").length).toBeGreaterThan(0);
 		expect(screen.queryByText("S$")).toBeNull();
 		expect(screen.getByText(/Minimum subtotal \(RM\)/)).toBeTruthy();
+	});
+
+	it("an SG store can reach the business address at all (86eyqgujv)", () => {
+		// The field used to render ONLY inside the radius and Lalamove mode
+		// panels, both Malaysia-only — so a Singapore store had no way to set a
+		// business address, and therefore no return address on any despatch
+		// label it printed. Its own always-visible card fixes that.
+		renderTab("SG", { mode: "flat", fee: 500 });
+		expect(screen.getByText("Business address")).toBeTruthy();
+		expect(screen.getByText(/return address on despatch labels/i)).toBeTruthy();
+	});
+
+	it("MY keeps one editor too — the duplicated pickers are gone", () => {
+		// It was duplicated once in radius mode and once in Lalamove mode. One
+		// card, one save; the modes now reference it instead of owning a copy.
+		renderTab("MY", {
+			mode: "radius",
+			bands: [{ maxKm: 5, fee: 500 }],
+			outOfRange: "arrange",
+		});
+		expect(screen.getAllByText("Business address")).toHaveLength(1);
+	});
+
+	it("a mode that needs the address, without one, points at the card", () => {
+		renderTab("MY", {
+			mode: "radius",
+			bands: [{ maxKm: 5, fee: 500 }],
+			outOfRange: "arrange",
+		});
+		expect(screen.getByText(/Set your business address first/i)).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Go to Business address/ }),
+		).toBeTruthy();
+	});
+
+	it("a deep link rings the exact card, and only that card (86eyqgujv)", () => {
+		// The checklist links here; landing at the top of a long tab and making
+		// the seller hunt is what this replaces.
+		const { container } = render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="SG"
+					currency="SGD"
+					fix={{
+						anchor: SETTINGS_ANCHOR.business_address,
+						highlight: "error",
+					}}
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={{ mode: "flat", fee: 500 }}
+					businessAddress={undefined}
+					deliveryBooking={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>,
+		);
+		const ringed = container.querySelectorAll("[data-fix-highlight]");
+		expect(ringed).toHaveLength(1);
+		expect(ringed[0]?.id).toBe(SETTINGS_ANCHOR.business_address);
+		// Verifiable rows earn a real error ring — we KNOW the address is in the
+		// wrong country. An unverifiable row would be amber instead, because a
+		// red border on a bank account we can't check would be a false claim.
+		expect(ringed[0]?.getAttribute("data-fix-highlight")).toBe("error");
+	});
+
+	it("no deep link means no ring anywhere — never a permanent red border", () => {
+		const { container } = renderTab("SG", { mode: "flat", fee: 500 });
+		expect(container.querySelectorAll("[data-fix-highlight]")).toHaveLength(0);
 	});
 
 	it("an SG store stuck on a stored MY-only mode gets the amber repair note", () => {

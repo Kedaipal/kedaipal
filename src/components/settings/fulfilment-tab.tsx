@@ -50,6 +50,12 @@ import {
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
+import {
+	type FixHighlight,
+	highlightRingClass,
+	SETTINGS_ANCHOR,
+	scrollToAnchor,
+} from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
@@ -101,6 +107,11 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
+	/** Deep-link target from the post-switch checklist: the anchor to scroll to
+	 * and how loudly to ring it (86eyqgujv). Undefined on a normal visit — the
+	 * ring is contextual to having asked to fix something, never a permanent
+	 * red border on a field we only want checked. */
+	fix?: { anchor: string; highlight: FixHighlight };
 	/** Storefront currency — every money input on this tab wears its symbol.
 	 * Threaded rather than assumed: an SG store's delivery, pickup-fee and
 	 * minimum-order fields quoted "RM" before this (86eyqgujv). */
@@ -132,9 +143,28 @@ interface FulfilmentTabProps {
 	subscription: SubscriptionView | undefined;
 }
 
-function Card({ children }: { children: ReactNode }) {
+/**
+ * `id` is the deep-link anchor: the post-switch checklist links to the exact
+ * card that fixes a row, and `highlight` rings it so the seller lands on the
+ * thing rather than the top of a long tab (86eyqgujv).
+ *
+ * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
+ */
+function Card({
+	children,
+	id,
+	highlight,
+}: {
+	children: ReactNode;
+	id?: string;
+	highlight?: FixHighlight;
+}) {
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			{children}
 		</section>
 	);
@@ -220,6 +250,7 @@ function MoneyPrefix({ currency }: { currency: string }) {
 
 export function FulfilmentTab({
 	retailerId,
+	fix,
 	currency,
 	country,
 	offerSelfCollect,
@@ -237,6 +268,10 @@ export function FulfilmentTab({
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
 	const updateSettings = useUpdateSettings();
+	/** Ring this card when it's the one the post-switch checklist sent the
+	 * seller to (86eyqgujv). Undefined on a normal visit. */
+	const ring = (anchor: string): FixHighlight | undefined =>
+		fix?.anchor === anchor ? fix.highlight : undefined;
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
@@ -370,8 +405,16 @@ export function FulfilmentTab({
 			<OpeningHoursCard initial={openingHours} />
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} currency={currency} />
+			<BusinessAddressCard
+				country={country}
+				businessAddress={businessAddress}
+				highlight={ring(SETTINGS_ANCHOR.business_address)}
+			/>
 
-			<Card>
+			<Card
+				id={SETTINGS_ANCHOR.delivery_mode}
+				highlight={ring(SETTINGS_ANCHOR.delivery_mode)}
+			>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
 						title="Delivery"
@@ -421,7 +464,10 @@ export function FulfilmentTab({
 				onSave={(patch) => updateSettings({ awbConfig: patch })}
 			/>
 
-			<Card>
+			<Card
+				id={SETTINGS_ANCHOR.pickup_addresses}
+				highlight={ring(SETTINGS_ANCHOR.pickup_addresses)}
+			>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
 						title="Pickup"
@@ -728,9 +774,6 @@ function DeliveryChargeSection({
 	const [onUnpriceable, setOnUnpriceable] = useState<"block" | "arrange">(
 		config?.mode === "weight" ? config.onUnpriceable : "arrange",
 	);
-	// Business address: the autocomplete pick replaces the stored one on save.
-	const [pickedAddress, setPickedAddress] =
-		useState<GoogleSelectedAddress | null>(null);
 	// Lalamove drafts (mode "lalamove" only). Blank key inputs mean "keep the
 	// stored pair" (server: undefined = no change); `editingKeys` swaps the
 	// stored-key summary row for fresh inputs (key rotation).
@@ -779,14 +822,8 @@ function DeliveryChargeSection({
 	const uncoveredStates = MY_STATES.filter((s) => !claimedStates.has(s));
 	const patchZone = (i: number, patch: Partial<ZoneDraft>) =>
 		setZones((prev) => prev.map((z, j) => (j === i ? { ...z, ...patch } : z)));
-	const effectiveAddress = pickedAddress
-		? {
-				label: pickedAddress.formattedAddress,
-				latitude: pickedAddress.latitude,
-				longitude: pickedAddress.longitude,
-				placeId: pickedAddress.placeId,
-			}
-		: businessAddress;
+	// The stored address only — this section no longer edits it (86eyqgujv).
+	const effectiveAddress = businessAddress;
 
 	async function save() {
 		setError(null);
@@ -889,8 +926,8 @@ function DeliveryChargeSection({
 			if (!effectiveAddress) {
 				setError(
 					collectionMode
-						? "Pick your business address from the suggestions — it's where riders drop off what they collect."
-						: "Pick your business address from the suggestions — it's the pickup point riders are sent to.",
+						? "Set your business address above first — it's where riders drop off what they collect."
+						: "Set your business address above first — it's the pickup point riders are sent to.",
 				);
 				return;
 			}
@@ -909,7 +946,7 @@ function DeliveryChargeSection({
 		} else {
 			if (!effectiveAddress) {
 				setError(
-					"Set your business address first — distances are measured from it.",
+					"Set your business address above first — distances are measured from it.",
 				);
 				return;
 			}
@@ -965,11 +1002,6 @@ function DeliveryChargeSection({
 						: {};
 			await updateSettings({
 				deliveryConfig: nextConfig,
-				// Only send the address when the seller picked a new one — an
-				// unchanged save must not touch (or clear) the stored address.
-				...(pickedAddress && effectiveAddress
-					? { businessAddress: effectiveAddress }
-					: {}),
 				...bookingPatch,
 			});
 			toast.success(
@@ -979,7 +1011,6 @@ function DeliveryChargeSection({
 						? "Lalamove delivery is on — book riders from any confirmed delivery order."
 						: "Delivery charge saved.",
 			);
-			setPickedAddress(null);
 			setApiKey("");
 			setApiSecret("");
 			setEditingKeys(false);
@@ -1118,41 +1149,23 @@ function DeliveryChargeSection({
 						</p>
 					) : null}
 
-					{/* 1 · Pickup point */}
-					<div className="flex flex-col gap-1.5">
-						<GoogleAddressAutocomplete
-							country={country}
-							initialValue={businessAddress?.label ?? ""}
-							label={
-								collectionMode
-									? "Your outlet address (riders drop off here)"
-									: "Your pickup address (riders collect here)"
-							}
-							required
-							placeholder="Start typing your business address…"
-							description={
-								effectiveAddress
-									? collectionMode
-										? "✓ Pinned — riders bring collected orders to this exact point."
-										: "✓ Pinned — riders are sent to this exact point."
-									: "Pick a Google suggestion so riders get an exact pin — your stall, kitchen or shop. Buyers never see this address."
-							}
-							onSelect={(payload) => setPickedAddress(payload)}
-							onTextChange={() => setPickedAddress(null)}
-						/>
-						{businessAddress && !pickedAddress ? (
-							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-								<MapPin
-									className="size-3 shrink-0 text-accent"
-									aria-hidden="true"
-								/>
-								<span className="font-mono">
-									{businessAddress.latitude.toFixed(5)},{" "}
-									{businessAddress.longitude.toFixed(5)}
-								</span>
-							</p>
-						) : null}
-					</div>
+					{/* 1 · Pickup point — one editor, in the Business address card
+					    above. It used to be duplicated here and in radius mode,
+					    which is how a Singapore store ended up with no way to set
+					    one at all (86eyqgujv). */}
+					<BusinessAddressReference
+						address={businessAddress}
+						present={
+							collectionMode
+								? "Riders bring collected orders to"
+								: "Riders collect from"
+						}
+						missing={
+							collectionMode
+								? "Set your business address first — it's where riders bring collected orders."
+								: "Set your business address first — it's the exact point riders are sent to."
+						}
+					/>
 
 					{/* 2 · Vehicle */}
 					<div className="flex flex-col gap-1.5">
@@ -1480,38 +1493,11 @@ function DeliveryChargeSection({
 							them, or switch to Free / Flat fee (always allowed).
 						</p>
 					) : null}
-					<div className="flex flex-col gap-1.5">
-						<GoogleAddressAutocomplete
-							country={country}
-							initialValue={businessAddress?.label ?? ""}
-							label="Business address (measure from)"
-							required
-							placeholder="Start typing your business address…"
-							description={
-								effectiveAddress
-									? "✓ Pinned — distances are measured from this point."
-									: "Pick a Google suggestion so we can measure distances from your place. Buyers never see this address."
-							}
-							onSelect={(payload) => setPickedAddress(payload)}
-							onTextChange={() => {
-								// Typing away from a pick invalidates it — the stored
-								// address (if any) remains until a new pick is saved.
-								setPickedAddress(null);
-							}}
-						/>
-						{businessAddress && !pickedAddress ? (
-							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-								<MapPin
-									className="size-3 shrink-0 text-accent"
-									aria-hidden="true"
-								/>
-								<span className="font-mono">
-									{businessAddress.latitude.toFixed(5)},{" "}
-									{businessAddress.longitude.toFixed(5)}
-								</span>
-							</p>
-						) : null}
-					</div>
+					<BusinessAddressReference
+						address={businessAddress}
+						present="Distances are measured from"
+						missing="Set your business address first — distance pricing measures from it."
+					/>
 
 					<div className="flex flex-col gap-2">
 						<p className="text-xs font-medium text-muted-foreground">
@@ -2527,6 +2513,154 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
  * price-on-quote line are exempt (their value is settled by the seller's
  * quote). Blank or 0 = no minimum.
  */
+/**
+ * The store's own physical address — where parcels are sent FROM.
+ *
+ * Its own card, always visible, because two unrelated features consume it and
+ * neither is a pricing choice: distance pricing measures from it, and it is
+ * the **return address printed on every despatch label**. It used to live
+ * inside the radius and Lalamove mode panels — duplicated once each — which
+ * meant a Singapore store could never set one at all, since both of those
+ * modes are Malaysia-only and don't render there. An SG seller shipping
+ * parcels therefore had no way to put a return address on a label (86eyqgujv).
+ *
+ * One editor, one save. The pricing modes read the stored value and link back
+ * here rather than carrying a second copy of the picker.
+ */
+/**
+ * How a pricing mode refers to the store's business address without owning a
+ * second copy of the editor. Either states what the stored address is used for
+ * here, or — when there isn't one — says so and takes the seller to the card
+ * that sets it, rather than leaving them to find it (86eyqgujv).
+ */
+function BusinessAddressReference({
+	address,
+	present,
+	missing,
+}: {
+	address: BusinessAddress | undefined;
+	/** Verb phrase for the set case, e.g. "Riders collect from". */
+	present: string;
+	/** Full sentence for the unset case, naming why it's needed here. */
+	missing: string;
+}) {
+	if (address) {
+		return (
+			<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+				<MapPin
+					className="mt-0.5 size-3 shrink-0 text-accent"
+					aria-hidden="true"
+				/>
+				<span>
+					{present}{" "}
+					<span className="font-medium text-foreground">{address.label}</span> —
+					change it in <b>Business address</b> above.
+				</span>
+			</p>
+		);
+	}
+	return (
+		<div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-2.5 dark:border-amber-800">
+			<p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+				{missing}
+			</p>
+			<Button
+				type="button"
+				variant="outline"
+				onClick={() => scrollToAnchor(SETTINGS_ANCHOR.business_address)}
+				className="h-10 sm:w-auto sm:self-start sm:px-4"
+			>
+				Go to Business address
+			</Button>
+		</div>
+	);
+}
+
+function BusinessAddressCard({
+	country,
+	businessAddress,
+	highlight,
+}: {
+	country: Country;
+	businessAddress: BusinessAddress | undefined;
+	highlight?: FixHighlight;
+}) {
+	const updateSettings = useUpdateSettings();
+	const [picked, setPicked] = useState<GoogleSelectedAddress | null>(null);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	async function save() {
+		if (!picked) return;
+		setSaving(true);
+		setError(null);
+		try {
+			await updateSettings({
+				businessAddress: {
+					label: picked.formattedAddress,
+					latitude: picked.latitude,
+					longitude: picked.longitude,
+					placeId: picked.placeId,
+				},
+			});
+			setPicked(null);
+			toast.success("Business address saved.");
+		} catch (err) {
+			setError(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card id={SETTINGS_ANCHOR.business_address} highlight={highlight}>
+			<SectionHeading
+				title="Business address"
+				description="Where you send parcels from. It prints as the return address on despatch labels, riders are sent here to collect, and distance pricing measures from it. Buyers never see it."
+			/>
+			<div className="flex flex-col gap-1.5">
+				<GoogleAddressAutocomplete
+					country={country}
+					initialValue={businessAddress?.label ?? ""}
+					label="Address"
+					placeholder="Start typing your business address…"
+					description={
+						picked
+							? "Pinned — save to use it."
+							: businessAddress
+								? "✓ Pinned. Search again to replace it."
+								: "Pick a Google suggestion so we get an exact pin — your stall, kitchen or shop."
+					}
+					onSelect={(payload) => setPicked(payload)}
+					onTextChange={() => setPicked(null)}
+				/>
+				{businessAddress && !picked ? (
+					<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+						<MapPin
+							className="size-3 shrink-0 text-accent"
+							aria-hidden="true"
+						/>
+						<span className="font-mono">
+							{businessAddress.latitude.toFixed(5)},{" "}
+							{businessAddress.longitude.toFixed(5)}
+						</span>
+					</p>
+				) : null}
+			</div>
+			{error ? <p className="text-xs text-destructive">{error}</p> : null}
+			<Button
+				type="button"
+				onClick={save}
+				disabled={!picked || saving}
+				isLoading={saving}
+				className="h-11 lg:w-auto lg:self-start lg:px-5"
+			>
+				Save address
+			</Button>
+		</Card>
+	);
+}
+
 function MinOrderValueCard({
 	initial,
 	currency,

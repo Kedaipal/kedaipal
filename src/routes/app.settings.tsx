@@ -19,7 +19,13 @@ import {
 	Store,
 	Trash2,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import {
@@ -28,6 +34,8 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import type { CountrySetupItemKey } from "../../convex/lib/countrySetup";
+import { VERIFIABLE } from "../../convex/lib/countrySetup";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
 import {
 	DELIVERY_MODE_LABELS,
@@ -73,6 +81,13 @@ import {
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
+import {
+	type FixHighlight,
+	highlightFor,
+	highlightRingClass,
+	SETTINGS_ANCHOR,
+	scrollToAnchor,
+} from "../lib/country-setup-copy";
 import { convexErrorMessage } from "../lib/format";
 import {
 	ANCHOR_UI_LABELS,
@@ -195,9 +210,28 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	},
 ];
 
-function Card({ children }: { children: ReactNode }) {
+/**
+ * `id` is the deep-link anchor: the post-switch checklist links to the exact
+ * card that fixes a row, and `highlight` rings it so the seller lands on the
+ * thing rather than the top of a long tab (86eyqgujv).
+ *
+ * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
+ */
+function Card({
+	children,
+	id,
+	highlight,
+}: {
+	children: ReactNode;
+	id?: string;
+	highlight?: FixHighlight;
+}) {
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			{children}
 		</section>
 	);
@@ -245,15 +279,25 @@ function InfoBanner({
 export const Route = createFileRoute("/app/settings")({
 	// `tab` stays optional: no tab = the grouped index on mobile (desktop falls
 	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
-	validateSearch: (search: Record<string, unknown>) => {
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { tab?: SettingsTab; fix?: CountrySetupItemKey } => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
 				: search.tab;
+		// `fix` is the post-switch checklist's deep link: which card to scroll
+		// to and ring (86eyqgujv). Validated against the known keys so a
+		// hand-typed value can't ring an arbitrary element.
+		const fix =
+			typeof search.fix === "string" && search.fix in SETTINGS_ANCHOR
+				? (search.fix as CountrySetupItemKey)
+				: undefined;
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
 				: undefined,
+			...(fix ? { fix } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -328,7 +372,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab } = Route.useSearch();
+	const { tab, fix } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
@@ -337,6 +381,24 @@ function SettingsRoute() {
 	const [saving, setSaving] = useState(false);
 
 	const availability = useSlugAvailability(newSlug);
+
+	// Deep link from the post-switch checklist (86eyqgujv): scroll to the card
+	// that actually fixes the row and ring it, instead of dropping the seller at
+	// the top of a long tab to hunt for it.
+	const fixAnchor = fix ? SETTINGS_ANCHOR[fix] : undefined;
+	const fixTarget = fix
+		? { anchor: SETTINGS_ANCHOR[fix], highlight: highlightFor(VERIFIABLE[fix]) }
+		: undefined;
+	/** Ring this card when it's the one the checklist sent the seller to. */
+	const ringFor = (anchor: string): FixHighlight | undefined =>
+		fixTarget?.anchor === anchor ? fixTarget.highlight : undefined;
+	useEffect(() => {
+		if (!fixAnchor) return;
+		// The tab body mounts in this same commit, so the target doesn't exist
+		// until after paint — wait a frame rather than racing it.
+		const frame = requestAnimationFrame(() => scrollToAnchor(fixAnchor));
+		return () => cancelAnimationFrame(frame);
+	}, [fixAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
 
@@ -612,7 +674,10 @@ function SettingsRoute() {
 						    email (below). The WA card only mounts when the deployment has
 						    an approved seller template configured (86eyhw9zy). */}
 						{retailer.waOrderAlertsAvailable ? (
-							<Card>
+							<Card
+								id={SETTINGS_ANCHOR.notify_wa_phone}
+								highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+							>
 								<WaOrderAlertsCard
 									enabled={retailer.orderWaAlerts === true}
 									currentPhone={retailer.notifyWaPhone ?? ""}
@@ -666,7 +731,11 @@ function SettingsRoute() {
 							{/* Directly under the picker, so "what did that just do?"
 							    is answered where the question was asked. Renders
 							    nothing for a store that has never switched. */}
-							<CountrySetupPanel onGoToTab={(tab) => setActiveTab(tab)} />
+							<CountrySetupPanel
+								onGoToFix={(tab, key) =>
+									navigate({ search: { tab, fix: key } })
+								}
+							/>
 						</Card>
 						<Card>
 							<CurrencyForm
@@ -705,7 +774,10 @@ function SettingsRoute() {
 							</p>
 						</InfoBanner>
 
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.wa_phone}
+							highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
+						>
 							<WaPhoneForm
 								current={retailer.waPhone ?? ""}
 								country={retailer.country}
@@ -718,7 +790,10 @@ function SettingsRoute() {
 								onSave={(locale) => updateSettings({ locale })}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.message_copy}
+							highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+						>
 							<MessageTemplatesForm
 								current={retailer.messageTemplates}
 								onSave={(messageTemplates) =>
@@ -731,13 +806,19 @@ function SettingsRoute() {
 
 				{activeTab === "payments" ? (
 					<div className="flex flex-col gap-6 pt-2">
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.payment_methods}
+							highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+						>
 							<PaymentMethodsForm
 								current={retailer.paymentMethods ?? []}
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.hitpay}
+							highlight={ringFor(SETTINGS_ANCHOR.hitpay)}
+						>
 							<OnlinePaymentsCard
 								hitpay={retailer.hitpay}
 								canUse={hasFeature(retailer.subscription, "onlinePayments")}
@@ -752,16 +833,17 @@ function SettingsRoute() {
 						<p className="px-1 text-xs text-muted-foreground">
 							Kedaipal doesn't chase unpaid orders automatically. Each order
 							gets one WhatsApp — the confirmation — and it links the buyer to
-							their order page, where these payment details and the “I've
-							paid” button live. If an order is still unpaid on day 11, a
-							“Send payment reminder” button appears on its order page (once
-							per day, until day 14) — sending it is always your call.
+							their order page, where these payment details and the “I've paid”
+							button live. If an order is still unpaid on day 11, a “Send
+							payment reminder” button appears on its order page (once per day,
+							until day 14) — sending it is always your call.
 						</p>
 					</div>
 				) : null}
 
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
+						fix={fixTarget}
 						currency={retailer.currency}
 						retailerId={retailer._id}
 						country={retailer.country}
@@ -1686,8 +1768,8 @@ function MessageTemplatesForm({
 					The confirmation your buyers receive is a fixed Meta-approved template
 					— WhatsApp's rule for messaging someone who hasn't replied yet — so it
 					can't be customised. This copy is the reply sent when a buyer writes
-					their order number (e.g.{" "}
-					<code className="font-mono">ORD-1234</code>) to our shared number. Use{" "}
+					their order number (e.g. <code className="font-mono">ORD-1234</code>)
+					to our shared number. Use{" "}
 					<code className="font-mono">{"{shortId}"}</code> and{" "}
 					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
 					blank to use the default.
@@ -2207,8 +2289,8 @@ function LocaleForm({
 				    admitted: retailer email alerts have always rendered in it, and
 				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
 				<span className="text-xs text-muted-foreground">
-					Used for the order confirmation buyers receive and their order
-					page — and for the order alerts we send you on WhatsApp.
+					Used for the order confirmation buyers receive and their order page —
+					and for the order alerts we send you on WhatsApp.
 				</span>
 			</label>
 
