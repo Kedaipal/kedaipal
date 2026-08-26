@@ -23,6 +23,10 @@ import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import {
+	type ShareTagPreset,
+	SHARE_TAG_PRESETS,
+} from "../../convex/lib/attribution";
 import { convexErrorMessage } from "../lib/format";
 import { storefrontOrigin } from "../lib/storefront-url";
 
@@ -48,6 +52,9 @@ const POSTER_PRINT_CSS = `
 `;
 
 type HeaderStyle = "brand" | "cover";
+
+/** The online QR's `?src=` tag — the poster itself ("online") or a channel. */
+type OnlineQrTag = "online" | ShareTagPreset;
 
 /**
  * Print-button helper text per template — the poster's behavior must never be
@@ -91,6 +98,10 @@ function PosterRoute() {
 	// Header background: brand mint (Kris's approved default) or the seller's
 	// storefront cover photo. Session-only, like the language toggle.
 	const [headerStyle, setHeaderStyle] = useState<HeaderStyle>("brand");
+	// Attribution tag on the ONLINE QR (86eyq0eq9): default "online" ("this
+	// order came from the poster"), or a channel preset — a poster propped up
+	// in a TikTok live tags its orders "tiktok" in Insights. Session-only.
+	const [onlineTag, setOnlineTag] = useState<OnlineQrTag>("online");
 	// Don't let a print fire while the cover photo is still streaming — it
 	// would print as an empty box. Tracked only for the cover variant.
 	const [coverLoaded, setCoverLoaded] = useState(false);
@@ -159,6 +170,7 @@ function PosterRoute() {
 	const { counter: counterFallback, online: onlineUrl } = posterQrUrls(
 		storefrontOrigin(),
 		retailer.slug,
+		onlineTag,
 	);
 	const counterUrl = storeQr?.waUrl ?? counterFallback;
 	const printWaiting = useCover && !coverLoaded;
@@ -211,6 +223,35 @@ function PosterRoute() {
 						value={template}
 						onChange={(v) => setTemplate(v as PosterVariant)}
 					/>
+					{/* Attribution preset (86eyq0eq9): only meaningful while the sheet
+					    carries an online QR — the counter-only template hides it. */}
+					{template !== "counter" ? (
+						<div className="flex flex-col gap-1.5">
+							<PosterToggle
+								label="Track orders from"
+								options={[
+									{ value: "online", label: "Poster" },
+									...SHARE_TAG_PRESETS.map((p) => ({
+										value: p.tag,
+										label: p.label,
+									})),
+								]}
+								value={onlineTag}
+								onChange={(v) => setOnlineTag(v as OnlineQrTag)}
+							/>
+							<p className="text-xs text-muted-foreground">
+								Tags the online QR so orders from this poster show their
+								source in{" "}
+								<Link
+									to="/app/insights"
+									className="font-semibold text-accent-emphasis hover:underline"
+								>
+									Insights
+								</Link>
+								{" "}— pick TikTok for a poster shown in your lives.
+							</p>
+						</div>
+					) : null}
 					<PosterToggle
 						label="Poster language"
 						options={[
@@ -364,7 +405,7 @@ function PosterToggle({
 		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
 			<span className="text-sm font-semibold">{label}</span>
 			<fieldset
-				className="flex rounded-xl border border-border p-1"
+				className="flex flex-wrap rounded-xl border border-border p-1"
 				aria-label={label}
 			>
 				{options.map((opt) => (

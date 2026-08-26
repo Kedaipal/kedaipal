@@ -12,6 +12,7 @@ import { KpiRow } from "../components/insights/kpi-row";
 import { LockedTeaser } from "../components/insights/locked-teaser";
 import { PaymentDonut } from "../components/insights/payment-donut";
 import { RevenueTrend } from "../components/insights/revenue-trend";
+import { SourceBreakdown } from "../components/insights/source-breakdown";
 import { TopProducts } from "../components/insights/top-products";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -168,6 +169,7 @@ function InsightsRoute() {
 							collected={view.collected}
 							currency={currency}
 						/>
+						<SourceBreakdown sources={view.sources} currency={currency} />
 					</div>
 				</>
 			)}

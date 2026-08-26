@@ -18,6 +18,7 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { sanitizeAttributionSource } from "./lib/attribution";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
@@ -695,6 +696,11 @@ export const create = mutation({
 		// read from our own record. Missing/stale/mismatched → the order falls
 		// back to the store's onUnquotable policy. See docs/delivery-lalamove.md.
 		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
+		// Marketing source the buyer arrived from (86eyq0eq9) — the session's
+		// captured `?src=`/`utm_source` tag. Client sends its cleaned copy but
+		// the server re-sanitizes (authoritative); a bad value can never block
+		// the order — it buckets to "other". See convex/lib/attribution.ts.
+		attributionSource: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -1162,6 +1168,7 @@ export const create = mutation({
 			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: args.channel,
 			source: "storefront",
+			attributionSource: sanitizeAttributionSource(args.attributionSource),
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
 			deliveryDirection,

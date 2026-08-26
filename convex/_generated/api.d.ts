@@ -31,6 +31,7 @@ import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_appVersion from "../lib/appVersion.js";
+import type * as lib_attribution from "../lib/attribution.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_awbConfig from "../lib/awbConfig.js";
 import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
@@ -140,6 +141,7 @@ declare const fullApi: ApiFromModules<{
   "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
   "lib/appVersion": typeof lib_appVersion;
+  "lib/attribution": typeof lib_attribution;
   "lib/auth": typeof lib_auth;
   "lib/awbConfig": typeof lib_awbConfig;
   "lib/billingEmailCopy": typeof lib_billingEmailCopy;

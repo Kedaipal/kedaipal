@@ -13,6 +13,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -117,6 +118,8 @@ function CheckoutSkeleton() {
 
 function CheckoutRoute() {
 	const { slug } = Route.useParams();
+	// A tagged link can land straight on checkout — capture here too.
+	useCaptureAttribution(slug);
 	// Live query keeps the page reactive after the SSR'd loader response —
 	// same pattern as the store home and category pages.
 	const result = useQuery(

@@ -15,6 +15,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -205,6 +206,8 @@ function CategorySkeleton() {
 
 function CategoryRoute() {
 	const { slug, categorySlug } = Route.useParams();
+	// Category deep links get shared too — capture the ?src= tag here as well.
+	useCaptureAttribution(slug);
 	// Live queries keep the page reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),

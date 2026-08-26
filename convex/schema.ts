@@ -869,6 +869,16 @@ export default defineSchema({
 		source: v.optional(
 			v.union(v.literal("storefront"), v.literal("counter")),
 		),
+		// Marketing source the BUYER arrived from (86eyq0eq9) — the `?src=` /
+		// `utm_source` tag on the storefront link ("tiktok", "instagram",
+		// "online" = poster QR, free-form seller tags; present-but-garbage
+		// sanitizes to "other"). Stamped once at create on STOREFRONT orders
+		// only — counter orders derive their report bucket from `source`, and
+		// absence = direct — so there is nothing to backfill. Sanitized by
+		// convex/lib/attribution.ts (the one author, shared with the client).
+		// Per-row read only — no index; the insights by-source breakdown reads
+		// it inside the existing bounded `by_retailer` range scan.
+		attributionSource: v.optional(v.string()),
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),

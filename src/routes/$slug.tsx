@@ -18,6 +18,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -231,6 +232,9 @@ function StorefrontSkeleton() {
 
 function StorefrontRoute() {
 	const { slug } = Route.useParams();
+	// Persist the visit's ?src=/utm_source tag for this session (86eyq0eq9) —
+	// checkout stamps it onto the order so Insights can report per-source.
+	useCaptureAttribution(slug);
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),

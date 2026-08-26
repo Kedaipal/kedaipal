@@ -8217,3 +8217,47 @@ describe("orders — creation rate limits (PR #206 review)", () => {
 		expect(shortId).toMatch(/^ORD-/);
 	});
 });
+
+describe("orders — source attribution (86eyq0eq9)", () => {
+	async function createWith(
+		t: ReturnType<typeof setup>,
+		attributionSource: string | undefined,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			attributionSource,
+		});
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("stamps the sanitized tag at create", async () => {
+		const t = setup();
+		const order = await createWith(t, "TikTok ");
+		expect(order?.attributionSource).toBe("tiktok");
+		expect(order?.source).toBe("storefront");
+	});
+
+	test("absent tag stays unset (= direct), and never blocks the order", async () => {
+		const t = setup();
+		const order = await createWith(t, undefined);
+		expect(order?.attributionSource).toBeUndefined();
+	});
+
+	test("present-but-garbage buckets to 'other' instead of failing checkout", async () => {
+		const t = setup();
+		const order = await createWith(t, "###!!!");
+		expect(order?.attributionSource).toBe("other");
+	});
+});

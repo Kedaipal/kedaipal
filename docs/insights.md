@@ -49,6 +49,16 @@ adjustments — expected, they answer different questions. Mockup-quote changes
 mutate `order.total` after creation; aggregates read current doc state, so this
 is self-correcting.
 
+- **By-source breakdown** (`86eyq0eq9`, `docs/source-attribution.md`) buckets
+  every revenue order by `attributionBucket` — the stamped
+  `orders.attributionSource` (`?src=`/`utm_source` captured at the storefront),
+  else `counter` for counter-checkout orders (derived from `orders.source`,
+  never stamped), else `direct`. Rows carry **earned** revenue + order count,
+  so Σ rows === earned (this is "which funnel produced the order", not "which
+  got paid"). Labels via `sourceLabel` (`convex/lib/attribution.ts`): known
+  tags prettified (TikTok, Poster QR, Parcel label QR…), free-form seller tags
+  verbatim, garbage bucketed to `other`.
+
 ## Backend — two queries, one page (`convex/analytics.ts`)
 
 Cache discipline is the core design constraint: **every inbound order must not
@@ -110,8 +120,10 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 - Components in `src/components/insights/`: `kpi-row`, `revenue-trend`,
   `top-products` (bar list + revenue/quantity toggle + thumbnails),
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
-  opacity, on-brand), `date-range-control` (preset chips + custom range) and
-  `locked-teaser`.
+  opacity, on-brand), `source-breakdown` (bar list of `attributionBucket` rows;
+  its all-direct state doubles as the attribution feature's discoverability
+  surface, pointing at the poster + QR-dialog presets), `date-range-control`
+  (preset chips + custom range) and `locked-teaser`.
 - **Trend interaction is a scrubber, not hover** (mobile-first): a hover `title`
   is mute on a phone and a 30-day range gives ~11px bars (below the 44px tap
   rule), so the whole chart is tap/drag-scrubbable — the nearest bar selects
