@@ -2287,9 +2287,17 @@ export const countrySetup = query({
 export const ackCountrySetup = mutation({
 	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (ctx, args): Promise<{ acked: number }> => {
-		const retailer = args.retailerId
-			? (await requireRetailerAccess(ctx, args.retailerId)).retailer
-			: await resolveOwnRetailer(ctx);
+		// `access` is kept, not destructured away: an admin acting as a seller
+		// can retire that seller's payments-at-risk rows, and there is no un-ack
+		// short of another country switch — so the write has to be traceable, and
+		// "the seller confirmed their bank details" must not be indistinguishable
+		// from "an admin clicked through during white-glove setup" (PR #221
+		// review). `logAdminAction` no-ops on an owner write, so the own-store
+		// path below needs no equivalent.
+		const access = args.retailerId
+			? await requireRetailerAccess(ctx, args.retailerId)
+			: null;
+		const retailer = access ? access.retailer : await resolveOwnRetailer(ctx);
 		if (!retailer || retailer.countryChangedAt === undefined) {
 			return { acked: 0 };
 		}
@@ -2329,6 +2337,14 @@ export const ackCountrySetup = mutation({
 			countrySetupAcked: merged,
 			updatedAt: Date.now(),
 		});
+		if (access) {
+			await logAdminAction(
+				ctx,
+				access,
+				"retailers.ackCountrySetup",
+				retailer._id,
+			);
+		}
 		return { acked: keys.length };
 	},
 });

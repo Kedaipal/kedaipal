@@ -275,13 +275,6 @@ export function BookDeliveryCard({
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
-	// Lalamove is a Malaysian market for us. On a Singapore store the card has
-	// nothing true to offer — not a Book button, and not the "set Lalamove up"
-	// hint either, since there is no setup that would work. Hidden outright,
-	// including when a job exists: a store switched from Malaysia can hold a
-	// completed MY trip, and that history belongs on the order timeline rather
-	// than under a live dispatch card (86eyqgujv).
-	if (blockReason === "country_unsupported") return null;
 	// TEST KEYS (86eypncfy). Not a warning we can afford to leave in Settings:
 	// a sandbox booking looks identical to a real one right up until no rider
 	// ever arrives, and the buyer has already been charged a fee the test
@@ -315,6 +308,21 @@ export function BookDeliveryCard({
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
+	// Lalamove is a Malaysian market for us. On a Singapore store the card has
+	// nothing true to offer — not a Book button, and not the "set Lalamove up"
+	// hint either, since there is no setup that would work. A completed or
+	// failed Malaysian trip belongs on the order timeline rather than under a
+	// live dispatch card that would re-offer a booking (86eyqgujv).
+	//
+	// But NEVER while a rider is still out (PR #221 review). Cancelling is the
+	// seller's only way to stop a trip they are being billed for, and the
+	// button lives on this card — `cancelBooking` has no country gate of its
+	// own, so hiding the card would be a pure UI trap, exactly the kind this
+	// PR exists to remove. The booking controls stay gone either way: they are
+	// gated on `!activeJob`, so an in-flight card offers tracking and cancel
+	// and nothing that spends.
+	if (blockReason === "country_unsupported" && !activeJob) return null;
+
 	const failedJob =
 		job && ["canceled", "expired", "rejected"].includes(job.status)
 			? job

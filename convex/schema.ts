@@ -1378,9 +1378,10 @@ export default defineSchema({
 		// country switch stamps un-stamped rows with the OLD country.
 		//
 		// A pickup point is the one wrong-country item a BUYER is shown directly,
-		// at checkout, before they travel — so it is the top-ranked item on the
-		// post-switch checklist rather than something quietly hidden. Hiding them
-		// would break the working-method invariant on a pickup-only store.
+		// at checkout, before they travel — so it is named on the post-switch
+		// checklist (ranked `buyer_visible`, under the two money rows) rather
+		// than quietly hidden. Hiding them would break the working-method
+		// invariant on a pickup-only store.
 		country: v.optional(countryValidator),
 		// Optional contact info for the person running this pickup spot. When
 		// set, the seller order detail page surfaces a "Notify <name>" wa.me

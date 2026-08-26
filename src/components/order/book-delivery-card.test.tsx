@@ -103,6 +103,40 @@ describe("BookDeliveryCard — Singapore (86eyqgujv)", () => {
 		expect(container.textContent).toBe("");
 	});
 
+	it("stays visible while a rider is still out — cancel is the only way to stop the bill", () => {
+		// PR #221 review. `cancelBooking` has no country gate of its own, so
+		// hiding the card on a just-switched store would leave a seller with a
+		// rider mid-trip unable to stop a trip they're being billed for. The
+		// booking controls stay gone (they key off `!activeJob`), so the card
+		// offers tracking and cancel and nothing that spends.
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: false,
+			blockReason: "country_unsupported",
+			job: {
+				status: "on_going",
+				providerOrderId: "LLM-SG-1",
+				costActual: 1170,
+				vehicleType: "MOTORCYCLE",
+				driver: {
+					name: "Rahim",
+					phone: "+60111111111",
+					plateNumber: "WXY 1234",
+				},
+				shareLink: "https://share.lalamove.com/?MY123",
+				failureReason: undefined,
+				createdAt: 1_700_000_000_000,
+			},
+		};
+		render(
+			<BookDeliveryCard
+				order={{ ...deliveredOrder, status: "packed" } as Doc<"orders">}
+			/>,
+		);
+		expect(screen.getByText("Cancel booking")).toBeTruthy();
+		expect(screen.queryByText("Book delivery")).toBeNull();
+	});
+
 	it("hides even when a Malaysian trip is already on the order", () => {
 		// A store switched from MY can hold a completed trip. That history
 		// belongs on the order timeline, not under a live dispatch card that
@@ -149,9 +183,7 @@ describe("BookDeliveryCard — completed job", () => {
 			];
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
-		expect(
-			screen.getByText(/Delivery photo from the rider/),
-		).toBeTruthy();
+		expect(screen.getByText(/Delivery photo from the rider/)).toBeTruthy();
 		const shots = screen.getAllByAltText("Proof of delivery");
 		expect(shots).toHaveLength(2);
 		expect(shots[0].closest("a")?.getAttribute("href")).toBe(

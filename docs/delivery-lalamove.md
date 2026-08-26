@@ -273,10 +273,19 @@ every other reason names a fix, and in a market our integration doesn't serve
 there is no fix to name. Before it, a store switched MY→SG fell through to
 `no_seller_phone` and told the seller to *"add a Malaysian (+60) WhatsApp
 number in Settings → Store"*, which the country switch itself refuses to store:
-a closed loop. The card now returns null, **including when a job exists** — a
-switched store can hold a completed Malaysian trip, and that history belongs on
-the order timeline rather than under a live dispatch card that would re-offer a
-booking. `getDeliveryJob.bookingEnabled` agrees with it, so the mark-shipped
+a closed loop. The card now returns null, including when a completed or failed
+Malaysian trip is on the order — that history belongs on the order timeline
+rather than under a live dispatch card that would re-offer a booking.
+
+**Except while a rider is still out** (PR #221 review). `cancelBooking` carries
+no country gate of its own, so hiding the card on a just-switched store would
+leave a seller with a trip in flight unable to stop one they are *being billed
+for* — a pure UI trap, and the exact shape of trap the country-switch work
+exists to remove. An in-flight card on an unsupported country renders tracking
+and Cancel and nothing else: the booking controls are gated on `!activeJob`
+independently, so nothing there can spend.
+
+`getDeliveryJob.bookingEnabled` agrees with the block reason, so the mark-shipped
 prompt hands an SG seller the courier + consignment form instead of a rider
 prompt. Enabling `deliveryBooking` at all now runs the same country allowlist
 in `updateSettings` — previously that rule only bound a store while it was
