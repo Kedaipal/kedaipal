@@ -123,7 +123,7 @@ function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 }
 
 function isOrderSource(x: unknown): x is OrderSource {
-	return x === "storefront" || x === "counter";
+	return x === "storefront" || x === "counter" || x === "claim";
 }
 
 export const Route = createFileRoute("/app/orders/")({

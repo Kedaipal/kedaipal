@@ -117,7 +117,9 @@ import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
-const addressValidator = v.object({
+// Shared with convex/orderClaims.ts (claim-link commit runs the same
+// storefront validation + delivery resolution — one author for both paths).
+export const addressValidator = v.object({
 	line1: v.string(),
 	line2: v.optional(v.string()),
 	city: v.string(),
@@ -203,7 +205,7 @@ function blockedDeliveryMessage(
  *    setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
-function resolveDeliveryForOrder(
+export function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
 	address:
@@ -287,7 +289,7 @@ function resolveDeliveryForOrder(
  * (a cheap-nearby-pin quote can't be replayed against a far delivery
  * address; ~11 m tolerance absorbs float noise, not geography).
  */
-async function loadCheckoutDeliveryQuote(
+export async function loadCheckoutDeliveryQuote(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
@@ -316,7 +318,9 @@ async function loadCheckoutDeliveryQuote(
 	};
 }
 
-function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
+export function buildPickupSnapshot(
+	location: Doc<"pickupLocations">,
+): PickupSnapshot {
 	return {
 		label: location.label,
 		address: location.address,
@@ -1789,6 +1793,7 @@ const MAX_INBOX_SCAN = 1000;
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
+	v.literal("claim"),
 );
 
 /**

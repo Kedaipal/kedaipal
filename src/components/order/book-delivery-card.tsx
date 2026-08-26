@@ -27,6 +27,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { MASK_PII } from "../../lib/analytics-privacy";
+import { formatCountdown } from "../../lib/countdown";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
@@ -1263,12 +1264,6 @@ export function BookDeliveryCard({
 	);
 }
 
-/** "4:32" / "0:07" from a remaining-ms figure, floored at zero so a lapsed
- * quote never renders a negative clock. */
-function formatCountdown(remainingMs: number): string {
-	const total = Math.max(0, Math.floor(remainingMs / 1000));
-	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
 
 /** "4 Aug 2026 · 3:30 PM" from an epoch moment — the card's one spelling for
  * a scheduled pickup (86eyg0n8e follow-up). */

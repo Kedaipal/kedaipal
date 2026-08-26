@@ -733,6 +733,10 @@ type RetailerPublic = {
 	// orderCap nudge ("X of 100 plan orders used"). OWNER-only, like
 	// `subscription`. See convex/subscriptionUsage.ts.
 	ordersThisMonth?: number;
+	// Claim links (86eyq0epn): the store's remembered default payment window —
+	// seeds the send dialog's chips; the dialog updates it on every send.
+	// OWNER-only (seller config). Unset = the 24h default.
+	claimLinkWindowMinutes?: number;
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
@@ -864,6 +868,7 @@ async function buildRetailerPublic(
 			adminFullAccess: opts?.adminFullAccess,
 		}),
 		ordersThisMonth: usedOrders,
+		claimLinkWindowMinutes: row.claimLinkWindowMinutes,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
 		sendingPaused: !!sendingLimits?.pausedAt,

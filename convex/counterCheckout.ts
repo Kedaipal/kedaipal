@@ -835,6 +835,11 @@ export const createOrderFromSession = mutation({
 			updatedAt: now,
 		});
 
+		// A claim link sent from this session dies with the counter sale — the
+		// buyer completing the old link would double-sell the same cart
+		// (86eyq0epn; the claim page renders "cancelled" from the next read).
+		await cancelOpenClaimsForSession(ctx, session._id, now);
+
 		// Buyer confirmation + tracking link over WhatsApp — only when there's a
 		// buyer to reach. An anonymous sale sends nothing.
 		if (session.waPhone) {
@@ -861,6 +866,29 @@ export const createOrderFromSession = mutation({
 	},
 });
 
+/**
+ * Any still-open claim links sent from a session are cancelled when the
+ * session settles another way (counter sale completed, session dismissed) —
+ * one cart must never be sellable through two doors at once. Shared by
+ * createOrderFromSession + cancelCheckoutSession; orderClaims.sendClaim
+ * supersedes its own predecessors the same way.
+ */
+async function cancelOpenClaimsForSession(
+	ctx: MutationCtx,
+	sessionId: Id<"counterCheckoutSessions">,
+	now: number,
+): Promise<void> {
+	const claims = await ctx.db
+		.query("orderClaims")
+		.withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+		.collect();
+	for (const claim of claims) {
+		if (claim.status === "open") {
+			await ctx.db.patch(claim._id, { status: "cancelled", updatedAt: now });
+		}
+	}
+}
+
 /** Seller dismisses an active session (status → cancelled). Ownership-checked. */
 export const cancelCheckoutSession = mutation({
 	args: { sessionId: v.id("counterCheckoutSessions") },
@@ -869,10 +897,12 @@ export const cancelCheckoutSession = mutation({
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
 		if (session.status === "awaiting_buyer" || session.status === "buyer_identified") {
+			const now = Date.now();
 			await ctx.db.patch(sessionId, {
 				status: "cancelled",
-				updatedAt: Date.now(),
+				updatedAt: now,
 			});
+			await cancelOpenClaimsForSession(ctx, sessionId, now);
 			await logAdminAction(
 				ctx,
 				access,

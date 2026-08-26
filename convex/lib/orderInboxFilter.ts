@@ -21,7 +21,7 @@ export type InboxFilterArgs = {
 	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in).
 	// Legacy orders with no stamped source read as "storefront". Undefined = no
 	// source filtering. See orders.source in convex/schema.ts.
-	source?: "storefront" | "counter";
+	source?: "storefront" | "counter" | "claim";
 	searchText?: string;
 };
 
@@ -34,7 +34,7 @@ export type FilterableOrder = {
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentMethod?: string;
-	source?: "storefront" | "counter";
+	source?: "storefront" | "counter" | "claim";
 	createdAt: number;
 	fulfilmentDate?: number;
 	shortId: string;

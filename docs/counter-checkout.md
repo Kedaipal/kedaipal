@@ -1,5 +1,12 @@
 # Counter Checkout (in-person order spine)
 
+> **Claim links (`86eyq0epn`)** build on this surface: instead of finishing the
+> sale at the counter, the seller can **send the keyed cart to the buyer** as a
+> price-locked WhatsApp checkout link ("Send to buyer to complete" on the build
+> screen; "Waiting on buyers" panel on the landing). See
+> [`docs/claim-links.md`](./claim-links.md) — including the rule that a counter
+> sale or session dismissal cancels the session's open claim.
+
 > ClickUp [`86ey0e82j`](https://app.clickup.com/t/86ey0e82j). Lands **Bearcamp**
 > (first paying customer — sells at a physical counter + online). The first brick
 > of the offline→online **order spine**: a seller-initiated, in-person order that

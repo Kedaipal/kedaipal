@@ -33,6 +33,21 @@ export function orderConfirmTemplateName(): string | undefined {
 }
 
 /**
+ * Claim links (86eyq0epn) — the Meta-approved utility template that hands the
+ * buyer their price-locked checkout link. Same env-gating posture as the
+ * confirm template: unset ⇒ WhatsApp sends are unavailable and the seller
+ * falls back to the copyable wa.me link the claims UI always offers, so the
+ * code ships decoupled from Meta template review. The registered button URL
+ * base must be `https://kedaipal.com/claim/{{1}}`, added via Meta's
+ * **Add variable** control (never hand-typed braces — the 86eyheqzv lesson;
+ * the pre-router placeholder rescue covers a mis-registration either way).
+ */
+export function claimLinkTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CLAIM_LINK_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * Seller WhatsApp order alerts (86eyhw9zy) — the Meta-approved utility
  * templates that notify the SELLER's own number (sellers have no open service
  * window with the shared WABA, so free-form text can't reach them). Same

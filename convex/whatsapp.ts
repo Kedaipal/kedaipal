@@ -12,12 +12,17 @@ import {
 	refreshWaProfileName,
 } from "./customers";
 import {
+	claimLinkTemplateName,
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
 	sellerPaymentReceivedTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
+import {
+	describeClaimWindow,
+	effectiveClaimStatus,
+} from "./lib/orderClaims";
 import {
 	type ConfirmationPushStatus,
 	classifyPushFailure,
@@ -1011,7 +1016,7 @@ export const getOrderForSellerAlert = internalQuery({
 		retailerId: Id<"retailers">;
 		shortId: string;
 		status: Doc<"orders">["status"];
-		source: "storefront" | "counter" | undefined;
+		source: Doc<"orders">["source"];
 		customerName: string;
 		total: number;
 		currency: string;
@@ -1639,5 +1644,142 @@ export const notifyCounterOrderCreated = internalAction({
 		// cashier's Done screen (Download / Share, for handing it over there and
 		// then) and the buyer's own tracking page, whose link is in the message
 		// above.
+	},
+});
+
+// --- Claim links (86eyq0epn, docs/claim-links.md) ---------------------------
+
+/** Load what notifyClaimLink needs — claim + store, status judged live. */
+export const getClaimMeta = internalQuery({
+	args: { claimId: v.id("orderClaims") },
+	handler: async (
+		ctx,
+		{ claimId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		waPhone: string;
+		buyerName: string | undefined;
+		storeName: string;
+		locale: Locale;
+		currency: string;
+		itemsTotal: number;
+		windowMinutes: number;
+		token: string;
+		status: "open" | "completed" | "cancelled" | "expired";
+	} | null> => {
+		const claim = await ctx.db.get(claimId);
+		if (!claim) return null;
+		const retailer = await ctx.db.get(claim.retailerId);
+		if (!retailer) return null;
+		return {
+			retailerId: claim.retailerId,
+			waPhone: claim.waPhone,
+			buyerName: claim.buyerName,
+			storeName: retailer.storeName,
+			locale: pickLocale(retailer.locale),
+			currency: claim.currency,
+			itemsTotal: claim.lines.reduce((sum, l) => sum + l.price * l.quantity, 0),
+			windowMinutes: claim.windowMinutes,
+			token: claim.token,
+			status: effectiveClaimStatus(claim, Date.now()),
+		};
+	},
+});
+
+/**
+ * Scheduled by orderClaims.sendClaim / resendClaim: push the buyer their
+ * price-locked checkout link as a Meta utility template (the buyer may have no
+ * open service window — the seller keyed their number by hand). Env-gated
+ * (WHATSAPP_CLAIM_LINK_TEMPLATE, unset ⇒ silently unavailable; the claims UI
+ * always offers the copyable link as the manual fallback).
+ *
+ * Category is `utility_template`, deliberately NOT transactional (ticket AC:
+ * respect wabaProtection.canSend) — a claim is an OFFER the seller initiated,
+ * not an order event the buyer is owed, so the kill switch, caps, quality
+ * throttle and opt-outs all apply. A blocked/failed send stamps
+ * `lastSendOutcome: "failed"` so the claims list surfaces the share-it-yourself
+ * fallback. Transient failures retry on the shared classifier's schedule.
+ *
+ * Registered body params: {{1}} buyer name, {{2}} store name, {{3}} locked
+ * items total, {{4}} the window in words ("15 minutes"); button URL base
+ * `https://kedaipal.com/claim/{{1}}` (the claim token — its own parameter
+ * namespace, registered via Add variable).
+ */
+export const notifyClaimLink = internalAction({
+	args: {
+		claimId: v.id("orderClaims"),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { claimId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		const templateName = claimLinkTemplateName();
+		if (!templateName) {
+			// No template configured — the WhatsApp leg is unavailable. Stamp failed
+			// so the seller is handed the copy-link fallback instead of assuming it
+			// sent.
+			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
+				claimId,
+				outcome: "failed",
+			});
+			return;
+		}
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getClaimMeta, { claimId })
+			.catch((err) => {
+				console.error("WA claim-link lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		// A claim that died between schedule and send (cancelled / superseded /
+		// expired / completed) must not message the buyer.
+		if (meta.status !== "open") return;
+
+		const locale = pickLocale(meta.locale);
+		const languageCode = TEMPLATE_LANGUAGE[locale];
+		const money = `${meta.currency} ${(meta.itemsTotal / 100).toFixed(2)}`;
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.waPhone, {
+				kind: "template",
+				templateName,
+				languageCode,
+				bodyParams: [
+					// Meta rejects empty params — a nameless buyer gets a neutral word.
+					meta.buyerName ?? (locale === "ms" ? "kawan" : "there"),
+					meta.storeName,
+					money,
+					describeClaimWindow(meta.windowMinutes, languageCode),
+				],
+				urlButtonParam: meta.token,
+			});
+			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
+				claimId,
+				outcome: receipt?.blocked ? "failed" : "sent",
+			});
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA claim-link send failed", { claimId, attempt, outcome, err });
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifyClaimLink,
+					{ claimId, attempt: attempt + 1 },
+				);
+				return;
+			}
+			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
+				claimId,
+				outcome: "failed",
+			});
+		}
 	},
 });

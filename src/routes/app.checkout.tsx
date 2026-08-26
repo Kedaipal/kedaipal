@@ -21,6 +21,7 @@ import {
 	Plus,
 	QrCode,
 	Search,
+	Send,
 	Trash2,
 	UserCheck,
 	UserX,
@@ -43,6 +44,10 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
+import {
+	ClaimsPanel,
+	SendClaimDialog,
+} from "../components/claim/send-claim";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -173,7 +178,12 @@ function CounterCheckoutRoute() {
 					}}
 				/>
 			) : (
-				<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
+				<>
+					<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
+					{/* Claim links sent to buyers (86eyq0epn) — live countdown, resend,
+					    cancel, and recent outcomes. Renders nothing until one is sent. */}
+					<ClaimsPanel onResume={openSession} />
+				</>
 			)}
 		</div>
 	);
@@ -230,8 +240,10 @@ function ActiveSession({
 				currency={retailer.currency ?? "MYR"}
 				country={retailer.country}
 				draft={session.draft}
+				defaultClaimWindowMinutes={retailer.claimLinkWindowMinutes}
 				onCreated={onCreated}
 				onCancel={onCancelActive}
+				onSentToBuyer={onBackToList}
 			/>
 		) : null;
 
@@ -1290,8 +1302,10 @@ function BuildOrderScreen({
 	currency,
 	country,
 	draft,
+	defaultClaimWindowMinutes,
 	onCreated,
 	onCancel,
+	onSentToBuyer,
 }: {
 	retailerId: Id<"retailers">;
 	sessionId: SessionId;
@@ -1310,6 +1324,8 @@ function BuildOrderScreen({
 	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
 	country: Country;
 	draft: SessionDraft | undefined;
+	/** Claim links (86eyq0epn): the store's remembered payment window. */
+	defaultClaimWindowMinutes: number | undefined;
 	onCreated: (created: {
 		shortId: string;
 		orderId: Id<"orders">;
@@ -1318,6 +1334,8 @@ function BuildOrderScreen({
 	// Cancel the whole checkout (customer walked / changed their mind). Drops the
 	// session + any items and returns to the open-checkouts list.
 	onCancel: () => void;
+	/** A claim link was sent — back to the list (the ClaimsPanel takes over). */
+	onSentToBuyer: () => void;
 }) {
 	// Counter uses listForCounter (not the public list) so hidden, counter-only
 	// SKUs — e.g. a pre-priced event product — are ringable in person while
@@ -1364,6 +1382,8 @@ function BuildOrderScreen({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Cancel-the-whole-checkout confirm (customer changed their mind at the counter).
 	const [cancelOpen, setCancelOpen] = useState(false);
+	// "Send to buyer to complete" (claim link, 86eyq0epn) — window picker dialog.
+	const [sendOpen, setSendOpen] = useState(false);
 	// Per-variant price text for custom/quote lines (keyed by variantId). The cart
 	// line holds the parsed cents; this holds the in-progress input string.
 	const [customPriceInput, setCustomPriceInput] = useState<
@@ -2028,6 +2048,39 @@ function BuildOrderScreen({
 						>
 							{`Review order · ${formatPrice(total, currency)}`}
 						</Button>
+						{/* Claim link (86eyq0epn): hand the rest of checkout to the buyer
+						    — they add address, date & payment on a price-locked page.
+						    Identified buyers only (an anonymous sale has nobody to send
+						    to); every line must be priced first (the claim freezes them). */}
+						{!anonymous ? (
+							(() => {
+								const unpriced = cartEntries.some(([, l]) => l.price <= 0);
+								const sendDisabled = cartEntries.length === 0 || unpriced;
+								return (
+									<>
+										<Button
+											type="button"
+											variant="outline"
+											onClick={() => setSendOpen(true)}
+											disabled={sendDisabled}
+											title={
+												unpriced
+													? "Set a price for every custom item first"
+													: undefined
+											}
+											className="mt-2 h-11 w-full"
+										>
+											<Send className="size-4" aria-hidden />
+											Send to buyer to complete
+										</Button>
+										<p className="mt-1.5 text-center text-xs text-muted-foreground">
+											They get a WhatsApp link to add their address, delivery
+											&amp; payment — your prices stay locked.
+										</p>
+									</>
+								);
+							})()
+						) : null}
 						{/* Escape hatch: the customer walked or changed their mind. Cancels
 						    the whole checkout (session + items) — confirmed first since it's
 						    destructive. */}
@@ -2093,6 +2146,24 @@ function BuildOrderScreen({
 						},
 					);
 				}}
+			/>
+			<SendClaimDialog
+				open={sendOpen}
+				onOpenChange={setSendOpen}
+				sessionId={sessionId}
+				buyerName={buyer.displayName}
+				itemCount={cartEntries.reduce((n, [, l]) => n + l.qty, 0)}
+				itemsTotal={total}
+				currency={currency}
+				defaultWindowMinutes={defaultClaimWindowMinutes}
+				items={cartEntries.map(([variantId, l]) => ({
+					variantId: variantId as Id<"productVariants">,
+					quantity: l.qty,
+					// Same rule as the draft/create payloads: custom lines always carry
+					// their price, standard lines only when the seller adjusted them.
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+				}))}
+				onSent={onSentToBuyer}
 			/>
 			<ConfirmCheckoutDialog
 				open={confirmOpen}
