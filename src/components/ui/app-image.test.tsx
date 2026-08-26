@@ -421,6 +421,83 @@ describe("AppImage — image proxy + srcset (86eypxght)", () => {
 	});
 });
 
+describe("AppImage — retry (86eypxgff) composed with the proxy (86eypxght)", () => {
+	const UUID = "3346125e-42d4-4560-a3e1-abf7438de45f";
+	const STORAGE = `https://qualified-chihuahua-441.convex.cloud/api/storage/${UUID}`;
+
+	it("retries a failed PROXIED load on the same proxied URL, keeping its srcset", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src={STORAGE} alt="Cake" sizes="50vw" />,
+			);
+			const first = imgIn(container);
+			expect(first?.getAttribute("src")).toBe(`/img/${UUID}?w=640`);
+
+			failAndFlush(container);
+
+			// A retry must remount against the SAME proxied candidate — not fall
+			// back to the raw storage URL, and not drop the srcset, or the retry
+			// would quietly re-download the multi-MB original the proxy exists to
+			// avoid.
+			const retried = imgIn(container);
+			expect(retried).not.toBe(first);
+			expect(retried?.getAttribute("src")).toBe(`/img/${UUID}?w=640`);
+			expect(retried?.getAttribute("srcset")).toContain(`/img/${UUID}?w=160 160w`);
+			expect(retried?.getAttribute("sizes")).toBe("50vw");
+			expect(retried?.getAttribute("src")).not.toContain("convex.cloud");
+
+			fireEvent.load(retried as HTMLImageElement);
+			expect(skeletonIn(container)).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("still gives up after the bounded budget on a proxied image", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src={STORAGE} alt="Broken cake" sizes="50vw" />,
+			);
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) failAndFlush(container);
+			expect(imgIn(container)).toBeNull();
+			expect(screen.getByText("Broken cake")).toBeTruthy();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("switching to a different product image resets the retry budget AND re-proxies", () => {
+		const OTHER = "9f1c2b3a-1111-4222-8333-444455556666";
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(
+				<AppImage src={STORAGE} alt="First" sizes="50vw" />,
+			);
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) failAndFlush(container);
+			expect(imgIn(container)).toBeNull();
+
+			rerender(
+				<AppImage
+					src={`https://qualified-chihuahua-441.convex.cloud/api/storage/${OTHER}`}
+					alt="Second"
+					sizes="50vw"
+				/>,
+			);
+
+			// Fresh budget, and the NEW file is proxied too — the reset keys off
+			// the original `src` prop, which is what the proxy derives from.
+			expect(imgIn(container)?.getAttribute("src")).toBe(`/img/${OTHER}?w=640`);
+			failAndFlush(container);
+			expect(imgIn(container)?.getAttribute("src")).toBe(`/img/${OTHER}?w=640`);
+			expect(skeletonIn(container)).not.toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("AppImage — reduced motion", () => {
 	const originalMatchMedia = window.matchMedia;
 
