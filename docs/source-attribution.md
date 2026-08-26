@@ -29,8 +29,8 @@ never disagree:
   `tiktok-live` for claim-link orders `86eyq0epn`). **Free-form tags render
   verbatim** — a seller can invent `?src=raya-promo` and see it in the report
   without us shipping anything.
-- `SHARE_TAG_PRESETS` — the channel presets both preset surfaces render
-  (TikTok / Instagram / Facebook / WhatsApp), one list so they can't drift.
+- `SHARE_TAG_PRESETS` — the channel presets the tagged-link builder renders
+  (TikTok / Instagram / Facebook / WhatsApp).
 
 ## Capture (client, session-scoped)
 
@@ -84,17 +84,31 @@ never disagree:
   the `?src=` mechanic and links the poster; when every order is untagged, a
   footer nudge explains pasting a tagged link in a TikTok bio/live chat.
 
-## Preset surfaces (where a seller gets a tagged link)
+## Where a seller gets a tagged link
 
-- **`/app/poster`** — a "Track orders from" segmented row (rendered whenever
-  the sheet carries an online QR; hidden on the counter-only template):
-  `Poster` (= the default `?src=online`) or a `SHARE_TAG_PRESETS` channel.
-  Retags **only the online QR** (`posterQrUrls(origin, slug, onlineTag?)`) —
-  the counter QR/fallback keeps its own meaning. Helper line under the row
-  names the consequence and links Insights.
-- **StorefrontQrDialog** (dashboard Home) — a "Tagged share links" card: one
-  tap copies `<storefrontUrl>?src=<tag>` per preset, for pasting into a
-  TikTok bio / live chat / IG profile.
+**One surface: the dashboard Home store-link card** —
+`src/components/dashboard/tagged-share-links.tsx`, a "Tagged links" row sitting
+directly under **Copy link / Open live**, with one chip per
+`SHARE_TAG_PRESETS` entry. A tap copies `<storefrontUrl>?src=<tag>` and stamps
+the same `linkSharedAt` "shared their link" signal the plain copy button does
+(a denied clipboard shows the URL in the toast rather than failing silently, so
+the seller can still copy by hand). All-tier, matching capture — a Starter
+seller must be able to build a tagged link even though the report is Pro.
+
+**Deliberately NOT on any QR surface** (owner call, Arif):
+
+- The **poster** (`/app/poster`) keeps its two fixed tags, `?src=counter` and
+  `?src=online`. A printed sheet is a physical artifact that outlives any
+  campaign, so it describes *itself* ("Poster QR") and must not carry a
+  campaign tag — a poster printed for one live would misattribute every scan
+  it collects for the rest of its life on the wall.
+- The **StorefrontQrDialog** is untouched; its QR codes still encode the bare
+  storefront URL.
+
+Both files are byte-identical to their pre-feature state. The consequence is
+that a QR scan is always attributable to the *surface* (poster / parcel label /
+counter), never to a campaign — campaigns are links you paste, and that is the
+one place the builder lives.
 
 ## Emitters today (all captured for free)
 
@@ -102,7 +116,7 @@ never disagree:
 | --- | --- |
 | `counter` / `online` | poster QR fallbacks (`posterQrUrls`) |
 | `awb` | despatch-label QR (`convex/awb.ts` `storeUrlFor`) |
-| any preset / free-form | poster "Track orders from", QR-dialog share links, seller's own links |
+| any preset / free-form | Home's tagged share links, or a seller's own hand-written tag |
 
 (`storefront_badge` is NOT in this system — it tags kedaipal.com itself.)
 
@@ -125,8 +139,9 @@ never disagree:
   / buckets garbage to `other` without failing the order.
 - `src/hooks/useSourceAttribution.test.tsx` — capture precedence, last-touch
   overwrite, per-store keying, empty-vs-garbage, no-slug no-throw.
-- `src/components/poster/store-poster.test.tsx` — the preset retags only the
-  online QR.
+- `src/components/dashboard/tagged-share-links.test.tsx` — a chip per preset,
+  the copied URL carries that preset's tag, the copy counts as sharing, and a
+  denied clipboard surfaces the link instead of failing silently.
 
 ## Not in v1
 

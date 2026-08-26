@@ -2,13 +2,11 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Copy, Download, X } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useRef } from "react";
 import QRCode from "react-qr-code";
-import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { SHARE_TAG_PRESETS } from "../../../convex/lib/attribution";
 import { useActAsRetailerId } from "../../hooks/useDashboardRetailer";
 import { Button } from "../ui/button";
 
@@ -100,42 +98,6 @@ export function StorefrontQrDialog({
 									Counter QR loading…
 								</div>
 							)}
-						</div>
-
-						{/* Tagged share links (86eyq0eq9): one tap copies the storefront
-						    URL with a `?src=` tag, so orders from each channel show
-						    their source on the Insights page. */}
-						<div className="flex flex-col gap-3 rounded-2xl border border-border p-4">
-							<div>
-								<p className="text-sm font-semibold">Tagged share links</p>
-								<p className="text-xs text-muted-foreground">
-									Paste one in your TikTok bio, live chat or IG profile —
-									orders from each link show their source in Insights.
-								</p>
-							</div>
-							<div className="flex flex-wrap gap-2">
-								{SHARE_TAG_PRESETS.map((p) => (
-									<button
-										key={p.tag}
-										type="button"
-										onClick={() => {
-											const url = `${storefrontUrl}?src=${p.tag}`;
-											void navigator.clipboard
-												.writeText(url)
-												.then(() => toast.success(`${p.label} link copied`))
-												.catch(() =>
-													toast.error(
-														`Couldn't copy — the link is ${url}`,
-													),
-												);
-										}}
-										className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border px-3.5 text-sm font-semibold transition-colors hover:bg-muted"
-									>
-										<Copy className="size-3.5 text-muted-foreground" />
-										{p.label}
-									</button>
-								))}
-							</div>
 						</div>
 
 						<Link

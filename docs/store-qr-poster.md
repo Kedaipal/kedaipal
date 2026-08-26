@@ -169,15 +169,15 @@ a wrap pushes the stack toward the pinned footer (~3mm clearance).
 - **Online QR (bottom)** = storefront `?src=online` from `posterQrUrls()`.
   **`?src=` is CONSUMED as source attribution since `86eyq0eq9`** — the
   storefront captures it for the session, `orders.create` stamps it as
-  `orders.attributionSource`, and Insights reports orders/revenue per source
-  (see `docs/source-attribution.md`). The route's **"Track orders from"**
-  preset row (shown whenever the sheet carries an online QR — hidden on the
-  counter-only template) retags the online QR (`online` default / TikTok /
-  Instagram / Facebook / WhatsApp via the shared `SHARE_TAG_PRESETS`), so a
-  poster propped up in a TikTok live labels its orders `tiktok`.
+  `orders.attributionSource`, and Insights reports these scans as **"Poster
+  QR"** (see `docs/source-attribution.md`). The poster's two tags are **fixed**
+  and describe the sheet itself: a campaign-tagged QR was built and then
+  **rejected** (owner call, Arif) because a printed poster outlives the
+  campaign that produced it and would misattribute every later scan. Campaign
+  tags live on copy-paste links (Home's "Tagged links" row), never on a QR.
 - `StorePoster` is fully presentational: the route resolves both URLs and passes
-  `counterUrl` / `onlineUrl` in. `posterQrUrls(origin, slug, onlineTag?)` only
-  builds the storefront pair used for the online QR + the counter fallback.
+  `counterUrl` / `onlineUrl` in. `posterQrUrls(origin, slug)` only builds the
+  storefront pair used for the online QR + the counter fallback.
 - **Rotation:** rotating the token (here or on the Counter Checkout Store QR
   card, `86ey5m35w`) kills old printed posters — both surfaces encode the same
   token. Re-print after a rotate.

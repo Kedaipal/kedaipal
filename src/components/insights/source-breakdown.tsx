@@ -39,14 +39,15 @@ export function SourceBreakdown({
 				</h3>
 				<p className="mt-1 text-xs text-muted-foreground">
 					Add <span className="font-mono">?src=tiktok</span> (or any tag) to
-					your store link — orders from it are counted here. Presets live in
-					your <Link
-						to="/app/poster"
+					your store link — orders from it are counted here. Ready-made tagged
+					links sit under your store link on{" "}
+					<Link
+						to="/app"
 						className="font-semibold text-accent-emphasis hover:underline"
 					>
-						store poster
-					</Link>{" "}
-					and the QR dialog on Home.
+						Home
+					</Link>
+					.
 				</p>
 			</div>
 

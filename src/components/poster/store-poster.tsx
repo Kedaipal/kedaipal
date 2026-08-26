@@ -52,21 +52,24 @@ interface StorePosterProps {
 /**
  * Storefront QR targets. `?src=` is the storefront attribution tag
  * (86eyq0eq9): the storefront captures it for the session and stamps it onto
- * the order, so Insights can report orders per source. `online` is the
- * poster's default online-QR tag — `onlineTag` overrides it (the route's
- * "Track orders from" preset, e.g. `tiktok` for a poster propped up in a live
- * stream). `counter` is only the fallback the route uses when the walk-in
- * `waUrl` isn't available (WABA number unset) — the primary counter target is
- * the KPS deep link. See docs/store-qr-poster.md + docs/source-attribution.md.
+ * the order, so Insights reports these scans as "Poster QR" / "Counter".
+ *
+ * These two tags are FIXED and describe the printed sheet itself — a poster is
+ * a physical artifact that outlives any campaign, so it must not carry a
+ * campaign tag (owner call, Arif). Campaign links are copy-paste links, built
+ * elsewhere; see docs/source-attribution.md.
+ *
+ * `counter` is only the fallback the route uses when the walk-in `waUrl` isn't
+ * available (WABA number unset) — the primary counter target is the KPS deep
+ * link. See docs/store-qr-poster.md.
  */
 export function posterQrUrls(
 	origin: string,
 	slug: string,
-	onlineTag = "online",
 ): { counter: string; online: string } {
 	return {
 		counter: `${origin}/${slug}?src=counter`,
-		online: `${origin}/${slug}?src=${onlineTag}`,
+		online: `${origin}/${slug}?src=online`,
 	};
 }
 

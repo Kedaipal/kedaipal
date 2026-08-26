@@ -35,6 +35,7 @@ import {
 	StatusBadge,
 } from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
+import { TaggedShareLinks } from "../components/dashboard/tagged-share-links";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -583,6 +584,12 @@ function DashboardHome() {
 							</a>
 						</Button>
 					</div>
+					{/* Campaign-tagged variants of the same link (86eyq0eq9) — sits
+					    with the link actions, never on a QR surface. */}
+					<TaggedShareLinks
+						storefrontUrl={storefrontUrl}
+						onCopy={stampShare}
+					/>
 				</section>
 			) : null}
 

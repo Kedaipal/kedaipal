@@ -28,15 +28,6 @@ describe("posterQrUrls", () => {
 			online: "https://kedaipal.com/kek-lapis?src=online",
 		});
 	});
-
-	it("the online tag preset (86eyq0eq9) retags ONLY the online QR", () => {
-		// The "Track orders from" picker: a poster shown in a TikTok live tags
-		// its orders "tiktok"; the counter fallback keeps its own meaning.
-		expect(posterQrUrls("https://kedaipal.com", "kek-lapis", "tiktok")).toEqual({
-			counter: "https://kedaipal.com/kek-lapis?src=counter",
-			online: "https://kedaipal.com/kek-lapis?src=tiktok",
-		});
-	});
 });
 
 describe("StorePoster", () => {
