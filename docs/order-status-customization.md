@@ -1,9 +1,45 @@
 # Order Status Customization (Per-Retailer Stages)
 
-**Status:** Phase 1 **shipped** (14 Jun 2026); Phase 2 **shipped** (14 Jun 2026).
+**Status:** Phase 1 **shipped** (14 Jun 2026); Phase 2 **shipped** (14 Jun 2026);
+per-stage WhatsApp notification **removed** (4 Aug 2026, `86eyd63r8`).
 **Date:** 13 Jun 2026 (Phase 1 + 2 shipped 14 Jun 2026)
-**Related:** [`order-lifecycle.md`](./order-lifecycle.md) · [`proof-approval.md`](./proof-approval.md) · [`messaging-channels.md`](./messaging-channels.md)
+**Related:** [`order-lifecycle.md`](./order-lifecycle.md) · [`one-message-per-order.md`](./one-message-per-order.md) · [`proof-approval.md`](./proof-approval.md) · [`messaging-channels.md`](./messaging-channels.md)
 **ClickUp:** Bearcamp onboarding [`86exxt0g4`](https://app.clickup.com/t/86exxt0g4) · Discussion [`86exxt46h`](https://app.clickup.com/t/86exxt46h)
+
+> ## ⚠️ Stages no longer message the buyer (4 Aug 2026, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8))
+>
+> **The per-stage `notify` toggle is gone, and so is the `MAX_NOTIFY_STAGES = 5`
+> cap that bounded it.** An order sends the buyer exactly ONE outbound WhatsApp
+> message — the confirmation — and stages never send anything. Removed:
+> `OrderStage.notify` (schema widened to `v.optional`, dropped by
+> `sanitizeOrderStages`, decays to absent on the seller's next save),
+> `MAX_NOTIFY_STAGES`, `stageNotifyPlan`, `StageNotifyPlan` (both
+> `convex/lib/orderStatus.ts` and the `src/lib` mirror), the
+> `internal.whatsapp.notifyStageEntry` action, `renderStageUpdate` in
+> `whatsappCopy.ts`, and the editor's per-stage checkbox.
+>
+> **This resolves the open question this doc left behind.** The Phase-2 limits
+> note said the ≤5 cap was "an **interim cost guard**, to be re-tuned alongside
+> the WABA rate-limit / per-tier messaging-cost work". That work arrived, and the
+> answer was not a bigger or per-tier number — Meta bills every delivered message
+> from 1 Oct 2026, and the honest budget turned out to be **one per order, on
+> every plan**. A cap of N > 0 would have kept the same class of bug (a seller
+> quietly spending margin by ticking boxes) with a different constant. See
+> [`one-message-per-order.md`](./one-message-per-order.md).
+>
+> **Everything else about stages is unchanged and still the point of the
+> feature.** Stages remain the seller's own vocabulary for the steps an order
+> goes through: they drive the dashboard advance buttons, the inbox badges, and
+> the buyer's timeline on `/track/<token>` — which updates *reactively*, so the
+> buyer sees "Drying" the instant the seller taps it. That was always the
+> primary visibility surface (this doc's own Phase-2 note: *"the buyer
+> self-serves here anytime… not every stage needs a push"*); it is now the only
+> one. The editor says so in a line under the stage list, so a seller who relied
+> on stage pings isn't left wondering where the toggle went.
+>
+> Sections below are the as-built record from June and are left intact for
+> history; read every mention of `notify` / `stageNotifyPlan` /
+> `notifyStageEntry` / `notifyStatusChange` / "≤5 notify stages" as **removed**.
 
 ## Problem
 
@@ -40,15 +76,16 @@ invariant:
 | Canonical anchor | What the system hangs on it                                                                                                     |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `pending`        | Created at checkout; never a manual target. System-managed.                                                                     |
-| `confirmed`      | Payment auto-confirm target; dashboard "new" count; notification eligibility.                                                   |
+| `confirmed`      | Payment auto-confirm target; dashboard "new" count. _(Was also "notification eligibility" — no stage notifies now.)_             |
 | `packed`         | **Mockup gate boundary** (`confirmed→packed` blocked until approved/waived); "production started".                              |
 | `shipped`        | Unlocks `carrierTrackingUrl`.                                                                                                   |
 | `delivered`      | Terminal success.                                                                                                               |
 | `cancelled`      | Terminal; triggers stock restoration + customer-aggregate decrement (first transition only). System action, not a seller stage. |
 
-Indexes (`by_retailer_status`), payment/mockup gating, cancel logic, dashboard
-counts, and `notifyStatusChange` eligibility all continue to read these literals.
-**No migration of the canonical state, ever.**
+Indexes (`by_retailer_status`), payment/mockup gating, cancel logic and dashboard
+counts all continue to read these literals. **No migration of the canonical
+state, ever.** _(`notifyStatusChange` eligibility used to be on this list; that
+action is deleted — `86eyd63r8`.)_
 
 ### Layer 2 — Buyer-visible journey (seller-defined, ordered, custom)
 
@@ -138,10 +175,13 @@ are **untouched**.
 - **Email** — `convex/lib/emailCopy.ts` is _retailer-facing alerts_ (`newOrder`,
   `orderConfirmed`, `paymentClaimed`, `mockup*`). There is **no buyer status-change
   email**. `statusLabels` does not touch email.
-- **WhatsApp status wording** — the seller already has a per-status _full-message_
-  override via `messageTemplates` (applied in `convex/whatsapp.ts:411`). Phase 1
-  keeps WA on that existing seam; `statusLabels` drives the **UI surfaces** only.
-  See `DECISION 4`.
+- **WhatsApp status wording** — the seller had a per-status _full-message_
+  override via `messageTemplates`. Phase 1 kept WA on that existing seam;
+  `statusLabels` drives the **UI surfaces** only. See `DECISION 4`. _(Since
+  `86eyd63r8` there are no status messages at all: the per-status `TemplateKey`s
+  are deleted and `TEMPLATE_KEYS` is `["confirm"]` —_ `statusLabels` _/ stage
+  labels are now the only place this wording lives, and they reach the buyer via
+  the tracking page.)_
 
 ### Edge cases
 
@@ -237,7 +277,9 @@ orderStages: v.optional(v.array(v.object({
   ),
   label: v.object({ en: v.string(), ms: v.string() }),
   description: v.optional(v.object({ en: v.string(), ms: v.string() })), // buyer-visible
-  notify: v.boolean(),             // push a WhatsApp on entry? (see DECISION 2)
+  // notify: v.boolean()          // REMOVED 86eyd63r8 — stages never message the
+  //                              // buyer. Field kept v.optional in the live
+  //                              // schema so old rows validate; nothing writes it.
   sortOrder: v.number(),
 }))),
 
@@ -257,7 +299,9 @@ or deleted.
 - Stage anchors must be **monotonically non-decreasing** by `sortOrder` — you can't
   place a `packed` stage before a `confirmed` stage. Validated at the mutation.
 - Advancing to a stage **sets `currentStageId`**, derives the canonical `status` from
-  `anchor`, writes an `orderEvents` row, and (if `stage.notify`) sends one WhatsApp.
+  `anchor`, and writes an `orderEvents` row. ~~and (if `stage.notify`) sends one
+  WhatsApp~~ — removed by `86eyd63r8`; the buyer's timeline updates reactively
+  instead.
 - The **mockup gate** now fires on the _first_ transition into any `packed`-anchored
   stage. The carrier-URL rule keys off the first `shipped`-anchored stage. All
   existing gate code reads the anchor, unchanged in spirit.
@@ -302,32 +346,30 @@ decisions/deviations recorded:
   path — defaults are 4 anchor stages built from `statusLabels`), `resolveCurrentStage`
   (derives from `status` when `currentStageId` is missing/stale — no backfill),
   `stageLabel`/`stageDescription`, `collectStageConfigErrors`/`assertValidOrderStages`
-  (cap, monotonic anchors, band, label caps), `stageNotifyPlan`, and
-  `resolveAnchorLabel` (dashboard buckets speak the seller's vocabulary).
+  (cap, monotonic anchors, band, label caps), ~~`stageNotifyPlan`~~ (deleted,
+  `86eyd63r8`), and `resolveAnchorLabel` (dashboard buckets speak the seller's
+  vocabulary).
 - **Advance.** New `orders.advanceToStage({orderId, stageId})` derives the
   canonical status from `stage.anchor`. `updateStatus` is **kept** for cancel
   (stock-restore/aggregates) and as the canonical path. The **mockup gate is
   checked by anchor ordinal** (`>= packed`), which also closes the bypass where a
   config skips the packed anchor — config can't ship a made-to-order item without
   mockup resolution. Carrier URL still only on a shipped-anchored entry.
-- **Notify model (the one fork the spec didn't fully pin).** `stage.notify` is the
-  single source of truth, routed by the pure `stageNotifyPlan`:
-  anchor-**crossing** → `notifyStatusChange` (reuses the rich Phase-1 status copy
-  **and `messageTemplates` overrides** — zero regression); **within** an anchor →
-  the new generic `notifyStageEntry` (`renderStageUpdate`); `confirmed` → nothing
-  (the confirm/payment flow owns buyer comms then, as today).
-- **Anchor crossings speak the seller's stage vocabulary (2026-07-03, `86ey570am`).**
-  The original crossing path sent only the generic canonical copy ("packed and
-  ready for pickup") even when the seller renamed the stage ("Ready for
-  Collection") and wrote a buyer-visible description — so WhatsApp contradicted
-  the tracking timeline. `notifyStatusChange` now renders the entered stage's
-  **label + description** via `renderStageUpdate` (keeping the carrier link on
-  shipped crossings) whenever the retailer has configured `orderStages`.
-  Precedence: authored `messageTemplates` override → custom stage copy → default
-  catalog. Sellers on default (synthesized) stages and `cancelled` keep the rich
-  canonical copy — zero regression. Stage resolution prefers the order's
-  `currentStageId`, falling back to the first stage on the anchor for plain
-  `updateStatus` transitions.
+- **~~Notify model~~ — REMOVED (`86eyd63r8`).** Phase 2 routed buyer
+  notifications through `stage.notify` and the pure `stageNotifyPlan`:
+  anchor-**crossing** → `notifyStatusChange` (rich Phase-1 status copy +
+  `messageTemplates` overrides); **within** an anchor → the generic
+  `notifyStageEntry` (`renderStageUpdate`); `confirmed` → nothing. **All three
+  arms are deleted.** `advanceToStage` now writes the stage + event and stops;
+  the buyer sees the move on their order page.
+- **~~Anchor crossings speak the seller's stage vocabulary~~ (2026-07-03,
+  `86ey570am`) — REMOVED with the send it fixed.** That fix made
+  `notifyStatusChange` render the entered stage's label + description via
+  `renderStageUpdate` so WhatsApp couldn't contradict the tracking timeline. The
+  contradiction it solved is now structurally impossible: there is only one
+  surface. The seller's stage vocabulary still reaches the buyer — the timeline
+  on `/track/<token>` renders their labels and descriptions directly, resolving
+  the order's `currentStageId` (falling back to the first stage on the anchor).
 - **Migration: none.** Intentionally read-time + additive — synthesis covers
   retailers without `orderStages`, derivation covers orders without
   `currentStageId`, and every new field is optional. A no-op migration would be
@@ -337,8 +379,10 @@ decisions/deviations recorded:
   Phase-1 `StatusLabelsForm` — stages are the general model, so renaming a stage
   subsumes relabeling. Add/remove, EN+MS label, optional EN+MS buyer note, anchor
   dropdown ("counts as → Accepted / In production / Ready / Done", DECISION 1),
-  per-stage notify toggle (new intermediate stages default **off**, DECISION 2),
-  inline validation, and a "Reset to defaults". **Reorder via the shared
+  ~~per-stage notify toggle~~ (removed, `86eyd63r8` — replaced by one line under
+  the stage list saying stages name the steps on the buyer's order page and
+  don't send a WhatsApp), inline validation, and a "Reset to defaults".
+  **Reorder via the shared
   `SortableList` (@dnd-kit), not up/down arrows** — the project's recorded
   drag-to-sort standard overrides the brief's "up/down" note.
 - **Dashboard.** Order detail advances via the seller's stage list (next stage +
@@ -352,12 +396,13 @@ decisions/deviations recorded:
   singular: exactly one "Accepted" (confirmed) and one "Done" (delivered)** — the
   multi-stage granularity lives in the middle (In production / Ready) band. This
   keeps "accepted"/"done" as natural single moments and avoids a multi-Done
-  dashboard-advance edge + a dead notify toggle on extra Accepted stages.
-  **At most 5 stages may notify on WhatsApp** (confirmed never sends, so it's not
-  counted) — an **interim cost guard**, to be re-tuned alongside the WABA
-  rate-limit / per-tier messaging-cost work (so a Scale-vs-Starter seller can't
-  blow the shared WABA budget by ticking notify on every stage). All three are
-  enforced in `collectStageConfigErrors` (inline in the editor) + the mutation.
+  dashboard-advance edge.
+  **~~At most 5 stages may notify on WhatsApp~~** — the interim cost guard is
+  **gone** (`86eyd63r8`). It was always flagged for re-tuning "alongside the WABA
+  rate-limit / per-tier messaging-cost work"; that work landed as **one message
+  per order, on every plan**, so there is no notify count left to cap and
+  `MAX_NOTIFY_STAGES` is deleted. The two surviving limits are enforced in
+  `collectStageConfigErrors` (inline in the editor) + the mutation.
 - **Tier:** ungated (consistent with Phase 1).
 
 ---
@@ -370,10 +415,13 @@ decisions/deviations recorded:
   they set its anchor? **Recommend:** a friendly dropdown — _"counts as → Accepted /
   In production / Ready / Done"_ — pre-filled sensibly by the default template, so
   most sellers never touch it. (Alt: infer from position — rejected, too magic.)
-- **DECISION 2 — Default for per-stage `notify` (Phase 2).** **Recommend:** default
-  **off** for newly-added intermediate stages, **on** for the anchor-crossing
-  milestones (confirmed/ready/done). Keeps WhatsApp cost + buyer annoyance down;
-  buyer still sees everything on the tracking page.
+- **DECISION 2 — Default for per-stage `notify` (Phase 2). ~~MOOT~~ — the toggle
+  itself is gone (`86eyd63r8`, 4 Aug 2026).** Shipped as recommended (off for new
+  intermediate stages, on for anchor crossings), then removed entirely: an order
+  sends exactly one WhatsApp message, and no stage sends any. The decision's own
+  reasoning is what carried the day — *"buyer still sees everything on the
+  tracking page"* was true, so the pushes were paying Meta to duplicate a surface
+  the buyer already had.
 - **DECISION 3 — Cancel/pending stay system-managed.** **Recommend:** yes — sellers
   customize the `confirmed → delivered` band only. `pending` and `cancelled` are not
   editable stages. Keeps the terminal/cancel logic untouchable by config.
@@ -381,8 +429,13 @@ decisions/deviations recorded:
   drive UI only; WA keeps the existing `messageTemplates` full-message override.
   Bearcamp is self-collect (existing WA copy already says "ready for pickup"/
   "collected"), so there's no gap on day one, and Phase 2's per-stage copy subsumes
-  this.
-- **DECISION 5 — Stage cap (Phase 2).** **Decided + extended:** 20 stages / retailer,
-  **plus** exactly one Accepted (confirmed) and one Done (delivered) stage, **plus**
-  ≤5 notify-enabled stages (interim WhatsApp cost guard — confirmed excluded; revisit
-  with the WABA rate-limit / per-tier cost work). See _Phase 2 — as shipped → Limits_.
+  this. **Overtaken by `86eyd63r8`:** the per-status WhatsApp copy has no sender
+  any more, so `statusLabels` + stage labels drive *everything* the buyer reads —
+  which is what option (a) was aiming at, arrived at from the other direction.
+- **DECISION 5 — Stage cap (Phase 2).** **Decided + extended, then trimmed:** 20
+  stages / retailer, **plus** exactly one Accepted (confirmed) and one Done
+  (delivered) stage. ~~**plus** ≤5 notify-enabled stages~~ — the interim WhatsApp
+  cost guard is removed (`86eyd63r8`); the promised revisit "with the WABA
+  rate-limit / per-tier cost work" resolved to one message per order, so the cap
+  has nothing left to count. See _Phase 2 — as shipped → Limits_ and
+  [`one-message-per-order.md`](./one-message-per-order.md).

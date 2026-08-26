@@ -81,11 +81,11 @@ Helpers that run on **both** backend and frontend are duplicated (not imported) 
 
 Versions are single-sourced in [`convex/lib/legal.ts`](../convex/lib/legal.ts) (mirrored in `src/lib/legal.ts`) as ISO dates:
 
-- `TERMS_VERSION`, `PRIVACY_VERSION`, `AUP_VERSION` (all `2026-05-26` at time of writing)
+- `TERMS_VERSION`, `PRIVACY_VERSION`, `AUP_VERSION` — each moves independently; `convex/lib/legal.ts` is the source of truth (mirrored in `src/lib/legal.ts`)
 - `LEGAL_CONTACT_EMAIL` = `hello@kedaipal.com`
 
 Flow:
-1. `createRetailer` stamps `{terms,privacy,aup}AcceptedAt` + version + best-effort `acceptanceIp` at onboarding.
+1. `createRetailer` stamps `{terms,privacy,aup}AcceptedAt` + version at onboarding. (An `acceptanceIp` column existed until 86eyn25fu; no client ever passed it and a Convex mutation can't observe the request IP, so an always-empty "legal defensibility" field was dropped.)
 2. `recordConsentAcceptance` re-stamps on re-acceptance.
 3. The frontend's `consentIsStale` compares stored versions against current to trigger the re-acceptance banner.
 

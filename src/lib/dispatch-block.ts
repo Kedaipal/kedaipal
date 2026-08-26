@@ -13,6 +13,11 @@ import type { DispatchBlock } from "../../convex/lalamove";
  * (the posture the `Locale` sweep set for exhaustive lookups).
  */
 const BLOCK_COPY: Record<DispatchBlock, string> = {
+	// The only reason with no fix to offer: our Lalamove integration is a
+	// Malaysian market one. Surfaces that can hide themselves (the dispatch
+	// card) do; this line is the fallback for the ones that can't.
+	country_unsupported:
+		"Lalamove rider booking is only available for Malaysian stores right now — mark this order shipped yourself once it's on its way.",
 	not_delivery:
 		"This is a self-collect order — there's nothing to send a rider for.",
 	bad_status:

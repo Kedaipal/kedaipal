@@ -18,15 +18,10 @@ crons.daily(
 	internal.subscriptions.internalDailyBillingStatus,
 );
 
-// Unpaid-order payment reminders: one WhatsApp nudge at day 11 of the 14-day
-// open-payment window (3 days before it closes). 02:00 UTC = 10:00 MYT, a
-// humane hour for a buyer-facing message. See docs/payment-reminder.md.
-crons.daily(
-	"unpaid payment reminders",
-	{ hourUTC: 2, minuteUTC: 0 },
-	internal.paymentReminders.sendDuePaymentReminders,
-	{},
-);
+// NOTE: the day-11 unpaid-payment-reminder cron was removed with the
+// one-message-per-order policy (86eyd63r8) — an order gets exactly one outbound
+// WhatsApp, the confirmation push, and chasing payment is the seller's call from
+// the inbox. See docs/one-message-per-order.md.
 
 // Lalamove checkout-quote hygiene: abandoned deliveryQuotes rows (buyer never
 // completed checkout) are transient by design — purge anything older than a
@@ -57,6 +52,39 @@ crons.daily(
 	"purge stale counter checkout sessions",
 	{ hourUTC: 3, minuteUTC: 45 },
 	internal.counterCheckout.purgeStaleSessions,
+	{},
+);
+
+// Log retention (86eyetzt7) — windows live in convex/lib/retention.ts, policy
+// table in docs/data-retention.md. Three daily purges; orderEvents (tied to
+// order retention, 86eydwct5) and optOuts (a standing legal instruction) are
+// deliberately NOT purged.
+
+// outboundMessageLog rows older than 90 days: each expiring row is first
+// folded into its messageLogRollups (retailer × MYT month × category × status)
+// bucket, so the WhatsApp cost ledger survives in aggregate, then deleted.
+crons.daily(
+	"purge expired outbound message log",
+	{ hourUTC: 4, minuteUTC: 5 },
+	internal.wabaProtection.purgeExpiredOutboundLog,
+	{},
+);
+
+// wabaHealth history older than 90 days — the newest row is ALWAYS kept
+// (canSend reads the latest row as the live quality state; purging it would
+// fail the gateway open to HIGH).
+crons.daily(
+	"purge expired waba health history",
+	{ hourUTC: 4, minuteUTC: 15 },
+	internal.wabaProtection.purgeExpiredWabaHealth,
+	{},
+);
+
+// adminAuditLog rows older than 24 months (the stated compliance window).
+crons.daily(
+	"purge expired admin audit log",
+	{ hourUTC: 4, minuteUTC: 25 },
+	internal.admin.purgeExpiredAdminAudit,
 	{},
 );
 

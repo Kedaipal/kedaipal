@@ -42,6 +42,8 @@ import {
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { DEFAULT_COUNTRY } from "./lib/country";
+import { riderBookingAllowed } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -615,6 +617,7 @@ export const applyWebhookEvent = internalMutation({
 /** Why the Book-delivery button is unavailable — rendered disabled-with-reason
  * on order detail (never a dead end; each reason maps to copy + a fix path). */
 export type DispatchBlock =
+	| "country_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -635,6 +638,14 @@ function dispatchBlockReason(args: {
 	planOk: boolean;
 }): DispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
+	// Country FIRST — ahead of even `not_delivery`, because every reason below
+	// names a fix, and in a market Lalamove doesn't serve there is no fix to
+	// name. A store switched from Malaysia keeps `deliveryBooking.enabled`, so
+	// without this the card fell through to `no_seller_phone` and told a
+	// Singapore seller to "add a Malaysian (+60) WhatsApp number" — advice the
+	// country switch itself refuses to let them take (86eyqgujv).
+	if (!riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
+		return "country_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
@@ -1392,23 +1403,13 @@ export const fetchPodImages = internalAction({
 		});
 		if (!stored) return; // lost an idempotency race — mutation cleaned our blobs
 
-		// Collection jobs keep the photo as the SELLER's hand-over record only —
-		// it shows the rider dropping the buyer's gear at the seller's own
-		// doorstep, and the order isn't delivered, so the "Delivered! 📸"
-		// follow-up would be flatly wrong for the buyer.
-		if (context.deliveryDirection === "collection") return;
-
-		const imageUrls: string[] = [];
-		for (const id of storageIds) {
-			const url = await ctx.storage.getUrl(id);
-			if (url) imageUrls.push(url);
-		}
-		if (imageUrls.length > 0) {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
-				orderId: context.orderId,
-				imageUrls,
-			});
-		}
+		// The rider's drop-off photo is NOT WhatsApp'd (86eyd63r8) — for either
+		// trip direction. It was the one send in the codebase that produced N
+		// messages from a single event (up to 3 images), and the order's single
+		// message has long since gone out. Standard deliveries show the photos on
+		// the buyer's tracking page + the seller's dispatch card; collection jobs
+		// stay seller-only (86eyg0n8e — the shot is the rider at the SELLER's
+		// door, and orders.get already hides it from the track page).
 	},
 });
 
@@ -1466,19 +1467,7 @@ export const devInjectPodImage = internalAction({
 			storageIds: [storageId],
 		});
 		if (!stored) return "job already has POD images — nothing injected";
-		const url = await ctx.storage.getUrl(storageId);
-		if (url) {
-			const jobRow = await ctx.runQuery(internal.lalamove.getPodJobOrder, {
-				jobId,
-			});
-			if (jobRow) {
-				await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
-					orderId: jobRow.orderId,
-					imageUrls: [url],
-				});
-			}
-		}
-		return `injected 1 POD image onto job ${jobId} — check the order card + buyer WhatsApp`;
+		return `injected 1 POD image onto job ${jobId} — check the order card + the buyer's tracking page`;
 	},
 });
 
@@ -1695,7 +1684,12 @@ export const getDeliveryJob = query({
 		return {
 			promptBookOnPacked,
 			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
-			bookingEnabled: retailer.deliveryBooking?.enabled === true,
+			// Agrees with `blockReason` by construction: a stored `enabled` flag
+			// carried in from Malaysia is not a working booking setup, and the
+			// mark-shipped prompt keys off this to decide rider-vs-courier.
+			bookingEnabled:
+				retailer.deliveryBooking?.enabled === true &&
+				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
 			job: latest

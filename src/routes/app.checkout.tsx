@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { Country } from "../../convex/lib/country";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	formatFulfilmentDate,
 	fulfilmentDateBounds,
@@ -43,7 +44,7 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
-import { SendOrderDocument } from "../components/order/send-order-document";
+import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -68,8 +69,9 @@ import {
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
 import { cn } from "../lib/utils";
 
@@ -226,7 +228,7 @@ function ActiveSession({
 					isNewCustomer: session.isNewCustomer,
 					customer: session.customer,
 				}}
-				currency={retailer.currency ?? "MYR"}
+				currency={retailer.currency ?? DEFAULT_CURRENCY}
 				country={retailer.country}
 				draft={session.draft}
 				onCreated={onCreated}
@@ -361,9 +363,14 @@ function OpenCheckoutsList({
 				}}
 				title="Cancel this checkout?"
 				description={
-					pendingCancel
-						? `${pendingCancel.label} and any items added to it will be removed. This can't be undone.`
-						: undefined
+					// Dialogs portal to document.body, so the mask must ride the
+					// description node itself — an ancestor tag can't reach it.
+					pendingCancel ? (
+						<>
+							<span {...MASK_PII}>{pendingCancel.label}</span> and any items
+							added to it will be removed. This can't be undone.
+						</>
+					) : undefined
 				}
 				confirmLabel="Cancel checkout"
 				cancelLabel="Keep it open"
@@ -401,8 +408,8 @@ function EmptyCheckouts() {
  * grouping every way an order begins, so the control reads cleanly on mobile and
  * desktop instead of two competing pill buttons:
  *   1. Show the store QR — buyer scans, their checkout appears + auto-opens here.
- *   2. Enter the buyer's phone — manual bind, buyer still gets a WhatsApp
- *      confirmation + receipt (86ey8vqp6).
+ *   2. Enter the buyer's phone — manual bind, buyer still gets the one WhatsApp
+ *      confirmation (86ey8vqp6).
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
@@ -581,7 +588,7 @@ function CounterCheckoutActions({
 								Enter phone number
 							</span>
 							<span className="block text-xs text-muted-foreground">
-								Buyer gets confirmation & receipt on WhatsApp
+								Buyer gets one WhatsApp with their order link
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -628,14 +635,15 @@ function CounterCheckoutActions({
 				</DialogContent>
 			</Dialog>
 
-			{/* Manual phone bind — buyer still gets their confirmation + receipt. */}
+			{/* Manual phone bind — buyer still gets the one WhatsApp confirmation. */}
 			<Dialog open={phoneOpen} onOpenChange={changePhone}>
 				<DialogContent className="sm:max-w-sm">
 					<DialogHeader>
 						<DialogTitle>Enter buyer's number</DialogTitle>
 						<DialogDescription>
-							We'll message their WhatsApp with the confirmation and receipt —
-							no scan needed.
+							We'll send one WhatsApp confirming the order, with a link to their
+							order page — no scan needed. That message includes our
+							privacy-policy link.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-3">
@@ -740,7 +748,8 @@ function SessionRow({
 				<span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/15 font-mono text-sm font-bold text-accent">
 					{session.pairingCode ?? <UserCheck className="size-5" />}
 				</span>
-				<div className="min-w-0 flex-1">
+				{/* MASK_PII: the buyer's WA profile name — the pairing code stays readable. */}
+				<div {...MASK_PII} className="min-w-0 flex-1">
 					<div className="flex min-w-0 flex-wrap items-center gap-2">
 						<p className="truncate text-sm font-semibold">
 							{session.displayName ?? "Buyer connected"}
@@ -823,8 +832,8 @@ function DoneScreen({
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
 	buyerName: string | undefined;
-	// Anonymous cash sale — no buyer to notify (86ey8vqp6). The receipt is still
-	// generated; the seller downloads/shares it rather than it being "sent".
+	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
+	// confirmation goes out and the document below is their only copy.
 	anonymous?: boolean;
 	onBackToList: () => void;
 }) {
@@ -837,6 +846,16 @@ function DoneScreen({
 	// through the status pipeline. Optional, not automatic: a paid deposit on an
 	// item that isn't ready yet is left as a normal confirmed order.
 	const canComplete = paidInPerson && !!orderId && !completed;
+
+	// Say exactly what left the building. A counter order sends the buyer ONE
+	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
+	// page — and an anonymous cash sale sends nothing at all. The receipt/invoice
+	// PDF is never messaged; it's handed over below.
+	const sentSummary = anonymous
+		? "is confirmed. Cash sale with no contact, so nothing was sent."
+		: paidInPerson
+			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
+			: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
 
 	async function markCompleted() {
 		if (!orderId) return;
@@ -869,18 +888,16 @@ function DoneScreen({
 						{shortId ? (
 							<>
 								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-								{completed
-									? "is marked completed."
-									: anonymous
-										? "is confirmed. It's a cash sale with no contact, so no WhatsApp was sent."
-										: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
+								{completed ? "is marked completed." : sentSummary}
 							</>
 						) : completed ? (
 							"The order is marked completed."
 						) : anonymous ? (
 							"The order is confirmed — a cash sale with no contact, so nothing was sent."
 						) : (
-							"The order is confirmed and the buyer has been notified on WhatsApp."
+							// Resumed a completed session: we don't have the created order's
+							// paid state here, so stay on what's true either way.
+							"The order is confirmed. We sent the buyer one WhatsApp with a link to their order."
 						)}
 					</p>
 				</div>
@@ -888,13 +905,9 @@ function DoneScreen({
 			{shortId ? (
 				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
 					<p className="text-sm font-semibold text-emerald-950">
-						{anonymous
-							? "Receipt"
-							: paidInPerson
-								? "Receipt sent to buyer"
-								: "Invoice & payment details sent"}
+						{paidInPerson ? "Receipt" : "Invoice"}
 					</p>
-					<SendOrderDocument
+					<OrderDocumentActions
 						shortId={shortId}
 						paid={paidInPerson}
 						buyerName={buyerName}
@@ -977,7 +990,13 @@ function isAdjusted(l: CartLine): boolean {
  * a deal. Hidden when the delta rounds to 0% (the strikethrough still marks
  * the line as adjusted).
  */
-function PriceDeltaChip({ price, catalog }: { price: number; catalog: number }) {
+function PriceDeltaChip({
+	price,
+	catalog,
+}: {
+	price: number;
+	catalog: number;
+}) {
 	const delta = priceDelta(price, catalog);
 	if (!delta) return null;
 	return (
@@ -1178,7 +1197,7 @@ function ProductVariantRows({
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-										RM
+										{currencySymbol(currency)}
 									</span>
 									<Input
 										type="number"
@@ -1995,7 +2014,8 @@ function BuildOrderScreen({
 								</label>
 							) : (
 								<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-									The buyer gets a WhatsApp link to pay and track their order.
+									We'll send one WhatsApp with how to pay and a link to track
+									the order.
 								</p>
 							)}
 						</div>
@@ -2034,9 +2054,13 @@ function BuildOrderScreen({
 				open={cancelOpen}
 				onOpenChange={setCancelOpen}
 				title="Cancel this checkout?"
-				description={`${
-					buyer.displayName ?? "This buyer"
-				}'s checkout and any items added to it will be removed. This can't be undone.`}
+				description={
+					<>
+						<span {...MASK_PII}>{buyer.displayName ?? "This buyer"}</span>
+						's checkout and any items added to it will be removed. This can't
+						be undone.
+					</>
+				}
 				confirmLabel="Cancel checkout"
 				cancelLabel="Keep it open"
 				destructive
@@ -2068,13 +2092,11 @@ function BuildOrderScreen({
 					// the passive autosave swallows failures — if this component ever
 					// remounts before a save lands, rehydration would silently revert
 					// the adjustment to the last-saved draft.
-					saveDraft({ sessionId, draft: buildDraftPayload(next) }).catch(
-						() => {
-							toast.error(
-								"Couldn't save the price change — check your connection.",
-							);
-						},
-					);
+					saveDraft({ sessionId, draft: buildDraftPayload(next) }).catch(() => {
+						toast.error(
+							"Couldn't save the price change — check your connection.",
+						);
+					});
 				}}
 			/>
 			<ConfirmCheckoutDialog
@@ -2093,7 +2115,7 @@ function BuildOrderScreen({
 				paymentLabel={
 					paid
 						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
-						: "Pay later — buyer pays via WhatsApp link"
+						: "Pay later — we send the buyer a payment link on WhatsApp"
 				}
 				submitting={submitting}
 				onConfirm={submit}
@@ -2215,16 +2237,13 @@ function CartLineEditDialog({
 				<div className="space-y-4">
 					<div className="flex items-center justify-between gap-3">
 						<span className="text-sm font-medium">Quantity</span>
-						<Stepper
-							qty={qty}
-							onChange={(q) => setLocalQty(Math.max(1, q))}
-						/>
+						<Stepper qty={qty} onChange={(q) => setLocalQty(Math.max(1, q))} />
 					</div>
 					<label className="block">
 						<span className="text-sm font-medium">Unit price</span>
 						<div className="relative mt-1">
 							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-								RM
+								{currencySymbol(currency)}
 							</span>
 							<Input
 								type="number"
@@ -2347,7 +2366,9 @@ function ConfirmCheckoutDialog({
 				<DialogHeader>
 					<DialogTitle>Confirm order</DialogTitle>
 					<DialogDescription>
-						Go through it with {buyerName ?? "the buyer"} before creating it.
+						Go through it with{" "}
+						<span {...MASK_PII}>{buyerName ?? "the buyer"}</span> before
+						creating it.
 					</DialogDescription>
 				</DialogHeader>
 
@@ -2515,7 +2536,7 @@ function BuyerCard({
 				<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
 					<UserX className="size-5" />
 				</span>
-				<div className="min-w-0 flex-1">
+				<div {...MASK_PII} className="min-w-0 flex-1">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Walk-in customer
 					</p>
@@ -2542,7 +2563,7 @@ function BuyerCard({
 			<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
 				<UserCheck className="size-5" />
 			</span>
-			<div className="min-w-0 flex-1">
+			<div {...MASK_PII} className="min-w-0 flex-1">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Buyer connected
 				</p>

@@ -154,7 +154,8 @@ export type TierLimits = {
   ordersFairUse: number | null;     // soft ceiling for unlimited tiers (Scale)
   seats: number;
   broadcastsPerMonth: number;
-  notifyStagesMax: number;          // supersedes the flat MAX_NOTIFY_STAGES=5
+  // notifyStagesMax: number;       // DROP — moot since 86eyd63r8 (see §9): stages
+                                    // never message the buyer, so there is nothing to cap.
   customDomain: boolean;
   orderOverageSen: number | null;   // minor units (sen); null = hard cap (block, don't bill)
   broadcastOverageSen: number | null;
@@ -305,10 +306,14 @@ kill-switch (the S4 ticket) — all reading the same `subscriptions`/
 
 ## 9. Follow-up wires to remember
 
-- **`notifyStagesMax` should come from entitlement, not the flat `MAX_NOTIFY_STAGES = 5`**
-  (in `convex/lib/orderStatus.ts`). `collectStageConfigErrors` is pure and takes no
-  entitlement today → either pass the cap in as a param, or keep 5 as the floor and
-  raise per tier later. Conscious step, not a surprise. See
+- ~~**`notifyStagesMax` should come from entitlement, not the flat `MAX_NOTIFY_STAGES = 5`**~~
+  — **MOOT** (2026-08-04, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)). Stages
+  never message the buyer any more: the per-stage `notify` toggle, the
+  `MAX_NOTIFY_STAGES` cap and the sends behind them are all deleted, so there is no
+  per-tier messaging allowance left to entitle. **Do not reintroduce a per-plan message
+  budget** without re-opening the policy — one message per order is deliberately uniform
+  across every plan, precisely so a buyer's experience never varies by what their seller
+  pays. See [`one-message-per-order.md`](./one-message-per-order.md) and
   [`order-status-customization.md`](./order-status-customization.md) §Limits.
 - **Trial tier** — decide which limits `trialing` grants (suggest Pro-equivalent for
   14 days), then a cron flips `trialing → expired` at `trialEndsAt` via the

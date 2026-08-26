@@ -105,13 +105,59 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		// package.json still reads 2026.08.1 — the bump happens in the
+		// staging→main release PR, by hand (docs/ci.md). Until then these notes
+		// are simply hidden: `visibleReleases` drops anything newer than the
+		// running build, which is the case the "notes for a version newer than
+		// the running build are hidden" test pins.
 		version: "2026.08.2",
 		date: "2026-08-26",
-		// Notable: it changes where a daily job happens. A seller who types stock
-		// into the product form and finds it read-only deserves to have been told,
-		// not to discover it mid-edit.
+		// The one release this year that genuinely earns the modal: a seller who
+		// doesn't read it will keep marking orders shipped believing the buyer was
+		// told, will wait on an automatic payment chase that no longer runs, and
+		// will hunt for the stock box that left the product form.
 		notable: true,
 		entries: [
+			{
+				title: {
+					en: "Your customer gets one WhatsApp — everything else is on their order page",
+				},
+				body: {
+					en: "When an order comes in they get a confirmation with a link, and that page then updates itself: packing, shipping, your mockup, the payment details, the tracking number. We no longer message them at each step. Worth saying \"keep this link\" when you chat — it's the one thing they need, and it's always current.",
+				},
+				icon: "package",
+			},
+			{
+				title: {
+					en: "Cancelling an order no longer messages the customer",
+				},
+				body: {
+					en: "It shows on their order page, but nothing is sent — so if someone is expecting their order, tell them yourself. The cancel screen now says so before you confirm.",
+				},
+				icon: "clock",
+			},
+			{
+				title: {
+					en: "Get a WhatsApp the moment an online payment lands",
+				},
+				body: {
+					en: "If you collect through HitPay, we'll message your own number as soon as the money arrives — and the order confirms itself, so there's nothing for you to check. Switch it on with the new-order and payment alerts under Store settings.",
+				},
+				href: "/app/settings?tab=store",
+				hrefLabel: { en: "Turn on alerts" },
+				icon: "wallet",
+			},
+			{
+				title: {
+					en: "Payment reminders are yours to send now",
+				},
+				body: {
+					en: "We've stopped chasing unpaid orders automatically. Instead, an unpaid order shows a \"Send payment reminder\" button from day 11 — once a day, up to day 14. You choose who gets nudged and when, and nothing goes out behind your back.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "megaphone",
+			},
 			{
 				icon: "package",
 				title: {
@@ -121,6 +167,7 @@ export const RELEASES: Release[] = [
 					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
 				},
 				href: "/app/products",
+				hrefLabel: { en: "Open products" },
 			},
 		],
 	},

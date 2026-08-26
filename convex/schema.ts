@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
@@ -53,7 +54,26 @@ export default defineSchema({
 		// autocomplete region, and the currency a new store defaults to. Undefined
 		// = MY (every pre-existing store, zero migration). Closed set in
 		// convex/lib/country.ts.
-		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
+		country: v.optional(countryValidator),
+		// The last country SWITCH (SG-lite, 86eyqgujv). Unset = this store has
+		// never moved country, which is every store born in its own market — the
+		// post-switch checklist skips them entirely, so it costs nothing to read.
+		//
+		// Switching is a different path from being created in a country: it
+		// leaves Malaysian addresses, bank details and rate cards behind on
+		// surfaces a buyer and a courier can see. Nothing is refused and nothing
+		// is deleted (refusing deadlocks — Places predictions are locked to the
+		// store's CURRENT country, so "fix your address first" is impossible);
+		// instead every carried value is inert where it matters and
+		// convex/lib/countrySetup.ts names what is left to fix.
+		countryChangedAt: v.optional(v.number()),
+		countryChangedFrom: v.optional(countryValidator),
+		// Checklist rows the seller has confirmed by hand. ONLY unverifiable
+		// items can be acknowledged — a bank account's country is free text we
+		// cannot judge, so the seller confirms it. A stamped wrong-country
+		// address is a fact and is never retired by a tick. Cleared on every
+		// switch (a new move re-opens every question).
+		countrySetupAcked: v.optional(v.array(v.string())),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -167,7 +187,13 @@ export default defineSchema({
 							zh: v.optional(v.string()),
 						}),
 					),
-					notify: v.boolean(),
+					// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle
+					// is gone: an order sends exactly ONE message (the confirmation
+					// push) and stages are a seller/timeline vocabulary only. Widened to
+					// optional so already-saved stage lists still validate; nothing
+					// writes it any more (sanitizeOrderStages drops it), so it decays to
+					// absent on the seller's next save. Narrow it away later.
+					notify: v.optional(v.boolean()),
 					sortOrder: v.number(),
 				}),
 			),
@@ -204,17 +230,18 @@ export default defineSchema({
 			),
 		),
 		// Legal consent tracking. Versions are ISO dates mirrored from
-		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time;
-		// acceptanceIp is a best-effort client IP captured at acceptance for
-		// legal defensibility. Stamped at onboarding (createRetailer) and on
-		// re-acceptance (recordConsentAcceptance).
+		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time.
+		// Stamped at onboarding (createRetailer) and on re-acceptance
+		// (recordConsentAcceptance). An `acceptanceIp` field existed here until
+		// 86eyn25fu but was dropped: no client ever passed it (provably always
+		// undefined) and Convex mutations can't observe the request IP, so a
+		// "legal defensibility" column that's always empty was worse than none.
 		termsAcceptedAt: v.optional(v.number()),
 		termsVersion: v.optional(v.string()),
 		privacyAcceptedAt: v.optional(v.number()),
 		privacyVersion: v.optional(v.string()),
 		aupAcceptedAt: v.optional(v.number()),
 		aupVersion: v.optional(v.string()),
-		acceptanceIp: v.optional(v.string()),
 		// Retailer opt-in for offering self-collect at checkout. Storefront only
 		// surfaces the self-collect option when this is true AND the retailer has
 		// at least one active pickup location. New retailers default to true
@@ -243,6 +270,23 @@ export default defineSchema({
 				latitude: v.number(),
 				longitude: v.number(),
 				placeId: v.optional(v.string()),
+				// The country this address was CAPTURED in (SG-lite, 86eyqgujv).
+				// Stamped at save from the store's country the way
+				// deliveryBooking.env is stamped from the key prefix — never
+				// derived from a stored value at read time. Coordinates cannot
+				// answer this: Singapore's bounding box (lat 1.13–1.47) contains
+				// Johor Bahru at 1.4655 N, so a geometric test would call a
+				// Malaysian seller's address Singaporean.
+				//
+				// Unset = captured before we tracked it, which for every row that
+				// exists today means it matches its store (no store had switched
+				// country when this shipped). Read as "matches" — fail open, so
+				// no existing label or setting changes behaviour. The country
+				// switch stamps un-stamped rows with the OLD country at the one
+				// moment that fact is known for certain, so every switch from
+				// here on is fully covered without a backfill that would have to
+				// guess.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
@@ -1344,6 +1388,18 @@ export default defineSchema({
 		latitude: v.optional(v.number()),
 		longitude: v.optional(v.number()),
 		placeId: v.optional(v.string()),
+		// The country this point's address was CAPTURED in (SG-lite, 86eyqgujv).
+		// Same posture as retailers.businessAddress.country: stamped at save from
+		// the store's country, never derived from the coordinates (Singapore's
+		// bounding box contains Johor Bahru). Unset reads as "matches"; the
+		// country switch stamps un-stamped rows with the OLD country.
+		//
+		// A pickup point is the one wrong-country item a BUYER is shown directly,
+		// at checkout, before they travel — so it is named on the post-switch
+		// checklist (ranked `buyer_visible`, under the two money rows) rather
+		// than quietly hidden. Hiding them would break the working-method
+		// invariant on a pickup-only store.
+		country: v.optional(countryValidator),
 		// Optional contact info for the person running this pickup spot. When
 		// set, the seller order detail page surfaces a "Notify <name>" wa.me
 		// button so the seller can forward the order details in one tap.
@@ -1732,6 +1788,9 @@ export default defineSchema({
 	// retailer. An active opt-out is a row with `reactivatedAt` unset; START/MULA
 	// stamps `reactivatedAt` to re-opt-in. Transactional order messages are NOT
 	// suppressed (a buyer mid-order must still get order updates) — see canSend.
+	// NEVER purged — an opt-out is the buyer's standing legal instruction
+	// (convex/lib/retention.ts, docs/data-retention.md); reads must stay indexed
+	// + bounded (`by_created` serves the admin 30-day stats window).
 	optOuts: defineTable({
 		waPhone: v.string(),
 		source: v.union(
@@ -1746,13 +1805,26 @@ export default defineSchema({
 		triggeredByRetailerId: v.optional(v.id("retailers")),
 		reactivatedAt: v.optional(v.number()),
 		createdAt: v.number(),
-	}).index("by_phone", ["waPhone"]),
+	})
+		.index("by_phone", ["waPhone"])
+		// The 30-day opt-out stat on the admin vendor list (86eyetzt7). The table
+		// is append-only and NEVER purged, so that read must never be a full scan.
+		.index("by_created", ["createdAt"])
+		// The live do-not-message set, for the admin register (86eyn25gu).
+		// Rows are never deleted — opting back in stamps `reactivatedAt`, which is
+		// the consent ledger — so "who is currently opted out" is exactly the rows
+		// where that stamp is absent. Indexed rather than scanned-and-filtered:
+		// re-activations accumulate forever, so a bounded newest-first scan would
+		// slowly start returning pages of re-activated rows and hiding live ones.
+		.index("by_active", ["reactivatedAt"]),
 
 	// WABA quality-rating history, one row per Meta health webhook
 	// (phone_number_quality_update / account_update). The gateway reads the LATEST
 	// row (by_observed desc) to auto-throttle: LOW → pause all but transactional;
 	// MEDIUM/UNKNOWN → pause marketing only. History (not a singleton) so we can
-	// see trend + implement sustained-recovery later.
+	// see trend + implement sustained-recovery later. Retention: 90 days, but the
+	// newest row is ALWAYS kept regardless of age — purging it would fail the
+	// gateway open to HIGH (convex/lib/retention.ts).
 	wabaHealth: defineTable({
 		qualityRating: v.union(
 			v.literal("HIGH"),
@@ -1784,7 +1856,10 @@ export default defineSchema({
 	// cost/abuse attribution ("who sent what, when, blocked why"). `retailerId`
 	// optional for system replies to an unknown inbound sender. delivered/read are
 	// reserved for a future Meta message-status webhook; today we log sent/failed/
-	// blocked_* at send time.
+	// blocked_* at send time. The fastest-growing table in the schema — raw rows
+	// are purged after 90 days, rolled up into `messageLogRollups` first so the
+	// cost ledger survives in aggregate (`by_sent` drives the purge cron's range
+	// read). See convex/lib/retention.ts + docs/data-retention.md.
 	outboundMessageLog: defineTable({
 		retailerId: v.optional(v.id("retailers")),
 		toWaPhone: v.string(),
@@ -1809,7 +1884,47 @@ export default defineSchema({
 		sentAt: v.number(),
 	})
 		.index("by_retailer_sent", ["retailerId", "sentAt"])
-		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
+		.index("by_phone_sent", ["toWaPhone", "sentAt"])
+		.index("by_sent", ["sentAt"]),
+
+	// Monthly rollups of PURGED outboundMessageLog rows — the WhatsApp cost
+	// ledger's permanent aggregate memory (ClickUp 86eyetzt7). Before the purge
+	// cron deletes an expired log row it folds the row into its
+	// (retailer × MYT month × category × status) bucket here, in the SAME
+	// transaction, so per-retailer volume/cost accounting (Meta bills per-send
+	// from Oct 2026) survives the raw rows. Deliberately drops `templateName` +
+	// `toWaPhone`: per-template/per-recipient detail is a 90-day view on the raw
+	// log; this is the forever ledger. Row count is bounded by construction:
+	// retailers × months × 4 categories × 8 statuses. `retailerId` optional to
+	// mirror outboundMessageLog (system replies to an unknown sender carry none).
+	messageLogRollups: defineTable({
+		retailerId: v.optional(v.id("retailers")),
+		/** MYT calendar month, "YYYY-MM" (lib/retention.ts mytMonthKey). */
+		month: v.string(),
+		category: v.union(
+			v.literal("transactional"),
+			v.literal("utility_template"),
+			v.literal("marketing_template"),
+			v.literal("session_message"),
+		),
+		status: v.union(
+			v.literal("sent"),
+			v.literal("delivered"),
+			v.literal("read"),
+			v.literal("failed"),
+			v.literal("blocked_optout"),
+			v.literal("blocked_capreached"),
+			v.literal("blocked_quality"),
+			v.literal("blocked_retailer_paused"),
+		),
+		count: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_month_category_status", [
+		"retailerId",
+		"month",
+		"category",
+		"status",
+	]),
 
 	// --- Admin console audit trail (ClickUp 86ey25er1, docs/admin-console.md) --
 	// One row per admin-on-behalf ("act-as") write during white-glove onboarding.
@@ -1817,14 +1932,19 @@ export default defineSchema({
 	// in convex/lib/auth.ts); every write they make on a store they don't own is
 	// stamped here so edits are attributable to a person. Owner writes are NOT
 	// logged — only the admin exception. `targetId` is the affected doc id when
-	// known at write time (updates/deletes); omitted for creates.
+	// known at write time (updates/deletes); omitted for creates. Retention:
+	// 24 months (`by_ts` drives the purge cron) — see convex/lib/retention.ts.
 	adminAuditLog: defineTable({
 		adminUserId: v.string(), // Clerk subject of the acting admin
-		retailerId: v.id("retailers"), // store acted upon
+		// Store acted upon. Optional since 86eyn25gu: global actions (the manual
+		// WABA opt-out) have no store in scope — those rows simply don't appear
+		// in per-retailer audit views.
+		retailerId: v.optional(v.id("retailers")),
 		action: v.string(), // e.g. "products.create", "retailers.updateSettings"
 		targetId: v.optional(v.string()),
 		ts: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_admin", ["adminUserId"]),
+		.index("by_admin", ["adminUserId"])
+		.index("by_ts", ["ts"]),
 });

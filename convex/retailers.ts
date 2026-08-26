@@ -1,12 +1,15 @@
 import { v } from "convex/values";
 
+// One customisable key survives the one-message-per-order cut (86eyd63r8):
+// `confirm`, the write-in reply for a buyer who messages their ORD- reference
+// on an order the confirmation template never reached (legacy / failed-push).
+// The status keys' sends are deleted and `unknownFallback` was never actually
+// read (its render site hardcodes the defaults) — an override stored for any
+// of them could no longer render, so the wire stops accepting them. Old rows
+// keep their stored extras harmlessly (schema stays wide; the catalog just
+// never looks those keys up), and they drop off on the seller's next save.
 const localeOverridesValidator = v.object({
 	confirm: v.optional(v.string()),
-	packed: v.optional(v.string()),
-	shipped: v.optional(v.string()),
-	delivered: v.optional(v.string()),
-	cancelled: v.optional(v.string()),
-	unknownFallback: v.optional(v.string()),
 });
 
 const messageTemplatesValidator = v.object({
@@ -58,7 +61,10 @@ const orderStagesValidator = v.array(
 				zh: v.optional(v.string()),
 			}),
 		),
-		notify: v.boolean(),
+		// Accepted-and-ignored: older clients may still post the retired
+		// per-stage notify flag (86eyd63r8). Rejecting it would fail their save
+		// for no reason; sanitizeOrderStages simply drops it.
+		notify: v.optional(v.boolean()),
 		sortOrder: v.optional(v.number()),
 	}),
 );
@@ -69,7 +75,7 @@ type OrderStageInput = {
 	anchor: StageAnchor;
 	label: { en: string; ms?: string; zh?: string };
 	description?: { en?: string; ms?: string; zh?: string };
-	notify: boolean;
+	notify?: boolean;
 	sortOrder?: number;
 };
 
@@ -108,7 +114,6 @@ function sanitizeOrderStages(
 			anchor: s.anchor,
 			label: { en, ...(ms ? { ms } : {}), ...(zh ? { zh } : {}) },
 			...(description ? { description } : {}),
-			notify: Boolean(s.notify),
 			sortOrder: i,
 		};
 	});
@@ -185,10 +190,15 @@ import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
 import {
+	DELETION_PHASES,
+	type DeletionPhase,
+	deletionPhaseValidator,
+	runDeletionPhase,
+} from "./lib/accountDeletion";
+import {
 	type OpeningHours,
 	sanitizeOpeningHours,
 } from "./lib/openingHours";
-import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -205,6 +215,11 @@ import {
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { isEncrypted } from "./lib/credentialCrypto";
+import {
+	ackableKeys,
+	type CountrySetupItem,
+	resolveCountrySetup,
+} from "./lib/countrySetup";
 import { inferLalamoveEnv, resolveLalamoveCredentials } from "./lib/lalamove";
 import {
 	type HitpayConfig,
@@ -215,6 +230,7 @@ import {
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
+import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -240,7 +256,6 @@ import {
 	assertValidSlug,
 	assertValidStoreName,
 	normalizeWaPhone,
-	STORED_MOBILE_PATTERN,
 } from "./lib/slug";
 import {
 	AUP_VERSION,
@@ -468,6 +483,11 @@ type BusinessAddress = {
 	latitude: number;
 	longitude: number;
 	placeId?: string;
+	/** The country this address was captured in — STAMPED by the server, never
+	 * accepted from the client (deliberately absent from
+	 * `businessAddressValidator`, the `apiKeyHint`/`env` posture). See the
+	 * schema comment for why coordinates can't answer this. */
+	country?: Country;
 };
 
 const BUSINESS_ADDRESS_LABEL_MAX = 300;
@@ -475,7 +495,10 @@ const BUSINESS_ADDRESS_LABEL_MAX = 300;
 /** Validate the settings-captured business address (the radius-mode origin).
  * Coordinates are required — the address exists to measure distance from, so
  * a coord-less capture is meaningless (the UI only saves autocomplete picks). */
-function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
+function sanitizeBusinessAddress(
+	raw: BusinessAddress,
+	capturedIn: Country,
+): BusinessAddress {
 	const label = raw.label.trim();
 	if (label.length === 0) throw new ConvexError("Business address is empty");
 	if (label.length > BUSINESS_ADDRESS_LABEL_MAX) {
@@ -499,16 +522,12 @@ function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
 		latitude: raw.latitude,
 		longitude: raw.longitude,
 		placeId: placeId && placeId.length > 0 ? placeId : undefined,
+		// Stamped from the store's country at the moment of capture. The Places
+		// proxy locks predictions to that country (convex/google.ts
+		// `includedRegionCodes`), so this is a fact about where the pick came
+		// from, not an inference about where it points.
+		country: capturedIn,
 	};
-}
-
-/** Trim and bound a best-effort client IP before persisting. */
-function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
-	if (ip === undefined) return undefined;
-	const trimmed = ip.trim();
-	if (trimmed.length === 0) return undefined;
-	// IPv6 max textual length is 45 chars; clamp generously to avoid storing junk.
-	return trimmed.slice(0, 64);
 }
 
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -532,11 +551,6 @@ export { DEFAULT_LOCALE } from "./lib/locale";
 
 type LocaleOverrides = {
 	confirm?: string;
-	packed?: string;
-	shipped?: string;
-	delivered?: string;
-	cancelled?: string;
-	unknownFallback?: string;
 };
 
 type MessageTemplatesShape = {
@@ -545,21 +559,12 @@ type MessageTemplatesShape = {
 	zh?: LocaleOverrides;
 };
 
-const TEMPLATE_MAX_LENGTH = 1000;
-
 function sanitizeOverrides(
 	input: LocaleOverrides | undefined,
 ): LocaleOverrides | undefined {
 	if (!input) return undefined;
 	const out: LocaleOverrides = {};
-	for (const key of [
-		"confirm",
-		"packed",
-		"shipped",
-		"delivered",
-		"cancelled",
-		"unknownFallback",
-	] as const) {
+	for (const key of ["confirm"] as const) {
 		const raw = input[key];
 		if (raw === undefined) continue;
 		const trimmed = raw.trim();
@@ -893,6 +898,19 @@ async function requireUserId(ctx: QueryCtx): Promise<string> {
  * Returns the signed-in user's retailer, or null if they have not completed
  * onboarding yet. Used by `/app` and `/onboarding` route guards.
  */
+/** The signed-in user's own store row (not the public payload). `null` when
+ * unauthenticated or storeless — callers decide what that means for them. */
+async function resolveOwnRetailer(
+	ctx: QueryCtx,
+): Promise<Doc<"retailers"> | null> {
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) return null;
+	return ctx.db
+		.query("retailers")
+		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+		.first();
+}
+
 export const getMyRetailer = query({
 	args: {},
 	handler: async (ctx): Promise<RetailerPublic | null> => {
@@ -1199,9 +1217,6 @@ export const createRetailer = mutation({
 		// freeze their currency at create, so a wrong default here would strand
 		// the whole catalog — see docs/sg-lite.md).
 		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
-		// Best-effort client IP captured at the consent moment. Optional —
-		// onboarding never blocks if IP lookup fails.
-		acceptanceIp: v.optional(v.string()),
 		// Signup path. Both start a 14-day trial; "founding" additionally flags the
 		// store (`foundingIntent`) and reserves a Founding-10 rank, but the paid Pro
 		// plan still only starts at admin mark-paid. The real rank gate is mark-paid +
@@ -1269,7 +1284,6 @@ export const createRetailer = mutation({
 		// Consent is implied: the onboarding UI gates submission on a required,
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
-		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
 		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -1297,7 +1311,6 @@ export const createRetailer = mutation({
 			privacyVersion: PRIVACY_VERSION,
 			aupAcceptedAt: now,
 			aupVersion: AUP_VERSION,
-			acceptanceIp,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -1393,7 +1406,6 @@ export const updateSettings = mutation({
 	): Promise<{
 		ok: true;
 		productsCurrencySynced: number;
-		pickupContactsCleared: number;
 	}> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
 		// path (owner-or-admin); otherwise it's the caller's own store.
@@ -1429,6 +1441,9 @@ export const updateSettings = mutation({
 			coverImageStorageId: string | undefined;
 			currency: SupportedCurrency;
 			country: Country;
+			countryChangedAt: number;
+			countryChangedFrom: Country;
+			countrySetupAcked: string[] | undefined;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
 			statusLabels: StatusLabels | undefined;
@@ -1528,67 +1543,39 @@ export const updateSettings = mutation({
 			try { patch.currency = assertSupportedCurrency(args.currency); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 		if (args.country !== undefined) {
-			// Flipping to a country the STORED delivery-charge mode doesn't
-			// support would strand every order (SG + radius/weight/lalamove:
-			// zone lookups miss, Lalamove is MY-market) — refuse with the fix
-			// named. A same-call deliveryConfig replacement is judged below in
-			// the config branch instead, against the incoming mode.
-			if (args.deliveryConfig === undefined) {
-				const storedConfig = retailer.deliveryConfig as
-					| DeliveryConfig
-					| undefined;
-				if (
-					storedConfig &&
-					!deliveryModeAllowed(args.country, storedConfig.mode)
-				) {
-					throw new ConvexError(
-						"Switch your delivery charge to Free or a Flat fee first — distance, weight-zone and Lalamove pricing are Malaysia-only for now.",
-					);
-				}
-			}
-			// Same posture for the store's own WhatsApp numbers (the SG-lite
-			// invariant: an SG store carries SG numbers, an MY store MY ones — the
-			// plate on every phone field is a promise about what's behind it). A
-			// stored number that doesn't match the NEW country blocks the switch
-			// unless this same call clears or replaces it; a same-call replacement
-			// is judged against the new country by the phone branches above
-			// (effectiveCountry). Without this, a switch left a contradictory row
-			// (SG store, MY contact) that only surfaced on the NEXT save of the
-			// field — the worst place to learn about it.
-			const carriedNumbers: ReadonlyArray<
-				[stored: string | undefined, label: string]
-			> = [
-				[
-					args.waPhone === undefined ? retailer.waPhone : undefined,
-					"WhatsApp contact number",
-				],
-				[
-					args.notifyWaPhone === undefined ? retailer.notifyWaPhone : undefined,
-					"order-alerts WhatsApp number",
-				],
-			];
-			for (const [stored, label] of carriedNumbers) {
-				if (stored && !STORED_MOBILE_PATTERN[args.country].test(stored)) {
-					throw new ConvexError(
-						`Your ${label} isn't a ${args.country === "SG" ? "Singapore" : "Malaysian"} number — replace or remove it when switching the store's country.`,
-					);
-				}
-			}
-			// Rider BOOKING escapes the delivery-mode check above, because pricing
-			// and booking are independent by design (`pricing ⊥ booking`): a store
-			// on FLAT pricing with booking on passes that check and would carry a
-			// live Book-a-rider button — plus prompt-book-on-packed, which spends
-			// money without being asked — into a market our integration cannot
-			// serve. Same effective-state rule as everywhere else: a same-call
-			// clear or disable is the escape hatch.
-			const effectiveBooking =
-				args.deliveryBooking !== undefined
-					? args.deliveryBooking
-					: (retailer.deliveryBooking as DeliveryBooking | undefined);
-			if (effectiveBooking?.enabled && !riderBookingAllowed(args.country)) {
-				throw new ConvexError(
-					"Turn off Lalamove rider booking first — rider dispatch is Malaysia-only for now.",
-				);
+			// The switch ALWAYS succeeds, and destroys nothing (86eyqgujv).
+			//
+			// #204/#210 refused a switch that would carry an MY-only delivery
+			// mode, an enabled Lalamove booking, or a +60 phone number into
+			// Singapore, and the settings UI escaped each refusal by CLEARING
+			// the value in the same call. Both halves were wrong:
+			//
+			//  · Refusing deadlocks the one case that matters most. Google Places
+			//    predictions are locked server-side to the store's CURRENT
+			//    country (convex/google.ts `includedRegionCodes`), so a seller
+			//    told "fix your address first" cannot — the picker will only
+			//    offer them addresses in the country they are trying to leave.
+			//  · Clearing is a data wipe. A weight-zone rate card is an hour of
+			//    the seller's work and does not come back when they switch home.
+			//
+			// Carrying the values is safe because the READ paths were made safe
+			// first: an unservable address resolves to a held or blocked quote
+			// and never a price (pinned in convex/lib/delivery.test.ts), the
+			// dispatch card hides itself on a country we can't book in, and a
+			// wrong-country return address is dropped from the parcel label. So
+			// nothing broken can act — it can only sit there until the seller
+			// replaces it, which convex/lib/countrySetup.ts asks them to do.
+			//
+			// What IS recorded: when the store moved and from where. That is the
+			// only trigger for the checklist, so a store that never switches
+			// never pays for any of this.
+			if (args.country !== (retailer.country ?? DEFAULT_COUNTRY)) {
+				patch.countryChangedAt = Date.now();
+				patch.countryChangedFrom = retailer.country ?? DEFAULT_COUNTRY;
+				// A new move re-opens every question the seller previously
+				// confirmed — their bank details were checked against the OLD
+				// destination.
+				patch.countrySetupAcked = undefined;
 			}
 			patch.country = args.country;
 		}
@@ -1682,7 +1669,13 @@ export const updateSettings = mutation({
 			if (args.businessAddress === null) {
 				patch.businessAddress = undefined;
 			} else {
-				patch.businessAddress = sanitizeBusinessAddress(args.businessAddress);
+				// Stamped with the EFFECTIVE country so "switch to Singapore and
+				// pick the new address" lands in one save, correctly stamped SG.
+				patch.businessAddress = sanitizeBusinessAddress(
+					args.businessAddress,
+					(args.country !== undefined ? args.country : retailer.country) ??
+						DEFAULT_COUNTRY,
+				);
 			}
 		}
 		if (args.deliveryConfig !== undefined) {
@@ -1836,6 +1829,21 @@ export const updateSettings = mutation({
 					);
 				}
 				if (clean.enabled) {
+					// Country allowlist FIRST, mirroring the deliveryConfig branch
+					// above — otherwise the rule only bound a store while it was
+					// SWITCHING country. The stored-booking check inside the
+					// `args.country` branch catches "carry Lalamove into Singapore";
+					// this catches "turn Lalamove on while already in Singapore",
+					// which had no guard at all (86eyqgujv). Judged against the
+					// effective country so a same-call switch is honoured.
+					const effectiveCountry =
+						(args.country !== undefined ? args.country : retailer.country) ??
+						DEFAULT_COUNTRY;
+					if (!riderBookingAllowed(effectiveCountry)) {
+						throw new ConvexError(
+							"Lalamove rider booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+						);
+					}
 					const effectiveAddress =
 						args.businessAddress !== undefined
 							? patch.businessAddress
@@ -2099,18 +2107,45 @@ export const updateSettings = mutation({
 		// edits every location would be a chore with no buyer impact. Bounded —
 		// pickup points are a short, seller-curated list. Inactive rows are
 		// cleared too, so reactivating one later can't resurrect a stale number.
-		let pickupContactsCleared = 0;
 		if (patch.country !== undefined) {
+			// A country switch is the ONE moment we know for certain which
+			// country the store's existing addresses were captured in: whatever
+			// it was until this line ran. Stamp that onto every row that has no
+			// stamp yet, and from here on "this address is in the wrong country"
+			// is a stored fact rather than a guess (86eyqgujv).
+			//
+			// Deliberately no backfill for stores that never switch: their
+			// addresses match by construction, so an un-stamped row there is
+			// correct and must not be flagged. A backfill would also have to
+			// guess for the stores that ALREADY switched before this shipped —
+			// and would guess wrong in exactly the direction that hides the bug.
+			const previousCountry = retailer.country ?? DEFAULT_COUNTRY;
+			const carriedAddress = retailer.businessAddress as
+				| BusinessAddress
+				| undefined;
+			if (
+				patch.businessAddress === undefined &&
+				carriedAddress &&
+				carriedAddress.country === undefined
+			) {
+				patch.businessAddress = {
+					...carriedAddress,
+					country: previousCountry,
+				};
+			}
 			const locations = await ctx.db
 				.query("pickupLocations")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 				.collect();
+			// The manager's number is KEPT, not cleared (86eyqgujv). #210 wiped
+			// any that didn't match the new country — reported in the toast, but
+			// never chosen, and gone for good on a store with five points and
+			// five staff numbers. It is an internal ops contact that breaks
+			// nothing by being foreign, so it becomes a checklist row instead.
 			for (const location of locations) {
-				const stored = location.managerWaPhone;
-				if (!stored) continue;
-				if (STORED_MOBILE_PATTERN[patch.country].test(stored)) continue;
-				await ctx.db.patch(location._id, { managerWaPhone: undefined });
-				pickupContactsCleared += 1;
+				if (location.country === undefined) {
+					await ctx.db.patch(location._id, { country: previousCountry });
+				}
 			}
 		}
 
@@ -2132,7 +2167,7 @@ export const updateSettings = mutation({
 			);
 		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
-		return { ok: true, productsCurrencySynced, pickupContactsCleared };
+		return { ok: true, productsCurrencySynced };
 	},
 });
 
@@ -2142,10 +2177,8 @@ export const updateSettings = mutation({
  * Like createRetailer, versions are taken server-side (never client-supplied).
  */
 export const recordConsentAcceptance = mutation({
-	args: {
-		acceptanceIp: v.optional(v.string()),
-	},
-	handler: async (ctx, args): Promise<{ ok: true }> => {
+	args: {},
+	handler: async (ctx): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
 		const retailer = await ctx.db
 			.query("retailers")
@@ -2161,7 +2194,6 @@ export const recordConsentAcceptance = mutation({
 			privacyVersion: PRIVACY_VERSION,
 			aupAcceptedAt: now,
 			aupVersion: AUP_VERSION,
-			acceptanceIp: sanitizeAcceptanceIp(args.acceptanceIp),
 			updatedAt: now,
 		});
 		return { ok: true };
@@ -2174,6 +2206,149 @@ export const recordConsentAcceptance = mutation({
  * dismissal so a seller who deliberately skips self-collect isn't nagged.
  * No-op if already true.
  */
+/**
+ * The post-switch setup checklist (86eyqgujv) — what a store still needs to
+ * fix after moving country, most costly first.
+ *
+ * `null` for every store that has never switched, and that is checked BEFORE
+ * any other read: `countryChangedAt` is unset on all of them, so this query
+ * costs one row lookup and never touches pickupLocations. The checklist is a
+ * path almost no store walks and must not tax the ones that don't.
+ *
+ * Owner-or-admin, and act-as resolves the SELLER's store — an admin doing
+ * white-glove setup is looking at the seller's checklist, not their own.
+ */
+export const countrySetup = query({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		args,
+	): Promise<{
+		country: Country;
+		changedFrom: Country | undefined;
+		changedAt: number;
+		items: CountrySetupItem[];
+	} | null> => {
+		const retailer = args.retailerId
+			? (await requireRetailerAccess(ctx, args.retailerId)).retailer
+			: await resolveOwnRetailer(ctx);
+		if (!retailer) return null;
+		if (retailer.countryChangedAt === undefined) return null;
+
+		const locations = await ctx.db
+			.query("pickupLocations")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.collect();
+		const items = resolveCountrySetup({
+			country: retailer.country,
+			countryChangedAt: retailer.countryChangedAt,
+			acked: retailer.countrySetupAcked,
+			businessAddress: retailer.businessAddress,
+			pickupLocations: locations.map((l) => ({
+				country: l.country,
+				managerWaPhone: l.managerWaPhone,
+				isActive: l.isActive,
+			})),
+			deliveryConfigMode: (retailer.deliveryConfig as DeliveryConfig | undefined)
+				?.mode,
+			deliveryBookingEnabled:
+				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
+				true,
+			waPhone: retailer.waPhone,
+			notifyWaPhone: retailer.notifyWaPhone,
+			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,
+			hasHitpay: (retailer.hitpay as HitpayConfig | undefined) !== undefined,
+			// Seller-authored copy can quote ringgit anywhere in its free text;
+			// nothing in the row tells us whether it does.
+			hasCustomCopy:
+				retailer.messageTemplates !== undefined ||
+				retailer.paymentInstructions !== undefined,
+		});
+		return {
+			country: retailer.country ?? DEFAULT_COUNTRY,
+			changedFrom: retailer.countryChangedFrom,
+			changedAt: retailer.countryChangedAt,
+			items,
+		};
+	},
+});
+
+/**
+ * Confirm the checklist rows we cannot verify ourselves — "I've checked my
+ * bank details / my HitPay account / my message copy."
+ *
+ * Only UNVERIFIABLE keys are accepted, computed server-side from the current
+ * state rather than taken from the caller. That is the whole integrity of the
+ * checklist: a stamped wrong-country address is a fact, and no acknowledgement
+ * may retire it. Without this filter the "dismiss" button would quietly become
+ * a way to hide a real fault, which is how checklists become noise sellers
+ * learn to click past.
+ */
+export const ackCountrySetup = mutation({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (ctx, args): Promise<{ acked: number }> => {
+		// `access` is kept, not destructured away: an admin acting as a seller
+		// can retire that seller's payments-at-risk rows, and there is no un-ack
+		// short of another country switch — so the write has to be traceable, and
+		// "the seller confirmed their bank details" must not be indistinguishable
+		// from "an admin clicked through during white-glove setup" (PR #221
+		// review). `logAdminAction` no-ops on an owner write, so the own-store
+		// path below needs no equivalent.
+		const access = args.retailerId
+			? await requireRetailerAccess(ctx, args.retailerId)
+			: null;
+		const retailer = access ? access.retailer : await resolveOwnRetailer(ctx);
+		if (!retailer || retailer.countryChangedAt === undefined) {
+			return { acked: 0 };
+		}
+		const locations = await ctx.db
+			.query("pickupLocations")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.collect();
+		const items = resolveCountrySetup({
+			country: retailer.country,
+			countryChangedAt: retailer.countryChangedAt,
+			acked: undefined,
+			businessAddress: retailer.businessAddress,
+			pickupLocations: locations.map((l) => ({
+				country: l.country,
+				managerWaPhone: l.managerWaPhone,
+				isActive: l.isActive,
+			})),
+			deliveryConfigMode: (retailer.deliveryConfig as DeliveryConfig | undefined)
+				?.mode,
+			deliveryBookingEnabled:
+				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
+				true,
+			waPhone: retailer.waPhone,
+			notifyWaPhone: retailer.notifyWaPhone,
+			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,
+			hasHitpay: (retailer.hitpay as HitpayConfig | undefined) !== undefined,
+			hasCustomCopy:
+				retailer.messageTemplates !== undefined ||
+				retailer.paymentInstructions !== undefined,
+		});
+		const keys = ackableKeys(items);
+		if (keys.length === 0) return { acked: 0 };
+		const merged = Array.from(
+			new Set([...(retailer.countrySetupAcked ?? []), ...keys]),
+		);
+		await ctx.db.patch(retailer._id, {
+			countrySetupAcked: merged,
+			updatedAt: Date.now(),
+		});
+		if (access) {
+			await logAdminAction(
+				ctx,
+				access,
+				"retailers.ackCountrySetup",
+				retailer._id,
+			);
+		}
+		return { acked: keys.length };
+	},
+});
+
 export const markPickupSetupSeen = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ updated: boolean }> => {
@@ -2471,134 +2646,129 @@ type DeleteUserResult =
 	| {
 			deleted: true;
 			retailerId: Id<"retailers">;
-			counts: { orders: number; products: number; customers: number };
+			/** False ⇒ a continuation batch was scheduled — watch the logs. */
+			done: boolean;
+			/** Where the cascade is (the phase this invocation left off in). */
+			phase: DeletionPhase;
+			/** Documents processed by THIS invocation, not a running total. */
+			processed: number;
 	  };
+
+/** Rows processed per invocation before handing off to a scheduled
+ * continuation — sized so even the heaviest phase (orders: events + blobs per
+ * row) stays far inside the single-mutation read/write limits. */
+const DELETE_USER_BATCH = 25;
 
 /**
  * Hard-delete a user and every tenant artifact they own, keyed by Clerk
- * subject (`userId`). Cascades through orders (+ their orderEvents and payment
- * proof files), products (+ their image files), customers, and parked
- * slugHistory rows, then removes the retailer's logo / payment-QR blobs and the
- * retailer row itself. Runs as a single ACID mutation, so it's all-or-nothing.
+ * subject (`userId`) — the PDPA erasure path (86eyetzbk). Paginated and
+ * SELF-CHAINING: each invocation processes a bounded batch (~25 rows) and
+ * schedules itself via `ctx.scheduler` until every phase completes, so a large
+ * tenant can no longer exceed single-mutation transaction limits (the old
+ * one-shot ACID version failed outright on big stores). Invoke it ONCE with
+ * just `{ userId }` — `phase`/`cursor` are internal continuation state, never
+ * passed by hand. Progress is logged per phase (counts + ids only, never
+ * phone numbers or message bodies).
  *
- * Internal-only: there is no shopper/retailer-facing path to this. Invoke it
- * from a Clerk "user.deleted" webhook handler, a GDPR erasure job, or the
- * Convex dashboard.
+ * Sweeps, in order (see DELETION_PHASES in convex/lib/accountDeletion.ts):
+ * orders (+ events + buyer image / payment proof / mockup blobs via the shared
+ * `orderBlobs` helper), products (shared `deleteProductCascade`: variants +
+ * images + junctions), leftover junctions, categories (+ tile blobs),
+ * deliveryJobs (+ POD blobs), deliveryQuotes, customers, pickupLocations
+ * (manager name/phone), counterCheckoutSessions (buyer phone/pushname),
+ * subscriptions, subscriptionUsage, foundingMembers, retailerSendingLimits,
+ * outboundMessageLog (buyer phones), slugHistory, then optOuts attribution,
+ * and finally the retailer's own blobs + row.
+ *
+ * RETAINED BY DECISION (not omissions): `invoices` rows + their frozen PDF
+ * blobs (financial records of what Kedaipal charged the seller — no buyer
+ * PII) and `adminAuditLog` rows (an audit trail must outlive the tenant it
+ * audited). `optOuts` rows are the buyer's GLOBAL suppression instruction and
+ * are never deleted — only their `triggeredByRetailerId` attribution is
+ * cleared. Rationale lives in convex/lib/accountDeletion.ts + the doc below.
+ *
+ * The retailer row is deleted in the FINAL phase, so every continuation batch
+ * can re-resolve the tenant by userId; each phase is idempotent, so re-running
+ * a batch after a crash just resumes. Because the cascade now spans multiple
+ * transactions it is no longer all-or-nothing — invoke it once the tenant is
+ * inactive (a row created mid-cascade by a still-live storefront could survive
+ * as an orphan).
+ *
+ * Internal-only: no shopper/retailer-facing path. Invoked manually from the
+ * Convex dashboard today; wiring an automatic trigger (Clerk `user.deleted`
+ * webhook) is ticket 86eydwct5's scope, not this function's.
  *
  * Idempotent — returns `{ deleted: false }` when the user has no retailer.
- *
- * NOTE: deletion is bounded by the tenant's data volume. A single Convex
- * mutation has read/write-set limits, so a Scale-tier retailer with very large
- * order history could exceed them. If that becomes real, split this into a
- * paginated batch driven by `ctx.scheduler`. The slugHistory scan is a full
- * table read (no by-retailer index) but that table is small and TTL-pruned.
+ * See docs/account-deletion.md.
  */
 export const deleteUser = internalMutation({
-	args: { userId: v.string() },
-	handler: async (ctx, { userId }): Promise<DeleteUserResult> => {
+	args: {
+		userId: v.string(),
+		// Continuation state for the self-chaining batches — internal only.
+		phase: v.optional(deletionPhaseValidator),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, args): Promise<DeleteUserResult> => {
+		const { userId } = args;
 		const retailer = await ctx.db
 			.query("retailers")
 			.withIndex("by_user", (q) => q.eq("userId", userId))
 			.first();
 		if (!retailer) return { deleted: false };
-		const retailerId = retailer._id;
 
-		// Best-effort: a missing/already-deleted blob must not abort the cascade.
-		const deleteFile = async (storageId: string | undefined): Promise<void> => {
-			if (!storageId) return;
-			try {
-				await ctx.storage.delete(storageId as Id<"_storage">);
-			} catch {
-				// blob already gone — ignore
+		let phase: DeletionPhase = args.phase ?? DELETION_PHASES[0];
+		let cursor: string | null = args.cursor ?? null;
+		let budget = DELETE_USER_BATCH;
+		let processedTotal = 0;
+
+		while (true) {
+			const result = await runDeletionPhase(ctx, retailer, phase, budget, cursor);
+			processedTotal += result.processed;
+			budget -= result.processed;
+			console.log(
+				`deleteUser[${retailer._id}] phase=${phase} processed=${result.processed}${result.done ? " (phase complete)" : ""}`,
+			);
+			if (!result.done) {
+				// More rows in this phase — hand the position to a continuation.
+				await ctx.scheduler.runAfter(0, internal.retailers.deleteUser, {
+					userId,
+					phase,
+					cursor: result.cursor ?? null,
+				});
+				return {
+					deleted: true,
+					retailerId: retailer._id,
+					done: false,
+					phase,
+					processed: processedTotal,
+				};
 			}
-		};
-
-		// Orders → their events + payment proof files.
-		const orders = await ctx.db
-			.query("orders")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const order of orders) {
-			const events = await ctx.db
-				.query("orderEvents")
-				.withIndex("by_order", (q) => q.eq("orderId", order._id))
-				.collect();
-			for (const event of events) await ctx.db.delete(event._id);
-			await deleteFile(order.paymentProofStorageId);
-			await ctx.db.delete(order._id);
-		}
-
-		// Products → their variants (+ variant images), image files and category
-		// memberships, via the shared cascade so this can't drift from the
-		// surgical products.deletePermanently. Category `productCount` is
-		// deliberately NOT maintained here — the category rows themselves are
-		// deleted a few lines below, so decrementing them first is pure waste.
-		const products = await ctx.db
-			.query("products")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const product of products) await deleteProductCascade(ctx, product);
-
-		// Categories + product↔category junction rows (+ tile images).
-		const junctionRows = await ctx.db
-			.query("productCategories")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const junction of junctionRows) await ctx.db.delete(junction._id);
-		const categories = await ctx.db
-			.query("categories")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const category of categories) {
-			await deleteFile(category.imageStorageId);
-			await ctx.db.delete(category._id);
-		}
-
-		// Lalamove delivery ledger + transient checkout quotes.
-		const deliveryJobs = await ctx.db
-			.query("deliveryJobs")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const job of deliveryJobs) {
-			for (const podId of job.podImageStorageIds ?? []) {
-				await ctx.storage.delete(podId);
+			const next = DELETION_PHASES[DELETION_PHASES.indexOf(phase) + 1];
+			if (next === undefined) break; // the final `retailer` phase just ran
+			phase = next;
+			cursor = null;
+			if (budget <= 0) {
+				await ctx.scheduler.runAfter(0, internal.retailers.deleteUser, {
+					userId,
+					phase,
+				});
+				return {
+					deleted: true,
+					retailerId: retailer._id,
+					done: false,
+					phase,
+					processed: processedTotal,
+				};
 			}
-			await ctx.db.delete(job._id);
-		}
-		const deliveryQuotes = await ctx.db
-			.query("deliveryQuotes")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const quote of deliveryQuotes) await ctx.db.delete(quote._id);
-
-		// Customers.
-		const customers = await ctx.db
-			.query("customers")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.collect();
-		for (const customer of customers) await ctx.db.delete(customer._id);
-
-		// Parked slug-history rows (no by-retailer index; small, TTL-pruned table).
-		const history = await ctx.db.query("slugHistory").collect();
-		for (const row of history) {
-			if (row.retailerId === retailerId) await ctx.db.delete(row._id);
 		}
 
-		// Retailer-level storage, then the retailer row. Delete every QR image —
-		// across the methods array AND the legacy single object.
-		await deleteFile(retailer.logoStorageId);
-		await deleteFile(retailer.coverImageStorageId);
-		for (const qrId of collectQrStorageIds(retailer)) await deleteFile(qrId);
-		await ctx.db.delete(retailerId);
-
+		console.log(`deleteUser[${retailer._id}] tenant fully erased`);
 		return {
 			deleted: true,
-			retailerId,
-			counts: {
-				orders: orders.length,
-				products: products.length,
-				customers: customers.length,
-			},
+			retailerId: retailer._id,
+			done: true,
+			phase,
+			processed: processedTotal,
 		};
 	},
 });
