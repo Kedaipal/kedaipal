@@ -133,6 +133,23 @@ the kill switch, caps, quality throttle and opt-outs all bind). A
 blocked/failed send surfaces on the claims list with "copy the link and
 send it yourself" — the link itself keeps working.
 
+### Keeping the template in the Utility category
+
+Meta auto-categorizes templates from their **body text**, and a Marketing
+classification is not a cosmetic difference: marketing sends are subject to
+per-user frequency caps and require marketing opt-in, so a re-categorized
+claim template would start dropping sends silently. The first BM draft was
+flagged Marketing because it framed the window as a **price guarantee with
+scarcity** — "harga ini dikunci untuk anda" (this price is locked for you) +
+"harga akan dilepaskan" (the price will be released). That is the shape of a
+limited-time offer, not a transaction update.
+
+The rule for this template (and any future one): describe an **existing
+order** and the action needed to finish it; let the **link/request** expire,
+never the *price*. Avoid price guarantees, scarcity, deal/offer wording and
+celebratory emoji. The price-hold detail is not lost — the buyer sees the live
+"Price locked for 14:32" bar on the page the button opens.
+
 ## Deferred / follow-ups
 
 - Meta template registration (EN + MS) with Arif — until then every claim
