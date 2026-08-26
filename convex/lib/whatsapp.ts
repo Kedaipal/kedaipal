@@ -33,6 +33,27 @@ export function orderConfirmTemplateName(): string | undefined {
 }
 
 /**
+ * Collapse a value into a safe WhatsApp TEMPLATE parameter.
+ *
+ * Meta rejects parameters containing newlines, tabs, or 4+ consecutive spaces,
+ * and `classifyPushFailure` treats that rejection (132007) as TERMINAL — so one
+ * pasted tab in a buyer's name kills the send outright, with no retry. The risk
+ * is real for any buyer-controlled string: `sanitizeCustomerName` trims the ends
+ * but never the interior, and a WhatsApp pushname is whatever the buyer typed
+ * into their own profile. A whitespace-only value degenerates to the caller's
+ * fallback rather than an empty param (also a Meta rejection).
+ *
+ * Every buyer- or seller-authored string entering `bodyParams` goes through
+ * this — it is the one choke point, so a new template can't reintroduce the bug.
+ */
+export function templateParam(
+	raw: string | undefined | null,
+	fallback: string,
+): string {
+	return (raw ?? "").replace(/\s+/g, " ").trim() || fallback;
+}
+
+/**
  * Claim links (86eyq0epn) — the Meta-approved utility template that hands the
  * buyer their price-locked checkout link. Same env-gating posture as the
  * confirm template: unset ⇒ WhatsApp sends are unavailable and the seller

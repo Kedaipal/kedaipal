@@ -108,6 +108,14 @@ repeat customers.
 
 ## WhatsApp send
 
+Every buyer- or seller-authored string entering `bodyParams` goes through
+**`templateParam()`** (`convex/lib/whatsapp.ts`): Meta rejects parameters
+containing newlines, tabs or 4+ consecutive spaces, and `classifyPushFailure`
+treats that rejection (132007) as **terminal** — so one pasted tab in a
+WhatsApp pushname would kill the send with no retry and no explanation to the
+seller. It is the single choke point for that class, shared with the seller
+alerts and the buyer confirm push.
+
 `notifyClaimLink` (convex/whatsapp.ts) mirrors the confirm-push shape:
 env-gated on **`WHATSAPP_CLAIM_LINK_TEMPLATE`** (unset ⇒ silently
 unavailable; the send outcome stamps `failed` so the seller is handed the

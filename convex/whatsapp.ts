@@ -14,6 +14,7 @@ import {
 import {
 	claimLinkTemplateName,
 	orderConfirmTemplateName,
+	templateParam,
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
 	sellerPaymentReceivedTemplateName,
@@ -1038,8 +1039,7 @@ export const getOrderForSellerAlert = internalQuery({
 		// per classifyPushFailure). Collapse here, at the one choke point both
 		// alert actions read; whitespace-only degenerates to the placeholder
 		// rather than an empty param (also a Meta rejection).
-		const rawName = order.customer.name ?? "";
-		const customerName = rawName.replace(/\s+/g, " ").trim() || "Anonymous";
+		const customerName = templateParam(order.customer.name, "Anonymous");
 		return {
 			retailerId: order.retailerId,
 			shortId: order.shortId,
@@ -1494,7 +1494,14 @@ export const notifyStorefrontOrderCreated = internalAction({
 				kind: "template",
 				templateName,
 				languageCode,
-				bodyParams: [meta.shortId, meta.storeName, money],
+				// storeName is seller-authored free text, so it rides templateParam
+				// too — a tab in a store name would otherwise break EVERY
+				// confirmation push for that store, terminally (132007).
+				bodyParams: [
+					meta.shortId,
+					templateParam(meta.storeName, "the store"),
+					money,
+				],
 				// The approved button URL is https://kedaipal.com/track/{{1}} — Meta
 				// appends ONLY this suffix (the tracking token, not the shortId).
 				urlButtonParam: trackingToken,
@@ -1744,9 +1751,13 @@ export const notifyClaimLink = internalAction({
 				templateName,
 				languageCode,
 				bodyParams: [
-					// Meta rejects empty params — a nameless buyer gets a neutral word.
-					meta.buyerName ?? (locale === "ms" ? "kawan" : "there"),
-					meta.storeName,
+					// Buyer-controlled (a WhatsApp pushname, or a cashier-typed name
+					// whose interior whitespace survives sanitizeCustomerName), so it
+					// goes through templateParam or a stray tab kills the send
+					// terminally. Empty degenerates to a neutral word — Meta rejects
+					// an empty parameter too.
+					templateParam(meta.buyerName, locale === "ms" ? "kawan" : "there"),
+					templateParam(meta.storeName, "the store"),
 					money,
 					describeClaimWindow(meta.windowMinutes, languageCode),
 				],
