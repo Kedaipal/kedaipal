@@ -122,7 +122,7 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
   opacity, on-brand), `source-breakdown` (bar list of `attributionBucket` rows;
   its all-direct state doubles as the attribution feature's discoverability
-  surface, pointing at the poster + QR-dialog presets), `date-range-control`
+  surface, pointing at Home's tagged-link row), `date-range-control`
   (preset chips + custom range) and `locked-teaser`.
 - **Trend interaction is a scrubber, not hover** (mobile-first): a hover `title`
   is mute on a phone and a 30-day range gives ~11px bars (below the 44px tap

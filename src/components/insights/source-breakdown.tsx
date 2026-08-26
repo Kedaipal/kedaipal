@@ -11,7 +11,7 @@ import { formatPrice, formatPriceCompact } from "../../lib/format";
 //
 // The all-direct state doubles as the feature's discoverability surface: a
 // seller who never tagged a link learns here that tagged links exist and
-// where to make one (poster / QR dialog presets).
+// where to make one (the "Tagged links" row on Home's store-link card).
 
 const DISPLAY_LIMIT = 8;
 
