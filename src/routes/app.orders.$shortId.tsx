@@ -36,6 +36,7 @@ import {
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
 	COUNTRY_PAYMENT_METHODS,
@@ -2144,14 +2145,28 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 		// Hoisted so the catch can clean up blobs already uploaded before a failure.
 		const storageIds: string[] = [];
 		try {
+			// Prepare the whole set first. A mockup the BUYER can't open is the
+			// mirror of an unreadable payment proof — they're asked to approve a
+			// design that renders as a broken box — so nothing is uploaded until
+			// every file has been proven decodable. See lib/image-upload.ts.
+			const prepared: { blob: Blob; contentType: string }[] = [];
+			for (const file of Array.from(files)) {
+				const result = await prepareImageUpload(file);
+				if (!result.ok) {
+					toast.error(result.message);
+					setUploading(false);
+					return;
+				}
+				prepared.push(result);
+			}
 			// Upload each selected image, then send them together as the mockup set
 			// (replacing any previous one). Sequential keeps it simple + ordered.
-			for (const file of Array.from(files)) {
+			for (const item of prepared) {
 				const url = await generateUploadUrl({ orderId: order._id });
 				const res = await fetch(url, {
 					method: "POST",
-					headers: { "Content-Type": file.type },
-					body: file,
+					headers: { "Content-Type": item.contentType },
+					body: item.blob,
 				});
 				if (!res.ok) throw new Error("Upload failed");
 				const { storageId } = (await res.json()) as { storageId: string };
@@ -2370,7 +2385,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 								: "Upload & send mockup"}
 						<input
 							type="file"
-							accept="image/*"
+							accept={IMAGE_ACCEPT}
 							multiple
 							disabled={uploading}
 							onChange={handleUpload}

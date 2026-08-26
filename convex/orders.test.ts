@@ -1098,6 +1098,38 @@ describe("orders", () => {
 			expect(claimEvent).toBeTruthy();
 		});
 
+		// NOTE (86eyr6zm8): the "rejects a HEIC proof" case can't be exercised
+		// here — convex-test's storage doesn't record `contentType`, so
+		// `db.system.get()` returns no type and the guard's deliberate fail-open
+		// path allows it. The rejection logic itself is unit-tested against a
+		// stub context in convex/lib/imageContentType.test.ts; this test pins the
+		// half that IS reachable, and matters most given the fail-open default:
+		// that a perfectly normal proof still goes through.
+		test("claimPayment accepts a normal image proof", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const png = await t.run((ctx) =>
+				ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+			);
+
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				proofStorageId: png,
+			});
+
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(order?.paymentStatus).toBe("claimed");
+		});
+
 		test("claimPayment without reference or proof still succeeds", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);

@@ -20,6 +20,10 @@ import {
 import { stampRetailerActivation } from "./lib/activation";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
+import {
+	isStoredImageRenderable,
+	UNRENDERABLE_PROOF_MESSAGE,
+} from "./lib/imageContentType";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
 import {
@@ -3472,6 +3476,17 @@ export const claimPayment = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
+		}
+		// The SELLER has to look at this proof to decide whether money arrived,
+		// and they're a different person from whoever uploaded it — so a file
+		// they can't open must not reach them. The client refuses undecodable
+		// uploads already; this closes the direct-call gap that a client guard
+		// structurally cannot. See convex/lib/imageContentType.ts.
+		if (
+			proofStorageId &&
+			!(await isStoredImageRenderable(ctx, proofStorageId as Id<"_storage">))
+		) {
+			throw new ConvexError(UNRENDERABLE_PROOF_MESSAGE);
 		}
 		// Payment is gated behind mockup approval — the buyer's tracking page
 		// disables "I've paid" while the gate is closed; reject a direct call too.
