@@ -500,10 +500,10 @@ celebratory emoji. The price-hold detail is not lost — the buyer sees the live
 
 ## Deferred / follow-ups
 
-- Claim-link **attribution presets** are three (`CLAIM_SOURCE_CHOICES`:
-  TikTok Live / Instagram / WhatsApp). A seller who lives on another channel
-  has no chip for it — the field takes any sanitized tag, so widening is a
-  one-line change once someone asks. Deliberately not the full
+- Claim-link **attribution presets** are four (`CLAIM_SOURCE_CHOICES`:
+  TikTok Live / Instagram Live / Facebook Live / WhatsApp). A seller who lives
+  on another channel has no chip for it — the field takes any sanitized tag, so
+  widening is a one-line change once someone asks. Deliberately not the full
   `SHARE_TAG_PRESETS` list: a long chip row is a decision tax mid-livestream.
 
 - Meta template registration (EN + MS) with Arif — until then every claim
