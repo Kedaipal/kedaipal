@@ -976,6 +976,8 @@ function OrderDetailRoute() {
 									src={customerImageUrl}
 									alt="Customer reference photo"
 									caption="Customer reference photo"
+									// Buyer-supplied, order-owned — erased on hard delete.
+									sensitive
 									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white"
 									className="block max-h-56 w-auto object-contain"
 								/>
@@ -1049,6 +1051,9 @@ function OrderDetailRoute() {
 									alt="Payment receipt"
 									aspect="h-64 w-full"
 									objectFit="contain"
+									// A buyer's bank screenshot. Order-owned, erased on hard
+									// delete — must never sit on a public edge cache.
+									sensitive
 								/>
 							</a>
 						) : (
@@ -2277,6 +2282,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							<AppImage
 								src={url}
 								alt="Current mockup"
+								// Order-owned blob — erased on hard delete.
+								sensitive
 								aspect={
 									mockupUrls.length === 1
 										? "h-64 w-full"

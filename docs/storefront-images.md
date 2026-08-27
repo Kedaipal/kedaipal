@@ -50,6 +50,12 @@ The proxy reads the **stored original on the fly**. The entire existing catalog 
 
 **`immutable` is true by construction.** Convex blobs are never rewritten in place — every replace path mints a new storage id (and a new uuid) and GCs the old blob. A given uuid's bytes can never change; they can only stop existing, and a deleted file's cached copies are no worse than the 30-day private cache the originals already carry. A 404 is edge-cached for only 60 s.
 
+**Order-owned images are excluded from the proxy entirely.** The proxy re-serves images as `public, max-age=1y, immutable` on a global edge. That is right for catalog photos and wrong for the blobs `convex/lib/orderBlobs.ts` calls order-owned — the buyer's reference photo, their payment-proof screenshot, the seller's mockup(s) — plus delivery POD photos, which show a buyer's doorstep.
+
+Those have an explicit erase contract: the admin hard delete and the account-deletion cascade both free them, and both are documented as **permanent**. A public edge copy would outlive that delete by up to a year and stay fetchable by anyone holding the URL — silently breaking a promise already shipped. This was considered as an "accept the risk, the URL is an unguessable capability" note and rejected: the risk is not really about guessability, it is that *delete would stop meaning delete*, and the images gain nothing from proxying anyway (one or two people view them once, so they are no part of the catalog-weight problem).
+
+They render with `AppImage`'s `sensitive` flag, which keeps them on their original Convex URL and its `private` caching. Store-level assets — product photos, logo, cover, category art, and the seller's payment QR — are deliberately **not** sensitive: they are published to every visitor by design, and edge caching is the whole point. `src/lib/sensitive-images.test.ts` fails the build if a render of an order-owned image loses the flag.
+
 **`srcset` requires `sizes`.** A `srcset` without `sizes` makes the browser assume the image is 100vw and pull the **largest** candidate — on a grid of 180 px tiles that is worse than not proxying at all. `AppImage` therefore emits `srcset` only when a call site supplies `sizes`; without it the image is still proxied, just at one fixed width (`DEFAULT_IMAGE_WIDTH`).
 
 **The lightbox keeps the original.** `ZoomableImage`'s zoom view renders the untouched storage URL — it zooms to 3×, exactly the case a resized derivative renders soft. Those bytes are fetched only when a buyer explicitly opens the zoom.
@@ -71,6 +77,24 @@ Image Transformations must be enabled on the zone, and **were not as of 23 Aug 2
 > Cloudflare dashboard → the **kedaipal.com** zone → **Images → Transformations → Enable**
 
 No "resize from any origin" toggle is needed — the Worker fetches the origin itself. Billing: 5,000 unique transformations/month free, then US$0.50 per 1,000.
+
+### Edge cache — measured
+Transformations were switched on 26 Aug 2026. Fetching the same transform URL twice on the live zone:
+
+```
+1st  cf-cache-status: MISS   content-type: image/webp   10478 bytes
+2nd  cf-cache-status: HIT    age: 0                     10478 bytes
+```
+
+So the zone caches transforms at the edge, and `format=webp` is honoured (see the `Accept` note above).
+
+**Still to confirm on the first deploy**, because it cannot be exercised before then: that the *Worker* path caches too. `/cdn-cgi/image/` (measured above) and `fetch(origin, {cf:{image, cacheEverything, cacheTtlByStatus}})` are different cache paths, and `wrangler dev --remote` does not exercise edge caching. After the first deploy, curl any `/img/<uuid>?w=320` twice:
+
+```bash
+curl -sI "https://kedaipal.com/img/<uuid>?w=320" | grep -i cf-cache-status   # run twice: expect MISS then HIT
+```
+
+If the second call is `MISS` or `BYPASS`, add an explicit `cf.cacheTtl` alongside `cacheTtlByStatus` in `src/lib/image-route.ts` and re-check.
 
 `CONVEX_URL` needs no new wiring: `.github/workflows/deploy.yml` already passes it to the Worker via `wrangler deploy --var CONVEX_URL:…`, and `serverEnv.CONVEX_URL` covers `wrangler dev` / node.
 

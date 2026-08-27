@@ -1056,6 +1056,9 @@ function TrackingRoute() {
 									src={url}
 									alt="Proof of delivery"
 									aspect="h-72 w-full"
+									// A photo of the buyer's own doorstep, erased with the
+									// order — keep it off the public edge cache.
+									sensitive
 								/>
 							</a>
 						))}
@@ -1979,6 +1982,8 @@ function MockupReview({
 						caption="Your mockup"
 						wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 						className="block max-h-72 w-full object-contain"
+						// Order-owned blob (orderBlobs.ts) — erased on hard delete.
+						sensitive
 					/>
 				) : (
 					<div className="grid grid-cols-2 gap-2">
@@ -1988,6 +1993,8 @@ function MockupReview({
 								src={url}
 								alt={`Your mockup ${i + 1}`}
 								caption={`Your mockup ${i + 1}`}
+								// Order-owned blob — erased on hard delete.
+								sensitive
 								wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 								className="block aspect-square w-full object-cover"
 							/>

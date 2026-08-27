@@ -120,6 +120,7 @@ export function ZoomableImage({
 	wrapperClassName,
 	caption,
 	sizes,
+	sensitive,
 }: {
 	src: string;
 	alt: string;
@@ -127,6 +128,8 @@ export function ZoomableImage({
 	className?: string;
 	/** `sizes` hint for the thumbnail — see AppImage. The lightbox ignores it. */
 	sizes?: string;
+	/** Order-owned/buyer-linked image — keep it off the resize proxy. See AppImage. */
+	sensitive?: boolean;
 	/** Classes for the wrapping button — use for layout (flex item, snap, etc.). */
 	wrapperClassName?: string;
 	/** Optional caption shown in the lightbox. */
@@ -152,6 +155,7 @@ export function ZoomableImage({
 					aspect={className}
 					fill={false}
 					sizes={sizes}
+					sensitive={sensitive}
 				/>
 			</button>
 			{/* The lightbox deliberately keeps the ORIGINAL, unproxied URL: it

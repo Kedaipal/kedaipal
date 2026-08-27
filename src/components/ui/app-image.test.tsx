@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppImage, MAX_LOAD_RETRIES } from "./app-image";
 
@@ -56,7 +62,9 @@ describe("AppImage — loading, error, and empty states", () => {
 			const retried = imgIn(container);
 			expect(retried).not.toBeNull();
 			expect(retried).not.toBe(first);
-			expect(retried?.getAttribute("src")).toBe("https://example.com/flaky.jpg");
+			expect(retried?.getAttribute("src")).toBe(
+				"https://example.com/flaky.jpg",
+			);
 			expect(skeletonIn(container)).not.toBeNull();
 			expect(screen.queryByText("Flaky photo")).toBeNull();
 
@@ -392,7 +400,11 @@ describe("AppImage — image proxy + srcset (86eypxght)", () => {
 
 	it("emits a full srcset + sizes when `sizes` is given", () => {
 		const { container } = render(
-			<AppImage src={STORAGE} alt="Cake" sizes="(min-width: 1024px) 25vw, 50vw" />,
+			<AppImage
+				src={STORAGE}
+				alt="Cake"
+				sizes="(min-width: 1024px) 25vw, 50vw"
+			/>,
 		);
 		const img = container.querySelector("img");
 		const srcset = img?.getAttribute("srcset") ?? "";
@@ -415,9 +427,63 @@ describe("AppImage — image proxy + srcset (86eypxght)", () => {
 	});
 
 	it("still renders the fallback for an unset src, with no proxy URL invented", () => {
-		const { container } = render(<AppImage src={undefined} alt="No photo" sizes="100vw" />);
+		const { container } = render(
+			<AppImage src={undefined} alt="No photo" sizes="100vw" />,
+		);
 		expect(container.querySelector("img")).toBeNull();
 		expect(container.innerHTML).not.toContain("/img/");
+	});
+});
+
+describe("AppImage — order-owned images stay off the edge cache (PDPA)", () => {
+	const UUID = "3346125e-42d4-4560-a3e1-abf7438de45f";
+	const STORAGE = `https://qualified-chihuahua-441.convex.cloud/api/storage/${UUID}`;
+
+	it("serves a sensitive image from its ORIGINAL url — never the proxy", () => {
+		const { container } = render(
+			<AppImage src={STORAGE} alt="Payment receipt" sensitive />,
+		);
+		const img = container.querySelector("img");
+		// The proxy re-serves as `public, max-age=1y, immutable`. These four blob
+		// kinds (buyer reference photo, payment proof, mockups, POD) are erased
+		// by the admin hard delete and the account cascade — documented as
+		// PERMANENT — so a public edge copy outliving that delete by a year would
+		// silently break a promise we already shipped.
+		expect(img?.getAttribute("src")).toBe(STORAGE);
+		expect(img?.getAttribute("src")).not.toContain("/img/");
+	});
+
+	it("emits no srcset for a sensitive image, even when sizes is supplied", () => {
+		const { container } = render(
+			<AppImage src={STORAGE} alt="Mockup" sizes="50vw" sensitive />,
+		);
+		const img = container.querySelector("img");
+		expect(img?.getAttribute("srcset")).toBeNull();
+		expect(container.innerHTML).not.toContain("/img/");
+	});
+
+	it("still proxies the same url when NOT marked sensitive — the flag is the only difference", () => {
+		// Guards against the opt-out being wired backwards, or applied globally.
+		const { container } = render(<AppImage src={STORAGE} alt="Product" />);
+		expect(container.querySelector("img")?.getAttribute("src")).toBe(
+			`/img/${UUID}?w=640`,
+		);
+	});
+
+	it("keeps retry working on a sensitive image, against the original url", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src={STORAGE} alt="Payment receipt" sensitive />,
+			);
+			const first = imgIn(container);
+			failAndFlush(container);
+			const retried = imgIn(container);
+			expect(retried).not.toBe(first);
+			expect(retried?.getAttribute("src")).toBe(STORAGE);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
@@ -443,7 +509,9 @@ describe("AppImage — retry (86eypxgff) composed with the proxy (86eypxght)", (
 			const retried = imgIn(container);
 			expect(retried).not.toBe(first);
 			expect(retried?.getAttribute("src")).toBe(`/img/${UUID}?w=640`);
-			expect(retried?.getAttribute("srcset")).toContain(`/img/${UUID}?w=160 160w`);
+			expect(retried?.getAttribute("srcset")).toContain(
+				`/img/${UUID}?w=160 160w`,
+			);
 			expect(retried?.getAttribute("sizes")).toBe("50vw");
 			expect(retried?.getAttribute("src")).not.toContain("convex.cloud");
 

@@ -70,6 +70,27 @@ export interface AppImageProps {
 	 */
 	sizes?: string;
 	/**
+	 * Order-owned or buyer-linked imagery: keep it OFF the resize proxy.
+	 *
+	 * The proxy re-serves images as `public, max-age=1y, immutable` on
+	 * Cloudflare's edge. That is right for catalog photos and wrong for the four
+	 * image kinds `convex/lib/orderBlobs.ts` calls order-owned — the buyer's
+	 * reference photo, their payment-proof screenshot, the seller's mockup(s) —
+	 * plus delivery POD photos, which show a buyer's doorstep.
+	 *
+	 * Those have an explicit erase contract: the admin hard delete and the
+	 * account-deletion cascade both free those blobs, and we document that as
+	 * PERMANENT. A public edge copy would outlive the delete by up to a year and
+	 * stay fetchable by anyone holding the URL — silently breaking a promise we
+	 * already shipped. They also gain nothing from proxying: one or two people
+	 * view them once, so they are no part of the catalog-weight problem.
+	 *
+	 * Store-level assets (product photos, logo, cover, category art, the
+	 * seller's payment QR) are deliberately NOT sensitive — they are published
+	 * to every visitor by design, and edge caching is the entire point.
+	 */
+	sensitive?: boolean;
+	/**
 	 * Accessible name. Also shown (truncated) as the error/empty-state caption.
 	 * Pass `""` for purely decorative images — the fallback then renders
 	 * icon-only and `aria-hidden`.
@@ -137,6 +158,7 @@ export function AppImage({
 	objectFit = "cover",
 	fill = true,
 	sizes,
+	sensitive = false,
 }: AppImageProps) {
 	const hasSrc = typeof src === "string" && src.length > 0;
 	const isLocalPreview = hasSrc && isLocalPreviewUrl(src);
@@ -149,8 +171,11 @@ export function AppImage({
 	// with no backfill and no seller re-upload.
 	// `src` doubles as the srcset fallback, so the default width serves both the
 	// no-`sizes` case and browsers that ignore srcset.
-	const displaySrc = hasSrc ? proxiedImageUrl(src, DEFAULT_IMAGE_WIDTH) : src;
-	const srcSet = hasSrc && sizes ? imageSrcSet(src) : null;
+	const proxyable = hasSrc && !sensitive;
+	const displaySrc = proxyable
+		? proxiedImageUrl(src, DEFAULT_IMAGE_WIDTH)
+		: src;
+	const srcSet = proxyable && sizes ? imageSrcSet(src) : null;
 	const initialStatus: ImageStatus = isLocalPreview ? "loaded" : "loading";
 
 	const [status, setStatus] = useState<ImageStatus>(initialStatus);
@@ -191,8 +216,7 @@ export function AppImage({
 	// for elements that are gone.
 	useEffect(
 		() => () => {
-			if (retryTimerRef.current !== null)
-				clearTimeout(retryTimerRef.current);
+			if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
 		},
 		[],
 	);

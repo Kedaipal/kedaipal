@@ -796,6 +796,8 @@ export function BookDeliveryCard({
 											src={url}
 											alt="Proof of delivery"
 											aspect="h-20 w-20"
+											// Buyer's doorstep — off the public edge cache.
+											sensitive
 										/>
 									</a>
 								))}
