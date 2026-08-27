@@ -4,6 +4,7 @@
 // sees" and "what they export". No Convex imports; unit-tested directly. See
 // docs/order-inbox.md + docs/invoices-receipts.md.
 
+import { attributionBucket } from "./attribution";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
 import { orderBucket, type OrderStatus } from "./orderBuckets";
 
@@ -22,6 +23,14 @@ export type InboxFilterArgs = {
 	// Legacy orders with no stamped source read as "storefront". Undefined = no
 	// source filtering. See orders.source in convex/schema.ts.
 	source?: "storefront" | "counter";
+	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
+	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
+	// OR within the filter, ANDed with the rest), because "how did my socials
+	// do" is a question about several channels at once. Deliberately a separate
+	// dimension from `source` above: that one is the checkout SURFACE
+	// (storefront vs counter), this one is where the buyer came FROM. Empty or
+	// undefined = no attribution filtering.
+	attributionSources?: string[];
 	searchText?: string;
 };
 
@@ -35,6 +44,7 @@ export type FilterableOrder = {
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentMethod?: string;
 	source?: "storefront" | "counter";
+	attributionSource?: string;
 	createdAt: number;
 	fulfilmentDate?: number;
 	shortId: string;
@@ -66,6 +76,10 @@ export function buildInboxPredicate(
 			? new Set(args.paymentMethods)
 			: null;
 	const wantUnspecified = args.methodUnspecified === true;
+	const attributionSet =
+		args.attributionSources && args.attributionSources.length > 0
+			? new Set(args.attributionSources)
+			: null;
 	return (o) => {
 		// Bucket membership goes through the same seen-aware resolver the counts
 		// use, so the chip count and the list can't disagree: an unseen push-path
@@ -74,6 +88,11 @@ export function buildInboxPredicate(
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
 		// Source filter — legacy/undefined source reads as "storefront".
 		if (args.source !== undefined && (o.source ?? "storefront") !== args.source)
+			return false;
+		// Marketing-origin filter — bucketed through the SAME resolver Insights
+		// reports with (attribution.ts), so a row in the by-source breakdown and
+		// the inbox it drills into can never disagree about which orders count.
+		if (attributionSet && !attributionSet.has(attributionBucket(o)))
 			return false;
 		// Undefined paymentStatus reads as "unpaid".
 		if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;

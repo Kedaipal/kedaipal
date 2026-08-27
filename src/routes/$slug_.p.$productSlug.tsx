@@ -11,6 +11,7 @@ import { ProductPageView } from "../components/storefront/product-page";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
@@ -256,6 +257,8 @@ function ProductSkeleton() {
 
 function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
+	// Product links are the ones pasted in bios/lives — capture the ?src= tag.
+	useCaptureAttribution(slug);
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
 	const result = useQuery(

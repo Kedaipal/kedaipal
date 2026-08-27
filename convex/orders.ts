@@ -18,6 +18,10 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import {
+	attributionBucket,
+	sanitizeAttributionSource,
+} from "./lib/attribution";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import {
@@ -699,6 +703,11 @@ export const create = mutation({
 		// read from our own record. Missing/stale/mismatched → the order falls
 		// back to the store's onUnquotable policy. See docs/delivery-lalamove.md.
 		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
+		// Marketing source the buyer arrived from (86eyq0eq9) — the session's
+		// captured `?src=`/`utm_source` tag. Client sends its cleaned copy but
+		// the server re-sanitizes (authoritative); a bad value can never block
+		// the order — it buckets to "other". See convex/lib/attribution.ts.
+		attributionSource: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -1166,6 +1175,7 @@ export const create = mutation({
 			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: args.channel,
 			source: "storefront",
+			attributionSource: sanitizeAttributionSource(args.attributionSource),
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
 			deliveryDirection,
@@ -1847,6 +1857,12 @@ export const searchOrders = query({
 		// Checkout surface: "storefront" (online) vs "counter" (walk-in). Legacy
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
+		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
+		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
+		// ANDs with the rest. Free-form by design (sellers invent their own
+		// tags), so this is v.string() rather than a literal union; the picker is
+		// driven by `availableSources` below. Distinct dimension from `source`.
+		attributionSources: v.optional(v.array(v.string())),
 		searchText: v.optional(v.string()),
 		// Max rows to return. OMIT it for the inbox: the query then returns the
 		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
@@ -1868,6 +1884,7 @@ export const searchOrders = query({
 			fulfilmentWindow,
 			mockupPending,
 			source,
+			attributionSources,
 			searchText,
 			limit,
 		},
@@ -1890,6 +1907,7 @@ export const searchOrders = query({
 			fulfilmentWindow !== undefined ||
 			mockupPending !== undefined ||
 			source !== undefined ||
+			attributionSources !== undefined ||
 			(searchText !== undefined && searchText.trim().length > 0);
 		if (usesInboxFeatures && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
@@ -1925,9 +1943,18 @@ export const searchOrders = query({
 			 */
 			readyToShip: 0,
 		};
+		// Which marketing origins actually appear in this seller's window
+		// (86eyq0eq9). Tallied over the FULL scan like `counts` — never over the
+		// filtered set — so picking one source can't make the others vanish from
+		// the picker. Free-form tags mean the filter UI cannot hardcode a list;
+		// this is that list, and it costs nothing (we already hold every row).
+		const sourceTally = new Map<string, number>();
+
 		for (const o of all) {
 			const b = orderBucket(o);
 			counts[b]++;
+			const asrc = attributionBucket(o);
+			sourceTally.set(asrc, (sourceTally.get(asrc) ?? 0) + 1);
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 			const open = b === "new" || b === "in_progress";
 			// Counter orders default their date to today at create — they're not a
@@ -1961,6 +1988,7 @@ export const searchOrders = query({
 				fulfilmentWindow,
 				mockupPending,
 				source,
+				attributionSources,
 				searchText,
 			}),
 		);
@@ -1979,6 +2007,14 @@ export const searchOrders = query({
 			orders: sorted.slice(0, take),
 			total: sorted.length,
 			counts,
+			// Most-used origin first — the picker mirrors the Insights ordering.
+			// Ties break ALPHABETICALLY, not by scan order: equal-count origins
+			// would otherwise swap places every time a new order lands, and a
+			// filter list that reshuffles under the seller is worse than one in
+			// a slightly arbitrary but stable order.
+			availableSources: [...sourceTally.entries()]
+				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+				.map(([key]) => key),
 			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
 			// 1,000 are outside the window, so the list AND counts under-report.
 			// The inbox surfaces this in a footer; export is the full-history path.
@@ -2018,6 +2054,10 @@ const exportFilterValidators = {
 	),
 	paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
 	methodUnspecified: v.optional(v.boolean()),
+	// Marketing origin (86eyq0eq9) — kept in lockstep with the inbox so a CSV
+	// export of a filtered view contains exactly the rows the seller was
+	// looking at (the invariant orderInboxFilter.ts exists to protect).
+	attributionSources: v.optional(v.array(v.string())),
 	dateFrom: v.optional(v.number()),
 	dateTo: v.optional(v.number()),
 	fulfilmentWindow: v.optional(
