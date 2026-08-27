@@ -17,6 +17,7 @@
  */
 
 import { displayAddressState } from "../address";
+import { type Country, DEFAULT_COUNTRY } from "../country";
 import { formatPhone } from "../customer";
 import { formatFulfilmentDateTime } from "../fulfilmentDate";
 import type { AwbConfig } from "../awbConfig";
@@ -312,7 +313,11 @@ export type OrderForAwb = {
 export type RetailerForAwb = {
 	storeName: string;
 	waPhone?: string;
-	businessAddress?: { label: string };
+	/** The store's country today. Compared against the address's stamped
+	 * capture country to catch a return address left behind by a country
+	 * switch (86eyqgujv). */
+	country?: Country;
+	businessAddress?: { label: string; country?: Country };
 };
 
 /**
@@ -339,6 +344,8 @@ export function addressLines(address: AddressForAwb): string[] {
  */
 const RECIPIENT_ADDRESS_WARNING = "! Address incomplete - check the order";
 const SENDER_ADDRESS_WARNING = "! Return address incomplete - check Settings";
+const FOREIGN_SENDER_ADDRESS_WARNING =
+	"! Return address not set for this country - check Settings";
 
 /**
  * Clamp a party's address lines to what the page can actually carry.
@@ -394,14 +401,31 @@ export function orderToAwbLabelData(args: {
 	// so the fallback never fired and the courier got a blank line where they
 	// look first.
 	const storeName = printable(retailer.storeName) ?? "Store";
+	// A return address left behind by a country switch is WORSE than none: a
+	// courier acting on it sends the parcel abroad. Zaki's ORD-Z932 shipped to
+	// Woodlands, Singapore with "55, Jalan Eco Majestic 7/1D, 43700 Beranang,
+	// Selangor, Malaysia" printed as its sender. Omitted, with the reason on the
+	// label, so an undeliverable parcel stops at the depot instead (86eyqgujv).
+	//
+	// Only an address whose capture country is STAMPED and differs is dropped —
+	// an un-stamped legacy row prints exactly as it always did.
+	const foreignReturnAddress =
+		retailer.businessAddress?.country !== undefined &&
+		retailer.businessAddress.country !== (retailer.country ?? DEFAULT_COUNTRY);
 	const storeAddress = clampLines(
-		retailer.businessAddress ? [retailer.businessAddress.label] : [],
+		retailer.businessAddress && !foreignReturnAddress
+			? [retailer.businessAddress.label]
+			: [],
 	);
 	const storeParty: Omit<AwbParty, "heading"> = {
 		name: storeName,
 		phone: retailer.waPhone ? formatPhone(retailer.waPhone) : undefined,
 		lines: storeAddress.lines,
-		warning: storeAddress.lost ? SENDER_ADDRESS_WARNING : undefined,
+		warning: foreignReturnAddress
+			? FOREIGN_SENDER_ADDRESS_WARNING
+			: storeAddress.lost
+				? SENDER_ADDRESS_WARNING
+				: undefined,
 	};
 
 	const buyerAddress = clampLines(address ? addressLines(address) : []);

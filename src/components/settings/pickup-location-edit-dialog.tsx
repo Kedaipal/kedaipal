@@ -5,9 +5,11 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import { type Country, COUNTRY_LABELS } from "../../../convex/lib/country";
+import { COUNTRY_LABELS, type Country } from "../../../convex/lib/country";
+import { STORED_MOBILE_PATTERN } from "../../../convex/lib/slug";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
@@ -36,6 +38,8 @@ interface PickupLocationEditDialogProps {
 	 * region lock), the placeholder names it, and the manager-contact field
 	 * wears its plate + validator arm. */
 	country: Country;
+	/** Storefront currency — the fee field wears its symbol (86eyqgujv). */
+	currency: string;
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
@@ -100,6 +104,7 @@ export function PickupLocationEditDialog({
 	location,
 	retailerId,
 	country,
+	currency,
 	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
@@ -135,6 +140,21 @@ export function PickupLocationEditDialog({
 	const lockedWithExistingFee =
 		!canChargeFee && Boolean(location?.fee && location.fee > 0);
 
+	// A manager number kept from before a country switch (86eyqgujv). The
+	// switch deliberately no longer wipes these, which would otherwise trap the
+	// seller here: the field wears this country's plate and its validator
+	// rejects a foreign number, so a seller opening this dialog to fix the
+	// ADDRESS would find Save blocked by a phone field they never touched,
+	// under a value they can't read ("60123456789" beneath a +65 plate).
+	//
+	// So the field starts empty and the old number is stated above it, with
+	// what saving will do. Nothing is lost until they choose to save.
+	const carriedContact =
+		location?.managerWaPhone &&
+		!STORED_MOBILE_PATTERN[country].test(location.managerWaPhone)
+			? location.managerWaPhone
+			: null;
+
 	const form = useAppForm({
 		defaultValues: {
 			label: location?.label ?? "",
@@ -142,8 +162,12 @@ export function PickupLocationEditDialog({
 			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
-			// National part only — the field wears the store-country plate.
-			managerWaPhone: toNationalPhoneInput(location?.managerWaPhone, country),
+			// National part only — the field wears the store-country plate. A
+			// carried foreign number has no national part under this plate, so it
+			// starts blank and is explained beneath instead.
+			managerWaPhone: carriedContact
+				? ""
+				: toNationalPhoneInput(location?.managerWaPhone, country),
 		},
 		// Label errors render on the field itself (aria-invalid + message beneath);
 		// the address + fee inputs aren't shared fields, so they carry their own
@@ -384,7 +408,7 @@ export function PickupLocationEditDialog({
 								</label>
 								<div className="relative">
 									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-										RM
+										{currencySymbol(currency)}
 									</span>
 									<input
 										id="pickup-fee-input"
@@ -509,6 +533,15 @@ export function PickupLocationEditDialog({
 										/>
 									)}
 								</form.AppField>
+								{carriedContact ? (
+									<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+										This point's saved contact is{" "}
+										<span className="font-medium">+{carriedContact}</span>, from
+										before you moved the store to {COUNTRY_LABELS[country]}.
+										Enter a {COUNTRY_LABELS[country]} number above, or leave
+										this blank — saving will remove the old one.
+									</p>
+								) : null}
 							</div>
 
 							{serverError ? (

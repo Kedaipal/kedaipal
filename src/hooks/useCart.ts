@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 import type { Id } from "../../convex/_generated/dataModel";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 
 /**
  * Cart state for the public storefront. Persisted to localStorage and keyed
@@ -210,7 +211,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		return {
 			itemCount: count,
 			total: sum,
-			currency: state.items[0]?.currency ?? "MYR",
+			currency: state.items[0]?.currency ?? DEFAULT_CURRENCY,
 		};
 	}, [state.items]);
 

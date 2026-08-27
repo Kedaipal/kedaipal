@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { type SupportedCurrency } from "./currency";
 
 /**
@@ -19,6 +20,14 @@ export const COUNTRIES = ["MY", "SG"] as const;
 export type Country = (typeof COUNTRIES)[number];
 
 export const DEFAULT_COUNTRY: Country = "MY";
+
+/**
+ * The schema validator for a country field. One author, because a country is
+ * now stamped in three places — the store, its business address and each
+ * pickup point — and three hand-written unions would be three chances for the
+ * set to drift from `COUNTRIES`.
+ */
+export const countryValidator = v.union(v.literal("MY"), v.literal("SG"));
 
 export const COUNTRY_LABELS: Record<Country, string> = {
 	MY: "Malaysia",

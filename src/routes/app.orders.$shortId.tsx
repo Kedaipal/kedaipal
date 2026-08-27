@@ -28,14 +28,15 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
-import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
 	COUNTRY_PAYMENT_METHODS,
@@ -88,6 +89,7 @@ import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	formatPrice,
 	formatPriceCompact,
 	normalizePriceInput,
@@ -975,6 +977,8 @@ function OrderDetailRoute() {
 									src={customerImageUrl}
 									alt="Customer reference photo"
 									caption="Customer reference photo"
+									// Buyer-supplied, order-owned — erased on hard delete.
+									sensitive
 									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white"
 									className="block max-h-56 w-auto object-contain"
 								/>
@@ -1048,6 +1052,9 @@ function OrderDetailRoute() {
 									alt="Payment receipt"
 									aspect="h-64 w-full"
 									objectFit="contain"
+									// A buyer's bank screenshot. Order-owned, erased on hard
+									// delete — must never sit on a public edge cache.
+									sensitive
 								/>
 							</a>
 						) : (
@@ -2055,7 +2062,7 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 			<div className="flex items-end gap-2">
 				<div className="relative flex-1">
 					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-						RM
+						{currencySymbol(order.currency)}
 					</span>
 					<input
 						type="text"
@@ -2138,14 +2145,28 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 		// Hoisted so the catch can clean up blobs already uploaded before a failure.
 		const storageIds: string[] = [];
 		try {
+			// Prepare the whole set first. A mockup the BUYER can't open is the
+			// mirror of an unreadable payment proof — they're asked to approve a
+			// design that renders as a broken box — so nothing is uploaded until
+			// every file has been proven decodable. See lib/image-upload.ts.
+			const prepared: { blob: Blob; contentType: string }[] = [];
+			for (const file of Array.from(files)) {
+				const result = await prepareImageUpload(file);
+				if (!result.ok) {
+					toast.error(result.message);
+					setUploading(false);
+					return;
+				}
+				prepared.push(result);
+			}
 			// Upload each selected image, then send them together as the mockup set
 			// (replacing any previous one). Sequential keeps it simple + ordered.
-			for (const file of Array.from(files)) {
+			for (const item of prepared) {
 				const url = await generateUploadUrl({ orderId: order._id });
 				const res = await fetch(url, {
 					method: "POST",
-					headers: { "Content-Type": file.type },
-					body: file,
+					headers: { "Content-Type": item.contentType },
+					body: item.blob,
 				});
 				if (!res.ok) throw new Error("Upload failed");
 				const { storageId } = (await res.json()) as { storageId: string };
@@ -2276,6 +2297,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							<AppImage
 								src={url}
 								alt="Current mockup"
+								// Order-owned blob — erased on hard delete.
+								sensitive
 								aspect={
 									mockupUrls.length === 1
 										? "h-64 w-full"
@@ -2362,7 +2385,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 								: "Upload & send mockup"}
 						<input
 							type="file"
-							accept="image/*"
+							accept={IMAGE_ACCEPT}
 							multiple
 							disabled={uploading}
 							onChange={handleUpload}

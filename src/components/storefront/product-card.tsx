@@ -69,7 +69,9 @@ export function ProductCard({
 	// seller tops up on the mockup (86eyhn4mr).
 	const allQuote = product.hasQuotePricing && product.priceTo === 0;
 	const showFrom =
-		priceVaries || product.hasQuotePricing || hasStartingPrice(product.variants);
+		priceVaries ||
+		product.hasQuotePricing ||
+		hasStartingPrice(product.variants);
 	const firstImage = product.imageUrls[0];
 	// Minimum order quantity (≥2 when set — sanitizer normalizes 0/1 away).
 	const minQuantity = product.minQuantity ?? 0;
@@ -110,6 +112,10 @@ export function ProductCard({
 						aspect="absolute inset-0"
 						className="transition-transform duration-300 group-hover:scale-105"
 						priority={priority}
+						// Tracks GRID_CLASS in product-grid.tsx (2 / sm:3 / lg:4).
+						// These tiles are the bulk of a store home's payload — a
+						// phone pulls ~320px files here instead of 1200px originals.
+						sizes="(min-width: 1024px) 25vw, (min-width: 640px) 33vw, 50vw"
 					/>
 				) : (
 					<div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground">

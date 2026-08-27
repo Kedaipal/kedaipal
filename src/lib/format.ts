@@ -229,6 +229,34 @@ const CURRENCY_SYMBOL_OVERRIDE: Record<string, string> = { SGD: "S$" };
 // amount with; overridden symbols use the same so the two paths render alike.
 const NBSP = " ";
 
+/**
+ * The bare currency symbol a seller-facing input should wear as its prefix
+ * ("RM", "S$") — the same symbol `formatPrice` puts in front of an amount, so
+ * a field's plate and the total it feeds can never disagree.
+ *
+ * Exported because every dashboard money input needs it: before this the map
+ * above was module-private, so eleven call sites hardcoded "RM" and an SG
+ * store's delivery, pickup-fee and minimum-order fields all quoted Malaysian
+ * ringgit (86eyqgujv). Derived via `formatToParts` rather than a second table,
+ * so a currency added to `SUPPORTED_CURRENCIES` needs no edit here.
+ */
+export function currencySymbol(currency: string): string {
+	const override = CURRENCY_SYMBOL_OVERRIDE[currency];
+	if (override) return override;
+	try {
+		const part = new Intl.NumberFormat("en-MY", {
+			style: "currency",
+			currency,
+		})
+			.formatToParts(0)
+			.find((p) => p.type === "currency");
+		return part?.value ?? currency;
+	} catch {
+		// Unknown code — mirror formatPrice's fallback and show the code itself.
+		return currency;
+	}
+}
+
 export function formatPrice(minorUnits: number, currency: string): string {
 	const major = minorUnits / 100;
 	const symbol = CURRENCY_SYMBOL_OVERRIDE[currency];

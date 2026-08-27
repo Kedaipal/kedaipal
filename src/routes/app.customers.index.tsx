@@ -5,6 +5,7 @@ import { usePaginatedQuery } from "convex/react";
 import { Search, Users, X } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { ProFeatureWall } from "../components/app/pro-gate";
 import {
 	CustomerList,
@@ -38,7 +39,7 @@ function CustomersRoute() {
 	const [term, setTerm] = useState("");
 	const debouncedTerm = useDebounce(term, 250);
 	const searching = debouncedTerm.trim().length > 0;
-	const currency = retailer?.currency ?? "MYR";
+	const currency = retailer?.currency ?? DEFAULT_CURRENCY;
 
 	// Plan gate (Pro+). Queries are skipped while locked so the server gate is
 	// never tripped in normal use; admin act-as sees through it.

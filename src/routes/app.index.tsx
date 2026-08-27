@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import { PageHeaderSkeleton } from "../components/dashboard/page-header";
@@ -36,10 +37,12 @@ import {
 } from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
+import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { MASK_PII } from "../lib/analytics-privacy";
 import {
 	formatPrice,
 	formatPriceCompact,
@@ -54,7 +57,6 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
-import { MASK_PII } from "../lib/analytics-privacy";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { hasFeature, hasSubscribed, trialDaysLeft } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -136,6 +138,7 @@ function DashboardSkeleton() {
 
 function DashboardHome() {
 	const retailer = useDashboardRetailer();
+	const navigate = useNavigate();
 	const products = useQuery(
 		convexQuery(
 			api.products.listAll,
@@ -378,7 +381,7 @@ function DashboardHome() {
 	const dueTodayCount = counts?.dueToday ?? 0;
 	const unpaidCount = counts?.unpaid ?? 0;
 	const unpaidAmount = counts?.unpaidAmount ?? 0;
-	const currency = retailer.currency ?? "MYR";
+	const currency = retailer.currency ?? DEFAULT_CURRENCY;
 	const recentOrders = recentOrdersPage?.page ?? [];
 	const anythingNeedsAttention =
 		newCount > 0 || dueTodayCount > 0 || unpaidCount > 0;
@@ -462,6 +465,16 @@ function DashboardHome() {
 				</Link>
 			</div>
 			<WhiteGloveCard slug={retailer.slug} />
+			{/* Above everything the seller does daily, because a wrong bank
+			    account or pickup address costs real money and they may have
+			    switched country and closed the tab. Renders nothing for a store
+			    that has never switched (86eyqgujv). */}
+			<CountrySetupPanel
+				variant="banner"
+				onGoToFix={(tab, key) =>
+					navigate({ to: "/app/settings", search: { tab, fix: key } })
+				}
+			/>
 			{/* Welcome banner — only for brand-new users */}
 			{isNew ? (
 				<section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent/20 via-accent/10 to-background p-6 lg:max-w-2xl">
@@ -815,7 +828,10 @@ function DashboardHome() {
 										className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
 									>
 										<div className="flex min-w-0 flex-col gap-0.5">
-											<p {...MASK_PII} className="truncate text-sm font-semibold">
+											<p
+												{...MASK_PII}
+												className="truncate text-sm font-semibold"
+											>
 												{order.customer?.name ?? "Anonymous"}
 											</p>
 											<p className="truncate text-xs text-muted-foreground">

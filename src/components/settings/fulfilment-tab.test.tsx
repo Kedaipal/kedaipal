@@ -13,7 +13,9 @@ import { useMutation } from "convex/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
+import { COUNTRY_CURRENCY } from "../../../convex/lib/country";
 import { ActAsProvider } from "../../hooks/useActAs";
+import { SETTINGS_ANCHOR } from "../../lib/country-setup-copy";
 import { FulfilmentTab } from "./fulfilment-tab";
 
 // Act-as wiring regression (production bug): every settings write in this tab
@@ -89,6 +91,7 @@ describe("FulfilmentTab act-as wiring", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country="MY"
+					currency="MYR"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -184,6 +187,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country="MY"
+					currency="MYR"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={{ mode: "lalamove", onUnquotable: "block" }}
@@ -292,6 +296,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country="MY"
+					currency="MYR"
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={undefined}
@@ -309,12 +314,8 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	it("defaults to 'Open 24 hours, every day'; closing one day saves a 7-row schedule", async () => {
 		renderWithHours(undefined);
-		expect(
-			screen.getByText(/Open 24 hours, every day/),
-		).toBeTruthy();
-		fireEvent.click(
-			screen.getByRole("button", { name: "Set opening hours" }),
-		);
+		expect(screen.getByText(/Open 24 hours, every day/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
 		// The editor opens in "Same every day" seeded at the current truth
 		// (00:00–23:59 = all day). Tap Sunday's chip off, save.
 		fireEvent.click(screen.getByRole("button", { name: "Sunday" }));
@@ -332,9 +333,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	it("same-every-day: one range set through the themed picker writes the whole week", async () => {
 		renderWithHours(undefined);
-		fireEvent.click(
-			screen.getByRole("button", { name: "Set opening hours" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
 		fireEvent.click(screen.getByRole("button", { name: "Opening time" }));
 		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
 		fireEvent.click(screen.getByRole("button", { name: "Closing time" }));
@@ -353,9 +352,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	it("closing every day disables Save with the reason on screen", () => {
 		renderWithHours(undefined);
-		fireEvent.click(
-			screen.getByRole("button", { name: "Set opening hours" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
 		for (const day of [
 			"Monday",
 			"Tuesday",
@@ -413,9 +410,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		expect(screen.getAllByText("9:00 AM – 6:00 PM").length).toBe(6);
 		expect(screen.getByText("Closed")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
-		fireEvent.click(
-			screen.getByRole("button", { name: "Reset to open 24/7" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Reset to open 24/7" }));
 		await waitFor(() =>
 			expect(updateSettings).toHaveBeenCalledWith({
 				openingHours: null,
@@ -451,6 +446,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 				<FulfilmentTab
 					retailerId={SELLER_ID as never}
 					country={country}
+					currency={COUNTRY_CURRENCY[country]}
 					offerSelfCollect={false}
 					offerDelivery={true}
 					deliveryConfig={deliveryConfig}
@@ -488,14 +484,102 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 		expect(screen.queryByText(/Malaysia-only for now/)).toBeNull();
 	});
 
+	it("an SG store's money fields wear S$, never RM (86eyqgujv)", () => {
+		// Zaki's report: a Singapore store's delivery + minimum-order fields
+		// still quoted Malaysian ringgit. The symbol now comes from the store's
+		// currency, so the flat-fee prefix and the min-order label follow it.
+		renderTab("SG", { mode: "flat", fee: 500 });
+		expect(screen.getAllByText("S$").length).toBeGreaterThan(0);
+		expect(screen.queryByText("RM")).toBeNull();
+		expect(screen.getByText(/Minimum subtotal \(S\$\)/)).toBeTruthy();
+	});
+
+	it("an MY store is untouched — the same fields still wear RM", () => {
+		renderTab("MY", { mode: "flat", fee: 500 });
+		expect(screen.getAllByText("RM").length).toBeGreaterThan(0);
+		expect(screen.queryByText("S$")).toBeNull();
+		expect(screen.getByText(/Minimum subtotal \(RM\)/)).toBeTruthy();
+	});
+
+	it("an SG store can reach the business address at all (86eyqgujv)", () => {
+		// The field used to render ONLY inside the radius and Lalamove mode
+		// panels, both Malaysia-only — so a Singapore store had no way to set a
+		// business address, and therefore no return address on any despatch
+		// label it printed. Its own always-visible card fixes that.
+		renderTab("SG", { mode: "flat", fee: 500 });
+		expect(screen.getByText("Business address")).toBeTruthy();
+		expect(screen.getByText(/return address on despatch labels/i)).toBeTruthy();
+	});
+
+	it("MY keeps one editor too — the duplicated pickers are gone", () => {
+		// It was duplicated once in radius mode and once in Lalamove mode. One
+		// card, one save; the modes now reference it instead of owning a copy.
+		renderTab("MY", {
+			mode: "radius",
+			bands: [{ maxKm: 5, fee: 500 }],
+			outOfRange: "arrange",
+		});
+		expect(screen.getAllByText("Business address")).toHaveLength(1);
+	});
+
+	it("a mode that needs the address, without one, points at the card", () => {
+		renderTab("MY", {
+			mode: "radius",
+			bands: [{ maxKm: 5, fee: 500 }],
+			outOfRange: "arrange",
+		});
+		expect(screen.getByText(/Set your business address first/i)).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Go to Business address/ }),
+		).toBeTruthy();
+	});
+
+	it("a deep link rings the exact card, and only that card (86eyqgujv)", () => {
+		// The checklist links here; landing at the top of a long tab and making
+		// the seller hunt is what this replaces.
+		const { container } = render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="SG"
+					currency="SGD"
+					fix={{
+						anchor: SETTINGS_ANCHOR.business_address,
+						highlight: "error",
+					}}
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={{ mode: "flat", fee: 500 }}
+					businessAddress={undefined}
+					deliveryBooking={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>,
+		);
+		const ringed = container.querySelectorAll("[data-fix-highlight]");
+		expect(ringed).toHaveLength(1);
+		expect(ringed[0]?.id).toBe(SETTINGS_ANCHOR.business_address);
+		// Verifiable rows earn a real error ring — we KNOW the address is in the
+		// wrong country. An unverifiable row would be amber instead, because a
+		// red border on a bank account we can't check would be a false claim.
+		expect(ringed[0]?.getAttribute("data-fix-highlight")).toBe("error");
+	});
+
+	it("no deep link means no ring anywhere — never a permanent red border", () => {
+		const { container } = renderTab("SG", { mode: "flat", fee: 500 });
+		expect(container.querySelectorAll("[data-fix-highlight]")).toHaveLength(0);
+	});
+
 	it("an SG store stuck on a stored MY-only mode gets the amber repair note", () => {
 		renderTab("SG", {
 			mode: "radius",
 			bands: [{ maxKm: 5, fee: 500 }],
 			outOfRange: "arrange",
 		});
-		expect(
-			screen.getByText(/uses a Malaysia-only mode/),
-		).toBeTruthy();
+		expect(screen.getByText(/uses a Malaysia-only mode/)).toBeTruthy();
 	});
 });

@@ -2013,18 +2013,33 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 		).rejects.toThrow(/Malaysia-only/);
 	});
 
-	test("flipping an MY store to SG is refused while an MY-only config is stored", async () => {
+	test("flipping to SG KEEPS an MY-only config — it is listed, not destroyed (86eyqgujv)", async () => {
+		// This used to be refused, and the settings UI escaped the refusal by
+		// sending `deliveryConfig: null` — throwing away a seller's whole
+		// weight-zone rate card, irreversibly, on a country switch. Carrying it
+		// is safe: an SG address matches no MY zone, so the resolver holds or
+		// blocks and never prices (convex/lib/delivery.test.ts). Switching back
+		// restores the rate card intact.
 		const t = setup();
 		const asA = await seed(t, USER_A, "my-weight-flip");
 		await asA.mutation(api.retailers.updateSettings, {
 			deliveryConfig: weightConfig,
 		});
-		await expect(
-			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
-		).rejects.toThrow(/Switch your delivery charge/);
-		// Still MY — the refused save must not half-apply.
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+
 		const mine = await asA.query(api.retailers.getMyRetailer);
-		expect(mine?.country).toBe("MY");
+		expect(mine?.country).toBe("SG");
+		expect(mine?.deliveryConfig).toMatchObject({ mode: "weight" });
+
+		// ...and the seller is told, rather than left to wonder why quotes stop.
+		const setupState = await asA.query(api.retailers.countrySetup, {});
+		expect(setupState?.items.map((i) => i.key)).toContain("delivery_mode");
+
+		// Switching home brings it back exactly as it was.
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.deliveryConfig,
+		).toMatchObject({ mode: "weight" });
 	});
 
 	test("one save can flip to SG AND clear/replace the config together", async () => {
@@ -2134,19 +2149,22 @@ describe("seller-side phone arms (SG-lite, 86eynw2dy)", () => {
 });
 
 describe("country switch carries no wrong-country WhatsApp numbers (SG-lite invariant)", () => {
-	test("a bare MY→SG switch is refused while an MY waPhone is stored", async () => {
+	test("a bare MY→SG switch KEEPS the MY number and lists it (86eyqgujv)", async () => {
+		// Was refused, with the settings UI clearing the number to get past it.
+		// A +60 number still receives WhatsApp perfectly well, so removing the
+		// store's only published contact is the bigger harm — it becomes a
+		// checklist row instead.
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-stale-wa");
 		await asA.mutation(api.retailers.updateSettings, {
 			waPhone: "012-345 6789",
 		});
-		await expect(
-			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
-		).rejects.toThrow(/WhatsApp contact number isn't a Singapore number/);
-		// Refused save must not half-apply.
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
 		const mine = await asA.query(api.retailers.getMyRetailer);
-		expect(mine?.country).toBe("MY");
+		expect(mine?.country).toBe("SG");
 		expect(mine?.waPhone).toBe("60123456789");
+		const setupState = await asA.query(api.retailers.countrySetup, {});
+		expect(setupState?.items.map((i) => i.key)).toContain("wa_phone");
 	});
 
 	test("one save can switch AND clear the number together", async () => {
@@ -2179,15 +2197,18 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		expect(mine?.waPhone).toBe("6591234567");
 	});
 
-	test("a stored notifyWaPhone blocks the switch too; clearing it in-call auto-disables alerts", async () => {
+	test("a stored notifyWaPhone is kept and listed; clearing it in-call still auto-disables alerts", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-stale-notify");
 		await asA.mutation(api.retailers.updateSettings, {
 			notifyWaPhone: "011-2345 6789",
 		});
-		await expect(
-			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
-		).rejects.toThrow(/order-alerts WhatsApp number isn't a Singapore number/);
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		expect(
+			(await asA.query(api.retailers.countrySetup, {}))?.items.map(
+				(i) => i.key,
+			),
+		).toContain("notify_wa_phone");
 		await asA.mutation(api.retailers.updateSettings, {
 			country: "SG",
 			notifyWaPhone: "",
@@ -2198,15 +2219,32 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		expect(mine?.orderWaAlerts).toBeFalsy();
 	});
 
-	test("the guard is symmetric — SG→MY refuses a stored SG number", async () => {
+	test("symmetric — SG→MY keeps a stored SG number and lists it too", async () => {
 		const t = setup();
 		const asSg = await seedSg(t, "switch-back-my");
 		await asSg.mutation(api.retailers.updateSettings, {
 			waPhone: "9123 4567",
 		});
+		await asSg.mutation(api.retailers.updateSettings, { country: "MY" });
+		const mine = await asSg.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("MY");
+		expect(mine?.waPhone).toBe("6591234567");
+		expect(
+			(await asSg.query(api.retailers.countrySetup, {}))?.items.map(
+				(i) => i.key,
+			),
+		).toContain("wa_phone");
+	});
+
+	test("typing a wrong-country number DIRECTLY is still refused", async () => {
+		// The switch is permissive about what it CARRIES; the phone field is not
+		// permissive about what a seller TYPES. Losing that would let anyone
+		// store a mismatched number at any time, which is a different bug.
+		const t = setup();
+		const asSg = await seedSg(t, "sg-direct-typing");
 		await expect(
-			asSg.mutation(api.retailers.updateSettings, { country: "MY" }),
-		).rejects.toThrow(/isn't a Malaysian number/);
+			asSg.mutation(api.retailers.updateSettings, { waPhone: "012-345 6789" }),
+		).rejects.toThrow();
 	});
 });
 
@@ -2229,7 +2267,11 @@ describe("country switch and Lalamove rider booking (PR #208 review)", () => {
 		apiSecret: "sk_test_def",
 	};
 
-	test("a bare MY→SG switch is refused while rider booking is enabled", async () => {
+	test("a bare MY→SG switch carries booking across, inert and listed (86eyqgujv)", async () => {
+		// Was refused. The stored flag is now harmless: getDeliveryJob reports
+		// `country_unsupported` and the dispatch card hides itself, so
+		// prompt-book-on-packed can't spend a cent. Keeping the row means the
+		// seller's API keys survive a round trip.
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-booking-armed");
 		await asA.mutation(api.retailers.updateSettings, {
@@ -2237,12 +2279,19 @@ describe("country switch and Lalamove rider booking (PR #208 review)", () => {
 			deliveryConfig: { mode: "flat", fee: 500 },
 			deliveryBooking: booking,
 		});
-		await expect(
-			asA.mutation(api.retailers.updateSettings, { country: "SG" }),
-		).rejects.toThrow(/rider booking/i);
-		// Refused save must not half-apply.
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
 		const mine = await asA.query(api.retailers.getMyRetailer);
-		expect(mine?.country).toBe("MY");
+		expect(mine?.country).toBe("SG");
+		expect(mine?.deliveryBooking?.enabled).toBe(true);
+		expect(mine?.deliveryBooking?.apiKeyHint).toBeTruthy();
+		expect(
+			(await asA.query(api.retailers.countrySetup, {}))?.items.map(
+				(i) => i.key,
+			),
+		).toContain("delivery_booking");
 	});
 
 	test("one save can switch AND disable booking, keeping the stored keys", async () => {
@@ -2284,8 +2333,13 @@ describe("country switch and Lalamove rider booking (PR #208 review)", () => {
 	});
 });
 
-describe("country switch clears wrong-country pickup contacts (PR #208 review)", () => {
-	test("MY manager numbers are cleared on the switch and counted back", async () => {
+describe("a country switch keeps pickup contacts (86eyqgujv, was PR #208)", () => {
+	test("a wrong-country manager number SURVIVES the switch", async () => {
+		// #208 review had the switch clear these. It was reported in the toast
+		// but never chosen, and on a store with five points and five staff
+		// numbers it is five numbers gone for good. A manager's number is an
+		// internal ops contact — nothing breaks by it being foreign — so it is
+		// kept and listed on the post-switch checklist instead.
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-pickup-contacts");
 		const retailer = await asA.query(api.retailers.getMyRetailer);
@@ -2297,27 +2351,23 @@ describe("country switch clears wrong-country pickup contacts (PR #208 review)",
 			managerName: "Ali",
 			managerWaPhone: "012-345 6789",
 		});
-		// A second point with no contact must not be counted.
-		await asA.mutation(api.pickupLocations.create, {
-			retailerId: retailer._id,
-			label: "Stall",
-			address: "5 Jln Bukit Bintang, 55100 Kuala Lumpur",
-		});
 
-		const result = await asA.mutation(api.retailers.updateSettings, {
-			country: "SG",
-		});
-		expect(result.pickupContactsCleared).toBe(1);
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
 
 		const rows = await asA.query(api.pickupLocations.listForRetailer, {
 			retailerId: retailer._id,
 		});
-		for (const row of rows) expect(row.managerWaPhone).toBeUndefined();
-		// The rest of the location survives — only the invalid field goes.
+		expect(rows.find((r) => r.label === "Studio")?.managerWaPhone).toBe(
+			"60123456789",
+		);
 		expect(rows.find((r) => r.label === "Studio")?.managerName).toBe("Ali");
+
+		// ...and the seller is told about it rather than left to find out.
+		const setup_ = await asA.query(api.retailers.countrySetup, {});
+		expect(setup_?.items.map((i) => i.key)).toContain("pickup_contacts");
 	});
 
-	test("a matching number is left alone (no needless clearing)", async () => {
+	test("a matching number raises nothing", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-pickup-keep");
 		const retailer = await asA.query(api.retailers.getMyRetailer);
@@ -2329,13 +2379,269 @@ describe("country switch clears wrong-country pickup contacts (PR #208 review)",
 			managerWaPhone: "012-345 6789",
 		});
 		// MY→MY is not a country change at all.
-		const result = await asA.mutation(api.retailers.updateSettings, {
-			country: "MY",
-		});
-		expect(result.pickupContactsCleared).toBe(0);
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
 		const rows = await asA.query(api.pickupLocations.listForRetailer, {
 			retailerId: retailer._id,
 		});
 		expect(rows[0]?.managerWaPhone).toBe("60123456789");
+		// Never switched → no checklist at all, so this store pays nothing.
+		expect(await asA.query(api.retailers.countrySetup, {})).toBeNull();
+	});
+});
+
+describe("address country stamps (SG-lite, 86eyqgujv)", () => {
+	const MY_ADDRESS = {
+		label: "55, Jalan Eco Majestic 7/1D, 43700 Beranang, Selangor",
+		latitude: 2.9,
+		longitude: 101.8,
+	};
+	const SG_ADDRESS = {
+		label: "661 Woodlands Ring Road, Singapore 730661",
+		latitude: 1.44,
+		longitude: 103.79,
+	};
+
+	test("a saved business address is stamped with the store's country", async () => {
+		// Server-stamped, never client-sent: `businessAddressValidator` has no
+		// country field, so a caller cannot claim one. Same posture as
+		// deliveryBooking.env / hitpay.mode.
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-my");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+
+	test("an SG store stamps SG — coordinates are never consulted", async () => {
+		// The reason this is stamped rather than derived: Singapore's bounding
+		// box (lat 1.13–1.47) contains Johor Bahru at 1.4655 N, so a geometric
+		// test would call a Malaysian seller's address Singaporean. Here an SG
+		// store saves a JB-adjacent coordinate and still stamps SG, because the
+		// Places picker it came from was locked to Singapore.
+		const t = setup();
+		const asA = await seedSg(t, "stamp-sg");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: { ...SG_ADDRESS, latitude: 1.4655, longitude: 103.757 },
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.country).toBe("SG");
+	});
+
+	test("switching country stamps carried addresses with the OLD country", async () => {
+		// The one moment the answer is known for certain: whatever the store was
+		// until this save ran. After it, "your return address is Malaysian" is a
+		// stored fact rather than a guess — which is what the AWB fail-safe and
+		// the post-switch checklist both read.
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-switch");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await t.run(async (ctx) => {
+			// Strip the stamp to model a row saved before this shipped.
+			const row = await ctx.db
+				.query("retailers")
+				.filter((q) => q.eq(q.field("slug"), "stamp-switch"))
+				.first();
+			if (!row?.businessAddress) throw new Error("seed failed");
+			await ctx.db.patch(row._id, {
+				businessAddress: {
+					label: row.businessAddress.label,
+					latitude: row.businessAddress.latitude,
+					longitude: row.businessAddress.longitude,
+				},
+			});
+		});
+
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.country).toBe("SG");
+		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+
+	test("a same-call switch + new address stamps the NEW country", async () => {
+		// "Flip to Singapore and pick my Singapore address" must land in one
+		// save correctly — the effective-country rule the rest of updateSettings
+		// already uses.
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-switch-fresh");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+			businessAddress: SG_ADDRESS,
+		});
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.country).toBe("SG");
+	});
+
+	test("an already-stamped address is never re-stamped by a switch", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stamp-idempotent");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		// Stamped MY on save, and MY is still the truth — a round trip through
+		// SG must not rewrite it to SG on the way back.
+		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+});
+
+describe("countrySetup query + ack (86eyqgujv)", () => {
+	const MY_ADDRESS = {
+		label: "55, Jalan Eco Majestic 7/1D, 43700 Beranang, Selangor",
+		latitude: 2.9,
+		longitude: 101.8,
+	};
+
+	test("a store that never switched gets null — it costs one row read", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "no-switch");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+			paymentMethods: [
+				{
+					type: "bank" as const,
+					label: "Maybank",
+					bankName: "Maybank",
+					bankAccountName: "Wagyu Walid",
+					bankAccountNumber: "512345678901",
+					sortOrder: 0,
+				},
+			],
+		});
+		expect(await asA.query(api.retailers.countrySetup, {})).toBeNull();
+	});
+
+	test("after a switch the list is money-first and self-clears as things are fixed", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-checklist");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+			paymentMethods: [
+				{
+					type: "bank" as const,
+					label: "Maybank",
+					bankName: "Maybank",
+					bankAccountName: "Wagyu Walid",
+					bankAccountNumber: "512345678901",
+					sortOrder: 0,
+				},
+			],
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+
+		const first = await asA.query(api.retailers.countrySetup, {});
+		expect(first?.changedFrom).toBe("MY");
+		expect(first?.items.map((i) => i.key)).toEqual([
+			"payment_methods",
+			"business_address",
+		]);
+
+		// Replacing the address retires its row WITHOUT any acknowledgement —
+		// this is what the stamp buys: the checklist tracks reality, not clicks.
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: {
+				label: "661 Woodlands Ring Road, Singapore 730661",
+				latitude: 1.44,
+				longitude: 103.79,
+			},
+		});
+		expect(
+			(await asA.query(api.retailers.countrySetup, {}))?.items.map((i) => i.key),
+		).toEqual(["payment_methods"]);
+	});
+
+	test("ack retires only what we can't verify, and the query goes quiet", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-ack");
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentMethods: [
+				{
+					type: "bank" as const,
+					label: "Maybank",
+					bankName: "Maybank",
+					bankAccountName: "Wagyu Walid",
+					bankAccountNumber: "512345678901",
+					sortOrder: 0,
+				},
+			],
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		expect(
+			(await asA.query(api.retailers.countrySetup, {}))?.items,
+		).toHaveLength(1);
+
+		const { acked } = await asA.mutation(api.retailers.ackCountrySetup, {});
+		expect(acked).toBe(1);
+		expect((await asA.query(api.retailers.countrySetup, {}))?.items).toEqual(
+			[],
+		);
+	});
+
+	test("ack cannot retire a verifiable row, even by asking twice", async () => {
+		// The mutation computes the ackable set server-side rather than taking
+		// keys from the caller, so "dismiss" can never become a way to silence a
+		// wrong-country address that is still wrong.
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-ack-integrity");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: MY_ADDRESS,
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+
+		await asA.mutation(api.retailers.ackCountrySetup, {});
+		await asA.mutation(api.retailers.ackCountrySetup, {});
+		expect(
+			(await asA.query(api.retailers.countrySetup, {}))?.items.map((i) => i.key),
+		).toEqual(["business_address"]);
+	});
+
+	test("switching again re-opens everything the seller had confirmed", async () => {
+		// Their bank details were checked against the OLD destination.
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-twice");
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentMethods: [
+				{
+					type: "bank" as const,
+					label: "Maybank",
+					bankName: "Maybank",
+					bankAccountName: "Wagyu Walid",
+					bankAccountNumber: "512345678901",
+					sortOrder: 0,
+				},
+			],
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		await asA.mutation(api.retailers.ackCountrySetup, {});
+		expect((await asA.query(api.retailers.countrySetup, {}))?.items).toEqual(
+			[],
+		);
+
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		const reopened = await asA.query(api.retailers.countrySetup, {});
+		expect(reopened?.changedFrom).toBe("SG");
+		expect(reopened?.items.map((i) => i.key)).toEqual(["payment_methods"]);
+	});
+
+	test("saving the SAME country is not a switch and records nothing", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-noop");
+		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
+		expect(await asA.query(api.retailers.countrySetup, {})).toBeNull();
 	});
 });

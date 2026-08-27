@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { AppImage } from "../ui/app-image";
 import { SortableList } from "../ui/sortable-list";
 
@@ -43,13 +44,26 @@ export function ProductImagesField({
 		}
 		setUploading(true);
 		try {
-			const added: ProductImage[] = [];
+			// Prepare EVERY file before uploading any of them, so a batch either
+			// lands whole or not at all — a partial upload leaves the seller
+			// guessing which photos actually made it.
+			const prepared: { blob: Blob; contentType: string }[] = [];
 			for (const file of Array.from(files)) {
+				const result = await prepareImageUpload(file);
+				if (!result.ok) {
+					onError(result.message);
+					return;
+				}
+				prepared.push(result);
+			}
+
+			const added: ProductImage[] = [];
+			for (const item of prepared) {
 				const url = await generateUploadUrl();
 				const res = await fetch(url, {
 					method: "POST",
-					headers: { "Content-Type": file.type },
-					body: file,
+					headers: { "Content-Type": item.contentType },
+					body: item.blob,
 				});
 				if (!res.ok) throw new Error("Upload failed");
 				// Validate the response shape before trusting it — an error body
@@ -58,7 +72,12 @@ export function ProductImagesField({
 				const body = (await res.json()) as { storageId?: unknown };
 				if (typeof body.storageId !== "string")
 					throw new Error("Upload failed: unexpected response");
-				added.push({ id: body.storageId, url: URL.createObjectURL(file) });
+				// Preview the bytes we actually stored — for a converted file the
+				// original and the upload differ.
+				added.push({
+					id: body.storageId,
+					url: URL.createObjectURL(item.blob),
+				});
 			}
 			onChange([...images, ...added]);
 		} catch (err) {
@@ -132,7 +151,7 @@ export function ProductImagesField({
 						{uploading ? "Uploading…" : "+ Add"}
 						<input
 							type="file"
-							accept="image/*"
+							accept={IMAGE_ACCEPT}
 							multiple
 							disabled={uploading}
 							onChange={(e) => handleFiles(e.target.files)}
