@@ -133,6 +133,16 @@ the kill switch, caps, quality throttle and opt-outs all bind). A
 blocked/failed send surfaces on the claims list with "copy the link and
 send it yourself" — the link itself keeps working.
 
+### The buyer copy never says "reserved"
+
+v1 holds **no stock** — the claim locks a *price*, and `commit` can still fail
+with "sold out while this link was open". So no buyer-facing surface claims a
+reservation: the ticket masthead reads "Order ticket · To complete", the header
+reads "Ready to complete", and the WhatsApp body says the order "is not
+complete yet". The same rule killed the first BM template draft (below). If
+stock reservation ever lands (86eybbxhf), this wording can change — and only
+then.
+
 ### Keeping the template in the Utility category
 
 Meta auto-categorizes templates from their **body text**, and a Marketing

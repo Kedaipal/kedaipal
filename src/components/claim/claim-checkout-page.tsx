@@ -3,7 +3,7 @@ import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Clock, Package, Truck } from "lucide-react";
+import { Package, Truck } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
@@ -39,8 +39,11 @@ import {
 } from "../../../convex/lib/openingHours";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
-import { formatCountdown } from "../../lib/countdown";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatMobile,
+	formatPrice,
+} from "../../lib/format";
 import { displayAddressState } from "../../lib/address-display";
 import { claimFormSchemaFor } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
@@ -108,56 +111,6 @@ function ClaimSection({
 			</h2>
 			{children}
 		</section>
-	);
-}
-
-/**
- * Variant A — the sticky "Price locked for 14:32" bar (navy, mint clock, thin
- * progress line). Ticks once a second; at zero it tells the parent to swap the
- * whole page to the expired state (the server judges expiry too — this is the
- * honest UI flip, not the gate).
- */
-export function ClaimTimerBar({
-	expiresAt,
-	windowMinutes,
-	onExpired,
-}: {
-	expiresAt: number;
-	windowMinutes: number;
-	onExpired: () => void;
-}) {
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => {
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		return () => clearInterval(timer);
-	}, []);
-	const remaining = expiresAt - now;
-	useEffect(() => {
-		if (remaining <= 0) onExpired();
-	}, [remaining, onExpired]);
-	const fraction = Math.max(
-		0,
-		Math.min(1, remaining / (windowMinutes * 60 * 1000)),
-	);
-	return (
-		<div className="sticky top-0 z-40 bg-primary text-primary-foreground">
-			<div className="relative mx-auto flex max-w-5xl items-center justify-center gap-2 px-4 pb-[11px] pt-[9px]">
-				<Clock className="size-3.5 shrink-0 text-accent" aria-hidden />
-				<p className="text-[13px] font-medium">Price locked for</p>
-				<p
-					className="font-mono text-sm font-bold tabular-nums text-accent"
-					aria-live="off"
-				>
-					{formatCountdown(remaining)}
-				</p>
-			</div>
-			<div className="absolute inset-x-0 bottom-0 h-[3px] bg-primary-foreground/15">
-				<div
-					className="h-full bg-accent transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
-					style={{ width: `${fraction * 100}%` }}
-				/>
-			</div>
-		</div>
 	);
 }
 
@@ -598,7 +551,7 @@ export function ClaimCheckoutPage({
 					{storeName}
 				</h2>
 				<p className="mt-1 font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-					Order ticket · Reserved
+					Order ticket · To complete
 				</p>
 			</div>
 			<div className="border-t-2 border-dashed border-border" aria-hidden />
@@ -692,7 +645,7 @@ export function ClaimCheckoutPage({
 						<div className="flex flex-col gap-1">
 							<p className="text-sm font-medium">WhatsApp number</p>
 							<div className="flex h-11 items-center rounded-xl border border-border bg-muted px-3.5 text-sm text-muted-foreground">
-								+{open.waPhone}
+								{formatMobile(open.waPhone)}
 							</div>
 							<p className="text-xs text-muted-foreground">
 								This order link was sent to your WhatsApp — updates land in

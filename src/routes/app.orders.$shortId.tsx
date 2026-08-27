@@ -638,6 +638,11 @@ function OrderDetailRoute() {
 							timeStyle: "short",
 						})}
 						{order.channel === "whatsapp" ? " · via WhatsApp" : ""}
+						{/* Where the order came from, when that isn't the default. A claim link
+						    (86eyq0epn) was keyed by the seller at a locked price and completed by
+						    the buyer — worth saying on the one screen the seller opens to work the
+						    order, since the inbox Source filter is the only other place it shows. */}
+						{order.source === "claim" ? " · Claim link" : ""}
 					</p>
 				</div>
 				<StatusBadge

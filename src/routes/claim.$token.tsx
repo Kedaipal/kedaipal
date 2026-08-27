@@ -5,10 +5,8 @@ import { Clock, MessageCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { ClaimPagePayload } from "../../convex/orderClaims";
-import {
-	ClaimCheckoutPage,
-	ClaimTimerBar,
-} from "../components/claim/claim-checkout-page";
+import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
+import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
 import { AppImage } from "../components/ui/app-image";
 import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient } from "../lib/convex-server";
@@ -266,7 +264,7 @@ function ClaimRoute() {
 		<div className="mx-auto flex min-h-dvh w-full max-w-none flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
 			<ClaimStoreHeader
 				store={store}
-				subtitle={`Order reserved${open.buyerName ? ` for ${open.buyerName}` : ""} · ${formatPrice(open.itemsTotal, store.currency)}`}
+				subtitle={`Ready to complete${open.buyerName ? ` — ${open.buyerName}` : ""} · ${formatPrice(open.itemsTotal, store.currency)}`}
 			/>
 			<ClaimTimerBar
 				expiresAt={open.expiresAt}
