@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	canKeepOriginal,
+	prepareImageUpload,
 	IMAGE_ACCEPT,
 	imageRejectMessage,
 	isPassthroughType,
 	MAX_IMAGE_EDGE,
 	PASSTHROUGH_TYPES,
+	shouldTryJpegFallback,
 	targetDimensions,
 } from "./image-upload";
 
@@ -110,5 +114,100 @@ describe("imageRejectMessage", () => {
 		"encode_failed",
 	] as const)("returns a non-empty message for %s", (reason) => {
 		expect(imageRejectMessage(reason).length).toBeGreaterThan(10);
+	});
+});
+
+describe("canKeepOriginal — PR #225 review, finding 1", () => {
+	it("refuses to keep Safari-only formats, even when re-encoding gained nothing", () => {
+		// Safari decodes HEIF and TIFF, so both pass the decode test. Keeping
+		// their original bytes would store something Chrome can't render — the
+		// exact bug class this module exists to kill. The earlier check excluded
+		// only `image/heic` by name, which is an allowlist-shaped mistake: it
+		// knows just the format someone thought of.
+		for (const t of ["image/heic", "image/heif", "image/tiff", "image/bmp"]) {
+			expect(canKeepOriginal(t, false, 100, 10)).toBe(false);
+		}
+	});
+
+	it("keeps a web format that re-encoding made bigger and that needed no resize", () => {
+		for (const t of ["image/jpeg", "image/png", "image/webp", "image/avif"]) {
+			expect(canKeepOriginal(t, false, 100, 10)).toBe(true);
+		}
+	});
+
+	it("never keeps the original when a resize was needed — that's the whole point", () => {
+		expect(canKeepOriginal("image/jpeg", true, 100, 10)).toBe(false);
+	});
+
+	it("never keeps the original when re-encoding actually shrank it", () => {
+		expect(canKeepOriginal("image/jpeg", false, 10, 100)).toBe(false);
+	});
+
+	it("only ever keeps formats the accept list already offers", () => {
+		for (const t of ["image/jpeg", "image/png", "image/webp", "image/avif"]) {
+			if (canKeepOriginal(t, false, 100, 10)) expect(IMAGE_ACCEPT).toContain(t);
+		}
+	});
+});
+
+describe("shouldTryJpegFallback — PR #225 review, finding 2", () => {
+	it("does nothing when the encoder actually produced WebP", () => {
+		expect(shouldTryJpegFallback("image/jpeg", "image/webp")).toBe(false);
+		expect(shouldTryJpegFallback("image/png", "image/webp")).toBe(false);
+	});
+
+	it("falls back for alpha-free sources when toBlob silently returned PNG", () => {
+		// `canvas.toBlob` is specified to fall back to PNG for a type it can't
+		// encode, and says nothing about it. A 1600px PNG of a photo is
+		// megabytes — the size win would evaporate exactly where it matters.
+		for (const t of ["image/jpeg", "image/heic", "image/heif"]) {
+			expect(shouldTryJpegFallback(t, "image/png")).toBe(true);
+		}
+	});
+
+	it("does NOT flatten a source that may carry transparency", () => {
+		// A store logo on a JPEG background is a worse outcome than a big file.
+		for (const t of ["image/png", "image/webp", "image/avif"]) {
+			expect(shouldTryJpegFallback(t, "image/png")).toBe(false);
+		}
+	});
+});
+
+describe("prepareImageUpload — the label is never the last word", () => {
+	function fileOf(type: string, name = "x") {
+		return new File([new Uint8Array([1, 2, 3])], name, { type });
+	}
+
+	// jsdom implements neither object URLs nor image decoding. Stub both so the
+	// branch under test is reachable, with `decode()` rejecting to stand in for
+	// a file this browser genuinely cannot render.
+	beforeEach(() => {
+		(URL as unknown as { createObjectURL: unknown }).createObjectURL = () =>
+			"blob:stub";
+		(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = () => {};
+		HTMLImageElement.prototype.decode = () =>
+			Promise.reject(new Error("cannot decode"));
+	});
+
+	afterEach(() => {
+		(URL as unknown as { createObjectURL?: unknown }).createObjectURL =
+			undefined;
+		(URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL =
+			undefined;
+	});
+
+	it("refuses a file that DECLARES a non-image type", async () => {
+		const out = await prepareImageUpload(fileOf("application/pdf", "invoice.pdf"));
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.reason).toBe("not_an_image");
+	});
+
+	it("does NOT pre-judge an EMPTY type — it goes to the decode test instead", async () => {
+		// Some pickers and drag sources supply no type at all. Judging on the
+		// label alone is the habit this module exists to break, so an empty type
+		// must reach the decoder and be refused (or accepted) on what it IS.
+		const out = await prepareImageUpload(fileOf("", "mystery"));
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.reason).not.toBe("not_an_image");
 	});
 });

@@ -74,6 +74,24 @@ describe("isStoredImageRenderable", () => {
 		expect(await isStoredImageRenderable(ctxWith({ contentType: "" }), ID)).toBe(true);
 	});
 
+	it("fails open when the id is malformed and the lookup THROWS", async () => {
+		// `proofStorageId` is `v.string()`, so a crafted direct call can pass any
+		// string, and `db.system.get` throws on a malformed one rather than
+		// returning null. The fail-open promise has to cover that too — an
+		// abuser getting a raw internal error instead of the buyer-facing
+		// message helps nobody.
+		const throwing = {
+			db: {
+				system: {
+					get: async () => {
+						throw new Error("Invalid storage ID");
+					},
+				},
+			},
+		};
+		expect(await isStoredImageRenderable(throwing, ID)).toBe(true);
+	});
+
 	it("fails open on a missing storage row too", async () => {
 		expect(await isStoredImageRenderable(ctxWith(null), ID)).toBe(true);
 	});

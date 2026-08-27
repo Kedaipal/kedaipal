@@ -38,6 +38,43 @@ export const MAX_IMAGE_EDGE = 1600;
 const WEBP_QUALITY = 0.82;
 
 /**
+ * Fallback encoder quality. Only used when the browser can't encode WebP —
+ * `canvas.toBlob` is specified to silently fall back to PNG for an unsupported
+ * type, and a 1600px PNG of a photograph is megabytes, which would quietly undo
+ * the entire point of normalizing on exactly the platform our sellers use most.
+ */
+const JPEG_QUALITY = 0.82;
+
+/**
+ * Source formats we may keep BYTE-FOR-BYTE when re-encoding would make the file
+ * bigger and no resize was needed.
+ *
+ * A positive allowlist, not an exclusion list. The earlier shape of this check
+ * excluded `image/heic` by name, which is the same allowlist-shaped mistake the
+ * decode test exists to avoid — it only knows the format someone thought of.
+ * Safari decodes HEIF and TIFF too, so both would pass the decode test and then
+ * be kept as-is, storing bytes Chrome can't render: precisely the bug this
+ * module was written to kill. Listing what is safe to keep makes
+ * "we never store bytes other browsers can't decode" true by construction.
+ *
+ * These are `IMAGE_ACCEPT` minus the passthrough types, which never reach here.
+ */
+const KEEP_ORIGINAL_TYPES = [
+	"image/jpeg",
+	"image/png",
+	"image/webp",
+	"image/avif",
+] as const;
+
+/**
+ * Formats with no alpha channel to lose, so a JPEG fallback is safe.
+ *
+ * PNG/WebP/AVIF sources may carry transparency — a store logo especially — and
+ * JPEG would flatten it onto black. Those keep whatever the encoder produced.
+ */
+const ALPHA_FREE_SOURCE_TYPES = ["image/jpeg", "image/heic", "image/heif"];
+
+/**
  * Formats we store byte-for-byte instead of re-encoding.
  *
  * SVG is vector — drawing it to a canvas would rasterize it and throw away the
@@ -125,6 +162,40 @@ export function targetDimensions(
 }
 
 /**
+ * May we store `file`'s ORIGINAL bytes untouched?
+ *
+ * Only when it needed no resize, re-encoding gained nothing, and the format is
+ * one every browser renders. The last clause is the load-bearing one — see
+ * `KEEP_ORIGINAL_TYPES`.
+ */
+export function canKeepOriginal(
+	fileType: string,
+	resized: boolean,
+	encodedSize: number,
+	originalSize: number,
+): boolean {
+	if (resized) return false;
+	if (encodedSize < originalSize) return false;
+	return (KEEP_ORIGINAL_TYPES as readonly string[]).includes(fileType);
+}
+
+/**
+ * The encoder returned something other than what we asked for (`toBlob` falls
+ * back to PNG silently). Should we try JPEG instead?
+ *
+ * Only for sources with no alpha to lose. A transparent PNG or WebP keeps the
+ * encoder's own output — flattening a store logo onto black to save bytes is a
+ * worse outcome than the bytes.
+ */
+export function shouldTryJpegFallback(
+	fileType: string,
+	encodedType: string,
+): boolean {
+	if (encodedType === "image/webp") return false;
+	return ALPHA_FREE_SOURCE_TYPES.includes(fileType);
+}
+
+/**
  * Decode `file` the way an `<img>` will, then re-encode it small.
  *
  * Resolves to the blob to upload, or a rejection naming what to do about it.
@@ -141,7 +212,13 @@ export async function prepareImageUpload(
 		message: imageRejectMessage(reason, file.name),
 	});
 
-	if (!file.type.startsWith("image/")) return reject("not_an_image");
+	// A declared non-image type is refused outright, but an EMPTY type is not:
+	// some pickers and drag sources supply none, and the decode below is a
+	// stricter, more honest test than the label anyway. Judging on the label
+	// alone is the habit this module exists to break.
+	if (file.type !== "" && !file.type.startsWith("image/")) {
+		return reject("not_an_image");
+	}
 
 	if (isPassthroughType(file.type)) {
 		if (file.size > MAX_PASSTHROUGH_BYTES) return reject("too_large");
@@ -175,16 +252,40 @@ export async function prepareImageUpload(
 		if (!ctx) return reject("encode_failed");
 		ctx.drawImage(img, 0, 0, width, height);
 
-		const encoded = await new Promise<Blob | null>((resolve) => {
-			canvas.toBlob((b) => resolve(b), "image/webp", WEBP_QUALITY);
-		});
+		const encode = (type: string, quality: number) =>
+			new Promise<Blob | null>((resolve) => {
+				canvas.toBlob((b) => resolve(b), type, quality);
+			});
+
+		let encoded = await encode("image/webp", WEBP_QUALITY);
+
+		// `canvas.toBlob` is specified to fall back to PNG *silently* when it
+		// can't encode the requested type — the only way to know what you got is
+		// to read the blob back. A 1600px PNG of a photo is megabytes, so on a
+		// browser without WebP encoding this would store something far larger
+		// than the WebP we claimed, while labelling it `image/webp`.
+		// A source that may carry alpha is excluded from the fallback by
+		// `shouldTryJpegFallback` and keeps whatever the encoder produced.
+		if (encoded && shouldTryJpegFallback(file.type, encoded.type)) {
+			const jpeg = await encode("image/jpeg", JPEG_QUALITY);
+			// JPEG at this size still gets most of the win, and every browser can
+			// encode it. Only take it if it's genuinely smaller.
+			if (jpeg && jpeg.type === "image/jpeg" && jpeg.size < encoded.size) {
+				encoded = jpeg;
+			}
+		}
+
 		if (!encoded || encoded.size === 0) return reject("encode_failed");
+		// Without a type we cannot label the upload honestly, and this module has
+		// just made declared content types load-bearing (the server's
+		// `isStoredImageRenderable` trusts them). Refuse rather than guess.
+		if (!encoded.type) return reject("encode_failed");
 
 		// Re-encoding can occasionally make an already-tight file bigger. When
-		// the original is a web format that needed no resize, keep it — the
-		// point is to never ship MORE bytes than we were given.
+		// the original needed no resize AND is a format every browser renders,
+		// keep it — the point is to never ship MORE bytes than we were given.
 		const resized = width !== img.naturalWidth || height !== img.naturalHeight;
-		if (!resized && encoded.size >= file.size && file.type !== "image/heic") {
+		if (canKeepOriginal(file.type, resized, encoded.size, file.size)) {
 			return {
 				ok: true,
 				blob: file,
@@ -196,7 +297,8 @@ export async function prepareImageUpload(
 		return {
 			ok: true,
 			blob: encoded,
-			contentType: "image/webp",
+			// The encoder's ACTUAL output, never an assumption.
+			contentType: encoded.type,
 			normalized: true,
 		};
 	} finally {

@@ -56,8 +56,17 @@ export async function isStoredImageRenderable(
 	ctx: SystemReader,
 	storageId: Id<"_storage">,
 ): Promise<boolean> {
-	const meta = await ctx.db.system.get(storageId);
-	const contentType = meta?.contentType;
+	// A malformed id string throws rather than returning null (the arg is
+	// `v.string()`, so a crafted direct call can pass anything). The fail-open
+	// promise below should cover that too — an abuser getting a raw internal
+	// error instead of the buyer-facing message helps nobody.
+	let contentType: string | undefined;
+	try {
+		const meta = await ctx.db.system.get(storageId);
+		contentType = meta?.contentType;
+	} catch {
+		return true;
+	}
 	if (!contentType) return true;
 	return isRenderableImageType(contentType);
 }

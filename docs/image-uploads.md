@@ -25,8 +25,16 @@ The fix has to be at upload, before the bytes are ever stored.
 
 `src/lib/image-upload.ts` → `prepareImageUpload(file)`, in front of **every** upload:
 
-1. **Prove it renders by rendering it** — `new Image()` + `.decode()`, which succeeds exactly when an `<img>` would. Deliberately a **capability test, not a format allowlist**: an allowlist only ever knows the formats we thought of, and HEIC is exactly the format nobody thought of.
-2. **Normalize** — resize to a 1600 px long edge and re-encode WebP q0.82. Fixes format *and* weight in one pass (a 2.5 MB phone photo → ~150 KB). If re-encoding would produce *more* bytes than we were handed and no resize was needed, the original is kept — the point is never to ship more than we were given.
+1. **Prove it renders by rendering it** — `new Image()` + `.decode()`, which succeeds exactly when an `<img>` would. Deliberately a **capability test, not a format allowlist**: an allowlist only ever knows the formats we thought of, and HEIC is exactly the format nobody thought of. A file that *declares* a non-image type is refused up front, but an **empty** type is not — some pickers and drag sources supply none, and judging on the label alone is the habit this module exists to break, so it goes to the decoder like everything else.
+2. **Normalize** — resize to a 1600 px long edge and re-encode WebP q0.82. Fixes format *and* weight in one pass (a 2.5 MB phone photo → ~150 KB).
+
+### Two traps in the normalize path (PR #225 review)
+
+**The stored content type is whatever the encoder actually produced, never what we asked for.** `canvas.toBlob` is specified to fall back to **PNG silently** when it can't encode the requested type — the returned blob's `.type` is the only way to find out. Hardcoding `image/webp` would mean that on any browser without WebP encoding, every upload stores PNG bytes labelled WebP: the size win evaporates (a 1600 px PNG of a photo is megabytes, not ~150 KB) *and* the label is a lie at exactly the boundary where this module just made declared types load-bearing — `isStoredImageRenderable` trusts them, and the resize proxy may key off them. A blob with no type at all is refused rather than guessed at.
+
+Where the fallback lands on PNG and the source has **no alpha to lose** (`ALPHA_FREE_SOURCE_TYPES` — JPEG, HEIC, HEIF), it re-encodes as JPEG q0.82 instead, which every browser can encode and which still gets most of the size win. A PNG/WebP/AVIF source keeps the encoder's output: flattening a transparent store logo onto black to save bytes is a worse outcome than the bytes.
+
+**Keeping the original is a positive allowlist, not an exclusion.** If no resize was needed and re-encoding gained nothing, the original bytes may be kept — but only for `KEEP_ORIGINAL_TYPES` (JPEG, PNG, WebP, AVIF). An earlier version excluded `image/heic` *by name*, which is the same allowlist-shaped mistake the decode test exists to avoid: it only knows the format someone thought of. Safari decodes **HEIF and TIFF** too, so both would pass the decode test and then be stored as-is — unrenderable on Chrome, the exact bug this module was written to kill. Listing what is safe to keep makes the rule true by construction.
 3. **Reject with the fix, not a shrug** — the message names HEIC and the menu that converts it, and names the file, so a rejected batch says *which* file to fix.
 4. **`IMAGE_ACCEPT`** replaces `image/*` at all 12 file inputs, so the OS picker greys `.HEIC` out instead of offering a file we're about to refuse. The runtime check still stands behind it: drag-and-drop and the picker's "All Files" escape hatch bypass `accept` entirely.
 
@@ -58,7 +66,7 @@ The last two in bold are why this matters beyond tidiness. An unreadable **payme
 
 That is the single genuine trust boundary in the app: a **buyer** supplies the file and a **seller** has to look at it. Everywhere else a seller uploads to their own store, where the only person a bad file hurts is the uploader — not worth a system-table read on every write path.
 
-It **fails open** on an unknown content type. The costs are asymmetric: wrongly blocking a claim stops a real payment from being recorded, while wrongly allowing one shows a broken image — the status quo, not a regression.
+It **fails open** on an unknown content type — and on a *malformed* id, which throws rather than returning null (the argument is `v.string()`, so a crafted direct call can pass anything; an abuser getting a raw internal error instead of the buyer-facing message helps nobody). The costs are asymmetric: wrongly blocking a claim stops a real payment from being recorded, while wrongly allowing one shows a broken image — the status quo, not a regression.
 
 **Known test-harness gap:** `convex-test`'s storage doesn't record `contentType`, so `db.system.get()` returns no type and the rejection can't be exercised through the mutation. The logic is unit-tested against a stub context instead (`imageContentType.test.ts`), and the mutation test pins the half that *is* reachable — that a normal proof still goes through, which is the regression that matters given the fail-open default.
 
