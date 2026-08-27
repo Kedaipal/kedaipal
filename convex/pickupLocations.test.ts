@@ -1474,3 +1474,59 @@ describe("pickupLocations — SG store manager contact (SG-lite, 86eynw2dy)", ()
 		).rejects.toThrow(/Singapore mobile/i);
 	});
 });
+
+describe("pickup point country stamps (SG-lite, 86eyqgujv)", () => {
+	test("create stamps the store's country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "stamp");
+		const id = await seedLocation(t, USER_A, retailer._id, "Shop");
+		const row = await t.run(async (ctx) => ctx.db.get(id));
+		expect(row?.country).toBe("MY");
+	});
+
+	test("a country switch stamps existing points with the OLD country", async () => {
+		// A pickup point is the one wrong-country item a BUYER is shown before
+		// they travel, so it has to become a stated fact the checklist can rank
+		// first — not something inferred from coordinates later.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "switch");
+		const id = await seedLocation(t, USER_A, retailer._id, "Shop");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(id, { country: undefined });
+		});
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { country: "SG", waPhone: "" });
+		const row = await t.run(async (ctx) => ctx.db.get(id));
+		expect(row?.country).toBe("MY");
+	});
+
+	test("editing the ADDRESS re-stamps; editing anything else does not", async () => {
+		// The edit dialog submits every field on every save. Stamping on any
+		// save would let a seller clear a wrong-country flag by touching the
+		// schedule note — marking the address fixed without fixing it.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "restamp");
+		const id = await seedLocation(t, USER_A, retailer._id, "Shop");
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+
+		// Same address, different label → still stamped with the old country.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId: id,
+			label: "Shop (renamed)",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+		});
+		expect((await t.run(async (ctx) => ctx.db.get(id)))?.country).toBe("MY");
+
+		// A genuinely new address → re-stamped to where the store is now.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId: id,
+			address: "Blk 123 Ang Mo Kio Ave 4, #05-678, Singapore 560123",
+		});
+		expect((await t.run(async (ctx) => ctx.db.get(id)))?.country).toBe("SG");
+	});
+});

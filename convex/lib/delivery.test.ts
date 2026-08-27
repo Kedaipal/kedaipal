@@ -793,3 +793,38 @@ describe("DELIVERY_MODE_LABELS (SG-lite, 86eynw29u)", () => {
 		}
 	});
 });
+
+describe("a Malaysian pricing mode carried into Singapore (86eyqgujv)", () => {
+	// Load-bearing: this is WHY the country switch does not need to drop a
+	// seller's rate card. The obvious "fall back to free" would be a money
+	// leak — free cross-border shipping on every order. The resolver already
+	// refuses to price what it can't price, so the config is harmless to
+	// carry, reversible if the seller switches back, and the checklist can ask
+	// them to replace it rather than the switch destroying it.
+	test("an SG address matches no MY zone → held for the seller, never free", () => {
+		const quote = resolveDeliveryQuote({
+			config: WEIGHT_ARRANGE,
+			subtotal: 12000,
+			origin: undefined,
+			destination: undefined,
+			state: "Singapore",
+			cartWeight: OK_2KG,
+		});
+		expect(quote.kind).toBe("pending");
+		expect(quote.kind === "pending" && quote.reason).toBe("unserved_state");
+		expect(quote).not.toHaveProperty("fee");
+	});
+
+	test("the block policy refuses delivery outright — also never free", () => {
+		const quote = resolveDeliveryQuote({
+			config: WEIGHT_BLOCK,
+			subtotal: 12000,
+			origin: undefined,
+			destination: undefined,
+			state: "Singapore",
+			cartWeight: OK_2KG,
+		});
+		expect(quote.kind).toBe("blocked");
+		expect(quote.kind === "blocked" && quote.reason).toBe("unserved_state");
+	});
+});

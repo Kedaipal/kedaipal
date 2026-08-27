@@ -9,6 +9,7 @@ import { convexErrorMessage } from "../../lib/format";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { Input } from "../ui/input";
 import { ZoomableImage } from "../ui/zoomable-image";
 
@@ -88,7 +89,21 @@ export function ManualPaymentDialog({
 		try {
 			let proofStorageId: string | undefined;
 			if (proofFile) {
-				if (proofFile.size > MAX_PROOF_BYTES) {
+				// A proof the seller can't open is worse here than anywhere else
+				// in the app: they're being asked to confirm a payment against an
+				// image that renders as a broken box, with nothing telling either
+				// side why. So the proof is decoded (and shrunk) before it is
+				// stored — see lib/image-upload.ts.
+				const prepared = await prepareImageUpload(proofFile);
+				if (!prepared.ok) {
+					setServerError(prepared.message);
+					setSubmitting(false);
+					return;
+				}
+				// Checked AFTER preparing, not before: the file is re-encoded on
+				// the way through, so a big phone photo now shrinks under the cap
+				// instead of being refused for a size it no longer has.
+				if (prepared.blob.size > MAX_PROOF_BYTES) {
 					setServerError("Screenshot must be smaller than 5 MB.");
 					setSubmitting(false);
 					return;
@@ -96,8 +111,8 @@ export function ManualPaymentDialog({
 				const uploadUrl = await generateUploadUrl({ token });
 				const uploadRes = await fetch(uploadUrl, {
 					method: "POST",
-					headers: { "Content-Type": proofFile.type },
-					body: proofFile,
+					headers: { "Content-Type": prepared.contentType },
+					body: prepared.blob,
 				});
 				if (!uploadRes.ok) {
 					throw new Error("Couldn't upload screenshot. Please try again.");
@@ -309,7 +324,7 @@ export function ManualPaymentDialog({
 									id="payment-proof"
 									ref={fileInputRef}
 									type="file"
-									accept="image/*"
+									accept={IMAGE_ACCEPT}
 									onChange={(e) => setProofFile(e.target.files?.[0] ?? null)}
 									className="hidden"
 								/>

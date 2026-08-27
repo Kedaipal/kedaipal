@@ -14,6 +14,7 @@ import { categorySlugSchema, slugify } from "../../lib/slug";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { SortableList } from "../ui/sortable-list";
 import { Textarea } from "../ui/textarea";
 
@@ -76,15 +77,23 @@ export function CategoryEditDialog({
 		setUploading(true);
 		setServerError(null);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				setServerError(prepared.message);
+				return;
+			}
 			const url = await generateUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setStagedImage({ id: storageId, previewUrl: URL.createObjectURL(file) });
+			setStagedImage({
+				id: storageId,
+				previewUrl: URL.createObjectURL(prepared.blob),
+			});
 		} catch (err) {
 			setServerError(convexErrorMessage(err));
 		} finally {
@@ -268,7 +277,7 @@ export function CategoryEditDialog({
 								<input
 									ref={fileInputRef}
 									type="file"
-									accept="image/*"
+									accept={IMAGE_ACCEPT}
 									className="hidden"
 									onChange={(e) => {
 										handleFile(e.target.files?.[0]);

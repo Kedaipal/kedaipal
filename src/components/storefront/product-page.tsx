@@ -244,6 +244,7 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 						caption={name}
 						wrapperClassName="w-64 shrink-0 snap-start"
 						className="aspect-square w-full rounded-2xl object-cover"
+						sizes="256px"
 					/>
 				))}
 			</div>
@@ -256,6 +257,8 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 					caption={name}
 					wrapperClassName="block w-full"
 					className="aspect-square w-full rounded-2xl object-cover"
+					// Desktop hero fills the left column of the two-column layout.
+					sizes="(min-width: 1024px) 45vw, 100vw"
 				/>
 				{images.length > 1 ? (
 					<div className="mt-3 flex flex-wrap gap-2">
@@ -277,6 +280,7 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 									alt=""
 									aspect="size-14"
 									rounded="rounded-md"
+									sizes="56px"
 								/>
 							</button>
 						))}

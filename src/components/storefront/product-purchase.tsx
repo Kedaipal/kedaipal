@@ -14,6 +14,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
 import {
 	availableValuesPerAxis,
@@ -170,18 +171,23 @@ export function useProductPurchase({
 		setImageError(null);
 		setUploadingImage(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				setImageError(prepared.message);
+				return;
+			}
 			const url = await generateCustomImageUploadUrl({ retailerId });
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const body = (await res.json()) as { storageId?: unknown };
 			if (typeof body.storageId !== "string")
 				throw new Error("Upload failed: unexpected response");
 			if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-			const preview = URL.createObjectURL(file);
+			const preview = URL.createObjectURL(prepared.blob);
 			blobRef.current = preview;
 			setCustomImage({ storageId: body.storageId, preview });
 		} catch (err) {
@@ -643,7 +649,7 @@ function RequestFields({
 						)}
 						<input
 							type="file"
-							accept="image/*"
+							accept={IMAGE_ACCEPT}
 							disabled={pp.uploadingImage}
 							onChange={(e) =>
 								void pp.handleCustomImage(e.target.files?.[0] ?? null)

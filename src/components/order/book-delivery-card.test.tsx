@@ -80,6 +80,77 @@ function completedDispatch(
 	};
 }
 
+describe("BookDeliveryCard — Singapore (86eyqgujv)", () => {
+	it("renders nothing at all on a country where we can't book a rider", () => {
+		// Zaki's report: a store switched MY→SG still showed the LALAMOVE
+		// DELIVERY card with a Book button and the copy "Add a Malaysian (+60)
+		// WhatsApp number in Settings → Store first" — advice the country switch
+		// itself refuses to accept. There is no setup that would make booking
+		// work here, so the card has nothing honest to render.
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: false,
+			blockReason: "country_unsupported",
+			job: null,
+		};
+		// A CONFIRMED order — the state where the card is at its loudest, so
+		// this can't pass because some other branch bailed out first.
+		const { container } = render(
+			<BookDeliveryCard
+				order={{ ...deliveredOrder, status: "confirmed" } as Doc<"orders">}
+			/>,
+		);
+		expect(container.textContent).toBe("");
+	});
+
+	it("stays visible while a rider is still out — cancel is the only way to stop the bill", () => {
+		// PR #221 review. `cancelBooking` has no country gate of its own, so
+		// hiding the card on a just-switched store would leave a seller with a
+		// rider mid-trip unable to stop a trip they're being billed for. The
+		// booking controls stay gone (they key off `!activeJob`), so the card
+		// offers tracking and cancel and nothing that spends.
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: false,
+			blockReason: "country_unsupported",
+			job: {
+				status: "on_going",
+				providerOrderId: "LLM-SG-1",
+				costActual: 1170,
+				vehicleType: "MOTORCYCLE",
+				driver: {
+					name: "Rahim",
+					phone: "+60111111111",
+					plateNumber: "WXY 1234",
+				},
+				shareLink: "https://share.lalamove.com/?MY123",
+				failureReason: undefined,
+				createdAt: 1_700_000_000_000,
+			},
+		};
+		render(
+			<BookDeliveryCard
+				order={{ ...deliveredOrder, status: "packed" } as Doc<"orders">}
+			/>,
+		);
+		expect(screen.getByText("Cancel booking")).toBeTruthy();
+		expect(screen.queryByText("Book delivery")).toBeNull();
+	});
+
+	it("hides even when a Malaysian trip is already on the order", () => {
+		// A store switched from MY can hold a completed trip. That history
+		// belongs on the order timeline, not under a live dispatch card that
+		// would re-offer a booking the market can't serve.
+		state.dispatch = {
+			...completedDispatch(),
+			bookingEnabled: false,
+			blockReason: "country_unsupported",
+		};
+		const { container } = render(<BookDeliveryCard order={deliveredOrder} />);
+		expect(container.textContent).toBe("");
+	});
+});
+
 describe("BookDeliveryCard — completed job", () => {
 	it("renders a settled record (delivered pill, cost, rider, trip link) — not an empty card", () => {
 		state.dispatch = completedDispatch();
@@ -112,9 +183,7 @@ describe("BookDeliveryCard — completed job", () => {
 			];
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
-		expect(
-			screen.getByText(/Delivery photo from the rider/),
-		).toBeTruthy();
+		expect(screen.getByText(/Delivery photo from the rider/)).toBeTruthy();
 		const shots = screen.getAllByAltText("Proof of delivery");
 		expect(shots).toHaveLength(2);
 		expect(shots[0].closest("a")?.getAttribute("href")).toBe(
@@ -786,9 +855,7 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 		});
 		fireEvent.click(screen.getByText("Use this time"));
 
-		const checkbox = (await screen.findByRole(
-			"checkbox",
-		)) as HTMLInputElement;
+		const checkbox = (await screen.findByRole("checkbox")) as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 	});
 
@@ -828,9 +895,7 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 		});
 		fireEvent.click(screen.getByText("Use this time"));
 
-		const checkbox = (await screen.findByRole(
-			"checkbox",
-		)) as HTMLInputElement;
+		const checkbox = (await screen.findByRole("checkbox")) as HTMLInputElement;
 		expect(checkbox.checked).toBe(false);
 		// The promise-mismatch warning points at the box, not at a detour.
 		expect(screen.getByText(/Tick the box above/)).toBeTruthy();
@@ -877,7 +942,9 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 		// Dispatch still went through after the sync (3rd action call: prepare,
 		// re-quote, confirm).
 		await waitFor(() =>
-			expect((state.action as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3),
+			expect((state.action as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+				3,
+			),
 		);
 	});
 });
@@ -949,9 +1016,11 @@ describe("BookDeliveryCard — past pickup moments are refused (86eyp63xn follow
 
 	it("a stale scheduledFor never prefills a past day into the editor", async () => {
 		state.dispatch = bookableDispatch;
-		state.action = vi.fn().mockResolvedValue(
-			quoteResult({ scheduledFor: Date.now() - 3 * 60 * 60 * 1000 }),
-		);
+		state.action = vi
+			.fn()
+			.mockResolvedValue(
+				quoteResult({ scheduledFor: Date.now() - 3 * 60 * 60 * 1000 }),
+			);
 		render(<BookDeliveryCard order={order} />);
 
 		fireEvent.click(screen.getByText("Book delivery"));
@@ -1120,7 +1189,6 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 		expect(screen.queryByText(/didn't go through/i)).toBeNull();
 	});
 });
-
 
 describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)", () => {
 	/** The reported incident was a seller on a tablet reaching a live money

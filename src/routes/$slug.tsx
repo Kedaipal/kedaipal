@@ -20,6 +20,11 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import {
+	absoluteProxiedImageUrl,
+	imageSrcSet,
+	proxiedImageUrl,
+} from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
 
 interface StorefrontLoaderData {
@@ -68,6 +73,12 @@ export const Route = createFileRoute("/$slug")({
 
 		const retailer = result.retailer;
 
+		// Social cards + JSON-LD go through the image proxy too: link unfurlers
+		// are known to skip oversized images outright, and a 4 MB cover is
+		// exactly the kind of thing they drop — so this is a correctness fix for
+		// WhatsApp previews, not only a weight one. Absolute because an unfurler
+		// can't resolve a root-relative path.
+		//
 		// OG/social-share image precedence: cover banner (wide, ideal for a
 		// summary_large_image card) → logo → first product image.
 		let ogImageUrl: string | undefined =
@@ -100,7 +111,9 @@ export const Route = createFileRoute("/$slug")({
 			locale: retailer.locale ?? "en",
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
-			ogImageUrl,
+			ogImageUrl: ogImageUrl
+				? absoluteProxiedImageUrl(ogImageUrl, SITE_URL)
+				: undefined,
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
 			openingHours: retailer.openingHours,
 		};
@@ -158,8 +171,7 @@ export const Route = createFileRoute("/$slug")({
 			// than asserting "always open" (86eyp5rav).
 			...(openingHours
 				? {
-						openingHoursSpecification:
-							openingHoursSpecification(openingHours),
+						openingHoursSpecification: openingHoursSpecification(openingHours),
 					}
 				: {}),
 		};
@@ -171,8 +183,22 @@ export const Route = createFileRoute("/$slug")({
 				// LCP preload — StorefrontHeader renders this URL with `priority`
 				// the moment retailer data resolves; hinting the browser before
 				// the JS bundle even parses shaves the fetch off the critical path.
+				// The preload MUST name the same candidate StorefrontHeader will
+				// actually request — it renders the cover through AppImage, which
+				// proxies it and emits a srcset. Preloading the raw storage URL
+				// would download a file the page never uses AND leave the real LCP
+				// element unpreloaded, so `imagesrcset`/`imagesizes` mirror the
+				// component's own `sizes="100vw"`.
 				...(coverImageUrl
-					? [{ rel: "preload", as: "image", href: coverImageUrl }]
+					? [
+							{
+								rel: "preload",
+								as: "image",
+								href: proxiedImageUrl(coverImageUrl),
+								imagesrcset: imageSrcSet(coverImageUrl) ?? undefined,
+								imagesizes: "100vw",
+							},
+						]
 					: []),
 			],
 			scripts: [

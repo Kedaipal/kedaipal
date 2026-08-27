@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
@@ -53,7 +54,26 @@ export default defineSchema({
 		// autocomplete region, and the currency a new store defaults to. Undefined
 		// = MY (every pre-existing store, zero migration). Closed set in
 		// convex/lib/country.ts.
-		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
+		country: v.optional(countryValidator),
+		// The last country SWITCH (SG-lite, 86eyqgujv). Unset = this store has
+		// never moved country, which is every store born in its own market — the
+		// post-switch checklist skips them entirely, so it costs nothing to read.
+		//
+		// Switching is a different path from being created in a country: it
+		// leaves Malaysian addresses, bank details and rate cards behind on
+		// surfaces a buyer and a courier can see. Nothing is refused and nothing
+		// is deleted (refusing deadlocks — Places predictions are locked to the
+		// store's CURRENT country, so "fix your address first" is impossible);
+		// instead every carried value is inert where it matters and
+		// convex/lib/countrySetup.ts names what is left to fix.
+		countryChangedAt: v.optional(v.number()),
+		countryChangedFrom: v.optional(countryValidator),
+		// Checklist rows the seller has confirmed by hand. ONLY unverifiable
+		// items can be acknowledged — a bank account's country is free text we
+		// cannot judge, so the seller confirms it. A stamped wrong-country
+		// address is a fact and is never retired by a tick. Cleared on every
+		// switch (a new move re-opens every question).
+		countrySetupAcked: v.optional(v.array(v.string())),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -250,6 +270,23 @@ export default defineSchema({
 				latitude: v.number(),
 				longitude: v.number(),
 				placeId: v.optional(v.string()),
+				// The country this address was CAPTURED in (SG-lite, 86eyqgujv).
+				// Stamped at save from the store's country the way
+				// deliveryBooking.env is stamped from the key prefix — never
+				// derived from a stored value at read time. Coordinates cannot
+				// answer this: Singapore's bounding box (lat 1.13–1.47) contains
+				// Johor Bahru at 1.4655 N, so a geometric test would call a
+				// Malaysian seller's address Singaporean.
+				//
+				// Unset = captured before we tracked it, which for every row that
+				// exists today means it matches its store (no store had switched
+				// country when this shipped). Read as "matches" — fail open, so
+				// no existing label or setting changes behaviour. The country
+				// switch stamps un-stamped rows with the OLD country at the one
+				// moment that fact is known for certain, so every switch from
+				// here on is fully covered without a backfill that would have to
+				// guess.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
@@ -1344,6 +1381,18 @@ export default defineSchema({
 		latitude: v.optional(v.number()),
 		longitude: v.optional(v.number()),
 		placeId: v.optional(v.string()),
+		// The country this point's address was CAPTURED in (SG-lite, 86eyqgujv).
+		// Same posture as retailers.businessAddress.country: stamped at save from
+		// the store's country, never derived from the coordinates (Singapore's
+		// bounding box contains Johor Bahru). Unset reads as "matches"; the
+		// country switch stamps un-stamped rows with the OLD country.
+		//
+		// A pickup point is the one wrong-country item a BUYER is shown directly,
+		// at checkout, before they travel — so it is named on the post-switch
+		// checklist (ranked `buyer_visible`, under the two money rows) rather
+		// than quietly hidden. Hiding them would break the working-method
+		// invariant on a pickup-only store.
+		country: v.optional(countryValidator),
 		// Optional contact info for the person running this pickup spot. When
 		// set, the seller order detail page surfaces a "Notify <name>" wa.me
 		// button so the seller can forward the order details in one tap.

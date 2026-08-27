@@ -1,4 +1,5 @@
 import QRCode from "react-qr-code";
+import type { Country } from "../../../convex/lib/country";
 import { m } from "../../paraglide/messages";
 
 /**
@@ -10,6 +11,20 @@ import { m } from "../../paraglide/messages";
  * eagerly present and fully opaque the moment it renders.
  */
 export type PosterLocale = "en" | "ms";
+
+/**
+ * The language a store's poster opens in, by country. Buyer-facing print, so
+ * it follows the buyers who will stand in front of it: Bahasa Melayu in
+ * Malaysia, English in Singapore (BM on a Singapore counter is simply the
+ * wrong language — 86eyqgujv). The seller can still switch it per print.
+ *
+ * A `Record` so a third country is a compile error here rather than a silent
+ * fall back to BM — the exhaustive-lookup posture the `Locale` sweep set.
+ */
+export const POSTER_DEFAULT_LOCALE: Record<Country, PosterLocale> = {
+	MY: "ms",
+	SG: "en",
+};
 
 /**
  * Poster template: "both" = the approved two-QR v2 sheet (default);
