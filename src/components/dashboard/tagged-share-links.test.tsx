@@ -50,13 +50,17 @@ describe("TaggedShareLinks", () => {
 	it("renders one chip per preset", () => {
 		render(<TaggedShareLinks storefrontUrl={STORE_URL} />);
 		for (const p of SHARE_TAG_PRESETS) {
-			expect(screen.getByRole("button", { name: p.label })).toBeTruthy();
+			// Accessible name spells out the action — the visible label alone
+			// ("TikTok") wouldn't tell a screen-reader user what pressing it does.
+			expect(
+				screen.getByRole("button", { name: `Copy ${p.label} link` }),
+			).toBeTruthy();
 		}
 	});
 
 	it("copies the store link with that preset's ?src= tag", async () => {
 		render(<TaggedShareLinks storefrontUrl={STORE_URL} />);
-		fireEvent.click(screen.getByRole("button", { name: "TikTok" }));
+		fireEvent.click(screen.getByRole("button", { name: "Copy TikTok link" }));
 		await waitFor(() =>
 			expect(written).toEqual([`${STORE_URL}?src=tiktok`]),
 		);
@@ -66,8 +70,32 @@ describe("TaggedShareLinks", () => {
 	it("fires onCopy so the copy counts as sharing the link", async () => {
 		const onCopy = vi.fn();
 		render(<TaggedShareLinks storefrontUrl={STORE_URL} onCopy={onCopy} />);
-		fireEvent.click(screen.getByRole("button", { name: "Instagram" }));
+		fireEvent.click(screen.getByRole("button", { name: "Copy Instagram link" }));
 		await waitFor(() => expect(onCopy).toHaveBeenCalledTimes(1));
+	});
+
+	it("each preset shows its own brand glyph, decoratively", () => {
+		const { container } = render(<TaggedShareLinks storefrontUrl={STORE_URL} />);
+		// The glyph is what a seller actually scans for, so assert the marks are
+		// present and distinct rather than trusting the text label alone.
+		for (const p of SHARE_TAG_PRESETS) {
+			const glyph = container.querySelector(`[data-brand="${p.label}"]`);
+			expect(glyph).toBeTruthy();
+			// Decorative: the button already carries the accessible name, so the
+			// mark must stay out of the a11y tree rather than doubling it up.
+			expect(glyph?.getAttribute("aria-hidden")).toBe("true");
+		}
+	});
+
+	it("the pressed button itself confirms the copy", async () => {
+		render(<TaggedShareLinks storefrontUrl={STORE_URL} />);
+		fireEvent.click(screen.getByRole("button", { name: "Copy TikTok link" }));
+		// Feedback lands in the button, not only in a toast that can be missed.
+		await waitFor(() => expect(screen.getByText("Copied")).toBeTruthy());
+		// ...and only on the one that was pressed.
+		expect(
+			screen.getByRole("button", { name: "Copy Instagram link" }).textContent,
+		).toBe("Instagram");
 	});
 
 	it("a denied clipboard surfaces the link instead of failing silently", async () => {
@@ -81,7 +109,7 @@ describe("TaggedShareLinks", () => {
 		});
 		const onCopy = vi.fn();
 		render(<TaggedShareLinks storefrontUrl={STORE_URL} onCopy={onCopy} />);
-		fireEvent.click(screen.getByRole("button", { name: "Facebook" }));
+		fireEvent.click(screen.getByRole("button", { name: "Copy Facebook link" }));
 		await waitFor(() =>
 			expect(toastError).toHaveBeenCalledWith(
 				`Couldn't copy automatically — your link is ${STORE_URL}?src=facebook`,

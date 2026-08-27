@@ -119,6 +119,88 @@ describe("buildInboxPredicate — source", () => {
 	});
 });
 
+describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
+	const tiktok = order({ attributionSource: "tiktok" });
+	const instagram = order({ attributionSource: "instagram" });
+	const untagged = order({ source: "storefront" });
+	const counter = order({ source: "counter" });
+
+	test("undefined / empty means no attribution filtering", () => {
+		for (const args of [
+			{ bucket: "all" as const },
+			{ bucket: "all" as const, attributionSources: [] },
+		]) {
+			const p = buildInboxPredicate(args);
+			expect([tiktok, instagram, untagged, counter].every(p)).toBe(true);
+		}
+	});
+
+	test("one origin keeps only that origin", () => {
+		const p = buildInboxPredicate({
+			bucket: "all",
+			attributionSources: ["tiktok"],
+		});
+		expect(p(tiktok)).toBe(true);
+		expect(p(instagram)).toBe(false);
+		expect(p(untagged)).toBe(false);
+		expect(p(counter)).toBe(false);
+	});
+
+	test("several origins OR together (the multi-select)", () => {
+		const p = buildInboxPredicate({
+			bucket: "all",
+			attributionSources: ["tiktok", "instagram"],
+		});
+		expect(p(tiktok)).toBe(true);
+		expect(p(instagram)).toBe(true);
+		expect(p(untagged)).toBe(false);
+	});
+
+	test("'direct' matches untagged storefront AND legacy sourceless orders", () => {
+		const p = buildInboxPredicate({
+			bucket: "all",
+			attributionSources: ["direct"],
+		});
+		expect(p(untagged)).toBe(true);
+		expect(p(order({}))).toBe(true); // legacy: no source, no tag
+		expect(p(counter)).toBe(false);
+		expect(p(tiktok)).toBe(false);
+	});
+
+	test("'counter' matches counter orders, which are never stamped", () => {
+		const p = buildInboxPredicate({
+			bucket: "all",
+			attributionSources: ["counter"],
+		});
+		expect(p(counter)).toBe(true);
+		expect(p(untagged)).toBe(false);
+	});
+
+	test("ANDs with the other filters rather than replacing them", () => {
+		const p = buildInboxPredicate({
+			bucket: "all",
+			attributionSources: ["tiktok"],
+			paymentStatuses: ["received"],
+		});
+		expect(p(order({ attributionSource: "tiktok", paymentStatus: "received" }))).toBe(true);
+		// Right origin, wrong payment state → excluded.
+		expect(p(order({ attributionSource: "tiktok", paymentStatus: "unpaid" }))).toBe(false);
+	});
+
+	test("is a separate dimension from the checkout-surface `source` filter", () => {
+		// A counter-surface order carrying a tag is reachable by BOTH filters, and
+		// the two must intersect, not collide.
+		const tagged = order({ source: "counter", attributionSource: "tiktok" });
+		const p = buildInboxPredicate({
+			bucket: "all",
+			source: "counter",
+			attributionSources: ["tiktok"],
+		});
+		expect(p(tagged)).toBe(true);
+		expect(p(counter)).toBe(false); // counter surface, but bucket is "counter" not "tiktok"
+	});
+});
+
 describe("compareInboxOrder", () => {
 	test("soonest fulfilment date first; dateless sinks to the bottom", () => {
 		expect(compareInboxOrder({ fulfilmentDate: 10 }, { fulfilmentDate: 20 })).toBeLessThan(0);

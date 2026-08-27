@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { Copy } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { SHARE_TAG_PRESETS } from "../../../convex/lib/attribution";
+import { cn } from "../../lib/utils";
+import { BRAND_GLYPHS } from "./brand-icons";
 
 /**
  * Tagged share links (86eyq0eq9) — one tap copies the store link with a
@@ -63,20 +65,44 @@ export function TaggedShareLinks({
 					.
 				</p>
 			</div>
-			{/* Horizontal scroll below sm rather than a wrap: keeps the share card
-			    a predictable height on a phone (the category-rail idiom). */}
-			<div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-				{SHARE_TAG_PRESETS.map((p) => (
-					<button
-						key={p.tag}
-						type="button"
-						onClick={() => void copyTagged(p.tag, p.label)}
-						className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-background px-3.5 text-sm font-semibold transition-colors hover:bg-muted"
-					>
-						<Copy className="size-3.5 text-muted-foreground" aria-hidden />
-						{copiedTag === p.tag ? "Copied!" : p.label}
-					</button>
-				))}
+			{/* An even 4-up grid, not a scroller: with exactly four presets a rail
+			    would hide the last one behind an edge on a 390px phone and make
+			    the seller discover it by swiping. Four equal targets fit, so show
+			    all four. Each stays well over the 44px tap floor. */}
+			<div className="grid grid-cols-4 gap-2">
+				{SHARE_TAG_PRESETS.map((p) => {
+					const brand = BRAND_GLYPHS[p.tag];
+					const justCopied = copiedTag === p.tag;
+					return (
+						<button
+							key={p.tag}
+							type="button"
+							onClick={() => void copyTagged(p.tag, p.label)}
+							aria-label={`Copy ${p.label} link`}
+							className={cn(
+								"group flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border bg-background px-1 py-2 transition-colors",
+								justCopied
+									? "border-accent bg-accent/10"
+									: "border-border hover:bg-muted",
+							)}
+						>
+							{/* The glyph carries the recognition, so it leads and the
+							    word underneath only confirms it. Swapping it for a tick
+							    on copy keeps the feedback in the button the seller just
+							    pressed rather than only in a toast they may miss. */}
+							{justCopied ? (
+								<Check className="size-5 text-accent" aria-hidden />
+							) : brand ? (
+								<brand.Icon className={cn("size-5", brand.colorClass)} />
+							) : (
+								<Copy className="size-5 text-muted-foreground" aria-hidden />
+							)}
+							<span className="text-[11px] font-semibold leading-none">
+								{justCopied ? "Copied" : p.label}
+							</span>
+						</button>
+					);
+				})}
 			</div>
 		</div>
 	);

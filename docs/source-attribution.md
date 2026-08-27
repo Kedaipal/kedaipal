@@ -88,12 +88,31 @@ never disagree:
 
 **One surface: the dashboard Home store-link card** —
 `src/components/dashboard/tagged-share-links.tsx`, a "Tagged links" row sitting
-directly under **Copy link / Open live**, with one chip per
-`SHARE_TAG_PRESETS` entry. A tap copies `<storefrontUrl>?src=<tag>` and stamps
-the same `linkSharedAt` "shared their link" signal the plain copy button does
-(a denied clipboard shows the URL in the toast rather than failing silently, so
-the seller can still copy by hand). All-tier, matching capture — a Starter
-seller must be able to build a tagged link even though the report is Pro.
+directly under **Copy link / Open live**. A tap copies
+`<storefrontUrl>?src=<tag>` and stamps the same `linkSharedAt` "shared their
+link" signal the plain copy button does (a denied clipboard shows the URL in
+the toast rather than failing silently, so the seller can still copy by hand).
+All-tier, matching capture — a Starter seller must be able to build a tagged
+link even though the report is Pro.
+
+The four presets render as an even **4-up grid of icon tiles**, each carrying
+its channel's own mark from `dashboard/brand-icons.tsx`:
+
+- **A grid, not a scroller.** Exactly four presets fit a 390px row, so a
+  horizontal rail would hide the last one behind the edge and make the seller
+  find it by swiping. Tiles are ≥64px tall, well over the 44px floor.
+- **The glyph leads, the word confirms.** A seller scans for the TikTok mark,
+  not the string "TikTok".
+- **The pressed tile becomes a tick.** Confirmation lands under the thumb that
+  pressed it, instead of only in a toast that can be missed or dismissed.
+- **Marks are decorative** (`aria-hidden`, `data-brand` for tests) — each
+  button already carries a real accessible name ("Copy TikTok link"), so a
+  `role="img"` glyph would make a screen reader announce the brand twice.
+- **Brand hex is hardcoded, not tokenised** — these are external identities
+  and must not drift with our theme. TikTok is the exception: its mono mark is
+  black-on-light / white-on-dark by design, so it rides `text-foreground`.
+  Paths are the CC0 Simple Icons marks, inlined rather than adding a
+  dependency (this repo exact-pins deps; four glyphs don't justify one).
 
 **Deliberately NOT on any QR surface** (owner call, Arif):
 
@@ -109,6 +128,31 @@ Both files are byte-identical to their pre-feature state. The consequence is
 that a QR scan is always attributable to the *surface* (poster / parcel label /
 counter), never to a campaign — campaigns are links you paste, and that is the
 one place the builder lives.
+
+## Filtering and drilling down
+
+- **Order inbox filter** — the filter sheet gains a **"Came from"** section
+  (multi-select chips, OR within itself, ANDed with everything else). It is a
+  separate dimension from the existing **"Order type"** filter: that one is the
+  checkout SURFACE (online vs counter), this one is where the buyer came from.
+  Both live in `OrderFilterValue`; the URL carries repeated `?asrc=` params, so
+  a filtered inbox is shareable and survives a refresh.
+- **The picker is data-driven.** Free-form tags mean the UI cannot hardcode a
+  list, so `searchOrders` returns `availableSources` — the origins actually
+  present in the scanned window, tallied over the **full** scan (never the
+  filtered set, or picking one origin would make the others vanish and strand
+  the seller). Most-used first, ties broken **alphabetically** so the list
+  doesn't reshuffle as orders arrive. The section hides itself below two
+  origins — one origin is every order, nothing to narrow.
+- **CSV export honours it too** — `attributionSources` is in
+  `exportFilterValidators`, so an export of a filtered view contains exactly
+  the rows the seller was looking at. That parity is the whole reason
+  `orderInboxFilter.ts` exists.
+- **Insights drills down.** Every row of "Where orders come from" is a link to
+  `/app/orders?asrc=<bucket>`: "TikTok made RM400" immediately raises "which
+  orders?", so the widget answers it in one tap. Both ends bucket through the
+  same `attributionBucket`, so the report and the inbox it opens can never
+  disagree about which orders count.
 
 ## Emitters today (all captured for free)
 
@@ -139,9 +183,17 @@ one place the builder lives.
   / buckets garbage to `other` without failing the order.
 - `src/hooks/useSourceAttribution.test.tsx` — capture precedence, last-touch
   overwrite, per-store keying, empty-vs-garbage, no-slug no-throw.
-- `src/components/dashboard/tagged-share-links.test.tsx` — a chip per preset,
-  the copied URL carries that preset's tag, the copy counts as sharing, and a
+- `src/components/dashboard/tagged-share-links.test.tsx` — a tile per preset,
+  each with its own decorative brand mark, the copied URL carries that preset's
+  tag, the copy counts as sharing and confirms in the pressed tile, and a
   denied clipboard surfaces the link instead of failing silently.
+- `convex/lib/orderInboxFilter.test.ts` — the "Came from" predicate: empty =
+  no filtering, multi-select ORs, `direct` reaches untagged + legacy rows,
+  `counter` reaches unstamped counter orders, and it ANDs with the other
+  filters rather than replacing them.
+- `convex/orders.test.ts` — `availableSources` is tallied over the full window
+  (filtering by one origin must NOT shrink the picker), multi-select ORs, and
+  an origin nothing matches returns an empty list rather than everything.
 
 ## Not in v1
 

@@ -57,33 +57,46 @@ export function SourceBreakdown({
 				</p>
 			) : (
 				<>
-					<ul className="flex flex-col gap-3">
+					<ul className="flex flex-col gap-1.5">
 						{ranked.map((s) => {
 							const pct = max > 0 ? Math.max(4, (s.revenue / max) * 100) : 0;
 							return (
-								<li key={s.source} className="flex flex-col gap-1">
-									<div className="flex items-baseline justify-between gap-2">
-										<span className="min-w-0 truncate text-sm font-medium">
-											{sourceLabel(s.source)}
-											<span className="text-muted-foreground">
-												{" "}
-												· {s.orderCount.toLocaleString("en-MY")}{" "}
-												{s.orderCount === 1 ? "order" : "orders"}
+								<li key={s.source}>
+									{/* The whole row is the drill-down: "TikTok made RM400"
+									    immediately raises "which orders?", so answer it in
+									    one tap instead of making the seller rebuild the
+									    filter by hand in the inbox. */}
+									<Link
+										to="/app/orders"
+										search={{ asrc: [s.source] }}
+										className="tap-target -mx-2 flex flex-col gap-1 rounded-xl px-2 py-1.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+										aria-label={`View ${s.orderCount} ${
+											s.orderCount === 1 ? "order" : "orders"
+										} from ${sourceLabel(s.source)}`}
+									>
+										<div className="flex items-baseline justify-between gap-2">
+											<span className="min-w-0 truncate text-sm font-medium">
+												{sourceLabel(s.source)}
+												<span className="text-muted-foreground">
+													{" "}
+													· {s.orderCount.toLocaleString("en-MY")}{" "}
+													{s.orderCount === 1 ? "order" : "orders"}
+												</span>
 											</span>
-										</span>
-										<span
-											className="shrink-0 tabular-nums text-sm font-semibold"
-											title={formatPrice(s.revenue, currency)}
-										>
-											{formatPriceCompact(s.revenue, currency)}
-										</span>
-									</div>
-									<div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-										<div
-											className="h-full rounded-full bg-accent transition-all"
-											style={{ width: `${pct}%` }}
-										/>
-									</div>
+											<span
+												className="shrink-0 tabular-nums text-sm font-semibold"
+												title={formatPrice(s.revenue, currency)}
+											>
+												{formatPriceCompact(s.revenue, currency)}
+											</span>
+										</div>
+										<div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+											<div
+												className="h-full rounded-full bg-accent transition-all"
+												style={{ width: `${pct}%` }}
+											/>
+										</div>
+									</Link>
 								</li>
 							);
 						})}
