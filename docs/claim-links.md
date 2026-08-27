@@ -199,11 +199,35 @@ outcome.
 
 ## Seller side (Counter Checkout)
 
-- **Build screen:** "Send to buyer to complete" under Review order — rendered
-  only for identified buyers (an anonymous sale has nobody to send to),
-  disabled-with-reason until every line is priced. Opens `SendClaimDialog`
-  (window chips + what-the-buyer-fills chips); on send, back to the counter
-  landing with a toast.
+- **Build screen — the panel asks ONE question first** (redesigned 27 Aug):
+  *"How is this order paid?"* is a segmented control above the blocks it
+  governs, because the answer decides what every block below it means.
+  - **Counter sale** — collection + payment, as before.
+  - **Send to buyer** — collection and payment are **hidden**, and the absence
+    is *stated*: "…fills in the rest — delivery or pickup, date & time, and
+    payment. Nothing you key here would reach them." An unexplained absence
+    reads as a bug; this was the original confusion (a seller keyed collection
+    and payment, tapped Send, and none of it reached the buyer). In their
+    place: the window chips and origin chips, **inline**.
+  - **The modal is gone.** `SendClaimDialog` was retired — the two controls it
+    held belong beside the cart they describe, not behind a dialog a seller has
+    to open to discover them.
+  - **Exactly one primary action**, labelled for its mode — `Review order · RM
+    20.00` vs `Send link · RM 20.00`. Two competing full-width buttons in one
+    slot was the other half of the confusion. The money is on both: it is what
+    a send commits, and it is the figure directly above the button (labelled
+    **"Locked total"** in send mode, since the buyer's delivery is added on
+    their own page).
+  - An **anonymous cash sale** disables the Send segment with its reason ("no
+    number to send a link to") rather than hiding it — the same
+    disabled-with-reason posture the Pay-later toggle already takes.
+  - Mode defaults to **counter sale**, not to an unchosen state: that is the
+    overwhelming majority of counter traffic and today's zero-tap flow, and the
+    control keeps the alternative permanently visible and one tap away.
+  - The rules that are rules rather than markup (which mode shows payment
+    controls, what the primary says, why it's disabled) live in the pure
+    `src/lib/counter-panel.ts` and are unit-tested — the panel itself is a
+    2,600-line route component, so the seam is what makes them assertable.
 - **Counter landing:** `ClaimsPanel` ("Waiting on buyers") under the open
   checkouts — live countdown chip per open claim (amber), **Copy link**
   (always available), **Resend** (cooldown-gated), **Cancel**, plus recent

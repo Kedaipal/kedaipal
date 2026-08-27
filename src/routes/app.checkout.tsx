@@ -45,10 +45,19 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
+import { ClaimsPanel } from "../components/claim/send-claim";
+import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import {
-	ClaimsPanel,
-	SendClaimDialog,
-} from "../components/claim/send-claim";
+	counterPrimaryAction,
+	showsSellerPaymentControls,
+} from "../lib/counter-panel";
+import { sourceLabel } from "../../convex/lib/attribution";
+import {
+	CLAIM_SOURCE_CHOICES,
+	CLAIM_WINDOW_CHOICES_MINUTES,
+	DEFAULT_CLAIM_WINDOW_MINUTES,
+	describeClaimWindow,
+} from "../../convex/lib/orderClaims";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -1393,8 +1402,27 @@ function BuildOrderScreen({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Cancel-the-whole-checkout confirm (customer changed their mind at the counter).
 	const [cancelOpen, setCancelOpen] = useState(false);
-	// "Send to buyer to complete" (claim link, 86eyq0epn) — window picker dialog.
-	const [sendOpen, setSendOpen] = useState(false);
+	// How this order gets paid (86eyq0epn) — the panel's FIRST question, and the
+	// thing every block below it depends on:
+	//   "counter" — the buyer is standing here; seller keys collection + payment.
+	//   "send"    — the buyer finishes on their phone under a countdown, so the
+	//               seller keys NEITHER (the buyer picks fulfilment and pays on
+	//               their own page). Showing those controls in send mode was the
+	//               original confusion: a seller filled them in, tapped Send, and
+	//               nothing they had keyed reached the buyer.
+	// Defaults to "counter" rather than forcing a pick: that is ~90% of counter
+	// traffic and today's zero-tap flow, and the segmented control keeps the
+	// alternative one tap away and permanently visible.
+	const [payMode, setPayMode] = useState<"counter" | "send">("counter");
+	// Claim-link fields, now INLINE in the panel (the modal is gone — its two
+	// controls belong beside the cart they describe).
+	const [windowMinutes, setWindowMinutes] = useState(
+		defaultClaimWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES,
+	);
+	const [claimSource, setClaimSource] = useState<string | undefined>(
+		defaultClaimSource,
+	);
+	const [sending, setSending] = useState(false);
 	// Per-variant price text for custom/quote lines (keyed by variantId). The cart
 	// line holds the parsed cents; this holds the in-progress input string.
 	const [customPriceInput, setCustomPriceInput] = useState<
@@ -1406,6 +1434,34 @@ function BuildOrderScreen({
 	// total never flickers through half-typed values and there is no in-between
 	// state for the debounced autosave to persist.
 	const [editingLineId, setEditingLineId] = useState<string | null>(null);
+
+	// Send the claim link straight from the panel. Same mutation the dialog
+	// called; the dialog is gone because its two controls (window, origin) now
+	// live beside the cart they describe.
+	const sendClaim = useMutation(api.orderClaims.sendClaim);
+	async function submitClaim() {
+		setSending(true);
+		try {
+			await sendClaim({
+				sessionId,
+				items: cartEntries.map(([variantId, l]) => ({
+					variantId: variantId as Id<"productVariants">,
+					quantity: l.qty,
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+				})),
+				windowMinutes,
+				attributionSource: claimSource,
+			});
+			toast.success(
+				`WhatsApp link sent to ${buyer.displayName ?? "the buyer"} — you'll see the order the moment they complete it.`,
+			);
+			onSentToBuyer();
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSending(false);
+		}
+	}
 
 	// Collection date — counter orders are self-collect, so this is "when will
 	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
@@ -1912,6 +1968,73 @@ function BuildOrderScreen({
 					</div>
 
 					<div className="space-y-4 p-4">
+						{/* THE FIRST QUESTION (86eyq0epn). Everything below re-renders
+						    around it, so it sits above the blocks it governs. An
+						    anonymous cash sale has nobody to send a link to, so that
+						    segment is disabled-with-reason rather than hidden — the
+						    seller learns the capability exists and why it can't apply
+						    here (same posture the Pay-later toggle already takes). */}
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								How is this order paid?
+							</p>
+							<div className="mt-3 grid rounded-xl border border-border bg-background p-1 sm:grid-cols-2">
+								<button
+									type="button"
+									onClick={() => setPayMode("counter")}
+									aria-pressed={payMode === "counter"}
+									className={cn(
+										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
+										payMode === "counter"
+											? "bg-accent text-accent-foreground shadow-sm"
+											: "text-muted-foreground hover:bg-muted",
+									)}
+								>
+									<Banknote className="size-4 shrink-0" />
+									<span>
+										<span className="block">Counter sale</span>
+										<span className="block text-[11px] font-normal opacity-80">
+											Buyer is here
+										</span>
+									</span>
+								</button>
+								<button
+									type="button"
+									onClick={() => setPayMode("send")}
+									disabled={anonymous}
+									aria-pressed={payMode === "send"}
+									title={
+										anonymous
+											? "A cash sale has no number to send a link to."
+											: undefined
+									}
+									className={cn(
+										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
+										anonymous
+											? "cursor-not-allowed text-muted-foreground/50"
+											: payMode === "send"
+												? "bg-accent text-accent-foreground shadow-sm"
+												: "text-muted-foreground hover:bg-muted",
+									)}
+								>
+									<Send className="size-4 shrink-0" />
+									<span>
+										<span className="block">Send to buyer</span>
+										<span className="block text-[11px] font-normal opacity-80">
+											They finish on their phone
+										</span>
+									</span>
+								</button>
+							</div>
+							<p className="mt-2 text-xs text-muted-foreground">
+								{payMode === "counter"
+									? "You take the payment and finish the sale right here."
+									: "They add their address and pay on their phone — your prices stay locked until the countdown runs out."}
+							</p>
+						</div>
+
+						{showsSellerPaymentControls(payMode) ? (
+						<>
 						<div className="rounded-xl border border-border bg-muted/20 p-3">
 							<button
 								type="button"
@@ -2043,55 +2166,154 @@ function BuildOrderScreen({
 								</p>
 							)}
 						</div>
+						</>
+						) : (
+						/* SEND MODE — collection + payment are deliberately absent, and
+						   said out loud: an absence the seller can't explain reads as a
+						   bug, and this is the exact confusion the redesign fixes. */
+						<>
+						<p className="rounded-xl border border-border bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
+							<span className="font-medium text-foreground">
+								{buyer.displayName ?? "The buyer"} fills in the rest
+							</span>{" "}
+							— delivery or pickup, date &amp; time, and payment. Nothing you
+							key here would reach them, so collection and payment are hidden.
+						</p>
+
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								How long do they get?
+							</p>
+							<div className="mt-3 flex gap-2">
+								{CLAIM_WINDOW_CHOICES_MINUTES.map((minutes) => {
+									const active = windowMinutes === minutes;
+									return (
+										<button
+											key={minutes}
+											type="button"
+											aria-pressed={active}
+											onClick={() => setWindowMinutes(minutes)}
+											className={cn(
+												"tap-target box-border flex-1 rounded-xl border-2 px-2 text-sm font-semibold transition-colors",
+												active
+													? "border-accent bg-accent/10 text-accent-emphasis"
+													: "border-border bg-background text-muted-foreground hover:border-accent/40",
+											)}
+										>
+											{describeClaimWindow(minutes)
+												.replace(" minutes", " min")
+												.replace(" hours", "h")}
+										</button>
+									);
+								})}
+							</div>
+							<p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+								Time to <em>complete</em> the order — then at least 15 minutes
+								to pay. Still unpaid when it&apos;s up and the order cancels
+								itself, so your stock comes back.
+							</p>
+						</div>
+
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								Where&apos;s this order from?
+							</p>
+							<div className="mt-3 flex flex-wrap gap-2">
+								{CLAIM_SOURCE_CHOICES.map((tag) => {
+									const active = claimSource === tag;
+									const brand = BRAND_GLYPHS[tag];
+									return (
+										<button
+											key={tag}
+											type="button"
+											aria-pressed={active}
+											onClick={() =>
+												setClaimSource(active ? undefined : tag)
+											}
+											className={cn(
+												"tap-target box-border flex items-center gap-1.5 rounded-full border-2 px-3 text-xs font-semibold transition-colors",
+												active
+													? "border-accent bg-accent/10 text-accent-emphasis"
+													: "border-border bg-background text-muted-foreground hover:border-accent/40",
+											)}
+										>
+											{brand ? (
+												<brand.Icon
+													className={cn(
+														"size-3.5 shrink-0",
+														active && brand.colorClass,
+													)}
+												/>
+											) : null}
+											{sourceLabel(tag)}
+										</button>
+									);
+								})}
+							</div>
+							<p className="mt-2 text-xs text-muted-foreground">
+								Optional — tags the sale so Insights can tell you what a Live
+								is actually worth. Tap again to clear. We remember both
+								choices for your next send.
+							</p>
+						</div>
+						</>
+						)}
 					</div>
 
 					<div className="border-t border-border bg-muted/20 p-4">
 						<div className="mb-3 flex items-center justify-between text-sm">
-							<span className="font-medium text-muted-foreground">Total</span>
+							{/* Send mode is a price COMMITMENT, not a sum — and it is the
+							    items total, since the buyer's delivery is added on their
+							    own page. Label it so the figure can't be read as a final
+							    bill. */}
+							<span className="font-medium text-muted-foreground">
+								{payMode === "send" ? "Locked total" : "Total"}
+							</span>
 							<span className="text-xl font-bold tabular-nums">
 								{formatPrice(total, currency)}
 							</span>
 						</div>
-						<Button
-							onClick={() => setConfirmOpen(true)}
-							disabled={cartEntries.length === 0}
-							className="h-12 w-full text-base shadow-sm"
-						>
-							{`Review order · ${formatPrice(total, currency)}`}
-						</Button>
-						{/* Claim link (86eyq0epn): hand the rest of checkout to the buyer
-						    — they add address, date & payment on a price-locked page.
-						    Identified buyers only (an anonymous sale has nobody to send
-						    to); every line must be priced first (the claim freezes them). */}
-						{!anonymous ? (
-							(() => {
-								const unpriced = cartEntries.some(([, l]) => l.price <= 0);
-								const sendDisabled = cartEntries.length === 0 || unpriced;
-								return (
-									<>
-										<Button
-											type="button"
-											variant="outline"
-											onClick={() => setSendOpen(true)}
-											disabled={sendDisabled}
-											title={
-												unpriced
-													? "Set a price for every custom item first"
-													: undefined
-											}
-											className="mt-2 h-11 w-full"
-										>
+						{/* ONE primary, whose label names the outcome of THIS mode. The
+						    two paths are no longer competing buttons in the same slot. */}
+						{(() => {
+							const action = counterPrimaryAction({
+								mode: payMode,
+								empty: cartEntries.length === 0,
+								// A claim freezes prices at send, so an unpriced line
+								// would lock a zero.
+								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								money: formatPrice(total, currency),
+								windowMinutes,
+								buyerName: buyer.displayName,
+							});
+							return (
+								<>
+									<Button
+										type="button"
+										onClick={
+											payMode === "send"
+												? submitClaim
+												: () => setConfirmOpen(true)
+										}
+										disabled={action.disabled || sending}
+										title={action.reason}
+										className="h-12 w-full text-base shadow-sm"
+									>
+										{payMode === "send" ? (
 											<Send className="size-4" aria-hidden />
-											Send to buyer to complete
-										</Button>
+										) : null}
+										{payMode === "send" && sending
+											? "Sending…"
+											: action.label}
+									</Button>
+									{action.helper ? (
 										<p className="mt-1.5 text-center text-xs text-muted-foreground">
-											They get a WhatsApp link to add their address, delivery
-											&amp; payment — your prices stay locked.
+											{action.helper}
 										</p>
-									</>
-								);
-							})()
-						) : null}
+									) : null}
+								</>
+							);
+						})()}
 						{/* Escape hatch: the customer walked or changed their mind. Cancels
 						    the whole checkout (session + items) — confirmed first since it's
 						    destructive. */}
@@ -2155,25 +2377,6 @@ function BuildOrderScreen({
 						);
 					});
 				}}
-			/>
-			<SendClaimDialog
-				open={sendOpen}
-				onOpenChange={setSendOpen}
-				sessionId={sessionId}
-				buyerName={buyer.displayName}
-				itemCount={cartEntries.reduce((n, [, l]) => n + l.qty, 0)}
-				itemsTotal={total}
-				currency={currency}
-				defaultWindowMinutes={defaultClaimWindowMinutes}
-				defaultSource={defaultClaimSource}
-				items={cartEntries.map(([variantId, l]) => ({
-					variantId: variantId as Id<"productVariants">,
-					quantity: l.qty,
-					// Same rule as the draft/create payloads: custom lines always carry
-					// their price, standard lines only when the seller adjusted them.
-					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
-				}))}
-				onSent={onSentToBuyer}
 			/>
 			<ConfirmCheckoutDialog
 				open={confirmOpen}

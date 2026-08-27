@@ -6,40 +6,25 @@ import { Check, Clock, Copy, Link2, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
-import { sourceLabel } from "../../../convex/lib/attribution";
-import { BRAND_GLYPHS } from "../dashboard/brand-icons";
-import {
-	CLAIM_SOURCE_CHOICES,
-	CLAIM_WINDOW_CHOICES_MINUTES,
-	claimResendState,
-	DEFAULT_CLAIM_WINDOW_MINUTES,
-	describeClaimWindow,
-} from "../../../convex/lib/orderClaims";
+import { claimResendState } from "../../../convex/lib/orderClaims";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown, formatClaimCountdown } from "../../lib/countdown";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { storefrontOrigin } from "../../lib/storefront-url";
-import { Button } from "../ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "../ui/dialog";
 
 /**
- * Seller side of claim links (86eyq0epn, docs/claim-links.md):
- *  - SendClaimDialog — the "Send to buyer to complete" confirm on the counter
- *    build screen: pick the payment window (chips; remembered as the store
- *    default), see what the buyer fills in, send.
- *  - ClaimsPanel — "Waiting on buyers" on the counter landing: live countdown
- *    per open claim, Resend (cooldown-gated, disabled-with-reason), Cancel,
- *    Copy link (the always-available fallback when the WhatsApp send fails),
- *    plus recently completed / expired outcomes.
+ * Seller side of claim links (86eyq0epn, docs/claim-links.md) — the
+ * "Waiting on buyers" panel on the counter landing: live countdown per open
+ * claim, Resend (cooldown-gated, disabled-with-reason), Cancel, Copy link
+ * (the always-available fallback when a WhatsApp send is blocked), plus
+ * recently completed / expired outcomes.
+ *
+ * The send CONTROLS are not here. They used to live in a modal
+ * (`SendClaimDialog`), which the counter panel redesign retired: the payment
+ * window and origin chips belong beside the cart they describe, not behind a
+ * dialog the seller has to open to discover them. They now render inline in
+ * `app.checkout.tsx` under the "Send to buyer" mode.
  */
 
 /** The buyer-facing claim URL — same origin rules as the storefront link. */
@@ -54,196 +39,6 @@ async function copyClaimLink(token: string): Promise<void> {
 	} catch {
 		toast.error("Couldn't copy — long-press the link to copy it manually");
 	}
-}
-
-interface SendClaimItem {
-	variantId: Id<"productVariants">;
-	quantity: number;
-	unitPrice?: number;
-}
-
-export function SendClaimDialog({
-	open,
-	onOpenChange,
-	sessionId,
-	buyerName,
-	itemCount,
-	itemsTotal,
-	currency,
-	defaultWindowMinutes,
-	defaultSource,
-	items,
-	onSent,
-}: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	sessionId: Id<"counterCheckoutSessions">;
-	buyerName: string | undefined;
-	itemCount: number;
-	itemsTotal: number;
-	currency: string;
-	/** The store's remembered default (retailers.claimLinkWindowMinutes). */
-	defaultWindowMinutes: number | undefined;
-	/** The store's remembered origin (retailers.claimLinkSource). */
-	defaultSource: string | undefined;
-	items: SendClaimItem[];
-	/** Called after a successful send — the caller returns to the list. */
-	onSent: () => void;
-}) {
-	const sendClaim = useMutation(api.orderClaims.sendClaim);
-	const [windowMinutes, setWindowMinutes] = useState(
-		defaultWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES,
-	);
-	const [source, setSource] = useState<string | undefined>(defaultSource);
-	const [sending, setSending] = useState(false);
-	// Re-seed the chip whenever the dialog opens (the remembered default may
-	// have changed since mount).
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset-on-open only.
-	useEffect(() => {
-		if (open) {
-			setWindowMinutes(defaultWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES);
-			setSource(defaultSource);
-		}
-	}, [open]);
-
-	const who = buyerName ?? "the buyer";
-
-	async function handleSend() {
-		setSending(true);
-		try {
-			const result = await sendClaim({
-				sessionId,
-				items,
-				windowMinutes,
-				attributionSource: source,
-			});
-			toast.success(
-				`WhatsApp link sent to ${who} — you'll see the order the moment they complete it.`,
-			);
-			// Belt-and-braces: put the link on the clipboard path one tap away by
-			// showing a follow-up toast with a copy action (the WABA send outcome
-			// lands on the claims list either way).
-			void result;
-			onSent();
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSending(false);
-		}
-	}
-
-	return (
-		<Dialog open={open} onOpenChange={(o) => !sending && onOpenChange(o)}>
-			<DialogContent>
-				<DialogHeader>
-					<DialogTitle>
-						Send to <span {...MASK_PII}>{who}</span> to complete
-					</DialogTitle>
-					<DialogDescription>
-						{itemCount} item{itemCount === 1 ? "" : "s"} ·{" "}
-						{formatPrice(itemsTotal, currency)} — price locked at what you
-						keyed.
-					</DialogDescription>
-				</DialogHeader>
-
-				{/* One quiet line, not a boxed chip rack: this is a fact the seller
-				    reads once and never acts on, so it must not outweigh the two
-				    controls below that they DO act on. */}
-				<p className="text-xs text-muted-foreground">
-					They fill in delivery or pickup, date &amp; time, and payment.
-				</p>
-
-				<div className="flex flex-col gap-2">
-					<p className="text-sm font-semibold">Give them how long?</p>
-					<div className="flex gap-2">
-						{CLAIM_WINDOW_CHOICES_MINUTES.map((minutes) => {
-							const active = windowMinutes === minutes;
-							return (
-								<button
-									key={minutes}
-									type="button"
-									aria-pressed={active}
-									onClick={() => setWindowMinutes(minutes)}
-									className={`tap-target flex-1 rounded-xl border-2 px-2 py-2.5 text-sm font-semibold transition-colors ${
-										active
-											? "border-accent bg-accent/10 text-accent-emphasis"
-											: "border-border bg-card text-muted-foreground hover:border-accent/40"
-									}`}
-								>
-									{describeClaimWindow(minutes)
-										.replace(" minutes", " min")
-										.replace(" hours", " hours")}
-								</button>
-							);
-						})}
-					</div>
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						This is how long they have to <em>complete</em> the order — then
-						at least 15 minutes to pay (nobody can open a banking app in one
-						minute). An order still unpaid when time&apos;s up is cancelled
-						automatically, so your stock comes back. Resending never resets
-						the clock.
-					</p>
-				</div>
-
-				<div className="flex flex-col gap-2">
-					<p className="text-sm font-semibold">Where&apos;s this order from?</p>
-					<div className="flex flex-wrap gap-2">
-						{CLAIM_SOURCE_CHOICES.map((tag) => {
-							const active = source === tag;
-							// Same glyph the order page and the tagged-link cards use, so
-							// one channel looks like itself everywhere in the app.
-							const brand = BRAND_GLYPHS[tag];
-							return (
-								<button
-									key={tag}
-									type="button"
-									aria-pressed={active}
-									onClick={() => setSource(active ? undefined : tag)}
-									className={`tap-target flex items-center gap-1.5 rounded-full border-2 px-3 py-1.5 text-xs font-semibold transition-colors ${
-										active
-											? "border-accent bg-accent/10 text-accent-emphasis"
-											: "border-border bg-card text-muted-foreground hover:border-accent/40"
-									}`}
-								>
-									{brand ? (
-										<brand.Icon
-											className={`size-3.5 shrink-0 ${active ? brand.colorClass : ""}`}
-										/>
-									) : null}
-									{sourceLabel(tag)}
-								</button>
-							);
-						})}
-					</div>
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						Counts this sale against that channel in Insights. Tap again to
-						clear it. We&apos;ll remember both choices for your next send —
-						set them once at the top of a live.
-					</p>
-				</div>
-
-				<DialogFooter>
-					<Button
-						type="button"
-						variant="outline"
-						onClick={() => onOpenChange(false)}
-						disabled={sending}
-					>
-						Back
-					</Button>
-					<Button type="button" onClick={handleSend} disabled={sending}>
-						<Send className="size-4" aria-hidden />
-						{sending ? "Sending…" : "Send WhatsApp link"}
-					</Button>
-				</DialogFooter>
-				<p className="text-center text-[11px] text-muted-foreground">
-					If WhatsApp can&apos;t deliver it, you&apos;ll get a copyable link on
-					the counter page to send yourself.
-				</p>
-			</DialogContent>
-		</Dialog>
-	);
 }
 
 // ---------------------------------------------------------------------------
