@@ -153,6 +153,24 @@ export function riderBookingAllowed(country: Country): boolean {
 }
 
 /**
+ * Whether a store COUNTRY may connect Delyva courier booking (86eyjpv6z).
+ * Its own table for the same reason as COUNTRY_RIDER_BOOKING above — booking
+ * capabilities are decided per provider, never derived from a pricing-mode
+ * list. Malaysia-only for v1: the ICP is MY frozen sellers, and every
+ * seller-facing string (West-Malaysia cold-chain coverage, MYR) assumes it.
+ * Delyva does operate in SG, so widening later is a product decision, not a
+ * rewrite.
+ */
+export const COUNTRY_DELYVA_BOOKING: Record<Country, boolean> = {
+	MY: true,
+	SG: false,
+};
+
+export function delyvaBookingAllowed(country: Country): boolean {
+	return COUNTRY_DELYVA_BOOKING[country];
+}
+
+/**
  * Human names for the pricing modes, for copy that has to tell a seller which
  * one is in their way (the country card's blocked-switch explanation). Lives
  * beside the allowlist so the rule and its wording can't drift apart.

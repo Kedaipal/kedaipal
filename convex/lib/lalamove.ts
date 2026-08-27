@@ -14,7 +14,19 @@
 //    other money field in the repo.
 
 import { decryptSecret } from "./credentialCrypto";
+import type { DeliveryJobStatus } from "./deliveryJobs";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
+
+// Provider-agnostic job-status machinery moved to lib/deliveryJobs.ts when
+// Delyva became the second provider (86eyjpv6z) — re-exported here so the
+// many existing `from "./lib/lalamove"` importers keep working unchanged.
+export {
+	type DeliveryJobStatus,
+	TERMINAL_JOB_STATUSES,
+	isActiveJobStatus,
+	riderDrivesOrderStatus,
+	isRiderManagedTransition,
+} from "./deliveryJobs";
 
 export type LalamoveEnv = "sandbox" | "production";
 
@@ -539,16 +551,6 @@ export function parseDriverResponse(json: unknown): {
 	};
 }
 
-/** Our normalized job status (deliveryJobs.status). */
-export type DeliveryJobStatus =
-	| "assigning"
-	| "ongoing"
-	| "picked_up"
-	| "completed"
-	| "canceled"
-	| "expired"
-	| "rejected";
-
 const STATUS_MAP: Record<string, DeliveryJobStatus> = {
 	ASSIGNING_DRIVER: "assigning",
 	ON_GOING: "ongoing",
@@ -565,60 +567,6 @@ export function normalizeLalamoveStatus(
 	raw: string | undefined,
 ): DeliveryJobStatus | undefined {
 	return raw ? STATUS_MAP[raw] : undefined;
-}
-
-export const TERMINAL_JOB_STATUSES: ReadonlySet<DeliveryJobStatus> = new Set([
-	"completed",
-	"canceled",
-	"expired",
-	"rejected",
-]);
-
-/** A job in one of these states still occupies the order's "one active job"
- * slot; anything terminal frees it for a rebook. */
-export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
-	return !TERMINAL_JOB_STATUSES.has(status);
-}
-
-/**
- * Whether the rider (via webhook) currently drives the order's canonical
- * status — an ACTIVE job whose webhook has demonstrably delivered events
- * (`lastEventAt` is only ever written by the webhook handler, and the
- * ASSIGNING_DRIVER event lands seconds after booking when the seller has
- * registered the URL). While true, picked-up → shipped and completed →
- * delivered arrive on their own, so the seller's manual advance into those
- * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
- * message the buyer early and WITHOUT the live-tracking link.
- *
- * NOTE (3 Aug): this is no longer the GATE — it only decides the wording. The
- * gate is now "an ACTIVE job exists" (see the order-detail stepper), because
- * requiring a webhook event left it off between booking and the first event,
- * which is exactly when a seller can click a live trip through to delivered.
- * A webhook-less seller is protected by the confirm-gated escape instead, and
- * this predicate picks the honest copy for them ("…as long as your Lalamove
- * webhook is set up" rather than promising it moves on its own).
- */
-export function riderDrivesOrderStatus(job: {
-	status: DeliveryJobStatus;
-	lastEventAt?: number;
-}): boolean {
-	return isActiveJobStatus(job.status) && job.lastEventAt !== undefined;
-}
-
-/**
- * Whether an advance into `targetAnchor` is one the rider's webhook manages
- * (shipped at pickup, delivered at drop-off). Same-anchor moves (a seller's
- * custom stages within the shipped band) don't change canonical status and
- * stay free.
- */
-export function isRiderManagedTransition(
-	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
-	orderStatus: string,
-): boolean {
-	return (
-		(targetAnchor === "shipped" || targetAnchor === "delivered") &&
-		targetAnchor !== orderStatus
-	);
 }
 
 /** Provider order id out of a webhook event's `data` — undefined for

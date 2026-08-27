@@ -1,0 +1,208 @@
+# Delyva courier booking (86eyjpv6z)
+
+Nationwide **parcel + cold-chain** courier dispatch through [Delyva](https://delyva.com)'s
+aggregator API — the second provider behind the `deliveryJobs` seam, **additive
+to Lalamove** ([delivery-lalamove.md](./delivery-lalamove.md)), never a
+replacement. Lalamove = intra-city on-demand rider; Delyva = outstation
+parcels and chilled/frozen goods (Walid, Haziq, WaDaFish, the frozen ICP).
+
+Provider decision (Arif, 29 Jul 2026): Delyva over EasyParcel — EasyParcel
+prohibits frozen goods. Verification history on ClickUp `86eyexp7p`.
+
+## Commercials — the `source: "kedaipal"` attribution
+
+Confirmed with Herrey (Delyva, Aug 2026): Delyva pays Kedaipal **1% per
+confirmed/completed delivery order**, Delyva-funded — the seller pays the same
+rate as booking direct in the Delyva app; no take-rate on sellers. The
+commission only tracks when **`source: "kedaipal"` rides every
+`POST /order`** — it is hardcoded in `buildCreateOrderBody`
+(`convex/lib/delyva.ts`) and covered by a test, because dropping it is
+invisible breakage: bookings keep working, the revenue silently stops.
+
+## Model — BYO account, one API key
+
+Same posture as Lalamove/HitPay: the **seller's own Delyva account**, booked
+against the seller's credit. Kedaipal never holds float, never rebills, never
+touches refunds.
+
+The connect flow deviates from the ticket's "apiKey + apiSecret" AC on
+purpose (locked 27 Aug): Delyva authenticates every API call with a **single
+key** (`X-Delyvax-Access-Token`), and everything else is fetchable with it —
+so the seller pastes **one key** and `delyva.connect` does the rest:
+
+1. `GET /user` — validates the key, yields `apiSecret` (the webhook HMAC
+   secret — the seller never sees or types it) and `companyId`.
+2. `GET /customer` — yields the integer `customerId` that quote/order
+   payloads require, and the account display name for the settings card.
+3. Both secrets are encrypted (**`enc.v1.` envelope, in the action** — unlike
+   the Lalamove/HitPay save-then-encrypt path, no plaintext credential ever
+   lands in the DB or the mutation log).
+4. Our webhook URL (`<CONVEX_SITE_URL>/webhook/delyva`) is auto-subscribed
+   via `POST /webhook` for `order.created` + `order_tracking.update` +
+   `order_tracking.change` — **zero portal steps for the seller**. A
+   subscribe failure doesn't fail the connect (bookings work; status won't
+   flow); `webhooksSubscribedAt` unset is the honest signal, and
+   `resubscribeWebhooks` is the retry.
+
+**There is no sandbox toggle, by design.** Delyva has one API host
+(`https://api.delyva.app/v1.0`) and no key prefix — a "sandbox" is simply a
+separate account registered at `demo.delyva.app`. The ticket's
+"infer env from key prefix" AC is void; a key is just a key.
+
+Gates: connect/enable is **Pro-gated** via `PLAN_FEATURES.delivery` (the same
+flag as Lalamove booking; admin act-as bypasses for white-glove), and
+**Malaysia-only** via `delyvaBookingAllowed` (`convex/lib/delivery.ts`) —
+its own table, never derived from pricing modes. Disconnect/disable is never
+gated (downgrade never traps).
+
+## Schema
+
+- `retailers.delyva` — sibling credential arm next to `deliveryBooking`
+  (Lalamove) and `hitpay`: encrypted `apiKey`/`apiSecret`, `apiKeyHint`,
+  `customerId`, `companyId`, `accountName`, `defaultItemType`
+  (PARCEL/CHILLED/FROZEN, store-level default with per-order override),
+  `pickupAddress`, `connectedAt`, `webhooksSubscribedAt`.
+- **`pickupAddress` is structured on the Delyva arm**, not parsed out of
+  `businessAddress` — that field is one free-text label + coordinates (fine
+  for a rider, useless for a parcel courier's postcode/state zone pricing).
+  It is also the unit Delyva's **cold-chain activation** applies to, so a
+  deliberate address is part of the setup story. Booking blocks with reason
+  `no_pickup_address` until it's set.
+- `deliveryJobs.provider` widened to `"lalamove" | "delyva"`; Delyva rows
+  add `serviceName` (courier display name), `awb` (consignment number) and
+  `itemType`. `quotationId`/`vehicleType` carry the **service code** (their
+  quotes are indicative, not id-bound — see Dispatch below).
+- `by_provider_order` index widened to `["provider", "providerOrderId"]` —
+  two providers' order ids are both opaque strings, and the webhook lookup
+  uses `.unique()`, so a provider-blind index would let a cross-provider
+  collision throw inside a webhook handler.
+- AWB mirrors into the existing `orders.courierName` / `orders.trackingNo`
+  (86eyehvk4) + `carrierTrackingUrl` — **fill-if-unset**, so a seller's
+  manual shipment entry is never overwritten, and the buyer's track page +
+  shipped WhatsApp carry the tracking number with zero new plumbing.
+
+## Dispatch flow (two-tap, mirrored on Lalamove's invariant)
+
+Delyva differs from Lalamove in one important way: `POST
+/service/instantQuote` returns a **list of courier services** (DHL, J&T,
+Ninja Cold, …, each with price + service code), the prices are indicative,
+and there is no quotation id — order create re-prices. So:
+
+1. **`prepareBooking`** — live-quotes the parcel and returns the service
+   list sorted by price (the dispatch card renders a picker, cheapest
+   pre-selected). An **empty list is a normal answer** ("no courier takes a
+   chilled 2.5 kg parcel to this address") and renders as an empty state
+   with the manual-courier handoff, never an error.
+2. **`confirmBooking`** — reserve → external calls → commit/release:
+   - `reserveBooking` claims the order's **one-active-job slot atomically,
+     counting jobs from EITHER provider** — an order can never have a rider
+     and a courier racing for it.
+   - `POST /order` creates a **draft** (`process: false`) with
+     `idempotency-key: kp-<jobId>` (Delyva caches responses per key for
+     24 h, so a network retry can never double-create).
+   - `POST /order/process` with the picked `serviceCode` spends the credit.
+     A failed process **cancels the draft best-effort** so the seller's
+     Delyva dashboard doesn't fill with orphans, then releases the
+     reservation into the amber failed card with a classified reason.
+   - Price + AWB come from the process response, falling back to
+     `GET /order/{id}`, falling back to the `order.created` webhook.
+
+**Parcel weight** comes from `summarizeCartWeight` over the order's variants
+(`parcelWeightG`, the 86eyeea1n field) — the same never-silently-underweigh
+summariser the weight-zone pricing uses. When the cart is unweighable (a
+custom line, or missing product weights) the dialog asks the seller to type
+the packed weight (`weightKgOverride`); the seller can always override, since
+they know the real packed weight best.
+
+**Wire shapes were probed live** against a demo account (27 Aug 2026), not
+assumed: the waypoint address rides *inside* `contact` (a top-level
+`address1` is rejected), `inventory` is required on **both** waypoints, and
+`POST /order/{id}/cancel` is the working cancel path (the ms2781 variant also
+exists; both return `statusCode: 900`).
+
+## Webhook (`POST /webhook/delyva`)
+
+Signature: `X-Delyvax-Hmac-SHA256` = base64 HMAC-SHA256 of the **raw body**
+with the account's `apiSecret`. Same trust posture as the Lalamove route:
+no matching job → 200 ack + ignore (bookings made outside Kedaipal; we can't
+verify them and don't act); matching job but no stored secret → **500 fail
+closed**; bad signature → 401; signed but the payload's `customerId` doesn't
+match the job retailer's stored one → 200 + log (defense in depth).
+
+Status codes (verified against Delyva's own maintained WooCommerce plugin):
+
+| Delyva | Meaning              | Job status  | Order effect                        |
+| ------ | -------------------- | ----------- | ----------------------------------- |
+| 100/110| created / ready      | `assigning` | AWB fills → courier fields mirror   |
+| 200    | courier accepted     | `ongoing`   | —                                   |
+| 400    | start collecting     | `ongoing`   | —                                   |
+| 475    | failed collection    | `rejected`  | failure email, order untouched      |
+| 500    | collected            | `picked_up` | → **shipped** (from confirmed/packed) |
+| 600    | out for delivery     | `picked_up` | —                                   |
+| 650    | failed delivery      | *(kept)*    | failureReason + email — the parcel is still WITH the courier (retry/return follows), so the job never goes terminal |
+| 700/1000| completed           | `completed` | → **delivered** (from confirmed/packed/shipped) |
+| 900    | cancelled            | `canceled`  | failure email if it was active      |
+
+Idempotency + out-of-order: `lastEventAt` guard (older events only gap-fill
+the AWB, never regress status); order transitions ride
+`applyStatusTransition` behind the same `SHIPPABLE_FROM`/`DELIVERABLE_FROM`
+guards as Lalamove — **the order never regresses**, and a cancelled order is
+never touched. The manual-advance rider gate (`riderOwnsTransition` in
+`convex/orders.ts`) now returns the owning **provider** and words the block
+accordingly.
+
+## Shared machinery
+
+The provider-agnostic job-status rules (`DeliveryJobStatus`,
+`isActiveJobStatus`, `TERMINAL_JOB_STATUSES`, `riderDrivesOrderStatus`,
+`isRiderManagedTransition`) moved from `lib/lalamove.ts` to
+**`convex/lib/deliveryJobs.ts`**; `lib/lalamove.ts` re-exports them so its
+existing importers didn't change. Both provider modules import from the
+shared file.
+
+## Failure classification
+
+Delyva errors carry no stable machine ids — only `{error: {message}}` — so
+`classifyDelyvaFailure` matches phrases probed from the real API (the live
+zero-credit refusal is a test fixture) and **"unknown" beats a wrong story**
+(the 86eypncfy lesson). Classes: `credit` (top up in the Delyva app —
+includes Delyva's own message with the balance), `not_activated` (cold-chain
+pickup activation pending), `no_service`, `unknown`. Booking failures email
+the seller through the same `notifyDeliveryJobFailed` template, now
+provider-aware in all three locales.
+
+## Testing
+
+- `convex/lib/delyva.test.ts` — pure client mechanics; fixtures are payloads
+  captured live from the demo account (quote list, draft create, the
+  insufficient-credit refusal).
+- `convex/delyva.test.ts` — `convexTest` integration: webhook idempotency /
+  out-of-order / order transitions / AWB fill-if-unset mirroring, the
+  cross-provider reservation invariant, webhook correlation by
+  `(provider, providerOrderId)`.
+- Manual E2E: register a **demo account** at `demo.delyva.app` (same API
+  host; the "sandbox" is just a separate account) and use their webhook
+  simulator at `dx-integration-sandbox.pages.dev` to fire status updates.
+  Note: the demo account exposes **no CHILLED services** — cold-chain
+  quoting can only be verified end-to-end on a real account.
+
+## Open / follow-ups
+
+- **PR2 (frontend)**: Settings → Fulfilment Delyva card (single-key connect,
+  pickup address, parcel-type default) + order-detail dispatch card (service
+  picker; mockups approved 27 Aug). Backend queries (`getSettings`,
+  `getDispatchState`) already serve it.
+- **Cold-chain quote verification on a real account** — the `CHILLED`
+  itemType is confirmed in Delyva's plugin and API enum, but the demo
+  account returns no cold-chain services; verify pricing + the activation
+  failure copy against the production account before the frozen-seller pilot.
+- **`carrierTrackingUrl` fallback** (`my.delyva.app/customer/strack?trackingNo=…`)
+  — used only when the courier isn't in our registry
+  (`convex/lib/couriers.ts`); confirm the page is public during E2E.
+- **Scheduled pickups** — Delyva waypoints accept `scheduledAt`; v1 books
+  immediate collection (parcel couriers collect on their own cadence).
+  Revisit if sellers ask for date-bound pickups.
+- **Label printing** (`GET /order/{id}/label`) — the booked state's "Print
+  shipping label" in the mockups; wire in PR2.
+- Operational (with Herrey, tracked on `86eyjprqw`): 1% payout mechanics,
+  pickup-address activation lead time, partner agreement.

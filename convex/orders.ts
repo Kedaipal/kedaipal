@@ -2333,15 +2333,15 @@ async function riderOwnsTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
-): Promise<boolean> {
-	if (!isRiderManagedTransition(targetAnchor, order.status)) return false;
+): Promise<"lalamove" | "delyva" | null> {
+	if (!isRiderManagedTransition(targetAnchor, order.status)) return null;
 	// Collection orders (86eyg0n8e): the rider drives the FRONT of the flow —
 	// the webhook moves the JOB only, and the order stays the seller's to
 	// advance by hand throughout — so this gate would both lie ("it updates
 	// itself" never comes true) and strand. Read from the ORDER's frozen
 	// direction, never the store's live setting, mirroring the client: a mode
 	// switch must not re-gate (or un-gate) in-flight orders.
-	if (order.deliveryDirection === "collection") return false;
+	if (order.deliveryDirection === "collection") return null;
 	// An order can hold SEVERAL job rows: a failed booking's released row is kept
 	// on purpose (it doubles as the amber "failed" card) and `reserveBooking`
 	// then lets the seller rebook, so a live rider is routinely NOT the oldest
@@ -2359,13 +2359,18 @@ async function riderOwnsTransition(
 	// and the first event landing. The confirm-gated override is what protects
 	// the webhook-less seller instead, and cancelling the booking lifts the gate
 	// outright, so neither can be stranded.
-	return jobs.some((j) => isActiveJobStatus(j.status));
+	const active = jobs.find((j) => isActiveJobStatus(j.status));
+	return active ? active.provider : null;
 }
 
-/** Seller-facing message for a blocked manual advance. The order-detail
- * stepper offers an explicit "Update manually" confirm that overrides it. */
-const RIDER_GATE_MESSAGE =
-	"A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
+/** Seller-facing message for a blocked manual advance, per the provider that
+ * owns the live job. The order-detail stepper offers an explicit "Update
+ * manually" confirm that overrides it. */
+function riderGateMessage(provider: "lalamove" | "delyva"): string {
+	return provider === "delyva"
+		? "A Delyva courier booking is on this order — it updates itself when the courier collects and delivers, with the tracking number attached. Open the order and use “Update manually” to move it yourself."
+		: "A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
+}
 
 // Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
 // rider picked up → shipped, completed → delivered ride the SAME path as a
@@ -2549,12 +2554,9 @@ export const updateStatus = mutation({
 		// is never gated (not a rider-managed anchor). Sits before the transition
 		// so the manual courier fields above can't land on an order a rider
 		// already owns.
-		if (
-			!overrideRiderGate &&
-			status !== "cancelled" &&
-			(await riderOwnsTransition(ctx, order, status))
-		) {
-			throw new ConvexError(RIDER_GATE_MESSAGE);
+		if (!overrideRiderGate && status !== "cancelled") {
+			const gateProvider = await riderOwnsTransition(ctx, order, status);
+			if (gateProvider) throw new ConvexError(riderGateMessage(gateProvider));
 		}
 
 		await applyStatusTransition(ctx, order, status, {
@@ -2915,11 +2917,9 @@ export const advanceToStage = mutation({
 		// change canonical status, so isRiderManagedTransition lets them through.
 		// Checked after the collection gate, and never fires on collection orders
 		// (riderOwnsTransition rules them out by the order's frozen direction).
-		if (
-			!overrideRiderGate &&
-			(await riderOwnsTransition(ctx, order, targetStatus))
-		) {
-			throw new ConvexError(RIDER_GATE_MESSAGE);
+		if (!overrideRiderGate) {
+			const gateProvider = await riderOwnsTransition(ctx, order, targetStatus);
+			if (gateProvider) throw new ConvexError(riderGateMessage(gateProvider));
 		}
 
 		const now = Date.now();

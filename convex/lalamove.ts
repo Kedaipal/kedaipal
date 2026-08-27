@@ -337,7 +337,7 @@ export const getWebhookContext = internalQuery({
 			const job = await ctx.db
 				.query("deliveryJobs")
 				.withIndex("by_provider_order", (q) =>
-					q.eq("providerOrderId", providerOrderId),
+					q.eq("provider", "lalamove").eq("providerOrderId", providerOrderId),
 				)
 				.unique();
 			if (job) {
@@ -1643,10 +1643,14 @@ export const getDeliveryJob = query({
 			.query("deliveryJobs")
 			.withIndex("by_order", (q) => q.eq("orderId", order._id))
 			.collect();
+		// ANY provider's active job blocks a new booking (one slot per order),
+		// but this card only ever RENDERS Lalamove trips — a Delyva job has its
+		// own card (86eyjpv6z), so it must not surface here as a rider.
 		const activeJob = jobs.find((j) => isActiveJobStatus(j.status));
+		const lalamoveJobs = jobs.filter((j) => j.provider === "lalamove");
 		const latest =
-			activeJob ??
-			[...jobs].sort((a, b) => b.createdAt - a.createdAt)[0] ??
+			(activeJob?.provider === "lalamove" ? activeJob : undefined) ??
+			[...lalamoveJobs].sort((a, b) => b.createdAt - a.createdAt)[0] ??
 			null;
 
 		const credentials = resolveLalamoveCredentials(
