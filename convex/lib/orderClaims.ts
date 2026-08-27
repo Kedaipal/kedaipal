@@ -38,12 +38,22 @@ export const CLAIM_WINDOW_CHOICES_MINUTES = [10, 15, 60, 24 * 60] as const;
  */
 export const CLAIM_SOURCE_CHOICES = [
 	"tiktok-live",
-	"instagram",
+	"instagram-live",
+	"facebook-live",
 	"whatsapp",
 ] as const;
 
-/** The ticket's default (24 h) — used when the store has never sent one. */
-export const DEFAULT_CLAIM_WINDOW_MINUTES = 24 * 60;
+/**
+ * The default for a store that has never sent a claim (after that, the
+ * seller's own last choice is remembered and this stops applying).
+ *
+ * 15 minutes, not the ticket's 24 h: the flagship case is a live drop, where
+ * an all-day hold on live-priced stock is the opposite of what the seller
+ * wants — and the whole point of the deadline is that stock comes back. A
+ * seller doing DM quotes reaches for 24 h once and never thinks about it
+ * again, which is the cheaper direction to be wrong in.
+ */
+export const DEFAULT_CLAIM_WINDOW_MINUTES = 15;
 
 /** Hard bounds on a window. The floor keeps a fat-fingered 1-minute link from
  * being dead before WhatsApp delivers it; the ceiling keeps "price locked"

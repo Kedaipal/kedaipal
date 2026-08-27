@@ -1739,8 +1739,32 @@ export default defineSchema({
 		// Outcome of the LAST WhatsApp send attempt — "failed" surfaces the
 		// copy-the-link-yourself fallback on the claims list (WABA send can be
 		// blocked by caps/opt-out; the link itself still works).
+		// Outcome of the LAST WhatsApp send attempt. Five values, because the
+		// seller's NEXT MOVE differs in each case and a single "failed" hid the
+		// only one the buyer can actually fix:
+		//   sent        — nothing to do.
+		//   opted_out   — this buyer sent STOP to the shared WABA, so the
+		//                 gateway suppressed it. The ONLY remedy is the buyer
+		//                 replying START; the UI says so by name instead of
+		//                 blaming delivery. (This is the common one in practice:
+		//                 a tester's own number usually carries an old STOP.)
+		//   blocked     — the gateway refused for a reason that is OURS, not the
+		//                 buyer's (cap reached, quality throttle, kill switch).
+		//                 Waiting or copying the link is the move.
+		//   failed      — Meta rejected it or the network died. Copy the link.
+		//   unavailable — claim-link sending isn't configured on this deployment
+		//                 at all; retrying fails identically, so Copy link is the
+		//                 only offer.
+		// In every non-sent case the LINK ITSELF still works, deadline intact —
+		// which is why Copy link is always on the card.
 		lastSendOutcome: v.optional(
-			v.union(v.literal("sent"), v.literal("failed")),
+			v.union(
+				v.literal("sent"),
+				v.literal("opted_out"),
+				v.literal("blocked"),
+				v.literal("failed"),
+				v.literal("unavailable"),
+			),
 		),
 		// Set at completion — lets a re-opened link show the order's track page.
 		orderId: v.optional(v.id("orders")),

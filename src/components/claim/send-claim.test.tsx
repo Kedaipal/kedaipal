@@ -119,6 +119,47 @@ describe("ClaimsPanel — resend guard", () => {
 		).toBe(true);
 	});
 
+	test("an opted-out buyer gets the remedy by name, not a mystery delivery failure", () => {
+		mockClaims([
+			claim({
+				lastSendOutcome: "opted_out",
+				lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000,
+			}),
+		]);
+		render(<ClaimsPanel onResume={vi.fn()} />);
+		// The one thing only the BUYER can do — say it, don't bury it. (The
+		// keyword appears twice by design: in the explanation and on the
+		// disabled button, so assert on the explanation's emphasised span.)
+		expect(screen.getByText(/opted out/i)).toBeTruthy();
+		const keyword = screen
+			.getAllByText("START")
+			.find((el) => el.tagName === "SPAN");
+		expect(keyword).toBeTruthy();
+		// Resending would be blocked identically, so it must not look available.
+		expect(
+			screen
+				.getByRole("button", { name: /Resend once they reply START/ })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		// Copy link is the path that still works.
+		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();
+	});
+
+	test("an unconfigured deployment says so — never 'couldn't be delivered'", () => {
+		mockClaims([claim({ lastSendOutcome: "unavailable" })]);
+		render(<ClaimsPanel onResume={vi.fn()} />);
+		expect(screen.getByText(/isn't switched on yet/i)).toBeTruthy();
+		expect(screen.queryByText(/couldn't be delivered/i)).toBeNull();
+	});
+
+	test("the open row opens its counter session — a claim has no order yet", () => {
+		const onResume = vi.fn();
+		mockClaims([claim({ sessionId: "sess-42" })]);
+		render(<ClaimsPanel onResume={onResume} />);
+		screen.getByRole("button", { name: /Open .* checkout/i }).click();
+		expect(onResume).toHaveBeenCalledWith("sess-42");
+	});
+
 	test("renders nothing before a seller has ever sent one", () => {
 		mockClaims([]);
 		const { container } = render(<ClaimsPanel onResume={vi.fn()} />);

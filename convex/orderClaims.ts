@@ -339,7 +339,12 @@ export interface ClaimListRow {
 	windowMinutes: number;
 	sentCount: number;
 	lastSentAt: number;
-	lastSendOutcome?: "sent" | "failed";
+	lastSendOutcome?:
+		| "sent"
+		| "opted_out"
+		| "blocked"
+		| "failed"
+		| "unavailable";
 	/** Completed claims: the order it became (link target for the seller). */
 	orderShortId?: string;
 	createdAt: number;
@@ -963,7 +968,13 @@ export const commit = mutation({
 export const recordClaimSendOutcome = internalMutation({
 	args: {
 		claimId: v.id("orderClaims"),
-		outcome: v.union(v.literal("sent"), v.literal("failed")),
+		outcome: v.union(
+			v.literal("sent"),
+			v.literal("opted_out"),
+			v.literal("blocked"),
+			v.literal("failed"),
+			v.literal("unavailable"),
+		),
 	},
 	handler: async (ctx, { claimId, outcome }): Promise<void> => {
 		const claim = await ctx.db.get(claimId);

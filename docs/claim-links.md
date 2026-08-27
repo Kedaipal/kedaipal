@@ -211,7 +211,18 @@ outcome.
   the session). Renders nothing until a first claim exists — the build
   screen's button is the feature's front door.
 - **Marketing origin (86eyq0eq9).** The send dialog asks "Where's this order
-  from?" — TikTok Live / Instagram / WhatsApp, tap-again to clear. The tag is
+  from?" — **TikTok Live / Instagram Live / Facebook Live / WhatsApp**,
+  tap-again to clear. The **`-live` suffix is the point**: these are separate
+  buckets from the bare `tiktok`/`instagram`/`facebook` tags the dashboard's
+  tagged SHARE LINKS produce, because "my TikTok Lives made RM3,400" and "my
+  TikTok bio link made RM800" are two different answers to "how did my socials
+  do" — the acquisition mechanics, effort and conversion are nothing alike, and
+  blending them would hide the one the live seller actually optimises. WhatsApp
+  has **no** live arm on purpose: a WhatsApp claim is a DM or a broadcast reply,
+  never a broadcast in the streaming sense. Live variants reuse their parent's
+  brand glyph (`BRAND_GLYPHS`), so a "TikTok Live" row wears the TikTok logo —
+  a bare label beside logo-bearing siblings reads as a missing icon, not as a
+  different channel. The tag is
   frozen on the claim at send and carried onto the committed order's
   `attributionSource`, so Insights counts a live drop's revenue against the
   channel that produced it instead of "Direct / shared link". **Seller-chosen,
@@ -274,6 +285,22 @@ treats that rejection (132007) as **terminal** — so one pasted tab in a
 WhatsApp pushname would kill the send with no retry and no explanation to the
 seller. It is the single choke point for that class, shared with the seller
 alerts and the buyer confirm push.
+
+**A failed send says WHICH failure, because the remedies differ.**
+`lastSendOutcome` carries five values, not a boolean:
+
+| Outcome | What the seller is told, and why |
+|---|---|
+| `sent` | nothing |
+| `opted_out` | *"This buyer has opted out… they can reply **START**"* — the only case with a buyer-side remedy, and the common one in practice (a tester's own number usually carries an old STOP). Resend is disabled: it would be blocked identically. |
+| `blocked` | a cap, quality throttle or kill switch — **ours**, not the buyer's. Wait, or copy the link. |
+| `failed` | Meta rejected it, or the network died. Copy the link. |
+| `unavailable` | claim-link sending isn't configured on this deployment — a SETUP fact, not a delivery failure. Copy link is the only offer. |
+
+Collapsing these into one "couldn't be delivered" is how a real, fixable
+opt-out read as a mystery delivery problem and cost a server-log dig to
+diagnose. **In every non-sent case the link itself still works, deadline
+intact** — which is why Copy link is always on the card.
 
 `notifyClaimLink` (convex/whatsapp.ts) mirrors the confirm-push shape:
 env-gated on **`WHATSAPP_CLAIM_LINK_TEMPLATE`** (unset ⇒ silently

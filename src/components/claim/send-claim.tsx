@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { sourceLabel } from "../../../convex/lib/attribution";
+import { BRAND_GLYPHS } from "../dashboard/brand-icons";
 import {
 	CLAIM_SOURCE_CHOICES,
 	CLAIM_WINDOW_CHOICES_MINUTES,
@@ -145,21 +146,12 @@ export function SendClaimDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/40 px-3.5 py-3">
-					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						They fill in
-					</p>
-					<div className="flex flex-wrap gap-1.5">
-						{["Delivery or pickup", "Date & time", "Payment"].map((chip) => (
-							<span
-								key={chip}
-								className="rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium"
-							>
-								{chip}
-							</span>
-						))}
-					</div>
-				</div>
+				{/* One quiet line, not a boxed chip rack: this is a fact the seller
+				    reads once and never acts on, so it must not outweigh the two
+				    controls below that they DO act on. */}
+				<p className="text-xs text-muted-foreground">
+					They fill in delivery or pickup, date &amp; time, and payment.
+				</p>
 
 				<div className="flex flex-col gap-2">
 					<p className="text-sm font-semibold">Give them how long?</p>
@@ -199,18 +191,26 @@ export function SendClaimDialog({
 					<div className="flex flex-wrap gap-2">
 						{CLAIM_SOURCE_CHOICES.map((tag) => {
 							const active = source === tag;
+							// Same glyph the order page and the tagged-link cards use, so
+							// one channel looks like itself everywhere in the app.
+							const brand = BRAND_GLYPHS[tag];
 							return (
 								<button
 									key={tag}
 									type="button"
 									aria-pressed={active}
 									onClick={() => setSource(active ? undefined : tag)}
-									className={`tap-target rounded-full border-2 px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+									className={`tap-target flex items-center gap-1.5 rounded-full border-2 px-3 py-1.5 text-xs font-semibold transition-colors ${
 										active
 											? "border-accent bg-accent/10 text-accent-emphasis"
 											: "border-border bg-card text-muted-foreground hover:border-accent/40"
 									}`}
 								>
+									{brand ? (
+										<brand.Icon
+											className={`size-3.5 shrink-0 ${active ? brand.colorClass : ""}`}
+										/>
+									) : null}
 									{sourceLabel(tag)}
 								</button>
 							);
@@ -305,20 +305,38 @@ export function ClaimsPanel({
 					// second the clock runs out, before the server sweep.
 					const stillOpen = remaining > 0;
 					const resend = claimResendState(claim, now);
-					const resendLabel = !resend.canResend
-						? resend.reason === "max_sends"
-							? "Sent 3× — message them directly"
-							: `Resend in ${formatCountdown((resend.nextAt ?? now) - now)}`
-						: claim.lastSendOutcome === "failed"
-							? "Retry WhatsApp"
-							: "Resend";
+					// Sending isn't set up on this deployment: a Resend would fail the
+					// same way, so it is disabled with the real reason and Copy link
+					// carries the flow.
+					const sendUnavailable = claim.lastSendOutcome === "unavailable";
+					const optedOut = claim.lastSendOutcome === "opted_out";
+					const resendLabel = sendUnavailable
+						? "WhatsApp not set up"
+						: optedOut
+							? "Resend once they reply START"
+						: !resend.canResend
+							? resend.reason === "max_sends"
+								? "Sent 3× — message them directly"
+								: `Resend in ${formatCountdown((resend.nextAt ?? now) - now)}`
+							: claim.lastSendOutcome === "failed"
+								? "Retry WhatsApp"
+								: "Resend";
 					return (
 						<div
 							key={claim.claimId}
 							className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
 						>
 							<div className="flex items-center gap-3">
-								<div className="min-w-0 flex-1">
+								{/* Tappable: an open claim has no order yet, so the useful
+								    destination is the counter session it was sent from —
+								    where the seller can see the cart and re-send (which
+								    supersedes this claim) if something was wrong. */}
+								<button
+									type="button"
+									onClick={() => onResume(claim.sessionId)}
+									className="-m-1 min-w-0 flex-1 rounded-lg p-1 text-left transition-colors hover:bg-muted/60"
+									aria-label={`Open ${claim.buyerName}'s checkout`}
+								>
 									<p className="truncate text-sm font-semibold" {...MASK_PII}>
 										{claim.buyerName}
 									</p>
@@ -326,7 +344,7 @@ export function ClaimsPanel({
 										{claim.itemCount} item{claim.itemCount === 1 ? "" : "s"} ·{" "}
 										{formatPrice(claim.itemsTotal, claim.currency)}
 									</p>
-								</div>
+								</button>
 								<span
 									className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs font-semibold tabular-nums ${
 										stillOpen
@@ -338,7 +356,27 @@ export function ClaimsPanel({
 									{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
 								</span>
 							</div>
-							{claim.lastSendOutcome === "failed" ? (
+							{sendUnavailable ? (
+								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+									WhatsApp sending isn&apos;t switched on yet — copy the link
+									and send it to them yourself. The link and its countdown
+									work normally.
+								</p>
+							) : optedOut ? (
+								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+									This buyer has opted out of WhatsApp messages from Kedaipal,
+									so we couldn&apos;t send it. They can reply{" "}
+									<span className="font-semibold">START</span> to our number to
+									turn them back on — or just copy the link across yourself.
+									The link and its countdown work normally.
+								</p>
+							) : claim.lastSendOutcome === "blocked" ? (
+								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+									WhatsApp sending is paused right now (a sending limit or a
+									safety pause on our side) — copy the link and send it
+									yourself. The link and its countdown work normally.
+								</p>
+							) : claim.lastSendOutcome === "failed" ? (
 								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 									The WhatsApp message couldn&apos;t be delivered — copy the
 									link and send it to them yourself. The link (and its
@@ -356,7 +394,12 @@ export function ClaimsPanel({
 								</button>
 								<button
 									type="button"
-									disabled={!stillOpen || !resend.canResend}
+									disabled={
+										!stillOpen ||
+										!resend.canResend ||
+										sendUnavailable ||
+										optedOut
+									}
 									title={
 										!resend.canResend && resend.reason === "cooldown"
 											? "A moment between resends keeps this from spamming the buyer"

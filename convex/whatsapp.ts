@@ -1721,12 +1721,14 @@ export const notifyClaimLink = internalAction({
 		const attempt = attemptArg ?? 1;
 		const templateName = claimLinkTemplateName();
 		if (!templateName) {
-			// No template configured — the WhatsApp leg is unavailable. Stamp failed
-			// so the seller is handed the copy-link fallback instead of assuming it
-			// sent.
+			// Claim-link sending isn't configured on this deployment. That is a
+			// SETUP fact, not a delivery failure — stamping "failed" told the
+			// seller their message "couldn't be delivered" when we never tried,
+			// and offered them a Resend that would fail identically. The claims
+			// list reads this and offers Copy link, which is the path that works.
 			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
 				claimId,
-				outcome: "failed",
+				outcome: "unavailable",
 			});
 			return;
 		}
@@ -1763,9 +1765,20 @@ export const notifyClaimLink = internalAction({
 				],
 				urlButtonParam: meta.token,
 			});
+			// The gateway reports WHY it suppressed a send, and the reasons are not
+			// interchangeable to a seller: an opted-out buyer has a remedy only
+			// THEY can perform (reply START), while a cap/quality/kill-switch
+			// block is ours and just needs waiting out. Flattening both to
+			// "failed" is what made a real, fixable opt-out read as a mystery
+			// delivery problem and cost a server-log dig to diagnose.
+			const blocked = receipt?.blocked;
 			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
 				claimId,
-				outcome: receipt?.blocked ? "failed" : "sent",
+				outcome: !blocked
+					? "sent"
+					: blocked === "blocked_optout"
+						? "opted_out"
+						: "blocked",
 			});
 		} catch (err) {
 			const outcome = classifyPushFailure(
