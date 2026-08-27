@@ -45,7 +45,12 @@ import {
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
+import {
+	attributionBucket,
+	sourceLabel,
+} from "../../convex/lib/attribution";
 import { ProBadge } from "../components/app/pro-gate";
+import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	PageHeader,
@@ -105,7 +110,8 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
-import { isCrmLocked } from "../lib/subscription";
+import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -401,6 +407,11 @@ function OrderDetailRoute() {
 	// route-level useQuery throw takes the whole order page down (the exact bug
 	// this guard fixes; customers list/detail carry the same skip).
 	const crmLocked = isCrmLocked(retailer);
+	// Marketing origin of THIS order (86eyq0eq9) — the tag the buyer arrived
+	// with, else counter/direct. Drilling into the filtered inbox rides the
+	// Pro-gated inbox filter, so a Starter gets the fact as plain text rather
+	// than a link that would silently land on an unfiltered list.
+	const inboxFilterLocked = isOrderInboxLocked(retailer);
 	const crmCustomer = useQuery(
 		convexQuery(
 			api.customers.get,
@@ -1326,6 +1337,45 @@ function OrderDetailRoute() {
 						</Link>
 					) : (
 						<div className="flex items-center gap-3">{avatarRow}</div>
+					);
+				})()}
+				{/* Where this buyer came from (86eyq0eq9). Sits in the CUSTOMER card
+				    because it answers the other half of "who is this?" — the channel
+				    that produced them — and it's the only per-order place the fact
+				    lives. Always rendered, including for Direct: an absent row would
+				    read as "not tracked" rather than "arrived untagged". */}
+				{(() => {
+					const bucket = attributionBucket(order);
+					const brand = BRAND_GLYPHS[bucket];
+					const inner = (
+						<>
+							{brand ? (
+								<brand.Icon className={cn("size-4", brand.colorClass)} />
+							) : null}
+							<span className="text-sm font-medium">
+								{sourceLabel(bucket)}
+							</span>
+						</>
+					);
+					return (
+						<div className="flex items-center gap-2 border-t border-border pt-3">
+							<span className="text-xs text-muted-foreground">Came from</span>
+							{inboxFilterLocked ? (
+								<span className="ml-auto flex items-center gap-1.5">
+									{inner}
+								</span>
+							) : (
+								<Link
+									to="/app/orders"
+									search={{ asrc: [bucket] }}
+									aria-label={`See every order from ${sourceLabel(bucket)}`}
+									className="-mr-1 ml-auto flex items-center gap-1.5 rounded-lg px-1 py-0.5 transition-colors hover:bg-muted/60"
+								>
+									{inner}
+									<ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
+								</Link>
+							)}
+						</div>
 					);
 				})()}
 				{order.customer.waPhone ? (

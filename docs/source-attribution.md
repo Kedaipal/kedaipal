@@ -148,6 +148,14 @@ one place the builder lives.
   `exportFilterValidators`, so an export of a filtered view contains exactly
   the rows the seller was looking at. That parity is the whole reason
   `orderInboxFilter.ts` exists.
+- **The order detail names it.** The vendor's order page shows a **"Came from"**
+  row inside the CUSTOMER card — it answers the other half of "who is this?",
+  and it is the only per-order place the fact lives. Rendered for EVERY order,
+  Direct included: an absent row would read as "not tracked" rather than
+  "arrived untagged". The row carries the channel's brand glyph and links into
+  the filtered inbox; on Starter (`isOrderInboxLocked`) the origin still shows
+  but as plain text, since the drill-down would apply a filter that tier can't
+  use — a control that silently does nothing is worse than one not offered.
 - **Insights drills down.** Every row of "Where orders come from" is a link to
   `/app/orders?asrc=<bucket>`: "TikTok made RM400" immediately raises "which
   orders?", so the widget answers it in one tap. Both ends bucket through the
@@ -191,6 +199,9 @@ one place the builder lives.
   no filtering, multi-select ORs, `direct` reaches untagged + legacy rows,
   `counter` reaches unstamped counter orders, and it ANDs with the other
   filters rather than replacing them.
+- `src/lib/subscription.test.ts` — `isOrderInboxLocked`: Starter locks the
+  order-detail drill-down, loading never flashes a lock, admin act-as sees
+  through, and it tracks the inbox feature rather than CRM.
 - `convex/orders.test.ts` — `availableSources` is tallied over the full window
   (filtering by one origin must NOT shrink the picker), multi-select ORs, and
   an origin nothing matches returns an empty list rather than everything.
