@@ -2,6 +2,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	ArrowLeft,
 	ChevronDown,
@@ -1062,15 +1063,20 @@ function LogoForm({
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateLogoUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(file));
+			setLocalPreview(URL.createObjectURL(prepared.blob));
 			await onSave(storageId);
 			toast.success("Logo saved.");
 		} catch (err) {
@@ -1112,7 +1118,7 @@ function LogoForm({
 							{uploading ? "Uploading…" : "Replace"}
 							<input
 								type="file"
-								accept="image/*"
+								accept={IMAGE_ACCEPT}
 								className="hidden"
 								disabled={uploading}
 								onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1133,7 +1139,7 @@ function LogoForm({
 					{uploading ? "Uploading…" : "Tap to upload your logo"}
 					<input
 						type="file"
-						accept="image/*"
+						accept={IMAGE_ACCEPT}
 						className="hidden"
 						disabled={uploading}
 						onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1163,15 +1169,20 @@ function CoverImageForm({
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateCoverImageUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(file));
+			setLocalPreview(URL.createObjectURL(prepared.blob));
 			await onSave(storageId);
 			toast.success("Cover image saved.");
 		} catch (err) {
@@ -1212,7 +1223,7 @@ function CoverImageForm({
 							{uploading ? "Uploading…" : "Replace"}
 							<input
 								type="file"
-								accept="image/*"
+								accept={IMAGE_ACCEPT}
 								className="hidden"
 								disabled={uploading}
 								onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1233,7 +1244,7 @@ function CoverImageForm({
 					{uploading ? "Uploading…" : "Tap to upload a cover image"}
 					<input
 						type="file"
-						accept="image/*"
+						accept={IMAGE_ACCEPT}
 						className="hidden"
 						disabled={uploading}
 						onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1368,17 +1379,22 @@ function PaymentMethodsForm({
 		if (!file) return;
 		setUploadingKey(key);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateQrUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
 			update(key, {
 				qrImageStorageId: storageId,
-				qrPreviewUrl: URL.createObjectURL(file),
+				qrPreviewUrl: URL.createObjectURL(prepared.blob),
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -1584,7 +1600,7 @@ function PaymentMethodsForm({
 									: "Tap to upload QR image"}
 								<input
 									type="file"
-									accept="image/*"
+									accept={IMAGE_ACCEPT}
 									className="hidden"
 									onChange={(e) =>
 										handleQrFile(m._key, e.target.files?.[0] ?? null)

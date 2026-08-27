@@ -52,6 +52,7 @@ import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
 import type * as lib_hitpay from "../lib/hitpay.js";
+import type * as lib_imageContentType from "../lib/imageContentType.js";
 import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_insights from "../lib/insights.js";
 import type * as lib_lalamove from "../lib/lalamove.js";
@@ -162,6 +163,7 @@ declare const fullApi: ApiFromModules<{
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/fulfilmentDate": typeof lib_fulfilmentDate;
   "lib/hitpay": typeof lib_hitpay;
+  "lib/imageContentType": typeof lib_imageContentType;
   "lib/inboundIntent": typeof lib_inboundIntent;
   "lib/insights": typeof lib_insights;
   "lib/lalamove": typeof lib_lalamove;
