@@ -129,7 +129,9 @@ interface SanitizedDeliveryAddress {
 	placeId?: string;
 }
 
-function sanitizeAddress(
+// Exported for the claim-link checkout (86eyq0epn), which submits the same
+// address shape to orderClaims.commit — one sanitizer for both forms.
+export function sanitizeAddress(
 	raw: CheckoutAddressValues,
 	country: Country,
 ): SanitizedDeliveryAddress {

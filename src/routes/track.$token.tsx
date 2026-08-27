@@ -40,6 +40,7 @@ import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
+import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -627,6 +628,21 @@ function TrackingRoute() {
 				) : null
 			) : null}
 
+			{/* Why the order was cancelled, when a robot did it (86eyq0epn): a
+			    buyer who ran out of payment time must not come back to a bare
+			    "Cancelled" and wonder — say what happened and what to do next.
+			    Human cancellations carry no reason stamp and keep today's copy. */}
+			{isCancelled && order.cancelledReason === "payment_window_expired" ? (
+				<div className="mt-6 flex items-start gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">
+					<Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
+					<p>
+						The payment window for this order ran out, so it was cancelled
+						and the items were released. Still want it? Message the store —
+						they can send you a fresh order link.
+					</p>
+				</div>
+			) : null}
+
 			{/* Current status card */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 				<span className={config?.color}>{config?.icon}</span>
@@ -641,6 +657,21 @@ function TrackingRoute() {
 					</p>
 				</div>
 			</div>
+
+			{/* Payment deadline (86eyq0epn) — the claim timer continuing until real
+			    money. Rendered only while the clock is LIVE: unpaid (a `claimed`
+			    order shows the being-confirmed card instead — the countdown pauses
+			    on an "I've paid"), not cancelled, and no hold that makes payment
+			    impossible (fee-pending / gateway issue) — the exact states the
+			    auto-cancel sweep skips, so the UI never threatens what the server
+			    wouldn't do. */}
+			{!isCancelled &&
+			order.paymentDueAt !== undefined &&
+			paymentStatus === "unpaid" &&
+			!deliveryFeeHeld &&
+			!gatewayIssueUnresolved ? (
+				<PaymentDueCountdown dueAt={order.paymentDueAt} />
+			) : null}
 
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled. */}
 			{!isCancelled ? (

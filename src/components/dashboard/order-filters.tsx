@@ -16,11 +16,14 @@ import { FilterChip } from "../ui/filter-chip";
 export type PaymentStatus = "unpaid" | "claimed" | "received";
 
 /** Checkout surface the order came through (mirrors orders.source). */
-export type OrderSource = "storefront" | "counter";
+export type OrderSource = "storefront" | "counter" | "claim";
 
 const SOURCE_OPTIONS: { value: OrderSource; label: string }[] = [
 	{ value: "storefront", label: "Online" },
 	{ value: "counter", label: "Counter" },
+	// Claim-link orders (86eyq0epn): seller-keyed at a locked price, completed
+	// by the buyer — the TikTok Live funnel.
+	{ value: "claim", label: "Claim link" },
 ];
 
 const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [

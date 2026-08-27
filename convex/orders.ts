@@ -68,6 +68,11 @@ import {
 	type InboxFilterArgs,
 	needsMockup,
 } from "./lib/orderInboxFilter";
+import {
+	extendedPaymentDue,
+	isPaymentWindowLocked,
+	PAYMENT_WINDOW_LOCK_REASON,
+} from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
 	computeOrderTotals,
@@ -125,7 +130,9 @@ import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
-const addressValidator = v.object({
+// Shared with convex/orderClaims.ts (claim-link commit runs the same
+// storefront validation + delivery resolution — one author for both paths).
+export const addressValidator = v.object({
 	line1: v.string(),
 	line2: v.optional(v.string()),
 	city: v.string(),
@@ -211,7 +218,7 @@ function blockedDeliveryMessage(
  *    setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
-function resolveDeliveryForOrder(
+export function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
 	address:
@@ -295,7 +302,7 @@ function resolveDeliveryForOrder(
  * (a cheap-nearby-pin quote can't be replayed against a far delivery
  * address; ~11 m tolerance absorbs float noise, not geography).
  */
-async function loadCheckoutDeliveryQuote(
+export async function loadCheckoutDeliveryQuote(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
@@ -324,7 +331,9 @@ async function loadCheckoutDeliveryQuote(
 	};
 }
 
-function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
+export function buildPickupSnapshot(
+	location: Doc<"pickupLocations">,
+): PickupSnapshot {
 	return {
 		label: location.label,
 		address: location.address,
@@ -1803,6 +1812,7 @@ const MAX_INBOX_SCAN = 1000;
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
+	v.literal("claim"),
 );
 
 /**
@@ -2400,7 +2410,14 @@ export async function applyStatusTransition(
 		trackingNo: string;
 		currentStageId: string | undefined;
 		confirmationPushStatus: undefined;
+		paymentDueAt: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
+	// A payment deadline dies with the order — on EVERY cancellation (seller,
+	// admin, or the auto-cancel sweep), so the by_payment_due index only ever
+	// holds live clocks and a cancelled order never shows a countdown.
+	if (status === "cancelled" && order.paymentDueAt !== undefined) {
+		patch.paymentDueAt = undefined;
+	}
 	// `sending` and `deferred` are PROMISES about a message ("your confirmation
 	// is on its way") — cancelling the order invalidates them, so clear the
 	// stamp or the buyer's page keeps promising a message that will never come:
@@ -3286,6 +3303,14 @@ export const setDeliveryFee = mutation({
 			deliveryFeePendingReason: undefined,
 			subtotal,
 			total,
+			// A fee-pending order was UNPAYABLE, so its payment deadline was
+			// suspended (the auto-cancel sweep skips fee-pending rows). The fee
+			// landing is the moment it becomes payable — guarantee the runway,
+			// or a deadline that lapsed during the seller's own pricing delay
+			// would cancel the order the instant it could finally be paid.
+			...(order.paymentDueAt !== undefined
+				? { paymentDueAt: extendedPaymentDue(order.paymentDueAt, now) }
+				: {}),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -3355,6 +3380,12 @@ export const rescheduleFulfilment = mutation({
 			throw new ConvexError(
 				"This order was already collected — the date can't change now",
 			);
+		// The buyer is inside a claim link's payment window (86eyq0epn): they
+		// hold a confirmed order with a live countdown and may be mid-payment.
+		// The dialog hides the trigger behind the same predicate; this is the
+		// backstop, so a stale tab can't move the date under a paying buyer.
+		if (isPaymentWindowLocked(order))
+			throw new ConvexError(PAYMENT_WINDOW_LOCK_REASON);
 		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
 		// will NOT follow the order — rescheduling under it would desync the
 		// buyer's promise from the trip actually booked. The dialog says so and
@@ -3623,6 +3654,11 @@ async function applyPaymentReceived(
 		...extraPatch,
 		paymentStatus: "received",
 		paymentReceivedAt: now,
+		// Real money retires the payment deadline (86eyq0epn) — the ONE receive
+		// core every path runs through, so the countdown stops on `received` and
+		// never on a mere claim. Unconditional: clearing an unset field is a
+		// no-op.
+		paymentDueAt: undefined,
 		// The single retirement point for an unresolved gateway payment (PR #178
 		// review, finding 1). Whatever route settles the order — the seller
 		// reconciling the odd payment in their HitPay dashboard and marking it

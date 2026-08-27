@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useAction, useMutation } from "convex/react";
-import { CalendarClock, Loader2 } from "lucide-react";
+import { CalendarClock, Loader2, Lock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -16,7 +16,9 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { isActiveJobStatus } from "../../../convex/lib/lalamove";
+import { isPaymentWindowLocked } from "../../../convex/lib/orderClaims";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -42,7 +44,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * a dead disabled button would be noise. While a Lalamove booking is ACTIVE
  * the dialog opens onto an explanation instead of the form (the booking is
  * frozen against its quotationId and won't follow the order), mirroring the
- * server guard.
+ * server guard. It does the same while a claim link's payment window is live
+ * (86eyq0epn): the buyer holds a receipt with a running countdown and may be
+ * mid-payment, so the date can't move under them.
  */
 export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) {
 	const [open, setOpen] = useState(false);
@@ -176,6 +180,10 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 		setOpen(true);
 	}
 
+	// Claim links (86eyq0epn): the receipt is out and a countdown is running
+	// against THIS date. Mirrors the server guard in orders.rescheduleFulfilment.
+	const paymentWindowLocked = isPaymentWindowLocked(order);
+
 	// Live preview of exactly what the buyer's order page will say — parse
 	// failures (mid-typing) just hide the line.
 	const previewDate = mytMidnightFromYmd(dateValue);
@@ -255,32 +263,70 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 
 	return (
 		<>
+			{/* The locked state stays TAPPABLE rather than going disabled: a
+			    `title` tooltip is invisible on the phone this dashboard is built
+			    for, so the reason has to be reachable. The chrome (lock glyph,
+			    muted tone) says "closed" at a glance; the tap says why. */}
 			<Button
 				type="button"
 				variant="outline"
-				className="h-11 shrink-0 px-3 text-xs"
+				className={cn(
+					"h-11 shrink-0 px-3 text-xs",
+					paymentWindowLocked && "text-muted-foreground",
+				)}
 				onClick={openDialog}
 			>
-				<CalendarClock className="size-4" />
-				{order.fulfilmentDate !== undefined ? "Reschedule" : "Set date"}
+				{paymentWindowLocked ? (
+					<Lock className="size-4" />
+				) : (
+					<CalendarClock className="size-4" />
+				)}
+				{paymentWindowLocked
+					? "Locked"
+					: order.fulfilmentDate !== undefined
+						? "Reschedule"
+						: "Set date"}
 			</Button>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
-							{order.fulfilmentDate !== undefined
-								? "Reschedule this order"
-								: "Set a fulfilment date"}
+							{paymentWindowLocked
+								? "Locked while they pay"
+								: order.fulfilmentDate !== undefined
+									? "Reschedule this order"
+									: "Set a fulfilment date"}
 						</DialogTitle>
 						<DialogDescription>
-							{isDelivery
-								? collection
-									? "Change when the rider collects from your customer."
-									: "Change when this order should be delivered."
-								: "Change when the buyer picks this order up."}
+							{paymentWindowLocked
+								? "This date is part of what the buyer is paying for."
+								: isDelivery
+									? collection
+										? "Change when the rider collects from your customer."
+										: "Change when this order should be delivered."
+									: "Change when the buyer picks this order up."}
 						</DialogDescription>
 					</DialogHeader>
-					{hasActiveRiderJob ? (
+					{paymentWindowLocked ? (
+						<div className="flex flex-col gap-3">
+							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+								This buyer is paying against this date right now — their order
+								page is counting down to a deadline. Moving it mid-payment would
+								change the deal under them, so it&apos;s locked until the payment
+								lands. If the date really has to move, cancel the order (that
+								restocks it and releases the buyer) and send a fresh link.
+							</p>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setOpen(false)}
+								>
+									Close
+								</Button>
+							</DialogFooter>
+						</div>
+					) : hasActiveRiderJob ? (
 						<div className="flex flex-col gap-3">
 							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								A Lalamove booking is active for this order. The booking is

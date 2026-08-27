@@ -7,6 +7,7 @@ import {
 	ArrowLeft,
 	BadgeCheck,
 	Banknote,
+	Check,
 	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
@@ -21,6 +22,7 @@ import {
 	Plus,
 	QrCode,
 	Search,
+	Send,
 	Trash2,
 	UserCheck,
 	UserX,
@@ -44,6 +46,26 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
+import { ClaimsPanel } from "../components/claim/send-claim";
+import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
+import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
+import {
+	counterPrimaryAction,
+	showsSellerPaymentControls,
+} from "../lib/counter-panel";
+import {
+	canAddToCounterCart,
+	maxAddableQty,
+	productSoldOut,
+	variantStockNote,
+} from "../lib/counter-stock";
+import { sourceLabel } from "../../convex/lib/attribution";
+import {
+	CLAIM_SOURCE_CHOICES,
+	CLAIM_WINDOW_CHOICES_MINUTES,
+	DEFAULT_CLAIM_WINDOW_MINUTES,
+	describeClaimWindow,
+} from "../../convex/lib/orderClaims";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -174,7 +196,12 @@ function CounterCheckoutRoute() {
 					}}
 				/>
 			) : (
-				<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
+				<>
+					<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
+					{/* Claim links sent to buyers (86eyq0epn) — live countdown, resend,
+					    cancel, and recent outcomes. Renders nothing until one is sent. */}
+					<ClaimsPanel onResume={openSession} />
+				</>
 			)}
 		</div>
 	);
@@ -217,6 +244,19 @@ function ActiveSession({
 			/>
 		);
 
+	// A claim link is still out for this checkout (86eyq0epn). The build screen
+	// is NOT what the seller needs here — and it is actively dangerous, because
+	// every edit either silently misses the buyer's frozen offer or kills the
+	// link they're filling in. Show them what that buyer is looking at instead,
+	// with one deliberate way back to editing.
+	if (session.status === "buyer_identified" && session.liveClaim)
+		return (
+			<WaitingOnBuyerScreen
+				claim={session.liveClaim}
+				buyerName={session.displayName}
+			/>
+		);
+
 	if (session.status === "buyer_identified")
 		return retailer ? (
 			<BuildOrderScreen
@@ -231,8 +271,11 @@ function ActiveSession({
 				currency={retailer.currency ?? DEFAULT_CURRENCY}
 				country={retailer.country}
 				draft={session.draft}
+				defaultClaimWindowMinutes={retailer.claimLinkWindowMinutes}
+				defaultClaimSource={retailer.claimLinkSource}
 				onCreated={onCreated}
 				onCancel={onCancelActive}
+				onSentToBuyer={onBackToList}
 			/>
 		) : null;
 
@@ -1093,12 +1136,14 @@ function ProductThumb({
 	);
 }
 
-/** Cart quantity + a price label for a product, shared by the list + grid cards. */
+/** Cart quantity, price label + sold-out state for a product — shared by the
+ * list rows, the grid tiles and the variant modal so the three can never
+ * disagree about whether something is orderable. */
 function counterProductMeta(
 	p: CounterProduct,
 	cart: Map<string, CartLine>,
 	currency: string,
-): { cartQty: number; priceLabel: string } {
+): { cartQty: number; priceLabel: string; soldOut: boolean } {
 	const cartQty = p.variants.reduce(
 		(s, vr) => s + (cart.get(vr._id)?.qty ?? 0),
 		0,
@@ -1119,7 +1164,7 @@ function counterProductMeta(
 							: `from ${formatPrice(lo, currency)}`;
 					return hasCustom ? `${base} · custom` : base;
 				})();
-	return { cartQty, priceLabel };
+	return { cartQty, priceLabel, soldOut: productSoldOut(p) };
 }
 
 /**
@@ -1195,7 +1240,9 @@ function ProductVariantRows({
 								) : null}
 							</div>
 							<div className="flex items-center gap-2">
-								<div className="relative flex-1">
+								{/* min-w-0: an input's intrinsic size is its min-content, so
+								    flex-1 alone can't shrink it below ~20ch. */}
+								<div className="relative min-w-0 flex-1">
 									<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
 										{currencySymbol(currency)}
 									</span>
@@ -1244,26 +1291,49 @@ function ProductVariantRows({
 					);
 				}
 
+				// Stock is stated on the row and enforced on the control, so the
+				// seller never builds a cart the server will refuse (Zaki, 27 Aug).
+				const stockNote = variantStockNote(vr);
+				const sellable = canAddToCounterCart(vr);
+				const maxQty = maxAddableQty(vr);
 				return (
 					<div
 						key={vr._id}
-						className="flex items-center justify-between gap-3 py-3"
+						className={cn(
+							"flex items-center justify-between gap-3 py-3",
+							!sellable && "opacity-70",
+						)}
 					>
 						<div className="min-w-0">
 							<p className="truncate text-sm">{label || "Default"}</p>
-							<p className="text-xs text-muted-foreground">
-								{formatPrice(vr.price, currency)}
-								{vr.blockWhenOutOfStock ? ` · ${vr.onHand} left` : ""}
+							<p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+								<span>{formatPrice(vr.price, currency)}</span>
+								{stockNote ? (
+									<span
+										className={cn(
+											"font-medium",
+											stockNote.tone === "danger"
+												? "text-destructive"
+												: stockNote.tone === "warn"
+													? "text-amber-600 dark:text-amber-500"
+													: "text-muted-foreground",
+										)}
+									>
+										· {stockNote.text}
+									</span>
+								) : null}
 							</p>
 						</div>
 						{inCart ? (
 							<Stepper
 								qty={inCart.qty}
+								max={maxQty}
 								onChange={(q) => setQty(vr._id, inCart, q)}
 							/>
 						) : (
 							<Button
 								variant="secondary"
+								disabled={!sellable}
 								onClick={() =>
 									setQty(
 										vr._id,
@@ -1279,8 +1349,14 @@ function ProductVariantRows({
 								}
 								className="h-11 px-3"
 							>
-								<Plus className="size-4" />
-								Add
+								{sellable ? (
+									<>
+										<Plus className="size-4" />
+										Add
+									</>
+								) : (
+									"Sold out"
+								)}
 							</Button>
 						)}
 					</div>
@@ -1297,8 +1373,11 @@ function BuildOrderScreen({
 	currency,
 	country,
 	draft,
+	defaultClaimWindowMinutes,
+	defaultClaimSource,
 	onCreated,
 	onCancel,
+	onSentToBuyer,
 }: {
 	retailerId: Id<"retailers">;
 	sessionId: SessionId;
@@ -1317,6 +1396,10 @@ function BuildOrderScreen({
 	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
 	country: Country;
 	draft: SessionDraft | undefined;
+	/** Claim links (86eyq0epn): the store's remembered payment window. */
+	defaultClaimWindowMinutes: number | undefined;
+	/** Claim links: the store's remembered marketing origin (86eyq0eq9). */
+	defaultClaimSource: string | undefined;
 	onCreated: (created: {
 		shortId: string;
 		orderId: Id<"orders">;
@@ -1325,6 +1408,8 @@ function BuildOrderScreen({
 	// Cancel the whole checkout (customer walked / changed their mind). Drops the
 	// session + any items and returns to the open-checkouts list.
 	onCancel: () => void;
+	/** A claim link was sent — back to the list (the ClaimsPanel takes over). */
+	onSentToBuyer: () => void;
 }) {
 	// Counter uses listForCounter (not the public list) so hidden, counter-only
 	// SKUs — e.g. a pre-priced event product — are ringable in person while
@@ -1371,6 +1456,27 @@ function BuildOrderScreen({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Cancel-the-whole-checkout confirm (customer changed their mind at the counter).
 	const [cancelOpen, setCancelOpen] = useState(false);
+	// How this order gets paid (86eyq0epn) — the panel's FIRST question, and the
+	// thing every block below it depends on:
+	//   "counter" — the buyer is standing here; seller keys collection + payment.
+	//   "send"    — the buyer finishes on their phone under a countdown, so the
+	//               seller keys NEITHER (the buyer picks fulfilment and pays on
+	//               their own page). Showing those controls in send mode was the
+	//               original confusion: a seller filled them in, tapped Send, and
+	//               nothing they had keyed reached the buyer.
+	// Defaults to "counter" rather than forcing a pick: that is ~90% of counter
+	// traffic and today's zero-tap flow, and the segmented control keeps the
+	// alternative one tap away and permanently visible.
+	const [payMode, setPayMode] = useState<"counter" | "send">("counter");
+	// Claim-link fields, now INLINE in the panel (the modal is gone — its two
+	// controls belong beside the cart they describe).
+	const [windowMinutes, setWindowMinutes] = useState(
+		defaultClaimWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES,
+	);
+	const [claimSource, setClaimSource] = useState<string | undefined>(
+		defaultClaimSource,
+	);
+	const [sending, setSending] = useState(false);
 	// Per-variant price text for custom/quote lines (keyed by variantId). The cart
 	// line holds the parsed cents; this holds the in-progress input string.
 	const [customPriceInput, setCustomPriceInput] = useState<
@@ -1382,6 +1488,34 @@ function BuildOrderScreen({
 	// total never flickers through half-typed values and there is no in-between
 	// state for the debounced autosave to persist.
 	const [editingLineId, setEditingLineId] = useState<string | null>(null);
+
+	// Send the claim link straight from the panel. Same mutation the dialog
+	// called; the dialog is gone because its two controls (window, origin) now
+	// live beside the cart they describe.
+	const sendClaim = useMutation(api.orderClaims.sendClaim);
+	async function submitClaim() {
+		setSending(true);
+		try {
+			await sendClaim({
+				sessionId,
+				items: cartEntries.map(([variantId, l]) => ({
+					variantId: variantId as Id<"productVariants">,
+					quantity: l.qty,
+					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+				})),
+				windowMinutes,
+				attributionSource: claimSource,
+			});
+			toast.success(
+				`WhatsApp link sent to ${buyer.displayName ?? "the buyer"} — you'll see the order the moment they complete it.`,
+			);
+			onSentToBuyer();
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSending(false);
+		}
+	}
 
 	// Collection date — counter orders are self-collect, so this is "when will
 	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
@@ -1589,9 +1723,14 @@ function BuildOrderScreen({
 			: formatFulfilmentDate(collectionEpoch);
 
 	return (
-		<div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
+		// `grid-cols-[minmax(0,1fr)]` on the mobile track is load-bearing, not
+		// decoration: an implicit `auto` column is floored by its widest child's
+		// min-content, so one un-shrinkable descendant (a number input's intrinsic
+		// size, a long unbroken label) widens the whole grid and both cards spill
+		// past main's right padding — the asymmetric gutter Zaki caught on 27 Aug.
+		<div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
 			{/* Catalog */}
-			<div className="flex flex-col gap-4">
+			<div className="flex min-w-0 flex-col gap-4">
 				<BuyerCard
 					buyer={buyer}
 					currency={currency}
@@ -1674,7 +1813,7 @@ function BuildOrderScreen({
 					) : view === "grid" ? (
 						<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 							{filtered.map((p) => {
-								const { cartQty, priceLabel } = counterProductMeta(
+								const { cartQty, priceLabel, soldOut } = counterProductMeta(
 									p,
 									cart,
 									currency,
@@ -1703,6 +1842,16 @@ function BuildOrderScreen({
 													Hidden
 												</span>
 											) : null}
+											{/* Sold out veils the tile instead of hiding it: the
+											    seller still needs to open it — to see WHICH size
+											    ran out, or to sell a made-to-order sibling. */}
+											{soldOut ? (
+												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
+													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Sold out
+													</span>
+												</span>
+											) : null}
 										</div>
 										<div className="min-w-0 p-2.5">
 											<p className="truncate text-sm font-semibold">{p.name}</p>
@@ -1717,7 +1866,7 @@ function BuildOrderScreen({
 					) : (
 						filtered.map((p) => {
 							const open = isSearching || expanded.has(p._id);
-							const { cartQty, priceLabel } = counterProductMeta(
+							const { cartQty, priceLabel, soldOut } = counterProductMeta(
 								p,
 								cart,
 								currency,
@@ -1742,7 +1891,10 @@ function BuildOrderScreen({
 										<ProductThumb
 											url={p.imageUrls[0]}
 											name={p.name}
-											className="size-12 shrink-0 rounded-xl"
+											className={cn(
+												"size-12 shrink-0 rounded-xl",
+												soldOut && "opacity-50",
+											)}
 										/>
 										<div className="min-w-0 flex-1">
 											<p className="flex items-center gap-1.5 text-sm font-semibold">
@@ -1753,6 +1905,13 @@ function BuildOrderScreen({
 													<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 														<EyeOff className="size-3" aria-hidden />
 														Hidden
+													</span>
+												) : null}
+												{/* Every choice is at zero — say it on the closed row,
+												    not at checkout with a customer waiting. */}
+												{soldOut ? (
+													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Sold out
 													</span>
 												) : null}
 											</p>
@@ -1794,9 +1953,22 @@ function BuildOrderScreen({
 			</div>
 
 			{/* Cart / checkout */}
-			<div className="lg:sticky lg:top-6 lg:self-start">
-				<div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-					<div className="border-b border-border p-4">
+			<div className="min-w-0 lg:sticky lg:top-6 lg:self-start">
+				{/* On desktop the panel is a fixed-height column bounded by the
+				    viewport (top-6 above, the same gutter below), NOT an
+				    arbitrarily tall sticky block. Sticky alone meant a panel
+				    taller than the screen simply hung off the bottom: the wheel
+				    scrolled the catalog for its full length before the page could
+				    reach the panel's own footer (Zaki, 27 Aug).
+
+				    Three bands now: the cart is pinned at the top, the money and
+				    the primary action are pinned at the bottom, and only the
+				    questions between them scroll — the POS shape, where what
+				    you're ringing up and what it costs never leave the screen. On
+				    mobile nothing is bounded, so the card grows and the page
+				    scrolls as before. */}
+				<div className="flex flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm lg:max-h-[calc(100dvh-3rem)]">
+					<div className="shrink-0 border-b border-border p-4">
 						<div className="flex items-start justify-between gap-3">
 							<div>
 								<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -1887,7 +2059,48 @@ function BuildOrderScreen({
 						)}
 					</div>
 
-					<div className="space-y-4 p-4">
+					{/* The scroll region. The cart above and the money below are
+					    pinned on desktop; only the questions move. */}
+					<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+						{/* THE FIRST QUESTION (86eyq0epn). Everything below re-renders
+						    around it, so it sits above the blocks it governs. An
+						    anonymous cash sale has nobody to send a link to, so that
+						    segment is disabled-with-reason rather than hidden — the
+						    seller learns the capability exists and why it can't apply
+						    here (same posture the Pay-later toggle already takes). */}
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								How is this order paid?
+							</p>
+							<div className="mt-3 grid gap-2">
+								<ChoiceCard
+									active={payMode === "counter"}
+									onSelect={() => setPayMode("counter")}
+									icon={Banknote}
+									title="Counter sale"
+									subtitle="Buyer is here"
+								/>
+								<ChoiceCard
+									active={payMode === "send"}
+									disabled={anonymous}
+									reason="A cash sale has no number to send a link to."
+									onSelect={() => setPayMode("send")}
+									icon={Send}
+									title="Send to buyer"
+									subtitle="They finish on their phone"
+								/>
+							</div>
+							<p className="mt-2 text-xs text-muted-foreground">
+								{anonymous
+									? "A cash sale has no number on file, so there's nobody to send a link to — add a phone on the buyer card to unlock it."
+									: payMode === "counter"
+										? "You take the payment and finish the sale right here."
+										: "They add their address and pay on their phone — your prices stay locked until the countdown runs out."}
+							</p>
+						</div>
+
+						{showsSellerPaymentControls(payMode) ? (
+						<>
 						<div className="rounded-xl border border-border bg-muted/20 p-3">
 							<button
 								type="button"
@@ -1937,53 +2150,23 @@ function BuildOrderScreen({
 							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 								Payment
 							</p>
-							<div className="mt-3 grid rounded-xl border border-border bg-background p-1 sm:grid-cols-2">
-								<button
-									type="button"
-									onClick={() => setPaidInPerson(true)}
-									aria-pressed={paid}
-									className={cn(
-										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
-										paid
-											? "bg-accent text-accent-foreground shadow-sm"
-											: "text-muted-foreground hover:bg-muted",
-									)}
-								>
-									<Banknote className="size-4" />
-									<span>
-										<span className="block">Paid now</span>
-										<span className="block text-[11px] font-normal opacity-80">
-											Settled at counter
-										</span>
-									</span>
-								</button>
-								<button
-									type="button"
-									onClick={() => setPaidInPerson(false)}
+							<div className="mt-3 grid gap-2">
+								<ChoiceCard
+									active={paid}
+									onSelect={() => setPaidInPerson(true)}
+									icon={Banknote}
+									title="Paid now"
+									subtitle="Settled at counter"
+								/>
+								<ChoiceCard
+									active={!paid}
 									disabled={anonymous}
-									aria-pressed={!paid}
-									title={
-										anonymous
-											? "A cash sale has no buyer to send a payment link to."
-											: undefined
-									}
-									className={cn(
-										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
-										anonymous
-											? "cursor-not-allowed text-muted-foreground/50"
-											: !paid
-												? "bg-accent text-accent-foreground shadow-sm"
-												: "text-muted-foreground hover:bg-muted",
-									)}
-								>
-									<Clock className="size-4" />
-									<span>
-										<span className="block">Pay later</span>
-										<span className="block text-[11px] font-normal opacity-80">
-											Send payment link
-										</span>
-									</span>
-								</button>
+									reason="A cash sale has no buyer to send a payment link to."
+									onSelect={() => setPaidInPerson(false)}
+									icon={Clock}
+									title="Pay later"
+									subtitle="Send payment link"
+								/>
 							</div>
 
 							{anonymous ? (
@@ -2019,22 +2202,154 @@ function BuildOrderScreen({
 								</p>
 							)}
 						</div>
+						</>
+						) : (
+						/* SEND MODE — collection + payment are deliberately absent, and
+						   said out loud: an absence the seller can't explain reads as a
+						   bug, and this is the exact confusion the redesign fixes. */
+						<>
+						<p className="rounded-xl border border-border bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
+							<span className="font-medium text-foreground">
+								{buyer.displayName ?? "The buyer"} fills in the rest
+							</span>{" "}
+							— delivery or pickup, date &amp; time, and payment. Nothing you
+							key here would reach them, so collection and payment are hidden.
+						</p>
+
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								How long do they get?
+							</p>
+							<div className="mt-3 flex gap-2">
+								{CLAIM_WINDOW_CHOICES_MINUTES.map((minutes) => {
+									const active = windowMinutes === minutes;
+									return (
+										<button
+											key={minutes}
+											type="button"
+											aria-pressed={active}
+											onClick={() => setWindowMinutes(minutes)}
+											className={cn(
+												"tap-target box-border flex-1 rounded-xl border-2 px-2 text-sm font-semibold transition-colors",
+												active
+													? "border-accent bg-accent/10 text-accent-emphasis"
+													: "border-border bg-background text-muted-foreground hover:border-accent/40",
+											)}
+										>
+											{describeClaimWindow(minutes)
+												.replace(" minutes", " min")
+												.replace(" hours", "h")}
+										</button>
+									);
+								})}
+							</div>
+							<p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+								Time to <em>complete</em> the order — then at least 15 minutes
+								to pay. Still unpaid when it&apos;s up and the order cancels
+								itself, so your stock comes back.
+							</p>
+						</div>
+
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								Where&apos;s this order from?
+							</p>
+							<div className="mt-3 flex flex-wrap gap-2">
+								{CLAIM_SOURCE_CHOICES.map((tag) => {
+									const active = claimSource === tag;
+									const brand = BRAND_GLYPHS[tag];
+									return (
+										<button
+											key={tag}
+											type="button"
+											aria-pressed={active}
+											onClick={() =>
+												setClaimSource(active ? undefined : tag)
+											}
+											className={cn(
+												"tap-target box-border flex items-center gap-1.5 rounded-full border-2 px-3 text-xs font-semibold transition-colors",
+												active
+													? "border-accent bg-accent/10 text-accent-emphasis"
+													: "border-border bg-background text-muted-foreground hover:border-accent/40",
+											)}
+										>
+											{brand ? (
+												<brand.Icon
+													className={cn(
+														"size-3.5 shrink-0",
+														active && brand.colorClass,
+													)}
+												/>
+											) : null}
+											{sourceLabel(tag)}
+										</button>
+									);
+								})}
+							</div>
+							<p className="mt-2 text-xs text-muted-foreground">
+								Optional — tags the sale so Insights can tell you what a Live
+								is actually worth. Tap again to clear. We remember both
+								choices for your next send.
+							</p>
+						</div>
+						</>
+						)}
 					</div>
 
-					<div className="border-t border-border bg-muted/20 p-4">
+					<div className="shrink-0 border-t border-border bg-muted/20 p-4">
 						<div className="mb-3 flex items-center justify-between text-sm">
-							<span className="font-medium text-muted-foreground">Total</span>
+							{/* Send mode is a price COMMITMENT, not a sum — and it is the
+							    items total, since the buyer's delivery is added on their
+							    own page. Label it so the figure can't be read as a final
+							    bill. */}
+							<span className="font-medium text-muted-foreground">
+								{payMode === "send" ? "Locked total" : "Total"}
+							</span>
 							<span className="text-xl font-bold tabular-nums">
 								{formatPrice(total, currency)}
 							</span>
 						</div>
-						<Button
-							onClick={() => setConfirmOpen(true)}
-							disabled={cartEntries.length === 0}
-							className="h-12 w-full text-base shadow-sm"
-						>
-							{`Review order · ${formatPrice(total, currency)}`}
-						</Button>
+						{/* ONE primary, whose label names the outcome of THIS mode. The
+						    two paths are no longer competing buttons in the same slot. */}
+						{(() => {
+							const action = counterPrimaryAction({
+								mode: payMode,
+								empty: cartEntries.length === 0,
+								// A claim freezes prices at send, so an unpriced line
+								// would lock a zero.
+								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								money: formatPrice(total, currency),
+								windowMinutes,
+								buyerName: buyer.displayName,
+							});
+							return (
+								<>
+									<Button
+										type="button"
+										onClick={
+											payMode === "send"
+												? submitClaim
+												: () => setConfirmOpen(true)
+										}
+										disabled={action.disabled || sending}
+										title={action.reason}
+										className="h-12 w-full text-base shadow-sm"
+									>
+										{payMode === "send" ? (
+											<Send className="size-4" aria-hidden />
+										) : null}
+										{payMode === "send" && sending
+											? "Sending…"
+											: action.label}
+									</Button>
+									{action.helper ? (
+										<p className="mt-1.5 text-center text-xs text-muted-foreground">
+											{action.helper}
+										</p>
+									) : null}
+								</>
+							);
+						})()}
 						{/* Escape hatch: the customer walked or changed their mind. Cancels
 						    the whole checkout (session + items) — confirmed first since it's
 						    destructive. */}
@@ -2594,13 +2909,95 @@ function BuyerCard({
 	);
 }
 
+/**
+ * The panel's "pick one of these two" control — used by the mode question
+ * ("How is this order paid?") and the counter payment question (Paid now /
+ * Pay later), so the two can never drift apart.
+ *
+ * Deliberately NOT a filled segmented control. Two short labels inside a
+ * full-width solid slab read as a banner rather than a choice, and the slab
+ * fought the accent-outline treatment the window/origin chips a few rows
+ * below already use (Zaki, 27 Aug). Chosen = accent outline + tint + a check,
+ * which is the same visual grammar as those chips and is legible in both
+ * themes without inverting the text colour.
+ *
+ * A disabled option stays VISIBLE (never hidden): the seller should learn the
+ * capability exists and why it can't apply to this sale — callers pass the
+ * reason, and also surface it in prose below the pair, since `title` is
+ * invisible on a phone.
+ */
+function ChoiceCard({
+	active,
+	disabled,
+	reason,
+	icon: Icon,
+	title,
+	subtitle,
+	onSelect,
+}: {
+	active: boolean;
+	disabled?: boolean;
+	/** Why it's unavailable — tooltip on desktop; say it in prose too. */
+	reason?: string;
+	icon: React.ComponentType<{ className?: string }>;
+	title: string;
+	subtitle: string;
+	onSelect: () => void;
+}) {
+	const chosen = active && !disabled;
+	return (
+		<button
+			type="button"
+			onClick={onSelect}
+			disabled={disabled}
+			aria-pressed={active}
+			title={disabled ? reason : undefined}
+			className={cn(
+				"tap-target box-border flex items-center gap-2.5 rounded-xl border-2 px-3 py-2 text-left transition-colors",
+				disabled
+					? "cursor-not-allowed border-border bg-background opacity-60"
+					: chosen
+						? "border-accent bg-accent/10"
+						: "border-border bg-background hover:border-accent/40",
+			)}
+		>
+			<Icon
+				className={cn(
+					"size-4 shrink-0",
+					chosen ? "text-accent-emphasis" : "text-muted-foreground",
+				)}
+			/>
+			<span className="min-w-0 flex-1">
+				<span
+					className={cn(
+						"block text-sm font-semibold",
+						chosen && "text-accent-emphasis",
+					)}
+				>
+					{title}
+				</span>
+				<span className="block text-[11px] leading-tight text-muted-foreground">
+					{subtitle}
+				</span>
+			</span>
+			{chosen ? (
+				<Check className="size-4 shrink-0 text-accent-emphasis" aria-hidden />
+			) : null}
+		</button>
+	);
+}
+
 function Stepper({
 	qty,
+	max,
 	onChange,
 }: {
 	qty: number;
+	/** On-hand ceiling for a stock-tracked variant; undefined = made-to-order. */
+	max?: number;
 	onChange: (qty: number) => void;
 }) {
+	const atMax = max !== undefined && qty >= max;
 	return (
 		<div className="flex items-center gap-1">
 			<button
@@ -2617,8 +3014,10 @@ function Stepper({
 			<button
 				type="button"
 				onClick={() => onChange(qty + 1)}
+				disabled={atMax}
+				title={atMax ? `Only ${max} in stock` : undefined}
 				aria-label="Increase"
-				className="flex size-11 items-center justify-center rounded-lg border border-border hover:bg-muted"
+				className="flex size-11 items-center justify-center rounded-lg border border-border hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
 			>
 				<Plus className="size-4" />
 			</button>

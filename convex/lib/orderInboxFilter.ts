@@ -22,14 +22,14 @@ export type InboxFilterArgs = {
 	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in).
 	// Legacy orders with no stamped source read as "storefront". Undefined = no
 	// source filtering. See orders.source in convex/schema.ts.
-	source?: "storefront" | "counter";
+	source?: "storefront" | "counter" | "claim";
 	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
 	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
 	// OR within the filter, ANDed with the rest), because "how did my socials
 	// do" is a question about several channels at once. Deliberately a separate
 	// dimension from `source` above: that one is the checkout SURFACE
-	// (storefront vs counter), this one is where the buyer came FROM. Empty or
-	// undefined = no attribution filtering.
+	// (storefront vs counter vs claim link), this one is where the buyer came
+	// FROM. Empty or undefined = no attribution filtering.
 	attributionSources?: string[];
 	searchText?: string;
 };
@@ -43,7 +43,7 @@ export type FilterableOrder = {
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentMethod?: string;
-	source?: "storefront" | "counter";
+	source?: "storefront" | "counter" | "claim";
 	attributionSource?: string;
 	createdAt: number;
 	fulfilmentDate?: number;

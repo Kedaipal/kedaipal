@@ -75,4 +75,11 @@ export const BRAND_GLYPHS: Record<
 	instagram: { Icon: InstagramIcon, colorClass: "text-[#FF0069]" },
 	facebook: { Icon: FacebookIcon, colorClass: "text-[#0866FF]" },
 	whatsapp: { Icon: WhatsAppIcon, colorClass: "text-[#25D366]" },
+	// LIVE variants (86eyq0epn) are separate attribution BUCKETS but the same
+	// company — a "TikTok Live" row wearing no logo while "TikTok" wears one
+	// reads as a missing icon, not as a different channel. Same glyph, same
+	// brand colour; the LABEL carries the distinction.
+	"tiktok-live": { Icon: TikTokIcon, colorClass: "text-foreground" },
+	"instagram-live": { Icon: InstagramIcon, colorClass: "text-[#FF0069]" },
+	"facebook-live": { Icon: FacebookIcon, colorClass: "text-[#0866FF]" },
 };
