@@ -16,11 +16,21 @@ Pure module (no Convex imports), shared by client **and** server — the
 never disagree:
 
 - `sanitizeAttributionSource(raw)` — lowercase, spaces→`-`, strip outside
-  `[a-z0-9_-]`, collapse/trim separators, cap 32 chars. **Absent/blank →
-  `undefined`** (= direct; an empty `?src=` is an authoring accident).
-  **Present-but-garbage → `"other"`** (the tag existed, so the visit was NOT
-  direct — reclassifying it as direct would hide tampering). Never throws — a
-  bad tag must never block checkout (ticket AC).
+  `[a-z0-9_-]`, collapse/trim separators, cap 32 chars, then trim trailing
+  separators **again**. **Absent/blank → `undefined`** (= direct; an empty
+  `?src=` is an authoring accident). **Present-but-garbage → `"other"`** (the
+  tag existed, so the visit was NOT direct — reclassifying it as direct would
+  hide tampering). Never throws — a bad tag must never block checkout
+  (ticket AC).
+  - **It is idempotent, and that is load-bearing.** The inbox re-sanitizes
+    every `?asrc=` it reads, so if `sanitize(stored) !== stored` the chip for
+    that tag would filter to zero orders while the picker still offered it.
+    The second trim exists because the length cap can re-expose a separator
+    the first trim had already removed (PR #226 review).
+  - **Param precedence is by first USABLE tag**, not first present one:
+    `?src=&utm_source=tiktok` reads as TikTok, because an accident must not
+    out-rank a real signal. A garbage `src` still wins — it sanitizes to
+    `"other"`, which is a signal, just an unusable one.
 - `attributionBucket(order)` — the report bucket: stamped tag → `counter`
   (when `orders.source === "counter"`) → `direct`.
 - `KNOWN_SOURCE_LABELS` / `sourceLabel` — pretty labels for tags Kedaipal

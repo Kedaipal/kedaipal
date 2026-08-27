@@ -1369,7 +1369,7 @@ function OrderDetailRoute() {
 									to="/app/orders"
 									search={{ asrc: [bucket] }}
 									aria-label={`See every order from ${sourceLabel(bucket)}`}
-									className="-mr-1 ml-auto flex items-center gap-1.5 rounded-lg px-1 py-0.5 transition-colors hover:bg-muted/60"
+									className="tap-target -mr-2 ml-auto flex items-center justify-end gap-1.5 rounded-lg px-2 transition-colors hover:bg-muted/60"
 								>
 									{inner}
 									<ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />

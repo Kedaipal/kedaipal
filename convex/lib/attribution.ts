@@ -38,6 +38,12 @@ export const ATTRIBUTION_COUNTER = "counter";
  * Query params consulted on a storefront hit, in precedence order. `src` is
  * Kedaipal's own reserved convention (poster QRs, despatch-label QR);
  * `utm_source` catches links tagged by external tools.
+ *
+ * Precedence is by first param that yields a USABLE tag, not merely a present
+ * one: `?src=&utm_source=tiktok` reads as TikTok, because an empty `?src=` is
+ * an authoring accident and an accident must not out-rank a real signal. A
+ * present-but-garbage `src` still wins (it sanitizes to "other" — that IS a
+ * signal, just an unusable one). See useSourceAttribution.
  */
 export const ATTRIBUTION_PARAMS = ["src", "utm_source"] as const;
 
@@ -106,7 +112,14 @@ export function sanitizeAttributionSource(
 		.replace(/[^a-z0-9_-]/g, "")
 		.replace(/[-_]{2,}/g, "-")
 		.replace(/^[-_]+|[-_]+$/g, "")
-		.slice(0, ATTRIBUTION_MAX_LENGTH);
+		.slice(0, ATTRIBUTION_MAX_LENGTH)
+		// The cap can re-expose a separator that the trim above already removed
+		// (an over-long tag whose 32nd char is `-`), so trim ONCE MORE. This
+		// keeps the function idempotent, which the drill-down depends on: the
+		// inbox re-sanitizes every `?asrc=` it reads, so a stored key that
+		// re-sanitized to something else would filter to zero orders while the
+		// picker still offered it (PR #226 review).
+		.replace(/[-_]+$/g, "");
 	return cleaned === "" ? ATTRIBUTION_OTHER : cleaned;
 }
 

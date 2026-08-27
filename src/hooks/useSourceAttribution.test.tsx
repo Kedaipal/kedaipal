@@ -34,6 +34,21 @@ describe("useCaptureAttribution / readAttributionSource", () => {
 		expect(readAttributionSource("teststore")).toBe("instagram");
 	});
 
+	it("an EMPTY ?src= falls through to utm_source", () => {
+		// An accident must not out-rank a real signal (PR #226 review).
+		setSearch("?src=&utm_source=tiktok");
+		render(<Capture slug="teststore" />);
+		expect(readAttributionSource("teststore")).toBe("tiktok");
+	});
+
+	it("a garbage ?src= still wins over utm_source", () => {
+		// Unusable, but genuinely a signal — so it buckets to "other" rather
+		// than silently crediting the fallback param.
+		setSearch("?src=%23%23%23&utm_source=tiktok");
+		render(<Capture slug="teststore" />);
+		expect(readAttributionSource("teststore")).toBe("other");
+	});
+
 	it("?src= wins over utm_source when both arrive", () => {
 		setSearch("?utm_source=instagram&src=tiktok");
 		render(<Capture slug="teststore" />);

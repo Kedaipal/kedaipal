@@ -28,12 +28,16 @@ export function useCaptureAttribution(slug: string | undefined): void {
 		if (!slug) return;
 		try {
 			const params = new URLSearchParams(window.location.search);
-			let raw: string | null = null;
+			// First param that yields a USABLE tag wins — not merely the first
+			// one PRESENT. `?src=&utm_source=tiktok` must read as TikTok: an
+			// empty `?src=` is an authoring accident, and an accident must not
+			// out-rank a real signal. A garbage `src` still wins, because it
+			// sanitizes to "other" — unusable, but genuinely a signal.
+			let tag: string | undefined;
 			for (const key of ATTRIBUTION_PARAMS) {
-				raw = params.get(key);
-				if (raw !== null) break;
+				tag = sanitizeAttributionSource(params.get(key));
+				if (tag) break;
 			}
-			const tag = sanitizeAttributionSource(raw);
 			if (tag) sessionStorage.setItem(storageKey(slug), tag);
 		} catch {
 			// Storage/URL access denied — attribution is best-effort, never fatal.
