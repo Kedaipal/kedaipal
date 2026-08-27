@@ -212,7 +212,10 @@ their tracking link already reaches them privately in WhatsApp at confirm time.
 So the QR encodes **`<APP_URL>/<slug>?src=awb`** instead (the reserved `?src=`
 attribution param): the recipient scans the box → lands on the shop → reorders.
 That makes every parcel the same growth surface as the store QR poster, at zero
-privacy cost — everything on the storefront is public by definition.
+privacy cost — everything on the storefront is public by definition. Since
+`86eyq0eq9` the tag is also consumed: an order placed after scanning the box
+shows up as **"Parcel label QR"** in the Insights source breakdown
+(`docs/source-attribution.md`).
 
 This is deliberately **not a toggle**. A "put the tracking link back" option
 would be a footgun with no story for who it serves; if a future ticket wants a

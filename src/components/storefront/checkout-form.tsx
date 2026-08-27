@@ -45,6 +45,7 @@ import {
 } from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { readAttributionSource } from "../../hooks/useSourceAttribution";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
 import {
@@ -539,6 +540,9 @@ export function CheckoutPage({
 						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
 							? liveQuote.quoteId
 							: undefined,
+					// The session's captured ?src=/utm_source tag (86eyq0eq9) —
+					// undefined = direct. Server re-sanitizes; never blocks the order.
+					attributionSource: readAttributionSource(storeSlug),
 				});
 				if (value.deliveryMethod === "delivery")
 					saveAddress(country, value.address);

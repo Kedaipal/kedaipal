@@ -8249,3 +8249,135 @@ describe("orders — creation rate limits (PR #206 review)", () => {
 		expect(shortId).toMatch(/^ORD-/);
 	});
 });
+
+describe("orders — source attribution (86eyq0eq9)", () => {
+	async function createWith(
+		t: ReturnType<typeof setup>,
+		attributionSource: string | undefined,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			attributionSource,
+		});
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("stamps the sanitized tag at create", async () => {
+		const t = setup();
+		const order = await createWith(t, "TikTok ");
+		expect(order?.attributionSource).toBe("tiktok");
+		expect(order?.source).toBe("storefront");
+	});
+
+	test("absent tag stays unset (= direct), and never blocks the order", async () => {
+		const t = setup();
+		const order = await createWith(t, undefined);
+		expect(order?.attributionSource).toBeUndefined();
+	});
+
+	test("present-but-garbage buckets to 'other' instead of failing checkout", async () => {
+		const t = setup();
+		const order = await createWith(t, "###!!!");
+		expect(order?.attributionSource).toBe("other");
+	});
+});
+
+describe("orders — inbox filter by marketing origin (86eyq0eq9)", () => {
+	async function seedMix(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const mk = async (attributionSource?: string) =>
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				attributionSource,
+			});
+		await mk("tiktok");
+		await mk("tiktok");
+		await mk("instagram");
+		await mk(undefined); // direct
+		return { retailer, mk };
+	}
+
+	test("availableSources lists every origin present, most-used first", async () => {
+		const t = setup();
+		const { retailer } = await seedMix(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		// tiktok (2) leads; instagram and direct tie at 1 and break alphabetically
+		// so the picker order is stable as new orders arrive.
+		expect(res.availableSources).toEqual(["tiktok", "direct", "instagram"]);
+	});
+
+	test("filtering by one origin narrows the list but NOT the picker", async () => {
+		const t = setup();
+		const { retailer } = await seedMix(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			attributionSources: ["tiktok"],
+		});
+		expect(res.total).toBe(2);
+		expect(res.orders.every((o) => o.attributionSource === "tiktok")).toBe(true);
+		// The picker must keep offering the origins the seller filtered AWAY,
+		// otherwise choosing one would strand them with no way back.
+		expect(res.availableSources).toEqual(["tiktok", "direct", "instagram"]);
+	});
+
+	test("several origins OR together", async () => {
+		const t = setup();
+		const { retailer } = await seedMix(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			attributionSources: ["tiktok", "instagram"],
+		});
+		expect(res.total).toBe(3);
+	});
+
+	test("'direct' reaches the untagged orders", async () => {
+		const t = setup();
+		const { retailer } = await seedMix(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			attributionSources: ["direct"],
+		});
+		expect(res.total).toBe(1);
+		expect(res.orders[0]?.attributionSource).toBeUndefined();
+	});
+
+	test("an origin nothing matches returns an empty list, not everything", async () => {
+		const t = setup();
+		const { retailer } = await seedMix(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			attributionSources: ["facebook"],
+		});
+		expect(res.total).toBe(0);
+	});
+});
