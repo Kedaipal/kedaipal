@@ -84,6 +84,8 @@ The policy now:
 
 This makes failure *recoverable* — it does not make the images small. The payload itself is ClickUp `86eypxght` (Cloudflare resize proxy + `srcset`), which fixes the existing catalog in place with no re-upload.
 
+**Convex-hosted images are automatically routed through the resize proxy** (2026-08-23, ClickUp `86eypxght`): `AppImage` rewrites any `*.convex.cloud/api/storage/<uuid>` src onto our own `/img/<uuid>?w=…` Worker route, so Cloudflare resizes + re-encodes it and the result is edge-cached — fixing the whole existing catalog with no re-upload. **Give every new image surface a `sizes` prop** describing how wide it actually paints (e.g. `sizes="176px"`, or `sizes="(min-width: 1024px) 25vw, 50vw"`): that's what turns on the full `srcset`. Without `sizes` the image is still proxied, just at one fixed width — deliberately, because a `srcset` with no `sizes` makes the browser assume 100vw and fetch the LARGEST candidate, which on a grid of 180px tiles is worse than not proxying at all. Full rationale + the one-time dashboard step: [`storefront-images.md`](./storefront-images.md).
+
 ### Every phone field wears the `+60` plate (2026-08-12, ClickUp `86eyknr2r`)
 `src/components/ui/my-phone-input.tsx` — flag, fixed `+60`, a rule, then what the user types, as every payment/ride app in this market renders it (Grab, Shopee, Touch 'n Go, Stripe). Before this the repo had **three** shapes for one question: this plate (storefront checkout only), a bare `<input type="tel">` with a placeholder, and a 250-country searchable combobox — a control with one valid answer for a Malaysia-only product. The combobox and its `react-phone-number-input` + `cmdk` dependencies are gone.
 

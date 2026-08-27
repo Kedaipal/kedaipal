@@ -60,6 +60,10 @@ export function StorefrontHeader({
 						alt={`${retailer.storeName} cover`}
 						aspect="absolute inset-0"
 						priority
+						// Full-bleed banner: it genuinely wants the widest candidate
+						// on desktop, so this is the one surface that should reach
+						// for 1280.
+						sizes="100vw"
 					/>
 					<div
 						aria-hidden
@@ -83,6 +87,7 @@ export function StorefrontHeader({
 						src={retailer.logoUrl}
 						alt={`${retailer.storeName} logo`}
 						aspect="h-16 w-16 shrink-0"
+						sizes="64px"
 						rounded="rounded-2xl"
 						objectFit="contain"
 						className={`border-2 bg-background ${
