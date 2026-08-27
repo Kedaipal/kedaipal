@@ -7,7 +7,6 @@ import {
 	ArrowRight,
 	BadgeCheck,
 	Ban,
-	Bell,
 	Check,
 	CheckCircle2,
 	ChevronDown,
@@ -29,26 +28,29 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
-import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
-import {
-	type ManualReminderBlock,
-	manualReminderEligibility,
-} from "../../convex/lib/paymentReminder";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
+import {
+	attributionBucket,
+	sourceLabel,
+} from "../../convex/lib/attribution";
 import { ProBadge } from "../components/app/pro-gate";
+import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	PageHeader,
@@ -92,6 +94,7 @@ import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	formatPrice,
 	formatPriceCompact,
 	normalizePriceInput,
@@ -107,7 +110,8 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
-import { isCrmLocked } from "../lib/subscription";
+import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -196,40 +200,15 @@ function formatRelative(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
-/** Human "in ~2h" / "in ~15m" for the manual-reminder cooldown countdown. */
+/** "in 3h" / "tomorrow-ish" phrasing for the reminder cooldown + unlock. */
 function formatUntil(epochMs: number): string {
 	const diff = epochMs - Date.now();
-	if (diff <= 0) return "shortly";
-	const minutes = Math.ceil(diff / 60_000);
-	if (minutes < 60) return `in ~${minutes}m`;
-	return `in ~${Math.ceil(minutes / 60)}h`;
-}
-
-/** Seller-facing reason a manual payment reminder couldn't be sent — used for
- * the error toast when the server rejects a send the button thought was OK. */
-function manualReminderBlockMessage(
-	reason: ManualReminderBlock | "not_found",
-): string {
-	switch (reason) {
-		case "cancelled":
-			return "This order was cancelled — nothing to remind about.";
-		case "pending":
-			return "This order hasn't been confirmed yet.";
-		case "paid":
-			return "This order is already paid.";
-		case "claimed":
-			return "The buyer already tapped “I've paid” — check for their payment.";
-		case "mockup_gated":
-			return "The buyer hasn't been asked to pay yet (mockup pending).";
-		case "fee_pending":
-			return "Set the delivery charge first — the total isn't final yet.";
-		case "no_contact":
-			return "No WhatsApp number on file for this buyer.";
-		case "cooldown":
-			return "You just reminded this buyer — try again a little later.";
-		default:
-			return "Couldn't send the reminder. Try again.";
-	}
+	const minute = 60_000;
+	const hour = 60 * minute;
+	if (diff <= 0) return "now";
+	if (diff < hour) return `in ${Math.max(1, Math.round(diff / minute))}m`;
+	if (diff < 36 * hour) return `in ${Math.round(diff / hour)}h`;
+	return `in ${Math.round(diff / (24 * hour))} days`;
 }
 
 /**
@@ -316,8 +295,9 @@ function OrderDetailRoute() {
 	const clearGatewayPaymentIssue = useMutation(
 		api.orders.clearGatewayPaymentIssue,
 	);
-	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const cancelRiderBooking = useAction(api.lalamove.cancelBooking);
+	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
+	const [sendingReminder, setSendingReminder] = useState(false);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
 	// Opening the order IS the seller seeing it — drains it from the New bucket,
 	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
@@ -397,8 +377,8 @@ function OrderDetailRoute() {
 		? "Lalamove Collection"
 		: "Lalamove Delivery";
 	// A rider is mid-trip with this order: manual shipped/delivered advances are
-	// gated behind a confirm, so the seller can't message the buyer "on the way"
-	// before pickup (and without the tracking link).
+	// gated behind a confirm, so the buyer's order page can't claim "on the way"
+	// before the rider actually has the parcel (or without the tracking link).
 	//
 	// Gated from the moment of BOOKING, not from the first webhook event. The
 	// old predicate also required `lastEventAt`, which left the gate off during
@@ -427,6 +407,11 @@ function OrderDetailRoute() {
 	// route-level useQuery throw takes the whole order page down (the exact bug
 	// this guard fixes; customers list/detail carry the same skip).
 	const crmLocked = isCrmLocked(retailer);
+	// Marketing origin of THIS order (86eyq0eq9) — the tag the buyer arrived
+	// with, else counter/direct. Drilling into the filtered inbox rides the
+	// Pro-gated inbox filter, so a Starter gets the fact as plain text rather
+	// than a link that would silently land on an unfiltered list.
+	const inboxFilterLocked = isOrderInboxLocked(retailer);
 	const crmCustomer = useQuery(
 		convexQuery(
 			api.customers.get,
@@ -446,7 +431,6 @@ function OrderDetailRoute() {
 	// eye-level prompt without scrolling down to the card.
 	const [bookRequestToken, setBookRequestToken] = useState(0);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
-	const [sendingReminder, setSendingReminder] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -524,23 +508,6 @@ function OrderDetailRoute() {
 	// mark-received until the seller sets it below. See orders.setDeliveryFee.
 	const deliveryFeePending =
 		order.deliveryFeePending === true && order.status !== "cancelled";
-	// Manual "Send payment reminder" eligibility — the SAME predicate the server
-	// enforces (single source of truth), so the button's disabled-with-reason
-	// state can't disagree with what a tap would actually do. Recomputed each
-	// render; the order refetches after a send, so the 6h cooldown kicks in live.
-	const reminderEligibility = manualReminderEligibility(
-		{
-			status: order.status,
-			paymentStatus: order.paymentStatus,
-			mockupStatus: order.mockupStatus,
-			mockupWaivedAt: order.mockupWaivedAt,
-			deliveryFeePending: order.deliveryFeePending,
-			lastManualReminderAt: order.lastManualReminderAt,
-			createdAt: order.createdAt,
-			customer: { waPhone: order.customer.waPhone },
-		},
-		Date.now(),
-	);
 
 	// Three independent optional extras ride this one seam: the mark-shipped
 	// dialog supplies courier fields, `markCollected` is the collection-gate
@@ -616,35 +583,15 @@ function OrderDetailRoute() {
 				orderId: order._id,
 				paymentMethod: paymentMethodChoice,
 			});
-			toast.success("Payment confirmed — customer notified on WhatsApp");
+			toast.success("Payment confirmed", {
+				description: "The buyer sees it on their order page.",
+			});
 			setConfirmPaymentOpen(false);
 			setPaymentMethodChoice(undefined);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setConfirmingPayment(false);
-		}
-	}
-
-	async function handleSendReminder() {
-		if (!order) return;
-		setSendingReminder(true);
-		try {
-			const res = await sendPaymentReminder({ shortId });
-			if (res.ok) {
-				const who = order.customer.name ?? "The buyer";
-				toast.success("Payment reminder sent", {
-					description: `${who} will receive it on WhatsApp.`,
-				});
-			} else {
-				// The server re-checks state (the buyer may have paid in another tab,
-				// or the cooldown boundary differs) — surface why nothing was sent.
-				toast.error(manualReminderBlockMessage(res.reason ?? "not_found"));
-			}
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSendingReminder(false);
 		}
 	}
 
@@ -702,6 +649,11 @@ function OrderDetailRoute() {
 							timeStyle: "short",
 						})}
 						{order.channel === "whatsapp" ? " · via WhatsApp" : ""}
+						{/* Where the order came from, when that isn't the default. A claim link
+						    (86eyq0epn) was keyed by the seller at a locked price and completed by
+						    the buyer — worth saying on the one screen the seller opens to work the
+						    order, since the inbox Source filter is the only other place it shows. */}
+						{order.source === "claim" ? " · Claim link" : ""}
 					</p>
 				</div>
 				<StatusBadge
@@ -759,9 +711,9 @@ function OrderDetailRoute() {
 										type="button"
 										onClick={() => {
 											// Marking a delivery order shipped is THE moment the
-											// seller decides how it goes out, so ask first: a
-											// parcel seller for courier + tracking (optional, rides
-											// the shipped WhatsApp update), a rider vendor for the
+											// seller decides how it goes out, so prompt first: a
+											// parcel seller for courier + tracking (optional; it lands
+											// on the buyer's order page), a rider vendor for the
 											// booking they may not have made yet. Skipped when
 											// tracking is already attached AND when a rider booking
 											// is active (belt-and-braces: booking mirrors its
@@ -870,6 +822,13 @@ function OrderDetailRoute() {
 												: "to move it yourself instead."}
 										</p>
 									) : null}
+									{/* The buyer gets ONE WhatsApp per order (the confirmation),
+									    so a status move is silent on their phone — say so where
+									    the seller taps, or they'll assume it was sent. */}
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										Moving the order along updates the buyer&apos;s order page —
+										it doesn&apos;t send them a WhatsApp.
+									</p>
 								</div>
 							);
 						})()
@@ -888,7 +847,10 @@ function OrderDetailRoute() {
 			    the buyer is reached (manual send, or they correct their number). */}
 			{order.confirmationPushStatus === "failed" &&
 			order.status !== "cancelled" ? (
-				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+				<section
+					{...MASK_PII}
+					className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50"
+				>
 					<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
@@ -909,10 +871,11 @@ function OrderDetailRoute() {
 							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
 								The confirmation to{" "}
 								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
-								deliver — that number may have a typo or no WhatsApp, so status
-								updates won't reach them either. Their order page offers a
-								&ldquo;Update my number&rdquo; fix; if they reach you another
-								way, check the number with them.
+								deliver — that number may have a typo or no WhatsApp. It's the
+								only message this order sends, so they have nothing in chat to
+								come back to. Their order page offers an &ldquo;Update my
+								number&rdquo; fix; if they reach you another way, check the
+								number with them.
 							</p>
 						)}
 					</div>
@@ -1030,6 +993,8 @@ function OrderDetailRoute() {
 									src={customerImageUrl}
 									alt="Customer reference photo"
 									caption="Customer reference photo"
+									// Buyer-supplied, order-owned — erased on hard delete.
+									sensitive
 									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white"
 									className="block max-h-56 w-auto object-contain"
 								/>
@@ -1103,6 +1068,9 @@ function OrderDetailRoute() {
 									alt="Payment receipt"
 									aspect="h-64 w-full"
 									objectFit="contain"
+									// A buyer's bank screenshot. Order-owned, erased on hard
+									// delete — must never sit on a public edge cache.
+									sensitive
 								/>
 							</a>
 						) : (
@@ -1179,39 +1147,105 @@ function OrderDetailRoute() {
 								? "Set the delivery charge first"
 								: "Mark payment received"}
 					</Button>
-					{/* Manual reminder — re-send the payment details on demand. Hidden
-					    while payment isn't owed yet (mockup-gated or delivery charge
-					    pending). Also recovers the case where the buyer never got the
-					    first bot reply. */}
-					{!mockupGated && !deliveryFeePending ? (
-						<div className="flex flex-col gap-1.5 border-t border-border pt-3">
-							<Button
-								onClick={handleSendReminder}
-								isLoading={sendingReminder}
-								disabled={sendingReminder || !reminderEligibility.ok}
-								variant="ghost"
-								className="h-11 w-full"
-							>
-								<Bell className="size-4" />
-								Send payment reminder
-							</Button>
-							<p className="text-xs text-muted-foreground">
-								{!reminderEligibility.ok
-									? reminderEligibility.reason === "no_contact"
-										? "No WhatsApp number on file for this buyer yet."
-										: reminderEligibility.reason === "cooldown"
-											? `Reminded ${formatRelative(order.lastManualReminderAt)} — you can remind again ${formatUntil(
-													reminderEligibility.retryAt ?? Date.now(),
-												)}.`
-											: "A reminder isn't available for this order right now."
-									: order.lastManualReminderAt
-										? `Last reminded ${formatRelative(
-												order.lastManualReminderAt,
-											)}. Re-sends the payment details to their WhatsApp.`
-										: `Re-sends the payment details — amount, how to pay, and an "I've paid" button — to their WhatsApp. Handy if they never got the first reply. May not reach buyers you haven't messaged in 24h.`}
-							</p>
-						</div>
-					) : null}
+					{/* The manual payment reminder (86eyd63r8, revised 8 Aug): Kedaipal
+					    never chases automatically — the seller gets a window-boxed
+					    button instead. Hidden before day 11 (a control that's dead for
+					    10 days is noise — the line below names the unlock day), live
+					    on days 11–14 at most once per 24h, and closed for good after
+					    day 14. The eligibility mirrors the server's
+					    manualReminderEligibility exactly, so the disabled reasons here
+					    can never disagree with the mutation's lock. */}
+					{!mockupGated && !deliveryFeePending
+						? (() => {
+								const eligibility = manualReminderEligibility(
+									{
+										status: order.status,
+										paymentStatus: order.paymentStatus,
+										mockupStatus: order.mockupStatus,
+										mockupWaivedAt: order.mockupWaivedAt,
+										deliveryFeePending: order.deliveryFeePending,
+										lastManualReminderAt: order.lastManualReminderAt,
+										createdAt: order.createdAt,
+										customer: { waPhone: order.customer.waPhone },
+									},
+									Date.now(),
+								);
+								const blocked = eligibility.ok ? undefined : eligibility;
+								if (blocked?.reason === "too_early") {
+									return (
+										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
+											Kedaipal doesn't chase payment for you — how to pay is
+											always on the buyer's order page. If this is still
+											unpaid on day 11, a "Send payment reminder" button
+											unlocks here ({blocked.unlockAt ? formatUntil(blocked.unlockAt) : "later"}); until then, nudge them yourself with
+											the WhatsApp button below.
+										</p>
+									);
+								}
+								if (blocked?.reason === "window_closed") {
+									return (
+										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
+											The reminder window has closed — this order is past day
+											14 unpaid, which is beyond a nudge. Settle it with the
+											buyer directly (the WhatsApp button below), then mark
+											payment received — or cancel the order.
+										</p>
+									);
+								}
+								if (blocked?.reason === "no_contact") {
+									return (
+										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
+											No buyer WhatsApp number on file, so there's nobody to
+											remind — how to pay stays on the order page.
+										</p>
+									);
+								}
+								const onCooldown = blocked?.reason === "cooldown";
+								return (
+									<div className="flex flex-col gap-2 border-t border-border pt-3">
+										<Button
+											onClick={async () => {
+												setSendingReminder(true);
+												try {
+													const res = await sendPaymentReminder({ shortId });
+													if (res.ok) {
+														toast.success("Payment reminder sent", {
+															description:
+																"Amount, reference and the order-page link — you can send the next one in 24 hours.",
+														});
+													} else {
+														toast.error("Reminder not sent", {
+															description:
+																res.reason === "cooldown"
+																	? "You've already reminded this buyer in the last 24 hours."
+																	: res.reason === "window_closed"
+																		? "The day-14 reminder window has closed."
+																		: "This order can't be reminded right now.",
+														});
+													}
+												} finally {
+													setSendingReminder(false);
+												}
+											}}
+											isLoading={sendingReminder}
+											disabled={sendingReminder || onCooldown}
+											variant="outline"
+											className="h-11 w-full"
+										>
+											<MessageCircle className="size-4" />
+											{onCooldown
+												? `Reminded — next ${blocked?.retryAt ? formatUntil(blocked.retryAt) : "in 24h"}`
+												: "Send payment reminder on WhatsApp"}
+										</Button>
+										<p className="text-xs text-muted-foreground">
+											{onCooldown
+												? "Once per day, and only until day 14 — after that it's a conversation, not a nudge."
+												: "Sends the amount, transfer reference and their order-page link. Once per day until day 14. If the buyer has never replied on WhatsApp, Meta may not deliver it — the chat button below always works."}
+										</p>
+									</div>
+								);
+							})()
+						: null}
 				</section>
 			) : null}
 
@@ -1308,6 +1342,45 @@ function OrderDetailRoute() {
 						</Link>
 					) : (
 						<div className="flex items-center gap-3">{avatarRow}</div>
+					);
+				})()}
+				{/* Where this buyer came from (86eyq0eq9). Sits in the CUSTOMER card
+				    because it answers the other half of "who is this?" — the channel
+				    that produced them — and it's the only per-order place the fact
+				    lives. Always rendered, including for Direct: an absent row would
+				    read as "not tracked" rather than "arrived untagged". */}
+				{(() => {
+					const bucket = attributionBucket(order);
+					const brand = BRAND_GLYPHS[bucket];
+					const inner = (
+						<>
+							{brand ? (
+								<brand.Icon className={cn("size-4", brand.colorClass)} />
+							) : null}
+							<span className="text-sm font-medium">
+								{sourceLabel(bucket)}
+							</span>
+						</>
+					);
+					return (
+						<div className="flex items-center gap-2 border-t border-border pt-3">
+							<span className="text-xs text-muted-foreground">Came from</span>
+							{inboxFilterLocked ? (
+								<span className="ml-auto flex items-center gap-1.5">
+									{inner}
+								</span>
+							) : (
+								<Link
+									to="/app/orders"
+									search={{ asrc: [bucket] }}
+									aria-label={`See every order from ${sourceLabel(bucket)}`}
+									className="tap-target -mr-2 ml-auto flex items-center justify-end gap-1.5 rounded-lg px-2 transition-colors hover:bg-muted/60"
+								>
+									{inner}
+									<ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
+								</Link>
+							)}
+						</div>
 					);
 				})()}
 				{order.customer.waPhone ? (
@@ -1777,11 +1850,11 @@ function OrderDetailRoute() {
 					open={confirmManualAdvanceOpen}
 					onOpenChange={setConfirmManualAdvanceOpen}
 					title={`Mark as ${stageLabel(nextStage, "en")} manually?`}
-					description={`A Lalamove rider is handling this order, and its status updates automatically from the rider's progress. Marking it manually sends the buyer's WhatsApp update now${
+					description={`A Lalamove rider is handling this order, and its status updates automatically from the rider's progress. Marking it manually moves the order on the buyer's order page now${
 						nextStage.anchor === "shipped"
 							? " — before pickup, and without the live-tracking link"
 							: ""
-					}. Only do this if the automatic update didn't come through.`}
+					}. The buyer isn't sent a WhatsApp either way. Only do this if the automatic update didn't come through.`}
 					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					cancelLabel="Keep automatic"
 					onConfirm={() =>
@@ -1848,8 +1921,8 @@ function OrderDetailRoute() {
 				title={`Cancel order #${order.shortId}?`}
 				description={
 					hasActiveRiderBooking
-						? `The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-						: "The customer is notified over WhatsApp, stock is restored, and this can't be undone."
+					? `Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
+					: "Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."
 				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
@@ -1895,9 +1968,9 @@ function OrderDetailRoute() {
 					<DialogHeader>
 						<DialogTitle>Mark #{order.shortId} as paid?</DialogTitle>
 						<DialogDescription>
-							This confirms payment was received and notifies the customer on
-							WhatsApp. Make sure you've checked the amount in your bank app
-							first — this can't be undone here.
+							This marks the payment as received; the customer sees it on their
+							order page and isn't sent a WhatsApp. Make sure you've checked the
+							amount in your bank app first — this can't be undone here.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-2">
@@ -1961,7 +2034,11 @@ const MAX_MOCKUP_IMAGES = 5;
  * The explanation keys on the order's FROZEN `deliveryFeePendingReason` (a
  * Lalamove store must never read "outside your delivery bands"). The seller
  * agrees the charge with the buyer in chat, enters it here (0 = deliver
- * free), and the held payment ask goes out on WhatsApp with the final total.
+ * free), and the order's ONE held WhatsApp confirmation goes out with the
+ * final total (86eyd63r8) — but only while the push is still `deferred`. A
+ * legacy order (no push) already had its single message, so setting the fee
+ * there just updates the buyer's order page; the copy branches on that so it
+ * never promises a message that won't be sent.
  * The missing_weights copy names the FIX (set parcel weights), not just the
  * state — it's the one reason the seller can make never happen again.
  */
@@ -2004,11 +2081,9 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 		setSaving(true);
 		try {
 			await setDeliveryFee({ orderId: order._id, fee });
-			toast.success(
-				fee > 0
-					? "Delivery charge set — the buyer gets the payment request on WhatsApp."
-					: "Set to free delivery — the buyer gets the payment request on WhatsApp.",
-			);
+			toast.success(fee > 0 ? "Delivery charge set" : "Set to free delivery", {
+				description: "The buyer sees the new total on their order page.",
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -2035,13 +2110,14 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 			</div>
 			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
 				{FEE_PENDING_REASON_COPY[order.deliveryFeePendingReason ?? "unknown"]}{" "}
-				Agree it with the buyer on WhatsApp, then set it here — the payment
-				request goes out with the final total. Enter 0 to deliver free.
+				Agree it with the buyer on WhatsApp, then set it here — the new total
+				shows on their order page, where their confirmation message already
+				sent them. No further WhatsApp goes out. Enter 0 to deliver free.
 			</p>
 			<div className="flex items-end gap-2">
 				<div className="relative flex-1">
 					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-						RM
+						{currencySymbol(order.currency)}
 					</span>
 					<input
 						type="text"
@@ -2124,14 +2200,28 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 		// Hoisted so the catch can clean up blobs already uploaded before a failure.
 		const storageIds: string[] = [];
 		try {
+			// Prepare the whole set first. A mockup the BUYER can't open is the
+			// mirror of an unreadable payment proof — they're asked to approve a
+			// design that renders as a broken box — so nothing is uploaded until
+			// every file has been proven decodable. See lib/image-upload.ts.
+			const prepared: { blob: Blob; contentType: string }[] = [];
+			for (const file of Array.from(files)) {
+				const result = await prepareImageUpload(file);
+				if (!result.ok) {
+					toast.error(result.message);
+					setUploading(false);
+					return;
+				}
+				prepared.push(result);
+			}
 			// Upload each selected image, then send them together as the mockup set
 			// (replacing any previous one). Sequential keeps it simple + ordered.
-			for (const file of Array.from(files)) {
+			for (const item of prepared) {
 				const url = await generateUploadUrl({ orderId: order._id });
 				const res = await fetch(url, {
 					method: "POST",
-					headers: { "Content-Type": file.type },
-					body: file,
+					headers: { "Content-Type": item.contentType },
+					body: item.blob,
 				});
 				if (!res.ok) throw new Error("Upload failed");
 				const { storageId } = (await res.json()) as { storageId: string };
@@ -2146,6 +2236,10 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 				storageIds.length > 1
 					? `${storageIds.length} mockups sent to the buyer for approval`
 					: "Mockup sent to the buyer for approval",
+				{
+					description:
+						"They'll see it on their order page — no WhatsApp goes out.",
+				},
 			);
 		} catch (err) {
 			// If some images uploaded but submit never landed (a mid-loop failure, or
@@ -2233,7 +2327,11 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 			</div>
 
 			{status === "changes_requested" && order.mockupChangeNote ? (
-				<div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+				// MASK_PII: the note is the buyer's own free text.
+				<div
+					{...MASK_PII}
+					className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900"
+				>
 					<span className="font-medium">Buyer requested changes:</span>{" "}
 					{order.mockupChangeNote}
 				</div>
@@ -2254,6 +2352,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							<AppImage
 								src={url}
 								alt="Current mockup"
+								// Order-owned blob — erased on hard delete.
+								sensitive
 								aspect={
 									mockupUrls.length === 1
 										? "h-64 w-full"
@@ -2340,7 +2440,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 								: "Upload & send mockup"}
 						<input
 							type="file"
-							accept="image/*"
+							accept={IMAGE_ACCEPT}
 							multiple
 							disabled={uploading}
 							onChange={handleUpload}
@@ -2349,7 +2449,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 					</label>
 					<p className="text-center text-xs text-muted-foreground">
 						Up to {MAX_MOCKUP_IMAGES} images — e.g. different designs, angles,
-						or one per item. Sending replaces the current set.
+						or one per item. Sending replaces the current set. The buyer sees it
+						on their order page — no WhatsApp goes out.
 					</p>
 				</div>
 			) : null}
@@ -2514,7 +2615,11 @@ function NotifyManagerCard({
 	}
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+		// MASK_PII: the composed message renders the buyer's name + phone verbatim.
+		<section
+			{...MASK_PII}
+			className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+		>
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Notify store manager

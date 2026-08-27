@@ -284,6 +284,48 @@ export function checkoutFormSchemaFor(country: Country) {
 	return CHECKOUT_FORM_SCHEMAS[country];
 }
 
+// Claim-link checkout (86eyq0epn): the storefront checkout schema minus the
+// phone — the claim froze the buyer's WhatsApp number at send (it's the number
+// the link was delivered to), so there's nothing to type or validate. Name
+// stays editable (prefilled from the claim). Same conditional strict-address
+// refinement, same per-country instances-built-once posture.
+function buildClaimFormSchema(country: Country) {
+	return z
+		.object({
+			name: z
+				.string()
+				.trim()
+				.min(3, "Your name must be at least 3 characters")
+				.max(60, "Name must be at most 60 characters"),
+			deliveryMethod: deliveryMethodSchema,
+			address: addressFormFieldsSchema,
+			pickupLocationId: z.string(),
+			fulfilmentDate: z.string().min(1, "Pick when you need this order"),
+			fulfilmentTime: z.string(),
+			note: z.string().max(500, "Note must be at most 500 characters"),
+		})
+		.superRefine((val, ctx) => {
+			if (val.deliveryMethod !== "delivery") return;
+			const result = strictAddressSchemaFor(country).safeParse(val.address);
+			if (result.success) return;
+			for (const issue of result.error.issues) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: issue.message,
+					path: ["address", ...issue.path],
+				});
+			}
+		});
+}
+
+const CLAIM_FORM_SCHEMAS = Object.fromEntries(
+	COUNTRIES.map((c) => [c, buildClaimFormSchema(c)]),
+) as Record<Country, ReturnType<typeof buildClaimFormSchema>>;
+
+export function claimFormSchemaFor(country: Country) {
+	return CLAIM_FORM_SCHEMAS[country];
+}
+
 export type CheckoutFormValues = z.input<
 	ReturnType<typeof checkoutFormSchemaFor>
 >;

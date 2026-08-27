@@ -3,10 +3,16 @@ import {
 	defaultStreamHandler,
 } from "@tanstack/react-start/server";
 import { rescuePlaceholderUrl } from "../convex/lib/trackingToken";
+import { serverEnv } from "./lib/env";
+import { handleImageRequest } from "./lib/image-route";
 
 /**
  * Custom Worker entry (wrangler.jsonc `main`) — the default TanStack entry
- * plus one pre-router rescue (86eyheqzv): WhatsApp template buttons sent while
+ * plus two pre-router routes.
+ *
+ * 1. `/img/<uuid>` — Cloudflare Image Transformations in front of Convex
+ *    storage (86eypxght). See `src/lib/image-route.ts`.
+ * 2. The placeholder-link rescue (86eyheqzv): WhatsApp template buttons sent while
  * the template's URL variable was mis-registered carry a literal `{{1}}` before
  * the parameter (`/track/%7B%7B1%7D%7D<token>`), and the router's URL
  * canonicalization 307-loops on those paths (it decodes the braces in Location,
@@ -23,6 +29,18 @@ const startFetch = createStartHandler(defaultStreamHandler);
 
 export default {
 	fetch: (async (request, opts) => {
+		// Before the rescue: the image route is hot (every product photo on every
+		// storefront view) and must never pay for router work it doesn't use.
+		// `opts` is the Worker `env` — wrangler passes CONVEX_URL via
+		// `--var CONVEX_URL:...` at deploy (see .github/workflows/deploy.yml), and
+		// `serverEnv` covers `wrangler dev` / node, where it arrives on process.env.
+		const image = await handleImageRequest(request, {
+			convexUrl:
+				(opts as { CONVEX_URL?: string } | undefined)?.CONVEX_URL ??
+				serverEnv.CONVEX_URL,
+		});
+		if (image) return image;
+
 		const rescued = rescuePlaceholderUrl(request.url);
 		if (rescued) {
 			// Deliberate log: counts arrivals through polluted links, and the path

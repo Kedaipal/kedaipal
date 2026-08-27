@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { sanitizeAttributionSource } from "../../convex/lib/attribution";
 import { resolveAwbConfig } from "../../convex/lib/awbConfig";
 import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
 import {
@@ -68,6 +69,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { canHardDeleteOrders } from "../lib/admin-actions";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
@@ -113,6 +115,10 @@ type InboxSearch = {
 	fwin?: FulfilmentWindow;
 	/** Checkout surface (online vs counter). */
 	source?: OrderSource;
+	/** Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys. Repeated
+	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
+	 * and survives refresh, same as `pay`/`method`. */
+	asrc?: string[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
 };
@@ -122,7 +128,7 @@ function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 }
 
 function isOrderSource(x: unknown): x is OrderSource {
-	return x === "storefront" || x === "counter";
+	return x === "storefront" || x === "counter" || x === "claim";
 }
 
 export const Route = createFileRoute("/app/orders/")({
@@ -151,6 +157,24 @@ export const Route = createFileRoute("/app/orders/")({
 			(x): x is OrderPaymentMethod =>
 				typeof x === "string" && isOrderPaymentMethod(x),
 		);
+		// Free-form tags, so there is no allowlist to check against — sanitize
+		// with the SAME function that stamped them, which makes a hand-edited or
+		// stale URL land on the identical bucket key the order carries.
+		const asrcRaw = search.asrc;
+		const asrcArr = Array.isArray(asrcRaw)
+			? asrcRaw
+			: asrcRaw != null
+				? [asrcRaw]
+				: [];
+		const asrc = [
+			...new Set(
+				asrcArr.flatMap((x) => {
+					const clean =
+						typeof x === "string" ? sanitizeAttributionSource(x) : undefined;
+					return clean ? [clean] : [];
+				}),
+			),
+		];
 		const q =
 			typeof search.q === "string" && search.q.length > 0
 				? search.q
@@ -168,6 +192,7 @@ export const Route = createFileRoute("/app/orders/")({
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
 			source: isOrderSource(search.source) ? search.source : undefined,
+			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
 		};
@@ -210,6 +235,7 @@ function OrdersRoute() {
 		pay = [],
 		method = [],
 		munspec = false,
+		asrc = [],
 		from,
 		to,
 		mockup = false,
@@ -246,6 +272,7 @@ function OrdersRoute() {
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
+	const asrcKey = asrc.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
 	useEffect(() => {
 		navigate({
@@ -264,6 +291,7 @@ function OrdersRoute() {
 		debounced,
 		payKey,
 		methodKey,
+		asrcKey,
 		munspec,
 		from,
 		to,
@@ -309,6 +337,7 @@ function OrdersRoute() {
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
 							source,
+							attributionSources: asrc.length > 0 ? asrc : undefined,
 							searchText: debounced || undefined,
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
@@ -390,6 +419,10 @@ function OrdersRoute() {
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
 				fwin: next.fwin,
+				asrc:
+					next.attributionSources.length > 0
+						? next.attributionSources
+						: undefined,
 				source: next.source,
 			}),
 		});
@@ -522,6 +555,7 @@ function OrdersRoute() {
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
 					source,
+					attributionSources: asrc.length > 0 ? asrc : undefined,
 					searchText: debounced || undefined,
 					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
 				},
@@ -716,9 +750,11 @@ function OrdersRoute() {
 								mockup,
 								fwin,
 								source,
+								attributionSources: asrc,
 							}}
 							onChange={setFilters}
 							country={retailer.country}
+							availableSources={result?.availableSources}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
 						/>
@@ -842,7 +878,11 @@ function OrdersRoute() {
 								<div className="flex min-w-0 flex-1 flex-col">
 									{/* Name + money get the hierarchy. */}
 									<div className="flex items-center justify-between gap-2.5">
-										<span className="min-w-0 truncate text-[15px] font-semibold">
+										{/* Mask only the name — items/prices/status are the useful replay signal. */}
+										<span
+											{...MASK_PII}
+											className="min-w-0 truncate text-[15px] font-semibold"
+										>
 											{orderCustomerLabel(o.customer)}
 										</span>
 										<span className="shrink-0 text-[15px] font-bold tabular-nums">

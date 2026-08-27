@@ -6,7 +6,10 @@ Phase 2 (phone +65 — buyer checkout
 [`86eynw28q`](https://app.clickup.com/t/86eynw28q) + seller-side fields
 [`86eynw2dy`](https://app.clickup.com/t/86eynw2dy), one PR), and Phase 3
 (address variant + Places unlock + delivery-mode guard,
-[`86eynw29u`](https://app.clickup.com/t/86eynw29u)).
+[`86eynw29u`](https://app.clickup.com/t/86eynw29u)). A fourth pass,
+[`86eyqgujv`](https://app.clickup.com/t/86eyqgujv), covers the path none of
+those designed for — **switching an existing store's country**, which left
+Malaysian data and "RM" labels behind on live surfaces.
 
 The first SG merchant (SG WhatsApp number, SG buyers, SGD pricing) goes live on
 the shared +60 WABA — Meta delivers internationally, so the messaging layer is
@@ -136,14 +139,18 @@ the one author; radius/weight/Lalamove are MY-shaped (zone lookups key off
 MY states; `LALAMOVE_MARKET = "MY"`), so on an SG store they'd strand every
 order fee-pending or kill checkout. Three enforcement points:
 
-1. **Write (primary)** — `retailers.updateSettings` refuses storing an
+1. **Write (primary)** — `retailers.updateSettings` refuses **storing** an
    MY-only mode on an (effective) SG store — checked BEFORE the
    mode-specific requirements, so an SG seller picking Lalamove hears "the
-   mode is MY-only", not "configure booking first" — and refuses flipping
-   `country` → SG while such a config is stored ("switch to Free or a Flat
-   fee first"; a same-call config replacement is judged against the incoming
-   mode, so flip-and-fix lands in one save). The `CountryForm` surfaces the
-   refusal via its existing `convexErrorMessage` toast.
+   mode is MY-only", not "configure booking first". Enabling
+   `deliveryBooking` runs the same allowlist (86eyqgujv closed that gap: the
+   rule previously bound only while a store was *switching*, so an
+   already-SG store could turn Lalamove on freely).
+
+   It does **not** refuse a `country` switch that carries a stored MY-only
+   mode — see "Switching an existing store's country" below. That refusal was
+   removed once the read paths were made safe; the config is kept, goes
+   quiet, and comes back intact if the seller switches home.
 2. **Settings UI** — SG stores render only the Free + Flat cards with a
    one-line reason; a store somehow stuck on a stored MY-only mode gets an
    amber repair note instead of a silently unselected grid.
@@ -238,24 +245,130 @@ verified to re-validate nothing.
 - Counter manual bind stays **loose and plate-less** (cashiers key foreign
   numbers); its helper copy + placeholder are country-aware records.
 
-### The country-switch guard — what a switch refuses, clears, and leaves alone
+### Switching an existing store's country — `86eyqgujv`
 
-A switch is where every country-shaped stored value can go stale at once, so
-`retailers.updateSettings` judges the whole row against the NEW country in one
-transaction. Three different treatments, chosen by blast radius:
+Creating a store in a country and *moving* one there are different paths, and
+only the first was ever designed. A switched store keeps Malaysian addresses,
+bank details, rate cards and labels — on surfaces a buyer and a courier can
+see. Zaki hit all four on dev: Lalamove offering itself on SG orders, a parcel
+label printing a Selangor return address on a Woodlands delivery, and "RM" on
+an SG store's delivery fields.
 
-| Stored value | On a switch to a country it doesn't fit | Why |
+**The rule (settled 21 Aug): allow the switch, then guide the cleanup. Nothing
+is refused, nothing is deleted.**
+
+#### Why the earlier refusals were removed
+
+PRs #204/#210 refused a switch that would carry an MY-only delivery mode, an
+enabled Lalamove booking, or a +60 phone number into Singapore. Both halves of
+that turned out wrong:
+
+- **Refusing deadlocks the case that matters most.** Places predictions are
+  locked server-side to the store's CURRENT country
+  (`convex/google.ts` `includedRegionCodes`), so a seller told *"fix your
+  address before switching"* **cannot** — the picker only offers addresses in
+  the country they are trying to leave.
+- **The escape hatch was a data wipe.** The settings card got past each refusal
+  by clearing the value in the same call. `deliveryConfig: null` throws away a
+  whole weight-zone rate card, irreversibly, and it does not come back when the
+  seller switches home.
+
+Carrying the values is safe **because the read paths were made safe first** —
+that ordering is the design, not an accident:
+
+| Carried value | Why it can't do harm | Where |
 |---|---|---|
-| `deliveryConfig.mode` (radius / weight / lalamove) | **Refuses** — "switch your delivery charge to Free or a Flat fee first" | Zone lookups miss and Lalamove is MY-market, so every order would strand fee-pending or blocked. |
-| `deliveryBooking.enabled` | **Refuses** — "turn off Lalamove rider booking first" | Pricing and booking are independent (`pricing ⊥ booking`), so a FLAT-priced store passes the row above while still carrying an armed Book-a-rider button plus prompt-book-on-packed, which spends money without being asked. Own capability table `COUNTRY_RIDER_BOOKING`, deliberately not derived from the pricing allowlist. |
-| `waPhone`, `notifyWaPhone` | **Refuses** — "replace or remove it when switching" | The store's buyer-facing identity: one field, worth stopping for. |
-| `pickupLocations[].managerWaPhone` | **Cleared**, counted, and named in the toast | Internal operational contacts on N rows, never in the public pickup payload. Refusing the switch until a seller hand-edits every location would be a chore with no buyer impact — but leaving them would hold numbers the same form now refuses, surfacing only on the seller's next edit of that location. |
+| `deliveryConfig.mode` (radius / weight / lalamove) | An SG address matches no MY zone, so `resolveDeliveryQuote` **holds or blocks** — never a price, never free. Pinned by test. | `convex/lib/delivery.ts` |
+| `deliveryBooking.enabled` | `dispatchBlockReason` returns `country_unsupported` **first**, the dispatch card renders nothing, and `bookingEnabled` is false so prompt-book-on-packed can't fire. | `convex/lalamove.ts` |
+| `businessAddress` | A stamped foreign address is **dropped from the parcel label** with the reason printed, rather than sending an undelivered parcel abroad. | `convex/lib/pdf/awb.ts` |
+| `waPhone`, `notifyWaPhone` | A +60 number still receives WhatsApp. Removing the store's only published contact is the bigger harm. | — |
+| `pickupLocations[].managerWaPhone` | An internal ops contact; nothing breaks by it being foreign. #210 cleared these — on a store with five points that was five staff numbers deleted without being asked. | — |
 
-Every refusal is a **same-call escape hatch**: passing the fix alongside
-`country` in one mutation is judged against the new country, so the Settings
-country card's one-tap "switch and fix" never leaves a half-applied row. It
-disables booking rather than clearing it — a country switch is not a reason to
-make a seller re-enter Lalamove API keys they'll want back if they switch again.
+> A tempting shortcut — "treat an unavailable pricing mode as free delivery" —
+> would have been a **money leak**: free cross-border shipping on every order.
+> `delivery.test.ts` pins the real behaviour so nobody reaches for it later.
+
+#### Knowing an address is foreign: stamp, never derive
+
+`retailers.businessAddress.country` and `pickupLocations.country` record the
+country an address was **captured in**, written at save from the store's
+country — the `deliveryBooking.env` posture (86eypncfy): stamped from a known
+value at write time, never inferred from a stored one at read time. Both are
+absent from the args validators; the server stamps them, a client cannot claim
+them.
+
+**Coordinates cannot answer this.** Singapore's bounding box is lat 1.13–1.47,
+and Johor Bahru sits at **1.4655 N, 103.7578 E** inside it — a geometric test
+would call a Malaysian seller's own address Singaporean, on the one border that
+matters here.
+
+Legacy rows carry no stamp, and **unknown reads as "matches"** (fail open), so
+no existing label or setting changes behaviour. There is deliberately **no
+backfill**: a never-switched store's addresses match by construction, and for a
+store that already switched, a backfill would have to guess — and would guess
+in exactly the direction that hides the bug. Instead **the switch stamps
+un-stamped rows with the OLD country**, at the one moment that fact is known
+for certain. Every switch from here on is fully covered.
+
+A pickup point **re-stamps only when its address actually moves**. The edit
+dialog submits every field on every save, so stamping on any save would let a
+seller clear the flag by editing the schedule note.
+
+#### The checklist — `convex/lib/countrySetup.ts`
+
+Computed on read, never stored: it cannot go stale, needs no migration, and
+self-clears item by item. `retailers.countryChangedAt` is the only trigger, and
+it is checked before any other read — a store that never switches never pays
+for any of this.
+
+Ranked by what it costs to get wrong, because a seller reads the first row and
+maybe the second: **payments at risk → buyers see this → tidy-up**. Copy names
+the consequence, not the task (`src/lib/country-setup-copy.ts`) — not *"update
+payment methods"* but *"a buyer in Singapore can't transfer SGD into them — the
+payment fails and you'll be chasing it."*
+
+Two kinds of row, and the difference is load-bearing:
+
+- **Verifiable** (addresses, delivery mode, phone shapes) — we hold the fact,
+  so the row clears when it is genuinely fixed and **an acknowledgement can
+  never retire it**. `ackCountrySetup` computes the ackable set server-side
+  rather than trusting the caller. A checklist that can be ticked into a lie is
+  one sellers learn to click past.
+- **Acknowledged** (bank details, HitPay keys, the seller's own message
+  wording) — free text nothing in the row can judge, so the seller confirms it.
+  The button says exactly what it retires and what it doesn't.
+
+Rendered in two places by one component (`country-setup-panel.tsx`): under the
+country picker in Settings → Store, where "what did that just do?" gets asked,
+and as a banner on the dashboard home for the seller who switched and closed
+the tab.
+
+**Pickup points are deliberately NOT auto-hidden.** Hiding every wrong-country
+point would break the working-method invariant — a pickup-only store would lose
+checkout entirely, turning a cosmetic problem into a dead storefront. And
+unlike a bank account, a pickup address is printed in front of the buyer at
+checkout, so it is self-evident. It stays a top-ranked checklist row instead.
+
+#### One trap worth knowing
+
+The pickup-location dialog wears the store country's plate and its validator
+rejects a foreign number. Keeping a carried manager number would therefore
+block **Save** on a form the seller opened to fix the *address*, under a value
+they can't read (`60123456789` beneath a `+65` plate). The field now starts
+empty with the old number stated above it and what saving will do — which is
+what made it safe to stop wiping them.
+
+#### Currency in the dashboard
+
+`format.ts` kept `CURRENCY_SYMBOL_OVERRIDE` module-private, so thirteen money
+inputs hardcoded their own `"RM"` prefix. `currencySymbol(currency)` is now
+exported beside `formatPrice`, and `src/lib/currency-literals.test.ts` fails on
+any currency literal outside an allowlist of surfaces that price **Kedaipal's
+own subscription** (landing, `/pricing`, cost calculator, billing tab, admin
+console — genuinely MYR). That scan found two sites the ticket's list missed.
+
+Order-level money reads `order.currency`, not the store's: an order keeps the
+currency it was **placed** in, which the store's current setting cannot follow.
 
 **Known gap (follow-up, not a blocker):** Insights KPIs/trend and customer
 `totalSpent` sum frozen minor units across orders and label the result with the

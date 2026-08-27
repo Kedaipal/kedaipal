@@ -1,12 +1,32 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppImage } from "./app-image";
+import { AppImage, MAX_LOAD_RETRIES } from "./app-image";
 
 afterEach(cleanup);
 
 function skeletonIn(container: HTMLElement) {
 	return container.querySelector('[data-slot="skeleton"]');
+}
+
+function imgIn(container: HTMLElement) {
+	return container.querySelector("img") as HTMLImageElement | null;
+}
+
+/** Fail the image currently mounted, then run out the (jittered) retry delay. */
+function failAndFlush(container: HTMLElement) {
+	const img = imgIn(container);
+	if (img) fireEvent.error(img);
+	// Longest possible backoff is base * 1.5; 30s clears every attempt.
+	act(() => {
+		vi.advanceTimersByTime(30_000);
+	});
 }
 
 describe("AppImage — loading, error, and empty states", () => {
@@ -26,22 +46,175 @@ describe("AppImage — loading, error, and empty states", () => {
 		expect(img?.className).toContain("opacity-100");
 	});
 
-	it("swaps to the muted fallback on error and stops rendering the <img> (terminal, no retry loop)", () => {
-		const { container } = render(
-			<AppImage src="https://example.com/dead-url.jpg" alt="Broken photo" />,
-		);
-		const img = container.querySelector("img") as HTMLImageElement;
+	it("retries a failed load instead of going straight to the fallback, keeping the skeleton up", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src="https://example.com/flaky.jpg" alt="Flaky photo" />,
+			);
+			const first = imgIn(container);
 
-		fireEvent.error(img);
+			failAndFlush(container);
 
-		expect(container.querySelector("img")).toBeNull();
-		expect(skeletonIn(container)).toBeNull();
-		expect(screen.getByText("Broken photo")).toBeTruthy();
+			// The <img> is remounted (fresh element = fresh request) against the
+			// SAME url, and the buyer still sees a skeleton — never a flash of
+			// the broken box on a photo that is simply still arriving.
+			const retried = imgIn(container);
+			expect(retried).not.toBeNull();
+			expect(retried).not.toBe(first);
+			expect(retried?.getAttribute("src")).toBe(
+				"https://example.com/flaky.jpg",
+			);
+			expect(skeletonIn(container)).not.toBeNull();
+			expect(screen.queryByText("Flaky photo")).toBeNull();
 
-		// A second error (or any further re-render with the same src) does not
-		// resurrect the <img> — the error is terminal until src itself changes.
-		fireEvent.error(img);
-		expect(container.querySelector("img")).toBeNull();
+			// A retry that succeeds resolves normally.
+			fireEvent.load(retried as HTMLImageElement);
+			expect(skeletonIn(container)).toBeNull();
+			expect(imgIn(container)?.className).toContain("opacity-100");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("gives up after the bounded retry budget and shows the terminal fallback", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src="https://example.com/dead-url.jpg" alt="Broken photo" />,
+			);
+
+			// Initial attempt + MAX_LOAD_RETRIES retries all fail.
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) {
+				expect(imgIn(container)).not.toBeNull();
+				failAndFlush(container);
+			}
+
+			expect(imgIn(container)).toBeNull();
+			expect(skeletonIn(container)).toBeNull();
+			expect(screen.getByText("Broken photo")).toBeTruthy();
+
+			// Terminal: no further timers are pending, so nothing resurrects it.
+			act(() => {
+				vi.advanceTimersByTime(60_000);
+			});
+			expect(imgIn(container)).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("spreads retries with jitter so a grid of failed images can't retry in lockstep", () => {
+		vi.useFakeTimers();
+		const randomSpy = vi.spyOn(Math, "random");
+		try {
+			// Two images failing at the same instant must not schedule the same
+			// delay — the failures we retry are congestion-driven, so a lockstep
+			// retry would rebuild the pile-up that broke them.
+			const a = render(<AppImage src="https://example.com/a.jpg" alt="A" />);
+			const b = render(<AppImage src="https://example.com/b.jpg" alt="B" />);
+			const aBefore = imgIn(a.container);
+			const bBefore = imgIn(b.container);
+
+			// Drive the two failures to opposite ends of the jitter window.
+			// Delay is base * (0.5 + random) → 350ms for a, 1050ms for b.
+			randomSpy.mockReturnValueOnce(0);
+			fireEvent.error(aBefore as HTMLImageElement);
+			randomSpy.mockReturnValueOnce(1);
+			fireEvent.error(bBefore as HTMLImageElement);
+
+			// The <img> stays mounted while a retry is pending — a retry is a
+			// REMOUNT (new element, new request), so identity is the signal.
+			act(() => {
+				vi.advanceTimersByTime(400);
+			});
+			expect(imgIn(a.container)).not.toBe(aBefore);
+			expect(imgIn(b.container)).toBe(bBefore);
+
+			// b lands once its own, longer delay elapses.
+			act(() => {
+				vi.advanceTimersByTime(1_000);
+			});
+			expect(imgIn(b.container)).not.toBe(bBefore);
+		} finally {
+			randomSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not retry a revoked local preview — a blob: URL never comes back", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src="blob:http://localhost/revoked" alt="Upload preview" />,
+			);
+
+			failAndFlush(container);
+
+			// Terminal on the first error: retrying a revoked object URL is pure
+			// waste, so it goes straight to the fallback.
+			expect(imgIn(container)).toBeNull();
+			expect(screen.getByText("Upload preview")).toBeTruthy();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("gives a new src a fresh retry budget and drops the old src's pending retry", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(
+				<AppImage src="https://example.com/old.jpg" alt="Old" />,
+			);
+
+			// Burn the whole budget on the old src.
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) failAndFlush(container);
+			expect(imgIn(container)).toBeNull();
+
+			rerender(<AppImage src="https://example.com/new.jpg" alt="New" />);
+
+			// Fresh budget: the new src can fail and still retry.
+			expect(imgIn(container)?.getAttribute("src")).toBe(
+				"https://example.com/new.jpg",
+			);
+			failAndFlush(container);
+			expect(imgIn(container)?.getAttribute("src")).toBe(
+				"https://example.com/new.jpg",
+			);
+			expect(skeletonIn(container)).not.toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("drops a pending retry when the image unmounts", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, unmount } = render(
+				<AppImage src="https://example.com/scrolled-away.jpg" alt="Gone" />,
+			);
+			const before = vi.getTimerCount();
+			const img = imgIn(container) as HTMLImageElement;
+			fireEvent.error(img);
+			// The failure armed a retry…
+			expect(vi.getTimerCount()).toBe(before + 1);
+
+			// …and a second error on the same element does not stack another
+			// timer on top of the one already armed.
+			fireEvent.error(img);
+			expect(vi.getTimerCount()).toBe(before + 1);
+
+			unmount();
+
+			// …and unmounting disarms it. Asserted on the pending-timer count
+			// rather than on a post-unmount setState warning: React no longer
+			// warns about those, so a warning-based assertion would pass even
+			// with the cleanup deleted. A storefront grid holds dozens of these
+			// and scrolling away mid-retry must not leave work queued.
+			expect(vi.getTimerCount()).toBe(before);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("renders the fallback immediately for an unset src — no <img>, no skeleton, no request", () => {
@@ -142,8 +315,14 @@ describe("AppImage — loading, error, and empty states", () => {
 		const { container, rerender } = render(
 			<AppImage src="https://example.com/first.jpg" alt="First" />,
 		);
-		const firstImg = container.querySelector("img") as HTMLImageElement;
-		fireEvent.error(firstImg);
+		vi.useFakeTimers();
+		try {
+			// Exhaust the retry budget so the first src is genuinely in its
+			// terminal error state before the swap.
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) failAndFlush(container);
+		} finally {
+			vi.useRealTimers();
+		}
 		expect(container.querySelector("img")).toBeNull();
 
 		rerender(<AppImage src="https://example.com/second.jpg" alt="Second" />);
@@ -197,6 +376,193 @@ describe("AppImage — loading, error, and empty states", () => {
 		expect(container.querySelector("img")?.className).toContain(
 			"object-contain",
 		);
+	});
+});
+
+describe("AppImage — image proxy + srcset (86eypxght)", () => {
+	const UUID = "3346125e-42d4-4560-a3e1-abf7438de45f";
+	const STORAGE = `https://qualified-chihuahua-441.convex.cloud/api/storage/${UUID}`;
+
+	it("rewrites a Convex storage URL onto the /img route instead of hitting storage direct", () => {
+		const { container } = render(<AppImage src={STORAGE} alt="Cake" />);
+		const img = container.querySelector("img");
+		expect(img?.getAttribute("src")).toBe(`/img/${UUID}?w=640`);
+		// The Convex deployment host must not leak into public HTML.
+		expect(container.innerHTML).not.toContain("convex.cloud");
+	});
+
+	it("emits no srcset without `sizes` — a srcset alone makes the browser assume 100vw and fetch the LARGEST candidate", () => {
+		const { container } = render(<AppImage src={STORAGE} alt="Cake" />);
+		const img = container.querySelector("img");
+		expect(img?.getAttribute("srcset")).toBeNull();
+		expect(img?.getAttribute("sizes")).toBeNull();
+	});
+
+	it("emits a full srcset + sizes when `sizes` is given", () => {
+		const { container } = render(
+			<AppImage
+				src={STORAGE}
+				alt="Cake"
+				sizes="(min-width: 1024px) 25vw, 50vw"
+			/>,
+		);
+		const img = container.querySelector("img");
+		const srcset = img?.getAttribute("srcset") ?? "";
+		for (const w of [160, 320, 640, 960, 1280]) {
+			expect(srcset).toContain(`/img/${UUID}?w=${w} ${w}w`);
+		}
+		expect(img?.getAttribute("sizes")).toBe("(min-width: 1024px) 25vw, 50vw");
+	});
+
+	it.each([
+		["a local upload preview", "blob:http://localhost/preview-1"],
+		["a data URL", "data:image/png;base64,iVBORw0KGgo="],
+		["a bundled static asset", "/logo-dark.svg"],
+	])("leaves %s completely untouched", (_label, src) => {
+		const { container } = render(<AppImage src={src} alt="X" sizes="100vw" />);
+		const img = container.querySelector("img");
+		expect(img?.getAttribute("src")).toBe(src);
+		// No srcset either — there are no derivatives of a non-proxied source.
+		expect(img?.getAttribute("srcset")).toBeNull();
+	});
+
+	it("still renders the fallback for an unset src, with no proxy URL invented", () => {
+		const { container } = render(
+			<AppImage src={undefined} alt="No photo" sizes="100vw" />,
+		);
+		expect(container.querySelector("img")).toBeNull();
+		expect(container.innerHTML).not.toContain("/img/");
+	});
+});
+
+describe("AppImage — order-owned images stay off the edge cache (PDPA)", () => {
+	const UUID = "3346125e-42d4-4560-a3e1-abf7438de45f";
+	const STORAGE = `https://qualified-chihuahua-441.convex.cloud/api/storage/${UUID}`;
+
+	it("serves a sensitive image from its ORIGINAL url — never the proxy", () => {
+		const { container } = render(
+			<AppImage src={STORAGE} alt="Payment receipt" sensitive />,
+		);
+		const img = container.querySelector("img");
+		// The proxy re-serves as `public, max-age=1y, immutable`. These four blob
+		// kinds (buyer reference photo, payment proof, mockups, POD) are erased
+		// by the admin hard delete and the account cascade — documented as
+		// PERMANENT — so a public edge copy outliving that delete by a year would
+		// silently break a promise we already shipped.
+		expect(img?.getAttribute("src")).toBe(STORAGE);
+		expect(img?.getAttribute("src")).not.toContain("/img/");
+	});
+
+	it("emits no srcset for a sensitive image, even when sizes is supplied", () => {
+		const { container } = render(
+			<AppImage src={STORAGE} alt="Mockup" sizes="50vw" sensitive />,
+		);
+		const img = container.querySelector("img");
+		expect(img?.getAttribute("srcset")).toBeNull();
+		expect(container.innerHTML).not.toContain("/img/");
+	});
+
+	it("still proxies the same url when NOT marked sensitive — the flag is the only difference", () => {
+		// Guards against the opt-out being wired backwards, or applied globally.
+		const { container } = render(<AppImage src={STORAGE} alt="Product" />);
+		expect(container.querySelector("img")?.getAttribute("src")).toBe(
+			`/img/${UUID}?w=640`,
+		);
+	});
+
+	it("keeps retry working on a sensitive image, against the original url", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src={STORAGE} alt="Payment receipt" sensitive />,
+			);
+			const first = imgIn(container);
+			failAndFlush(container);
+			const retried = imgIn(container);
+			expect(retried).not.toBe(first);
+			expect(retried?.getAttribute("src")).toBe(STORAGE);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("AppImage — retry (86eypxgff) composed with the proxy (86eypxght)", () => {
+	const UUID = "3346125e-42d4-4560-a3e1-abf7438de45f";
+	const STORAGE = `https://qualified-chihuahua-441.convex.cloud/api/storage/${UUID}`;
+
+	it("retries a failed PROXIED load on the same proxied URL, keeping its srcset", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src={STORAGE} alt="Cake" sizes="50vw" />,
+			);
+			const first = imgIn(container);
+			expect(first?.getAttribute("src")).toBe(`/img/${UUID}?w=640`);
+
+			failAndFlush(container);
+
+			// A retry must remount against the SAME proxied candidate — not fall
+			// back to the raw storage URL, and not drop the srcset, or the retry
+			// would quietly re-download the multi-MB original the proxy exists to
+			// avoid.
+			const retried = imgIn(container);
+			expect(retried).not.toBe(first);
+			expect(retried?.getAttribute("src")).toBe(`/img/${UUID}?w=640`);
+			expect(retried?.getAttribute("srcset")).toContain(
+				`/img/${UUID}?w=160 160w`,
+			);
+			expect(retried?.getAttribute("sizes")).toBe("50vw");
+			expect(retried?.getAttribute("src")).not.toContain("convex.cloud");
+
+			fireEvent.load(retried as HTMLImageElement);
+			expect(skeletonIn(container)).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("still gives up after the bounded budget on a proxied image", () => {
+		vi.useFakeTimers();
+		try {
+			const { container } = render(
+				<AppImage src={STORAGE} alt="Broken cake" sizes="50vw" />,
+			);
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) failAndFlush(container);
+			expect(imgIn(container)).toBeNull();
+			expect(screen.getByText("Broken cake")).toBeTruthy();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("switching to a different product image resets the retry budget AND re-proxies", () => {
+		const OTHER = "9f1c2b3a-1111-4222-8333-444455556666";
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(
+				<AppImage src={STORAGE} alt="First" sizes="50vw" />,
+			);
+			for (let i = 0; i <= MAX_LOAD_RETRIES; i++) failAndFlush(container);
+			expect(imgIn(container)).toBeNull();
+
+			rerender(
+				<AppImage
+					src={`https://qualified-chihuahua-441.convex.cloud/api/storage/${OTHER}`}
+					alt="Second"
+					sizes="50vw"
+				/>,
+			);
+
+			// Fresh budget, and the NEW file is proxied too — the reset keys off
+			// the original `src` prop, which is what the proxy derives from.
+			expect(imgIn(container)?.getAttribute("src")).toBe(`/img/${OTHER}?w=640`);
+			failAndFlush(container);
+			expect(imgIn(container)?.getAttribute("src")).toBe(`/img/${OTHER}?w=640`);
+			expect(skeletonIn(container)).not.toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

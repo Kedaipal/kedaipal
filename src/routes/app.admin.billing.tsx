@@ -48,6 +48,7 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify } from "../lib/slug";
 
@@ -1130,11 +1131,16 @@ function PaymentConfigForm() {
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateQrUploadUrl({});
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
@@ -1249,7 +1255,7 @@ function PaymentConfigForm() {
 									)}
 									<input
 										type="file"
-										accept="image/*"
+										accept={IMAGE_ACCEPT}
 										className="hidden"
 										disabled={uploading}
 										onChange={(e) =>

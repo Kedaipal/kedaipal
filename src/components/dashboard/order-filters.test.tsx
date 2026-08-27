@@ -12,11 +12,12 @@ afterEach(cleanup);
 
 const EMPTY: Pick<
 	OrderFilterValue,
-	"payment" | "method" | "methodUnspecified"
+	"payment" | "method" | "methodUnspecified" | "attributionSources"
 > = {
 	payment: [],
 	method: [],
 	methodUnspecified: false,
+	attributionSources: [],
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -42,9 +43,10 @@ function openFilters() {
 }
 
 describe("OrderFilters", () => {
-	it("counts payment + method + unspecified + date range + mockup + source", () => {
+	it("counts payment + method + unspecified + date range + mockup + source + came-from", () => {
 		expect(activeFilterCount({ ...EMPTY, mockup: false })).toBe(0);
-		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup + 1 source = 7.
+		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup + 1 source
+		// + 2 came-from = 9 (each selected origin counts on its own, like payment).
 		expect(
 			activeFilterCount({
 				payment: ["unpaid", "received"],
@@ -54,8 +56,9 @@ describe("OrderFilters", () => {
 				to: 2,
 				mockup: true,
 				source: "counter",
+				attributionSources: ["tiktok", "direct"],
 			}),
-		).toBe(7);
+		).toBe(9);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
 		expect(
 			activeFilterCount({ ...EMPTY, mockup: false, source: "storefront" }),

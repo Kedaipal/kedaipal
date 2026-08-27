@@ -450,6 +450,10 @@ export const create = mutation({
 			managerName: cleanManagerName,
 			managerWaPhone: cleanManagerWaPhone,
 			fee: cleanFee,
+			// The country this address was captured in (86eyqgujv). Places
+			// predictions are locked to the store's country, so this is a fact
+			// about the pick, not a guess from its coordinates.
+			country: access.retailer.country ?? DEFAULT_COUNTRY,
 			isActive: true,
 			sortOrder: nextSortOrder,
 			createdAt: now,
@@ -543,6 +547,7 @@ export const update = mutation({
 			managerName: string | undefined;
 			managerWaPhone: string | undefined;
 			fee: number | undefined;
+			country: Country;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -551,6 +556,24 @@ export const update = mutation({
 
 		if (label !== undefined) patch.label = sanitizeLabel(label);
 		if (address !== undefined) patch.address = sanitizeAddress(address);
+		// Re-stamp the captured country only when the ADDRESS itself moved, or a
+		// fresh Places pick landed. The edit dialog submits every field on every
+		// save, so stamping on any save would let a seller clear a wrong-country
+		// flag by editing the schedule note — marking the address fixed without
+		// fixing it (86eyqgujv).
+		const nextPlaceId =
+			placeId === undefined
+				? undefined
+				: placeId === null
+					? null
+					: sanitizePlaceId(placeId);
+		const addressMoved =
+			(patch.address !== undefined && patch.address !== location.address) ||
+			(nextPlaceId !== undefined &&
+				(nextPlaceId ?? undefined) !== location.placeId);
+		if (addressMoved) {
+			patch.country = access.retailer.country ?? DEFAULT_COUNTRY;
+		}
 		if (locationType !== undefined) patch.locationType = locationType;
 		// Empty string clears the note; a value re-sanitizes it.
 		if (scheduleNote !== undefined)
@@ -581,9 +604,8 @@ export const update = mutation({
 				);
 			}
 		}
-		if (placeId !== undefined) {
-			patch.placeId =
-				placeId === null ? undefined : sanitizePlaceId(placeId);
+		if (nextPlaceId !== undefined) {
+			patch.placeId = nextPlaceId ?? undefined;
 		}
 
 		await ctx.db.patch(pickupLocationId, patch);

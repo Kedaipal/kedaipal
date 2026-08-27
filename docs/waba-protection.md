@@ -37,15 +37,35 @@ must never break a buyer's *active order* updates.
 
 | Category | Used for today | Gated? |
 | --- | --- | --- |
-| `transactional` | order confirm, status updates, payment received, mockup, counter order, founding welcome, diagnostics | **No** — always sends (core promise) |
-| `session_message` | generic inbound replies (unknown fallback, checkout-bind, opt-out acks) | Yes |
-| `utility_template` / `marketing_template` | reserved for templates ([`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw)) + Broadcast | Yes |
+| `transactional` | the order's **one** outbound message (storefront confirmation template, or the counter-order confirmation), the free-form confirm reply to an inbound `ORD-`, founding welcome, diagnostics | **No** — always sends (core promise) |
+| `session_message` | generic inbound replies (unknown fallback, store-QR acks, opt-out acks) | Yes |
+| `utility_template` / `marketing_template` | the confirmation push logs as `utility_template` + template name (per-template cost accounting); `marketing_template` reserved for Broadcast | Yes |
 
-**Consequence to keep in mind:** pre-Broadcast, almost all real traffic is
-transactional, so the kill switch + caps mostly govern session replies *today*
-and become fully load-bearing once Broadcast ships — which is exactly the
+> **The `transactional` row shrank hard (2026-08-04,
+> [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).** It used to read "order
+> confirm, status updates, payment received, mockup, counter order…" — and that
+> list is now, almost exactly, the list of sends that were **deleted**. An order
+> sends the buyer exactly one WhatsApp message; status updates, payment-received
+> pings, mockup notices, payment prompts, both payment reminders, the counter
+> receipt PDF and the Lalamove POD photos are gone. See
+> [`one-message-per-order.md`](./one-message-per-order.md).
+>
+> **"One message" is enforced by code structure, not by this gateway.** The
+> confirmation is `transactional`, so it bypasses `canSend` entirely — the caps,
+> kill switch, opt-out and quality halt never see it and could never have
+> counted it. The only thing preventing a second send is that there is no second
+> `wa.send` call site left, plus the `pushOwnsTheMessage` guard on inbound `ORD-`
+> replies (`convex/whatsapp.ts:554`). Do not reach for the rate limiter to
+> enforce message budgets: an order message that a cap could block is an order
+> message that can silently fail to reach a paying buyer, which is the exact
+> trade this category policy exists to refuse.
+
+**Consequence to keep in mind:** pre-Broadcast, the surviving traffic is almost
+entirely transactional, so the kill switch + caps mostly govern session replies
+*today* and become fully load-bearing once Broadcast ships — which is exactly the
 boundary we drew. The opt-out, quality auto-throttle, and audit log are valuable
-immediately.
+immediately, and the audit log matters more than ever now that every logged row
+is a **billable** message from 1 Oct 2026.
 
 ## The gate
 
@@ -90,12 +110,80 @@ number. **START / MULA** re-opts-in (`reactivateOptIn` stamps `reactivatedAt`).
 Handled in `handleInbound` before any other intent; the ack reply is
 `transactional` so it isn't suppressed by the opt-out it's confirming.
 
+**The ack says out loud that order updates keep coming**, in both languages —
+the confirmation for an order the buyer placed is `transactional` and bypasses
+this gate by design (the category table above), so a buyer told only "you're
+unsubscribed" who then receives one reasonably concludes the STOP failed. The
+BM half omitted that sentence until `86eyn25gu`. Same reason the manual panel
+spells it out: post-`86eyd63r8` the confirmation is the buyer's *only*
+automatic message, so an opt-out has almost no visible buyer-side effect today
+— what it actually suppresses is session replies now and Broadcast later.
+
 Opt-out rows are keyed on the **canonical (digits-only) phone** via
 `normalizeWaPhone`, on both write (`registerOptOut`/`reactivateOptIn`) and read
 (`isOptedOut`). Stored numbers already normalize through `assertValidWaPhone`, but
 keying the opt-out itself on the canonical form means a STOP suppresses later
 sends even if some future write path stores a `+`/spaced number — opt-out
 compliance never silently depends on every caller having normalized first.
+
+### Manual opt-out (admin, 2026-08-17, ClickUp 86eyn25gu)
+
+The keyword path only serves buyers who text the shared number themselves — a
+counter buyer whose number the cashier typed has no self-serve way to withdraw
+consent (PDPA audit finding L3). The Admin Console's WABA page now carries a
+**Manual opt-out** panel: type a number → live status (`adminOptOutStatus`) →
+one button that either opts it out (`adminRegisterOptOut`, the first caller of
+the `manual_admin` source declared in the schema from day one) or re-activates
+it (`adminReactivateOptIn`). Same scope as a STOP; idempotent both ways.
+
+**Input is canonicalized to the international form the send gate keys on**
+(`60…` / `65…`) via `assertValidMobileForCountry` (PR #191 review). Every key
+the send gate checks is international (Meta's inbound `from`, checkout/counter
+numbers), so an opt-out keyed on a bare local-digits strip would never match
+`isOptedOut` and fail silently while the panel claimed otherwise. Input that
+matches no country's **mobile** shape (an MY landline, a partial number)
+disables the button with a reason instead of registering an unmatchable key;
+canonicalization also keeps buyer-texted `START` able to undo an admin opt-out
+(one key, both paths — pinned by test).
+
+This is the one phone field with **no retailer behind it**, so unlike every
+plated field (whose country comes from the retailer row — see `slug.ts`) it
+tries **each country in `COUNTRIES`** in turn. `optOuts` is global to the
+shared number, so an SG store's buyer holds their opt-out under `65…`; a
+MY-only canonicalizer could neither find that row nor register a new one — a
+withdrawal request we could not honour. Trying each arm is unambiguous rather
+than permissive: the mobile NSN windows are disjoint (MY starts `1`, SG starts
+`8`/`9`) and stored patterns carry the dial code, so no input satisfies two
+arms. MY is tried first, keeping every pre-SG input byte-identical.
+
+**The register lists who is currently opted out** (`adminOptOutList`), because
+the lookup field structurally cannot: it answers "is THIS number opted out?"
+and you have to know the number first, so "who is opted out?" — the question a
+PDPA request actually asks — had no answer, and an admin could not confirm
+their own opt-out registered without retyping it. The vendor rows already show
+a 30-day opt-out *count*, so the data was teased and then unreachable.
+
+Rows come off a new **`optOuts.by_active` index keyed on `reactivatedAt`**:
+opting back in stamps that field rather than deleting the row, so the live set
+is exactly the rows where it is absent, and re-activations that accumulate
+forever can never crowd a live row out of a bounded newest-first scan. The
+table underneath stays the **consent ledger** — when consent was withdrawn and
+when it was restored — which is why re-activating removes a row from the list
+and from nothing else.
+
+Numbers render **masked to last-4**, like the status line and the audit log:
+session replay captures rendered text, and a list paints many at once. The full
+number rides in the payload for the row's Copy action, which never paints it.
+The list renders at zero too, with the empty state explaining what would appear
+there — it is the only place this feature announces itself.
+
+Every manual action is audited via **`logGlobalAdminAction`** — a new
+`adminAuditLog` shape with **no `retailerId`** (the field widened to optional),
+because the opt-out is global to the shared number, not a store action. The
+audit `targetId` carries the phone's **last four digits only**: the audit log
+has no retention, so a full phone must never land in it — the `optOuts` row
+holds the full number for correlation. Pinned by test in
+`wabaProtection.test.ts` ("admin manual opt-out").
 
 ## WABA health webhooks (auto-throttle)
 
@@ -145,9 +233,15 @@ npx convex run wabaProtection:listRecentOutbound '{"retailerId":"<id>"}'
 
 ## Schema (`convex/schema.ts`)
 
-`optOuts` (global, by_phone) · `wabaHealth` (history, by_observed) ·
+`optOuts` (global, by_phone + by_created) · `wabaHealth` (history, by_observed) ·
 `retailerSendingLimits` (kill switch + cap overrides, by_retailer) ·
-`outboundMessageLog` (audit, by_retailer_sent + by_phone_sent).
+`outboundMessageLog` (audit, by_retailer_sent + by_phone_sent + by_sent) ·
+`messageLogRollups` (permanent monthly cost-ledger aggregates).
+
+**Retention:** `outboundMessageLog` and `wabaHealth` are purged on a 90-day
+window (the outbound log rolls up into `messageLogRollups` first; the newest
+health row is always kept); `optOuts` is **never** purged — see
+[`docs/data-retention.md`](./data-retention.md) for the full policy table.
 
 ## Env vars
 

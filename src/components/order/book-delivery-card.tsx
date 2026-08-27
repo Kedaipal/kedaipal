@@ -26,13 +26,14 @@ import {
 	todayMytMidnight,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import { MASK_PII } from "../../lib/analytics-privacy";
+import { formatCountdown } from "../../lib/countdown";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
-import { Input } from "../ui/input";
 import {
 	Dialog,
 	DialogContent,
@@ -41,6 +42,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../ui/dialog";
+import { Input } from "../ui/input";
 
 /** How long "Confirm & dispatch" stays inert after it appears (86eypjfuf).
  * Long enough that a tap already in flight — the one that opened the dialog,
@@ -307,6 +309,21 @@ export function BookDeliveryCard({
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
+	// Lalamove is a Malaysian market for us. On a Singapore store the card has
+	// nothing true to offer — not a Book button, and not the "set Lalamove up"
+	// hint either, since there is no setup that would work. A completed or
+	// failed Malaysian trip belongs on the order timeline rather than under a
+	// live dispatch card that would re-offer a booking (86eyqgujv).
+	//
+	// But NEVER while a rider is still out (PR #221 review). Cancelling is the
+	// seller's only way to stop a trip they are being billed for, and the
+	// button lives on this card — `cancelBooking` has no country gate of its
+	// own, so hiding the card would be a pure UI trap, exactly the kind this
+	// PR exists to remove. The booking controls stay gone either way: they are
+	// gated on `!activeJob`, so an in-flight card offers tracking and cancel
+	// and nothing that spends.
+	if (blockReason === "country_unsupported" && !activeJob) return null;
+
 	const failedJob =
 		job && ["canceled", "expired", "rejected"].includes(job.status)
 			? job
@@ -428,8 +445,7 @@ export function BookDeliveryCard({
 	}): Promise<boolean> {
 		if (!quote || requoting) return false;
 		const vehicleType =
-			next.vehicleType ??
-			(quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE");
+			next.vehicleType ?? (quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE");
 		const override =
 			next.scheduleOverride !== undefined
 				? next.scheduleOverride
@@ -482,9 +498,7 @@ export function BookDeliveryCard({
 		// Round to the input's 5-min step, clamped below midnight — a seed in
 		// the day's last minutes must not round up to the invalid "24:00".
 		setSchedTime(
-			hhmmFromMinutes(
-				Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5),
-			),
+			hhmmFromMinutes(Math.min(1435, Math.round((seed - day) / 60000 / 5) * 5)),
 		);
 		setScheduleError(null);
 		setEditSchedule(true);
@@ -533,9 +547,7 @@ export function BookDeliveryCard({
 					await rescheduleFulfilment({
 						orderId: order._id,
 						fulfilmentDate: day,
-						fulfilmentTimeMinutes: Math.round(
-							(scheduleOverride - day) / 60000,
-						),
+						fulfilmentTimeMinutes: Math.round((scheduleOverride - day) / 60000),
 					});
 				} catch (err) {
 					toast.error(convexErrorMessage(err));
@@ -643,7 +655,8 @@ export function BookDeliveryCard({
 				<div className="flex flex-col gap-2 text-sm">
 					{activeJob.driver ? (
 						<div className="flex items-center justify-between gap-3">
-							<span className="flex items-center gap-2">
+							{/* MASK_PII: the rider is a third party. */}
+							<span {...MASK_PII} className="flex items-center gap-2">
 								<Bike className="size-4 text-accent" />
 								<span className="font-medium">{activeJob.driver.name}</span>
 								{activeJob.driver.plateNumber ? (
@@ -677,7 +690,7 @@ export function BookDeliveryCard({
 						<p className="text-muted-foreground">
 							{jobCollection
 								? "Finding a rider… this usually takes a few minutes. They'll collect from your customer's address and bring it here — you advance the order status yourself once it arrives."
-								: "Finding a rider… this usually takes a few minutes. When one picks up, the buyer gets the shipped message with live tracking automatically."}
+								: "Finding a rider… this usually takes a few minutes. When one picks up, the order moves itself to Shipped and the live tracking link appears on the buyer's order page — nothing for you to do."}
 						</p>
 					)}
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -729,7 +742,10 @@ export function BookDeliveryCard({
 						</p>
 					) : null}
 					{completedJob.driver ? (
-						<div className="flex items-center gap-2 text-xs text-muted-foreground">
+						<div
+							{...MASK_PII}
+							className="flex items-center gap-2 text-xs text-muted-foreground"
+						>
 							<Bike className="size-3.5 text-accent" />
 							<span className="font-medium text-foreground">
 								{completedJob.driver.name}
@@ -757,15 +773,16 @@ export function BookDeliveryCard({
 							</a>
 						) : null}
 					</div>
-					{/* Rider's drop-off photo (proof of delivery). Standard: the buyer
-					    got the same shot on WhatsApp. Collection: seller-only — it
-					    shows the hand-over at THIS outlet, never sent to the buyer. */}
+					{/* Rider's drop-off photo (proof of delivery) — never WhatsApp'd
+					    (86eyd63r8). Standard: the same shot renders on the buyer's order
+					    page. Collection (86eyg0n8e): seller-only — it shows the
+					    hand-over at THIS outlet, and orders.get hides it from the buyer. */}
 					{completedJob.podImageUrls?.length ? (
 						<div className="flex flex-col gap-1.5">
 							<p className="text-xs text-muted-foreground">
 								{jobCollection
 									? "Drop-off photo from the rider (kept for your records — not sent to the buyer)"
-									: "Delivery photo from the rider"}
+									: "Delivery photo from the rider — the buyer sees this on their order page too"}
 							</p>
 							<div className="flex gap-2">
 								{completedJob.podImageUrls.map((url) => (
@@ -780,6 +797,8 @@ export function BookDeliveryCard({
 											src={url}
 											alt="Proof of delivery"
 											aspect="h-20 w-20"
+											// Buyer's doorstep — off the public edge cache.
+											sensitive
 										/>
 									</a>
 								))}
@@ -882,8 +901,8 @@ export function BookDeliveryCard({
 						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
 							<span>
-								<span className="font-medium">Test keys.</span> This dispatches a
-								simulated trip — no rider will come and nothing is charged.
+								<span className="font-medium">Test keys.</span> This dispatches
+								a simulated trip — no rider will come and nothing is charged.
 							</span>
 						</p>
 					) : null}
@@ -1057,10 +1076,10 @@ export function BookDeliveryCard({
 										</>
 									) : (
 										<>
-											. If you&apos;ve agreed a new delivery time with them,
-											use <span className="font-medium">Reschedule</span> on
-											this page before booking — their order page keeps the
-											old time otherwise.
+											. If you&apos;ve agreed a new delivery time with them, use{" "}
+											<span className="font-medium">Reschedule</span> on this
+											page before booking — their order page keeps the old time
+											otherwise.
 										</>
 									)}
 								</p>
@@ -1179,8 +1198,8 @@ export function BookDeliveryCard({
 								</span>
 							</p>
 							<p className="pl-6 text-xs opacity-80">
-								Nothing was charged and your buyer wasn&apos;t notified. Fix
-								it, then get a fresh price — this one is no longer valid.
+								Nothing was charged and your buyer wasn&apos;t notified. Fix it,
+								then get a fresh price — this one is no longer valid.
 							</p>
 						</div>
 					) : quoteStale ? (
@@ -1232,9 +1251,7 @@ export function BookDeliveryCard({
 								onClick={handleConfirm}
 								// Disabled rather than an inert click handler: a button that
 								// silently swallows a real tap reads as broken.
-								disabled={
-									booking || requoting || quote === null || !spendArmed
-								}
+								disabled={booking || requoting || quote === null || !spendArmed}
 							>
 								{booking ? "Booking…" : "Confirm & dispatch"}
 							</Button>
@@ -1257,12 +1274,6 @@ export function BookDeliveryCard({
 	);
 }
 
-/** "4:32" / "0:07" from a remaining-ms figure, floored at zero so a lapsed
- * quote never renders a negative clock. */
-function formatCountdown(remainingMs: number): string {
-	const total = Math.max(0, Math.floor(remainingMs / 1000));
-	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
 
 /** "4 Aug 2026 · 3:30 PM" from an epoch moment — the card's one spelling for
  * a scheduled pickup (86eyg0n8e follow-up). */
