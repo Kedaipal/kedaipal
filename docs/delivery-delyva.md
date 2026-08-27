@@ -171,6 +171,74 @@ pickup activation pending), `no_service`, `unknown`. Booking failures email
 the seller through the same `notifyDeliveryJobFailed` template, now
 provider-aware in all three locales.
 
+## Seller UI
+
+Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the
+store's existing delivery charge (flat / weight-zone) at checkout and get the
+tracking number on `/track/<token>` and in the shipped WhatsApp, through the
+manual-courier pipeline that already existed. Decided 27 Aug, and it matches
+where the market landed: Shopee removed buyer courier choice in 2020 and
+assigns it now, Lazada/TikTok Shop show a tier rather than a brand, and
+Shopify has the buyer pick a merchant-configured *rate* while the merchant
+buys the label afterwards. It also protects the seller's margin, because the
+booking spends **their** Delyva credit — the dispatch card shows what the
+buyer paid right beside each courier's real price.
+
+**Settings → Fulfilment → Delyva courier** (`src/components/settings/delyva-card.tsx`),
+placed between the delivery *charge* card and the despatch *label* card —
+the order the seller thinks in: what the buyer pays → how the parcel leaves →
+the paper that goes on it. Booking is orthogonal to pricing (a flat-fee store
+can still book couriers), so it is its own card, never a delivery-charge mode.
+Unlike its HitPay sibling this card owns its own reads and actions rather than
+taking a summary + `onSave`: Delyva has its own Convex namespace, so threading
+four actions and a mutation through the tab would be five more props for no
+gain. Act-as is honoured the way `useUpdateSettings` does it. It carries: the
+one-key connect (with the "one key is all we need" line, because every other
+integration asks for two), the connected proof (**account name** + key hint —
+so a seller can see they pasted the *right* account's key), pause/replace/
+disconnect, the structured pickup address with the 5-digit-postcode rule
+mirrored from the server, the default parcel-type tiles, the **cold-chain
+activation note** (shown only for a chilled/frozen default — the single most
+likely reason a frozen seller's first booking fails), and a **webhook-retry
+warning** when `webhooksSubscribedAt` is unset, since a silent subscription
+failure otherwise shows up only as orders that mysteriously stop updating.
+
+**Order detail → Delyva Courier** (`src/components/order/delyva-dispatch-card.tsx`),
+directly after the Lalamove card — both answer "how is this going out?", and a
+store may have both connected (rider across town, courier across the country);
+each card hides itself when its own provider isn't set up, so nobody sees two.
+The picker is **inline on the card, not in a modal** — the deliberate
+divergence from `BookDeliveryCard`. Lalamove returns one price bound to a
+5-minute quotation id, so its flow is a modal with a countdown; Delyva returns
+a list whose prices are indicative and never expire, so the task is a
+comparison, and on a phone a scrollable courier list inside a scrollable
+dialog is the worse of the two. Flow: weight (seeded from the order, always
+editable) → parcel-type pills (store default, per-order override; changing
+either drops stale prices) → **Get courier prices** → the list, cheapest
+pre-selected with the CTA repeating the choice and its price → book. Booked
+state shows the courier, the AWB with one-tap copy, the cost, a tracking link
+and cancel. A booking failure renders **in place, not as a toast** (the
+86eypncfy lesson: the seller is coming back from a top-up and the reason must
+still be on screen), with the picker intact so retrying is one tap.
+
+**Copy that had to become provider-aware:** the client-side manual-advance gate
+in `app.orders.$shortId.tsx` now subscribes to `api.delyva.getDispatchState`
+alongside the Lalamove one and treats an active job from **either** provider as
+"someone else owns this order's status" — without it the UI would offer a
+manual *Shipped* the server then refuses, since `riderOwnsTransition` already
+covers both. The gate's wording, the cancel/delete warnings that point at the
+dispatch card by name, and the `deliveryJobFailed` email (all three locales)
+follow the provider that actually owns the job.
+
+**Discoverability** (the CLAUDE.md rule): the settings card explains the
+feature before it is connected, the order card shows a one-line hint linking to
+Settings when Delyva was never set up (rather than a disabled button for a
+feature the seller has never heard of), and
+`public/guides/delyva-setup.html` is the print-ready vendor walkthrough —
+account → credit → cold-chain activation → API key → paste → one real test —
+linked from the settings card, the `hitpay-setup.html` / `lalamove-setup.html`
+precedent.
+
 ## Testing
 
 - `convex/lib/delyva.test.ts` — pure client mechanics; fixtures are payloads
@@ -180,6 +248,12 @@ provider-aware in all three locales.
   out-of-order / order transitions / AWB fill-if-unset mirroring, the
   cross-provider reservation invariant, webhook correlation by
   `(provider, providerOrderId)`.
+- `src/components/order/delyva-dispatch-card.test.tsx` — the picker flow plus
+  every state that must not be a dead end: no couriers, an unweighable cart, a
+  failed booking, each blocked reason.
+- `src/components/settings/delyva-card.test.tsx` — one-key connect, the Pro
+  gate (and that it never traps a downgraded seller), the postcode rule, the
+  missing-address and unregistered-webhook warnings.
 - Manual E2E: register a **demo account** at `demo.delyva.app` (same API
   host; the "sandbox" is just a separate account) and use their webhook
   simulator at `dx-integration-sandbox.pages.dev` to fire status updates.
@@ -188,10 +262,19 @@ provider-aware in all three locales.
 
 ## Open / follow-ups
 
-- **PR2 (frontend)**: Settings → Fulfilment Delyva card (single-key connect,
-  pickup address, parcel-type default) + order-detail dispatch card (service
-  picker; mockups approved 27 Aug). Backend queries (`getSettings`,
-  `getDispatchState`) already serve it.
+- **Visual check of the two dashboard cards** — they sit behind Clerk, so the
+  render→look→iterate pass needs a signed-in session; behaviour is covered by
+  the two component suites meanwhile.
+- **Per-item parcel type** — ClickUp `86eyrmv1j` (backlog). Today the type is a
+  store default with a per-order override (option 1, decided 27 Aug). Delyva's
+  `itemType` applies to the **shipment**, not the line item, so even per-item
+  flags must resolve to one value ("coldest wins"); build it when a genuinely
+  mixed-temperature seller exists, as one optional variant field plus a
+  derivation in `getDispatchContext` — the same pills UI, smarter
+  pre-selection.
+- **Live Delyva rates at checkout** — a new *pricing* mode (the Lalamove
+  live-quote parallel), deliberately out of scope: buyer pricing stays
+  weight-band. Its own ticket if weight bands prove too coarse.
 - **Cold-chain quote verification on a real account** — the `CHILLED`
   itemType is confirmed in Delyva's plugin and API enum, but the demo
   account returns no cold-chain services; verify pricing + the activation

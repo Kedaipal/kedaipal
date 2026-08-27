@@ -58,6 +58,7 @@ import {
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
+import { DelyvaDispatchCard } from "../components/order/delyva-dispatch-card";
 import {
 	canPrintLabel,
 	PrintLabelButton,
@@ -352,6 +353,21 @@ function OrderDetailRoute() {
 	).data;
 	const hasActiveRiderBooking =
 		!!dispatchInfo?.job && isActiveJobStatus(dispatchInfo.job.status);
+	// The same awareness for a Delyva courier booking (86eyjpv6z) — the same
+	// query its card subscribes to, deduped by Convex. Without this the client
+	// gate would only know about riders, and a seller with a live courier
+	// booking would be offered a manual "Shipped" the SERVER then refuses
+	// (riderOwnsTransition covers both providers).
+	const delyvaInfo = useQuery(
+		convexQuery(
+			api.delyva.getDispatchState,
+			order?.deliveryMethod === "delivery" && order.shortId
+				? { shortId: order.shortId }
+				: "skip",
+		),
+	).data;
+	const hasActiveDelyvaBooking =
+		!!delyvaInfo?.job && isActiveJobStatus(delyvaInfo.job.status);
 	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
 	// their delivery charge). They never ship parcels, so no manual courier
 	// surface is offered anywhere on this page — 86eyff02p.
@@ -369,13 +385,15 @@ function OrderDetailRoute() {
 	// The dispatch card names itself after the TRIP it shows (or, with no job
 	// yet, the store's current mode) — mirror that exactly, since the
 	// cancel/delete warnings point the seller AT that card by name.
-	const dispatchCardName = (
-		dispatchInfo?.job
-			? dispatchInfo.job.deliveryDirection === "collection"
-			: dispatchInfo?.deliveryDirection === "collection"
-	)
-		? "Lalamove Collection"
-		: "Lalamove Delivery";
+	const dispatchCardName = hasActiveDelyvaBooking
+		? "Delyva Courier"
+		: (
+					dispatchInfo?.job
+						? dispatchInfo.job.deliveryDirection === "collection"
+						: dispatchInfo?.deliveryDirection === "collection"
+			  )
+			? "Lalamove Collection"
+			: "Lalamove Delivery";
 	// A rider is mid-trip with this order: manual shipped/delivered advances are
 	// gated behind a confirm, so the buyer's order page can't claim "on the way"
 	// before the rider actually has the parcel (or without the tracking link).
@@ -392,11 +410,15 @@ function OrderDetailRoute() {
 	// flow, not shipped/delivered, so this gate would both lie and strand.
 	// Derived from the same signal the tracking card reads, so the stepper gate
 	// and that card can't drift apart.
-	const riderHandlingTrip = hasActiveRiderBooking && !collectionService;
+	// A live Delyva courier booking gates the same way, with no collection
+	// exclusion to make: Delyva v1 only ever ships TO the buyer.
+	const riderHandlingTrip =
+		(hasActiveRiderBooking && !collectionService) || hasActiveDelyvaBooking;
 	// Has that booking actually reported yet? Only then can we promise the
 	// status moves on its own — otherwise the seller may have no webhook.
-	const riderWebhookReporting =
-		!!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
+	const riderWebhookReporting = hasActiveDelyvaBooking
+		? !!delyvaInfo?.job && riderDrivesOrderStatus(delyvaInfo.job)
+		: !!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
 	// Collection order whose goods are still with the buyer: nothing downstream
 	// ("packed", "cleaning", "ready") can be true yet. Mirrors the server gate
 	// in orders.advanceToStage.
@@ -689,8 +711,13 @@ function OrderDetailRoute() {
 								!blocked &&
 								awaitingCollection &&
 								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
-							const riderMoment =
-								nextStage.anchor === "delivered"
+							// Delyva ships parcels, Lalamove sends riders — the copy has
+							// to name what the seller actually booked (86eyjpv6z).
+							const riderMoment = hasActiveDelyvaBooking
+								? nextStage.anchor === "delivered"
+									? "the courier delivers it"
+									: "the courier collects it"
+								: nextStage.anchor === "delivered"
 									? "the rider drops off"
 									: "the rider picks up";
 							// First move out of pending into a confirmed-anchored stage
@@ -792,16 +819,21 @@ function OrderDetailRoute() {
 										<p className="text-xs leading-relaxed text-muted-foreground">
 											{riderWebhookReporting ? (
 												<>
-													A Lalamove rider is on this order — it moves to{" "}
-													<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
-													{riderMoment}.
+													{hasActiveDelyvaBooking
+														? "A Delyva courier booking is on this order"
+														: "A Lalamove rider is on this order"}{" "}
+													— it moves to <b>{stageLabel(nextStage, "en")}</b> on
+													its own when {riderMoment}.
 												</>
 											) : (
 												<>
-													A Lalamove rider is booked for this order — it moves
-													to <b>{stageLabel(nextStage, "en")}</b> on its own
-													once {riderMoment}, as long as your Lalamove webhook
-													is set up.
+													{hasActiveDelyvaBooking
+														? "A Delyva courier is booked for this order"
+														: "A Lalamove rider is booked for this order"}{" "}
+													— it moves to <b>{stageLabel(nextStage, "en")}</b> on
+													its own once {riderMoment}, as long as your{" "}
+													{hasActiveDelyvaBooking ? "Delyva" : "Lalamove"}{" "}
+													webhook is set up.
 												</>
 											)}{" "}
 											<button
@@ -1665,6 +1697,13 @@ function OrderDetailRoute() {
 					onAdvanceBookUnavailable={() => setShipDialogOpen(true)}
 				/>
 			) : null}
+
+			{/* Delyva courier dispatch (86eyjpv6z) — the parcel sibling of the
+			    rider card above, and deliberately right after it: both answer "how
+			    is this going out?", and a store may have both connected (rider
+			    across town, courier across the country). Each card hides itself
+			    when its own provider isn't set up, so nobody sees two. */}
+			{!isSelfCollect ? <DelyvaDispatchCard order={order} /> : null}
 
 			{/* Delivery address (delivery orders only). Collection orders relabel:
 			    this is where the rider COLLECTS, not where anything is delivered

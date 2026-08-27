@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up Delyva courier booking for your Kedaipal store — Vendor Guide</title>
+<style>
+  /* ============ Print setup ============ */
+  @page { size: A4; margin: 18mm; }
+  @media print {
+    .page-break { break-before: page; }
+    a { color: inherit; text-decoration: none; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+
+  /* ============ Base ============ */
+  :root {
+    --navy: #1B2A4A;
+    --navy-soft: #2C3E63;
+    --mint: #B9D9CC;
+    --mint-deep: #7BA394;
+    --mint-tint: #EFF7F3;
+    --paper: #FFFFFF;
+    --ink: #22304A;
+    --ink-soft: #5A6579;
+    --amber-tint: #FFF7E8;
+    --amber-edge: #E4B85C;
+    --red-tint: #FDF0EF;
+    --red-edge: #D96C60;
+    --line: #E3E8EF;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    font-size: 11pt;
+    line-height: 1.55;
+    max-width: 174mm; /* A4 minus margins, keeps screen preview honest */
+    margin: 0 auto;
+    padding: 12px 16px 40px;
+  }
+  h1, h2, h3 { color: var(--navy); line-height: 1.2; }
+  h1 { font-size: 26pt; letter-spacing: -0.5px; }
+  h2 { font-size: 17pt; margin-bottom: 4px; }
+  h3 { font-size: 12pt; margin-bottom: 2px; }
+  p { margin-bottom: 8px; }
+  ul, ol { margin: 0 0 8px 20px; }
+  li { margin-bottom: 4px; }
+  strong { color: var(--navy); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--mint-tint);
+    border: 1px solid var(--mint);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 9.5pt;
+    color: var(--navy);
+    white-space: nowrap;
+  }
+  a { color: var(--mint-deep); }
+
+  /* ============ Cover ============ */
+  .cover { padding-top: 18mm; }
+  .brandline {
+    display: inline-block;
+    background: var(--mint);
+    color: var(--navy);
+    font-weight: 700;
+    font-size: 9pt;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 999px;
+    margin-bottom: 14px;
+  }
+  .cover h1 { margin-bottom: 6px; }
+  .cover .subtitle { font-size: 13pt; color: var(--ink-soft); margin-bottom: 22px; }
+  .cover-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .cover-card {
+    flex: 1 1 46%;
+    border: 1.5px solid var(--line);
+    border-top: 4px solid var(--mint);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: #fff;
+  }
+  .cover-card h3 { margin-bottom: 8px; }
+  .cover-card ul { margin-left: 18px; margin-bottom: 0; }
+  .route {
+    background: var(--navy);
+    color: #fff;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 10.5pt;
+  }
+  .route strong { color: var(--mint); }
+
+  /* ============ Section headers ============ */
+  .section-head { margin: 26px 0 12px; display: flex; align-items: center; gap: 12px; }
+  .section-badge {
+    flex: 0 0 auto;
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: var(--navy);
+    color: var(--mint);
+    font-weight: 800;
+    font-size: 15pt;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .section-head .kicker {
+    font-size: 8.5pt; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--mint-deep); font-weight: 700;
+  }
+
+  /* ============ Step cards ============ */
+  .step {
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px 12px 54px;
+    margin-bottom: 12px;
+    position: relative;
+    break-inside: avoid;
+  }
+  .step .num {
+    position: absolute;
+    left: 12px; top: 12px;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--mint);
+    color: var(--navy);
+    font-weight: 800;
+    font-size: 12pt;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h3 { margin-bottom: 4px; }
+  .step p:last-of-type, .step ul:last-of-type { margin-bottom: 0; }
+
+  /* ============ Screenshot placeholders ============ */
+  .shot {
+    border: 2px dashed var(--mint-deep);
+    background: var(--mint-tint);
+    border-radius: 8px;
+    padding: 18px 14px;
+    text-align: center;
+    color: var(--navy-soft);
+    font-size: 9.5pt;
+    margin: 10px 0 2px;
+    min-height: 52px;
+    break-inside: avoid;
+  }
+  .shot .shot-label { font-weight: 700; color: var(--navy); }
+  .shot .shot-note { font-size: 8.5pt; color: var(--ink-soft); margin-top: 2px; }
+
+
+  /* ============ Real screenshots ============ */
+  .shot-real { margin: 10px 0 2px; break-inside: avoid; }
+  .shot-real img {
+    width: 100%; max-width: 100%; display: block;
+    border: 1.5px solid var(--line); border-radius: 8px;
+    background: #fff;
+  }
+  .shot-real .pair { display: flex; gap: 10px; }
+  .shot-real .pair img { width: calc(50% - 5px); }
+  .shot-real figcaption {
+    font-size: 8.5pt; color: var(--ink-soft);
+    margin-top: 4px; text-align: center;
+  }
+
+
+  /* ============ UI reproductions (faithful dashboard illustrations) ============ */
+  .mockup { margin: 10px 0 2px; break-inside: avoid; border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden; background: #F6F8FA; }
+  .mockup .bar { display: flex; align-items: center; gap: 5px; padding: 7px 11px; background: #ECEFF3; border-bottom: 1px solid var(--line); }
+  .mockup .bar i { width: 8px; height: 8px; border-radius: 50%; background: #CBD2DC; }
+  .mockup .bar span { margin-left: 8px; font-size: 8pt; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; }
+  .mockup .body { padding: 14px; }
+  .mockup figcaption { font-size: 8.5pt; color: var(--ink-soft); text-align: center; margin-top: 4px; }
+  .k-card { background:#fff; border:1px solid #E6EAF0; border-radius:14px; padding:16px; }
+  .k-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; }
+  .k-title { font-size:11pt; font-weight:700; color:var(--navy); }
+  .k-desc { font-size:8.5pt; color:var(--ink-soft); margin-top:3px; line-height:1.4; }
+  .k-toggle { width:42px; height:24px; border-radius:999px; background:#2FA968; position:relative; flex-shrink:0; }
+  .k-toggle::after { content:""; position:absolute; top:3px; left:21px; width:18px; height:18px; border-radius:50%; background:#fff; }
+  .k-label { font-size:8.5pt; font-weight:600; color:var(--ink-soft); margin:13px 0 6px; }
+  .k-veh { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .k-opt { border:1.5px solid #E6EAF0; border-radius:10px; padding:9px 12px; text-align:center; }
+  .k-opt.sel { border-color:#2FA968; background:#F0F9F4; }
+  .k-opt b { font-size:9.5pt; color:var(--navy); display:block; }
+  .k-opt.sel b { color:#2E8B5A; }
+  .k-opt small { font-size:7.5pt; color:var(--ink-soft); }
+  .k-input { border:1px solid #E6EAF0; border-radius:9px; padding:9px 11px; font-size:9pt; color:#96A0AF; background:#fff; margin-bottom:8px; font-family: ui-monospace, Menlo, monospace; }
+  .k-input.filled { color:var(--navy); }
+  .k-help { font-size:8pt; color:var(--ink-soft); line-height:1.45; margin-top:2px; }
+  .k-btn { display:inline-block; background:#2FA968; color:#fff; font-size:9pt; font-weight:600; padding:9px 16px; border-radius:9px; margin-top:11px; }
+  .k-stored { display:flex; justify-content:space-between; align-items:center; border:1px solid #E6EAF0; border-radius:9px; padding:10px 12px; font-size:9pt; color:var(--navy); }
+  .k-stored .rm { color:#D96C60; font-weight:600; font-size:8.5pt; }
+  .k-pin { display:flex; align-items:center; gap:5px; font-size:8pt; color:var(--mint-deep); margin-top:6px; font-weight:600; }
+  .k-pin .mono { font-family:ui-monospace,Menlo,monospace; color:var(--ink-soft); font-weight:400; }
+
+  /* ============ Callouts ============ */
+  .callout {
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 12px 0;
+    break-inside: avoid;
+  }
+  .callout h3 { margin-bottom: 6px; }
+  .callout.tip { background: var(--mint-tint); border-left: 5px solid var(--mint-deep); }
+  .callout.warn { background: var(--amber-tint); border-left: 5px solid var(--amber-edge); }
+  .callout.danger { background: var(--red-tint); border-left: 5px solid var(--red-edge); }
+  .callout.danger h3 { color: #A5382E; }
+
+  .dodont { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+  .dodont > div {
+    flex: 1 1 46%;
+    border-radius: 10px;
+    padding: 12px 14px;
+    break-inside: avoid;
+  }
+  .do { background: var(--mint-tint); border: 1.5px solid var(--mint-deep); }
+  .dont { background: var(--red-tint); border: 1.5px solid var(--red-edge); }
+  .dodont h3 { margin-bottom: 6px; }
+  .dont h3 { color: #A5382E; }
+  .dodont ul { margin-bottom: 0; margin-left: 18px; }
+
+  /* ============ FAQ ============ */
+  .faq { border-bottom: 1px solid var(--line); padding: 10px 0; break-inside: avoid; }
+  .faq:last-of-type { border-bottom: none; }
+  .faq .q { font-weight: 700; color: var(--navy); margin-bottom: 3px; }
+  .faq .q::before { content: "Q. "; color: var(--mint-deep); }
+  .faq .a { margin-bottom: 0; }
+  .faq .a::before { content: "A. "; color: var(--mint-deep); font-weight: 700; }
+
+  /* ============ Checklist ============ */
+  .checklist { list-style: none; margin: 10px 0 0; }
+  .checklist li {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 0;
+  }
+  .checklist .box {
+    flex: 0 0 auto;
+    width: 16px; height: 16px;
+    border: 2px solid var(--navy);
+    border-radius: 4px;
+    margin-top: 3px;
+  }
+  .sendbox {
+    border: 2px solid var(--navy);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 16px 0;
+    break-inside: avoid;
+  }
+  .sendbox h3 { margin-bottom: 8px; }
+  .sendbox .keyrow {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--mint-tint);
+    border: 1px solid var(--mint);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+  }
+  .sendbox .keyrow:last-child { margin-bottom: 0; }
+  .sendbox .keyrow .tag {
+    background: var(--navy); color: var(--mint);
+    font-size: 8pt; font-weight: 700; letter-spacing: 1px;
+    border-radius: 4px; padding: 2px 8px; text-transform: uppercase;
+    flex: 0 0 auto;
+  }
+
+  .support {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px;
+  }
+  .support > div {
+    flex: 1 1 46%;
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .support h3 { margin-bottom: 4px; }
+
+  /* ============ Footer ============ */
+  .doc-footer {
+    margin-top: 30px;
+    padding-top: 10px;
+    border-top: 2px solid var(--mint);
+    color: var(--ink-soft);
+    font-size: 8.5pt;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<section class="cover">
+  <span class="brandline">Kedaipal vendor guide</span>
+  <h1>Set up Delyva courier booking</h1>
+  <p class="subtitle">Book J&amp;T, DHL, Ninja and cold-chain couriers straight from an order &mdash; one tap, nationwide, and the tracking number lands on your buyer&rsquo;s order page by itself.</p>
+
+  <div class="cover-cards">
+    <div class="cover-card">
+      <h3>&#129520; What you need</h3>
+      <ul>
+        <li>A <strong>Kedaipal Pro plan</strong> &mdash; courier booking is a Pro feature. Check this first.</li>
+        <li>A <strong>Delyva account</strong> &mdash; free to open, no SSM needed to start.</li>
+        <li><strong>Credit in that account.</strong> Delyva is prepaid: you top up, each booking draws from your balance.</li>
+        <li>Your <strong>pickup address</strong> &mdash; the exact place the courier collects from.</li>
+        <li>About <strong>15 minutes</strong>. Add <strong>1&ndash;2 business days</strong> if you ship chilled or frozen (see Step C).</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h3>&#127881; What you get</h3>
+      <ul>
+        <li><strong>One tap</strong> from the order to a booked courier &mdash; no re-typing addresses</li>
+        <li>You <strong>pick the courier</strong> and see every price before you spend</li>
+        <li>The <strong>tracking number</strong> goes onto your buyer&rsquo;s order page automatically</li>
+        <li>The order marks itself <strong>Shipped</strong> at pickup and <strong>Delivered</strong> on arrival</li>
+        <li><strong>Cold chain</strong> &mdash; chilled and frozen couriers, which most parcel platforms refuse</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="route">
+    Your route: <strong>A</strong> Open your Delyva account &rarr; <strong>B</strong> Top up credit &rarr; <strong>C</strong> Activate cold chain <em>(frozen sellers only)</em> &rarr; <strong>D</strong> Copy your API key &rarr; <strong>E</strong> Paste it into Kedaipal &rarr; <strong>F</strong> Do one small real test.
+  </div>
+
+  <div class="callout tip">
+    <h3>&#128176; Whose money is it?</h3>
+    <p style="margin-bottom:0">The Delyva account is <strong>yours</strong>, and the credit is <strong>yours</strong>. Kedaipal only does the booking for you &mdash; we never hold, add to, or take from your delivery money. You pay Delyva <strong>exactly the same rate</strong> as booking direct in their own app; Delyva pays Kedaipal a small referral fee out of <em>their</em> side for sending the booking. Nothing is added to your price.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP A ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">A</div>
+    <div>
+      <div class="kicker">Step A &middot; about 5 minutes</div>
+      <h2>Open your Delyva account</h2>
+    </div>
+  </div>
+  <p>Delyva is a courier aggregator: one account, many couriers. You sign up once and get prices from J&amp;T, DHL eCommerce, Ninja, Pos Laju and the cold-chain couriers side by side.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Sign up at Delyva</h3>
+    <p>On your phone or laptop, open <strong>delyva.com</strong> and sign up for a <strong>customer account</strong>. Use the email you actually check &mdash; invoices and courier notices go there.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Fill in your business details</h3>
+    <p>Put in your <strong>shop name</strong>, your <strong>phone number</strong> and your <strong>pickup address</strong>. Get the address right: this is the door a courier rider knocks on, and it is also what Delyva checks when they activate cold chain later.</p>
+  </div>
+
+  <div class="callout tip">
+    <h3>&#129514; Want to try it before going live?</h3>
+    <p style="margin-bottom:0">Delyva has a free practice account at <strong>demo.delyva.app</strong>. It behaves like the real thing but books nothing and charges nothing. Handy if you want to click around first &mdash; just remember a demo account&rsquo;s key <strong>cannot book real couriers</strong>, so use your real account&rsquo;s key when you go live.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP B ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">B</div>
+    <div>
+      <div class="kicker">Step B &middot; about 5 minutes</div>
+      <h2>Top up your credit</h2>
+    </div>
+  </div>
+  <p>Delyva is <strong>prepaid</strong>. Every booking is paid for out of your balance the moment you confirm it &mdash; there is no invoice at the end of the month.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Go to Top Up in your Delyva account</h3>
+    <p>Pay by FPX / online banking or card. The credit shows in your balance right away.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Start with enough for a week of orders</h3>
+    <p>A West Malaysia parcel is roughly <strong>RM6&ndash;RM12</strong>; cold chain and East Malaysia cost more. Top up for about a week of your normal volume, then set yourself a <strong>weekly reminder</strong> to check the balance.</p>
+  </div>
+
+  <div class="callout warn">
+    <h3>&#9888;&#65039; An empty balance stops a booking, not your order</h3>
+    <p style="margin-bottom:0">If your credit runs out, Kedaipal will tell you plainly &mdash; <em>&ldquo;Your Delyva account doesn&rsquo;t have enough credit&rdquo;</em> &mdash; and the booking simply does not happen. <strong>Your buyer is not messaged and the order does not change.</strong> Top up, tap Book again, and carry on. Nothing is lost.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP C ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">C</div>
+    <div>
+      <div class="kicker">Step C &middot; frozen &amp; chilled sellers only &middot; 1&ndash;2 business days</div>
+      <h2>Ask Delyva to activate cold chain</h2>
+    </div>
+  </div>
+  <p>Chilled and frozen couriers do not switch on by themselves. Delyva activates <strong>your pickup address</strong> for cold chain by hand, once, before you can book a chilled or frozen parcel from it. Ambient (normal, dry) parcels need none of this and work immediately.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Email Delyva support</h3>
+    <p>Write to <strong>support@delyva.com</strong>. Tell them: your account email, your <strong>pickup address</strong>, and that you want it <strong>activated for chilled / frozen pickup</strong>. Say what you sell &mdash; frozen kuih, seafood, ice cream &mdash; and roughly how many parcels a week.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Keep selling ambient while you wait</h3>
+    <p>Activation usually takes <strong>1&ndash;2 business days</strong>. Meanwhile you can already book ordinary parcels through Kedaipal, and you can still arrange a cold-chain courier the old way and type the tracking number onto the order by hand.</p>
+  </div>
+
+  <div class="callout tip">
+    <h3>&#10052;&#65039; How Kedaipal shows this</h3>
+    <p style="margin-bottom:0">If you try to book a chilled parcel before your address is activated, Kedaipal will <strong>say exactly that</strong> and offer the alternatives, instead of failing with a confusing error. And if Delyva has no cold-chain courier serving that particular address, you will get a plain <em>&ldquo;no courier can take this&rdquo;</em> message rather than a silent empty screen. Cold chain is mostly a <strong>West Malaysia</strong> service &mdash; check with Delyva before promising a frozen delivery to Sabah or Sarawak.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP D ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">D</div>
+    <div>
+      <div class="kicker">Step D &middot; about 2 minutes</div>
+      <h2>Copy your API key</h2>
+    </div>
+  </div>
+  <p>The API key is what lets Kedaipal book on your behalf. You need <strong>one</strong> key &mdash; that is all.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Open Settings &rarr; API Integrations</h3>
+    <p>In your Delyva customer portal, go to <strong>Settings</strong>, then <strong>API Integrations</strong>. Create a key if there isn&rsquo;t one yet.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Copy the whole key</h3>
+    <p>It is a long string starting with <code>dx</code>. Copy <strong>all</strong> of it &mdash; no spaces before or after.</p>
+  </div>
+
+  <div class="sendbox">
+    <h3>&#128273; The only thing to paste into Kedaipal</h3>
+    <div class="keyrow"><span class="tag">1 &middot; API Key</span><span>Starts with <code>dx</code></span></div>
+    <p style="margin:8px 0 0; font-size:9.5pt; color:var(--ink-soft);">Other systems ask for a key <em>and</em> a secret. Kedaipal asks for the key only &mdash; we fetch the rest from Delyva for you and store it encrypted. Paste it into <strong>your own</strong> Kedaipal dashboard (Step E) and nowhere else. Never send a key to anyone in a chat, not even to us: if you get stuck, Kedaipal support will guide you on a call while <em>you</em> do the pasting.</p>
+  </div>
+
+  <div class="callout warn">
+    <h3>&#9888;&#65039; Treat the key like your bank password</h3>
+    <p style="margin-bottom:0">Anyone holding it can spend your Delyva credit. If you ever paste it somewhere by accident, delete the key in <strong>API Integrations</strong>, create a new one, and paste the new one into Kedaipal. The old key stops working the moment you delete it.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP E ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">E</div>
+    <div>
+      <div class="kicker">Step E &middot; about 3 minutes</div>
+      <h2>Paste it into Kedaipal</h2>
+    </div>
+  </div>
+  <p>In Kedaipal, go to <strong>Settings &rarr; Fulfilment</strong> and find the <strong>Delyva courier account</strong> card.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Paste the key and tap Connect</h3>
+    <p>Kedaipal checks the key with Delyva straight away. If it works, the card shows your <strong>account name</strong> and the last 4 characters of the key. If it doesn&rsquo;t, you get a plain reason &mdash; usually a partly-copied key.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Fill in your pickup address</h3>
+    <p>Street, city, state and a 5-digit postcode. This is where couriers collect &mdash; and the postcode is what decides the price, so get it exactly right. <strong>Make it match the address Delyva has</strong>, especially if you asked for cold-chain activation in Step C.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <h3>Pick your usual parcel type</h3>
+    <p><strong>Parcel</strong> for dry goods, <strong>Chilled</strong> for 0&ndash;4&deg;C, <strong>Frozen</strong> for &minus;18&deg;C. This is only your <em>usual</em> choice &mdash; you can switch it on any single order when you book.</p>
+  </div>
+
+  <div class="callout tip">
+    <h3>&#128230; What about the price your buyer pays?</h3>
+    <p style="margin-bottom:0">Connecting Delyva <strong>does not change your checkout price</strong>. Your buyers keep paying whatever your <strong>delivery charge</strong> setting says (flat fee, or your weight &amp; zone rate card). Booking is about <em>you</em> getting the parcel out the door. Keep an eye on both numbers &mdash; Kedaipal shows what the buyer paid right next to the courier&rsquo;s real price when you book, so you can see your margin before you spend.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP F ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">F</div>
+    <div>
+      <div class="kicker">Step F &middot; about 5 minutes</div>
+      <h2>Do one small real test</h2>
+    </div>
+  </div>
+  <p>Do this once, on a real order, before you rely on it during a busy day.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Open a paid, confirmed delivery order</h3>
+    <p>Scroll to the <strong>Delyva Courier</strong> card and tap <strong>Get courier prices</strong>.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Check the weight, then pick a courier</h3>
+    <p>Kedaipal works the weight out from your product weights. If an item has no weight set (or it&rsquo;s a custom order), it will <strong>ask you</strong> for the packed weight instead of guessing. You&rsquo;ll then see the couriers that can take it, cheapest first.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <h3>Book it, then watch the order move by itself</h3>
+    <p>Confirm, and the tracking number appears on the card &mdash; and on your buyer&rsquo;s order page. When the courier collects, the order becomes <strong>Shipped</strong> on its own. When it arrives, <strong>Delivered</strong>. You do not touch it.</p>
+  </div>
+
+  <div class="callout danger">
+    <h3>&#128683; Don&rsquo;t mark it Shipped yourself</h3>
+    <p style="margin-bottom:0">Once a courier is booked, Kedaipal takes over the status for you. If you also tap <strong>Shipped</strong> by hand, you would message your buyer <em>before</em> the parcel is actually collected. Kedaipal stops you doing that and explains why &mdash; and if you ever genuinely need to override it, there&rsquo;s an <strong>Update manually</strong> option on the order.</p>
+  </div>
+
+  <h3 style="margin-top:14px">Before you call it done</h3>
+  <ul class="checklist">
+    <li><span class="box"></span><span>Delyva account created and my pickup address is correct</span></li>
+    <li><span class="box"></span><span>Credit topped up &mdash; enough for about a week</span></li>
+    <li><span class="box"></span><span>Cold chain requested by email <em>(only if I ship chilled / frozen)</em></span></li>
+    <li><span class="box"></span><span>API key pasted into Kedaipal &mdash; card shows my account name</span></li>
+    <li><span class="box"></span><span>Pickup address and usual parcel type filled in on the Kedaipal card</span></li>
+    <li><span class="box"></span><span>Product weights set in Products &mdash; so I&rsquo;m not typing a weight every time</span></li>
+    <li><span class="box"></span><span>One real order booked end to end and it reached Delivered by itself</span></li>
+    <li><span class="box"></span><span>Key deleted from my Notes app / chat drafts</span></li>
+    <li><span class="box"></span><span>Weekly reminder set to check my Delyva credit balance</span></li>
+  </ul>
+
+  <div class="faq">
+    <p class="q">Do I have to use Delyva for every order?</p>
+    <p>No. It sits alongside everything else. Self-collect, your own rider, a courier you book yourself &mdash; all still work exactly as before. Delyva is one more button, not a replacement.</p>
+
+    <p class="q">Can I cancel a booking?</p>
+    <p>Yes, from the same card &mdash; as long as the courier hasn&rsquo;t collected it yet. After that you&rsquo;ll need to speak to Delyva.</p>
+
+    <p class="q">What if a delivery fails?</p>
+    <p>The courier retries or returns the parcel, and Kedaipal emails you what happened. The order stays where it is &mdash; nothing regresses and your buyer isn&rsquo;t told anything alarming.</p>
+
+    <p class="q">Can I still use Lalamove?</p>
+    <p>Yes. Lalamove is for a rider across town, today; Delyva is for a parcel across the country, and for anything that must stay cold. Use whichever suits the order &mdash; just not both on the same order.</p>
+  </div>
+
+  <div class="support">
+    <div>
+      <h3>&#128172; Kedaipal support</h3>
+      <p style="margin-bottom:0">WhatsApp: <strong>[Kedaipal support number]</strong><br>We&rsquo;ll help you through any step &mdash; in English or BM.</p>
+    </div>
+    <div>
+      <h3>&#128666; Delyva support</h3>
+      <p style="margin-bottom:0">Email: <strong>support@delyva.com</strong><br>Cold-chain activation, credit and courier issues.</p>
+    </div>
+  </div>
+
+  <div class="doc-footer">
+    Kedaipal &middot; August 2026 &middot; v1.0 &mdash; Delyva courier booking</div>
+</section>
+
+</body>
+</html>

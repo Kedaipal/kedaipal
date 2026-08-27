@@ -80,6 +80,7 @@ import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
+import { DelyvaCard } from "./delyva-card";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
@@ -453,6 +454,15 @@ export function FulfilmentTab({
 						canUseLalamove={hasFeature(subscription, "delivery")}
 					/>
 				</div>
+			</Card>
+
+			{/* Between the delivery CHARGE and the despatch LABEL, because that is
+			    the order the seller thinks in: what the buyer pays → how the parcel
+			    actually leaves → the paper that goes on it. Booking is orthogonal to
+			    pricing (a flat-fee store can still book couriers), so it is its own
+			    card rather than a delivery-charge mode. 86eyjpv6z. */}
+			<Card>
+				<DelyvaCard canUse={hasFeature(subscription, "delivery")} country={country} />
 			</Card>
 
 			{/* Directly after Delivery, and before Pickup, because that is what it
