@@ -65,11 +65,21 @@ worse than no entry at all. Keep them apart.
    | Despatch labels | `/app/settings?tab=fulfilment` | `/app/orders` |
    | Opening hours | `/app/settings?tab=fulfilment` | `/app/settings` |
 
-   Two tests guard this and **neither can check the tab**: one pins the `/app`
-   prefix, the other pins that the path before `?` is a real route in
-   `routeTree.gen.ts`. Both would pass a link to `/app/settings` that should
-   have carried `?tab=fulfilment`. Pointing at the right *part* of a page is an
-   authoring judgement — check it by tapping the link once before you merge.
+   Three tests guard this: one pins the `/app` prefix, one pins that the path
+   before `?` is a real route in `routeTree.gen.ts`, and one pins that a
+   `?tab=` value is a tab that still exists in `app.settings.tsx` — so a typo
+   or a renamed tab fails the gate instead of silently dropping the seller on
+   the Store tab.
+
+   What none of them can catch is a link that is *valid but wrong*: a note
+   about opening hours pointing at `?tab=store` passes every check. Choosing
+   the right tab stays an authoring judgement — tap the link once before you
+   merge.
+
+   Inline query strings are safe in `href`. TanStack Router parses them, so
+   `to="/app/settings?tab=store"` renders the same `href` as the
+   `search={{ tab: "store" }}` form used elsewhere in the app; the panel takes
+   the string form because a release entry is data, not JSX.
 5. Set `notable: true` only if the change alters how the seller works.
 6. **Most releases earn no entry at all.** An empty release is simply absent
    from the array — nothing shown, nothing stamped.

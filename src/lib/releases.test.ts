@@ -205,10 +205,9 @@ describe("the shipped RELEASES content", () => {
 		// precedent) so a route rename breaks the note in CI rather than in a
 		// seller's face.
 		//
-		// NOTE what this deliberately cannot check: the query string. A link to
-		// `/app/settings` passes here even when the feature lives behind
-		// `?tab=fulfilment`, so pointing at the RIGHT part of a page stays an
-		// authoring judgement — see docs/whats-new.md.
+		// This checks the PATH only. `?tab=` is checked by the next test;
+		// whether that tab is the right one for the feature stays an authoring
+		// judgement — see docs/whats-new.md.
 		const routeTree = readFileSync(
 			join(__dirname, "../routeTree.gen.ts"),
 			"utf8",
@@ -220,6 +219,43 @@ describe("the shipped RELEASES content", () => {
 				expect(
 					routeTree.includes(`'${path}'`),
 					`${e.href} points at ${path}, which is not a route in routeTree.gen.ts`,
+				).toBe(true);
+			}
+		}
+	});
+
+	test("every `?tab=` deep link names a settings tab that exists", () => {
+		// `/app/settings` is the one destination where the path alone doesn't
+		// locate the feature — the page is six tabs, and an unrecognised `tab`
+		// silently falls back to Store. So a typo (`?tab=fulfillment`) or a tab
+		// renamed out from under a note reads as "the feature moved" to the
+		// seller, with nothing failing anywhere.
+		//
+		// Read as text, like the route tree above, rather than imported:
+		// `app.settings.tsx` is a route module and pulling it into a unit test
+		// drags the whole settings page with it.
+		const settingsSource = readFileSync(
+			join(__dirname, "../routes/app.settings.tsx"),
+			"utf8",
+		);
+		const declared = settingsSource.match(
+			/type SettingsTab =\s*([\s\S]*?);/,
+		)?.[1];
+		expect(declared, "could not find the SettingsTab union").toBeDefined();
+		const tabs = [...(declared as string).matchAll(/"([a-z-]+)"/g)].map(
+			(m) => m[1],
+		);
+		expect(tabs.length).toBeGreaterThan(1);
+
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				const tab = new URLSearchParams(e.href?.split("?")[1] ?? "").get(
+					"tab",
+				);
+				if (tab === null) continue;
+				expect(
+					tabs.includes(tab),
+					`${e.href} names tab "${tab}", which is not one of: ${tabs.join(", ")}`,
 				).toBe(true);
 			}
 		}
