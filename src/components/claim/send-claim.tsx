@@ -2,70 +2,36 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import {
-	Check,
-	ChevronRight,
-	Clock,
-	Copy,
-	Link2,
-	Send,
-} from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Check, ChevronRight, Clock, Link2 } from "lucide-react";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import {
-	CLAIM_MAX_SENDS,
-	claimResendState,
-	claimResendVisible,
-} from "../../../convex/lib/orderClaims";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatCountdown, formatClaimCountdown } from "../../lib/countdown";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
-import { storefrontOrigin } from "../../lib/storefront-url";
+import { formatClaimCountdown } from "../../lib/countdown";
+import {
+	ClaimCopyLinkButton,
+	ClaimRetryButton,
+	ClaimSendNotice,
+	useClaimNow,
+} from "./claim-actions";
 
 /**
  * Seller side of claim links (86eyq0epn, docs/claim-links.md) — the
  * "Waiting on buyers" panel on the counter landing: live countdown per open
- * claim, Resend (cooldown-gated, disabled-with-reason), Cancel, Copy link
- * (the always-available fallback when a WhatsApp send is blocked), plus
- * recently completed / expired outcomes.
+ * claim, Copy link, a conditional Retry, Cancel, plus recently completed /
+ * expired outcomes.
  *
  * The send CONTROLS are not here. They used to live in a modal
  * (`SendClaimDialog`), which the counter panel redesign retired: the payment
  * window and origin chips belong beside the cart they describe, not behind a
  * dialog the seller has to open to discover them. They now render inline in
  * `app.checkout.tsx` under the "Send to buyer" mode.
+ *
+ * Opening a row goes to `WaitingOnBuyerScreen` — the counter session behind
+ * the claim, which is read-only for as long as the link is live.
  */
-
-/** The buyer-facing claim URL — same origin rules as the storefront link. */
-export function claimUrl(token: string): string {
-	return `${storefrontOrigin()}/claim/${token}`;
-}
-
-async function copyClaimLink(token: string): Promise<void> {
-	try {
-		await navigator.clipboard.writeText(claimUrl(token));
-		toast.success("Link copied — paste it into any chat");
-	} catch {
-		toast.error("Couldn't copy — long-press the link to copy it manually");
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Claims panel — "Waiting on buyers" on the counter landing
-// ---------------------------------------------------------------------------
-
-/** Shared 1s tick for the whole panel (one interval, however many rows). */
-function useNow(enabled: boolean): number {
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => {
-		if (!enabled) return;
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		return () => clearInterval(timer);
-	}, [enabled]);
-	return now;
-}
 
 export function ClaimsPanel({
 	onResume,
@@ -77,7 +43,6 @@ export function ClaimsPanel({
 	const claims = useQuery(
 		convexQuery(api.orderClaims.listClaims, { retailerId: actAsRetailerId }),
 	).data;
-	const resendClaim = useMutation(api.orderClaims.resendClaim);
 	const cancelClaim = useMutation(api.orderClaims.cancelClaim);
 	const openClaims = useMemo(
 		() => (claims ?? []).filter((c) => c.status === "open"),
@@ -87,7 +52,7 @@ export function ClaimsPanel({
 		() => (claims ?? []).filter((c) => c.status !== "open"),
 		[claims],
 	);
-	const now = useNow(openClaims.length > 0);
+	const now = useClaimNow(openClaims.length > 0);
 
 	// Nothing sent yet: render nothing — the feature announces itself from the
 	// build screen's "Send to buyer" button, not an empty panel.
@@ -110,24 +75,6 @@ export function ClaimsPanel({
 					// The row is judged live so it flips to the settled style the
 					// second the clock runs out, before the server sweep.
 					const stillOpen = remaining > 0;
-					const resend = claimResendState(claim, now);
-					// Sending isn't set up on this deployment: a Resend would fail the
-					// same way, so Copy link carries the flow.
-					const sendUnavailable = claim.lastSendOutcome === "unavailable";
-					const optedOut = claim.lastSendOutcome === "opted_out";
-					// Resend is a RETRY, not a nudge — it only appears when the last
-					// send didn't reach the buyer AND a retry can plausibly work. See
-					// claimResendVisible for why (every send is billed).
-					const showResend =
-						stillOpen && claimResendVisible(claim.lastSendOutcome);
-					// Short labels on purpose: three controls share one row on a phone,
-					// and the amber note directly below already names WhatsApp and the
-					// remedy — the button doesn't have to carry the whole sentence.
-					const resendLabel = !resend.canResend
-						? resend.reason === "max_sends"
-							? `Sent ${CLAIM_MAX_SENDS}×`
-							: `Retry in ${formatCountdown((resend.nextAt ?? now) - now)}`
-						: "Retry";
 					return (
 						<div
 							key={claim.claimId}
@@ -141,8 +88,8 @@ export function ClaimsPanel({
 							<div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
 								{/* Tappable: an open claim has no order yet, so the useful
 								    destination is the counter session it was sent from —
-								    where the seller can see the cart and re-send (which
-								    supersedes this claim) if something was wrong. */}
+								    where the seller sees the frozen cart and can release
+								    the link if something was wrong. */}
 								<button
 									type="button"
 									onClick={() => onResume(claim.sessionId)}
@@ -177,39 +124,16 @@ export function ClaimsPanel({
 									{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
 								</span>
 								<div className="flex w-full shrink-0 gap-2 sm:w-auto">
-									<button
-										type="button"
-										onClick={() => copyClaimLink(claim.token)}
-										className="tap-target flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted sm:flex-none"
-									>
-										<Copy className="size-3.5" aria-hidden />
-										Copy link
-									</button>
-									{showResend ? (
-										<button
-											type="button"
-											disabled={!resend.canResend}
-											title={
-												!resend.canResend
-													? resend.reason === "max_sends"
-														? `Sent ${CLAIM_MAX_SENDS} times already — copy the link and message them directly`
-														: "A moment between retries keeps this from spamming the buyer"
-													: undefined
-											}
-											onClick={async () => {
-												try {
-													await resendClaim({ claimId: claim.claimId });
-													toast.success("Link re-sent on WhatsApp");
-												} catch (err) {
-													toast.error(convexErrorMessage(err));
-												}
-											}}
-											className="tap-target flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
-										>
-											<Send className="size-3.5" aria-hidden />
-											{resendLabel}
-										</button>
-									) : null}
+									<ClaimCopyLinkButton
+										token={claim.token}
+										className="flex-1 sm:flex-none"
+									/>
+									<ClaimRetryButton
+										claim={claim}
+										now={now}
+										stillOpen={stillOpen}
+										className="flex-1 sm:flex-none"
+									/>
 									<button
 										type="button"
 										onClick={async () => {
@@ -226,33 +150,7 @@ export function ClaimsPanel({
 									</button>
 								</div>
 							</div>
-							{sendUnavailable ? (
-								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-									WhatsApp sending isn&apos;t switched on yet — copy the link
-									and send it to them yourself. The link and its countdown
-									work normally.
-								</p>
-							) : optedOut ? (
-								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-									This buyer has opted out of WhatsApp messages from Kedaipal,
-									so we couldn&apos;t send it. They can reply{" "}
-									<span className="font-semibold">START</span> to our number to
-									turn them back on — or just copy the link across yourself.
-									The link and its countdown work normally.
-								</p>
-							) : claim.lastSendOutcome === "blocked" ? (
-								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-									WhatsApp sending is paused right now (a sending limit or a
-									safety pause on our side) — copy the link and send it
-									yourself. The link and its countdown work normally.
-								</p>
-							) : claim.lastSendOutcome === "failed" ? (
-								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-									The WhatsApp message couldn&apos;t be delivered — copy the
-									link and send it to them yourself. The link (and its
-									deadline) still works.
-								</p>
-							) : null}
+							<ClaimSendNotice outcome={claim.lastSendOutcome} />
 						</div>
 					);
 				})}

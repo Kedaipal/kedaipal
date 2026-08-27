@@ -176,6 +176,53 @@ the reactive Convex subscription and resumes exactly where it was; closing the
 tab changes nothing at all, because the sweep is server-side. Neither page can
 be "killed" by a reload.
 
+### The CHECKOUT is frozen from the moment the link is sent
+
+The freeze above covers the buyer's *order*, after they commit. Zaki's 27 Aug
+test found the bigger hole on the other side of commit: *"once started the
+order, click on card, able to add items and even change order type… during a
+live it might get hectic, so need to be careful."*
+
+He was right, and every outcome was bad:
+
+| The seller does | What used to happen |
+| --- | --- |
+| Edits the cart | **Silently diverges.** The buyer's page renders the claim's frozen snapshot, so nothing reaches them — the seller believes a change landed that didn't. |
+| Rings it up at the counter | The buyer's link is **cancelled out from under them**, mid-form, with no warning to either side. |
+| Sends again | Same, via supersede. |
+
+So a counter checkout is **read-only for as long as its claim link is live**:
+
+- `liveClaimForSession` (in `convex/counterCheckout.ts`) judges "live" with
+  `effectiveClaimStatus`, not the stored column — a claim past its deadline
+  must not hold the checkout hostage while it waits for the 5-min sweep.
+- **Server guards** (the real ones): `saveSessionDraft` and
+  `createOrderFromSession` both refuse with `SESSION_CLAIM_LOCK_REASON`.
+  `cancelOpenClaimsForSession` stays on `createOrderFromSession` as the race
+  backstop.
+- **The screen**: opening such a checkout renders `WaitingOnBuyerScreen`, not
+  the build screen — the claim's **frozen lines** (what that buyer is actually
+  looking at), the countdown, the locked total, the send-failure note, Copy
+  link, the conditional Retry, and one deliberate way out: **"Cancel link &
+  edit this order"**, confirmed. Releasing is also the only honest way to do
+  it, because cancelling is what tells the buyer their offer was withdrawn.
+  No navigation afterwards — `getCheckoutSession` is a live subscription, so
+  the screen flips itself back to the editable build screen.
+- **The lock is stated, not just enforced.** A seller who can't find the Add
+  buttons is told why, and what to do instead.
+- **`listOpenSessions` parks it.** A checkout with a live link is *not* in
+  "Open checkouts" — it isn't something the cashier can work on, and it
+  already has a home one section down under "Waiting on buyers". Listing it in
+  both places showed the same buyer twice and put a dismiss button next to a
+  live offer. It reappears, editable, when the link is released or runs out.
+- **Dismissing the whole checkout still cascades** (the claim is cancelled with
+  it). That is a deliberate destructive act on the whole thing, unlike a sale
+  that reads as ordinary — and after the parking change, it is no longer
+  reachable from the list while a link is out.
+
+Same posture as the post-commit freeze, stated once: **an offer that is out
+gets released before it gets changed.**
+
 ### The order is frozen while the window runs
 
 `isPaymentWindowLocked(order)` — a `paymentDueAt` on a live order that has not
@@ -287,7 +334,9 @@ outcome.
   (always available), **Retry** (conditional, see below), **Cancel**, plus
   recent outcomes: completed (→ the order), expired ("Send a fresh link"
   reopens the session). The row is tappable (chevron affordance) and opens the
-  counter session the claim was sent from — an open claim has no order yet.
+  counter session the claim was sent from — an open claim has no order yet, so
+  the useful destination is `WaitingOnBuyerScreen` (read-only; see *The
+  CHECKOUT is frozen…* above).
   Renders nothing until a first claim exists — the build screen's button is
   the feature's front door.
   - **Layout**: one row on desktop (name · items · total | countdown |

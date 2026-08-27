@@ -43,6 +43,10 @@ import {
 } from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
+	effectiveClaimStatus,
+	SESSION_CLAIM_LOCK_REASON,
+} from "./lib/orderClaims";
+import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
@@ -202,6 +206,27 @@ export const getCheckoutSession = query({
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
 		// Autosaved in-progress order, so a resume restores the cart + selections.
 		draft: Doc<"counterCheckoutSessions">["draft"];
+		// A claim link that is still out (86eyq0epn). Non-null = this checkout is
+		// FROZEN: the screen renders the read-only "waiting on buyer" view and
+		// both edit mutations refuse. Carries the frozen snapshot rather than the
+		// draft, because the snapshot is what the buyer is actually looking at.
+		liveClaim: {
+			claimId: Id<"orderClaims">;
+			token: string;
+			expiresAt: number;
+			windowMinutes: number;
+			currency: string;
+			itemsTotal: number;
+			lines: Array<{
+				name: string;
+				variantLabel: string | undefined;
+				price: number;
+				quantity: number;
+			}>;
+			sentCount: number;
+			lastSentAt: number;
+			lastSendOutcome: Doc<"orderClaims">["lastSendOutcome"];
+		} | null;
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new ConvexError("Not authenticated");
@@ -241,8 +266,11 @@ export const getCheckoutSession = query({
 			});
 		}
 
+		const now = Date.now();
+		const claim = await liveClaimForSession(ctx, sessionId, now);
+
 		return {
-			status: effectiveStatus(session, Date.now()),
+			status: effectiveStatus(session, now),
 			expiresAt: session.expiresAt,
 			waPhone: session.waPhone,
 			displayName,
@@ -250,6 +278,28 @@ export const getCheckoutSession = query({
 			orderId: session.orderId,
 			customer,
 			draft: session.draft,
+			liveClaim: claim
+				? {
+						claimId: claim._id,
+						token: claim.token,
+						expiresAt: claim.expiresAt,
+						windowMinutes: claim.windowMinutes,
+						currency: claim.currency,
+						itemsTotal: claim.lines.reduce(
+							(sum, l) => sum + l.price * l.quantity,
+							0,
+						),
+						lines: claim.lines.map((l) => ({
+							name: l.name,
+							variantLabel: l.variantLabel,
+							price: l.price,
+							quantity: l.quantity,
+						})),
+						sentCount: claim.sentCount,
+						lastSentAt: claim.lastSentAt,
+						lastSendOutcome: claim.lastSendOutcome,
+					}
+				: null,
 		};
 	},
 });
@@ -488,6 +538,13 @@ export const saveSessionDraft = mutation({
 		const { session } = resolved;
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open for editing");
+		// A claim link froze these lines and the buyer is looking at them. An
+		// edit here would NOT reach that page, so it would silently diverge from
+		// the offer — the seller's cart and the buyer's would disagree with no
+		// sign either way. The screen renders read-only behind the same fact;
+		// this is the backstop for a stale tab.
+		if (await liveClaimForSession(ctx, sessionId, Date.now()))
+			throw new ConvexError(SESSION_CLAIM_LOCK_REASON);
 
 		// Drop junk lines (non-positive / non-integer qty) and cap the count so a
 		// rogue client can't bloat the row. Authoritative validation is at create.
@@ -510,6 +567,14 @@ export const saveSessionDraft = mutation({
  * customers at once and resume any of them by matching the buyer's pairing code.
  * Effectively-expired rows are filtered out even before the cron sweeps them.
  * Owner-or-admin. Item count comes straight off the draft (no per-variant lookups).
+ *
+ * A checkout whose CLAIM LINK is still out is deliberately absent (86eyq0epn):
+ * it is not something the cashier can work on — it is parked with the buyer,
+ * and it already has a home one section down under "Waiting on buyers". Listing
+ * it in both places showed the same buyer twice and, worse, put a dismiss
+ * button next to a live offer. One card per state, in the section that names
+ * that state. When the claim is released or runs out, the checkout reappears
+ * here, editable again.
  */
 export const listOpenSessions = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
@@ -553,6 +618,8 @@ export const listOpenSessions = query({
 
 		for (const s of rows) {
 			if (effectiveStatus(s, now) === "expired") continue;
+			// Parked with the buyer — see the docblock.
+			if (await liveClaimForSession(ctx, s._id, now)) continue;
 
 			let displayName: string | undefined;
 			if (s.customerId) {
@@ -648,6 +715,13 @@ export const createOrderFromSession = mutation({
 		if (args.items.length === 0) throw new ConvexError("Add at least one item");
 		if (args.items.length > MAX_COUNTER_ITEMS)
 			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
+		// One cart, one door — and the buyer is already at the other one. Ringing
+		// this up would silently kill the link they're filling in (see
+		// cancelOpenClaimsForSession below, which stays as the race backstop).
+		// Refusing makes the seller release the link on purpose first, which is
+		// also what tells the buyer their offer was withdrawn.
+		if (await liveClaimForSession(ctx, args.sessionId, Date.now()))
+			throw new ConvexError(SESSION_CLAIM_LOCK_REASON);
 
 		let sanitizedFulfilmentDate: number | undefined;
 		if (args.fulfilmentDate !== undefined) {
@@ -873,6 +947,35 @@ export const createOrderFromSession = mutation({
  * createOrderFromSession + cancelCheckoutSession; orderClaims.sendClaim
  * supersedes its own predecessors the same way.
  */
+/**
+ * The session's LIVE claim link, if one is out (86eyq0epn).
+ *
+ * "Live" is judged with `effectiveClaimStatus`, not the stored column: a claim
+ * past its deadline reads `expired` from the next read onward, and must NOT
+ * keep holding the session hostage while it waits for the 5-min sweep.
+ *
+ * While this returns a claim, the checkout is FROZEN — see the guards on
+ * `saveSessionDraft` and `createOrderFromSession`. Zaki, 27 Aug: during a live
+ * it gets hectic, and the failure mode is a seller reopening the card and
+ * editing an order a buyer is already filling in. Every outcome of that was
+ * bad: a draft edit silently diverges from the frozen offer (the buyer's page
+ * never changes, so the seller believes a change landed that didn't), and a
+ * counter sale or a re-send kills the buyer's open link mid-form.
+ */
+async function liveClaimForSession(
+	ctx: MutationCtx | QueryCtx,
+	sessionId: Id<"counterCheckoutSessions">,
+	now: number,
+): Promise<Doc<"orderClaims"> | null> {
+	const claims = await ctx.db
+		.query("orderClaims")
+		.withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+		.collect();
+	return (
+		claims.find((c) => effectiveClaimStatus(c, now) === "open") ?? null
+	);
+}
+
 async function cancelOpenClaimsForSession(
 	ctx: MutationCtx,
 	sessionId: Id<"counterCheckoutSessions">,

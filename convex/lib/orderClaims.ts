@@ -308,6 +308,11 @@ export function isPaymentWindowLocked(order: {
 	return (order.paymentStatus ?? "unpaid") !== "received";
 }
 
+/** The server's refusal when a seller tries to change a checkout whose claim
+ * link is still out. Named so the UI and the mutation say the same thing. */
+export const SESSION_CLAIM_LOCK_REASON =
+	"A link is out for this checkout and the buyer may be filling it in — cancel the link first, then change the order.";
+
 /** The server's refusal message for the freeze. The seller-facing dialog says
  * the same thing at length (and offers the way out); this is what surfaces if
  * a stale tab reaches the mutation anyway. */

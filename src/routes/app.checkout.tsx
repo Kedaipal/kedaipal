@@ -47,6 +47,7 @@ import {
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
 import { ClaimsPanel } from "../components/claim/send-claim";
+import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import {
 	counterPrimaryAction,
@@ -240,6 +241,19 @@ function ActiveSession({
 				buyerName={session.displayName}
 				anonymous={!session.waPhone}
 				onBackToList={onBackToList}
+			/>
+		);
+
+	// A claim link is still out for this checkout (86eyq0epn). The build screen
+	// is NOT what the seller needs here — and it is actively dangerous, because
+	// every edit either silently misses the buyer's frozen offer or kills the
+	// link they're filling in. Show them what that buyer is looking at instead,
+	// with one deliberate way back to editing.
+	if (session.status === "buyer_identified" && session.liveClaim)
+		return (
+			<WaitingOnBuyerScreen
+				claim={session.liveClaim}
+				buyerName={session.displayName}
 			/>
 		);
 

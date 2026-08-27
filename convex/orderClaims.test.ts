@@ -389,35 +389,19 @@ describe("orderClaims — resend + cancel", () => {
 		expect(payload?.open).toBeUndefined();
 	});
 
-	test("counter sale + session cancel both kill the open claim", async () => {
+	// Dismissing the whole checkout is a deliberate destructive act, so killing
+	// the offer with it is the right cascade — unlike ringing the same cart up
+	// at the counter, which now refuses outright (see "the checkout is frozen
+	// while its link is out"): that read as an ordinary sale but silently took
+	// the buyer's link away mid-form.
+	test("dismissing the checkout kills its open claim", async () => {
 		const t = setup();
-		const { claimId, sessionId, variantId } = await openClaim(t);
+		const { claimId, sessionId } = await openClaim(t);
 		const asA = t.withIdentity({ subject: USER_A });
-		await asA.mutation(api.counterCheckout.createOrderFromSession, {
+		await asA.mutation(api.counterCheckout.cancelCheckoutSession, {
 			sessionId,
-			items: [{ variantId, quantity: 1 }],
-			paidInPerson: true,
 		});
 		expect((await getClaim(t, claimId)).status).toBe("cancelled");
-
-		// And the dismissal path — a fresh session + claim at the SAME store
-		// (a different buyer, so the manual bind doesn't re-claim the first).
-		const secondSession = await seedSession(t, USER_A, {
-			waPhone: "60198765432",
-			name: "Mira Razak",
-		});
-		const { claimId: secondClaim } = await asA.mutation(
-			api.orderClaims.sendClaim,
-			{
-				sessionId: secondSession,
-				items: [{ variantId, quantity: 1 }],
-				windowMinutes: 15,
-			},
-		);
-		await asA.mutation(api.counterCheckout.cancelCheckoutSession, {
-			sessionId: secondSession,
-		});
-		expect((await getClaim(t, secondClaim)).status).toBe("cancelled");
 	});
 });
 
@@ -902,5 +886,131 @@ describe("orderClaims — payment deadline (the carried timer)", () => {
 		expect(order?.paymentDueAt).toBeUndefined();
 		// No robot signature on a human cancel.
 		expect(order?.cancelledReason).toBeUndefined();
+	});
+});
+
+describe("orderClaims — the checkout is frozen while its link is out", () => {
+	/** Seller sends a link, then goes back to fiddle with the same checkout. */
+	async function seedSentClaim(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 12000,
+		});
+		const sessionId = await seedSession(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { claimId } = await asA.mutation(api.orderClaims.sendClaim, {
+			sessionId,
+			items: [{ variantId, quantity: 1 }],
+			windowMinutes: 15,
+		});
+		return { retailer, variantId, sessionId, asA, claimId };
+	}
+
+	// The silent one: the buyer's page renders the FROZEN claim, so a draft edit
+	// would never reach them — the seller would believe a change landed that
+	// didn't. Refusing is the only honest answer.
+	test("a draft edit is refused, not silently diverged from the buyer's offer", async () => {
+		const t = setup();
+		const { sessionId, variantId, asA, claimId } = await seedSentClaim(t);
+
+		await expect(
+			asA.mutation(api.counterCheckout.saveSessionDraft, {
+				sessionId,
+				draft: { items: [{ variantId, quantity: 9 }] },
+			}),
+		).rejects.toThrow(/cancel the link first/i);
+
+		// Release it and the same edit goes through — the way back is deliberate.
+		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
+		await asA.mutation(api.counterCheckout.saveSessionDraft, {
+			sessionId,
+			draft: { items: [{ variantId, quantity: 9 }] },
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.draft?.items[0].quantity).toBe(9);
+	});
+
+	// The loud one: ringing it up at the counter used to cancel the buyer's link
+	// out from under them mid-form.
+	test("ringing the same cart up at the counter is refused while the link is live", async () => {
+		const t = setup();
+		const { sessionId, variantId, asA, claimId } = await seedSentClaim(t);
+
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			}),
+		).rejects.toThrow(/cancel the link first/i);
+
+		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
+		const { shortId } = await asA.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			},
+		);
+		expect(shortId).toMatch(/^ORD-/);
+	});
+
+	// A claim past its deadline must not hold the checkout hostage while it
+	// waits for the 5-minute sweep — `effectiveClaimStatus`, not the column.
+	test("an expired-but-unswept claim stops freezing the checkout", async () => {
+		const t = setup();
+		const { sessionId, variantId, asA, claimId } = await seedSentClaim(t);
+		await t.run(async (ctx) =>
+			ctx.db.patch(claimId, { expiresAt: Date.now() - 1000 }),
+		);
+		// Still stored as "open", but nothing about it is live any more.
+		expect((await getClaim(t, claimId)).status).toBe("open");
+
+		await asA.mutation(api.counterCheckout.saveSessionDraft, {
+			sessionId,
+			draft: { items: [{ variantId, quantity: 4 }] },
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.draft?.items[0].quantity).toBe(4);
+	});
+
+	test("the checkout is parked out of Open checkouts and comes back on release", async () => {
+		const t = setup();
+		const { retailer, sessionId, asA, claimId } = await seedSentClaim(t);
+		const open = () =>
+			asA.query(api.counterCheckout.listOpenSessions, {
+				retailerId: retailer._id,
+			});
+
+		// Parked with the buyer: it lives under "Waiting on buyers" instead, so
+		// listing it here too would show the same buyer twice — with a dismiss
+		// button next to a live offer.
+		expect(await open()).toHaveLength(0);
+
+		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
+		const rows = await open();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].sessionId).toBe(sessionId);
+	});
+
+	test("getCheckoutSession hands the screen the frozen snapshot, not the draft", async () => {
+		const t = setup();
+		const { sessionId, asA, claimId } = await seedSentClaim(t);
+
+		const session = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(session?.liveClaim?.claimId).toBe(claimId);
+		expect(session?.liveClaim?.lines).toHaveLength(1);
+		expect(session?.liveClaim?.itemsTotal).toBe(12000);
+
+		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
+		const released = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(released?.liveClaim).toBeNull();
 	});
 });

@@ -565,6 +565,22 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
 
+## A checkout is frozen while its claim link is out (2026-08-27)
+
+Sending a claim link (`86eyq0epn`) turns the cart into an **offer**, so the
+session stops being editable:
+
+- `listOpenSessions` **omits** it — it lives under "Waiting on buyers" instead.
+  One card per state, and no dismiss button beside a live offer.
+- `saveSessionDraft` and `createOrderFromSession` refuse
+  (`SESSION_CLAIM_LOCK_REASON`).
+- Opening it renders `WaitingOnBuyerScreen` (read-only), whose only way back to
+  editing is a confirmed **Cancel link**.
+- Dismissing the whole checkout still cancels the claim with it.
+
+Full rationale and the table of what each edit used to do:
+[`claim-links.md` § The CHECKOUT is frozen from the moment the link is sent](./claim-links.md).
+
 ## Stock is stated in the catalog, not discovered at checkout (2026-08-27)
 
 Zaki, testing `86eyq0epn`: *"for items with 0 stock is not obvious, only at
