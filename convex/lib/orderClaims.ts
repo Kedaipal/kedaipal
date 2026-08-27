@@ -4,10 +4,12 @@
  * can never disagree about a window, a cooldown, or whether a claim is still
  * alive. No Convex imports — unit-testable in isolation.
  *
- * The timer semantics (locked with Zaki, 26 Aug 2026):
- *  - The window gates buyer COMPLETION only (option (a)): an expired link kills
- *    the locked price and the checkout; a committed order's payment follows the
- *    normal flow (HitPay pay-now / manual transfer + reminders).
+ * The timer semantics (locked with Zaki, 26–27 Aug 2026):
+ *  - Before commit, the window gates buyer COMPLETION: an expired link kills
+ *    the locked price and the checkout.
+ *  - At commit the SAME deadline carries onto the order as `paymentDueAt`
+ *    (floored to a payment runway) and keeps running until real money — the
+ *    Agoda model; see the payment-deadline section at the bottom of this file.
  *  - Resend NEVER resets the deadline — same link, same clock.
  *  - Resend is cooled down + capped so a seller can't spam the buyer's WhatsApp.
  */
@@ -114,4 +116,88 @@ export function describeClaimWindow(
 		return hours === 1 ? "1 hour" : `${hours} hours`;
 	}
 	return lang === "ms" ? `${minutes} minit` : `${minutes} minutes`;
+}
+
+// ---------------------------------------------------------------------------
+// The payment deadline (the timer carried onto the order — Zaki, 27 Aug 2026)
+// ---------------------------------------------------------------------------
+// Stock decrements at claim COMMIT, so an unpaid committed order holds real
+// inventory. The claim's window therefore doesn't die at commit: it carries
+// onto the order as `orders.paymentDueAt` (the Agoda model — the hold runs
+// until money), and a sweep auto-cancels a due order so the stock comes back.
+// The rule that keeps it honest: THE CLOCK ONLY RUNS WHILE THE BUYER CAN
+// ACTUALLY PAY, and any moment payment starts or becomes possible guarantees
+// a minimum runway.
+
+/** The minimum time a buyer always has to actually PAY — floors the deadline
+ * at commit (a buyer who spent 14 of 15 minutes on the form still gets a real
+ * chance), and re-arms it whenever payment starts (a HitPay checkout mint) or
+ * first becomes possible (a fee-pending order getting its fee). */
+export const CLAIM_PAYMENT_RUNWAY_MS = 15 * 60 * 1000;
+
+/** How long after a HitPay checkout mint the sweep keeps its hands off —
+ * matches the request's ~1h life at HitPay, so a buyer sitting on the hosted
+ * page can't be cancelled mid-payment (money landing on a cancelled order is
+ * the worst outcome this feature can produce; the gatewayPaymentIssue
+ * machinery would catch it, but that's a safety net, not a plan). */
+export const GATEWAY_SESSION_GRACE_MS = 60 * 60 * 1000;
+
+/** The deadline stamped at claim commit: the claim's own deadline, floored to
+ * a full runway — the timer visibly CONTINUES from the claim page, it never
+ * shortens below "enough time to actually pay". */
+export function paymentDueAtCommit(
+	claimExpiresAt: number,
+	now: number,
+): number {
+	return Math.max(claimExpiresAt, now + CLAIM_PAYMENT_RUNWAY_MS);
+}
+
+/** Bounded extension when a payment session starts / payment becomes possible.
+ * Never shortens, never freezes indefinitely (a freeze would be exploitable:
+ * tap Pay, close the tab, hold the stock forever). The buyer sees the clock
+ * jump — visible and honest. */
+export function extendedPaymentDue(currentDueAt: number, now: number): number {
+	return Math.max(currentDueAt, now + CLAIM_PAYMENT_RUNWAY_MS);
+}
+
+/**
+ * May the sweep cancel this order right now? The single author — the cron and
+ * the tests judge with the same predicate. Every `false` arm is a deliberate
+ * protection, not an optimization:
+ *  - no deadline / not yet due — nothing to do;
+ *  - `claimed` — the buyer says they've paid; a human verifies. A false claim
+ *    pauses the clock, yes — but it escalates to the seller (who checks the
+ *    bank and rejects it, at which point the already-past deadline makes the
+ *    next sweep cancel). Cancelling a TRUE claim would burn a paid buyer.
+ *  - `received` — paid; the deadline should already be cleared (belt+braces);
+ *  - past pending/confirmed — the seller started fulfilling an unpaid order
+ *    on purpose; a robot must not un-decide that;
+ *  - `deliveryFeePending` — the buyer CANNOT pay until the seller prices it;
+ *  - `gatewayPaymentIssue` — money already moved oddly; a human is sorting it;
+ *  - live gateway session — the buyer may be mid-payment on HitPay's page.
+ */
+export function isAutoCancelDue(
+	order: {
+		paymentDueAt?: number;
+		status: string;
+		paymentStatus?: string;
+		deliveryFeePending?: boolean;
+		gatewayPaymentIssue?: unknown;
+		gatewayRequestedAt?: number;
+	},
+	now: number,
+): boolean {
+	if (order.paymentDueAt === undefined || now <= order.paymentDueAt)
+		return false;
+	if (order.status !== "pending" && order.status !== "confirmed") return false;
+	if ((order.paymentStatus ?? "unpaid") !== "unpaid") return false;
+	if (order.deliveryFeePending === true) return false;
+	if (order.gatewayPaymentIssue !== undefined && order.gatewayPaymentIssue !== null)
+		return false;
+	if (
+		order.gatewayRequestedAt !== undefined &&
+		now - order.gatewayRequestedAt < GATEWAY_SESSION_GRACE_MS
+	)
+		return false;
+	return true;
 }

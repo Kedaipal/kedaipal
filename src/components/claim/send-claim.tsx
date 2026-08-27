@@ -172,8 +172,10 @@ export function SendClaimDialog({
 						})}
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">
-						When time runs out the link and the locked price expire — they can
-						still message you for a fresh one. Resending the link never resets
+						They must complete the order <em>and pay</em> inside this window —
+						when it runs out, the link expires and an unpaid order is
+						cancelled automatically, so your stock comes back. Starting a
+						payment extends their time to finish it. Resending never resets
 						the clock. We&apos;ll remember this choice for your next send.
 					</p>
 				</div>

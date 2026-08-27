@@ -37,13 +37,41 @@ repeat customers.
   is remembered as the store's default (`retailers.claimLinkWindowMinutes`,
   updated at send — the dialog says so; deliberately no separate Settings
   card).
-- **Option (a): the timer gates buyer COMPLETION only.** An expired link
-  kills the checkout and the locked price; a committed order's payment then
-  follows the normal flow (HitPay Pay-now / manual transfer + the reminder
-  machinery). There is **no auto-cancel of committed-but-unpaid orders** —
-  that can't work honestly for manual-transfer stores, where "paid" is a
-  human-verified claim. A HitPay-only "pay to complete" is the v1.1 candidate
-  if hard pay-within-window semantics are ever wanted.
+- **The deadline runs until MONEY, not until commit** (revised 27 Aug — the
+  Agoda model; supersedes the first cut's option (a)). Before commit it gates
+  completion (expired ⇒ dead link + released price). At commit it **carries
+  onto the order as `orders.paymentDueAt`** — floored to
+  `CLAIM_PAYMENT_RUNWAY_MS` (15 min) so a buyer who spent the window on the
+  form still has a real chance to pay — because stock decrements at commit
+  and an unpaid order would otherwise hold inventory forever. The buyer's
+  order page shows the continuing countdown (`PaymentDueCountdown`); a
+  1-minute sweep (`cancelUnpaidDueOrders`, `by_payment_due` index)
+  **auto-cancels a due order** through `applyStatusTransition` (stock back,
+  aggregates reversed, usage un-metered), stamping
+  `cancelledReason: "payment_window_expired"` so the buyer's cancelled page
+  explains itself.
+- **The clock only runs while the buyer can actually pay** — every guard is
+  in ONE predicate, `isAutoCancelDue`:
+  - `claimed` ("I've paid") **pauses** it: a human verifies the transfer, and
+    cancelling a true claim would burn a paid buyer. A false claim escalates
+    to the seller, whose rejection re-exposes the past-due order to the next
+    sweep. The countdown never races the handshake — the UI shows the
+    "being confirmed" card instead of a clock.
+  - `received` retires it (cleared in `applyPaymentReceived`, the one core
+    every receive path runs through). Any cancellation clears it too — the
+    index only ever holds live clocks.
+  - **Starting a payment extends it, never freezes it**: a HitPay mint
+    (`recordCheckoutRequest`) bumps the deadline to ≥ now + runway (the buyer
+    sees the clock jump), and the sweep additionally leaves any order alone
+    while the checkout session is live (`GATEWAY_SESSION_GRACE_MS`, ~1 h) —
+    so nobody is cancelled mid-payment. A freeze was rejected as exploitable
+    (tap Pay, close the tab, hold the stock forever).
+  - `deliveryFeePending` **suspends** it (the buyer *can't* pay); the fee
+    landing (`setDeliveryFee`) re-arms it with the same runway floor.
+  - A seller who advanced an unpaid order past `confirmed` made a deliberate
+    call — the robot keeps out.
+  - Hard pay-within-window with no pauses at all would cancel paid manual-
+    transfer buyers (a claim is verified hours later) — permanently rejected.
 - **Resend never resets the clock** — same token, same deadline. Resend is
   guarded per claim: **5-minute cooldown, max 3 sends**
   (`claimResendState`), enforced server-side and mirrored as the
@@ -103,6 +131,11 @@ repeat customers.
   buyer confirmation push). **Idempotent**: a second commit returns the
   existing order; a reopened completed link shows "already confirmed" +
   the track page.
+- **After commit** the buyer lands on `/track/<token>`, where the SAME
+  deadline keeps counting (`PaymentDueCountdown`, above the payment card)
+  until real money — see the timer section for the pause/extension rules.
+  An auto-cancelled order's page says why ("the payment window ran out…"),
+  never a bare "Cancelled".
 - **Expired / cancelled:** calm dead-end — nothing charged, wa.me into the
   seller's chat with a prefilled ask, "Browse the store instead".
 

@@ -7,6 +7,7 @@ import type { Id } from "./_generated/dataModel";
 import { fulfilmentDateBounds } from "./lib/fulfilmentDate";
 import {
 	CLAIM_MAX_SENDS,
+	CLAIM_PAYMENT_RUNWAY_MS,
 	CLAIM_RESEND_COOLDOWN_MS,
 	CLAIM_RETENTION_MS,
 } from "./lib/orderClaims";
@@ -663,5 +664,168 @@ describe("orderClaims — listClaims + crons", () => {
 		);
 		await t.mutation(internal.orderClaims.purgeStaleClaims, {});
 		expect(await t.run((ctx) => ctx.db.get(claimId))).toBeNull();
+	});
+});
+
+describe("orderClaims — payment deadline (the carried timer)", () => {
+	/** Send a claim + commit it as a delivery order; returns ids for assertions. */
+	async function committedOrder(
+		t: ReturnType<typeof setup>,
+		opts: Parameters<typeof seedVariant>[3] = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			block: true,
+			onHand: 10,
+			...opts,
+		});
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token, expiresAt } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 2 }],
+				windowMinutes: 15,
+			});
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		const orderId = await t.run(async (ctx) => {
+			const claim = await ctx.db.get(claimId);
+			if (!claim?.orderId) throw new Error("commit didn't settle the claim");
+			return claim.orderId;
+		});
+		return { retailer, variantId, claimId, orderId, claimExpiresAt: expiresAt };
+	}
+
+	test("commit stamps paymentDueAt: the claim deadline floored to a full payment runway", async () => {
+		const t = setup();
+		const before = Date.now();
+		const { orderId, claimExpiresAt } = await committedOrder(t);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		// 15-min window: barely any of it was spent, so the floor (now + runway)
+		// and the claim deadline are within seconds of each other — assert the
+		// contract, not the winner: never earlier than either input.
+		expect(order?.paymentDueAt).toBeGreaterThanOrEqual(claimExpiresAt);
+		expect(order?.paymentDueAt).toBeGreaterThanOrEqual(
+			before + CLAIM_PAYMENT_RUNWAY_MS,
+		);
+	});
+
+	test("the sweep cancels a due unpaid order: stock back, deadline cleared, reason stamped", async () => {
+		const t = setup();
+		const { orderId, variantId } = await committedOrder(t);
+		// Commit took 2 of the 10 on hand.
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(8);
+
+		await t.run((ctx) => ctx.db.patch(orderId, { paymentDueAt: Date.now() - 1000 }));
+		const result = await t.mutation(
+			internal.orderClaims.cancelUnpaidDueOrders,
+			{},
+		);
+		expect(result.cancelled).toBe(1);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("cancelled");
+		expect(order?.cancelledReason).toBe("payment_window_expired");
+		expect(order?.paymentDueAt).toBeUndefined();
+		// The whole point: the held stock came back.
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(10);
+	});
+
+	test("the sweep leaves protected orders alone: claimed, fee-pending, live gateway session, already-fulfilling", async () => {
+		const t = setup();
+		const { orderId } = await committedOrder(t);
+		const past = Date.now() - 1000;
+
+		for (const patch of [
+			{ paymentDueAt: past, paymentStatus: "claimed" as const },
+			{ paymentDueAt: past, paymentStatus: "unpaid" as const, deliveryFeePending: true },
+			{
+				paymentDueAt: past,
+				paymentStatus: "unpaid" as const,
+				deliveryFeePending: undefined,
+				gatewayRequestedAt: Date.now(),
+			},
+		]) {
+			await t.run((ctx) => ctx.db.patch(orderId, patch));
+			const result = await t.mutation(
+				internal.orderClaims.cancelUnpaidDueOrders,
+				{},
+			);
+			expect(result.cancelled).toBe(0);
+			expect((await t.run((ctx) => ctx.db.get(orderId)))?.status).not.toBe(
+				"cancelled",
+			);
+		}
+
+		// Seller started fulfilling an unpaid order — their call stands.
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				gatewayRequestedAt: undefined,
+				status: "packed",
+			}),
+		);
+		const result = await t.mutation(
+			internal.orderClaims.cancelUnpaidDueOrders,
+			{},
+		);
+		expect(result.cancelled).toBe(0);
+	});
+
+	test("real money retires the deadline through the shared receive core", async () => {
+		const t = setup();
+		const { orderId } = await committedOrder(t);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.markPaymentReceived, { orderId });
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.paymentStatus).toBe("received");
+		expect(order?.paymentDueAt).toBeUndefined();
+		// And a later sweep has nothing to say about it.
+		const result = await t.mutation(
+			internal.orderClaims.cancelUnpaidDueOrders,
+			{},
+		);
+		expect(result.cancelled).toBe(0);
+	});
+
+	test("a HitPay mint extends a nearly-dead deadline — the buyer's clock jumps, never a freeze", async () => {
+		const t = setup();
+		const { orderId } = await committedOrder(t);
+		// 40 seconds left when the buyer taps Pay.
+		const nearlyDead = Date.now() + 40_000;
+		await t.run((ctx) => ctx.db.patch(orderId, { paymentDueAt: nearlyDead }));
+		const before = Date.now();
+		const res = await t.mutation(internal.hitpay.recordCheckoutRequest, {
+			orderId,
+			requestId: "req_test_1",
+			url: "https://securecheckout.example/req_test_1",
+			amountSen: 17800,
+			currency: "MYR",
+		});
+		expect(res.ok).toBe(true);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.paymentDueAt).toBeGreaterThanOrEqual(
+			before + CLAIM_PAYMENT_RUNWAY_MS,
+		);
+		// And the live session itself shields the order from the sweep even
+		// past the (old) deadline — belt and braces.
+		expect(order?.gatewayRequestedAt).toBeGreaterThanOrEqual(before);
+	});
+
+	test("a seller's own cancel clears the deadline too (index hygiene)", async () => {
+		const t = setup();
+		const { orderId } = await committedOrder(t);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, { orderId, status: "cancelled" });
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("cancelled");
+		expect(order?.paymentDueAt).toBeUndefined();
+		// No robot signature on a human cancel.
+		expect(order?.cancelledReason).toBeUndefined();
 	});
 });

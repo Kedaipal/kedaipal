@@ -918,7 +918,8 @@ export function ClaimCheckoutPage({
 						</Button>
 						<p className="text-center text-xs text-muted-foreground">
 							Nothing is charged yet — you pay on your order page next, online
-							or by bank transfer.
+							or by bank transfer. Your price hold continues there until
+							payment.
 						</p>
 					</div>
 				</div>
@@ -948,7 +949,8 @@ export function ClaimCheckoutPage({
 								: `Confirm order · ${formatPrice(displayTotal, store.currency)} + ${feeNounShort}`}
 					</Button>
 					<p className="text-center text-[11px] text-muted-foreground">
-						Nothing is charged yet — you pay on your order page next.
+						Nothing is charged yet — you pay next; the hold continues until
+						payment.
 					</p>
 				</div>
 			</div>

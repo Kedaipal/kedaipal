@@ -13,9 +13,11 @@
  *  - Lines are FROZEN at send. The counter draft is a non-authoritative
  *    scratchpad whose prices re-resolve at create, so "price locked" needs its
  *    own snapshot; commit re-reads variant rows ONLY for stock/parcel weight.
- *  - The window is a FIXED deadline that gates buyer completion only
- *    (option (a)): expired ⇒ dead link + released price; a committed order's
- *    payment follows the normal flow. Resend never moves the deadline.
+ *  - The window is a FIXED deadline. Before commit it gates completion
+ *    (expired ⇒ dead link + released price); at commit it CARRIES onto the
+ *    order as `paymentDueAt` and runs until real money, with the sweep below
+ *    auto-cancelling a due unpaid order so the stock comes back (Zaki,
+ *    27 Aug — the Agoda model). Resend never moves the deadline.
  *  - Resend is cooled down + capped (convex/lib/orderClaims.ts) so the seller
  *    can't spam the buyer's WhatsApp.
  *  - Commit mirrors the STOREFRONT validation set (address shape, delivery
@@ -50,6 +52,8 @@ import {
 	CLAIM_RETENTION_MS,
 	claimResendState,
 	effectiveClaimStatus,
+	isAutoCancelDue,
+	paymentDueAtCommit,
 	sanitizeClaimWindowMinutes,
 } from "./lib/orderClaims";
 import {
@@ -66,6 +70,7 @@ import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { type Locale, pickLocale, type PickupSnapshot } from "./lib/whatsappCopy";
 import {
 	addressValidator,
+	applyStatusTransition,
 	buildPickupSnapshot,
 	loadCheckoutDeliveryQuote,
 	resolveDeliveryForOrder,
@@ -857,6 +862,11 @@ export const commit = mutation({
 			fulfilmentDate: sanitizedFulfilmentDate,
 			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			customerNote: sanitizedCustomerNote,
+			// The claim's window CONTINUES onto the order (Zaki, 27 Aug — the
+			// Agoda model): stock just decremented, so the hold must run until
+			// real money. Floored to a full runway so a buyer who spent most of
+			// the window on the form still has a real chance to pay.
+			paymentDueAt: paymentDueAtCommit(claim.expiresAt, now),
 			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
@@ -947,6 +957,52 @@ export const recordClaimSendOutcome = internalMutation({
 			lastSendOutcome: outcome,
 			updatedAt: Date.now(),
 		});
+	},
+});
+
+/**
+ * Cron (every minute): auto-cancel orders whose payment deadline has passed —
+ * the teeth of the carried timer. Walks the tiny by_payment_due range (the
+ * field's present-means-live contract keeps it near-empty), re-judges each row
+ * with the shared `isAutoCancelDue` predicate (claimed / fee-pending /
+ * live-gateway-session / already-advanced rows are PROTECTED — see the
+ * predicate's comment), and cancels through `applyStatusTransition` so stock
+ * restore, aggregate reversal, usage un-metering and the push-stamp cleanup
+ * are the same code a seller's own Cancel runs. Stamps `cancelledReason` so
+ * the buyer's page can say WHY instead of a bare "Cancelled". No WhatsApp —
+ * one-message-per-order policy; the tracking page carries the state.
+ */
+export const cancelUnpaidDueOrders = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const now = Date.now();
+		const page = await ctx.db
+			.query("orders")
+			.withIndex("by_payment_due", (q) =>
+				q.gt("paymentDueAt", 0).lt("paymentDueAt", now),
+			)
+			.paginate({ numItems: 50, cursor: cursor ?? null });
+		let cancelled = 0;
+		for (const order of page.page) {
+			if (!isAutoCancelDue(order, now)) continue;
+			await applyStatusTransition(ctx, order, "cancelled", {
+				note: "payment_window_expired",
+			});
+			// applyStatusTransition clears paymentDueAt on every cancel; the
+			// reason stamp is this sweep's own signature.
+			await ctx.db.patch(order._id, {
+				cancelledReason: "payment_window_expired",
+			});
+			cancelled++;
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.orderClaims.cancelUnpaidDueOrders,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { cancelled, isDone: page.isDone };
 	},
 });
 

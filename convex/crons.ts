@@ -55,6 +55,19 @@ crons.daily(
 	{},
 );
 
+// Claim links (86eyq0epn): auto-cancel orders whose payment deadline passed —
+// the carried timer's teeth (stock decremented at commit comes back). Every
+// minute so "time's up" on the buyer's page and the actual cancel stay close;
+// the by_payment_due index keeps each run a near-empty range read. The
+// predicate protects claimed / fee-pending / live-payment-session orders —
+// see convex/lib/orderClaims.ts isAutoCancelDue.
+crons.interval(
+	"cancel unpaid orders past their payment deadline",
+	{ minutes: 1 },
+	internal.orderClaims.cancelUnpaidDueOrders,
+	{},
+);
+
 // Claim links (86eyq0epn): flip open claims past their fixed deadline to
 // `expired`. Reads judge expiry live, so this keeps the status buckets true
 // (claims list, purge eligibility). Every 5 min like the session sweep — a

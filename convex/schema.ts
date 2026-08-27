@@ -1185,6 +1185,29 @@ export default defineSchema({
 		// daily cron at schedule time so it never double-sends. Undefined = not
 		// sent (yet, or never became due). See docs/payment-reminder.md.
 		paymentReminderSentAt: v.optional(v.number()),
+		// Hard payment deadline (epoch-ms) — "field present = the clock is live".
+		// v1 stamper: a claim-link commit (86eyq0epn) carries the claim's window
+		// onto the order (floored to commit + CLAIM_PAYMENT_RUNWAY_MS so the
+		// buyer always has runway to actually pay), because stock decrements at
+		// commit and an unpaid order would otherwise hold inventory forever.
+		// The sweep cron (orderClaims.cancelUnpaidDueOrders) auto-cancels a due
+		// order ONLY while it is truly unpaid AND payable — never `claimed` (an
+		// "I've paid" is a human-verified promise, cancelling it would burn a
+		// buyer whose transfer landed), never while `deliveryFeePending` (the
+		// buyer CAN'T pay yet), never while a HitPay checkout session is live
+		// (gatewayRequestedAt within grace — mid-payment cancellation is how
+		// money lands on a cancelled order). Starting a payment session extends
+		// the deadline (visible clock jump, bounded — never an indefinite
+		// freeze, which would be exploitable). CLEARED on payment received and
+		// on any cancellation, so the by_payment_due index range only ever
+		// holds live clocks. See docs/claim-links.md.
+		paymentDueAt: v.optional(v.number()),
+		// Why this order was cancelled, when the cause wasn't a human tapping
+		// Cancel — lets the buyer's cancelled banner explain itself instead of a
+		// bare "Cancelled" (payment_window_expired = the paymentDueAt sweep).
+		// Undefined on every human cancellation, so absence means "the store
+		// cancelled it".
+		cancelledReason: v.optional(v.literal("payment_window_expired")),
 		// When the seller last MANUALLY re-sent the payment details to the buyer
 		// from the order page (distinct from the automatic paymentReminderSentAt
 		// so the two triggers never corrupt each other's once-only logic). Drives
@@ -1343,6 +1366,9 @@ export default defineSchema({
 		// The previous-id twin keeps payments on a REPLACED (re-priced /
 		// double-minted) link correlatable instead of silently 200-acked.
 		.index("by_gateway_request", ["gatewayRequestId"])
+		// The payment-deadline sweep's range read (paymentDueAt < now). Kept tiny
+		// by the field's present-means-live contract above.
+		.index("by_payment_due", ["paymentDueAt"])
 		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
 
 	/**

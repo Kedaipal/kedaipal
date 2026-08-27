@@ -64,6 +64,7 @@ import {
 	type InboxFilterArgs,
 	needsMockup,
 } from "./lib/orderInboxFilter";
+import { extendedPaymentDue } from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
 	computeOrderTotals,
@@ -2365,7 +2366,14 @@ export async function applyStatusTransition(
 		trackingNo: string;
 		currentStageId: string | undefined;
 		confirmationPushStatus: undefined;
+		paymentDueAt: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
+	// A payment deadline dies with the order — on EVERY cancellation (seller,
+	// admin, or the auto-cancel sweep), so the by_payment_due index only ever
+	// holds live clocks and a cancelled order never shows a countdown.
+	if (status === "cancelled" && order.paymentDueAt !== undefined) {
+		patch.paymentDueAt = undefined;
+	}
 	// `sending` and `deferred` are PROMISES about a message ("your confirmation
 	// is on its way") — cancelling the order invalidates them, so clear the
 	// stamp or the buyer's page keeps promising a message that will never come:
@@ -3251,6 +3259,14 @@ export const setDeliveryFee = mutation({
 			deliveryFeePendingReason: undefined,
 			subtotal,
 			total,
+			// A fee-pending order was UNPAYABLE, so its payment deadline was
+			// suspended (the auto-cancel sweep skips fee-pending rows). The fee
+			// landing is the moment it becomes payable — guarantee the runway,
+			// or a deadline that lapsed during the seller's own pricing delay
+			// would cancel the order the instant it could finally be paid.
+			...(order.paymentDueAt !== undefined
+				? { paymentDueAt: extendedPaymentDue(order.paymentDueAt, now) }
+				: {}),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -3588,6 +3604,11 @@ async function applyPaymentReceived(
 		...extraPatch,
 		paymentStatus: "received",
 		paymentReceivedAt: now,
+		// Real money retires the payment deadline (86eyq0epn) — the ONE receive
+		// core every path runs through, so the countdown stops on `received` and
+		// never on a mere claim. Unconditional: clearing an unset field is a
+		// no-op.
+		paymentDueAt: undefined,
 		// The single retirement point for an unresolved gateway payment (PR #178
 		// review, finding 1). Whatever route settles the order — the seller
 		// reconciling the odd payment in their HitPay dashboard and marking it

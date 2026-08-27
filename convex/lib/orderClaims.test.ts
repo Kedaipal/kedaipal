@@ -1,13 +1,18 @@
 import { describe, expect, test } from "vitest";
 import {
 	CLAIM_MAX_SENDS,
+	CLAIM_PAYMENT_RUNWAY_MS,
 	CLAIM_RESEND_COOLDOWN_MS,
 	claimResendState,
 	DEFAULT_CLAIM_WINDOW_MINUTES,
 	describeClaimWindow,
 	effectiveClaimStatus,
+	extendedPaymentDue,
+	GATEWAY_SESSION_GRACE_MS,
+	isAutoCancelDue,
 	MAX_CLAIM_WINDOW_MINUTES,
 	MIN_CLAIM_WINDOW_MINUTES,
+	paymentDueAtCommit,
 	sanitizeClaimWindowMinutes,
 } from "./orderClaims";
 
@@ -96,5 +101,87 @@ describe("describeClaimWindow", () => {
 		expect(describeClaimWindow(60, "ms")).toBe("1 jam");
 		expect(describeClaimWindow(24 * 60, "ms")).toBe("24 jam");
 		expect(describeClaimWindow(2 * 24 * 60, "ms")).toBe("2 hari");
+	});
+});
+
+describe("paymentDueAtCommit / extendedPaymentDue", () => {
+	test("a long window carries through unchanged; a nearly-spent one is floored to the runway", () => {
+		const dayOut = NOW + 20 * 60 * 60 * 1000;
+		expect(paymentDueAtCommit(dayOut, NOW)).toBe(dayOut);
+		// Buyer spent 14 of 15 minutes on the form — they still get a real
+		// chance to pay.
+		expect(paymentDueAtCommit(NOW + 60_000, NOW)).toBe(
+			NOW + CLAIM_PAYMENT_RUNWAY_MS,
+		);
+	});
+
+	test("extension never shortens, and re-arms a nearly-dead clock", () => {
+		const farOut = NOW + 10 * CLAIM_PAYMENT_RUNWAY_MS;
+		expect(extendedPaymentDue(farOut, NOW)).toBe(farOut);
+		expect(extendedPaymentDue(NOW + 40_000, NOW)).toBe(
+			NOW + CLAIM_PAYMENT_RUNWAY_MS,
+		);
+	});
+});
+
+describe("isAutoCancelDue", () => {
+	const due = {
+		paymentDueAt: NOW - 1000,
+		status: "confirmed",
+		paymentStatus: "unpaid" as const,
+	};
+
+	test("a due, unpaid, payable order cancels", () => {
+		expect(isAutoCancelDue(due, NOW)).toBe(true);
+		expect(isAutoCancelDue({ ...due, status: "pending" }, NOW)).toBe(true);
+		// paymentStatus unset reads as unpaid (legacy posture).
+		expect(
+			isAutoCancelDue({ ...due, paymentStatus: undefined }, NOW),
+		).toBe(true);
+	});
+
+	test("no deadline / not yet due — never", () => {
+		expect(isAutoCancelDue({ ...due, paymentDueAt: undefined }, NOW)).toBe(
+			false,
+		);
+		expect(isAutoCancelDue({ ...due, paymentDueAt: NOW + 1 }, NOW)).toBe(
+			false,
+		);
+	});
+
+	test("an 'I've paid' claim pauses the clock — a human verdict must never race a robot", () => {
+		expect(isAutoCancelDue({ ...due, paymentStatus: "claimed" }, NOW)).toBe(
+			false,
+		);
+		expect(isAutoCancelDue({ ...due, paymentStatus: "received" }, NOW)).toBe(
+			false,
+		);
+	});
+
+	test("a seller who started fulfilling an unpaid order made a call — the robot keeps out", () => {
+		for (const status of ["packed", "shipped", "delivered", "cancelled"]) {
+			expect(isAutoCancelDue({ ...due, status }, NOW)).toBe(false);
+		}
+	});
+
+	test("unpayable states suspend it: fee pending / gateway issue", () => {
+		expect(isAutoCancelDue({ ...due, deliveryFeePending: true }, NOW)).toBe(
+			false,
+		);
+		expect(
+			isAutoCancelDue({ ...due, gatewayPaymentIssue: { kind: "x" } }, NOW),
+		).toBe(false);
+	});
+
+	test("a live HitPay session shields the order; a stale one does not", () => {
+		expect(
+			isAutoCancelDue({ ...due, gatewayRequestedAt: NOW - 30 * 60_000 }, NOW),
+		).toBe(false);
+		expect(
+			isAutoCancelDue(
+				{ ...due, gatewayRequestedAt: NOW - GATEWAY_SESSION_GRACE_MS - 1 },
+				NOW,
+			),
+		).toBe(true);
 	});
 });
