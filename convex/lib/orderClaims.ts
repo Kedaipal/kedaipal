@@ -129,6 +129,45 @@ export function claimResendState(
 	return { canResend: true };
 }
 
+/** How the last WhatsApp send of a claim link ended. Mirrors the schema union;
+ * see convex/schema.ts for what each arm means. */
+export type ClaimSendOutcome =
+	| "sent"
+	| "opted_out"
+	| "blocked"
+	| "failed"
+	| "unavailable";
+
+/**
+ * Should the seller be offered a Resend at all? (Zaki, 27 Aug.)
+ *
+ * Resend is a RETRY, not a nudge. Every WhatsApp send is billed from 1 Oct
+ * 2026 (86eyd63r8), so a button whose best case is "the buyer sees the same
+ * link twice" is a button that spends money to repeat itself — and the free,
+ * strictly better answer to "I didn't get it" is already on the card: Copy
+ * link, which the seller can paste into any chat.
+ *
+ *  - `sent` — Meta accepted it. Nothing to retry. Hidden.
+ *  - `opted_out` / `unavailable` — a retry is GUARANTEED to fail the same way
+ *    (our own gateway suppresses it / no template is configured). Offering it
+ *    would be a lie; the row already explains the real remedy. Hidden.
+ *  - `failed` / `blocked` — the buyer has nothing, and the cause can clear
+ *    (network, a cap that resets, a pause that lifts). This is the one case a
+ *    retry is the point, so it shows — still cooldown- and max-send-gated.
+ *  - undefined — a legacy row from before outcomes were recorded; we can't
+ *    prove it landed, so the seller keeps the retry.
+ *
+ * Note this is a UI OFFER, not a server rule: `resendClaim` keeps its cooldown
+ * and 3-send ceiling as the actual abuse ceiling. Hiding the control removes
+ * the routine spend; the guards remain for anything that reaches the mutation.
+ */
+export function claimResendVisible(
+	lastSendOutcome: ClaimSendOutcome | undefined,
+): boolean {
+	if (lastSendOutcome === undefined) return true;
+	return lastSendOutcome === "failed" || lastSendOutcome === "blocked";
+}
+
 /**
  * Human wording for a window, for the WhatsApp template body + dialog copy.
  * Whole hours say hours, whole days say days, anything else says minutes —
@@ -235,3 +274,42 @@ export function isAutoCancelDue(
 		return false;
 	return true;
 }
+
+/**
+ * Is the order frozen because a buyer is inside its payment window?
+ *
+ * The receipt is already out: the buyer has a confirmed order on their track
+ * page with a live countdown, and may be on HitPay's page or at their banking
+ * app right now. Moving the fulfilment date under them changes the deal they
+ * are paying for — and on a rider booking it changes the PRICE — so the
+ * seller's reschedule control is closed for the duration (86eyq0epn).
+ *
+ * Deliberately time-free. `paymentDueAt` is cleared the moment payment lands
+ * (`applyPaymentReceived`) or the order is cancelled (`applyStatusTransition`),
+ * so its mere presence on an unpaid, live order IS the window. A deadline that
+ * has passed but not yet been swept is an order about to be auto-cancelled —
+ * still not a moment to reschedule — and a time-free predicate means no UI has
+ * to tick a clock to know whether the control is open.
+ *
+ * The escape hatch is Cancel: it restocks and releases the buyer, and the
+ * seller sends a fresh link with the new date. That is heavier than an edit,
+ * which is the point — the buyer must re-agree to a date they never saw.
+ */
+export function isPaymentWindowLocked(order: {
+	paymentDueAt?: number;
+	status: string;
+	paymentStatus?: string;
+}): boolean {
+	if (order.paymentDueAt === undefined) return false;
+	if (order.status !== "pending" && order.status !== "confirmed") return false;
+	// `claimed` still locks: the buyer says they've transferred against THIS
+	// date and is waiting on the seller to verify it. Only money actually
+	// received reopens the order — the same line `isAutoCancelDue` draws.
+	return (order.paymentStatus ?? "unpaid") !== "received";
+}
+
+/** The server's refusal message for the freeze. The seller-facing dialog says
+ * the same thing at length (and offers the way out); this is what surfaces if
+ * a stale tab reaches the mutation anyway. */
+export const PAYMENT_WINDOW_LOCK_REASON =
+	"The buyer is paying against this date right now — cancel the order if it has to move.";

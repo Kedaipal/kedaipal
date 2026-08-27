@@ -68,7 +68,11 @@ import {
 	type InboxFilterArgs,
 	needsMockup,
 } from "./lib/orderInboxFilter";
-import { extendedPaymentDue } from "./lib/orderClaims";
+import {
+	extendedPaymentDue,
+	isPaymentWindowLocked,
+	PAYMENT_WINDOW_LOCK_REASON,
+} from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
 	computeOrderTotals,
@@ -3376,6 +3380,12 @@ export const rescheduleFulfilment = mutation({
 			throw new ConvexError(
 				"This order was already collected — the date can't change now",
 			);
+		// The buyer is inside a claim link's payment window (86eyq0epn): they
+		// hold a confirmed order with a live countdown and may be mid-payment.
+		// The dialog hides the trigger behind the same predicate; this is the
+		// backstop, so a stale tab can't move the date under a paying buyer.
+		if (isPaymentWindowLocked(order))
+			throw new ConvexError(PAYMENT_WINDOW_LOCK_REASON);
 		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
 		// will NOT follow the order — rescheduling under it would desync the
 		// buyer's promise from the trip actually booked. The dialog says so and

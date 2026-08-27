@@ -565,6 +565,40 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
 
+## Stock is stated in the catalog, not discovered at checkout (2026-08-27)
+
+Zaki, testing `86eyq0epn`: *"for items with 0 stock is not obvious, only at
+checkout then will get the 0 stock error. able to add to cart even."* The
+server rule never changed — `createOrderFromSession` has always refused a
+sold-out line. What was missing was saying it **before** the seller builds a
+cart in front of a waiting customer.
+
+The rules are pure and unit-tested in [`src/lib/counter-stock.ts`](../src/lib/counter-stock.ts),
+built on the existing `isSellable` so the counter and the storefront can't
+disagree about what "sold out" means:
+
+| State | Row says | Control |
+| --- | --- | --- |
+| tracked, `onHand <= 0` | **Sold out** (destructive red) | Add is disabled and relabelled "Sold out" |
+| tracked, `onHand <= 3` | **Only N left** (amber) | Stepper capped at N |
+| tracked, healthy | `N left` (muted) | Stepper capped at N |
+| made-to-order | **Made to order** (muted) | no ceiling |
+
+- **Made-to-order says so** instead of showing nothing. A blank where its
+  neighbours show a count reads as missing data, when in fact it *is* the
+  answer: no number because there is no ceiling.
+- **The stepper stops where the server would.** `maxAddableQty` mirrors the
+  stock check, so the seller finds the ceiling by feel (a dead `+` with a
+  reason) instead of by error message at create.
+- **Product level**: `productSoldOut` (every choice unsellable) puts a
+  **SOLD OUT** chip on the list row and a veil + chip on the grid tile, and
+  dims the thumbnail. The product stays **tappable** — the seller still needs
+  to open it to see *which* size ran out, or to sell a made-to-order sibling
+  that survives its sold-out neighbours.
+- A mixed product (fixed sizes + a made-to-order "Custom", see
+  [`custom-option.md`](./custom-option.md)) is never marked sold out: the
+  custom line is always orderable.
+
 ## Header — one "New order" dropdown (`86eyd67y1`)
 
 Every way to start a checkout is grouped behind a **single** accent `New order`

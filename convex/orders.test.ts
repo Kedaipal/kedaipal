@@ -7774,6 +7774,57 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		expect(updated?.fulfilmentTimeMinutes).toBe(9 * 60);
 	});
 
+	// Claim links (86eyq0epn): the buyer holds a receipt with a live countdown
+	// and may be at their banking app right now. Zaki's 27 Aug call — the date
+	// they're paying for can't move under them; cancelling is the escape.
+	test("a live payment window freezes the date until the money lands", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, {
+				paymentDueAt: Date.now() + 10 * 60_000,
+				paymentStatus: "unpaid" as const,
+			}),
+		);
+
+		await expect(
+			asA.mutation(api.orders.rescheduleFulfilment, {
+				orderId: order._id,
+				fulfilmentDate: date,
+				fulfilmentTimeMinutes: 9 * 60,
+			}),
+		).rejects.toThrow(/paying against this date/);
+
+		// "I've transferred" is not "the money arrived" — still frozen while the
+		// seller verifies it.
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, { paymentStatus: "claimed" as const }),
+		);
+		await expect(
+			asA.mutation(api.orders.rescheduleFulfilment, {
+				orderId: order._id,
+				fulfilmentDate: date,
+				fulfilmentTimeMinutes: 9 * 60,
+			}),
+		).rejects.toThrow(/paying against this date/);
+
+		// Paid → the deal is settled and the seller can move it again.
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, {
+				paymentStatus: "received" as const,
+				paymentDueAt: undefined,
+			}),
+		);
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		const updated = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(updated?.fulfilmentTimeMinutes).toBe(9 * 60);
+	});
+
 	test("validation: past day, non-midnight, beyond 30d, and a bad time all reject", async () => {
 		const t = setup();
 		const { order } = await seedThreeAmOrder(t);

@@ -4,12 +4,14 @@ import {
 	CLAIM_PAYMENT_RUNWAY_MS,
 	CLAIM_RESEND_COOLDOWN_MS,
 	claimResendState,
+	claimResendVisible,
 	DEFAULT_CLAIM_WINDOW_MINUTES,
 	describeClaimWindow,
 	effectiveClaimStatus,
 	extendedPaymentDue,
 	GATEWAY_SESSION_GRACE_MS,
 	isAutoCancelDue,
+	isPaymentWindowLocked,
 	MAX_CLAIM_WINDOW_MINUTES,
 	MIN_CLAIM_WINDOW_MINUTES,
 	paymentDueAtCommit,
@@ -183,5 +185,78 @@ describe("isAutoCancelDue", () => {
 				NOW,
 			),
 		).toBe(true);
+	});
+});
+
+describe("claimResendVisible", () => {
+	// Resend is a retry, not a nudge — every WhatsApp send is billed.
+	test("a delivered send offers nothing to retry", () => {
+		expect(claimResendVisible("sent")).toBe(false);
+	});
+
+	test("only the outcomes a retry could actually fix are offered", () => {
+		expect(claimResendVisible("failed")).toBe(true);
+		expect(claimResendVisible("blocked")).toBe(true);
+	});
+
+	// Both of these would be suppressed identically on the way out: offering a
+	// retry would charge for a guaranteed failure.
+	test("hopeless outcomes are not offered a retry", () => {
+		expect(claimResendVisible("opted_out")).toBe(false);
+		expect(claimResendVisible("unavailable")).toBe(false);
+	});
+
+	test("a row from before outcomes were recorded keeps its retry", () => {
+		expect(claimResendVisible(undefined)).toBe(true);
+	});
+});
+
+describe("isPaymentWindowLocked", () => {
+	const inWindow = {
+		paymentDueAt: NOW + 10 * 60_000,
+		status: "pending",
+		paymentStatus: "unpaid",
+	};
+
+	test("an unpaid order with a live deadline is frozen", () => {
+		expect(isPaymentWindowLocked(inWindow)).toBe(true);
+		expect(isPaymentWindowLocked({ ...inWindow, status: "confirmed" })).toBe(
+			true,
+		);
+	});
+
+	// A passed-but-unswept deadline is an order about to be auto-cancelled —
+	// still not a moment to move the date, which is why the predicate is
+	// deliberately time-free.
+	test("a passed deadline stays frozen until the sweep clears it", () => {
+		expect(
+			isPaymentWindowLocked({ ...inWindow, paymentDueAt: NOW - 60_000 }),
+		).toBe(true);
+	});
+
+	test("payment landing releases it", () => {
+		expect(
+			isPaymentWindowLocked({ ...inWindow, paymentStatus: "received" }),
+		).toBe(false);
+		// `claimed` is the buyer saying they've transferred — money hasn't been
+		// verified, so the deal stays put.
+		expect(
+			isPaymentWindowLocked({ ...inWindow, paymentStatus: "claimed" }),
+		).toBe(true);
+	});
+
+	test("an order with no payment window is never frozen", () => {
+		expect(
+			isPaymentWindowLocked({ status: "pending", paymentStatus: "unpaid" }),
+		).toBe(false);
+	});
+
+	test("cancelled and shipped orders are past the point of freezing", () => {
+		expect(isPaymentWindowLocked({ ...inWindow, status: "cancelled" })).toBe(
+			false,
+		);
+		expect(isPaymentWindowLocked({ ...inWindow, status: "shipped" })).toBe(
+			false,
+		);
 	});
 });

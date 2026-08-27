@@ -45,6 +45,8 @@ function claim(overrides: Record<string, unknown> = {}) {
 		windowMinutes: 15,
 		sentCount: 1,
 		lastSentAt: NOW,
+		// The common case: Meta accepted it. Tests that want a Retry say so.
+		lastSendOutcome: "sent" as const,
 		createdAt: NOW,
 		...overrides,
 	};
@@ -66,24 +68,60 @@ afterEach(() => {
 });
 
 describe("ClaimsPanel — resend guard", () => {
-	test("during the cooldown the button is disabled and counts down", () => {
-		mockClaims([claim({ lastSentAt: NOW - 60_000 })]); // 1 min into a 5 min cooldown
+	// The rule Zaki set on 27 Aug: Resend is a RETRY, not a nudge. Every send
+	// is billed, so a delivered link must not offer a button whose best case is
+	// "the buyer sees the same message twice". Deleting the claimResendVisible
+	// call in send-claim.tsx turns this test red.
+	test("a delivered link offers no resend at all — Copy link is the free fix", () => {
+		mockClaims([
+			claim({ lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000 }),
+		]);
 		render(<ClaimsPanel onResume={vi.fn()} />);
-		const btn = screen.getByRole("button", { name: /Resend in/ });
+		expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();
+	});
+
+	// A row written before outcomes were recorded can't prove it landed, so the
+	// seller keeps the retry rather than losing the only WhatsApp path.
+	test("a legacy row with no recorded outcome keeps its retry", () => {
+		mockClaims([
+			claim({
+				lastSendOutcome: undefined,
+				lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000,
+			}),
+		]);
+		render(<ClaimsPanel onResume={vi.fn()} />);
+		expect(screen.getByRole("button", { name: /^Retry$/ })).toBeTruthy();
+	});
+
+	test("during the cooldown the button is disabled and counts down", () => {
+		// 1 min into a 5 min cooldown, on a send that failed (the only state
+		// that offers a retry at all).
+		mockClaims([
+			claim({ lastSendOutcome: "failed", lastSentAt: NOW - 60_000 }),
+		]);
+		render(<ClaimsPanel onResume={vi.fn()} />);
+		const btn = screen.getByRole("button", { name: /Retry in/ });
 		expect(btn.hasAttribute("disabled")).toBe(true);
 		expect(btn.textContent).toContain("4:00");
 	});
 
 	test("once the cooldown lapses the button is live", () => {
-		mockClaims([claim({ lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000 })]);
+		mockClaims([
+			claim({
+				lastSendOutcome: "failed",
+				lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000,
+			}),
+		]);
 		render(<ClaimsPanel onResume={vi.fn()} />);
-		const btn = screen.getByRole("button", { name: "Resend" });
+		const btn = screen.getByRole("button", { name: "Retry" });
 		expect(btn.hasAttribute("disabled")).toBe(false);
 	});
 
 	test("the hard send cap disables it with a different reason, not a countdown", () => {
 		mockClaims([
 			claim({
+				lastSendOutcome: "failed",
 				sentCount: CLAIM_MAX_SENDS,
 				lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS * 3,
 			}),
@@ -91,7 +129,7 @@ describe("ClaimsPanel — resend guard", () => {
 		render(<ClaimsPanel onResume={vi.fn()} />);
 		const btn = screen.getByRole("button", { name: /Sent 3/ });
 		expect(btn.hasAttribute("disabled")).toBe(true);
-		expect(screen.queryByText(/Resend in/)).toBeNull();
+		expect(screen.queryByText(/Retry in/)).toBeNull();
 	});
 
 	test("a failed WhatsApp send surfaces the copy-link fallback", () => {
@@ -105,21 +143,23 @@ describe("ClaimsPanel — resend guard", () => {
 		expect(screen.getByText(/couldn't be delivered/i)).toBeTruthy();
 		// Copy link is always offered — it is the path that works when Meta won't.
 		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /Retry WhatsApp/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /^Retry$/ })).toBeTruthy();
 	});
 
-	test("an expired-but-unswept claim reads Expired and can't be resent", () => {
+	test("an expired-but-unswept claim reads Expired and offers no retry", () => {
 		mockClaims([
-			claim({ expiresAt: NOW - 1000, lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS * 2 }),
+			claim({
+				lastSendOutcome: "failed",
+				expiresAt: NOW - 1000,
+				lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS * 2,
+			}),
 		]);
 		render(<ClaimsPanel onResume={vi.fn()} />);
 		expect(screen.getByText("Expired")).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: "Resend" }).hasAttribute("disabled"),
-		).toBe(true);
+		expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
 	});
 
-	test("an opted-out buyer gets the remedy by name, not a mystery delivery failure", () => {
+	test("an opted-out buyer gets the remedy by name, and no retry that would fail identically", () => {
 		mockClaims([
 			claim({
 				lastSendOutcome: "opted_out",
@@ -127,20 +167,15 @@ describe("ClaimsPanel — resend guard", () => {
 			}),
 		]);
 		render(<ClaimsPanel onResume={vi.fn()} />);
-		// The one thing only the BUYER can do — say it, don't bury it. (The
-		// keyword appears twice by design: in the explanation and on the
-		// disabled button, so assert on the explanation's emphasised span.)
+		// The one thing only the BUYER can do — say it, don't bury it.
 		expect(screen.getByText(/opted out/i)).toBeTruthy();
 		const keyword = screen
 			.getAllByText("START")
 			.find((el) => el.tagName === "SPAN");
 		expect(keyword).toBeTruthy();
-		// Resending would be blocked identically, so it must not look available.
-		expect(
-			screen
-				.getByRole("button", { name: /Resend once they reply START/ })
-				.hasAttribute("disabled"),
-		).toBe(true);
+		// A retry is guaranteed to be suppressed by our own gateway: don't show
+		// a button whose only outcome is the same failure, and a charge.
+		expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
 		// Copy link is the path that still works.
 		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();
 	});
@@ -150,6 +185,7 @@ describe("ClaimsPanel — resend guard", () => {
 		render(<ClaimsPanel onResume={vi.fn()} />);
 		expect(screen.getByText(/isn't switched on yet/i)).toBeTruthy();
 		expect(screen.queryByText(/couldn't be delivered/i)).toBeNull();
+		expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
 	});
 
 	test("the open row opens its counter session — a claim has no order yet", () => {

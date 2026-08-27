@@ -176,6 +176,44 @@ the reactive Convex subscription and resumes exactly where it was; closing the
 tab changes nothing at all, because the sweep is server-side. Neither page can
 be "killed" by a reload.
 
+### The order is frozen while the window runs
+
+`isPaymentWindowLocked(order)` — a `paymentDueAt` on a live order that has not
+been **received** — closes the seller's **Reschedule** control on
+`orders.rescheduleFulfilment` (server guard) and turns its trigger into a
+tappable **Locked** button that opens onto the reason (the same shape the
+active-Lalamove-booking case already uses; a `title` tooltip is invisible on
+the phone this dashboard is built for).
+
+Zaki's call, 27 Aug: *"the receipt is out and they might update while buyer is
+making payment."* The buyer holds a confirmed order with a running countdown
+and may be on HitPay's page or in their banking app. Moving the fulfilment
+date under them changes the deal they are paying for — and on a rider booking
+it changes the **price**.
+
+- Deliberately **time-free**. `paymentDueAt` is cleared the moment payment
+  lands or the order is cancelled, so its presence on an unpaid live order *is*
+  the window. A deadline that has passed but not yet been swept is an order
+  about to be auto-cancelled — still not a moment to reschedule — and a
+  time-free predicate means no UI has to tick a clock to know the control is
+  closed.
+- **`claimed` still locks.** "I've transferred" is not "the money arrived":
+  the buyer paid against *this* date and the seller is verifying. Only
+  `received` reopens it — the same line `isAutoCancelDue` draws.
+- **What stays open**: everything that helps the payment land — setting a
+  pending delivery fee (which also re-arms the deadline), marking payment
+  received, and cancelling. Only the deal-changing control closes.
+- **The escape hatch is Cancel**, which restocks and releases the buyer; the
+  seller then sends a fresh link with the new date. That is heavier than an
+  edit, which is the point — the buyer must re-agree to a date they never saw.
+- **Trade-off, stated**: on a 24-hour window this closes reschedule for up to
+  24 hours, and "can we move it to Friday?" mid-window costs a cancel + re-send.
+  A warn-and-extend alternative was rejected because it silently moves the
+  buyer's deadline. Revisit if sellers hit it in practice.
+- The mockup reprice path — the other control that could change a total
+  mid-payment — is unreachable here: `orderClaims.commit` never stamps
+  `mockupStatus`, so the card doesn't render on a claim order.
+
 ### What the buyer sees as the clock runs out
 
 Leaving the order page open through expiry gives three beats, no dead air:
@@ -228,14 +266,55 @@ outcome.
     controls, what the primary says, why it's disabled) live in the pure
     `src/lib/counter-panel.ts` and are unit-tested — the panel itself is a
     2,600-line route component, so the seam is what makes them assertable.
+  - **Each question is a stacked choice list, not a filled segmented control**
+    (27 Aug). Two short labels inside a solid accent slab read as a banner
+    rather than a choice, and fought the accent-outline treatment the window
+    and origin chips a few rows below already use. Chosen is now outline +
+    tint + a check (`ChoiceCard`), shared by both questions so they can't
+    drift. One option per row at **every** width: a viewport breakpoint is the
+    wrong instrument for a panel that is a fixed 380px column on desktop —
+    `sm:grid-cols-2` went two-up exactly where space was tightest and wrapped
+    "Counter sale" onto two lines.
+  - **The panel is a bounded column on desktop**, not an unbounded sticky
+    block: `lg:max-h-[calc(100dvh-3rem)]`, body scrolls inside, Total + the
+    primary action pinned. Sticky alone meant a panel taller than the screen
+    hung off the bottom, so the wheel scrolled the catalog for its full length
+    before the page could reach the panel's own footer (Zaki, 27 Aug). The
+    cart list's `max-h-72` is dropped at `lg` for the same reason — one scroll
+    region per context, never a scroller inside a scroller.
 - **Counter landing:** `ClaimsPanel` ("Waiting on buyers") under the open
   checkouts — live countdown chip per open claim (amber), **Copy link**
-  (always available), **Resend** (cooldown-gated), **Cancel**, plus recent
-  outcomes: completed (→ the order), expired ("Send a fresh link" reopens
-  the session). Renders nothing until a first claim exists — the build
-  screen's button is the feature's front door.
-- **Marketing origin (86eyq0eq9).** The send dialog asks "Where's this order
-  from?" — **TikTok Live / Instagram Live / Facebook Live / WhatsApp**,
+  (always available), **Retry** (conditional, see below), **Cancel**, plus
+  recent outcomes: completed (→ the order), expired ("Send a fresh link"
+  reopens the session). The row is tappable (chevron affordance) and opens the
+  counter session the claim was sent from — an open claim has no order yet.
+  Renders nothing until a first claim exists — the build screen's button is
+  the feature's front door.
+  - **Layout**: one row on desktop (name · items · total | countdown |
+    actions at their natural width), two on mobile (actions wrap full-width
+    under the name). The earlier version stretched three buttons across the
+    full dashboard width.
+- **Resend is a RETRY, not a nudge** (`claimResendVisible`, Zaki 27 Aug).
+  Every WhatsApp send is billed from 1 Oct 2026 (`86eyd63r8`), so a button
+  whose best case is "the buyer sees the same link twice" spends money to
+  repeat itself — and the free, strictly better answer to *"I didn't get it"*
+  is already on the card: **Copy link**, pasteable into any chat.
+  - `sent` → **hidden**. Meta accepted it; there is nothing to retry.
+  - `opted_out` / `unavailable` → **hidden**. A retry is *guaranteed* to fail
+    identically (our own gateway suppresses it / no template is configured);
+    offering it would be a lie with a charge attached. The row's amber note
+    already names the real remedy.
+  - `failed` / `blocked` → **shown**, labelled "Retry", because the buyer has
+    nothing and the cause can clear (network, a cap that resets, a pause that
+    lifts). Still cooldown-gated (5 min) and capped at 3 sends.
+  - `undefined` (rows predating outcome recording) → shown; we can't prove it
+    landed.
+  - This is a UI **offer** rule, not a server rule: `resendClaim` keeps the
+    cooldown and 3-send ceiling as the actual abuse ceiling. Hiding the
+    control removes the routine spend; the guards remain for anything that
+    reaches the mutation.
+- **Marketing origin (86eyq0eq9).** Send mode asks, inline under the cart,
+  "Where's this order from?" — **TikTok Live / Instagram Live / Facebook Live / WhatsApp**,
   tap-again to clear. The **`-live` suffix is the point**: these are separate
   buckets from the bare `tiktok`/`instagram`/`facebook` tags the dashboard's
   tagged SHARE LINKS produce, because "my TikTok Lives made RM3,400" and "my

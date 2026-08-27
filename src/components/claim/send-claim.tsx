@@ -2,11 +2,22 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Check, Clock, Copy, Link2, Send } from "lucide-react";
+import {
+	Check,
+	ChevronRight,
+	Clock,
+	Copy,
+	Link2,
+	Send,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { claimResendState } from "../../../convex/lib/orderClaims";
+import {
+	CLAIM_MAX_SENDS,
+	claimResendState,
+	claimResendVisible,
+} from "../../../convex/lib/orderClaims";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown, formatClaimCountdown } from "../../lib/countdown";
@@ -101,27 +112,33 @@ export function ClaimsPanel({
 					const stillOpen = remaining > 0;
 					const resend = claimResendState(claim, now);
 					// Sending isn't set up on this deployment: a Resend would fail the
-					// same way, so it is disabled with the real reason and Copy link
-					// carries the flow.
+					// same way, so Copy link carries the flow.
 					const sendUnavailable = claim.lastSendOutcome === "unavailable";
 					const optedOut = claim.lastSendOutcome === "opted_out";
-					const resendLabel = sendUnavailable
-						? "WhatsApp not set up"
-						: optedOut
-							? "Resend once they reply START"
-						: !resend.canResend
-							? resend.reason === "max_sends"
-								? "Sent 3× — message them directly"
-								: `Resend in ${formatCountdown((resend.nextAt ?? now) - now)}`
-							: claim.lastSendOutcome === "failed"
-								? "Retry WhatsApp"
-								: "Resend";
+					// Resend is a RETRY, not a nudge — it only appears when the last
+					// send didn't reach the buyer AND a retry can plausibly work. See
+					// claimResendVisible for why (every send is billed).
+					const showResend =
+						stillOpen && claimResendVisible(claim.lastSendOutcome);
+					// Short labels on purpose: three controls share one row on a phone,
+					// and the amber note directly below already names WhatsApp and the
+					// remedy — the button doesn't have to carry the whole sentence.
+					const resendLabel = !resend.canResend
+						? resend.reason === "max_sends"
+							? `Sent ${CLAIM_MAX_SENDS}×`
+							: `Retry in ${formatCountdown((resend.nextAt ?? now) - now)}`
+						: "Retry";
 					return (
 						<div
 							key={claim.claimId}
 							className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
 						>
-							<div className="flex items-center gap-3">
+							{/* One row on desktop, two on mobile. The actions carry
+							    `w-full sm:w-auto`, so they wrap under the name on a phone
+							    (where full-width taps are right) and collapse to their
+							    natural width beside it on a wide screen — instead of three
+							    buttons stretched across 900px (Zaki, 27 Aug). */}
+							<div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
 								{/* Tappable: an open claim has no order yet, so the useful
 								    destination is the counter session it was sent from —
 								    where the seller can see the cart and re-send (which
@@ -129,19 +146,28 @@ export function ClaimsPanel({
 								<button
 									type="button"
 									onClick={() => onResume(claim.sessionId)}
-									className="-m-1 min-w-0 flex-1 rounded-lg p-1 text-left transition-colors hover:bg-muted/60"
+									className="-m-1 flex min-w-0 flex-1 items-center gap-1.5 rounded-lg p-1 text-left transition-colors hover:bg-muted/60"
 									aria-label={`Open ${claim.buyerName}'s checkout`}
 								>
-									<p className="truncate text-sm font-semibold" {...MASK_PII}>
-										{claim.buyerName}
-									</p>
-									<p className="text-xs text-muted-foreground">
-										{claim.itemCount} item{claim.itemCount === 1 ? "" : "s"} ·{" "}
-										{formatPrice(claim.itemsTotal, claim.currency)}
-									</p>
+									<span className="min-w-0 flex-1">
+										<span
+											className="block truncate text-sm font-semibold"
+											{...MASK_PII}
+										>
+											{claim.buyerName}
+										</span>
+										<span className="block text-xs text-muted-foreground">
+											{claim.itemCount} item{claim.itemCount === 1 ? "" : "s"} ·{" "}
+											{formatPrice(claim.itemsTotal, claim.currency)}
+										</span>
+									</span>
+									<ChevronRight
+										className="size-4 shrink-0 text-muted-foreground"
+										aria-hidden
+									/>
 								</button>
 								<span
-									className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs font-semibold tabular-nums ${
+									className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs font-semibold tabular-nums ${
 										stillOpen
 											? "bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200"
 											: "bg-muted text-muted-foreground"
@@ -150,6 +176,55 @@ export function ClaimsPanel({
 									<Clock className="size-3" aria-hidden />
 									{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
 								</span>
+								<div className="flex w-full shrink-0 gap-2 sm:w-auto">
+									<button
+										type="button"
+										onClick={() => copyClaimLink(claim.token)}
+										className="tap-target flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted sm:flex-none"
+									>
+										<Copy className="size-3.5" aria-hidden />
+										Copy link
+									</button>
+									{showResend ? (
+										<button
+											type="button"
+											disabled={!resend.canResend}
+											title={
+												!resend.canResend
+													? resend.reason === "max_sends"
+														? `Sent ${CLAIM_MAX_SENDS} times already — copy the link and message them directly`
+														: "A moment between retries keeps this from spamming the buyer"
+													: undefined
+											}
+											onClick={async () => {
+												try {
+													await resendClaim({ claimId: claim.claimId });
+													toast.success("Link re-sent on WhatsApp");
+												} catch (err) {
+													toast.error(convexErrorMessage(err));
+												}
+											}}
+											className="tap-target flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+										>
+											<Send className="size-3.5" aria-hidden />
+											{resendLabel}
+										</button>
+									) : null}
+									<button
+										type="button"
+										onClick={async () => {
+											try {
+												await cancelClaim({ claimId: claim.claimId });
+												toast.success("Link released");
+											} catch (err) {
+												toast.error(convexErrorMessage(err));
+											}
+										}}
+										className="tap-target flex shrink-0 items-center justify-center rounded-xl px-3 py-2 text-sm font-semibold text-muted-foreground hover:bg-destructive/5 hover:text-destructive"
+									>
+										Cancel
+									</button>
+								</div>
 							</div>
 							{sendUnavailable ? (
 								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -178,56 +253,6 @@ export function ClaimsPanel({
 									deadline) still works.
 								</p>
 							) : null}
-							<div className="flex flex-wrap gap-2">
-								<button
-									type="button"
-									onClick={() => copyClaimLink(claim.token)}
-									className="tap-target flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"
-								>
-									<Copy className="size-3.5" aria-hidden />
-									Copy link
-								</button>
-								<button
-									type="button"
-									disabled={
-										!stillOpen ||
-										!resend.canResend ||
-										sendUnavailable ||
-										optedOut
-									}
-									title={
-										!resend.canResend && resend.reason === "cooldown"
-											? "A moment between resends keeps this from spamming the buyer"
-											: undefined
-									}
-									onClick={async () => {
-										try {
-											await resendClaim({ claimId: claim.claimId });
-											toast.success("Link re-sent on WhatsApp");
-										} catch (err) {
-											toast.error(convexErrorMessage(err));
-										}
-									}}
-									className="tap-target flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-								>
-									<Send className="size-3.5" aria-hidden />
-									{resendLabel}
-								</button>
-								<button
-									type="button"
-									onClick={async () => {
-										try {
-											await cancelClaim({ claimId: claim.claimId });
-											toast.success("Link released");
-										} catch (err) {
-											toast.error(convexErrorMessage(err));
-										}
-									}}
-									className="tap-target flex items-center justify-center rounded-xl border border-border px-3 py-2 text-sm font-semibold text-destructive hover:bg-destructive/5"
-								>
-									Cancel
-								</button>
-							</div>
 						</div>
 					);
 				})}
