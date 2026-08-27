@@ -9,6 +9,7 @@ import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
 import { AppImage } from "../components/ui/app-image";
 import { Skeleton } from "../components/ui/skeleton";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
 import { ssrRead } from "../lib/ssr-read";
@@ -90,7 +91,10 @@ function ClaimStoreHeader({
 	subtitle,
 }: {
 	store: ClaimPagePayload["store"];
-	subtitle?: string;
+	/** ReactNode, not string: the OPEN state puts the buyer's name in here and
+	 * it has to be wrapped in a masked span (Clarity's Balanced mode records
+	 * every rendered string verbatim). */
+	subtitle?: React.ReactNode;
 }) {
 	return (
 		<div className="border-b border-border bg-card">
@@ -264,7 +268,18 @@ function ClaimRoute() {
 		<div className="mx-auto flex min-h-dvh w-full max-w-none flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
 			<ClaimStoreHeader
 				store={store}
-				subtitle={`Ready to complete${open.buyerName ? ` — ${open.buyerName}` : ""} · ${formatPrice(open.itemsTotal, store.currency)}`}
+				subtitle={
+					<>
+						Ready to complete
+						{open.buyerName ? (
+							<>
+								{" — "}
+								<span {...MASK_PII}>{open.buyerName}</span>
+							</>
+						) : null}
+						{` · ${formatPrice(open.itemsTotal, store.currency)}`}
+					</>
+				}
 			/>
 			<ClaimTimerBar
 				expiresAt={open.expiresAt}

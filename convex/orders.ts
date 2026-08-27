@@ -72,6 +72,7 @@ import {
 	extendedPaymentDue,
 	isPaymentWindowLocked,
 	PAYMENT_WINDOW_LOCK_REASON,
+	paymentDeadlineApplies,
 } from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
@@ -2412,10 +2413,15 @@ export async function applyStatusTransition(
 		confirmationPushStatus: undefined;
 		paymentDueAt: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
-	// A payment deadline dies with the order — on EVERY cancellation (seller,
-	// admin, or the auto-cancel sweep), so the by_payment_due index only ever
-	// holds live clocks and a cancelled order never shows a countdown.
-	if (status === "cancelled" && order.paymentDueAt !== undefined) {
+	// A payment deadline dies whenever the clock stops meaning anything — every
+	// cancellation (seller, admin, or the auto-cancel sweep) AND every advance
+	// past `confirmed`, because a seller who packs an unpaid order has decided
+	// to fulfil it. Clearing on cancel alone (PR #227 review) stranded those
+	// rows in the by_payment_due range forever: the 1-minute sweep re-read a
+	// set that only grew, and the buyer's page threatened a cancellation the
+	// server would never carry out. Keeps the schema's stated invariant true —
+	// the index range only ever holds live clocks.
+	if (!paymentDeadlineApplies(status) && order.paymentDueAt !== undefined) {
 		patch.paymentDueAt = undefined;
 	}
 	// `sending` and `deferred` are PROMISES about a message ("your confirmation
@@ -2951,7 +2957,18 @@ export const advanceToStage = mutation({
 			statusChangedAt: number;
 			updatedAt: number;
 			collectedAt: number;
+			paymentDueAt: undefined;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Custom stages patch `status` here rather than through
+		// applyStatusTransition, so the payment-deadline cleanup has to be
+		// repeated — same rule, same reason (see that helper). Without this a
+		// store on custom stages leaks exactly the rows the other path fixed.
+		if (
+			!paymentDeadlineApplies(targetStatus) &&
+			order.paymentDueAt !== undefined
+		) {
+			patch.paymentDueAt = undefined;
+		}
 		// Set-if-unset, so a later manual advance can't move the arrival moment.
 		if (collectingFromBuyer && markCollected === true) {
 			patch.collectedAt = now;

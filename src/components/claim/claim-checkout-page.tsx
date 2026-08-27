@@ -45,6 +45,7 @@ import {
 	formatPrice,
 } from "../../lib/format";
 import { displayAddressState } from "../../lib/address-display";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { claimFormSchemaFor } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
@@ -644,7 +645,10 @@ export function ClaimCheckoutPage({
 						</form.AppField>
 						<div className="flex flex-col gap-1">
 							<p className="text-sm font-medium">WhatsApp number</p>
-							<div className="flex h-11 items-center rounded-xl border border-border bg-muted px-3.5 text-sm text-muted-foreground">
+							<div
+								{...MASK_PII}
+								className="flex h-11 items-center rounded-xl border border-border bg-muted px-3.5 text-sm text-muted-foreground"
+							>
 								{formatMobile(open.waPhone)}
 							</div>
 							<p className="text-xs text-muted-foreground">

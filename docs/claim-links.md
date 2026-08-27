@@ -176,6 +176,35 @@ the reactive Convex subscription and resumes exactly where it was; closing the
 tab changes nothing at all, because the sweep is server-side. Neither page can
 be "killed" by a reload.
 
+### The deadline is cleared by whoever ends the clock
+
+`paymentDeadlineApplies(status)` — `pending` or `confirmed` — is the single
+author for "does a payment deadline still mean anything here?". It gates the
+sweep (`isAutoCancelDue`), the seller freeze (`isPaymentWindowLocked`), the
+buyer's countdown on `/track`, and **both status writers**, which must clear
+`paymentDueAt` when they move an order past it:
+
+- `applyStatusTransition` (seller taps, admin, the sweep, Lalamove webhooks)
+- `advanceToStage` (custom stages — it patches `status` on its own path, so
+  the rule has to be repeated there; a store on custom stages would otherwise
+  leak exactly the rows the other writer fixes)
+
+PR #227 review caught this: the original cleared on `cancelled` only. A seller
+who marks an unpaid claim order Packed — which is *allowed*, and is why
+`isAutoCancelDue` has a "seller advanced it on purpose" arm — left the row with
+a live `paymentDueAt` forever. Two symptoms, one cause:
+
+1. The buyer's order page kept showing a countdown, then permanently read
+   *"The payment window has ended. This order will be cancelled…"* — a threat
+   the server would never carry out.
+2. The row sat in the `by_payment_due` range with `paymentDueAt < now` in
+   perpetuity, so the 1-minute sweep re-read a set that only ever grew —
+   contradicting the invariant `convex/schema.ts` states outright ("the
+   `by_payment_due` index range only ever holds live clocks").
+
+The track page gates on the same predicate rather than on `!isCancelled`, which
+is both tighter and the defence for any row stranded before the fix shipped.
+
 ### The CHECKOUT is frozen from the moment the link is sent
 
 The freeze above covers the buyer's *order*, after they commit. Zaki's 27 Aug
@@ -390,6 +419,17 @@ outcome.
 
 ## Buyer side (`/claim/<token>`)
 
+- **Excluded from GA and Clarity** via `isCapabilityTokenPath` — the claim URL
+  *is* the secret, and it is the stronger of the two capability tokens: it
+  reads the buyer's name/phone and can **commit an order that decrements
+  stock**. It shipped guarded against Clerk (`BUYER_ROUTE_IDS`) but not against
+  analytics; PR #227 review caught the twin. Both lists guard the same class of
+  route — change them together. See [`analytics.md` §1](./analytics.md).
+- The buyer's name (store header) and phone (checkout row) carry `MASK_PII`,
+  and all four claim files are pinned in the mask-sweep table in
+  `src/lib/analytics-privacy.test.tsx`. Clarity's Balanced mode masks input
+  contents and numbers but records every other rendered string verbatim, so a
+  rendered name is a replay of a real customer.
 - Token capability = `generateTrackingToken()` (the `/track` posture:
   unguessable, noindex, never echoed into meta). Clerk-free buyer surface
   (`BUYER_ROUTE_IDS`), SSR via `ssrRead` soft-degrade.
