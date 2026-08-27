@@ -33,11 +33,19 @@ covers general order-on-behalf: phone orders, DM quotes, repeat customers.
 ## The timer (Zaki's checkout window — locked 26 Aug, revised 27 Aug 2026)
 
 - The window is **vendor-set per send**, not fixed: the send dialog offers
-  **15 min / 1 hour / 24 hours** chips (`CLAIM_WINDOW_CHOICES_MINUTES`), and
+  **10 min / 15 min / 1 hour / 24 hours** chips
+  (`CLAIM_WINDOW_CHOICES_MINUTES`), and
   the choice is remembered as the store's default
   (`retailers.claimLinkWindowMinutes`, updated at send — the dialog says so;
   deliberately no separate Settings card, and deliberately three chips rather
   than six: a long chip row is a decision tax on someone mid-livestream).
+- **A short window compresses COMPLETION, not the whole hold.** Payment always
+  gets `CLAIM_PAYMENT_RUNWAY_MS` from commit, so a buyer who confirms at 9:30
+  of a 10-minute window still holds stock until ~24:30. That is why **5 minutes
+  is a bound and not a chip**: at 5 the runway dominates entirely, so the chip
+  would promise urgency the system doesn't deliver. The dialog says this in the
+  seller's words ("how long they have to *complete* the order — then at least
+  15 minutes to pay").
 - **Bounds** (`sanitizeClaimWindowMinutes`, server-enforced under the chips):
   **5 minutes minimum** — below that a link can be dead before WhatsApp
   delivers it — and **7 days maximum**, because "price locked" has to stay
@@ -202,6 +210,18 @@ outcome.
   outcomes: completed (→ the order), expired ("Send a fresh link" reopens
   the session). Renders nothing until a first claim exists — the build
   screen's button is the feature's front door.
+- **Marketing origin (86eyq0eq9).** The send dialog asks "Where's this order
+  from?" — TikTok Live / Instagram / WhatsApp, tap-again to clear. The tag is
+  frozen on the claim at send and carried onto the committed order's
+  `attributionSource`, so Insights counts a live drop's revenue against the
+  channel that produced it instead of "Direct / shared link". **Seller-chosen,
+  never derived**: a claim link serves a live, a DM quote and a phone order
+  alike, and only the seller knows which — staging reserved the `tiktok-live`
+  bucket for this feature, but hardcoding it would have mislabelled every
+  non-live use. Like the window, the choice is **remembered**
+  (`retailers.claimLinkSource`), so it is one tap at the top of a live and
+  zero for the next fifty claims. Untagged is fine and unchanged: the order
+  buckets `direct` exactly as before.
 - `sendClaim` / `resendClaim` / `cancelClaim` are owner-or-admin
   (`requireRetailerAccess`), admin-audited.
 
@@ -301,18 +321,11 @@ celebratory emoji. The price-hold detail is not lost — the buyer sees the live
 
 ## Deferred / follow-ups
 
-- **Attribution bucket for claim orders.** Staging's source-attribution work
-  (86eyq0eq9) reserved a `"tiktok-live"` label "for claim-link orders minted
-  from a live session", but `orderClaims.commit` stamps no
-  `attributionSource`, so a claim order currently buckets as **Direct /
-  shared link** on the order page's "Came from" row. That is defensible (the
-  seller did send a link directly) and not wrong, but it isn't the reserved
-  intent either. It stays undecided on purpose: claim links serve live drops
-  AND phone orders, DM quotes and repeat customers, so hardcoding
-  `tiktok-live` would mislabel most of them. The honest fix — when a real
-  seller needs the split — is a source chip in the send dialog, or deriving
-  it from the Live Session Pricing work (86eycz9ap) once a "live session" is
-  a thing the system knows about.
+- Claim-link **attribution presets** are three (`CLAIM_SOURCE_CHOICES`:
+  TikTok Live / Instagram / WhatsApp). A seller who lives on another channel
+  has no chip for it — the field takes any sanitized tag, so widening is a
+  one-line change once someone asks. Deliberately not the full
+  `SHARE_TAG_PRESETS` list: a long chip row is a decision tax mid-livestream.
 
 - Meta template registration (EN + MS) with Arif — until then every claim
   shows the copy-link fallback.

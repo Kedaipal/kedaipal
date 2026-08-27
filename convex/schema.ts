@@ -572,6 +572,15 @@ export default defineSchema({
 		// send dialog says so), no separate Settings card. Unset = 24h default
 		// (DEFAULT_CLAIM_WINDOW_MINUTES in convex/lib/orderClaims.ts).
 		claimLinkWindowMinutes: v.optional(v.number()),
+		// Claim links (86eyq0epn): the marketing origin the seller last tagged a
+		// claim with — an `attributionBucket` key ("tiktok-live", "instagram",
+		// …). Remembered exactly like the window above, so a seller sets it once
+		// at the top of a live and every claim that session inherits it. Unset =
+		// untagged (the order then buckets "direct", the pre-attribution
+		// behaviour). Deliberately seller-chosen rather than derived: a claim
+		// link serves a TikTok Live, a phone order and a DM quote alike, and
+		// only the seller knows which.
+		claimLinkSource: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -1718,6 +1727,11 @@ export default defineSchema({
 		// FIXED deadline (epoch-ms) — never slides, resend never resets it.
 		expiresAt: v.number(),
 		windowMinutes: v.number(),
+		// Marketing origin frozen at send (86eyq0eq9 × 86eyq0epn) — carried onto
+		// the committed order's `attributionSource` so Insights counts a live
+		// drop's revenue against the channel that produced it. Sanitized with
+		// the shared `sanitizeAttributionSource`; unset = untagged.
+		attributionSource: v.optional(v.string()),
 		// Resend guard (Zaki): cooldown + hard cap live in convex/lib/orderClaims.ts;
 		// these two power both the server check and the disabled-with-reason button.
 		sentCount: v.number(),

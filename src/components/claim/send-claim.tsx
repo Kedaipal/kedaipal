@@ -7,7 +7,9 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { sourceLabel } from "../../../convex/lib/attribution";
 import {
+	CLAIM_SOURCE_CHOICES,
 	CLAIM_WINDOW_CHOICES_MINUTES,
 	claimResendState,
 	DEFAULT_CLAIM_WINDOW_MINUTES,
@@ -68,6 +70,7 @@ export function SendClaimDialog({
 	itemsTotal,
 	currency,
 	defaultWindowMinutes,
+	defaultSource,
 	items,
 	onSent,
 }: {
@@ -80,6 +83,8 @@ export function SendClaimDialog({
 	currency: string;
 	/** The store's remembered default (retailers.claimLinkWindowMinutes). */
 	defaultWindowMinutes: number | undefined;
+	/** The store's remembered origin (retailers.claimLinkSource). */
+	defaultSource: string | undefined;
 	items: SendClaimItem[];
 	/** Called after a successful send — the caller returns to the list. */
 	onSent: () => void;
@@ -88,12 +93,16 @@ export function SendClaimDialog({
 	const [windowMinutes, setWindowMinutes] = useState(
 		defaultWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES,
 	);
+	const [source, setSource] = useState<string | undefined>(defaultSource);
 	const [sending, setSending] = useState(false);
 	// Re-seed the chip whenever the dialog opens (the remembered default may
 	// have changed since mount).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset-on-open only.
 	useEffect(() => {
-		if (open) setWindowMinutes(defaultWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES);
+		if (open) {
+			setWindowMinutes(defaultWindowMinutes ?? DEFAULT_CLAIM_WINDOW_MINUTES);
+			setSource(defaultSource);
+		}
 	}, [open]);
 
 	const who = buyerName ?? "the buyer";
@@ -101,7 +110,12 @@ export function SendClaimDialog({
 	async function handleSend() {
 		setSending(true);
 		try {
-			const result = await sendClaim({ sessionId, items, windowMinutes });
+			const result = await sendClaim({
+				sessionId,
+				items,
+				windowMinutes,
+				attributionSource: source,
+			});
 			toast.success(
 				`WhatsApp link sent to ${who} — you'll see the order the moment they complete it.`,
 			);
@@ -172,11 +186,40 @@ export function SendClaimDialog({
 						})}
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">
-						They must complete the order <em>and pay</em> inside this window —
-						when it runs out, the link expires and an unpaid order is
-						cancelled automatically, so your stock comes back. Starting a
-						payment extends their time to finish it. Resending never resets
-						the clock. We&apos;ll remember this choice for your next send.
+						This is how long they have to <em>complete</em> the order — then
+						at least 15 minutes to pay (nobody can open a banking app in one
+						minute). An order still unpaid when time&apos;s up is cancelled
+						automatically, so your stock comes back. Resending never resets
+						the clock.
+					</p>
+				</div>
+
+				<div className="flex flex-col gap-2">
+					<p className="text-sm font-semibold">Where&apos;s this order from?</p>
+					<div className="flex flex-wrap gap-2">
+						{CLAIM_SOURCE_CHOICES.map((tag) => {
+							const active = source === tag;
+							return (
+								<button
+									key={tag}
+									type="button"
+									aria-pressed={active}
+									onClick={() => setSource(active ? undefined : tag)}
+									className={`tap-target rounded-full border-2 px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+										active
+											? "border-accent bg-accent/10 text-accent-emphasis"
+											: "border-border bg-card text-muted-foreground hover:border-accent/40"
+									}`}
+								>
+									{sourceLabel(tag)}
+								</button>
+							);
+						})}
+					</div>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						Counts this sale against that channel in Insights. Tap again to
+						clear it. We&apos;ll remember both choices for your next send —
+						set them once at the top of a live.
 					</p>
 				</div>
 

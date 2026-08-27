@@ -14,9 +14,33 @@
  *  - Resend is cooled down + capped so a seller can't spam the buyer's WhatsApp.
  */
 
-/** Selectable windows in the send dialog (minutes). 15 min = live-drop urgency,
- * 24 h = the ticket's default for DM/phone orders. */
-export const CLAIM_WINDOW_CHOICES_MINUTES = [15, 60, 24 * 60] as const;
+/**
+ * Selectable windows in the send dialog (minutes). 10/15 min = live-drop
+ * urgency, 24 h = the ticket's default for DM/phone orders.
+ *
+ * Note what a SHORT window actually buys: it compresses the time to COMPLETE
+ * the checkout, not the whole hold — payment always gets
+ * `CLAIM_PAYMENT_RUNWAY_MS` from commit (you cannot ask someone to open a
+ * bank app and pay in 60 seconds). That is why the 5-minute floor is a bound
+ * and not a chip: at 5 minutes the runway dominates entirely, so the chip
+ * would promise an urgency the system doesn't deliver. The dialog copy says
+ * this in the seller's words.
+ */
+export const CLAIM_WINDOW_CHOICES_MINUTES = [10, 15, 60, 24 * 60] as const;
+
+/**
+ * Origin chips in the send dialog — where the buyer came from, in the
+ * seller's own words. Deliberately short: a claim link's realistic origins
+ * are a live, a DM, or "someone rang me". Keys are `attributionBucket` keys
+ * (KNOWN_SOURCE_LABELS in convex/lib/attribution.ts owns their display
+ * names); `undefined` = untagged, which buckets "direct" like any
+ * unattributed order.
+ */
+export const CLAIM_SOURCE_CHOICES = [
+	"tiktok-live",
+	"instagram",
+	"whatsapp",
+] as const;
 
 /** The ticket's default (24 h) — used when the store has never sent one. */
 export const DEFAULT_CLAIM_WINDOW_MINUTES = 24 * 60;

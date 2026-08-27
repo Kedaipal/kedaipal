@@ -40,6 +40,7 @@ import { stampRetailerActivation } from "./lib/activation";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
+import { sanitizeAttributionSource } from "./lib/attribution";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
@@ -177,6 +178,9 @@ export const sendClaim = mutation({
 			}),
 		),
 		windowMinutes: v.number(),
+		// Where this buyer came from (86eyq0eq9) — the seller's own answer,
+		// remembered as the store default for the rest of the session.
+		attributionSource: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -208,6 +212,8 @@ export const sendClaim = mutation({
 		}
 
 		const lines = await freezeClaimLines(ctx, retailer._id, args.items);
+		// Never throws (ticket AC) — a bad tag must not block a send.
+		const sanitizedSource = sanitizeAttributionSource(args.attributionSource);
 		const now = Date.now();
 
 		// Supersede: the previous open claim for this session dies with this send
@@ -237,18 +243,22 @@ export const sendClaim = mutation({
 			status: "open",
 			expiresAt,
 			windowMinutes,
+			attributionSource: sanitizedSource,
 			sentCount: 1,
 			lastSentAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
 
-		// Remember the window as the store default (surfaced in the dialog).
-		if (retailer.claimLinkWindowMinutes !== windowMinutes) {
-			await ctx.db.patch(retailer._id, {
-				claimLinkWindowMinutes: windowMinutes,
-				updatedAt: now,
-			});
+		// Remember the window + origin as the store defaults (both surfaced in
+		// the dialog, so the seller sets them once at the top of a live).
+		const defaultsPatch: Record<string, unknown> = {};
+		if (retailer.claimLinkWindowMinutes !== windowMinutes)
+			defaultsPatch.claimLinkWindowMinutes = windowMinutes;
+		if (retailer.claimLinkSource !== sanitizedSource)
+			defaultsPatch.claimLinkSource = sanitizedSource;
+		if (Object.keys(defaultsPatch).length > 0) {
+			await ctx.db.patch(retailer._id, { ...defaultsPatch, updatedAt: now });
 		}
 
 		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyClaimLink, {
@@ -862,6 +872,11 @@ export const commit = mutation({
 			fulfilmentDate: sanitizedFulfilmentDate,
 			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			customerNote: sanitizedCustomerNote,
+			// The channel the seller tagged this claim with, carried onto the
+			// order so Insights counts a live drop's revenue against the channel
+			// that produced it (86eyq0eq9). Undefined = untagged → the order
+			// buckets "direct", exactly as before this existed.
+			attributionSource: claim.attributionSource,
 			// The claim's window CONTINUES onto the order (Zaki, 27 Aug — the
 			// Agoda model): stock just decremented, so the hold must run until
 			// real money. Floored to a full runway so a buyer who spent most of

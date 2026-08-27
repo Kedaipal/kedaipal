@@ -242,6 +242,7 @@ function ActiveSession({
 				country={retailer.country}
 				draft={session.draft}
 				defaultClaimWindowMinutes={retailer.claimLinkWindowMinutes}
+				defaultClaimSource={retailer.claimLinkSource}
 				onCreated={onCreated}
 				onCancel={onCancelActive}
 				onSentToBuyer={onBackToList}
@@ -1310,6 +1311,7 @@ function BuildOrderScreen({
 	country,
 	draft,
 	defaultClaimWindowMinutes,
+	defaultClaimSource,
 	onCreated,
 	onCancel,
 	onSentToBuyer,
@@ -1333,6 +1335,8 @@ function BuildOrderScreen({
 	draft: SessionDraft | undefined;
 	/** Claim links (86eyq0epn): the store's remembered payment window. */
 	defaultClaimWindowMinutes: number | undefined;
+	/** Claim links: the store's remembered marketing origin (86eyq0eq9). */
+	defaultClaimSource: string | undefined;
 	onCreated: (created: {
 		shortId: string;
 		orderId: Id<"orders">;
@@ -2161,6 +2165,7 @@ function BuildOrderScreen({
 				itemsTotal={total}
 				currency={currency}
 				defaultWindowMinutes={defaultClaimWindowMinutes}
+				defaultSource={defaultClaimSource}
 				items={cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,

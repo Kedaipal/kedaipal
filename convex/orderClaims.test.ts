@@ -250,6 +250,81 @@ describe("orderClaims — sendClaim", () => {
 	});
 });
 
+describe("orderClaims — attribution (86eyq0eq9 × 86eyq0epn)", () => {
+	test("the tagged origin is frozen on the claim, remembered, and carried onto the order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { claimId, token } = await asA.mutation(api.orderClaims.sendClaim, {
+			sessionId,
+			items: [{ variantId, quantity: 1 }],
+			windowMinutes: 15,
+			attributionSource: "tiktok-live",
+		});
+		expect((await getClaim(t, claimId)).attributionSource).toBe("tiktok-live");
+		// Remembered as the store default so the next 50 claims need no tap.
+		expect((await asA.query(api.retailers.getMyRetailer))?.claimLinkSource).toBe(
+			"tiktok-live",
+		);
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		const order = await t.run(async (ctx) => {
+			const claim = await ctx.db.get(claimId);
+			return claim?.orderId ? await ctx.db.get(claim.orderId) : null;
+		});
+		// The whole point: Insights counts this revenue against the live, not
+		// against "direct".
+		expect(order?.attributionSource).toBe("tiktok-live");
+	});
+
+	test("an untagged claim stays untagged — the pre-attribution behaviour", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				windowMinutes: 15,
+			});
+		expect((await getClaim(t, claimId)).attributionSource).toBeUndefined();
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		const order = await t.run(async (ctx) => {
+			const claim = await ctx.db.get(claimId);
+			return claim?.orderId ? await ctx.db.get(claim.orderId) : null;
+		});
+		expect(order?.attributionSource).toBeUndefined();
+	});
+
+	test("a junk tag is sanitized, never thrown — a bad tag must not block a send", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				windowMinutes: 15,
+				attributionSource: "  TikTok Live!!  ",
+			});
+		expect((await getClaim(t, claimId)).attributionSource).toBe("tiktok-live");
+	});
+});
+
 describe("orderClaims — resend + cancel", () => {
 	async function openClaim(t: ReturnType<typeof setup>) {
 		const retailer = await seedRetailer(t, USER_A);
