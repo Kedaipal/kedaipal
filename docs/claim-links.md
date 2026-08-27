@@ -5,10 +5,11 @@ claims in live chat keys each claim in Counter Checkout (items, qty, the price
 they called out — including per-line overrides, 86eyphh8r), attaches the
 buyer's phone, and **sends the rest of checkout to the buyer** as a WhatsApp
 link. The buyer opens `/claim/<token>` — a pre-filled, **price-locked**
-checkout — adds address, fulfilment date/time and (on the order page next)
-payment. The order commits, and stock decrements, **only at buyer
-completion**. Also covers general order-on-behalf: phone orders, DM quotes,
-repeat customers.
+checkout — adds address and fulfilment date/time, confirms, then pays on the
+order page. The order commits, and stock decrements, **only at buyer
+completion**, and the same deadline keeps running on the order page **until
+real money** — an unpaid order auto-cancels and the stock comes back. Also
+covers general order-on-behalf: phone orders, DM quotes, repeat customers.
 
 ## The model
 
@@ -29,14 +30,20 @@ repeat customers.
   also cancels any open claim (`cancelOpenClaimsForSession`), so one cart is
   never sellable through two doors.
 
-## The timer (Zaki's checkout window — locked 26 Aug 2026)
+## The timer (Zaki's checkout window — locked 26 Aug, revised 27 Aug 2026)
 
-- The window is a **fixed deadline** stamped at send (`expiresAt`), chosen in
-  the send dialog: **15 min / 1 hour / 24 hours** chips
-  (`CLAIM_WINDOW_CHOICES_MINUTES`), 24 h the ticket default. The chosen value
-  is remembered as the store's default (`retailers.claimLinkWindowMinutes`,
-  updated at send — the dialog says so; deliberately no separate Settings
-  card).
+- The window is **vendor-set per send**, not fixed: the send dialog offers
+  **15 min / 1 hour / 24 hours** chips (`CLAIM_WINDOW_CHOICES_MINUTES`), and
+  the choice is remembered as the store's default
+  (`retailers.claimLinkWindowMinutes`, updated at send — the dialog says so;
+  deliberately no separate Settings card, and deliberately three chips rather
+  than six: a long chip row is a decision tax on someone mid-livestream).
+- **Bounds** (`sanitizeClaimWindowMinutes`, server-enforced under the chips):
+  **5 minutes minimum** — below that a link can be dead before WhatsApp
+  delivers it — and **7 days maximum**, because "price locked" has to stay
+  honest (a week-old locked price is a stale quote), an open claim holds buyer
+  PII until it dies, and a longer window would mean month-long inventory holds
+  now that the deadline runs until payment.
 - **The deadline runs until MONEY, not until commit** (revised 27 Aug — the
   Agoda model; supersedes the first cut's option (a)). Before commit it gates
   completion (expired ⇒ dead link + released price). At commit it **carries
@@ -82,6 +89,105 @@ repeat customers.
   (`expireStaleClaims`) keeps the status buckets true. Dead claims
   (expired/cancelled) hold buyer PII and are purged after ~30 days
   (`purgeStaleClaims`); completed claims are kept (they link to an order).
+
+## How the timer works, mechanically (dev)
+
+One field, one brain, one sweep — the whole design in four parts.
+
+### 1. The field
+
+`orders.paymentDueAt` (epoch-ms) with the contract **"present = the clock is
+live."** It is CLEARED on payment received (`applyPaymentReceived`) and on
+EVERY cancellation (`applyStatusTransition`), which is what keeps the
+`by_payment_due` index near-empty — the sweep's range read only ever sees live
+clocks. `orders.cancelledReason: "payment_window_expired"` rides alongside so
+the buyer's cancelled page can explain itself (absent = a human cancelled).
+
+### 2. The brain — pure functions, no Convex imports
+
+All in `convex/lib/orderClaims.ts`, matrix-tested in isolation:
+
+| Function | Answers |
+|---|---|
+| `paymentDueAtCommit(claimExpiresAt, now)` | what deadline the order inherits |
+| `extendedPaymentDue(currentDue, now)` | the bounded extension when payment starts |
+| `isAutoCancelDue(order, now)` | may the sweep cancel this, right now |
+
+### 3. The writers — five one-liners at existing chokepoints
+
+| Site | Does |
+|---|---|
+| `orderClaims.commit` | stamps the inherited deadline |
+| `hitpay.recordCheckoutRequest` (Pay-now mint) | extends it |
+| `orders.setDeliveryFee` | re-arms it when a fee-pending order becomes payable |
+| `applyPaymentReceived` | clears it (the ONE core every receive path runs through) |
+| `applyStatusTransition` | clears it on any cancel |
+
+### 4. The sweep — a Convex cron
+
+`internal.orderClaims.cancelUnpaidDueOrders`, registered in `crons.ts` via
+`crons.interval({ minutes: 1 })`. Indexed range read (`paymentDueAt < now`),
+pages of 50 with a self-scheduling continuation, re-judges every row with
+`isAutoCancelDue`, and cancels through `applyStatusTransition` — so stock
+restore, customer-aggregate reversal and usage un-metering are the *same code*
+the seller's own Cancel button runs. Each page is one OCC transaction: a
+payment landing mid-sweep just retries the mutation and the predicate
+re-judges. No WhatsApp (one-message-per-order policy — the tracking page
+carries the state).
+
+**The cron is unconditional.** Convex crons are wall-clock scheduled, not
+event-driven: it fires every minute whether or not any order has a live clock.
+With no due rows it is one indexed range read returning zero documents and
+exits — the cheapest thing this codebase does on a schedule, and far below the
+existing daily purges in work done. There is deliberately no "arm/disarm the
+cron" mechanism: that would be mutable global state to keep in sync with row
+state, and getting it wrong means deadlines that never fire.
+
+### Carry-on, not reset, not stacked
+
+The stamp is `max(claim deadline, commit + CLAIM_PAYMENT_RUNWAY_MS)`:
+
+- **1-hour window, committed at minute 11** → carries on with 49 min. The
+  buyer's remaining time is theirs.
+- **15-min window, committed at minute 11** → strict carry-on leaves 4 minutes
+  to open a bank app and land money. That is not a payment window, it is a
+  trap — the floor lifts it to 15 min from commit.
+
+The window's JOB changes at commit: before it, it creates claim urgency
+("decide"); after it, it is a payment window and must be physically
+completable. Straight `+window` stacking was rejected (rewards dawdling on
+long windows) and so was resetting (a 24-h window snapping to 15 min at commit
+is a rug-pull). The floor only ever engages when under 15 min remain.
+
+### Refresh and tab-close are safe by construction
+
+Both countdowns derive from an **absolute server timestamp**
+(`claim.expiresAt`, `order.paymentDueAt`) minus `Date.now()` — never an
+elapsed counter held in component state. A refresh re-reads the deadline from
+the reactive Convex subscription and resumes exactly where it was; closing the
+tab changes nothing at all, because the sweep is server-side. Neither page can
+be "killed" by a reload.
+
+### What the buyer sees as the clock runs out
+
+Leaving the order page open through expiry gives three beats, no dead air:
+
+1. **Ticking** — amber card: "Complete payment within 4:12 — after that this
+   order is cancelled and the items are released."
+2. **At zero** (instant, local) — the card switches to red honesty: "The
+   payment window has ended. This order will be cancelled and the items
+   released — unless your payment already went through, in which case it
+   applies as normal." The hedge is deliberate: at that moment the page cannot
+   know whether a webhook is in flight.
+3. **Within ~1 min** (the sweep lands) — the page is a live Convex
+   subscription, so it repaints itself with no refresh: status flips to
+   Cancelled, the payment card disappears, and the cancelled banner explains
+   *"the payment window for this order ran out, so it was cancelled and the
+   items were released. Still want it? Message the store."*
+
+If a payment landed in that window the sweep's predicate refuses to cancel,
+and the buyer's page flips to Paid instead — the same subscription, the other
+outcome.
 
 ## Seller side (Counter Checkout)
 
@@ -194,6 +300,19 @@ celebratory emoji. The price-hold detail is not lost — the buyer sees the live
 "Price locked for 14:32" bar on the page the button opens.
 
 ## Deferred / follow-ups
+
+- **Attribution bucket for claim orders.** Staging's source-attribution work
+  (86eyq0eq9) reserved a `"tiktok-live"` label "for claim-link orders minted
+  from a live session", but `orderClaims.commit` stamps no
+  `attributionSource`, so a claim order currently buckets as **Direct /
+  shared link** on the order page's "Came from" row. That is defensible (the
+  seller did send a link directly) and not wrong, but it isn't the reserved
+  intent either. It stays undecided on purpose: claim links serve live drops
+  AND phone orders, DM quotes and repeat customers, so hardcoding
+  `tiktok-live` would mislabel most of them. The honest fix — when a real
+  seller needs the split — is a source chip in the send dialog, or deriving
+  it from the Live Session Pricing work (86eycz9ap) once a "live session" is
+  a thing the system knows about.
 
 - Meta template registration (EN + MS) with Arif — until then every claim
   shows the copy-link fallback.

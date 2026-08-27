@@ -5,7 +5,9 @@
 > price-locked WhatsApp checkout link ("Send to buyer to complete" on the build
 > screen; "Waiting on buyers" panel on the landing). See
 > [`docs/claim-links.md`](./claim-links.md) — including the rule that a counter
-> sale or session dismissal cancels the session's open claim.
+> sale or session dismissal cancels the session's open claim, and the payment
+> deadline that carries onto the committed order (an unpaid claim order
+> auto-cancels so the stock it held comes back).
 
 > ClickUp [`86ey0e82j`](https://app.clickup.com/t/86ey0e82j). Lands **Bearcamp**
 > (first paying customer — sells at a physical counter + online). The first brick
@@ -118,9 +120,12 @@ After a **paid-in-person** order is created, the success screen offers an
 optional **"Mark as completed"** button (one tap → `delivered`).
 
 **`orders.source` — the checkout surface** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)):
-a first-class field on `orders`, `v.union("storefront","counter")`, distinct from
-`channel` (the messaging transport, always WhatsApp). `createOrderFromSession`
-stamps `"counter"`; the storefront `orders.create` stamps `"storefront"`.
+a first-class field on `orders`, `v.union("storefront","counter","claim")`,
+distinct from `channel` (the messaging transport, always WhatsApp).
+`createOrderFromSession` stamps `"counter"`; the storefront `orders.create`
+stamps `"storefront"`; a claim-link commit stamps `"claim"` (86eyq0epn — a
+seller-keyed cart the BUYER completed, so it deliberately keeps the
+buyer-chosen fulfilment surfaces that `"counter"` hides).
 Optional/dev-only widen, no backfill — **undefined reads as `"storefront"`** (same
 posture as `pickupSnapshot.locationType`). It drives per-surface UI:
 
