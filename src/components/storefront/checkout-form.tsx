@@ -46,6 +46,7 @@ import {
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
+import { readAnalyticsDistinctId } from "../../lib/posthog";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
 import {
@@ -541,6 +542,10 @@ export function CheckoutPage({
 					// The session's captured ?src=/utm_source tag (86eyq0eq9) —
 					// undefined = direct. Server re-sanitizes; never blocks the order.
 					attributionSource: readAttributionSource(storeSlug),
+					// The browser’s PostHog id (86eyrayux), so this order’s server-fired
+					// events join the anonymous pageviews that led here. Undefined when
+					// PostHog is unconfigured or blocked — never blocks the order.
+					analyticsDistinctId: readAnalyticsDistinctId(),
 				});
 				if (value.deliveryMethod === "delivery")
 					saveAddress(country, value.address);

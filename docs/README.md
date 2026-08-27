@@ -37,6 +37,7 @@ How the product actually works. Read in this order.
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
+| [analytics.md](./analytics.md) | GA4 + Clarity + PostHog: which tool owns which job and why three is not redundancy, the client/Convex event split, the `analyticsDistinctId` funnel join, and the `/track/*` carve-out every provider shares. |
 
 ## Roadmaps (designed / in-progress)
 
