@@ -16,9 +16,11 @@ import {
 	computeAov,
 	mergePaymentStats,
 	mergeProductStats,
+	mergeSourceStats,
 	type PaymentStat,
 	type ProductStat,
 	pickBucketing,
+	type SourceStat,
 	type TrendBucket,
 } from "../../convex/lib/insights";
 
@@ -89,6 +91,7 @@ export type RangePayload = {
 	products: ProductStat[];
 	trend: TrendBucket[];
 	payments: PaymentStat[];
+	sources: SourceStat[];
 	bucketing: Bucketing;
 	capped: boolean;
 };
@@ -100,6 +103,7 @@ export type TodayPayload = {
 	orderCount: number;
 	products: ProductStat[];
 	payments: PaymentStat[];
+	sources: SourceStat[];
 };
 
 export type InsightsView = {
@@ -113,6 +117,7 @@ export type InsightsView = {
 	trend: TrendBucket[];
 	products: ProductStat[];
 	payments: PaymentStat[];
+	sources: SourceStat[];
 };
 
 /**
@@ -143,6 +148,7 @@ export function buildInsightsView(opts: {
 		range?.payments ?? [],
 		today?.payments ?? [],
 	);
+	const sources = mergeSourceStats(range?.sources ?? [], today?.sources ?? []);
 
 	// Seed the contiguous grid, add the sparse range buckets, then today's column.
 	const grid = new Map<number, TrendBucket>(
@@ -179,6 +185,7 @@ export function buildInsightsView(opts: {
 		trend: [...grid.values()].sort((a, b) => a.start - b.start),
 		products,
 		payments,
+		sources,
 	};
 }
 

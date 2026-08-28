@@ -1,4 +1,5 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
 
 type OrderAddress = NonNullable<Doc<"orders">["deliveryAddress"]>;
@@ -14,6 +15,9 @@ interface DeliveryAddressDisplayProps {
 export function DeliveryAddressDisplay({
 	address,
 }: DeliveryAddressDisplayProps) {
+	// SG addresses hold "Singapore" as both city and state — the state line is
+	// skipped when it just repeats the city (src/lib/address-display.ts).
+	const stateLine = displayAddressState(address);
 	return (
 		<div {...MASK_PII} className="flex flex-col gap-0.5 text-sm">
 			<p className="font-medium">{address.line1}</p>
@@ -21,7 +25,7 @@ export function DeliveryAddressDisplay({
 			<p>
 				{address.postcode} {address.city}
 			</p>
-			<p>{address.state}</p>
+			{stateLine ? <p>{stateLine}</p> : null}
 			{address.notes ? (
 				<p className="mt-1.5 text-xs text-muted-foreground">
 					<span className="font-medium">Notes:</span> {address.notes}
@@ -35,6 +39,7 @@ export function formatAddressInline(address: OrderAddress): string {
 	const parts = [address.line1];
 	if (address.line2) parts.push(address.line2);
 	parts.push(`${address.postcode} ${address.city}`);
-	parts.push(address.state);
+	const stateLine = displayAddressState(address);
+	if (stateLine) parts.push(stateLine);
 	return parts.join(", ");
 }

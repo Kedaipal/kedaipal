@@ -37,7 +37,7 @@ function PrivacyPage() {
 			summary={[
 				"We collect retailer account details, catalog and order data, shopper contact details (mainly WhatsApp number), basic technical data, and masked recordings of how our pages are used.",
 				"We use it to run the Service, deliver order updates over WhatsApp, and keep accounts secure — we never sell personal data.",
-				"We share data only with the service providers listed below that help us operate (e.g. Convex, Clerk, Meta, Stripe, HitPay).",
+				"We share data only with the service providers listed below that help us operate (e.g. Convex, Clerk, Meta, HitPay, Lalamove, Google).",
 				"You have rights under Malaysia's Personal Data Protection Act 2010 (PDPA), including access, correction, and withdrawal of consent.",
 				`Questions or data requests? Email ${LEGAL_CONTACT_EMAIL}.`,
 			]}
@@ -92,7 +92,8 @@ function PrivacyPage() {
 					alongside the page address, browser, and device. Recordings mask what
 					you type into forms, and we additionally mask the areas of the retailer
 					dashboard that display customer names, phone numbers, addresses, and
-					notes. We do not record the buyer order-tracking pages at all.
+					notes. We do not record the buyer order-tracking pages at all, and
+					our analytics tools never receive those pages' addresses.
 				</p>
 			</section>
 
@@ -143,23 +144,32 @@ function PrivacyPage() {
 						<strong>Cloudflare</strong> — hosting, CDN, and DDoS protection.
 					</li>
 					<li>
-						<strong>Stripe</strong> and <strong>HitPay</strong> — subscription
-						billing and payment processing for retailer plans.
+						<strong>HitPay</strong> — online payments, processed through the
+						retailer's own HitPay account (Kedaipal never holds order money).
+						When a shopper pays online, HitPay receives the order amount and
+						reference together with the shopper's name and phone number, and
+						collects the shopper's email address on its own checkout page under
+						its own privacy policy.
+					</li>
+					<li>
+						<strong>Lalamove</strong> — rider delivery, booked through the
+						retailer's own Lalamove account. For orders dispatched with a
+						rider, Lalamove receives the delivery contact's name, phone number,
+						and address.
+					</li>
+					<li>
+						<strong>Google</strong> — address search at checkout (Google
+						Places, which processes the address text a shopper types in order
+						to suggest and pin it) and Google Analytics (aggregate usage
+						measurement).
 					</li>
 					<li>
 						<strong>Resend</strong> — transactional email (e.g. order and
 						account notifications).
 					</li>
 					<li>
-						<strong>PostHog</strong> — product analytics to understand and
-						improve usage.
-					</li>
-					<li>
 						<strong>Microsoft Clarity</strong> — session replays and heatmaps to
 						diagnose usability issues and improve the interface.
-					</li>
-					<li>
-						<strong>Calendly</strong> — scheduling onboarding and support calls.
 					</li>
 				</ul>
 				<p>
@@ -184,6 +194,13 @@ function PrivacyPage() {
 					identifiers persist for up to one year. They are not strictly
 					necessary, and we do not use advertising or cross-site tracking
 					cookies.
+				</p>
+				<p>
+					Your browser also stores some data locally on your device, which is
+					not sent to us: storefront cart contents, and — if you place a
+					delivery order — the delivery address you entered, kept on your device
+					so your next checkout can prefill it. Clearing your browser's site
+					data removes these.
 				</p>
 			</section>
 
@@ -226,9 +243,17 @@ function PrivacyPage() {
 				</ul>
 				<p>
 					<strong>Retailers</strong> act as the data user for their own
-					shoppers' personal data and are responsible for responding to their
-					customers' PDPA requests. Kedaipal processes that data on the
-					retailer's behalf. To exercise any of these rights with Kedaipal,
+					shoppers' personal data — order history, contact details, and notes —
+					and are responsible for responding to their customers' PDPA requests;
+					Kedaipal processes that data on the retailer's behalf. For some
+					processing Kedaipal decides the purpose itself and acts as the data
+					user: our own usage analytics, and the platform-wide WhatsApp opt-out
+					list (replying STOP applies across every store on our shared number).
+				</p>
+				<p>
+					Kedaipal's operating company is incorporated in Singapore, so
+					alongside the Malaysian PDPA we also honour Singapore's Personal Data
+					Protection Act 2012. To exercise any of these rights with Kedaipal,
 					contact us at{" "}
 					<a
 						href={`mailto:${LEGAL_CONTACT_EMAIL}`}
@@ -264,9 +289,10 @@ function PrivacyPage() {
 					9. International Transfers
 				</h2>
 				<p>
-					Kedaipal operates from Malaysia and our service providers may process
-					data in other countries. By using the Service, you consent to such
-					transfers where permitted by law.
+					Kedaipal serves sellers and shoppers in Malaysia, and our service
+					providers process data in other countries, including the United
+					States. By using the Service, you consent to such transfers where
+					permitted by law.
 				</p>
 			</section>
 
@@ -285,8 +311,9 @@ function PrivacyPage() {
 			<section className="space-y-3">
 				<h2 className="text-2xl font-semibold tracking-tight">11. Contact</h2>
 				<p>
-					If you have questions about this Privacy Policy or wish to exercise
-					your data rights, contact us at{" "}
+					Our designated Data Protection Officer is Arif Rahman. If you have
+					questions about this Privacy Policy or wish to exercise your data
+					rights, contact us at{" "}
 					<a
 						href={`mailto:${LEGAL_CONTACT_EMAIL}`}
 						className="underline hover:text-foreground"

@@ -205,13 +205,18 @@ and escalates for `pending` **or** unseen.
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.
 - **`order-filters.tsx`** — one coherent filter set: an **"Order type"** pair
-  (Online / Counter → `source`), a **"Needs mockup"** toggle
+  (Online / Counter → `source`), a **"Came from"** multi-select (marketing
+  origin → `attributionSources`, 86eyq0eq9 — a SEPARATE dimension from Order
+  type: that is the checkout surface, this is where the buyer arrived from; its
+  chips come from the query's `availableSources` because seller tags are
+  free-form, and the whole section hides below two origins), a
+  **"Needs mockup"** toggle
   (amber, with count; cross-cutting — ANDs with the bucket; shown only when ≥1
   order needs one or it's on), **payment** multi-select, and a **date range**
   (quick presets Today / 7 days / 30 days / This month + custom inputs). Inline on
   desktop; collapses to a **bottom-sheet** on phones with an active-count badge.
-  The mockup toggle + each payment pick increment the count; a date range counts
-  as **one**. (The amber "Mockup pending" pill on each row still flags individual
+  The mockup toggle + each payment pick + each "Came from" pick increment the
+  count; a date range counts as **one**. (The amber "Mockup pending" pill on each row still flags individual
   orders, so visibility isn't lost by folding mockup into the sheet.)
 
 ## Tests

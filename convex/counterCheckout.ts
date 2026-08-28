@@ -27,6 +27,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
@@ -42,13 +43,17 @@ import {
 } from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
+	effectiveClaimStatus,
+	SESSION_CLAIM_LOCK_REASON,
+} from "./lib/orderClaims";
+import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyWaPhone, assertValidWaPhone } from "./lib/slug";
+import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
@@ -201,6 +206,27 @@ export const getCheckoutSession = query({
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
 		// Autosaved in-progress order, so a resume restores the cart + selections.
 		draft: Doc<"counterCheckoutSessions">["draft"];
+		// A claim link that is still out (86eyq0epn). Non-null = this checkout is
+		// FROZEN: the screen renders the read-only "waiting on buyer" view and
+		// both edit mutations refuse. Carries the frozen snapshot rather than the
+		// draft, because the snapshot is what the buyer is actually looking at.
+		liveClaim: {
+			claimId: Id<"orderClaims">;
+			token: string;
+			expiresAt: number;
+			windowMinutes: number;
+			currency: string;
+			itemsTotal: number;
+			lines: Array<{
+				name: string;
+				variantLabel: string | undefined;
+				price: number;
+				quantity: number;
+			}>;
+			sentCount: number;
+			lastSentAt: number;
+			lastSendOutcome: Doc<"orderClaims">["lastSendOutcome"];
+		} | null;
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new ConvexError("Not authenticated");
@@ -240,8 +266,11 @@ export const getCheckoutSession = query({
 			});
 		}
 
+		const now = Date.now();
+		const claim = await liveClaimForSession(ctx, sessionId, now);
+
 		return {
-			status: effectiveStatus(session, Date.now()),
+			status: effectiveStatus(session, now),
 			expiresAt: session.expiresAt,
 			waPhone: session.waPhone,
 			displayName,
@@ -249,6 +278,28 @@ export const getCheckoutSession = query({
 			orderId: session.orderId,
 			customer,
 			draft: session.draft,
+			liveClaim: claim
+				? {
+						claimId: claim._id,
+						token: claim.token,
+						expiresAt: claim.expiresAt,
+						windowMinutes: claim.windowMinutes,
+						currency: claim.currency,
+						itemsTotal: claim.lines.reduce(
+							(sum, l) => sum + l.price * l.quantity,
+							0,
+						),
+						lines: claim.lines.map((l) => ({
+							name: l.name,
+							variantLabel: l.variantLabel,
+							price: l.price,
+							quantity: l.quantity,
+						})),
+						sentCount: claim.sentCount,
+						lastSentAt: claim.lastSentAt,
+						lastSendOutcome: claim.lastSendOutcome,
+					}
+				: null,
 		};
 	},
 });
@@ -268,9 +319,13 @@ export const getCheckoutSession = query({
 /**
  * Bind a walk-in session to a manually-keyed buyer phone — the "buyer won't/can't
  * scan" path. Normalizes to the SAME E.164 digits an inbound scan produces
- * (assertValidMyWaPhone), so it resolves-or-creates the exact same
- * `(retailerId, waPhone)` customer as a scan would — a returning buyer is
- * recognised, never duplicated. Re-claims an already-open session for that phone
+ * (assertValidWaPhoneForCountry, keyed off the store's country — an SG store's
+ * bare `81234567` is prefixed to `6581234567`, the form Meta delivers inbound),
+ * so it resolves-or-creates the exact same `(retailerId, waPhone)` customer as
+ * a scan would — a returning buyer is recognised, never duplicated. Stays
+ * deliberately loose beyond that bridging: a cashier may legitimately key a
+ * foreign number for a walk-in, so no mobile-shape gate applies here.
+ * Re-claims an already-open session for that phone
  * (whether from an earlier manual bind or a scan) instead of forking a second
  * one. Owner-or-admin, admin-audited. Cashier-authenticated, so no public
  * rate-limit/cap applies (those guard the public poster token, not a logged-in
@@ -293,7 +348,10 @@ export const bindSessionManualPhone = mutation({
 
 		let normalizedPhone: string;
 		try {
-			normalizedPhone = assertValidMyWaPhone(waPhone);
+			normalizedPhone = assertValidWaPhoneForCountry(
+				waPhone,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -480,6 +538,13 @@ export const saveSessionDraft = mutation({
 		const { session } = resolved;
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open for editing");
+		// A claim link froze these lines and the buyer is looking at them. An
+		// edit here would NOT reach that page, so it would silently diverge from
+		// the offer — the seller's cart and the buyer's would disagree with no
+		// sign either way. The screen renders read-only behind the same fact;
+		// this is the backstop for a stale tab.
+		if (await liveClaimForSession(ctx, sessionId, Date.now()))
+			throw new ConvexError(SESSION_CLAIM_LOCK_REASON);
 
 		// Drop junk lines (non-positive / non-integer qty) and cap the count so a
 		// rogue client can't bloat the row. Authoritative validation is at create.
@@ -502,6 +567,14 @@ export const saveSessionDraft = mutation({
  * customers at once and resume any of them by matching the buyer's pairing code.
  * Effectively-expired rows are filtered out even before the cron sweeps them.
  * Owner-or-admin. Item count comes straight off the draft (no per-variant lookups).
+ *
+ * A checkout whose CLAIM LINK is still out is deliberately absent (86eyq0epn):
+ * it is not something the cashier can work on — it is parked with the buyer,
+ * and it already has a home one section down under "Waiting on buyers". Listing
+ * it in both places showed the same buyer twice and, worse, put a dismiss
+ * button next to a live offer. One card per state, in the section that names
+ * that state. When the claim is released or runs out, the checkout reappears
+ * here, editable again.
  */
 export const listOpenSessions = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
@@ -545,6 +618,8 @@ export const listOpenSessions = query({
 
 		for (const s of rows) {
 			if (effectiveStatus(s, now) === "expired") continue;
+			// Parked with the buyer — see the docblock.
+			if (await liveClaimForSession(ctx, s._id, now)) continue;
 
 			let displayName: string | undefined;
 			if (s.customerId) {
@@ -578,7 +653,9 @@ export const listOpenSessions = query({
 
 /**
  * Seller confirms the order keyed off a bound session. Resolves catalog variants
- * server-side (price + stock are NEVER trusted from the client), creates a
+ * server-side (stock is authoritative; price defaults to the catalog but the
+ * seller — and only the seller, this is an owner-or-admin mutation — may adjust
+ * a line's price, e.g. a negotiated discount keyed at the counter), creates a
  * confirmed self-collect order linked to the bound buyer, optionally marks it
  * paid-in-person (cash / DuitNow-now), refreshes the customer aggregates, and
  * completes the session. Then sends the buyer a WhatsApp confirmation with their
@@ -591,11 +668,15 @@ export const createOrderFromSession = mutation({
 			v.object({
 				variantId: v.id("productVariants"),
 				quantity: v.number(),
-				// Vendor-entered unit price (sen) — REQUIRED for a custom/quote line
-				// (whose catalog price is 0; price is agreed in person), IGNORED for a
-				// normal line (which always uses the authoritative variant price, so a
-				// tampered client can't reprice a fixed product). Validated as a
-				// positive integer, no upper cap (same rule as any product price).
+				// Vendor-entered unit price (sen). REQUIRED for a custom/quote line
+				// (whose catalog price is 0; the price is agreed in person). OPTIONAL
+				// on a standard line — when present it's a seller price ADJUSTMENT (a
+				// discount or negotiated price keyed at the counter); when absent the
+				// authoritative catalog price is charged. Trusting it here is safe:
+				// this mutation is owner-or-admin only (requireSessionAccess), so the
+				// "client" IS the seller pricing their own order — a buyer never
+				// reaches this path. Validated as a positive integer, no upper cap
+				// (same rule as any product price).
 				unitPrice: v.optional(v.number()),
 			}),
 		),
@@ -634,6 +715,13 @@ export const createOrderFromSession = mutation({
 		if (args.items.length === 0) throw new ConvexError("Add at least one item");
 		if (args.items.length > MAX_COUNTER_ITEMS)
 			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
+		// One cart, one door — and the buyer is already at the other one. Ringing
+		// this up would silently kill the link they're filling in (see
+		// cancelOpenClaimsForSession below, which stays as the race backstop).
+		// Refusing makes the seller release the link on purpose first, which is
+		// also what tells the buyer their offer was withdrawn.
+		if (await liveClaimForSession(ctx, args.sessionId, Date.now()))
+			throw new ConvexError(SESSION_CLAIM_LOCK_REASON);
 
 		let sanitizedFulfilmentDate: number | undefined;
 		if (args.fulfilmentDate !== undefined) {
@@ -683,10 +771,12 @@ export const createOrderFromSession = mutation({
 			// the buyer is present, so design + price are agreed in person and the
 			// storefront's mockup-approval round-trip is moot. Counter orders are
 			// created `confirmed` with no mockup gate. A CUSTOM (quote) line carries
-			// no catalog price, so the vendor supplies it; everything else stays on
-			// the authoritative variant price. See docs/custom-option.md.
+			// no catalog price, so the vendor MUST supply it; a standard line MAY
+			// carry a seller price adjustment (see the arg comment above) and falls
+			// back to the authoritative variant price. See docs/custom-option.md +
+			// docs/counter-checkout.md ("Seller price adjustment").
 			let unitPrice: number;
-			if (variant.isCustom === true) {
+			if (variant.isCustom === true || item.unitPrice !== undefined) {
 				// A positive integer in sen — the SAME rule as any other price
 				// (products.ts). No artificial ceiling: we can't know the vendor's
 				// business (watches, renovations, B2B services can run six figures+),
@@ -819,6 +909,11 @@ export const createOrderFromSession = mutation({
 			updatedAt: now,
 		});
 
+		// A claim link sent from this session dies with the counter sale — the
+		// buyer completing the old link would double-sell the same cart
+		// (86eyq0epn; the claim page renders "cancelled" from the next read).
+		await cancelOpenClaimsForSession(ctx, session._id, now);
+
 		// Buyer confirmation + tracking link over WhatsApp — only when there's a
 		// buyer to reach. An anonymous sale sends nothing.
 		if (session.waPhone) {
@@ -845,6 +940,58 @@ export const createOrderFromSession = mutation({
 	},
 });
 
+/**
+ * Any still-open claim links sent from a session are cancelled when the
+ * session settles another way (counter sale completed, session dismissed) —
+ * one cart must never be sellable through two doors at once. Shared by
+ * createOrderFromSession + cancelCheckoutSession; orderClaims.sendClaim
+ * supersedes its own predecessors the same way.
+ */
+/**
+ * The session's LIVE claim link, if one is out (86eyq0epn).
+ *
+ * "Live" is judged with `effectiveClaimStatus`, not the stored column: a claim
+ * past its deadline reads `expired` from the next read onward, and must NOT
+ * keep holding the session hostage while it waits for the 5-min sweep.
+ *
+ * While this returns a claim, the checkout is FROZEN — see the guards on
+ * `saveSessionDraft` and `createOrderFromSession`. Zaki, 27 Aug: during a live
+ * it gets hectic, and the failure mode is a seller reopening the card and
+ * editing an order a buyer is already filling in. Every outcome of that was
+ * bad: a draft edit silently diverges from the frozen offer (the buyer's page
+ * never changes, so the seller believes a change landed that didn't), and a
+ * counter sale or a re-send kills the buyer's open link mid-form.
+ */
+async function liveClaimForSession(
+	ctx: MutationCtx | QueryCtx,
+	sessionId: Id<"counterCheckoutSessions">,
+	now: number,
+): Promise<Doc<"orderClaims"> | null> {
+	const claims = await ctx.db
+		.query("orderClaims")
+		.withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+		.collect();
+	return (
+		claims.find((c) => effectiveClaimStatus(c, now) === "open") ?? null
+	);
+}
+
+async function cancelOpenClaimsForSession(
+	ctx: MutationCtx,
+	sessionId: Id<"counterCheckoutSessions">,
+	now: number,
+): Promise<void> {
+	const claims = await ctx.db
+		.query("orderClaims")
+		.withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+		.collect();
+	for (const claim of claims) {
+		if (claim.status === "open") {
+			await ctx.db.patch(claim._id, { status: "cancelled", updatedAt: now });
+		}
+	}
+}
+
 /** Seller dismisses an active session (status → cancelled). Ownership-checked. */
 export const cancelCheckoutSession = mutation({
 	args: { sessionId: v.id("counterCheckoutSessions") },
@@ -853,10 +1000,12 @@ export const cancelCheckoutSession = mutation({
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
 		if (session.status === "awaiting_buyer" || session.status === "buyer_identified") {
+			const now = Date.now();
 			await ctx.db.patch(sessionId, {
 				status: "cancelled",
-				updatedAt: Date.now(),
+				updatedAt: now,
 			});
+			await cancelOpenClaimsForSession(ctx, sessionId, now);
 			await logAdminAction(
 				ctx,
 				access,

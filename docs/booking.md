@@ -221,12 +221,14 @@ verbatim to the guest — a silent no dead-ends someone planning a trip), stamps
 **`bookingResolution: "declined"` + `bookingDeclineReason`**, then the one
 cancel path releases the hold. The expiry cron stamps
 `bookingResolution: "expired"` the same way. Both markers exist so the buyer's
-page can say the TRUE thing — and so `notifyStatusChange` **suppresses the
-generic cancelled message** on resolution cancels (wrong copy, and the guest
-never messaged the WABA, so there's no session window for it to land in
-anyway). A seller cancelling an APPROVED booking carries no marker and keeps
-today's behaviour. `assertStillRequested` gives cause-true refusals: approve at
-hour 25 reads "expired — ask the guest to book again", never a generic error.
+page can say the TRUE thing instead of a bare "cancelled", and so the seller's
+resolution note keeps the why on the order. (They were also built to suppress
+the generic cancelled WhatsApp — obsolete since **`86eyd63r8` deleted every
+automatic status send**: an order now gets exactly ONE automatic outbound
+message, the confirmation push. Nothing to suppress, and the approve path was
+already riding that same push.) `assertStillRequested` gives cause-true
+refusals: approve at hour 25 reads "expired — ask the guest to book again",
+never a generic error.
 
 ### Seller surfaces
 

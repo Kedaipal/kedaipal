@@ -4,9 +4,30 @@ import { components } from "../_generated/api";
 /**
  * Rate limit definitions.
  *
- * - `orderCreate`: public order creation endpoint. Keyed by retailerId so each
- *   storefront is throttled independently. Token bucket allows a burst of 5
- *   then refills at 30/min steady state.
+ * - `orderCreate` + `orderCreateDaily`: the public order creation endpoint,
+ *   guarded by a PAIR of limiters, both keyed by retailerId so each storefront
+ *   is throttled independently. They answer different questions:
+ *
+ *   `orderCreate` (burst of 60, refill 120/min) shapes traffic WITHIN a live
+ *   sale. The original 5-burst / 30-per-min settings silently capped a store
+ *   at five near-simultaneous checkouts: a drop with forty buyers tapping
+ *   "Place order" inside ten seconds would have taken about five orders and
+ *   rejected the rest, and a throttled buyer costs a real sale.
+ *
+ *   `orderCreateDaily` (500/day, continuous refill) bounds TOTAL exposure.
+ *   It exists because a spam order no longer costs just an inventory hold and
+ *   some noise: since the confirmation push (86eyf1rck), `orders.create`
+ *   schedules a Meta-billed template send to a caller-chosen number, and that
+ *   send rides the `transactional` category — which BYPASSES the WABA
+ *   kill switch, caps, opt-outs and quality throttle by design (core promise).
+ *   The per-minute bucket alone would let one storefront key drive ~172k such
+ *   sends/day at the shared WABA, whose quality score is cross-tenant and not
+ *   self-healing. 500/day is more orders than the top plan tier's MONTHLY
+ *   order cap, so no legitimate seller can meet this ceiling — while an
+ *   attacker's reach drops ~345×. Continuous refill (~1 credit/3min) rather
+ *   than a midnight window, so recovery is gradual and there's no reset to
+ *   time an attack against. If a real store ever hits it, that's a support
+ *   conversation, not a config tweak.
  * - `productWrite`: authenticated retailer mutations. Keyed by Clerk subject so
  *   a single user cannot bulk-trash inventory.
  * - `addressUpdate`: public mutation that lets a shopper edit their delivery
@@ -32,9 +53,15 @@ import { components } from "../_generated/api";
 export const rateLimiter = new RateLimiter(components.rateLimiter, {
 	orderCreate: {
 		kind: "token bucket",
-		rate: 30,
+		rate: 120,
 		period: MINUTE,
-		capacity: 5,
+		capacity: 60,
+	},
+	orderCreateDaily: {
+		kind: "token bucket",
+		rate: 500,
+		period: 24 * 60 * MINUTE,
+		capacity: 500,
 	},
 	productWrite: {
 		kind: "fixed window",
@@ -66,6 +93,18 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		capacity: 2,
 	},
 	paymentClaim: {
+		kind: "token bucket",
+		rate: 5,
+		period: MINUTE,
+		capacity: 3,
+	},
+	// Buyer committing a claim link (86eyq0epn) — public token-authenticated
+	// mutation. Keyed by the claim token so abuse of one link can't starve
+	// others; a couple of validation-fix retries is the realistic ceiling.
+	// The commit ALSO runs the retailer-keyed orderCreate/orderCreateDaily
+	// pair (it schedules the same Meta-billed confirmation push an order
+	// create does, so it must share that spend ceiling).
+	claimCommit: {
 		kind: "token bucket",
 		rate: 5,
 		period: MINUTE,

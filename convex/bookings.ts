@@ -50,7 +50,8 @@ import { logAdminAction } from "./lib/auth";
 import { effectiveKind } from "./lib/productKind";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyMobile } from "./lib/slug";
+import { DEFAULT_COUNTRY } from "./lib/country";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import {
 	applyStatusTransition,
@@ -184,7 +185,13 @@ export const requestBooking = mutation({
 		}
 		let waPhone: string;
 		try {
-			waPhone = assertValidMyMobile(args.customer.waPhone);
+			// Judged by the STORE's country (SG-lite) — the same bridge
+			// orders.create uses, so a booking checkout can't reject a number
+			// the ordinary checkout would accept.
+			waPhone = assertValidMobileForCountry(
+				args.customer.waPhone,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -419,11 +426,11 @@ export const declineBookingRequest = mutation({
 			);
 		}
 
-		// Resolution FIRST, then the transition: the cancel path's scheduled
-		// notify reads the marker after this mutation commits, which is what
-		// keeps the generic "order cancelled" message (wrong copy, and no
-		// session window to land in) from firing on top of the page's own
-		// declined state.
+		// Resolution FIRST, then the transition, so any later reader sees a
+		// cancelled booking that already knows WHY. (This ordering also used to
+		// suppress the generic "order cancelled" WhatsApp; since 86eyd63r8 no
+		// automatic status sends exist at all, so the marker's remaining job is
+		// the buyer's page and the seller's resolution note.)
 		await ctx.db.patch(order._id, {
 			bookingResolution: "declined",
 			bookingDeclineReason: trimmed,
@@ -458,8 +465,7 @@ export const expireStaleRequests = internalMutation({
 			.take(50);
 		for (const order of stale) {
 			// The resolution marker is what the buyer's page reads ("Request
-			// expired", never a bare "cancelled") and what suppresses the generic
-			// cancelled send (no window to land in anyway).
+			// expired", never a bare "cancelled").
 			await ctx.db.patch(order._id, { bookingResolution: "expired" });
 			await applyStatusTransition(ctx, order, "cancelled", {
 				note: "Booking request expired — not answered within 24 hours",

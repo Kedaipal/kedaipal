@@ -11,7 +11,9 @@ import { ProductPageView } from "../components/storefront/product-page";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -92,12 +94,20 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			productSlug: params.productSlug,
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${params.productSlug}`,
+			// Social cards + JSON-LD go through the image proxy too: link unfurlers
+			// are known to skip oversized images outright, and a 4 MB cover is
+			// exactly the kind of thing they drop — so this is a correctness fix for
+			// WhatsApp previews, not only a weight one. Absolute because an unfurler
+			// can't resolve a root-relative path.
 			// Share image precedence: the product's own photo → store cover → logo.
-			ogImageUrl:
-				product.imageUrls[0] ??
-				retailer.coverImageUrl ??
-				retailer.logoUrl ??
-				undefined,
+			ogImageUrl: ((): string | undefined => {
+				const raw =
+					product.imageUrls[0] ??
+					retailer.coverImageUrl ??
+					retailer.logoUrl ??
+					undefined;
+				return raw ? absoluteProxiedImageUrl(raw, SITE_URL) : undefined;
+			})(),
 			priceFrom: product.priceFrom,
 			priceTo: product.priceTo,
 			currency: product.currency,
@@ -178,9 +188,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 							offers: {
 								"@type": "AggregateOffer",
 								lowPrice: toMajor(priceFrom),
-								...(priceTo > priceFrom
-									? { highPrice: toMajor(priceTo) }
-									: {}),
+								...(priceTo > priceFrom ? { highPrice: toMajor(priceTo) } : {}),
 								priceCurrency: currency,
 								availability,
 								url: canonicalUrl,
@@ -249,6 +257,8 @@ function ProductSkeleton() {
 
 function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
+	// Product links are the ones pasted in bios/lives — capture the ?src= tag.
+	useCaptureAttribution(slug);
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
 	const result = useQuery(

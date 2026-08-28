@@ -26,7 +26,7 @@ nothing here gets rebuilt.
 | Seller connect card | `src/components/settings/online-payments-card.tsx` (Settings → Payments) |
 | Buyer Pay-now + confirming state + collapsed manual methods | `src/routes/track.$token.tsx` |
 | Mismatch email | `convex/email.ts` `notifyGatewayPaymentMismatch` + `convex/lib/emailCopy.ts` `gatewayMismatch` (EN/MS/ZH) |
-| Credentials | `retailers.hitpay { enabled, apiKey, salt, connectedAt }` — server-only; clients get `HitpaySummary` (hasCredentials/mode/apiKeyHint) |
+| Credentials | `retailers.hitpay { enabled, apiKey, salt, connectedAt }` — server-only, **encrypted at rest since 86eyn25gk** (`mode`/`apiKeyHint` now stamped at save; see [`docs/credential-encryption.md`](./credential-encryption.md)); clients get `HitpaySummary` (hasCredentials/mode/apiKeyHint) |
 | Order fields | `orders.gatewayRequestId/-CheckoutUrl/-RequestedAmount/-RequestedCurrency/-RequestedAt/-PaymentId` + index `by_gateway_request` |
 
 ## Flow
@@ -108,8 +108,16 @@ nothing here gets rebuilt.
    hand") and never auto-receives. A match applies the exact
    `markPaymentReceived` semantics via the shared `applyPaymentReceived`
    helper: `paymentStatus received`, pending → `confirmed` auto-confirm +
-   activation stamp, orderEvents row, `notifyPaymentReceived` WhatsApp (an
-   existing message — no new send types). `paymentReference` stores the
+   activation stamp, orderEvents row. **The buyer is not messaged** — their
+   order page flips to "Payment received" live (86eyd63r8; the
+   `notifyPaymentReceived` WhatsApp this originally reused is deleted). **The
+   SELLER is**, and only here: `receiveGatewayPayment` schedules
+   `whatsapp.notifySellerPaymentReceived` + `email.notifyPaymentReceived`,
+   which pick one channel between them. This is the one receive path no human
+   on the seller's side witnessed — `markPaymentReceived` is their own click
+   and deliberately notifies nothing — and before 86eyd63r8 it notified them on
+   **no channel at all**. See
+   [`order-notifications.md`](./order-notifications.md). `paymentReference` stores the
    HitPay payment id; the seller's order page shows "Paid online via HitPay
    · <rail> · Ref …", and the buyer's paid card carries the same
    "Payment ref …" with one-tap copy (86eyjmhby) — both sides quote one

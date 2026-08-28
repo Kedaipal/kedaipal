@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
+	FlaskConical,
 	MapPin,
 	Pencil,
 	Phone,
@@ -17,22 +18,49 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES } from "../../../convex/lib/address";
-import type { DeliveryConfig, DeliveryZone } from "../../../convex/lib/delivery";
+import {
+	resolveAwbConfig,
+	type StoredAwbConfig,
+} from "../../../convex/lib/awbConfig";
+import type { Country } from "../../../convex/lib/country";
+import type {
+	DeliveryConfig,
+	DeliveryZone,
+} from "../../../convex/lib/delivery";
 import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
+	deliveryModeAllowed,
 } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
+	hhmmFromMinutes,
 	MAX_NOTICE_DAYS,
+	timeMinutesFromHhmm,
 } from "../../../convex/lib/fulfilmentDate";
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
+import {
+	type DayHours,
+	formatDayWindow,
+	OPEN_ALL_DAY,
+	type OpeningHours,
+	WEEKDAY_NAMES,
+	WEEKDAY_NAMES_SHORT,
+} from "../../../convex/lib/openingHours";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
+import { MASK_PII } from "../../lib/analytics-privacy";
+import {
+	type FixHighlight,
+	highlightRingClass,
+	SETTINGS_ANCHOR,
+	scrollToAnchor,
+} from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
@@ -41,16 +69,18 @@ import { deriveMapsUrl } from "../../lib/google-address";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
-import { FilterChip } from "../ui/filter-chip";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
+import { TimePicker } from "../ui/time-picker";
+import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
@@ -70,10 +100,27 @@ type DeliveryBookingSummary = {
 	promptBookOnPacked: boolean;
 	deliveryDirection: "standard" | "collection";
 	apiKeyHint?: string;
+	/** Sandbox vs production, from the key prefix (86eypncfy). Undefined = a
+	 * row the backfill hasn't stamped — badge nothing rather than imply live. */
+	env?: "sandbox" | "production";
 };
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
+	/** Deep-link target from the post-switch checklist: the anchor to scroll to
+	 * and how loudly to ring it (86eyqgujv). Undefined on a normal visit — the
+	 * ring is contextual to having asked to fix something, never a permanent
+	 * red border on a field we only want checked. */
+	fix?: { anchor: string; highlight: FixHighlight };
+	/** Storefront currency — every money input on this tab wears its symbol.
+	 * Threaded rather than assumed: an SG store's delivery, pickup-fee and
+	 * minimum-order fields quoted "RM" before this (86eyqgujv). */
+	currency: string;
+	/** The store's country (SG-lite) — SG stores see only the Free/Flat
+	 * delivery-charge modes (the MY-only ones are server-refused), the address
+	 * pickers search the store's own country, and the pickup-point editor's
+	 * manager-contact phone plate/validator follows it. */
+	country: Country;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	/** Current delivery-charge config (undefined = free delivery). */
@@ -83,17 +130,41 @@ interface FulfilmentTabProps {
 	/** Lalamove booking summary (86eyb5hrf) — secrets never reach the client. */
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store opening hours (86eyp5rav) — undefined = open 24/7. Buyers can only
+	 * pick fulfilment dates/times inside them. See convex/lib/openingHours.ts. */
+	openingHours: OpeningHours | undefined;
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
+	/** Despatch-label template (86eyp63mp) — undefined = every default. */
+	awbConfig: StoredAwbConfig | undefined;
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
 }
 
-function Card({ children }: { children: ReactNode }) {
+/**
+ * `id` is the deep-link anchor: the post-switch checklist links to the exact
+ * card that fixes a row, and `highlight` rings it so the seller lands on the
+ * thing rather than the top of a long tab (86eyqgujv).
+ *
+ * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
+ */
+function Card({
+	children,
+	id,
+	highlight,
+}: {
+	children: ReactNode;
+	id?: string;
+	highlight?: FixHighlight;
+}) {
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			{children}
 		</section>
 	);
@@ -166,21 +237,41 @@ function ToggleSwitch({
 	);
 }
 
+/** The currency symbol worn by a money input, positioned for the shared
+ * `pl-9` inputs on this tab. One author so a new currency never leaves a
+ * stray "RM" behind on a field. */
+function MoneyPrefix({ currency }: { currency: string }) {
+	return (
+		<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+			{currencySymbol(currency)}
+		</span>
+	);
+}
+
 export function FulfilmentTab({
 	retailerId,
+	fix,
+	currency,
+	country,
 	offerSelfCollect,
 	offerDelivery,
 	deliveryConfig,
 	businessAddress,
 	deliveryBooking,
 	minFulfilmentNoticeDays,
+	openingHours,
 	minOrderValue,
+	awbConfig,
 	subscription,
 }: FulfilmentTabProps) {
 	const locations = useQuery(
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
 	const updateSettings = useUpdateSettings();
+	/** Ring this card when it's the one the post-switch checklist sent the
+	 * seller to (86eyqgujv). Undefined on a normal visit. */
+	const ring = (anchor: string): FixHighlight | undefined =>
+		fix?.anchor === anchor ? fix.highlight : undefined;
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
@@ -311,10 +402,19 @@ export function FulfilmentTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
+			<OpeningHoursCard initial={openingHours} />
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
-			<MinOrderValueCard initial={minOrderValue} />
+			<MinOrderValueCard initial={minOrderValue} currency={currency} />
+			<BusinessAddressCard
+				country={country}
+				businessAddress={businessAddress}
+				highlight={ring(SETTINGS_ANCHOR.business_address)}
+			/>
 
-			<Card>
+			<Card
+				id={SETTINGS_ANCHOR.delivery_mode}
+				highlight={ring(SETTINGS_ANCHOR.delivery_mode)}
+			>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
 						title="Delivery"
@@ -341,9 +441,11 @@ export function FulfilmentTab({
 
 				<div className="border-t border-border pt-4">
 					<DeliveryChargeSection
+						currency={currency}
 						// Remount when the saved config/address/keys change shape so
 						// local draft state re-seeds from the server truth after a save.
 						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}:${deliveryBooking?.apiKeyHint ?? ""}`}
+						country={country}
 						config={deliveryConfig}
 						businessAddress={businessAddress}
 						deliveryBooking={deliveryBooking}
@@ -353,7 +455,19 @@ export function FulfilmentTab({
 				</div>
 			</Card>
 
-			<Card>
+			{/* Directly after Delivery, and before Pickup, because that is what it
+			    configures: the paper that goes on a parcel once it's going out by
+			    courier. Pickup orders have no address, so they never get one. */}
+			<DespatchLabelCard
+				key={JSON.stringify(awbConfig ?? {})}
+				config={resolveAwbConfig(awbConfig)}
+				onSave={(patch) => updateSettings({ awbConfig: patch })}
+			/>
+
+			<Card
+				id={SETTINGS_ANCHOR.pickup_addresses}
+				highlight={ring(SETTINGS_ANCHOR.pickup_addresses)}
+			>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
 						title="Pickup"
@@ -427,6 +541,7 @@ export function FulfilmentTab({
 							) : (
 								<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
 									<LocationRowBody
+										currency={currency}
 										location={loc}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
@@ -455,6 +570,7 @@ export function FulfilmentTab({
 									<LocationRow
 										key={loc._id}
 										location={loc}
+										currency={currency}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
 									/>
@@ -474,6 +590,8 @@ export function FulfilmentTab({
 				onClose={() => setEditing(null)}
 				location={editing === "new" ? undefined : (editing ?? undefined)}
 				retailerId={retailerId}
+				currency={currency}
+				country={country}
 				canChargeFee={hasFeature(subscription, "chargeablePickup")}
 			/>
 		</div>
@@ -519,7 +637,9 @@ function zoneDraftsFromZones(
 	}));
 }
 
-function weightZonesFromConfig(config: DeliveryConfig | undefined): ZoneDraft[] {
+function weightZonesFromConfig(
+	config: DeliveryConfig | undefined,
+): ZoneDraft[] {
 	// Empty = the template/blank chooser renders instead of an empty form.
 	if (config?.mode !== "weight") return [];
 	return zoneDraftsFromZones(config.zones);
@@ -527,7 +647,12 @@ function weightZonesFromConfig(config: DeliveryConfig | undefined): ZoneDraft[] 
 
 /** A fresh zone draft — one starter band so the row structure is visible. */
 function blankZoneDraft(): ZoneDraft {
-	return { name: "", states: [], bands: [{ maxKg: "3", fee: "" }], freeAbove: "" };
+	return {
+		name: "",
+		states: [],
+		bands: [{ maxKg: "3", fee: "" }],
+		freeAbove: "",
+	};
 }
 
 /** Segmented mode button — same visual language as the pickup KindButton. */
@@ -600,12 +725,17 @@ function ModeRadioDot({ active }: { active: boolean }) {
  * seller who bands by road distance will undercharge.
  */
 function DeliveryChargeSection({
+	country,
 	config,
 	businessAddress,
 	deliveryBooking,
 	canUseRadius,
 	canUseLalamove,
+	currency,
 }: {
+	/** SG stores get only Free/Flat — the MY-only modes' cards don't render
+	 * and updateSettings refuses them (SG-lite, 86eynw29u). */
+	country: Country;
 	config: DeliveryConfig | undefined;
 	businessAddress: BusinessAddress | undefined;
 	/** Secret-free booking summary — Lalamove is set up INSIDE this section
@@ -613,6 +743,7 @@ function DeliveryChargeSection({
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	canUseRadius: boolean;
 	canUseLalamove: boolean;
+	currency: string;
 }) {
 	const updateSettings = useUpdateSettings();
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
@@ -643,9 +774,6 @@ function DeliveryChargeSection({
 	const [onUnpriceable, setOnUnpriceable] = useState<"block" | "arrange">(
 		config?.mode === "weight" ? config.onUnpriceable : "arrange",
 	);
-	// Business address: the autocomplete pick replaces the stored one on save.
-	const [pickedAddress, setPickedAddress] =
-		useState<GoogleSelectedAddress | null>(null);
 	// Lalamove drafts (mode "lalamove" only). Blank key inputs mean "keep the
 	// stored pair" (server: undefined = no change); `editingKeys` swaps the
 	// stored-key summary row for fresh inputs (key rotation).
@@ -669,6 +797,15 @@ function DeliveryChargeSection({
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
 	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 
+	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
+	// weight-zone / Lalamove) don't render and the server refuses storing them
+	// (convex/lib/delivery.ts COUNTRY_DELIVERY_MODES). The one-line reason
+	// below the grid says so, so the missing cards are never a mystery.
+	const myOnlyModesHidden = !deliveryModeAllowed(country, "radius");
+	// Defensive: a stored MY-only mode on an SG store (pre-guard data) has no
+	// card to select — name the situation instead of showing nothing picked.
+	const storedModeUnavailable =
+		config !== undefined && !deliveryModeAllowed(country, config.mode);
 	// A downgraded seller sitting on a radius config can still view it and
 	// switch away (clearing is un-gated server-side) — they just can't edit it.
 	const radiusLocked = !canUseRadius;
@@ -685,14 +822,8 @@ function DeliveryChargeSection({
 	const uncoveredStates = MY_STATES.filter((s) => !claimedStates.has(s));
 	const patchZone = (i: number, patch: Partial<ZoneDraft>) =>
 		setZones((prev) => prev.map((z, j) => (j === i ? { ...z, ...patch } : z)));
-	const effectiveAddress = pickedAddress
-		? {
-				label: pickedAddress.formattedAddress,
-				latitude: pickedAddress.latitude,
-				longitude: pickedAddress.longitude,
-				placeId: pickedAddress.placeId,
-			}
-		: businessAddress;
+	// The stored address only — this section no longer edits it (86eyqgujv).
+	const effectiveAddress = businessAddress;
 
 	async function save() {
 		setError(null);
@@ -795,8 +926,8 @@ function DeliveryChargeSection({
 			if (!effectiveAddress) {
 				setError(
 					collectionMode
-						? "Pick your business address from the suggestions — it's where riders drop off what they collect."
-						: "Pick your business address from the suggestions — it's the pickup point riders are sent to.",
+						? "Set your business address above first — it's where riders drop off what they collect."
+						: "Set your business address above first — it's the pickup point riders are sent to.",
 				);
 				return;
 			}
@@ -815,7 +946,7 @@ function DeliveryChargeSection({
 		} else {
 			if (!effectiveAddress) {
 				setError(
-					"Set your business address first — distances are measured from it.",
+					"Set your business address above first — distances are measured from it.",
 				);
 				return;
 			}
@@ -871,11 +1002,6 @@ function DeliveryChargeSection({
 						: {};
 			await updateSettings({
 				deliveryConfig: nextConfig,
-				// Only send the address when the seller picked a new one — an
-				// unchanged save must not touch (or clear) the stored address.
-				...(pickedAddress && effectiveAddress
-					? { businessAddress: effectiveAddress }
-					: {}),
 				...bookingPatch,
 			});
 			toast.success(
@@ -885,7 +1011,6 @@ function DeliveryChargeSection({
 						? "Lalamove delivery is on — book riders from any confirmed delivery order."
 						: "Delivery charge saved.",
 			);
-			setPickedAddress(null);
 			setApiKey("");
 			setApiSecret("");
 			setEditingKeys(false);
@@ -906,35 +1031,39 @@ function DeliveryChargeSection({
 			    the others, but the promoted one: branded with the official
 			    wordmark so every tier SEES rider delivery exists. For a locked
 			    Starter it stays full-colour with a Pro chip + upgrade line
-			    (disabled-with-reason, not a washed-out ghost). */}
+			    (disabled-with-reason, not a washed-out ghost). SG stores see
+			    only Free + Flat (SG-lite) — the reason line below the grid
+			    names why the other modes are absent. */}
 			<div className="grid grid-cols-2 gap-2">
-				<button
-					type="button"
-					onClick={() => setMode("lalamove")}
-					disabled={lalamoveLocked && config?.mode !== "lalamove"}
-					aria-pressed={mode === "lalamove"}
-					className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-						mode === "lalamove"
-							? "border-accent bg-accent/5"
-							: "border-border bg-card hover:border-accent/40"
-					} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
-				>
-					<span className="flex items-center gap-1.5">
-						<AppImage
-							src="/img/lalamove-logo.svg"
-							alt="Lalamove"
-							aspect="h-4 w-auto"
-							fill={false}
-						/>
-						{lalamoveLocked ? <ProBadge /> : null}
-					</span>
-					<span className="text-xs text-muted-foreground">
-						{lalamoveLocked && config?.mode !== "lalamove"
-							? "Rider delivery — upgrade to Pro to turn on"
-							: "Live rider price, one-tap booking"}
-					</span>
-					<ModeRadioDot active={mode === "lalamove"} />
-				</button>
+				{myOnlyModesHidden ? null : (
+					<button
+						type="button"
+						onClick={() => setMode("lalamove")}
+						disabled={lalamoveLocked && config?.mode !== "lalamove"}
+						aria-pressed={mode === "lalamove"}
+						className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
+							mode === "lalamove"
+								? "border-accent bg-accent/5"
+								: "border-border bg-card hover:border-accent/40"
+						} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+					>
+						<span className="flex items-center gap-1.5">
+							<AppImage
+								src="/img/lalamove-logo.svg"
+								alt="Lalamove"
+								aspect="h-4 w-auto"
+								fill={false}
+							/>
+							{lalamoveLocked ? <ProBadge /> : null}
+						</span>
+						<span className="text-xs text-muted-foreground">
+							{lalamoveLocked && config?.mode !== "lalamove"
+								? "Rider delivery — upgrade to Pro to turn on"
+								: "Live rider price, one-tap booking"}
+						</span>
+						<ModeRadioDot active={mode === "lalamove"} />
+					</button>
+				)}
 				<ModeButton
 					active={mode === "free"}
 					onClick={() => setMode("free")}
@@ -947,33 +1076,51 @@ function DeliveryChargeSection({
 					title="Flat fee"
 					subtitle="Same fee every order"
 				/>
-				<ModeButton
-					active={mode === "radius"}
-					// A seller already ON radius keeps access to the tab so they can
-					// switch away; a locked seller can't switch INTO it.
-					disabled={radiusLocked && config?.mode !== "radius"}
-					onClick={() => setMode("radius")}
-					title="By distance"
-					subtitle="Radius bands — you deliver"
-					badge={radiusLocked ? <ProBadge /> : undefined}
-				/>
+				{myOnlyModesHidden ? null : (
+					<ModeButton
+						active={mode === "radius"}
+						// A seller already ON radius keeps access to the tab so they can
+						// switch away; a locked seller can't switch INTO it.
+						disabled={radiusLocked && config?.mode !== "radius"}
+						onClick={() => setMode("radius")}
+						title="By distance"
+						subtitle="Radius bands — you deliver"
+						badge={radiusLocked ? <ProBadge /> : undefined}
+					/>
+				)}
 				{/* Weight/zone rate card (86eyeea1n) — all-tier: it's the correctness
 				    fix for outstation parcel sellers (J&T/DD/Ninja), with zero
 				    provider cost to Kedaipal. */}
-				<ModeButton
-					active={mode === "weight"}
-					onClick={() => setMode("weight")}
-					title="By weight & zone"
-					subtitle="Courier rate card — you ship"
-				/>
+				{myOnlyModesHidden ? null : (
+					<ModeButton
+						active={mode === "weight"}
+						onClick={() => setMode("weight")}
+						title="By weight & zone"
+						subtitle="Courier rate card — you ship"
+					/>
+				)}
 			</div>
+			{myOnlyModesHidden ? (
+				<p className="text-xs text-muted-foreground">
+					Distance, weight-zone and Lalamove pricing are Malaysia-only for now —
+					Singapore stores deliver free or at a flat fee.
+				</p>
+			) : null}
+			{storedModeUnavailable ? (
+				<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+					Your saved delivery pricing uses a Malaysia-only mode, so buyers
+					can&apos;t check out with delivery right now — pick Free or Flat fee
+					above and save.
+				</p>
+			) : null}
 
 			{mode === "lalamove" ? (
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Buyers pay the real Lalamove price for their address at checkout,
-						and you book the rider in one tap from the order — with automatic
-						shipped + live-tracking WhatsApp messages. There&apos;s{" "}
+						and you book the rider in one tap from the order — which then marks
+						itself Shipped and puts the rider&apos;s live tracking on the
+						buyer&apos;s order page, automatically. There&apos;s{" "}
 						<b>no delivery area to set</b>, and{" "}
 						<b>buyers always see the price before ordering</b> (an address
 						Lalamove can&apos;t price can&apos;t check out, so you never work
@@ -1002,40 +1149,23 @@ function DeliveryChargeSection({
 						</p>
 					) : null}
 
-					{/* 1 · Pickup point */}
-					<div className="flex flex-col gap-1.5">
-						<GoogleAddressAutocomplete
-							initialValue={businessAddress?.label ?? ""}
-							label={
-								collectionMode
-									? "Your outlet address (riders drop off here)"
-									: "Your pickup address (riders collect here)"
-							}
-							required
-							placeholder="Start typing your business address…"
-							description={
-								effectiveAddress
-									? collectionMode
-										? "✓ Pinned — riders bring collected orders to this exact point."
-										: "✓ Pinned — riders are sent to this exact point."
-									: "Pick a Google suggestion so riders get an exact pin — your stall, kitchen or shop. Buyers never see this address."
-							}
-							onSelect={(payload) => setPickedAddress(payload)}
-							onTextChange={() => setPickedAddress(null)}
-						/>
-						{businessAddress && !pickedAddress ? (
-							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-								<MapPin
-									className="size-3 shrink-0 text-accent"
-									aria-hidden="true"
-								/>
-								<span className="font-mono">
-									{businessAddress.latitude.toFixed(5)},{" "}
-									{businessAddress.longitude.toFixed(5)}
-								</span>
-							</p>
-						) : null}
-					</div>
+					{/* 1 · Pickup point — one editor, in the Business address card
+					    above. It used to be duplicated here and in radius mode,
+					    which is how a Singapore store ended up with no way to set
+					    one at all (86eyqgujv). */}
+					<BusinessAddressReference
+						address={businessAddress}
+						present={
+							collectionMode
+								? "Riders bring collected orders to"
+								: "Riders collect from"
+						}
+						missing={
+							collectionMode
+								? "Set your business address first — it's where riders bring collected orders."
+								: "Set your business address first — it's the exact point riders are sent to."
+						}
+					/>
 
 					{/* 2 · Vehicle */}
 					<div className="flex flex-col gap-1.5">
@@ -1080,21 +1210,56 @@ function DeliveryChargeSection({
 							</a>
 						</div>
 						{hasStoredKey && !editingKeys ? (
-							<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
-								<span>
-									Key ending{" "}
-									<span className="font-mono">
-										…{deliveryBooking?.apiKeyHint}
-									</span>{" "}
-									stored
-								</span>
-								<button
-									type="button"
-									onClick={() => setEditingKeys(true)}
-									className="text-xs font-medium text-accent hover:underline"
-								>
-									Replace
-								</button>
+							<div className="flex flex-col gap-2">
+								<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
+									<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+										Key ending{" "}
+										<span className="font-mono">
+											…{deliveryBooking?.apiKeyHint}
+										</span>{" "}
+										stored
+										{deliveryBooking?.env === "sandbox" ? (
+											<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+												Test keys
+											</span>
+										) : deliveryBooking?.env === "production" ? (
+											<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
+												Live
+											</span>
+										) : null}
+									</span>
+									<button
+										type="button"
+										onClick={() => setEditingKeys(true)}
+										className="text-xs font-medium text-accent hover:underline"
+									>
+										Replace
+									</button>
+								</div>
+								{/* Say what the badge COSTS, not just what it is — a seller
+								    who doesn't know how sandbox differs from live reads a
+								    neutral "Test keys" chip as harmless (86eypncfy). */}
+								{deliveryBooking?.env === "sandbox" ? (
+									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+										<span>
+											<span className="font-medium">
+												No real rider will be dispatched.
+											</span>{" "}
+											Sandbox keys (
+											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+												pk_test_
+											</code>
+											) book simulated trips and quote your buyers test prices,
+											and the sandbox wallet can&apos;t be topped up with real
+											money. Replace them with your live{" "}
+											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+												pk_prod_
+											</code>{" "}
+											pair when you&apos;re ready to take real orders.
+										</span>
+									</p>
+								) : null}
 							</div>
 						) : (
 							<div className="flex flex-col gap-2">
@@ -1186,8 +1351,9 @@ function DeliveryChargeSection({
 							</div>
 							<p className="text-xs text-muted-foreground">
 								Paste this in your Lalamove Partner Portal → Developers →
-								Webhook URL (choose version 3). It powers the automatic shipped
-								+ live-tracking messages — step 5 in the guide.
+								Webhook URL (choose version 3). It powers the automatic Shipped
+								and Delivered updates, and the live tracking on the buyer&apos;s
+								order page — step 5 in the guide.
 							</p>
 						</div>
 					) : null}
@@ -1276,9 +1442,7 @@ function DeliveryChargeSection({
 								Delivery fee
 							</label>
 							<div className="relative">
-								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-									RM
-								</span>
+								<MoneyPrefix currency={currency} />
 								<input
 									id="flat-delivery-fee"
 									type="text"
@@ -1299,9 +1463,7 @@ function DeliveryChargeSection({
 								Free for orders above (optional)
 							</label>
 							<div className="relative">
-								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-									RM
-								</span>
+								<MoneyPrefix currency={currency} />
 								<input
 									id="free-above"
 									type="text"
@@ -1331,37 +1493,11 @@ function DeliveryChargeSection({
 							them, or switch to Free / Flat fee (always allowed).
 						</p>
 					) : null}
-					<div className="flex flex-col gap-1.5">
-						<GoogleAddressAutocomplete
-							initialValue={businessAddress?.label ?? ""}
-							label="Business address (measure from)"
-							required
-							placeholder="Start typing your business address…"
-							description={
-								effectiveAddress
-									? "✓ Pinned — distances are measured from this point."
-									: "Pick a Google suggestion so we can measure distances from your place. Buyers never see this address."
-							}
-							onSelect={(payload) => setPickedAddress(payload)}
-							onTextChange={() => {
-								// Typing away from a pick invalidates it — the stored
-								// address (if any) remains until a new pick is saved.
-								setPickedAddress(null);
-							}}
-						/>
-						{businessAddress && !pickedAddress ? (
-							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-								<MapPin
-									className="size-3 shrink-0 text-accent"
-									aria-hidden="true"
-								/>
-								<span className="font-mono">
-									{businessAddress.latitude.toFixed(5)},{" "}
-									{businessAddress.longitude.toFixed(5)}
-								</span>
-							</p>
-						) : null}
-					</div>
+					<BusinessAddressReference
+						address={businessAddress}
+						present="Distances are measured from"
+						missing="Set your business address first — distance pricing measures from it."
+					/>
 
 					<div className="flex flex-col gap-2">
 						<p className="text-xs font-medium text-muted-foreground">
@@ -1394,9 +1530,7 @@ function DeliveryChargeSection({
 								/>
 								<span className="text-xs text-muted-foreground">km →</span>
 								<div className="relative">
-									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-										RM
-									</span>
+									<MoneyPrefix currency={currency} />
 									<input
 										type="text"
 										inputMode="decimal"
@@ -1475,9 +1609,11 @@ function DeliveryChargeSection({
 									Accept the order, arrange the charge on WhatsApp
 								</span>
 								<span className="text-xs text-muted-foreground">
-									The order comes in with the delivery charge pending — you
-									agree it with the buyer in chat, set it on the order, and the
-									payment request goes out with the final total.
+									The order comes in with the delivery charge pending, and the
+									buyer&apos;s WhatsApp confirmation waits with it — so message
+									them first. Agree the charge, set it on the order, and
+									that&apos;s when their confirmation goes out, with the charge
+									and the final total in it.
 								</span>
 							</span>
 						</label>
@@ -1508,17 +1644,18 @@ function DeliveryChargeSection({
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Sell nationwide with your parcel courier&apos;s own rate card (J&T,
-						DD Cold Chain, Ninja Cold…). Buyers pay by <b>where the order
-						goes</b> — their state&apos;s zone — and <b>what it weighs</b>:
-						each product&apos;s parcel weight × quantity. You book the courier
-						yourself as usual; Kedaipal prices the checkout.
+						DD Cold Chain, Ninja Cold…). Buyers pay by{" "}
+						<b>where the order goes</b> — their state&apos;s zone — and{" "}
+						<b>what it weighs</b>: each product&apos;s parcel weight × quantity.
+						You book the courier yourself as usual; Kedaipal prices the
+						checkout.
 					</p>
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						A band works like a box tier — <b>&ldquo;up to 5 kg =
-						RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg). Rates use{" "}
-						<b>actual weight only</b>; if your courier bills volumetric
-						(size-based) weight, pick the safer band when you copy your card
-						over.
+						A band works like a box tier —{" "}
+						<b>&ldquo;up to 5 kg = RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg).
+						Rates use <b>actual weight only</b>; if your courier bills
+						volumetric (size-based) weight, pick the safer band when you copy
+						your card over.
 					</p>
 
 					{zones.length === 0 ? (
@@ -1556,6 +1693,7 @@ function DeliveryChargeSection({
 						<div className="flex flex-col gap-3">
 							{zones.map((zone, zi) => (
 								<WeightZoneCard
+									currency={currency}
 									// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
 									key={zi}
 									zone={zone}
@@ -1573,7 +1711,9 @@ function DeliveryChargeSection({
 									variant="outline"
 									size="sm"
 									className="h-10 gap-1.5 self-start"
-									onClick={() => setZones((prev) => [...prev, blankZoneDraft()])}
+									onClick={() =>
+										setZones((prev) => [...prev, blankZoneDraft()])
+									}
 								>
 									<Plus className="size-4" />
 									Add zone
@@ -1680,8 +1820,9 @@ function DeliveryChargeSection({
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 						<b>Weights come from your products:</b> every product choice has a
 						&ldquo;Parcel weight&rdquo; field in the product editor, and the
-						bulk-import sheet has a <span className="font-mono">weight_grams</span>{" "}
-						column. Items without a weight follow the rule above.{" "}
+						bulk-import sheet has a{" "}
+						<span className="font-mono">weight_grams</span> column. Items
+						without a weight follow the rule above.{" "}
 						<Link to="/app/products" className="font-medium underline">
 							Open Products
 						</Link>
@@ -1724,12 +1865,14 @@ function DeliveryChargeSection({
  */
 function WeightZoneCard({
 	zone,
+	currency,
 	index,
 	claimed,
 	onPatch,
 	onRemove,
 }: {
 	zone: ZoneDraft;
+	currency: string;
 	index: number;
 	/** state → owning zone index across the whole draft. */
 	claimed: Map<string, number>;
@@ -1826,9 +1969,7 @@ function WeightZoneCard({
 						/>
 						<span className="text-xs text-muted-foreground">kg →</span>
 						<div className="relative">
-							<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-								RM
-							</span>
+							<MoneyPrefix currency={currency} />
 							<input
 								type="text"
 								inputMode="decimal"
@@ -1882,8 +2023,8 @@ function WeightZoneCard({
 				) : null}
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					An order at exactly a band&apos;s weight is inside it. Heavier than
-					your last band follows the rule below. A band fee of RM0 means free
-					up to that weight.
+					your last band follows the rule below. A band fee of RM0 means free up
+					to that weight.
 				</p>
 			</div>
 
@@ -1895,9 +2036,7 @@ function WeightZoneCard({
 					Free delivery for orders above (optional)
 				</label>
 				<div className="relative self-start">
-					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-						RM
-					</span>
+					<MoneyPrefix currency={currency} />
 					<input
 						id={`zone-${index}-free-above`}
 						type="text"
@@ -1921,12 +2060,378 @@ function WeightZoneCard({
 	);
 }
 
+/** Render order for the weekly editor/summary: Monday-first (MY convention),
+ * while the underlying array stays 0 = Sunday (the getUTCDay index). */
+const DAY_RENDER_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+/** Editor draft — times as the native input's own "HH:MM" strings so a
+ * half-typed value never fights the controlled input; parsed at save. */
+type DayDraft = { openHhmm: string; closeHhmm: string; closed: boolean };
+
+function draftFromHours(initial: OpeningHours | undefined): DayDraft[] {
+	const week = initial ?? Array.from({ length: 7 }, () => OPEN_ALL_DAY);
+	return week.map((day) => ({
+		openHhmm: hhmmFromMinutes(day.open),
+		closeHhmm: hhmmFromMinutes(day.close),
+		closed: day.closed === true,
+	}));
+}
+
+/** Parse one draft row. Null = invalid (unparseable or open ≥ close). */
+function parseDayDraft(row: DayDraft): DayHours | null {
+	const open = timeMinutesFromHhmm(row.openHhmm);
+	const close = timeMinutesFromHhmm(row.closeHhmm);
+	if (Number.isNaN(open) || Number.isNaN(close) || open >= close) return null;
+	return row.closed ? { open, close, closed: true } : { open, close };
+}
+
+/**
+ * Store opening hours (86eyp5rav) — the weekly schedule buyers' fulfilment
+ * dates/times must fall inside. Sits first in the tab: it's the most
+ * fundamental checkout-wide timing rule (when the store operates at all),
+ * above the notice window. Default (unset) = open 24/7; the server normalizes
+ * an all-24h week back to unset and rejects an all-closed one.
+ */
+function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
+	const updateSettings = useUpdateSettings();
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState<DayDraft[]>(() => draftFromHours(initial));
+	// "Same every day" (one range + day chips — the overwhelmingly common
+	// schedule) vs "Different per day" (the 7-row editor). Derived on entry:
+	// a schedule whose OPEN days all share one range reads as "same".
+	const [mode, setMode] = useState<"same" | "perDay">("same");
+	const [saving, setSaving] = useState(false);
+
+	const configured = initial !== undefined;
+
+	function startEditing() {
+		const rows = draftFromHours(initial);
+		const open = rows.filter((row) => !row.closed);
+		setMode(
+			open.every(
+				(row) =>
+					row.openHhmm === open[0].openHhmm &&
+					row.closeHhmm === open[0].closeHhmm,
+			)
+				? "same"
+				: "perDay",
+		);
+		setDraft(rows);
+		setEditing(true);
+	}
+
+	function setDay(index: number, patch: Partial<DayDraft>) {
+		setDraft((prev) =>
+			prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+		);
+	}
+
+	/** Same-mode range edit — one pair of pickers writes every day's times
+	 * (closed days included, so re-opening a chip inherits the range). */
+	function setAllDays(
+		patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm">>,
+	) {
+		setDraft((prev) => prev.map((row) => ({ ...row, ...patch })));
+	}
+
+	/** Switching to "same" unifies every day onto the first open day's range —
+	 * visible immediately in the pickers, so the collapse is never a silent
+	 * surprise at save time. Switching back keeps the unified values. */
+	function switchMode(next: "same" | "perDay") {
+		if (next === "same") {
+			const source = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+			setAllDays({ openHhmm: source.openHhmm, closeHhmm: source.closeHhmm });
+		}
+		setMode(next);
+	}
+
+	const parsed = draft.map(parseDayDraft);
+	const invalidDays = DAY_RENDER_ORDER.filter(
+		(i) => !draft[i].closed && parsed[i] === null,
+	);
+	const allClosed = draft.every((row) => row.closed);
+	const valid = invalidDays.length === 0 && !allClosed;
+	// Same-mode reads its range off the first open row (all rows are kept in
+	// sync); when every chip is off, fall back to Monday so the pickers keep
+	// showing the last times instead of blanking.
+	const rangeSource =
+		draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+
+	async function save() {
+		if (!valid) return;
+		setSaving(true);
+		try {
+			await updateSettings({
+				openingHours: draft.map((row, i) => {
+					const day = parseDayDraft(row);
+					// Closed rows may hold an unparseable range the seller never
+					// looked at — persist their last-known-good times (or all-day)
+					// so re-opening the day restores something sensible.
+					return (
+						day ??
+						(initial?.[i]
+							? { ...initial[i], closed: true }
+							: { ...OPEN_ALL_DAY, closed: true })
+					);
+				}),
+			});
+			toast.success("Opening hours updated.");
+			setEditing(false);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	async function resetTo247() {
+		setSaving(true);
+		try {
+			await updateSettings({ openingHours: null });
+			toast.success("Back to open 24 hours, every day.");
+			setEditing(false);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card>
+			<SectionHeading
+				title="Opening hours"
+				description="When your store operates. Buyers can browse and place orders any time — but the delivery or pickup date and time they pick at checkout must fall inside these hours, and closed days can't be picked at all. Counter sales aren't affected."
+			/>
+			{!editing ? (
+				<>
+					{configured ? (
+						<ul className="flex flex-col gap-1 text-sm tabular-nums">
+							{DAY_RENDER_ORDER.map((i) => {
+								const day = initial[i];
+								return (
+									<li key={WEEKDAY_NAMES[i]} className="flex justify-between">
+										<span className="text-muted-foreground">
+											{WEEKDAY_NAMES_SHORT[i]}
+										</span>
+										<span
+											className={
+												day.closed ? "text-muted-foreground" : "font-medium"
+											}
+										>
+											{day.closed ? "Closed" : formatDayWindow(day)}
+										</span>
+									</li>
+								);
+							})}
+						</ul>
+					) : (
+						<p className="text-sm text-muted-foreground">
+							Open 24 hours, every day — buyers can pick any date and time.
+						</p>
+					)}
+					<div>
+						<Button
+							type="button"
+							variant={configured ? "outline" : "default"}
+							onClick={startEditing}
+							className="h-11"
+						>
+							{configured ? "Edit hours" : "Set opening hours"}
+						</Button>
+					</div>
+				</>
+			) : (
+				<>
+					{/* Same-every-day is the overwhelmingly common schedule, so it
+					    leads and is the default — the 7-row editor is the escape
+					    hatch, not the entry fee. KindButton pattern (pickup dialog). */}
+					<div className="grid grid-cols-2 gap-2">
+						<ModeButton
+							active={mode === "same"}
+							onClick={() => switchMode("same")}
+							title="Same every day"
+							subtitle="One set of hours for the whole week"
+						/>
+						<ModeButton
+							active={mode === "perDay"}
+							onClick={() => switchMode("perDay")}
+							title="Different per day"
+							subtitle="Set each day's hours individually"
+						/>
+					</div>
+					{mode === "same" ? (
+						<>
+							<div className="flex items-center gap-2">
+								<TimePicker
+									value={rangeSource.openHhmm}
+									onChange={(next) => setAllDays({ openHhmm: next })}
+									disabled={saving}
+									isError={invalidDays.length > 0}
+									aria-label="Opening time"
+									className="flex-1"
+								/>
+								<span
+									className="shrink-0 text-muted-foreground"
+									aria-hidden="true"
+								>
+									–
+								</span>
+								<TimePicker
+									value={rangeSource.closeHhmm}
+									onChange={(next) => setAllDays({ closeHhmm: next })}
+									disabled={saving}
+									isError={invalidDays.length > 0}
+									aria-label="Closing time"
+									className="flex-1"
+								/>
+							</div>
+							{/* Tap a day off for the weekly rest day — chips, not 7
+							    toggle rows, because open/closed is the ONLY per-day
+							    fact left in this mode. */}
+							<div className="flex flex-col gap-1.5">
+								<span className="text-xs font-medium text-muted-foreground">
+									Open on
+								</span>
+								<div className="flex flex-wrap gap-1.5">
+									{DAY_RENDER_ORDER.map((i) => (
+										<FilterChip
+											key={WEEKDAY_NAMES[i]}
+											tone="accent"
+											selected={!draft[i].closed}
+											disabled={saving}
+											aria-label={WEEKDAY_NAMES[i]}
+											onClick={() => setDay(i, { closed: !draft[i].closed })}
+											className="px-3"
+										>
+											{WEEKDAY_NAMES_SHORT[i]}
+										</FilterChip>
+									))}
+								</div>
+							</div>
+						</>
+					) : (
+						// Phones stack each day: name + switch on one line, the range
+						// full-width beneath. Side-by-side needs ~340px for the two
+						// pickers alone, so a 430px phone truncated them to "12…";
+						// the hairline separators keep the two-line rows from
+						// reading as one run-on list. One line again from sm.
+						<div className="flex flex-col gap-3 sm:gap-2.5">
+							{DAY_RENDER_ORDER.map((i) => {
+								const row = draft[i];
+								const rowInvalid = !row.closed && parsed[i] === null;
+								return (
+									<div
+										key={WEEKDAY_NAMES[i]}
+										className="flex flex-col gap-2 border-b border-border/60 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:gap-2.5 sm:border-0 sm:pb-0"
+									>
+										<div className="flex items-center gap-2.5">
+											<span className="w-10 shrink-0 text-sm font-medium">
+												{WEEKDAY_NAMES_SHORT[i]}
+											</span>
+											<ToggleSwitch
+												on={!row.closed}
+												onChange={(open) => setDay(i, { closed: !open })}
+												disabled={saving}
+												label={`Open on ${WEEKDAY_NAMES[i]}`}
+											/>
+											{row.closed ? (
+												<span className="text-sm text-muted-foreground">
+													Closed
+												</span>
+											) : null}
+										</div>
+										{row.closed ? null : (
+											<div className="flex min-w-0 flex-1 items-center gap-1.5">
+												<TimePicker
+													value={row.openHhmm}
+													onChange={(next) => setDay(i, { openHhmm: next })}
+													disabled={saving}
+													isError={rowInvalid}
+													showIcon={false}
+													aria-label={`${WEEKDAY_NAMES[i]} opening time`}
+													className="min-w-0 flex-1"
+												/>
+												<span
+													className="shrink-0 text-muted-foreground"
+													aria-hidden="true"
+												>
+													–
+												</span>
+												<TimePicker
+													value={row.closeHhmm}
+													onChange={(next) => setDay(i, { closeHhmm: next })}
+													disabled={saving}
+													isError={rowInvalid}
+													showIcon={false}
+													aria-label={`${WEEKDAY_NAMES[i]} closing time`}
+													className="min-w-0 flex-1"
+												/>
+											</div>
+										)}
+									</div>
+								);
+							})}
+						</div>
+					)}
+					<p className="text-xs text-muted-foreground">
+						12:00 AM – 11:59 PM means open all day.
+					</p>
+					{invalidDays.length > 0 ? (
+						<p className="text-xs text-destructive">
+							{mode === "same"
+								? "Opening time must be before closing time."
+								: `${WEEKDAY_NAMES[invalidDays[0]]}: opening time must be before closing time.`}
+						</p>
+					) : allClosed ? (
+						<p className="text-xs text-destructive">
+							Keep at least one day open — buyers need a day they can pick at
+							checkout.
+						</p>
+					) : null}
+					<div className="flex flex-wrap items-center gap-3">
+						<Button
+							type="button"
+							onClick={save}
+							disabled={!valid || saving}
+							isLoading={saving}
+							className="h-11"
+						>
+							Save hours
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => setEditing(false)}
+							disabled={saving}
+							className="h-11"
+						>
+							Cancel
+						</Button>
+						{configured ? (
+							<button
+								type="button"
+								onClick={resetTo247}
+								disabled={saving}
+								className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+							>
+								Reset to open 24/7
+							</button>
+						) : null}
+					</div>
+				</>
+			)}
+		</Card>
+	);
+}
+
 /**
  * Order-date notice setting — how many days ahead a buyer's chosen fulfilment
  * date must be. Governs the storefront date picker's earliest selectable day
- * (and counter checkout's default). Sits first in the tab: it's a checkout-wide
- * timing rule that applies to BOTH delivery and pickup, above the per-method
- * toggles. 0 = same-day allowed (ready-stock sellers).
+ * (and counter checkout's default). Sits with the other checkout-wide timing
+ * rules at the top of the tab (below Opening hours): it applies to BOTH
+ * delivery and pickup, above the per-method toggles. 0 = same-day allowed
+ * (ready-stock sellers).
  */
 function MinNoticeCard({ initial }: { initial: number | undefined }) {
 	const updateSettings = useUpdateSettings();
@@ -2008,7 +2513,161 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
  * price-on-quote line are exempt (their value is settled by the seller's
  * quote). Blank or 0 = no minimum.
  */
-function MinOrderValueCard({ initial }: { initial: number | undefined }) {
+/**
+ * The store's own physical address — where parcels are sent FROM.
+ *
+ * Its own card, always visible, because two unrelated features consume it and
+ * neither is a pricing choice: distance pricing measures from it, and it is
+ * the **return address printed on every despatch label**. It used to live
+ * inside the radius and Lalamove mode panels — duplicated once each — which
+ * meant a Singapore store could never set one at all, since both of those
+ * modes are Malaysia-only and don't render there. An SG seller shipping
+ * parcels therefore had no way to put a return address on a label (86eyqgujv).
+ *
+ * One editor, one save. The pricing modes read the stored value and link back
+ * here rather than carrying a second copy of the picker.
+ */
+/**
+ * How a pricing mode refers to the store's business address without owning a
+ * second copy of the editor. Either states what the stored address is used for
+ * here, or — when there isn't one — says so and takes the seller to the card
+ * that sets it, rather than leaving them to find it (86eyqgujv).
+ */
+function BusinessAddressReference({
+	address,
+	present,
+	missing,
+}: {
+	address: BusinessAddress | undefined;
+	/** Verb phrase for the set case, e.g. "Riders collect from". */
+	present: string;
+	/** Full sentence for the unset case, naming why it's needed here. */
+	missing: string;
+}) {
+	if (address) {
+		return (
+			<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+				<MapPin
+					className="mt-0.5 size-3 shrink-0 text-accent"
+					aria-hidden="true"
+				/>
+				<span>
+					{present}{" "}
+					<span className="font-medium text-foreground">{address.label}</span> —
+					change it in <b>Business address</b> above.
+				</span>
+			</p>
+		);
+	}
+	return (
+		<div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-2.5 dark:border-amber-800">
+			<p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+				{missing}
+			</p>
+			<Button
+				type="button"
+				variant="outline"
+				onClick={() => scrollToAnchor(SETTINGS_ANCHOR.business_address)}
+				className="h-10 sm:w-auto sm:self-start sm:px-4"
+			>
+				Go to Business address
+			</Button>
+		</div>
+	);
+}
+
+function BusinessAddressCard({
+	country,
+	businessAddress,
+	highlight,
+}: {
+	country: Country;
+	businessAddress: BusinessAddress | undefined;
+	highlight?: FixHighlight;
+}) {
+	const updateSettings = useUpdateSettings();
+	const [picked, setPicked] = useState<GoogleSelectedAddress | null>(null);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	async function save() {
+		if (!picked) return;
+		setSaving(true);
+		setError(null);
+		try {
+			await updateSettings({
+				businessAddress: {
+					label: picked.formattedAddress,
+					latitude: picked.latitude,
+					longitude: picked.longitude,
+					placeId: picked.placeId,
+				},
+			});
+			setPicked(null);
+			toast.success("Business address saved.");
+		} catch (err) {
+			setError(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card id={SETTINGS_ANCHOR.business_address} highlight={highlight}>
+			<SectionHeading
+				title="Business address"
+				description="Where you send parcels from. It prints as the return address on despatch labels, riders are sent here to collect, and distance pricing measures from it. Buyers never see it."
+			/>
+			<div className="flex flex-col gap-1.5">
+				<GoogleAddressAutocomplete
+					country={country}
+					initialValue={businessAddress?.label ?? ""}
+					label="Address"
+					placeholder="Start typing your business address…"
+					description={
+						picked
+							? "Pinned — save to use it."
+							: businessAddress
+								? "✓ Pinned. Search again to replace it."
+								: "Pick a Google suggestion so we get an exact pin — your stall, kitchen or shop."
+					}
+					onSelect={(payload) => setPicked(payload)}
+					onTextChange={() => setPicked(null)}
+				/>
+				{businessAddress && !picked ? (
+					<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+						<MapPin
+							className="size-3 shrink-0 text-accent"
+							aria-hidden="true"
+						/>
+						<span className="font-mono">
+							{businessAddress.latitude.toFixed(5)},{" "}
+							{businessAddress.longitude.toFixed(5)}
+						</span>
+					</p>
+				) : null}
+			</div>
+			{error ? <p className="text-xs text-destructive">{error}</p> : null}
+			<Button
+				type="button"
+				onClick={save}
+				disabled={!picked || saving}
+				isLoading={saving}
+				className="h-11 lg:w-auto lg:self-start lg:px-5"
+			>
+				Save address
+			</Button>
+		</Card>
+	);
+}
+
+function MinOrderValueCard({
+	initial,
+	currency,
+}: {
+	initial: number | undefined;
+	currency: string;
+}) {
 	const updateSettings = useUpdateSettings();
 	const effective = initial ?? 0;
 	const [value, setValue] = useState(
@@ -2030,7 +2689,7 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
 			toast.success(
 				sen === 0
 					? "Minimum order value cleared."
-					: `Minimum order value set to ${formatPrice(sen, "MYR")}.`,
+					: `Minimum order value set to ${formatPrice(sen, currency)}.`,
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -2051,7 +2710,7 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
 						htmlFor="min-order-value"
 						className="text-xs font-medium text-muted-foreground"
 					>
-						Minimum subtotal (RM)
+						Minimum subtotal ({currencySymbol(currency)})
 					</label>
 					<Input
 						id="min-order-value"
@@ -2078,7 +2737,7 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
 			</div>
 			{trimmed.length > 0 && !valid ? (
 				<p className="text-xs text-destructive">
-					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, "MYR")}, or
+					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, currency)}, or
 					leave blank for no minimum.
 				</p>
 			) : null}
@@ -2094,11 +2753,13 @@ function MinOrderValueCard({ initial }: { initial: number | undefined }) {
  */
 function LocationRowBody({
 	location,
+	currency,
 	onEdit,
 	onToggleActive,
 	dragHandle,
 }: {
 	location: Doc<"pickupLocations">;
+	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
 	dragHandle?: ReactNode;
@@ -2119,7 +2780,7 @@ function LocationRowBody({
 						<PickupKindBadge kind={location.locationType ?? "self_collect"} />
 						{location.fee && location.fee > 0 ? (
 							<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-								+ {formatPrice(location.fee, "MYR")} fee
+								+ {formatPrice(location.fee, currency)} fee
 							</span>
 						) : null}
 					</div>
@@ -2152,7 +2813,12 @@ function LocationRowBody({
 						</p>
 					) : null}
 					{location.managerName || location.managerWaPhone ? (
-						<p className="flex items-center gap-1 text-xs text-muted-foreground">
+						// MASK_PII: the manager is a third party — their name + phone
+						// shouldn't ride session replay.
+						<p
+							{...MASK_PII}
+							className="flex items-center gap-1 text-xs text-muted-foreground"
+						>
 							<Phone
 								className="size-3 shrink-0 text-accent"
 								aria-hidden="true"
@@ -2199,10 +2865,12 @@ function LocationRowBody({
  */
 function LocationRow({
 	location,
+	currency,
 	onEdit,
 	onToggleActive,
 }: {
 	location: Doc<"pickupLocations">;
+	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
 }) {
@@ -2210,6 +2878,7 @@ function LocationRow({
 		<li className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 opacity-60">
 			<LocationRowBody
 				location={location}
+				currency={currency}
 				onEdit={onEdit}
 				onToggleActive={onToggleActive}
 			/>

@@ -89,6 +89,9 @@ export function CategoryRail({
 									src={category.imageUrl}
 									alt=""
 									aspect="absolute inset-0"
+									// Fixed-width tiles, so a fixed hint: w-36 (144px)
+									// growing to lg:w-44 (176px).
+									sizes="176px"
 								/>
 							) : (
 								<div

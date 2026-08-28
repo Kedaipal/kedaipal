@@ -10,6 +10,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { GoogleAddressComponent } from "../../../convex/google";
+import { type Country, DEFAULT_COUNTRY } from "../../../convex/lib/country";
 import { useDebounce } from "../../hooks/useDebounce";
 import { convexErrorMessage } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -41,6 +42,9 @@ interface GoogleAddressAutocompleteProps {
 	 * can omit — the Convex action falls back to Clerk identity for rate-limit
 	 * scoping. */
 	retailerId?: Id<"retailers">;
+	/** The store's country — scopes Google's predictions to it (server-side
+	 * region lock; SG-lite 86eynw29u). Defaults to MY, the original lock. */
+	country?: Country;
 	placeholder?: string;
 	label?: string;
 	required?: boolean;
@@ -83,6 +87,7 @@ function newSessionToken(): string {
 export function GoogleAddressAutocomplete({
 	initialValue = "",
 	retailerId,
+	country = DEFAULT_COUNTRY,
 	placeholder = "Start typing an address…",
 	label,
 	required = false,
@@ -129,6 +134,7 @@ export function GoogleAddressAutocomplete({
 			input: debouncedInput,
 			sessionToken: sessionTokenRef.current,
 			retailerId,
+			country,
 		})
 			.then((result) => {
 				if (requestId !== requestIdRef.current) return; // stale
@@ -144,7 +150,7 @@ export function GoogleAddressAutocomplete({
 				if (requestId !== requestIdRef.current) return;
 				setLoading(false);
 			});
-	}, [debouncedInput, autocomplete, retailerId]);
+	}, [debouncedInput, autocomplete, retailerId, country]);
 
 	const handleInputChange = useCallback(
 		(value: string) => {

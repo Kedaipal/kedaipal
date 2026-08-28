@@ -1,9 +1,11 @@
 import { CalendarDays, Palette, SlidersHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState } from "react";
+import { sourceLabel } from "../../../convex/lib/attribution";
+import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
-	ORDER_PAYMENT_METHODS,
+	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
@@ -14,11 +16,14 @@ import { FilterChip } from "../ui/filter-chip";
 export type PaymentStatus = "unpaid" | "claimed" | "received";
 
 /** Checkout surface the order came through (mirrors orders.source). */
-export type OrderSource = "storefront" | "counter";
+export type OrderSource = "storefront" | "counter" | "claim";
 
 const SOURCE_OPTIONS: { value: OrderSource; label: string }[] = [
 	{ value: "storefront", label: "Online" },
 	{ value: "counter", label: "Counter" },
+	// Claim-link orders (86eyq0epn): seller-keyed at a locked price, completed
+	// by the buyer — the TikTok Live funnel.
+	{ value: "claim", label: "Claim link" },
 ];
 
 const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [
@@ -49,6 +54,14 @@ export interface OrderFilterValue {
 	fwin?: FulfilmentWindow;
 	/** Checkout surface (online vs counter). Unset = both. */
 	source?: OrderSource;
+	/**
+	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
+	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
+	 * together, because "how did my socials do" spans more than one. Empty =
+	 * no attribution filtering. Distinct from `source`, which is the checkout
+	 * SURFACE rather than where the buyer came from.
+	 */
+	attributionSources: string[];
 }
 
 export function activeFilterCount(v: OrderFilterValue): number {
@@ -62,7 +75,8 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0) +
 		(v.fwin != null ? 1 : 0) +
-		(v.source != null ? 1 : 0)
+		(v.source != null ? 1 : 0) +
+		v.attributionSources.length
 	);
 }
 
@@ -143,6 +157,16 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, source: undefined }),
 		});
 	}
+	for (const a of v.attributionSources) {
+		tokens.push({
+			key: `asrc-${a}`,
+			label: sourceLabel(a),
+			clear: (x) => ({
+				...x,
+				attributionSources: x.attributionSources.filter((y) => y !== a),
+			}),
+		});
+	}
 	if (v.fwin) {
 		const label = DUE_WINDOWS.find((w) => w.value === v.fwin)?.label ?? v.fwin;
 		tokens.push({
@@ -201,7 +225,23 @@ export function clearedFilters(): OrderFilterValue {
 		mockup: false,
 		fwin: undefined,
 		source: undefined,
+		attributionSources: [],
 	};
+}
+
+/**
+ * Which method chips this store's seller is offered, in display order. The
+ * store's country list, plus anything ALREADY selected that it doesn't contain
+ * — a gateway-stamped rail (HitPay MY can settle a GrabPay order) or a
+ * deep-linked `?method=` can hold a value the picker never offers, and a
+ * selected chip the seller can't see is a filter they can't switch off.
+ */
+export function methodChoicesFor(
+	country: Country,
+	selected: readonly OrderPaymentMethod[],
+): OrderPaymentMethod[] {
+	const offered = COUNTRY_PAYMENT_METHODS[country];
+	return [...offered, ...selected.filter((m) => !offered.includes(m))];
 }
 
 /**
@@ -214,11 +254,24 @@ export function clearedFilters(): OrderFilterValue {
 export function OrderFilters({
 	value,
 	onChange,
+	country,
+	availableSources,
 	mockupCount,
 	resultCount,
 }: {
 	value: OrderFilterValue;
 	onChange: (next: OrderFilterValue) => void;
+	/** The store's country — decides which settlement rails are offered
+	 * (SG has no DuitNow/TnG/FPX; MY has no PayNow). See lib/paymentMethod.ts. */
+	country: Country;
+	/**
+	 * Marketing origins present in this seller's order window, most-used first
+	 * (from `searchOrders`). Free-form tags mean the list can't be hardcoded —
+	 * and offering an origin that would match nothing is worse than offering
+	 * none, so the section hides itself when this has fewer than two entries
+	 * (one origin = every order, nothing to narrow).
+	 */
+	availableSources?: string[];
 	/** Orders awaiting a mockup — drives the toggle's count badge. The toggle is
 	 * hidden when there are none (and it isn't already on). */
 	mockupCount?: number;
@@ -249,6 +302,15 @@ export function OrderFilters({
 			method: value.method.includes(m)
 				? value.method.filter((x) => x !== m)
 				: [...value.method, m],
+		});
+	}
+
+	function toggleAttributionSource(src: string) {
+		onChange({
+			...value,
+			attributionSources: value.attributionSources.includes(src)
+				? value.attributionSources.filter((x) => x !== src)
+				: [...value.attributionSources, src],
 		});
 	}
 
@@ -390,6 +452,29 @@ export function OrderFilters({
 							</div>
 						</div>
 
+						{(availableSources?.length ?? 0) > 1 ? (
+							<div className="flex flex-col gap-2">
+								<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+									Came from
+								</span>
+								<div className="flex flex-wrap gap-2">
+									{availableSources?.map((src) => (
+										<FilterChip
+											key={src}
+											tone="accent"
+											selected={value.attributionSources.includes(src)}
+											onClick={() => toggleAttributionSource(src)}
+										>
+											{sourceLabel(src)}
+										</FilterChip>
+									))}
+								</div>
+								<p className="text-[11px] text-muted-foreground">
+									Where the buyer came from — tag your links on Home to add more.
+								</p>
+							</div>
+						) : null}
+
 						<div className="flex flex-col gap-2">
 							<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
 								Payment
@@ -413,7 +498,7 @@ export function OrderFilters({
 								Payment method
 							</span>
 							<div className="flex flex-wrap gap-2">
-								{ORDER_PAYMENT_METHODS.map((m) => (
+								{methodChoicesFor(country, value.method).map((m) => (
 									<FilterChip
 										key={m}
 										tone="accent"
