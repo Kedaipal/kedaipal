@@ -136,3 +136,32 @@ describe("OrderBulkBar", () => {
 		expect(onApply).not.toHaveBeenCalled();
 	});
 });
+
+describe("OrderBulkBar — bulk unpin (86eyrtz74)", () => {
+	it("offers Unpin only when the caller passes onUnpin", () => {
+		// The caller passes it only when the selection actually contains a pinned
+		// order — an item that would no-op is worse than no item.
+		renderBar();
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		expect(screen.queryByRole("button", { name: /^unpin$/i })).toBeNull();
+	});
+
+	it("calls onUnpin and closes the menu", async () => {
+		const onUnpin = vi.fn();
+		renderBar({ onUnpin });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^unpin$/i }));
+		expect(onUnpin).toHaveBeenCalledTimes(1);
+		await waitFor(() =>
+			expect(screen.queryByRole("button", { name: /^unpin$/i })).toBeNull(),
+		);
+	});
+
+	it("swallows a rejecting unpin — the caller owns the error toast", async () => {
+		const onUnpin = vi.fn().mockRejectedValue(new Error("boom"));
+		renderBar({ onUnpin });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^unpin$/i }));
+		await waitFor(() => expect(onUnpin).toHaveBeenCalled());
+	});
+});

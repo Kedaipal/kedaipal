@@ -29,7 +29,7 @@ import {
 	UNRENDERABLE_PROOF_MESSAGE,
 } from "./lib/imageContentType";
 import { requireCustomerName } from "./lib/customer";
-import { assertPlanFeature } from "./subscriptions";
+import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 import {
 	recordOrderCancelled,
 	recordOrderCreated,
@@ -69,9 +69,9 @@ import {
 } from "./lib/paymentReminder";
 import {
 	buildInboxPredicate,
-	compareInboxOrder,
 	type InboxFilterArgs,
 	needsMockup,
+	sortInboxOrders,
 } from "./lib/orderInboxFilter";
 import {
 	extendedPaymentDue,
@@ -1929,6 +1929,12 @@ export const searchOrders = query({
 		// driven by `availableSources` below. Distinct dimension from `source`.
 		attributionSources: v.optional(v.array(v.string())),
 		searchText: v.optional(v.string()),
+		// Pin privilege (86eyrtz74): keep PINNED orders in the result even when
+		// they fail the filters above. On by default in the UI — the seller pins
+		// an order so they can filter to something else and still compare against
+		// it. Not a plan-gated inbox feature (see the gate below): pinning is
+		// all-tier, so its visibility rule has to be too.
+		showPinned: v.optional(v.boolean()),
 		// Max rows to return. OMIT it for the inbox: the query then returns the
 		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
 		// subscription, and the client paginates by slicing that window — so
@@ -1951,6 +1957,7 @@ export const searchOrders = query({
 			source,
 			attributionSources,
 			searchText,
+			showPinned,
 			limit,
 		},
 	) => {
@@ -2007,6 +2014,13 @@ export const searchOrders = query({
 			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
 			 */
 			readyToShip: 0,
+			/**
+			 * Orders the seller has pinned (86eyrtz74). Counted over the FULL set
+			 * like every other count, so the Pinned chip states the real total and
+			 * doesn't shrink as the seller filters — the chip is the only standing
+			 * reminder that a pin set exists at all, given pins never auto-clear.
+			 */
+			pinned: 0,
 		};
 		// Which marketing origins actually appear in this seller's window
 		// (86eyq0eq9). Tallied over the FULL scan like `counts` — never over the
@@ -2038,6 +2052,7 @@ export const searchOrders = query({
 				counts.unpaidAmount += o.total;
 			}
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
+			if (o.pinnedAt !== undefined) counts.pinned++;
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
@@ -2055,13 +2070,20 @@ export const searchOrders = query({
 				source,
 				attributionSources,
 				searchText,
+				showPinned,
 			}),
 		);
-		// Returned newest-created first (the scan order) — the inbox's default
+		// Pinned first, then newest-created (the scan order) — the inbox's default
 		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
-		// over this stable window (sortInboxOrders), so toggling never re-queries.
+		// over this stable window (the same `sortInboxOrders`), so toggling never
+		// re-queries; the non-pinned tail keeps its createdAt-desc order, which is
+		// what that client-side `due` sort uses as its tiebreaker.
 		// See docs/order-inbox.md ("Sort"). Export sorts independently.
-		const sorted = filtered;
+		//
+		// Partitioning HERE and not only on the client is what makes `limit`
+		// safe: a counts-only caller trims the payload, and a pin must never be
+		// the row that gets trimmed away.
+		const sorted = sortInboxOrders(filtered, "recent");
 
 		// No `limit` → return the full window (the inbox slices client-side, so
 		// its subscription args stay stable across "Load more"). A supplied limit
@@ -2135,6 +2157,10 @@ const exportFilterValidators = {
 	mockupPending: v.optional(v.boolean()),
 	source: v.optional(orderSourceValidator),
 	searchText: v.optional(v.string()),
+	// Pin privilege (86eyrtz74) — kept in the SHARED validator set so an export
+	// of a filtered view contains exactly the rows the seller was looking at,
+	// forced-in pins included. See InboxFilterArgs.showPinned.
+	showPinned: v.optional(v.boolean()),
 } as const;
 
 // Bookkeeping exports paginate the FULL result set in bounded pages — they must
@@ -2146,28 +2172,106 @@ const exportFilterValidators = {
 const EXPORT_PAGE_SIZE = 500;
 const EXPORT_SCAN_CAP = 20_000;
 
-/** Project an order to the lean shape the CSV needs (drops heavy fields). */
+/**
+ * Project an order to the shape the column registry reads (drops the heavy and
+ * the secret: storage ids, gateway/push plumbing, and above all `trackingToken`
+ * — the capability for the buyer's no-auth tracking page, which must never
+ * reach a spreadsheet). `categories` is filled in separately by the caller (see
+ * `attachOrderCategories`) because it needs extra reads.
+ */
 function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 	return {
 		shortId: o.shortId,
 		createdAt: o.createdAt,
 		fulfilmentDate: o.fulfilmentDate,
+		fulfilmentTimeMinutes: o.fulfilmentTimeMinutes,
 		status: o.status,
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
+		paymentReference: o.paymentReference,
+		paymentReceivedAt: o.paymentReceivedAt,
 		deliveryMethod: o.deliveryMethod,
 		deliveryDirection: o.deliveryDirection,
+		source: o.source,
+		attributionSource: o.attributionSource,
 		customer: o.customer,
 		items: o.items,
 		subtotal: o.subtotal,
+		mockupQuotedAmount: o.mockupQuotedAmount,
 		pickupFee: o.pickupFee,
 		deliveryFee: o.deliveryFee,
+		deliveryFeePending: o.deliveryFeePending,
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
+		deliveryAddress: o.deliveryAddress
+			? {
+					line1: o.deliveryAddress.line1,
+					line2: o.deliveryAddress.line2,
+					city: o.deliveryAddress.city,
+					state: o.deliveryAddress.state,
+					postcode: o.deliveryAddress.postcode,
+					notes: o.deliveryAddress.notes,
+				}
+			: undefined,
+		pickupSnapshot: o.pickupSnapshot
+			? { label: o.pickupSnapshot.label, address: o.pickupSnapshot.address }
+			: undefined,
 		courierName: o.courierName,
 		trackingNo: o.trackingNo,
+		cancelledReason: o.cancelledReason,
+		pinnedAt: o.pinnedAt,
 	};
+}
+
+/**
+ * Fill in `categories` for a page of export rows (86eyrtz74).
+ *
+ * Categories are a pure browse layer and are deliberately NEVER frozen onto an
+ * order line (docs/product-categories.md), so this is a LIVE lookup — the
+ * column is labelled "Categories (current)" for that reason.
+ *
+ * Batched by distinct `productId` across the whole page, with a memo shared
+ * across pages by the caller: a 500-row page of a repeat-order store touches a
+ * handful of products, and the naive per-line fan-out would be thousands of
+ * index reads for the same answer. Category names are resolved once per
+ * category id for the same reason.
+ */
+async function attachOrderCategories(
+	ctx: QueryCtx,
+	orders: Doc<"orders">[],
+	rows: CsvOrder[],
+	memo: Map<string, string[]>,
+): Promise<void> {
+	const unseen = new Set<Id<"products">>();
+	for (const o of orders) {
+		for (const it of o.items) if (!memo.has(it.productId)) unseen.add(it.productId);
+	}
+	for (const productId of unseen) {
+		const joins = await ctx.db
+			.query("productCategories")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.collect();
+		const names: string[] = [];
+		for (const j of joins) {
+			const cat = await ctx.db.get(j.categoryId);
+			// Archived categories still name a real grouping the seller used, so
+			// they stay in the export — dropping them would blank the column for
+			// a store mid-reorganisation.
+			if (cat) names.push(cat.name);
+		}
+		memo.set(productId, names);
+	}
+	for (const [i, o] of orders.entries()) {
+		const row = rows[i];
+		if (!row) continue;
+		// Deduped ACROSS lines: the column answers "what kinds of thing is this
+		// order", not "what is each line" — a 12-line order of one category
+		// should read "Kuih", not "Kuih, Kuih, Kuih…".
+		const names = new Set<string>();
+		for (const it of o.items) for (const n of memo.get(it.productId) ?? []) names.add(n);
+		row.categories = [...names].sort((a, b) => a.localeCompare(b));
+	}
 }
 
 async function assertExportAccess(
@@ -2226,8 +2330,14 @@ export const exportPage = internalQuery({
 			.order("desc")
 			.paginate(paginationOpts);
 		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
+		const matched = page.page.filter(predicate);
+		const rows = matched.map(orderToCsvSource);
+		// Memo is per-page: each page is its own transaction, so it can't span
+		// them. Within a 500-row page it still collapses a repeat-order store's
+		// thousands of line lookups down to one read per distinct product.
+		await attachOrderCategories(ctx, matched, rows, new Map());
 		return {
-			rows: page.page.filter(predicate).map(orderToCsvSource),
+			rows,
 			scanned: page.page.length,
 			isDone: page.isDone,
 			cursor: page.continueCursor,
@@ -2242,9 +2352,12 @@ export const exportByIds = internalQuery({
 	handler: async (ctx, { retailerId, orderIds }): Promise<CsvOrder[]> => {
 		await assertExportAccess(ctx, retailerId);
 		const fetched = await Promise.all(orderIds.map((id) => ctx.db.get(id)));
-		return fetched
-			.filter((o): o is Doc<"orders"> => o?.retailerId === retailerId)
-			.map(orderToCsvSource);
+		const owned = fetched.filter(
+			(o): o is Doc<"orders"> => o?.retailerId === retailerId,
+		);
+		const rows = owned.map(orderToCsvSource);
+		await attachOrderCategories(ctx, owned, rows, new Map());
+		return rows;
 	},
 });
 
@@ -2266,10 +2379,17 @@ export const exportOrders = action({
 		...exportFilterValidators,
 		// When set, export exactly these orders (the seller's ticked selection).
 		orderIds: v.optional(v.array(v.id("orders"))),
+		// Narrow the export to these columns — the table view's "export visible
+		// columns" path (86eyrtz74). Plain strings, not a literal union, because
+		// the keys are resolved leniently against the registry: a client running
+		// an older build must never fail an export over a column that has since
+		// been renamed. Omitted/empty = every column, which is what the cards
+		// view (no column picker) and any older client send.
+		columnKeys: v.optional(v.array(v.string())),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, orderIds, ...filters },
+		{ retailerId, orderIds, columnKeys, ...filters },
 	): Promise<{ csv: string; count: number; capped: boolean }> => {
 		let rows: CsvOrder[];
 		let capped = false;
@@ -2303,8 +2423,19 @@ export const exportOrders = action({
 			}
 		}
 
-		rows.sort(compareInboxOrder);
-		return { csv: ordersToCsv(rows), count: rows.length, capped };
+		// Pinned first, then fulfilment date. The pinned-first PARTITION is shared
+		// with the inbox (`sortInboxOrders` owns that rule for both surfaces, so a
+		// pin can never be trimmed away by a `limit`), but the sort inside each
+		// partition is deliberately fixed to "due" here rather than mirroring the
+		// inbox's "recent" default: a bookkeeping file wants the fulfilment queue,
+		// and the export has always sorted this way. The `Pinned` column keeps
+		// those rows identifiable once the file is open in Excel.
+		const sorted = sortInboxOrders(rows, "due");
+		return {
+			csv: ordersToCsv(sorted, columnKeys),
+			count: sorted.length,
+			capped,
+		};
 	},
 });
 
@@ -2567,6 +2698,41 @@ export const markSeen = mutation({
 		// No updatedAt bump: "the seller looked at it" isn't an order change, and
 		// touching updatedAt would corrupt the time-in-status badge.
 		await ctx.db.patch(order._id, { seenAt: Date.now() });
+	},
+});
+
+/**
+ * Pin / unpin an order (86eyrtz74) — the seller's manual bookmark.
+ *
+ * Idempotent by design: the control is a one-tap toggle on a card, a table row
+ * AND the detail page, so a double-tap or a stale client must never flip the
+ * state back. `pinned` is the desired end state, not a toggle instruction.
+ *
+ * Un-gated by plan: a bookmark is a one-bit annotation on an order the seller
+ * can already see, not an inbox search feature, so gating it behind Pro would
+ * mean a Starter watching pinned rows sort to the top of a list they were never
+ * allowed to pin into. Only the soft-lock (`assertSubscriptionActive`) applies,
+ * matching every other "manage what you already have" write.
+ *
+ * Never bumps `updatedAt` — bookmarking is not progress on the order, and the
+ * time-in-status badge reads that field (the `markSeen` trap).
+ */
+export const setPinned = mutation({
+	args: { orderId: v.id("orders"), pinned: v.boolean() },
+	handler: async (ctx, { orderId, pinned }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
+		const isPinned = order.pinnedAt !== undefined;
+		if (isPinned === pinned) return;
+		await ctx.db.patch(order._id, {
+			pinnedAt: pinned ? Date.now() : undefined,
+		});
+		await logAdminAction(
+			ctx,
+			access,
+			pinned ? "orders.pin" : "orders.unpin",
+			orderId,
+		);
 	},
 });
 
@@ -4620,6 +4786,67 @@ export const getMockupUrls = query({
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
 		return urls.filter((u): u is string => u !== null);
+	},
+});
+
+/**
+ * Thumbnails for an order's line items (86eyrtz74) — so a seller packing an
+ * order can recognise the product by sight instead of parsing
+ * "Kek Lapis Sarawak · 1 kg".
+ *
+ * Resolution per line: the VARIANT's first image, else the PRODUCT's first
+ * image, else nothing (the caller renders `AppImage`'s fallback).
+ *
+ * Keyed the same way as `getMockupUrls`: buyer `token` OR authenticated seller
+ * `shortId`, via `resolveSharedOrder`. Returns one entry per line item in line
+ * order — NOT a map keyed by product/variant id — because the same product can
+ * appear on two lines and the caller renders by position.
+ *
+ * The image is deliberately NOT frozen onto the order (unlike name/price): it
+ * is a packing aid, not a financial record, so a seller who replaces a product
+ * photo should see the new one everywhere. The cost is that a deleted photo
+ * leaves a line with no thumbnail, which degrades to the standard fallback box.
+ *
+ * Batched: one read per distinct variant + product across the order, not per
+ * line, and storage URLs resolve in parallel.
+ */
+export const getItemImageUrls = query({
+	args: {
+		shortId: v.optional(v.string()),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, { shortId, token }): Promise<(string | null)[]> => {
+		const order = await resolveSharedOrder(ctx, { token, shortId });
+		if (!order) return [];
+
+		const variantIds = new Set<Id<"productVariants">>();
+		const productIds = new Set<Id<"products">>();
+		for (const it of order.items) {
+			if (it.variantId) variantIds.add(it.variantId);
+			productIds.add(it.productId);
+		}
+		const variantFirst = new Map<string, string | undefined>();
+		const productFirst = new Map<string, string | undefined>();
+		await Promise.all([
+			...[...variantIds].map(async (id) => {
+				const v = await ctx.db.get(id);
+				variantFirst.set(id, v?.imageStorageIds[0]);
+			}),
+			...[...productIds].map(async (id) => {
+				const p = await ctx.db.get(id);
+				productFirst.set(id, p?.imageStorageIds[0]);
+			}),
+		]);
+
+		return Promise.all(
+			order.items.map(async (it) => {
+				const storageId =
+					(it.variantId ? variantFirst.get(it.variantId) : undefined) ??
+					productFirst.get(it.productId);
+				if (!storageId) return null;
+				return ctx.storage.getUrl(storageId);
+			}),
+		);
 	},
 });
 

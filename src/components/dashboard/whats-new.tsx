@@ -11,6 +11,7 @@ import {
 	Megaphone,
 	Package,
 	Printer,
+	Rows3,
 	Settings,
 	Sparkles,
 	Truck,
@@ -198,6 +199,7 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	megaphone: Megaphone,
 	settings: Settings,
 	chart: ChartLine,
+	table: Rows3,
 };
 
 /** `2026-08-25` → `25 Aug`. */
