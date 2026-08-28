@@ -1007,10 +1007,12 @@ export const create = mutation({
 			snapshotItems.map((i) => i.productId),
 		);
 		for (const line of snapshotItems) {
-			const names = categoryNames.get(line.productId);
-			// Absent rather than `[]` for an uncategorised product: "no categories"
-			// and "not recorded" should not look identical on an old order.
-			if (names && names.length > 0) line.categoryNames = names;
+			// Always stamped, `[]` included: PRESENT means "we recorded what this
+			// product was filed under when it sold" — and "filed under nothing" is
+			// a real answer. Absent is reserved for orders that predate the field
+			// (and the backfill), so the two never look alike. Both render as an
+			// empty cell, so this is an internal distinction only.
+			line.categoryNames = categoryNames.get(line.productId) ?? [];
 		}
 
 		const itemSubtotal = snapshotItems.reduce(
@@ -2191,6 +2193,23 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 }
 
 /**
+ * A cache that lets `resolveCategoryNames` be called repeatedly without
+ * re-reading the same products and categories. One order at checkout doesn't
+ * need it (a fresh map per call is the same thing); the backfill, which walks a
+ * whole store's orders over the same handful of products, very much does.
+ */
+export interface CategoryNameMemo {
+	/** productId → its sorted category names. */
+	byProduct: Map<string, string[]>;
+	/** categoryId → name, so a category shared by 40 products is read once. */
+	byCategory: Map<string, string>;
+}
+
+export function createCategoryNameMemo(): CategoryNameMemo {
+	return { byProduct: new Map(), byCategory: new Map() };
+}
+
+/**
  * Category names for a set of products, resolved once per distinct id
  * (86eyrtz74). Used at ORDER CREATE to freeze `items[].categoryNames`, so every
  * later read — table, export, search — is free.
@@ -2198,29 +2217,35 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
  * Archived categories are included: they name a real grouping the seller was
  * using at the time, and this is a record of that moment.
  */
-async function resolveCategoryNames(
+export async function resolveCategoryNames(
 	ctx: MutationCtx,
 	productIds: Iterable<Id<"products">>,
+	memo: CategoryNameMemo = createCategoryNameMemo(),
 ): Promise<Map<string, string[]>> {
 	const out = new Map<string, string[]>();
-	const nameById = new Map<string, string>();
 	for (const productId of new Set(productIds)) {
+		const cached = memo.byProduct.get(productId);
+		if (cached) {
+			out.set(productId, cached);
+			continue;
+		}
 		const joins = await ctx.db
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
 			.collect();
 		const names: string[] = [];
 		for (const j of joins) {
-			let name = nameById.get(j.categoryId);
+			let name = memo.byCategory.get(j.categoryId);
 			if (name === undefined) {
 				const cat = await ctx.db.get(j.categoryId);
 				if (!cat) continue;
 				name = cat.name;
-				nameById.set(j.categoryId, name);
+				memo.byCategory.set(j.categoryId, name);
 			}
 			names.push(name);
 		}
 		names.sort((a, b) => a.localeCompare(b));
+		memo.byProduct.set(productId, names);
 		out.set(productId, names);
 	}
 	return out;

@@ -901,10 +901,13 @@ export default defineSchema({
 				// an order spanning two categories, and "sales by category" is the
 				// obvious next question. The union derives from these for free.
 				//
-				// Optional with NO backfill — absence means "not recorded", the
-				// same posture as `attributionSource`. Stamping today's
-				// categorisation onto historical orders would manufacture exactly
-				// the false history this field exists to prevent.
+				// ALWAYS stamped on new orders, `[]` included: present means "we
+				// recorded this", and "filed under nothing" is a real answer.
+				// Optional only for orders that predate the field — those are
+				// covered by the opt-in `migrations:backfillOrderCategoryNames`,
+				// which necessarily stamps TODAY's categorisation (there is no
+				// record of the old one) and is therefore a manual, one-time
+				// approximation rather than something the app does on its own.
 				categoryNames: v.optional(v.array(v.string())),
 				price: v.number(),
 				quantity: v.number(),

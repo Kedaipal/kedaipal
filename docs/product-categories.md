@@ -24,7 +24,15 @@ Categories are a pure browse layer — never frozen onto an order line (unlike `
 >
 > **Per-line, not a deduped union on the order.** The union is all today's single column needs, but it cannot attribute revenue on an order spanning two categories, and "sales by category" is the obvious next question. The union derives for free via `orderCategoryNames()` in `convex/lib/orderCsv.ts`.
 >
-> **No backfill.** Absent means "not recorded" — the same posture as `attributionSource`. Stamping today's categorisation onto historical orders would manufacture exactly the false history that freezing exists to prevent, so orders placed before this ship show a blank Categories cell, permanently and honestly. Archived categories ARE included at stamp time: they name a real grouping the seller was using.
+> **Present means recorded — `[]` included.** An uncategorised product stamps an empty list, because "filed under nothing" is a real answer. **Absent** is reserved for orders that predate the field, so the two are always distinguishable. Both render as an empty cell; the distinction is internal, and it is what lets the backfill below terminate. Archived categories ARE included at stamp time: they name a real grouping the seller was using.
+>
+> **The backfill is opt-in, manual, and approximate.** `migrations:backfillOrderCategoryNames` fills in orders that predate the field. It necessarily stamps **today's** categorisation — there is no record of what a product was filed under last March — which is the one thing freezing exists to avoid. The first pass shipped with no backfill for exactly that reason; the owner overrode it (28 Aug), and the override is right: a permanently blank column on a store's entire history is worse than an approximate one, and the approximation is bounded to orders placed before the feature existed. Everything from that moment on is exact. It is a `npx convex run`, never something the app does on its own, and it never re-dates a line that already carries a stamp.
+>
+> ```bash
+> npx convex run migrations:backfillOrderCategoryNames
+> ```
+>
+> **Run it as part of the release**, on each deployment, or the Categories column reads as broken on every existing order.
 >
 > `categories.namesByProduct` remains and is still a live lookup — it feeds the **product** export, where live catalogue state is the correct answer.
 >

@@ -387,7 +387,11 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Status",
 		group: "order",
 		defaultVisible: true,
-		width: 116,
+		// Wide enough for the longest stock stage plus a two-word custom one
+		// ("Ready for Pickup") on one line — the pill truncates rather than wraps
+		// (StatusBadge), and a truncated status is a status you have to hover to
+		// read, so the column is sized to make that the exception.
+		width: 148,
 		value: (o) => o.status,
 	},
 	{

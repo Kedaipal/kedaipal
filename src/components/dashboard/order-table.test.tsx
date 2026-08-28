@@ -53,7 +53,9 @@ function cols(...keys: OrderColumnKey[]) {
 	});
 }
 
-function renderTable(overrides: Partial<Parameters<typeof OrderTable>[0]> = {}) {
+function renderTable(
+	overrides: Partial<Parameters<typeof OrderTable>[0]> = {},
+) {
 	const props = {
 		orders: [base],
 		columns: cols("shortId", "customer", "total"),
@@ -124,9 +126,25 @@ describe("OrderTable", () => {
 		expect(screen.queryByText("confirmed")).toBeNull();
 	});
 
+	it("keeps a long status on ONE line — a wrapped pill breaks into fragments", () => {
+		renderTable({
+			columns: cols("status"),
+			statusLabelFor: () => "Ready for Pickup",
+		});
+		const badge = screen.getByText("Ready for Pickup");
+		// The defect is purely visual (an inline span whose rounded background
+		// splits across two lines), so the class is the only observable — pin it.
+		expect(badge.className).toContain("inline-block");
+		expect(badge.className).toContain("truncate");
+		// Truncated text still has to be readable.
+		expect(badge.getAttribute("title")).toBe("Ready for Pickup");
+	});
+
 	it("pins from the row, passing the order back", () => {
 		const { onTogglePin } = renderTable();
-		fireEvent.click(screen.getByRole("button", { name: /pin order ORD-1001/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /pin order ORD-1001/i }),
+		);
 		expect(onTogglePin).toHaveBeenCalledWith(base);
 	});
 
@@ -214,29 +232,33 @@ describe("OrderTable — per-column sorting", () => {
 		{ ...base, _id: "c", shortId: "ORD-C", total: 24500, createdAt: 200 },
 	];
 	const idsOnScreen = () =>
-		screen
-			.getAllByText(/ORD-[ABC]/)
-			.map((n) => n.textContent ?? "");
+		screen.getAllByText(/ORD-[ABC]/).map((n) => n.textContent ?? "");
 
 	it("every header is a sort control", () => {
 		renderTable({ orders: rows });
 		expect(
 			screen.getByRole("button", { name: /order id — click to sort/i }),
 		).toBeTruthy();
-		expect(screen.getByRole("button", { name: /total — click to sort/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /total — click to sort/i }),
+		).toBeTruthy();
 	});
 
 	it("reports the column the seller clicked, biggest-first for money", () => {
 		// Numeric columns open DESCENDING (TanStack's inference, and the right
 		// instinct: clicking Total means "show me the big ones").
 		const { onSortingChange } = renderTable({ orders: rows });
-		fireEvent.click(screen.getByRole("button", { name: /total — click to sort/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /total — click to sort/i }),
+		);
 		expect(onSortingChange).toHaveBeenCalledWith([{ id: "total", desc: true }]);
 	});
 
 	it("text columns open ascending — A first, not Z", () => {
 		const { onSortingChange } = renderTable({ orders: rows });
-		fireEvent.click(screen.getByRole("button", { name: /customer — click to sort/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /customer — click to sort/i }),
+		);
 		expect(onSortingChange).toHaveBeenCalledWith([
 			{ id: "customer", desc: false },
 		]);
@@ -278,20 +300,18 @@ describe("OrderTable — per-column sorting", () => {
 			columns: cols("shortId", "fulfilmentDate"),
 			sorting: [{ id: "fulfilmentDate", desc: false }],
 		});
-		expect(
-			screen.getAllByText(/ORD-[XYZ]/).map((n) => n.textContent),
-		).toEqual(["ORD-Z", "ORD-X", "ORD-Y"]);
+		expect(screen.getAllByText(/ORD-[XYZ]/).map((n) => n.textContent)).toEqual([
+			"ORD-Z",
+			"ORD-X",
+			"ORD-Y",
+		]);
 	});
 
 	it("keeps pinned orders on top of ANY sort", () => {
 		// Pinning is a partition, never a competing sort key: the cheapest order
 		// still leads a descending-by-total table when it is pinned.
 		renderTable({
-			orders: [
-				rows[0],
-				rows[1],
-				{ ...rows[2], pinnedAt: 1 },
-			],
+			orders: [rows[0], rows[1], { ...rows[2], pinnedAt: 1 }],
 			sorting: [{ id: "total", desc: false }],
 		});
 		expect(idsOnScreen()[0]).toBe("ORD-C");

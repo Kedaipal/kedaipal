@@ -31,10 +31,7 @@ import {
 	INBOX_BUCKETS,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
-import {
-	ORDER_COLUMNS,
-	type OrderColumnKey,
-} from "../../convex/lib/orderCsv";
+import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	sortInboxOrders,
@@ -84,6 +81,11 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import {
+	type InboxView,
+	resolveInboxView,
+	useInboxView,
+} from "../hooks/useInboxView";
 import { useOrderColumns } from "../hooks/useOrderColumns";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
@@ -109,8 +111,6 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
-/** Card list vs table (86eyrtz74). Both are available at every width. */
-type InboxView = "cards" | "table";
 const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
 
 function isPaymentStatus(x: unknown): x is PaymentStatus {
@@ -140,8 +140,14 @@ type InboxSearch = {
 	asrc?: string[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
-	/** Card list (default) vs the desktop table (86eyrtz74). Only "table" is
-	 * stored, so a shared link opens the view the sender was actually in. */
+	/** Card list vs table (86eyrtz74), both available at every width.
+	 *
+	 * The one search param that does NOT follow the "defaults stay out of the
+	 * URL" convention: BOTH values are written, because absent now means "use the
+	 * view I was last in" (`useInboxView`), not "cards". Writing only "table"
+	 * would leave a seller who prefers the table with no way to send — or to
+	 * pin — a cards link. A named view always wins over the remembered one, so a
+	 * shared link opens the layout it was sent in. */
 	view?: InboxView;
 	/** Table view's per-column sort: the column key, and `tdesc` for direction
 	 * (86eyrtz74). In the URL — unlike column layout, which is a 36-toggle
@@ -228,7 +234,12 @@ export const Route = createFileRoute("/app/orders/")({
 			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
-			view: search.view === "table" ? "table" : undefined,
+			// Both values survive (see InboxSearch.view) — absent means "the view
+			// this seller last used", which is a different thing from "cards".
+			view:
+				search.view === "table" || search.view === "cards"
+					? search.view
+					: undefined,
 			// Validated against the registry so a hand-edited or stale key can
 			// never put the table into an unsortable state.
 			tsort:
@@ -287,7 +298,7 @@ function OrdersRoute() {
 		fwin,
 		source,
 		sort = "recent",
-		view = "cards",
+		view: urlView,
 		nopin = false,
 		tsort,
 		tdesc = false,
@@ -332,6 +343,13 @@ function OrdersRoute() {
 	// Keyed on "" while the retailer is still loading so the hook order is stable
 	// across the early return below.
 	const columnState = useOrderColumns(retailer?._id ?? "");
+	// The remembered layout, same storage posture as the columns above. A view
+	// named in the URL wins; otherwise the seller resumes where they left off,
+	// and cards is only the fallback for someone who has never chosen.
+	const { stored: storedView, remember: rememberView } = useInboxView(
+		retailer?._id ?? "",
+	);
+	const view = resolveInboxView(urlView, storedView);
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
@@ -534,12 +552,11 @@ function OrdersRoute() {
 	}
 
 	function setView(next: InboxView) {
-		navigate({
-			search: (prev) => ({
-				...prev,
-				view: next === "table" ? "table" : undefined,
-			}),
-		});
+		// Remembered AND written to the URL: the memory is what survives leaving
+		// the page, the URL is what survives sharing it. Both values go in — see
+		// InboxSearch.view for why this param breaks the defaults-stay-out rule.
+		rememberView(next);
+		navigate({ search: (prev) => ({ ...prev, view: next }) });
 	}
 
 	function setSort(next: InboxSort) {

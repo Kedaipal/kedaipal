@@ -8917,14 +8917,15 @@ describe("orders — categories frozen at checkout (86eyrtz74)", () => {
 		expect(after?.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
 	});
 
-	test("an uncategorised product leaves the field ABSENT, not empty", async () => {
-		// "no categories" and "not recorded" must not look identical on an old
-		// order — absence is what tells them apart.
+	test("an uncategorised product records an EMPTY list, not nothing", async () => {
+		// "filed under nothing" is a real answer and gets recorded as one. Absence
+		// is reserved for orders that predate the field, so the backfill can tell
+		// the two apart (see migrations:backfillOrderCategoryNames).
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
 		const order = await place(t, retailer._id, productId);
-		expect(order.items[0].categoryNames).toBeUndefined();
+		expect(order.items[0].categoryNames).toEqual([]);
 	});
 
 	test("the export reads the frozen names — no lookup, no drift", async () => {

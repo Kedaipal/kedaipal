@@ -37,6 +37,9 @@ Two deliberate details:
   `+60123456789` however it was stored or typed. Plain substring can't do that.
 - **Categories participate**, because they are frozen onto the order at checkout
   (see below). That was the one column a live lookup could never have covered.
+  Orders placed *before* the field existed need
+  `npx convex run migrations:backfillOrderCategoryNames` — see
+  [product-categories.md](./product-categories.md).
 
 The haystack is built lazily (only when there IS a term), since it allocates ~36
 strings per order. Expect broader matches than before: a term appearing in a
@@ -99,6 +102,18 @@ WhatsApp.
 
 - **Two views, not three.** The existing card list *is* the list view; a third
   mode would be a menu with nothing behind it.
+- **The chosen view is remembered** per store on this device
+  (`useInboxView`, `kp:orders:view:<retailerId>`), the same storage posture as
+  the column layout beside it. The layout is how a seller reads their business,
+  not a per-visit choice — opening Orders from the nav used to drop a table user
+  back into cards every single time.
+  `view` is therefore the one search param that does **not** follow the
+  "defaults stay out of the URL" convention: **both** values are written
+  (`resolveInboxView` = URL → remembered → cards). Absent now means *"the view I
+  was last in"*, which is a different thing from "cards" — writing only `table`
+  would leave a table-preferring seller unable to send, or pin, a cards link. A
+  view named in the URL always wins, so a shared link opens the layout it was
+  sent in.
 - **Available at EVERY width.** The first build gated the table to `lg` and up;
   the owner reversed that (28 Aug) — *"they might need a quick look while on the
   move"*. Withholding the view was the wrong trade: a horizontally scrolling
@@ -136,6 +151,14 @@ WhatsApp.
   are complements, not alternatives — shadcn's table is markup with no logic,
   TanStack is logic with no markup, and shadcn's own "data table" is exactly
   this pairing. Column widths come from `<colgroup>` + `table-fixed`.
+- **A status pill never wraps.** `StatusBadge` is `inline-block` + `truncate`
+  + `max-w-full`: as a plain inline span, a label too long for its container
+  ("Ready for Pickup" in a 116px cell, any long custom stage name on a narrow
+  card) wrapped mid-phrase and the rounded background broke into two ragged
+  fragments. It now stays one rounded box that ellipsises, with the full text on
+  hover — and the Status column was widened to 148px so that truncation is the
+  exception, not the norm. The fix is on the badge, not the table, because the
+  same defect was reachable from every card and the order detail page.
 - **Row navigation**: the row carries `onClick`, and the Order ID cell carries a
   real `<Link>`. A `<tr>` cannot be an anchor, so the link is what keeps
   middle-click, cmd-click and keyboard navigation working; the row click is the
