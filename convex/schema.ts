@@ -749,7 +749,18 @@ export default defineSchema({
 		// book against it.
 		booking: v.optional(
 			v.object({
-				capacityPerNight: v.number(),
+				// UNSET = unlimited (S7, 86eyqxb14) — a gym selling month packages
+				// has no daily member cap. Never default a missing value to 1.
+				capacityPerNight: v.optional(v.number()),
+				// Fixed-length package in DAYS (S7): set = the buyer picks a START
+				// date only, the end derives (start + packageDays) and the price is
+				// FLAT per package rather than per night. Unset = the free
+				// check-in/check-out range the campsite sells.
+				packageDays: v.optional(v.number()),
+				// "Instant book" (S7 — the spec's named follow-up): set = a request
+				// lands `confirmed` with the payment ask firing straight away,
+				// skipping `booking_requested`. Unset = request-to-book.
+				autoAccept: v.optional(v.boolean()),
 				// Refundable security deposit (sen) collected ON TOP of the stay
 				// price in the one payment at approval (86eyn4kee; distinct from
 				// the parked partial-payment deposit 86eyhwb03). Optional; 0 is
@@ -1058,6 +1069,13 @@ export default defineSchema({
 		// exist — the per-night capacity count asks "which bookings of THIS
 		// listing overlap these nights", and an array field can't be indexed.
 		bookingProductId: v.optional(v.id("products")),
+		// The listing's package length FROZEN at request (S7). Present = this
+		// order was sold as a fixed-length package at a flat price, so every
+		// surface reads it as a validity window ("Valid 1 – 30 Sep") and the
+		// line is quantity 1. Absent = the free per-night range. Frozen because
+		// a later edit to the listing must never re-describe a placed booking
+		// (the securityDeposit / pickupSnapshot posture).
+		bookingPackageDays: v.optional(v.number()),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets

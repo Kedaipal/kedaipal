@@ -42,10 +42,10 @@ import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -438,6 +438,9 @@ function TrackingRoute() {
 	// Booking kind (S3): the page speaks stay language — range card, request
 	// states, and no payment surface until the seller approves.
 	const isBooking = deliveryMethod === "booking";
+	// Frozen at request (S7): a package reads as a validity window, a
+	// free-range stay as check-in → check-out.
+	const isBookingPackage = order.bookingPackageDays !== undefined;
 	const ms = order.retailerLocale === "ms";
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
@@ -718,9 +721,9 @@ function TrackingRoute() {
 				<div className="mt-6 flex items-start gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">
 					<Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
 					<p>
-						The payment window for this order ran out, so it was cancelled
-						and the items were released. Still want it? Message the store —
-						they can send you a fresh order link.
+						The payment window for this order ran out, so it was cancelled and
+						the items were released. Still want it? Message the store — they can
+						send you a fresh order link.
 					</p>
 				</div>
 			) : null}
@@ -1196,12 +1199,24 @@ function TrackingRoute() {
 			order.bookingCheckOut !== undefined ? (
 				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						{ms ? "Penginapan anda" : "Your stay"}
+						{isBookingPackage
+							? ms
+								? "Pakej anda"
+								: "Your package"
+							: ms
+								? "Penginapan anda"
+								: "Your stay"}
 					</p>
 					<div className="flex flex-col gap-1.5 text-sm tabular-nums">
 						<div className="flex items-baseline gap-1.5">
 							<span className="font-medium">
-								{ms ? "Daftar masuk" : "Check-in"}
+								{isBookingPackage
+									? ms
+										? "Mula"
+										: "Starts"
+									: ms
+										? "Daftar masuk"
+										: "Check-in"}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
 							<span className="font-semibold">
@@ -1210,19 +1225,38 @@ function TrackingRoute() {
 						</div>
 						<div className="flex items-baseline gap-1.5">
 							<span className="font-medium">
-								{ms ? "Daftar keluar" : "Check-out"}
+								{isBookingPackage
+									? ms
+										? "Hari terakhir"
+										: "Last day"
+									: ms
+										? "Daftar keluar"
+										: "Check-out"}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
 							<span className="font-semibold">
-								{formatFulfilmentDate(order.bookingCheckOut)}
+								{/* A package's last USABLE day is the night before the
+								    exclusive check-out — printing the check-out would
+								    promise a day the buyer doesn't have. */}
+								{formatFulfilmentDate(
+									isBookingPackage
+										? order.bookingCheckOut - DAY_MS
+										: order.bookingCheckOut,
+								)}
 							</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
 							{Math.round(
 								(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
 							)}{" "}
-							{ms ? "malam" : "night(s)"} ·{" "}
-							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
+							{isBookingPackage
+								? ms
+									? "hari"
+									: "days"
+								: ms
+									? "malam"
+									: "night(s)"}{" "}
+							· {order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>
 				</section>

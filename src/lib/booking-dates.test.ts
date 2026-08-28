@@ -7,7 +7,10 @@ import {
 	latestCheckOutFor,
 	mytEpochFromCalendarDate,
 	mytMonthStart,
+	bookingPriceSuffix,
+	describeBookingSpan,
 	nextBookingSelection,
+	packageNights,
 	type SelectionContext,
 } from "./booking-dates";
 
@@ -94,5 +97,72 @@ describe("checkout-only handling (the design's partial-range state)", () => {
 		const short = ctx({ maxNights: 3 });
 		expect(latestCheckOutFor(day(10), short)).toBe(day(13));
 		expect(conflictCeiling(day(10), short)).toBeNull();
+	});
+});
+
+describe("fixed-length packages (S7)", () => {
+	const pkg = (partial: Partial<SelectionContext> = {}) =>
+		ctx({ packageDays: 30, ...partial });
+
+	it("one tap picks the whole span — there is no check-out to choose", () => {
+		const sel = nextBookingSelection({}, day(3), pkg());
+		expect(sel.checkIn).toBe(day(3));
+		expect(sel.checkOut).toBe(day(33));
+	});
+
+	it("tapping again just moves the start", () => {
+		const first = nextBookingSelection({}, day(3), pkg());
+		const second = nextBookingSelection(first, day(10), pkg());
+		expect(second.checkIn).toBe(day(10));
+		expect(second.checkOut).toBe(day(40));
+	});
+
+	it("a start is offered only when EVERY night it would occupy is free", () => {
+		// One busy night 10 days out closes every start that would span it —
+		// a package can't be shortened around it.
+		const c = pkg({ unavailable: new Set([day(10)]) });
+		expect(canCheckIn(day(11), c)).toBe(true); // starts after the busy night
+		expect(canCheckIn(day(10), c)).toBe(false); // starts ON it
+		expect(canCheckIn(day(5), c)).toBe(false); // would span it
+		expect(nextBookingSelection({}, day(5), c)).toEqual({});
+	});
+
+	it("still respects the notice window and horizon", () => {
+		const c = pkg({ earliestCheckIn: day(2), latestCheckIn: day(20) });
+		expect(canCheckIn(day(1), c)).toBe(false);
+		expect(canCheckIn(day(21), c)).toBe(false);
+		expect(canCheckIn(day(2), c)).toBe(true);
+	});
+
+	it("packageNights lists exactly the days occupied", () => {
+		expect(packageNights(day(0), 3)).toEqual([day(0), day(1), day(2)]);
+	});
+
+	it("crossing a month boundary lands on the right calendar day", () => {
+		// 1 Sep + 30 days = 1 Oct, so the last usable day is 30 Sep.
+		const sel = nextBookingSelection({}, day(0), pkg());
+		const last = calendarDateFromMytEpoch((sel.checkOut ?? 0) - DAY_MS);
+		expect(last.getMonth()).toBe(8); // September
+		expect(last.getDate()).toBe(30);
+	});
+});
+
+describe("booking copy helpers (S7)", () => {
+	it("a package prices per package, a free range per night", () => {
+		expect(bookingPriceSuffix(30)).toBe(" per package");
+		expect(bookingPriceSuffix(undefined)).toBe("/night");
+		expect(bookingPriceSuffix(0)).toBe("/night");
+	});
+
+	it("a package reads as a validity window ending on its LAST usable day", () => {
+		const fmt = (e: number) => String(calendarDateFromMytEpoch(e).getDate());
+		// 1 Sep + 30 days: valid through the 30th, never "– 1 Oct".
+		expect(
+			describeBookingSpan(day(0), day(30), { isPackage: true, format: fmt }),
+		).toBe("Valid 1 – 30");
+		// A stay's check-out morning IS the day they leave.
+		expect(
+			describeBookingSpan(day(0), day(2), { isPackage: false, format: fmt }),
+		).toBe("1 → 3");
 	});
 });

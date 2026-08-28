@@ -31,8 +31,7 @@ export function calendarDateFromMytEpoch(epoch: number): Date {
 export function mytMonthStart(epoch: number): number {
 	const shifted = new Date(epoch + MYT_OFFSET_MS);
 	return (
-		Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1) -
-		MYT_OFFSET_MS
+		Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1) - MYT_OFFSET_MS
 	);
 }
 
@@ -40,11 +39,8 @@ export function mytMonthStart(epoch: number): number {
 export function addMytMonths(monthStart: number, offset: number): number {
 	const shifted = new Date(monthStart + MYT_OFFSET_MS);
 	return (
-		Date.UTC(
-			shifted.getUTCFullYear(),
-			shifted.getUTCMonth() + offset,
-			1,
-		) - MYT_OFFSET_MS
+		Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + offset, 1) -
+		MYT_OFFSET_MS
 	);
 }
 
@@ -62,16 +58,33 @@ export type SelectionContext = {
 	/** Latest selectable check-in (horizon), MYT midnight, inclusive. */
 	latestCheckIn: number;
 	maxNights: number;
+	/** Fixed-length package in days (S7). Set = ONE tap picks the whole stay:
+	 * the buyer chooses a start date and the end derives. Unset = the two-tap
+	 * free range. Mirrors `products.booking.packageDays`. */
+	packageDays?: number;
 };
+
+/** Every night a stay starting on `day` would occupy, for a fixed-length
+ * package. */
+export function packageNights(day: number, packageDays: number): number[] {
+	const nights: number[] = [];
+	for (let i = 0; i < packageDays; i++) nights.push(day + i * DAY_MS);
+	return nights;
+}
 
 /** Can this day START a stay? Its own night must be free and inside the
  * bookable window. */
 export function canCheckIn(day: number, ctx: SelectionContext): boolean {
-	return (
-		day >= ctx.earliestCheckIn &&
-		day <= ctx.latestCheckIn &&
-		!ctx.unavailable.has(day)
-	);
+	if (day < ctx.earliestCheckIn || day > ctx.latestCheckIn) return false;
+	// A package is all-or-nothing: the buyer can't shorten it around a busy
+	// night, so EVERY night it would occupy has to be free before the start
+	// day is offered at all (the server re-checks the same span).
+	if (ctx.packageDays !== undefined && ctx.packageDays > 0) {
+		return !packageNights(day, ctx.packageDays).some((night) =>
+			ctx.unavailable.has(night),
+		);
+	}
+	return !ctx.unavailable.has(day);
 }
 
 /**
@@ -105,9 +118,20 @@ export function nextBookingSelection(
 	day: number,
 	ctx: SelectionContext,
 ): BookingSelection {
+	// A fixed-length package is a ONE-tap pick: the start is the only choice,
+	// the end derives (S7). Never a partial selection to complete.
+	if (ctx.packageDays !== undefined && ctx.packageDays > 0) {
+		return canCheckIn(day, ctx)
+			? { checkIn: day, checkOut: day + ctx.packageDays * DAY_MS }
+			: current;
+	}
 	const pickingCheckOut =
 		current.checkIn !== undefined && current.checkOut === undefined;
-	if (pickingCheckOut && current.checkIn !== undefined && day > current.checkIn) {
+	if (
+		pickingCheckOut &&
+		current.checkIn !== undefined &&
+		day > current.checkIn
+	) {
 		if (day <= latestCheckOutFor(current.checkIn, ctx)) {
 			return { checkIn: current.checkIn, checkOut: day };
 		}
@@ -132,4 +156,35 @@ export function conflictCeiling(
 		latestCheckOut: latest,
 		maxStayNights: Math.round((latest - checkIn) / DAY_MS),
 	};
+}
+
+/**
+ * What follows a booking listing's price on the storefront: a fixed-length
+ * package is a flat price for the whole span (S7), a free-range stay is
+ * per-night. ONE author so the card and the product page always agree.
+ */
+export function bookingPriceSuffix(packageDays?: number): string {
+	return packageDays !== undefined && packageDays > 0
+		? " per package"
+		: "/night";
+}
+
+/**
+ * How a placed booking's span reads on an order. A fixed-length package is a
+ * validity WINDOW — its last usable day is the night before the exclusive
+ * check-out, so "Valid 1 Sep – 30 Sep" (not "– 1 Oct", which would promise a
+ * day the buyer doesn't have). A free-range stay keeps check-in → check-out,
+ * where the check-out morning IS the day they leave.
+ *
+ * `format` is injected so this stays pure and the caller supplies its own
+ * locale-aware date formatter.
+ */
+export function describeBookingSpan(
+	checkIn: number,
+	checkOut: number,
+	opts: { isPackage: boolean; format: (epoch: number) => string },
+): string {
+	return opts.isPackage
+		? `Valid ${opts.format(checkIn)} – ${opts.format(checkOut - DAY_MS)}`
+		: `${opts.format(checkIn)} → ${opts.format(checkOut)}`;
 }

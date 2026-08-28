@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
+import { describeBookingSpan } from "../lib/booking-dates";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -122,6 +123,30 @@ import {
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
 import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
 import { cn } from "../lib/utils";
+
+/**
+ * The fulfilment card's one-line summary of a booking. A fixed-length package
+ * (S7, frozen `bookingPackageDays`) reads as a validity window in DAYS; a
+ * free-range stay reads as check-in → check-out in NIGHTS.
+ */
+function bookingFulfilmentLine(order: {
+	bookingCheckIn?: number;
+	bookingCheckOut?: number;
+	bookingPackageDays?: number;
+}): string {
+	if (order.bookingCheckIn === undefined || order.bookingCheckOut === undefined)
+		return "Booking";
+	const span = Math.round(
+		(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+	);
+	const isPackage = order.bookingPackageDays !== undefined;
+	const unit = isPackage ? "day" : "night";
+	return `Booking · ${span} ${unit}${span === 1 ? "" : "s"} · ${describeBookingSpan(
+		order.bookingCheckIn,
+		order.bookingCheckOut,
+		{ isPackage, format: formatFulfilmentDate },
+	)}`;
+}
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -1459,7 +1484,7 @@ function OrderDetailRoute() {
 							{isBooking
 								? order.bookingCheckIn !== undefined &&
 									order.bookingCheckOut !== undefined
-									? `Booking · ${Math.round((order.bookingCheckOut - order.bookingCheckIn) / DAY_MS)} night${Math.round((order.bookingCheckOut - order.bookingCheckIn) / DAY_MS) === 1 ? "" : "s"} · ${formatFulfilmentDate(order.bookingCheckIn)} → ${formatFulfilmentDate(order.bookingCheckOut)}`
+									? bookingFulfilmentLine(order)
 									: "Booking"
 								: isSelfCollect
 									? order.pickupSnapshot?.locationType === "drop_off"

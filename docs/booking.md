@@ -20,7 +20,8 @@ follow the core independently.
 | S3 `86eyn4kcn` | Approve/decline + WA copy set + buyer tracking states | ✅ built (this doc) |
 | S4 `86eyn4kdb` | Seller month calendar + `bookingBlocks` | — |
 | S5 `86eyn4kee` | Security deposit end-to-end | — |
-| S6 `86eyn4kf2` | ICS calendar feed + Settings connect card | — |
+| S6 `86eyn4kf2` | ICS calendar feed + Settings connect card | ✅ built (this doc) |
+| S7 `86eyqxb14` | Fixed-length packages + instant book (FS Fitness) | ✅ built (this doc) |
 
 ---
 
@@ -524,6 +525,111 @@ exclusive-end document shape, CRLF discipline); `convex/calendarFeed.test.ts`
 (ensure idempotent, rotate kills the old token + stranger refusal,
 `getCalendarFeed` shape, feed includes approved stay + scoped block and
 excludes request/declined/every phone number, unknown token → null).
+
+## S7 — fixed-length packages + instant book (`86eyqxb14`)
+
+**FS Fitness & Martial Arts** (10th payer, first at full-price RM 149, 23 Aug)
+sells month packages, not stays: the buyer picks a **start date**, the package
+has a **fixed length** and **one flat price**, and there is **no approval
+step**. The S1–S3 bundle assumed the opposite on all three counts. Three
+product-level presets close the gap — **no new kind, no behaviour fork** (spec
+decision 5).
+
+### The three knobs
+
+- **`products.booking.packageDays`** (1..366; 0 normalizes to unset). Set →
+  the buyer calendar becomes a **single start-date pick**, the end derives
+  (`start + packageDays`), and the order line is **`quantity: 1` at the flat
+  price** instead of `quantity: nights`. Unset → today's free
+  check-in/check-out range, priced per night. Both ride the same
+  `computeOrderTotals` math, so every money surface (totals, CSV, PDF,
+  Insights, receipts) needs zero special-casing either way.
+- **`products.booking.autoAccept`** — "Instant book", the spec's named
+  follow-up. Set → the order lands **`confirmed`** with the confirmation push
+  firing at create (the exact storefront machinery — stamps, retries, webhook
+  correlation) and the activation stamp made, skipping `booking_requested`
+  entirely. Unset → request-to-book as built. Template env unset ⇒ still
+  confirmed and payable, just silently (the S3 approve posture).
+- **`products.booking.capacityPerNight` is now optional — unset = UNLIMITED.**
+  A gym has no daily member cap, so requiring a number forced a fake ceiling.
+  **`undefined` must never be read as `?? 1`**: that would refuse the second
+  member. `findFullNights` skips the count entirely when capacity is unset
+  (only the seller's own blocks can close a night), and the three former
+  `?? 1` sites — `findFullNights`, `sellerCalendar`, `orders.get.bookingContext`
+  — now pass the absence through so each surface can say the honest thing
+  ("Unlimited", a bare count, "N other bookings … (no limit set)").
+
+### The scan bound — the subtle one
+
+`countBookedPerNight` looked back `MAX_BOOKING_NIGHTS` (30) days, which was
+correct while 30 nights was the longest stay that could exist. A 366-day
+package breaks that: a booking starting 60 days before a window genuinely
+overlaps it, and the indexed scan would **miss it and report the night free**.
+The bound is now **`MAX_BOOKING_SPAN_DAYS = max(MAX_BOOKING_NIGHTS,
+MAX_PACKAGE_DAYS)`**, deliberately global rather than per-product: a listing's
+`packageDays` can be edited or cleared after long bookings were already placed
+against it, so only a ceiling over every shape is safe. Pinned by a test that
+goes red when the old bound is restored.
+
+### Derivation lives in one place
+
+**`resolveBookingRange(booking, checkIn, checkOut?)`** is the single author of
+"which nights does this stay occupy" — imported by the buyer's calendar
+selection, the checkout preview and the authoritative mutation, so they cannot
+disagree by a day. `requestBooking`'s `checkOut` arg is now **optional and
+IGNORED for a package**: the server derives the end from the listing's own
+length, so a tampered client cannot buy 90 days at the 30-day price (pinned).
+The order freezes **`orders.bookingPackageDays`** at create (snapshot posture,
+like `securityDeposit`) — a later listing edit never re-describes a placed
+booking.
+
+### Copy
+
+A package is a **validity window**, and its last usable day is the night
+before the exclusive check-out — so it reads **"Valid 1 Sep – 30 Sep"**, never
+"– 1 Oct", which would promise a day the buyer doesn't have.
+`describeBookingSpan` and `bookingPriceSuffix` (`" per package"` vs `"/night"`)
+are the shared authors across the product card, product page, checkout
+receipt, seller order detail and the buyer's tracking card ("Your package",
+Starts / Last day). Instant-book listings never promise an approval that isn't
+coming: the CTA reads **"Book now"**, the total is "Total" not "Total when
+approved", and the footer says the booking is confirmed straight away.
+
+Seller config sits in the same booking card (wizard step 3 + the edit form):
+capacity with a blank-means-unlimited hint, "Package length" in days with a
+consequence line, and an "Instant book" toggle. The wizard review adds
+Package / Booking rows; the summary strip reads "Booking · 30-day package ·
+Unlimited spots · RM 150 per package · Instant book".
+
+**`ToggleSwitch` was extracted** from `fulfilment-tab.tsx` into
+`src/components/ui/toggle-switch.tsx` rather than copied — the booking form
+needed the same control, and a second copy is how two toggles drift apart.
+
+### S7 tests
+
+`convex/bookings.test.ts` ("fixed-length packages + instant book"): derived
+end + flat price + frozen shape surviving a listing edit; a client-supplied
+checkOut cannot stretch a package; a package longer than the free-range cap is
+accepted; unlimited capacity never blocks but a seller block still does; **the
+scan-bound regression** (mutation-tested); instant book lands confirmed and
+refuses approve; without it a package still waits; free-range listings
+untouched; a free-range request with no check-out is refused.
+`src/lib/booking-dates.test.ts`: one-tap span, all-nights-free gating, notice
++ horizon still applied, month-boundary derivation, and both copy helpers.
+`convex/products.test.ts`: the three knobs round-trip, 0/false clear, bad
+lengths refused, and an empty `booking: {}` is valid (unlimited).
+
+### What S7 deliberately does NOT do
+
+- **No hourly slots.** A slot is the same fixed-length primitive with a
+  smaller unit, but everything here is day-granular MYT midnights — sub-day
+  granularity is real work and still has no ticket (the spec deferred it in
+  August, attributed to Bearcamp).
+- **No renewal nudge, no "Active" bucket, no counter sign-up** — those are
+  S8 `86eyqxb2q`, S10 `86eyqxb41` and S9 `86eyqxb3d`.
+- **Rolling from the start date, not a locked calendar month.** The ticket
+  flags this as the open question for the onboarding call; locking a package
+  to the 1st is the follow-up if FS Fitness wants it.
 
 ### What S2 deliberately does NOT do
 

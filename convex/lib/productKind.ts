@@ -38,15 +38,49 @@ export const MAX_CAPACITY_PER_NIGHT = 100;
 /**
  * Validate a booking listing's per-night capacity: a whole number of
  * interchangeable units ("Standard Plot ×5" is one product with capacity 5).
+ *
+ * **`undefined` means UNLIMITED** (S7, `86eyqxb14`) — a gym selling month
+ * packages has no daily member cap, so requiring a number there would force a
+ * fake ceiling. Every consumer must treat `undefined` as "never full", NOT as
+ * a missing value to default to 1 — see `findFullNights`.
+ *
  * Throws with seller-facing copy — callers surface it verbatim.
  */
-export function sanitizeCapacityPerNight(n: number): number {
+export function sanitizeCapacityPerNight(
+	n: number | undefined,
+): number | undefined {
+	if (n === undefined) return undefined;
 	if (!Number.isInteger(n) || n < 1 || n > MAX_CAPACITY_PER_NIGHT) {
 		throw new Error(
-			`Capacity must be a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}`,
+			`Capacity must be a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}, or blank for unlimited`,
 		);
 	}
 	return n;
+}
+
+/**
+ * Longest fixed-length package a seller may sell (S7). A year covers the
+ * annual-membership case; beyond that is a subscription, not a booking.
+ */
+export const MAX_PACKAGE_DAYS = 366;
+
+/**
+ * Validate a booking listing's package length in DAYS.
+ *
+ * Set = the listing sells a **fixed-length package**: the buyer picks a start
+ * date only, the end derives, and the price is flat per package rather than
+ * per night. Unset = the free check-in/check-out range the campsite uses.
+ * 0 normalizes to undefined so "no package" has one spelling (the
+ * sanitizeFee/securityDeposit posture).
+ */
+export function sanitizePackageDays(n: number | undefined): number | undefined {
+	if (n === undefined) return undefined;
+	if (!Number.isInteger(n) || n < 0 || n > MAX_PACKAGE_DAYS) {
+		throw new Error(
+			`Package length must be a whole number of days between 1 and ${MAX_PACKAGE_DAYS}`,
+		);
+	}
+	return n === 0 ? undefined : n;
 }
 
 

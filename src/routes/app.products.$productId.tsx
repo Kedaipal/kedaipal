@@ -264,6 +264,10 @@ function EditProductRoute() {
 					securityDeposit: product.booking?.securityDeposit
 						? (product.booking.securityDeposit / 100).toFixed(2)
 						: undefined,
+					packageDays: product.booking?.packageDays
+						? String(product.booking.packageDays)
+						: undefined,
+					autoAccept: product.booking?.autoAccept === true,
 					minNoticeDays: product.minNoticeDays,
 					minQuantity: product.minQuantity,
 					categoryIds,

@@ -33,6 +33,26 @@ const QUICK_REASONS = [
 	"Group size is too large for this site",
 ];
 
+/**
+ * The seller's capacity context for these nights. An UNLIMITED listing (S7 —
+ * a gym) has no denominator, so it states the neighbours without inventing a
+ * ceiling; a capped listing quotes "N of M".
+ */
+function bookingCapacityLine(context: {
+	capacityPerNight?: number;
+	peakOtherBookings: number;
+}): string {
+	const { capacityPerNight: cap, peakOtherBookings: others } = context;
+	if (cap === undefined) {
+		return others > 0
+			? `${others} other booking${others === 1 ? "" : "s"} on those nights (no limit set). `
+			: "No other bookings on those nights. ";
+	}
+	return others > 0
+		? `${others} of ${cap} spot${cap === 1 ? "" : "s"} already booked on those nights. `
+		: `No other bookings on those nights (capacity ${cap}). `;
+}
+
 export function BookingRequestCard({
 	order,
 }: {
@@ -46,7 +66,7 @@ export function BookingRequestCard({
 		bookingCheckIn?: number;
 		bookingCheckOut?: number;
 		bookingContext?: {
-			capacityPerNight: number;
+			capacityPerNight?: number;
 			peakOtherBookings: number;
 			nights: number;
 		};
@@ -144,8 +164,7 @@ export function BookingRequestCard({
 					</div>
 					{(order.securityDeposit ?? 0) > 0 ? (
 						<p className="text-xs text-muted-foreground">
-							incl.{" "}
-							{formatPrice(order.securityDeposit ?? 0, order.currency)}{" "}
+							incl. {formatPrice(order.securityDeposit ?? 0, order.currency)}{" "}
 							refundable security deposit — returned after check-out.
 						</p>
 					) : null}
@@ -153,11 +172,7 @@ export function BookingRequestCard({
 			) : null}
 
 			<p className="text-xs leading-relaxed text-muted-foreground">
-				{context
-					? context.peakOtherBookings > 0
-						? `${context.peakOtherBookings} of ${context.capacityPerNight} spot${context.capacityPerNight === 1 ? "" : "s"} already booked on those nights. `
-						: `No other bookings on those nights (capacity ${context.capacityPerNight}). `
-					: null}
+				{context ? bookingCapacityLine(context) : null}
 				Approving confirms the booking and unlocks payment on the guest&apos;s
 				order page. Nothing has been charged yet; unanswered requests release
 				automatically after 24 hours.

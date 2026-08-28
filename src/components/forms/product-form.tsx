@@ -23,16 +23,18 @@ import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_CAPACITY_PER_NIGHT,
+	MAX_PACKAGE_DAYS,
 	type ProductKind,
 } from "../../../convex/lib/productKind";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
-import { cartesian } from "../../lib/variant";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
+import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
@@ -55,9 +57,15 @@ export interface ProductFormSubmitValues {
 	// Product kind (86eyj70z1). Set at create by the wizard; immutable after —
 	// the edit route never sends it to `products.update` (which has no kind arg).
 	kind?: ProductKind;
-	// Booking-kind config — travels with kind at create; capacity + deposit
-	// stay editable. securityDeposit in sen; 0 clears (server normalizes).
-	booking?: { capacityPerNight: number; securityDeposit?: number };
+	// Booking-kind config — travels with kind at create; capacity, deposit,
+	// package length and instant-book stay editable. securityDeposit in sen;
+	// 0 clears (server normalizes). capacityPerNight undefined = unlimited.
+	booking?: {
+		capacityPerNight?: number;
+		securityDeposit?: number;
+		packageDays?: number;
+		autoAccept?: boolean;
+	};
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
 	minNoticeDays?: number;
@@ -111,8 +119,13 @@ export type ProductFormDraft = {
 	hidden: boolean;
 	/** Stored kind (physical default) — round-trips to the wizard's card. */
 	kind: ProductKind;
-	/** Booking capacity, as typed (only meaningful when kind === "booking"). */
+	/** Booking capacity, as typed (only meaningful when kind === "booking").
+	 * Blank = unlimited. */
 	capacityPerNight: string;
+	/** Package length in days, as typed; blank = free check-in/check-out. */
+	packageDays?: string;
+	/** Instant book — skip the approval step. */
+	autoAccept?: boolean;
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
 	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
 	securityDeposit?: string;
@@ -137,8 +150,12 @@ interface ProductFormProps {
 		 * Absent = physical (legacy). Immutable in the form (create sets it via
 		 * the wizard; edit displays it in the summary strip only). */
 		kind?: ProductKind;
-		/** Booking capacity as a string draft ("5") — wizard handoff + edit seed. */
+		/** Booking capacity as a string draft ("5") — wizard handoff + edit seed.
+		 * Blank = unlimited. */
 		capacityPerNight?: string;
+		/** Package length in days as a string draft ("30"); blank = free range. */
+		packageDays?: string;
+		autoAccept?: boolean;
 		/** Booking security deposit as an RM string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
@@ -378,9 +395,8 @@ export function buildSubmitVariants(
 			active: row.active,
 			blockWhenOutOfStock: row.blockWhenOutOfStock,
 			requiresProof: row.requiresProof,
-			parcelWeightG: weightOk && weightStr.length > 0
-				? Number.parseInt(weightStr, 10)
-				: 0,
+			parcelWeightG:
+				weightOk && weightStr.length > 0 ? Number.parseInt(weightStr, 10) : 0,
 			imageStorageIds: row.imageStorageIds,
 		});
 	});
@@ -516,7 +532,11 @@ function ProductSummaryStrip({
 	editor: VariantEditorState;
 	currency: string;
 	/** Booking kind + its capacity draft — flips the strip to booking words. */
-	booking?: { capacityPerNight: string } | null;
+	booking?: {
+		capacityPerNight: string;
+		packageDays?: string;
+		autoAccept?: boolean;
+	} | null;
 }) {
 	const summary = describeProduct(
 		{
@@ -636,6 +656,12 @@ export function ProductForm({
 	const [depositDraft, setDepositDraft] = useState(
 		initialValues?.securityDeposit ?? "",
 	);
+	const [packageDraft, setPackageDraft] = useState(
+		initialValues?.packageDays ?? "",
+	);
+	const [autoAccept, setAutoAccept] = useState(
+		initialValues?.autoAccept === true,
+	);
 	// Draft as a string so the input can be cleared while typing; parsed at
 	// submit (blank/0 = no override).
 	const [minNoticeDraft, setMinNoticeDraft] = useState(
@@ -705,7 +731,8 @@ export function ProductForm({
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
 			if (!minQtyValid) return;
-			if (isBooking && (!capacityValid || !depositValid)) return;
+			if (isBooking && (!capacityValid || !depositValid || !packageValid))
+				return;
 
 			try {
 				const minNoticeParsed = Number.parseInt(minNoticeDraft, 10);
@@ -716,7 +743,14 @@ export function ProductForm({
 					kind,
 					booking: isBooking
 						? {
-								capacityPerNight: Number(capacityDraft.trim()),
+								// Blank = unlimited; the server keeps it unset.
+								capacityPerNight:
+									capacityTrimmed.length > 0
+										? Number(capacityTrimmed)
+										: undefined,
+								packageDays:
+									packageTrimmed.length > 0 ? Number(packageTrimmed) : 0,
+								autoAccept,
 								// Sen; 0 = clear (the server normalizes 0 → unset).
 								securityDeposit:
 									depositParsed !== null && depositParsed > 0
@@ -757,6 +791,8 @@ export function ProductForm({
 			kind,
 			capacityPerNight: capacityDraft,
 			securityDeposit: depositDraft,
+			packageDays: packageDraft,
+			autoAccept,
 			categoryIds,
 			images,
 			editor,
@@ -779,11 +815,21 @@ export function ProductForm({
 	// save then refuses).
 	const capacityTrimmed = capacityDraft.trim();
 	const capacityParsed = Number(capacityTrimmed);
+	// Blank capacity = UNLIMITED (S7), a valid choice — not a missing value.
 	const capacityValid =
-		capacityTrimmed.length > 0 &&
-		Number.isInteger(capacityParsed) &&
-		capacityParsed >= 1 &&
-		capacityParsed <= MAX_CAPACITY_PER_NIGHT;
+		capacityTrimmed.length === 0 ||
+		(Number.isInteger(capacityParsed) &&
+			capacityParsed >= 1 &&
+			capacityParsed <= MAX_CAPACITY_PER_NIGHT);
+
+	// Package length — blank = the free check-in/check-out range.
+	const packageTrimmed = packageDraft.trim();
+	const packageParsed = Number(packageTrimmed);
+	const packageValid =
+		packageTrimmed.length === 0 ||
+		(Number.isInteger(packageParsed) &&
+			packageParsed >= 1 &&
+			packageParsed <= MAX_PACKAGE_DAYS);
 
 	// Booking security deposit — blank = none; else a price 0..RM10,000
 	// (mirrors the server's sanitizeSecurityDeposit ceiling).
@@ -832,7 +878,13 @@ export function ProductForm({
 							editor={editor}
 							currency={currency}
 							booking={
-								isBooking ? { capacityPerNight: capacityDraft } : null
+								isBooking
+									? {
+											capacityPerNight: capacityDraft,
+											packageDays: packageDraft,
+											autoAccept,
+										}
+									: null
 							}
 						/>
 					) : (
@@ -957,7 +1009,10 @@ export function ProductForm({
 					</div>
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-capacity" className="text-sm font-medium">
-							Spots available each night
+							Spots available each night{" "}
+							<span className="font-normal text-muted-foreground">
+								(leave blank for unlimited)
+							</span>
 						</label>
 						<Input
 							id="booking-capacity"
@@ -973,13 +1028,68 @@ export function ProductForm({
 						/>
 						{!capacityValid ? (
 							<p className="text-xs text-destructive">
-								Enter a whole number between 1 and {MAX_CAPACITY_PER_NIGHT}.
+								Enter a whole number between 1 and {MAX_CAPACITY_PER_NIGHT}, or
+								leave blank for unlimited.
 							</p>
 						) : null}
 						<p className="text-xs leading-relaxed text-muted-foreground">
-							How many bookings can share the same night — e.g. 5 identical
-							plots = 5. Requests stop once a night is full. Lowering it never
-							cancels bookings you&apos;ve already accepted.
+							{capacityTrimmed.length === 0
+								? "Anyone can book any date — nothing ever sells out. Right for a gym or class where there's no daily limit."
+								: "How many bookings can share the same night — e.g. 5 identical plots = 5. Requests stop once a night is full. Lowering it never cancels bookings you've already accepted."}
+						</p>
+					</div>
+
+					{/* Fixed-length package (S7) — the gym/membership shape. */}
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-package" className="text-sm font-medium">
+							Package length{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<div className="flex items-center gap-2">
+							<Input
+								id="booking-package"
+								type="number"
+								inputMode="numeric"
+								min={1}
+								max={MAX_PACKAGE_DAYS}
+								placeholder="e.g. 30"
+								value={packageDraft}
+								onChange={(e) => setPackageDraft(e.target.value)}
+								variant="field"
+								isError={!packageValid}
+								className="w-32"
+							/>
+							<span className="text-sm text-muted-foreground">days</span>
+						</div>
+						{!packageValid ? (
+							<p className="text-xs text-destructive">
+								Enter a whole number of days between 1 and {MAX_PACKAGE_DAYS},
+								or leave blank.
+							</p>
+						) : null}
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{packageTrimmed.length > 0
+								? `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there and costs the flat price above.`
+								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 30) to sell a fixed-length package at one flat price."}
+						</p>
+					</div>
+
+					{/* Instant book (S7) — skip the approval step. */}
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<div className="flex items-center justify-between gap-3">
+							<span className="text-sm font-medium">Instant book</span>
+							<ToggleSwitch
+								on={autoAccept}
+								onChange={setAutoAccept}
+								label="Confirm bookings instantly"
+							/>
+						</div>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{autoAccept
+								? "Bookings are confirmed instantly and the payment request goes out straight away. Turn off to approve each request first."
+								: "You approve each request before the buyer pays. Turn on to confirm bookings instantly."}
 						</p>
 					</div>
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
@@ -1005,9 +1115,9 @@ export function ProductForm({
 							</p>
 						) : null}
 						<p className="text-xs leading-relaxed text-muted-foreground">
-							A refundable hold collected with the booking payment and
-							returned after check-out. Guests see it before they request —
-							changing it never affects bookings already placed.
+							A refundable hold collected with the booking payment and returned
+							after check-out. Guests see it before they request — changing it
+							never affects bookings already placed.
 						</p>
 					</div>
 				</ProductStepCard>

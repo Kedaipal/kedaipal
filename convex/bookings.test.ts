@@ -26,7 +26,12 @@ const day = (offset: number) => today() + offset * DAY_MS;
 
 async function seedBookingStore(
 	t: ReturnType<typeof convexTest>,
-	opts: { capacity?: number; securityDeposit?: number } = {},
+	opts: {
+		capacity?: number | null;
+		securityDeposit?: number;
+		packageDays?: number;
+		autoAccept?: boolean;
+	} = {},
 ) {
 	const asOwner = t.withIdentity({ subject: USER });
 	await asOwner.mutation(api.retailers.createRetailer, {
@@ -43,8 +48,11 @@ async function seedBookingStore(
 		sortOrder: 0,
 		kind: "booking" as const,
 		booking: {
-			capacityPerNight: opts.capacity ?? 1,
+			// null asks for UNLIMITED (the field left unset); undefined = default 1.
+			capacityPerNight: opts.capacity === null ? undefined : (opts.capacity ?? 1),
 			securityDeposit: opts.securityDeposit,
+			packageDays: opts.packageDays,
+			autoAccept: opts.autoAccept,
 		},
 		variants: [{ optionValues: [], price: 8000, onHand: 0 }],
 	});
@@ -628,5 +636,222 @@ describe("security deposit (S5)", () => {
 				keptAmount: 0,
 			}),
 		).rejects.toThrow(/no security deposit/i);
+	});
+});
+
+describe("fixed-length packages + instant book (S7)", () => {
+	test("a package derives its own end, prices flat, and freezes its shape", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageDays: 30,
+			capacity: null,
+		});
+		// The client sends a START date only — no checkOut to tamper with.
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		expect(order.bookingCheckIn).toBe(day(3));
+		expect(order.bookingCheckOut).toBe(day(33)); // start + 30 days
+		expect(order.bookingPackageDays).toBe(30);
+		// ONE flat-priced line, not 30 × the nightly rate.
+		expect(order.items[0]?.quantity).toBe(1);
+		expect(order.total).toBe(8000);
+
+		// A later edit to the listing never re-describes the placed order.
+		await asOwner.mutation(api.products.update, {
+			productId,
+			booking: { capacityPerNight: undefined, packageDays: 7 },
+		});
+		const after = await asOwner.query(api.orders.get, { shortId });
+		expect(after?.bookingPackageDays).toBe(30);
+		expect(after?.bookingCheckOut).toBe(day(33));
+	});
+
+	test("a client-supplied checkOut cannot stretch a package", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageDays: 30,
+			capacity: null,
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			// A tampered client asking for 90 days at the 30-day price.
+			checkOut: day(93),
+			customer: guest(2),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingCheckOut).toBe(day(33));
+		expect(order?.total).toBe(8000);
+	});
+
+	test("a package longer than the free-range cap is accepted (the cap is the seller's own length)", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageDays: 90, // > MAX_BOOKING_NIGHTS (30)
+			capacity: null,
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(2),
+			customer: guest(3),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingCheckOut).toBe(day(92));
+	});
+
+	test("unlimited capacity never blocks, and never hides a seller's block", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			packageDays: 30,
+		});
+		// Ten members starting the same day — a capped listing would refuse the
+		// second one.
+		for (let i = 0; i < 10; i++) {
+			await t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(1),
+				customer: { name: `Member ${i}`, waPhone: `01199900${10 + i}` },
+			});
+		}
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(40),
+		});
+		expect(window?.unavailable).toEqual([]);
+		expect(window?.packageDays).toBe(30);
+
+		// A block still closes the day — unlimited means "no capacity ceiling",
+		// not "never unavailable".
+		await asOwner.mutation(api.bookingBlocks.blockDays, {
+			retailerId: retailer._id,
+			startDate: day(5),
+			endDate: day(5),
+		});
+		const blocked = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(40),
+		});
+		expect(blocked?.unavailable).toEqual([day(5)]);
+		// And a package spanning that blocked night can't start at all.
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(1),
+				customer: guest(4),
+			}),
+		).rejects.toThrow(/no longer available/i);
+	});
+
+	test("a long package still occupies its nights against a LATER window (scan bound)", async () => {
+		// The regression this pins: the capacity scan used to look back only
+		// MAX_BOOKING_NIGHTS (30) days, so a 90-day package starting 60 days ago
+		// would be invisible to a window it genuinely overlaps — and the night
+		// would read as free.
+		const { t, retailer, productId } = await seedBookingStore(setup(), {
+			packageDays: 90,
+			capacity: 1,
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest(5),
+		});
+		// A window 60 days out — far beyond the old 30-day look-back.
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(60),
+			to: day(70),
+		});
+		expect(window?.unavailable).toEqual([
+			day(60), day(61), day(62), day(63), day(64),
+			day(65), day(66), day(67), day(68), day(69),
+		]);
+	});
+
+	test("instant book lands confirmed, skips the request state, and refuses approve/decline", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageDays: 30,
+			capacity: null,
+			autoAccept: true,
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest(6),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		expect(order.status).toBe("confirmed");
+		// Template env unset in tests ⇒ confirmed + payable, no automatic send
+		// (the documented posture the S3 approve path already has).
+		expect(order.confirmationPushStatus).toBeUndefined();
+		// There is no request to answer.
+		await expect(
+			asOwner.mutation(api.bookings.approveBookingRequest, {
+				orderId: order._id,
+			}),
+		).rejects.toThrow();
+		// It behaves like any confirmed order from here.
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "delivered",
+		});
+		expect(
+			(await asOwner.query(api.orders.get, { shortId }))?.status,
+		).toBe("delivered");
+	});
+
+	test("without instant book a package still waits for approval", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageDays: 30,
+			capacity: null,
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest(7),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.status).toBe("booking_requested");
+	});
+
+	test("a free-range listing is untouched: per-night pricing, no package stamp", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(8),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.items[0]?.quantity).toBe(2);
+		expect(order?.total).toBe(16_000);
+		expect(order?.bookingPackageDays).toBeUndefined();
+		expect(order?.status).toBe("booking_requested");
+	});
+
+	test("a free-range request with no check-out is refused", async () => {
+		const { t, retailer, productId } = await seedBookingStore(setup());
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				customer: guest(9),
+			}),
+		).rejects.toThrow(/check-out/i);
 	});
 });

@@ -220,9 +220,12 @@ export const sellerCalendar = query({
 
 		return {
 			days,
+			// Undefined = no honest denominator to show: either the view spans
+			// several listings, or this one has UNLIMITED capacity (S7). The grid
+			// renders a bare count in both cases.
 			capacityPerNight:
 				args.productId !== undefined
-					? (scoped[0]?.booking?.capacityPerNight ?? 1)
+					? scoped[0]?.booking?.capacityPerNight
 					: undefined,
 			blocks: visibleBlocks.map((b) => ({
 				_id: b._id,

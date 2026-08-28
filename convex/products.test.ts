@@ -2375,16 +2375,62 @@ describe("product kind + booking config", () => {
 		}
 	});
 
-	test("booking kind without capacity is refused", async () => {
+	test("package length + instant book + unlimited capacity round-trip (S7)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Monthly Gym Pass" }),
+			kind: "booking" as const,
+			// No capacity at all — a gym has no daily member cap.
+			booking: { packageDays: 30, autoAccept: true },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+		expect(listing?.booking?.packageDays).toBe(30);
+		expect(listing?.booking?.autoAccept).toBe(true);
+
+		// 0 clears the package back to a free-range stay; false clears instant book.
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 5, packageDays: 0, autoAccept: false },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.packageDays).toBeUndefined();
+		expect(listing?.booking?.autoAccept).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+
+		for (const bad of [10.5, -1, 400]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { packageDays: bad },
+				}),
+			).rejects.toThrow(/Package length/);
+		}
+	});
+
+	test("booking kind without its settings object is refused (capacity itself is optional since S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The kind ⟷ config pairing still holds both directions...
 		await expect(
 			asA.mutation(api.products.create, {
 				...baseProduct(retailer._id),
 				kind: "booking" as const,
 			}),
-		).rejects.toThrow(/per-night capacity/);
+		).rejects.toThrow(/booking settings/);
+		// ...but an EMPTY settings object is valid: no capacity = unlimited (S7),
+		// the shape a gym selling memberships needs.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Unlimited listing" }),
+			kind: "booking" as const,
+			booking: {},
+		});
+		const listing = await asA.query(api.products.get, { productId: id });
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
 	});
 
 	test("capacity on a non-booking product is refused", async () => {

@@ -1377,7 +1377,8 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
 	bookingContext?: {
-		capacityPerNight: number;
+		/** Absent = unlimited capacity (S7) — no denominator to show. */
+		capacityPerNight?: number;
 		peakOtherBookings: number;
 		nights: number;
 	};
@@ -1527,7 +1528,11 @@ export const get = query({
 		// "3 of 5 sites already booked", never a self-inflated 4. Never on the
 		// buyer path — per-night counts don't cross the public wire (locked).
 		let bookingContext:
-			| { capacityPerNight: number; peakOtherBookings: number; nights: number }
+			| {
+					capacityPerNight?: number;
+					peakOtherBookings: number;
+					nights: number;
+			  }
 			| undefined;
 		if (
 			!isBuyerRead &&
@@ -1549,7 +1554,7 @@ export const get = query({
 				peak = Math.max(peak, count - ownHold);
 			}
 			bookingContext = {
-				capacityPerNight: listing?.booking?.capacityPerNight ?? 1,
+				capacityPerNight: listing?.booking?.capacityPerNight,
 				peakOtherBookings: peak,
 				nights: Math.round(
 					(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,

@@ -21,6 +21,7 @@ import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_CAPACITY_PER_NIGHT,
+	MAX_PACKAGE_DAYS,
 	type ProductKind,
 } from "../../../convex/lib/productKind";
 import {
@@ -32,6 +33,7 @@ import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import { CategoryPicker } from "./category-picker";
 import {
@@ -45,9 +47,9 @@ import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
+	emptyCustomLine,
 	emptyRow,
 	FulfilmentToggle,
-	emptyCustomLine,
 	isMadeToOrderOnly,
 	PriceInput,
 	rebuildRows,
@@ -118,8 +120,14 @@ export type WizardState = {
 	/** Step 0 — "What are you selling?" null until answered (pre-answered when
 	 * the store's `storeType` is set — see `emptyWizardState`). */
 	kindCard: KindCard | null;
-	/** Booking kind only — per-night capacity, as typed. Prefilled "1". */
+	/** Booking kind only — per-night capacity, as typed. Prefilled "1";
+	 * blank = unlimited (S7). */
 	capacityPerNight: string;
+	/** Booking kind only — fixed-length package in days, as typed. Blank =
+	 * the free check-in/check-out range (S7). */
+	packageDays: string;
+	/** Booking kind only — skip the approval step (S7). */
+	autoAccept: boolean;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
 	 * none). Collected with the payment, returned after check-out (S5). */
 	securityDeposit: string;
@@ -153,6 +161,8 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		images: [],
 		kindCard,
 		capacityPerNight: "1",
+		packageDays: "",
+		autoAccept: false,
 		securityDeposit: "",
 		shape: null,
 		editor: {
@@ -302,17 +312,27 @@ export function wizardStepIssues(
 	// Booking's step 3 owns capacity + notice (its whole pricing card); the
 	// per-night price itself rides the shared row validation below.
 	if (step === 3 && booking) {
-		const cap = Number(state.capacityPerNight.trim());
+		// Blank capacity = UNLIMITED (S7), a real choice a gym makes.
+		const capRaw = state.capacityPerNight.trim();
+		const cap = Number(capRaw);
 		if (
-			state.capacityPerNight.trim().length === 0 ||
-			!Number.isInteger(cap) ||
-			cap < 1 ||
-			cap > MAX_CAPACITY_PER_NIGHT
+			capRaw.length > 0 &&
+			(!Number.isInteger(cap) || cap < 1 || cap > MAX_CAPACITY_PER_NIGHT)
 		) {
 			issues.push({
 				field: "capacityPerNight",
-				message: `Enter a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}.`,
+				message: `Enter a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}, or leave blank for unlimited.`,
 			});
+		}
+		const pkgRaw = state.packageDays.trim();
+		if (pkgRaw.length > 0) {
+			const pkg = Number(pkgRaw);
+			if (!Number.isInteger(pkg) || pkg < 1 || pkg > MAX_PACKAGE_DAYS) {
+				issues.push({
+					field: "packageDays",
+					message: `Enter a whole number of days between 1 and ${MAX_PACKAGE_DAYS}, or leave blank.`,
+				});
+			}
 		}
 		const depositRaw = state.securityDeposit.trim();
 		if (depositRaw.length > 0) {
@@ -482,11 +502,21 @@ export function buildWizardSubmitValues(
 				: undefined,
 		hidden: state.hidden,
 		kind,
-		// Kind + capacity travel together (the server enforces the same pairing).
+		// Kind + booking config travel together (the server enforces the pairing).
 		booking:
-			kind === "booking" && Number.isInteger(capacity)
+			kind === "booking"
 				? {
-						capacityPerNight: capacity,
+						// Blank = UNLIMITED (S7). `capacity` is Number("") === 0 for a
+						// blank field, which is an integer — so test the raw string,
+						// not the parsed number, or unlimited would submit as 0 and be
+						// refused by the 1..100 validator.
+						capacityPerNight:
+							state.capacityPerNight.trim().length > 0 ? capacity : undefined,
+						packageDays: (() => {
+							const n = Number(state.packageDays.trim());
+							return Number.isInteger(n) && n > 0 ? n : undefined;
+						})(),
+						autoAccept: state.autoAccept || undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
 							return dep !== null && dep > 0
@@ -537,6 +567,8 @@ export function wizardHandoff(state: WizardState): {
 			hidden: state.hidden,
 			kind: wizardKind(state),
 			capacityPerNight: state.capacityPerNight,
+			packageDays: state.packageDays,
+			autoAccept: state.autoAccept,
 			securityDeposit: state.securityDeposit,
 			categoryIds: state.categoryIds,
 			imageStorageIds: state.images.map((i) => i.id),
@@ -564,6 +596,8 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		// affordance only; locked in 86eyj70z1).
 		kindCard: cardFromKind(draft.kind),
 		capacityPerNight: draft.capacityPerNight,
+		packageDays: draft.packageDays ?? "",
+		autoAccept: draft.autoAccept === true,
 		securityDeposit: draft.securityDeposit ?? "",
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
 		// the buyer picks; one never-out-of-stock, mockup-gated row = made to
@@ -1596,7 +1630,12 @@ export function ProductWizard({
 						</label>
 						<IssueText message={issueFor("price:")} />
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
-							Spots available each night
+							<span>
+								Spots available each night{" "}
+								<span className="font-normal text-muted-foreground">
+									(blank = unlimited)
+								</span>
+							</span>
 							<StockInput
 								value={state.capacityPerNight}
 								onChange={(v) => patch({ capacityPerNight: v })}
@@ -1606,11 +1645,59 @@ export function ProductWizard({
 							/>
 							<IssueText message={issueFor("capacityPerNight")} />
 							<span className="text-xs font-normal text-muted-foreground">
-								How many bookings can share the same night — e.g. 5 identical
-								plots = 5. We stop taking requests for a night once they&apos;re
-								all booked.
+								{state.capacityPerNight.trim().length === 0
+									? "Anyone can book any date — nothing sells out. Right for a gym or class with no daily limit."
+									: "How many bookings can share the same night — e.g. 5 identical plots = 5. We stop taking requests for a night once they're all booked."}
 							</span>
 						</label>
+						{/* Fixed-length package (S7) — the membership/package shape. */}
+						<label className="flex flex-col gap-1.5 text-sm font-medium">
+							<span>
+								Package length{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</span>
+							<span className="flex items-center gap-2">
+								<Input
+									type="number"
+									inputMode="numeric"
+									min={1}
+									max={MAX_PACKAGE_DAYS}
+									placeholder="e.g. 30"
+									value={state.packageDays}
+									onChange={(e) => patch({ packageDays: e.target.value })}
+									variant="field"
+									isError={!!issueFor("packageDays")}
+									className="w-32"
+								/>
+								<span className="text-sm font-normal text-muted-foreground">
+									days
+								</span>
+							</span>
+							<IssueText message={issueFor("packageDays")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								{state.packageDays.trim().length > 0
+									? `Buyers pick a start date only — the booking runs ${state.packageDays.trim()} days from there at the flat price above.`
+									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 30) to sell a fixed-length package at one flat price."}
+							</span>
+						</label>
+						{/* Instant book (S7) — the spec's named follow-up. */}
+						<div className="flex flex-col gap-1.5">
+							<div className="flex items-center justify-between gap-3">
+								<span className="text-sm font-medium">Instant book</span>
+								<ToggleSwitch
+									on={state.autoAccept}
+									onChange={(v) => patch({ autoAccept: v })}
+									label="Confirm bookings instantly"
+								/>
+							</div>
+							<span className="text-xs text-muted-foreground">
+								{state.autoAccept
+									? "Bookings are confirmed instantly and the payment request goes out straight away. Turn off to approve each request first."
+									: "You approve each request before the buyer pays. Turn on to confirm bookings instantly."}
+							</span>
+						</div>
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							<span>
 								Security deposit{" "}
@@ -1683,9 +1770,8 @@ export function ProductWizard({
 								<p className="-mt-2 text-sm text-muted-foreground">
 									Optional. Leave it blank and buyers see &ldquo;Price on
 									quote&rdquo; — you set the real price when you send them a
-									mockup. Enter an amount and buyers see &ldquo;From{" "}
-									{currency} …&rdquo;, so nobody mistakes it for the final
-									price.
+									mockup. Enter an amount and buyers see &ldquo;From {currency}{" "}
+									…&rdquo;, so nobody mistakes it for the final price.
 								</p>
 								<label className="flex items-center gap-3 text-sm font-medium">
 									<span className="min-w-0 flex-1 truncate">
@@ -2048,9 +2134,30 @@ export function ProductWizard({
 									? [
 											{
 												label: "Capacity",
-												value: `${state.capacityPerNight.trim() || "1"} per night`,
+												value:
+													state.capacityPerNight.trim().length > 0
+														? `${state.capacityPerNight.trim()} per night`
+														: "Unlimited",
 												step: 3,
 											},
+											...(state.packageDays.trim().length > 0
+												? [
+														{
+															label: "Package",
+															value: `${state.packageDays.trim()} days, flat price`,
+															step: 3,
+														},
+													]
+												: []),
+											...(state.autoAccept
+												? [
+														{
+															label: "Booking",
+															value: "Confirmed instantly",
+															step: 3,
+														},
+													]
+												: []),
 											...(state.securityDeposit.trim().length > 0
 												? [
 														{
@@ -2328,60 +2435,62 @@ export function ProductWizard({
 									    (one request = one booking) and notice already lives in
 									    its Price & capacity step. */}
 									{isBooking ? null : (
-									<div className="flex flex-col gap-3 border-t border-border pt-3">
-										<span className="text-sm font-semibold">Order rules</span>
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											Minimum order quantity{" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<Input
-												type="number"
-												inputMode="numeric"
-												min={0}
-												max={MIN_QUANTITY_MAX}
-												placeholder="e.g. 20"
-												value={state.minQuantity}
-												onChange={(e) => patch({ minQuantity: e.target.value })}
-												isError={!!issueFor("minQuantity")}
-												className="h-11 w-32"
-											/>
-											<IssueText message={issueFor("minQuantity")} />
-											<span className="text-xs font-normal text-muted-foreground">
-												Buyers must order at least this many — choices combined.
-												Counter checkout ignores it.
-											</span>
-										</label>
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											Minimum notice{" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<span className="flex items-center gap-1.5">
+										<div className="flex flex-col gap-3 border-t border-border pt-3">
+											<span className="text-sm font-semibold">Order rules</span>
+											<label className="flex flex-col gap-1 text-sm font-medium">
+												Minimum order quantity{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
 												<Input
 													type="number"
 													inputMode="numeric"
 													min={0}
-													max={MAX_NOTICE_DAYS}
-													placeholder="0"
-													value={state.minNoticeDays}
+													max={MIN_QUANTITY_MAX}
+													placeholder="e.g. 20"
+													value={state.minQuantity}
 													onChange={(e) =>
-														patch({ minNoticeDays: e.target.value })
+														patch({ minQuantity: e.target.value })
 													}
-													isError={!!issueFor("minNoticeDays")}
-													className="h-11 w-24 text-center"
+													isError={!!issueFor("minQuantity")}
+													className="h-11 w-32"
 												/>
-												<span className="text-sm font-normal text-muted-foreground">
-													days
+												<IssueText message={issueFor("minQuantity")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													Buyers must order at least this many — choices
+													combined. Counter checkout ignores it.
 												</span>
-											</span>
-											<IssueText message={issueFor("minNoticeDays")} />
-											<span className="text-xs font-normal text-muted-foreground">
-												Lead time you need — buyers can&apos;t pick a delivery
-												or pickup date sooner than this.
-											</span>
-										</label>
-									</div>
+											</label>
+											<label className="flex flex-col gap-1 text-sm font-medium">
+												Minimum notice{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
+												<span className="flex items-center gap-1.5">
+													<Input
+														type="number"
+														inputMode="numeric"
+														min={0}
+														max={MAX_NOTICE_DAYS}
+														placeholder="0"
+														value={state.minNoticeDays}
+														onChange={(e) =>
+															patch({ minNoticeDays: e.target.value })
+														}
+														isError={!!issueFor("minNoticeDays")}
+														className="h-11 w-24 text-center"
+													/>
+													<span className="text-sm font-normal text-muted-foreground">
+														days
+													</span>
+												</span>
+												<IssueText message={issueFor("minNoticeDays")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													Lead time you need — buyers can&apos;t pick a delivery
+													or pickup date sooner than this.
+												</span>
+											</label>
+										</div>
 									)}
 
 									{/* Prefer the big-screen layout? Same draft, other skin. */}

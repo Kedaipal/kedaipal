@@ -106,6 +106,7 @@ export function BookingCheckoutForm({
 			earliestCheckIn: today + availability.noticeDays * DAY_MS,
 			latestCheckIn: today + availability.horizonDays * DAY_MS,
 			maxNights: availability.maxNights,
+			packageDays: availability.packageDays,
 		};
 	}, [availability, today]);
 
@@ -139,15 +140,26 @@ export function BookingCheckoutForm({
 		);
 	}
 
-	const pricePerNight = product.variants[0]?.price ?? product.priceFrom ?? 0;
+	const unitPrice = product.variants[0]?.price ?? product.priceFrom ?? 0;
 	// Refundable security deposit — stated HERE, before the request, and part
 	// of "Total when approved" (one payment; 86eyn4kee).
 	const securityDeposit = product.booking?.securityDeposit ?? 0;
+	// A fixed-length package is ONE flat price for the whole span (S7); a free
+	// range multiplies by nights. Mirrors requestBooking's own line-building.
+	const packageDays = availability.packageDays;
+	const isPackage = packageDays !== undefined && packageDays > 0;
+	// Instant book (S7): no approval step, so nothing on this page may promise
+	// one. The buyer books and pays straight away.
+	const instantBook = product.booking?.autoAccept === true;
 	const nights =
 		selection.checkIn !== undefined && selection.checkOut !== undefined
 			? Math.round((selection.checkOut - selection.checkIn) / DAY_MS)
 			: 0;
-	const stayTotal = nights * pricePerNight;
+	const stayTotal = isPackage
+		? nights > 0
+			? unitPrice
+			: 0
+		: nights * unitPrice;
 	const conflict =
 		selection.checkIn !== undefined && selection.checkOut === undefined
 			? conflictCeiling(selection.checkIn, ctx)
@@ -157,9 +169,11 @@ export function BookingCheckoutForm({
 	const nameOk = name.trim().length >= 3;
 	const rangeOk = nights >= 1;
 	const blockedReason = !rangeOk
-		? selection.checkIn === undefined
-			? "Pick your check-in and check-out dates"
-			: "Pick your check-out date"
+		? isPackage
+			? "Pick your start date"
+			: selection.checkIn === undefined
+				? "Pick your check-in and check-out dates"
+				: "Pick your check-out date"
 		: !nameOk
 			? "Enter your name"
 			: !parsedPhone.success
@@ -177,7 +191,10 @@ export function BookingCheckoutForm({
 				retailerId,
 				productId: product._id,
 				checkIn: selection.checkIn,
-				checkOut: selection.checkOut,
+				// Omitted for a package: the server derives the end from the
+				// listing's own length, so a tampered client can't buy 90 days at
+				// the 30-day price.
+				checkOut: isPackage ? undefined : selection.checkOut,
 				customer: { name: name.trim(), waPhone: phone },
 				customerNote: note.trim().length > 0 ? note.trim() : undefined,
 			});
@@ -195,13 +212,22 @@ export function BookingCheckoutForm({
 
 	const summary = (
 		<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
-			<h2 className="font-heading text-sm font-bold">Your stay</h2>
+			<h2 className="font-heading text-sm font-bold">
+				{isPackage
+					? ms
+						? "Pakej anda"
+						: "Your package"
+					: ms
+						? "Penginapan anda"
+						: "Your stay"}
+			</h2>
 			<div className="flex flex-col gap-2 border-t-2 border-dashed border-border pt-3 text-sm tabular-nums">
 				<div className="flex items-baseline gap-1.5">
 					<span className="min-w-0 truncate">{product.name}</span>
 					<span className="flex-1 border-b-2 border-dotted border-border" />
 					<span className="font-medium">
-						{formatPrice(pricePerNight, product.currency)}/night
+						{formatPrice(unitPrice, product.currency)}
+						{isPackage ? "" : "/night"}
 					</span>
 				</div>
 				{nights > 0 &&
@@ -210,12 +236,15 @@ export function BookingCheckoutForm({
 					<>
 						<div className="flex items-baseline gap-1.5">
 							<span>
-								{formatFulfilmentDate(selection.checkIn)} →{" "}
-								{formatFulfilmentDate(selection.checkOut)}
+								{isPackage
+									? `${ms ? "Sah" : "Valid"} ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(selection.checkOut - DAY_MS)}`
+									: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(selection.checkOut)}`}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
 							<span className="font-medium">
-								{nights} night{nights === 1 ? "" : "s"}
+								{isPackage
+									? `${nights} ${ms ? "hari" : "days"}`
+									: `${nights} night${nights === 1 ? "" : "s"}`}
 							</span>
 						</div>
 						{securityDeposit > 0 ? (
@@ -228,7 +257,15 @@ export function BookingCheckoutForm({
 							</div>
 						) : null}
 						<div className="flex items-baseline gap-1.5 border-t-2 border-dashed border-border pt-2 font-heading text-base font-extrabold">
-							<span>Total when approved</span>
+							<span>
+								{instantBook
+									? ms
+										? "Jumlah"
+										: "Total"
+									: ms
+										? "Jumlah selepas diluluskan"
+										: "Total when approved"}
+							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
 							<span>
 								{formatPrice(stayTotal + securityDeposit, product.currency)}
@@ -237,13 +274,20 @@ export function BookingCheckoutForm({
 					</>
 				) : (
 					<p className="text-xs text-muted-foreground">
-						Pick your dates to see the total.
+						{isPackage
+							? ms
+								? "Pilih tarikh mula untuk melihat jumlah."
+								: "Pick your start date to see the total."
+							: ms
+								? "Pilih tarikh untuk melihat jumlah."
+								: "Pick your dates to see the total."}
 					</p>
 				)}
 			</div>
 			<p className="text-xs leading-relaxed text-muted-foreground">
-				Nothing is charged now — you pay after {storeName} approves your
-				request.
+				{instantBook
+					? `Your booking is confirmed straight away — ${storeName} will send you the payment details.`
+					: `Nothing is charged now — you pay after ${storeName} approves your request.`}
 				{securityDeposit > 0
 					? " The security deposit is returned after check-out."
 					: ""}
@@ -259,11 +303,13 @@ export function BookingCheckoutForm({
 				isLoading={submitting}
 				onClick={submit}
 			>
-				Request to book
+				{instantBook ? "Book now" : "Request to book"}
 			</Button>
 			<p className="text-center text-xs text-muted-foreground">
 				{blockedReason ??
-					`${storeName} confirms within 24 hours — we'll WhatsApp you either way.`}
+					(instantBook
+						? `Confirmed instantly — ${storeName} will WhatsApp your payment details.`
+						: `${storeName} confirms within 24 hours — we'll WhatsApp you either way.`)}
 			</p>
 		</div>
 	);

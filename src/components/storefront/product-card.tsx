@@ -7,6 +7,7 @@ import {
 	SlidersHorizontal,
 } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
+import { bookingPriceSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
@@ -195,7 +196,7 @@ export function ProductCard({
 							{formatPrice(product.priceFrom, product.currency)}
 							{isBooking ? (
 								<span className="text-xs font-medium text-muted-foreground">
-									/night
+									{bookingPriceSuffix(product.booking?.packageDays)}
 								</span>
 							) : null}
 						</>

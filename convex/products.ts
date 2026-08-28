@@ -23,6 +23,7 @@ import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import {
 	effectiveKind,
 	sanitizeCapacityPerNight,
+	sanitizePackageDays,
 	sanitizeSecurityDeposit,
 } from "./lib/productKind";
 import {
@@ -723,8 +724,13 @@ export const create = mutation({
 		),
 		booking: v.optional(
 			v.object({
-				capacityPerNight: v.number(),
+				// Unset = unlimited (S7) — a gym has no daily member cap.
+				capacityPerNight: v.optional(v.number()),
 				securityDeposit: v.optional(v.number()),
+				// Fixed-length package in days; unset = free check-in/check-out.
+				packageDays: v.optional(v.number()),
+				// Instant book — skip the request-to-book approval step.
+				autoAccept: v.optional(v.boolean()),
 			}),
 		),
 		variants: v.array(variantInputValidator),
@@ -761,19 +767,27 @@ export const create = mutation({
 		// a non-booking product is dead config waiting to mislead (86eyj70z1).
 		const kind = args.kind ?? undefined;
 		let booking:
-			| { capacityPerNight: number; securityDeposit?: number }
+			| {
+					capacityPerNight?: number;
+					securityDeposit?: number;
+					packageDays?: number;
+					autoAccept?: boolean;
+			  }
 			| undefined;
 		if (kind === "booking") {
 			if (!args.booking)
-				throw new ConvexError("A booking listing needs a per-night capacity");
+				throw new ConvexError("A booking listing needs its booking settings");
 			try {
 				booking = {
+					// Unset capacity = unlimited (S7), not a missing value.
 					capacityPerNight: sanitizeCapacityPerNight(
 						args.booking.capacityPerNight,
 					),
 					securityDeposit: sanitizeSecurityDeposit(
 						args.booking.securityDeposit,
 					),
+					packageDays: sanitizePackageDays(args.booking.packageDays),
+					autoAccept: args.booking.autoAccept === true ? true : undefined,
 				};
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -880,8 +894,13 @@ export const update = mutation({
 		// availability module simply stops taking new requests past it.
 		booking: v.optional(
 			v.object({
-				capacityPerNight: v.number(),
+				// Unset = unlimited (S7) — a gym has no daily member cap.
+				capacityPerNight: v.optional(v.number()),
 				securityDeposit: v.optional(v.number()),
+				// Fixed-length package in days; unset = free check-in/check-out.
+				packageDays: v.optional(v.number()),
+				// Instant book — skip the request-to-book approval step.
+				autoAccept: v.optional(v.boolean()),
 			}),
 		),
 	},
@@ -936,6 +955,8 @@ export const update = mutation({
 					securityDeposit: sanitizeSecurityDeposit(
 						fields.booking.securityDeposit,
 					),
+					packageDays: sanitizePackageDays(fields.booking.packageDays),
+					autoAccept: fields.booking.autoAccept === true ? true : undefined,
 				};
 			} catch (err) {
 				throw new ConvexError((err as Error).message);

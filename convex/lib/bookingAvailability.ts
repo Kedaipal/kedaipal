@@ -21,14 +21,32 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { DAY_MS, isMytMidnight, todayMytMidnight } from "./fulfilmentDate";
+import { MAX_PACKAGE_DAYS } from "./productKind";
 
 /** How far ahead a check-in may be requested (~6 months — the design's month
  * nav cap; mirrors the 30-day fulfilment-date posture at booking scale). */
 export const BOOKING_HORIZON_DAYS = 180;
 
-/** Longest single stay. Also the capacity scan's look-back bound: a booking
- * whose check-in is more than this before a window can't overlap it. */
+/** Longest single FREE-RANGE stay a buyer may request (the campsite shape).
+ * A fixed-length package is bounded by `MAX_PACKAGE_DAYS` instead. */
 export const MAX_BOOKING_NIGHTS = 30;
+
+/**
+ * The capacity scan's look-back bound: a booking whose check-in is more than
+ * this before a window cannot overlap it.
+ *
+ * This is the MAX over every shape a stay can take — a free range
+ * (`MAX_BOOKING_NIGHTS`) or a fixed-length package (`MAX_PACKAGE_DAYS`, S7).
+ * It must never be narrower than the longest span that could exist, or the
+ * indexed scan silently misses an overlapping booking and the night reads as
+ * free. Deliberately NOT per-product: a listing's `packageDays` can be edited
+ * (or cleared) after long bookings were already placed against it, so only a
+ * global ceiling is safe.
+ */
+export const MAX_BOOKING_SPAN_DAYS = Math.max(
+	MAX_BOOKING_NIGHTS,
+	MAX_PACKAGE_DAYS,
+);
 
 /** How long a request soft-holds capacity before the cron releases it
  * (Airbnb norm; buyer copy promises "confirms within 24 hours"). */
@@ -75,7 +93,7 @@ export function holdsCapacity(status: Doc<"orders">["status"]): boolean {
 export function assertValidBookingRange(
 	checkIn: number,
 	checkOut: number,
-	opts: { noticeDays: number; now?: number },
+	opts: { noticeDays: number; now?: number; maxNights?: number },
 ): void {
 	if (!isMytMidnight(checkIn) || !isMytMidnight(checkOut)) {
 		throw new Error("Booking dates must be calendar days");
@@ -84,9 +102,13 @@ export function assertValidBookingRange(
 	if (nights < 1) {
 		throw new Error("Check-out must be after check-in");
 	}
-	if (nights > MAX_BOOKING_NIGHTS) {
+	// A fixed-length package passes its own length as the ceiling (S7): its
+	// span is the seller's choice, already capped at MAX_PACKAGE_DAYS when they
+	// set it, and the buyer never picks it. Free ranges keep the 30-night cap.
+	const maxNights = opts.maxNights ?? MAX_BOOKING_NIGHTS;
+	if (nights > maxNights) {
 		throw new Error(
-			`Stays are limited to ${MAX_BOOKING_NIGHTS} nights — split a longer stay into two requests`,
+			`Stays are limited to ${maxNights} nights — split a longer stay into two requests`,
 		);
 	}
 	const today = todayMytMidnight(opts.now);
@@ -118,7 +140,7 @@ export async function countBookedPerNight(
 	to: number,
 ): Promise<Map<number, number>> {
 	const counts = new Map<number, number>();
-	const scanFrom = from - MAX_BOOKING_NIGHTS * DAY_MS;
+	const scanFrom = from - MAX_BOOKING_SPAN_DAYS * DAY_MS;
 	const holders = await ctx.db
 		.query("orders")
 		.withIndex("by_booking_product", (q) =>
@@ -207,14 +229,48 @@ export async function findFullNights(
 	checkIn: number,
 	checkOut: number,
 ): Promise<number[]> {
-	const capacity = product.booking?.capacityPerNight ?? 1;
-	const [counts, blocks] = await Promise.all([
-		countBookedPerNight(ctx, product._id, checkIn, checkOut),
-		loadBlocksForWindow(ctx, product.retailerId, checkIn, checkOut),
-	]);
+	// UNDEFINED capacity = unlimited (S7) — a gym has no daily member cap, so
+	// only the seller's own blocks can close a night. Never `?? 1` here: that
+	// would read "unlimited" as "one spot" and refuse the second member.
+	const capacity = product.booking?.capacityPerNight;
+	const blocks = await loadBlocksForWindow(
+		ctx,
+		product.retailerId,
+		checkIn,
+		checkOut,
+	);
+	// The count is the expensive half — skip it entirely when nothing it could
+	// return would close a night.
+	const counts =
+		capacity === undefined
+			? null
+			: await countBookedPerNight(ctx, product._id, checkIn, checkOut);
 	return eachNight(checkIn, checkOut).filter(
 		(night) =>
-			(counts.get(night) ?? 0) >= capacity ||
+			(capacity !== undefined &&
+				counts !== null &&
+				(counts.get(night) ?? 0) >= capacity) ||
 			isNightBlocked(blocks, night, product._id),
 	);
+}
+
+/**
+ * The nights a stay occupies, given the listing's shape: a fixed-length
+ * package derives its end from the start (S7), a free-range stay keeps the
+ * check-out the buyer picked. ONE author, so the buyer's calendar, the
+ * checkout preview and the authoritative mutation can't disagree by a day.
+ */
+export function resolveBookingRange(
+	booking: { packageDays?: number } | undefined,
+	checkIn: number,
+	checkOut?: number,
+): { checkIn: number; checkOut: number } {
+	const days = booking?.packageDays;
+	if (days !== undefined && days > 0) {
+		return { checkIn, checkOut: checkIn + days * DAY_MS };
+	}
+	if (checkOut === undefined) {
+		throw new Error("Pick your check-out date");
+	}
+	return { checkIn, checkOut };
 }

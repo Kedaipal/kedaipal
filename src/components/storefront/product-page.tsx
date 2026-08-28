@@ -3,8 +3,9 @@ import { ArrowLeft, CalendarRange } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
-import { formatPrice } from "../../lib/format";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { bookingPriceSuffix } from "../../lib/booking-dates";
+import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
@@ -114,7 +115,7 @@ export function ProductPageView({
 								<PriceLabel value={pp.priceLabel} className="text-2xl" />
 								{isBooking ? (
 									<span className="text-sm font-medium text-muted-foreground">
-										/night
+										{bookingPriceSuffix(product.booking?.packageDays)}
 									</span>
 								) : null}
 							</span>
@@ -153,8 +154,8 @@ export function ProductPageView({
 							) : null}
 							<p className="rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
 								Pick your dates on the next step — you&apos;ll see live
-								availability on a calendar, and nothing is paid until the
-								seller approves your request.
+								availability on a calendar, and nothing is paid until the seller
+								approves your request.
 							</p>
 						</div>
 					) : (

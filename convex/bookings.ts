@@ -25,6 +25,7 @@ import {
 	query,
 	type QueryCtx,
 } from "./_generated/server";
+import { stampRetailerActivation } from "./lib/activation";
 import { linkOrderToCustomer } from "./customers";
 import {
 	assertValidBookingRange,
@@ -33,6 +34,7 @@ import {
 	findFullNights,
 	MAX_AVAILABILITY_WINDOW_DAYS,
 	MAX_BOOKING_NIGHTS,
+	resolveBookingRange,
 	nightsBetween,
 } from "./lib/bookingAvailability";
 import { requireCustomerName } from "./lib/customer";
@@ -110,6 +112,9 @@ export const availability = query({
 		noticeDays: number;
 		horizonDays: number;
 		maxNights: number;
+		/** Fixed-length package (S7): set = the buyer picks a start date only
+		 * and the calendar derives the end. Unset = free check-in/check-out. */
+		packageDays?: number;
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -138,7 +143,8 @@ export const availability = query({
 				product.minNoticeDays ?? 0,
 			),
 			horizonDays: BOOKING_HORIZON_DAYS,
-			maxNights: MAX_BOOKING_NIGHTS,
+			maxNights: product.booking?.packageDays ?? MAX_BOOKING_NIGHTS,
+			packageDays: product.booking?.packageDays,
 		};
 	},
 });
@@ -148,8 +154,11 @@ export const requestBooking = mutation({
 		retailerId: v.id("retailers"),
 		productId: v.id("products"),
 		// MYT midnights; checkOut exclusive — the stay occupies [checkIn, checkOut).
+		// checkOut is OMITTED for a fixed-length package (S7): the server derives
+		// it from the listing's own `packageDays`, so a tampered client can't buy
+		// 90 days at the 30-day price.
 		checkIn: v.number(),
-		checkOut: v.number(),
+		checkOut: v.optional(v.number()),
 		customer: v.object({
 			name: v.optional(v.string()),
 			// REQUIRED here (validated below), unlike the storefront path's
@@ -215,14 +224,31 @@ export const requestBooking = mutation({
 			throw new ConvexError("This listing isn't taking bookings right now");
 		}
 
-		// Range gates — notice window is max(store, listing), same composition as
-		// the fulfilment-date path.
+		// The listing's shape decides the range: a fixed-length package derives
+		// its end from the start (S7), a free range keeps the buyer's check-out.
+		// One resolver shared with the calendar, so they can't differ by a day.
+		let checkIn: number;
+		let checkOut: number;
 		try {
-			assertValidBookingRange(args.checkIn, args.checkOut, {
+			({ checkIn, checkOut } = resolveBookingRange(
+				product.booking,
+				args.checkIn,
+				args.checkOut,
+			));
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+
+		// Range gates — notice window is max(store, listing), same composition as
+		// the fulfilment-date path. A package passes its own length as the
+		// ceiling: the seller chose that span, the buyer never picks it.
+		try {
+			assertValidBookingRange(checkIn, checkOut, {
 				noticeDays: Math.max(
 					retailer.minFulfilmentNoticeDays ?? 0,
 					product.minNoticeDays ?? 0,
 				),
+				maxNights: product.booking?.packageDays,
 			});
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -232,30 +258,27 @@ export const requestBooking = mutation({
 		// (Convex serializes, so two buyers racing for the last spot can't both
 		// pass; a block/booking landing mid-checkout surfaces here as the
 		// friendly retry, never a silent failure).
-		const fullNights = await findFullNights(
-			ctx,
-			product,
-			args.checkIn,
-			args.checkOut,
-		);
+		const fullNights = await findFullNights(ctx, product, checkIn, checkOut);
 		if (fullNights.length > 0) {
 			throw new ConvexError(
 				`${formatFulfilmentDate(fullNights[0])} is no longer available — pick different dates`,
 			);
 		}
 
-		const nights = nightsBetween(args.checkIn, args.checkOut);
+		const nights = nightsBetween(checkIn, checkOut);
+		// A PACKAGE is one flat-priced line (S7) — "RM 150 per package", not
+		// "RM 5 × 30 nights". A free-range stay keeps per-night × nights. Both
+		// ride the standard quantity math, so every money surface (totals, CSV,
+		// insights, receipts, PDF) needs zero special-casing either way.
+		const isPackage = (product.booking?.packageDays ?? 0) > 0;
 		const items = [
 			{
 				productId: product._id,
 				variantId: variant._id,
 				name: product.name,
 				variantLabel: undefined,
-				// Per-night price × nights via the standard quantity math, so every
-				// money surface (totals, CSV, insights, receipts) reads the stay as
-				// "listing × nights" with zero special-casing.
 				price: variant.price,
-				quantity: nights,
+				quantity: isPackage ? 1 : nights,
 			},
 		];
 		// The refundable security deposit rides the one payment (86eyn4kee):
@@ -265,6 +288,15 @@ export const requestBooking = mutation({
 		const securityDeposit = product.booking?.securityDeposit;
 		const { subtotal, total } = computeOrderTotals(items, { securityDeposit });
 		const now = Date.now();
+
+		// "Instant book" (S7): a gym doesn't vet each signup, so an auto-accept
+		// listing lands CONFIRMED and the payment ask fires straight away.
+		const instantBook = product.booking?.autoAccept === true;
+		// Same rule the storefront's confirm-at-create uses — a message needs a
+		// registered template. Env unset ⇒ the order is still confirmed and
+		// payable, just silently (the S3 approve posture).
+		const pushAtCreate =
+			instantBook && orderConfirmTemplateName() !== undefined;
 
 		let shortId: string | null = null;
 		for (let attempt = 0; attempt < SHORT_ID_RETRIES; attempt++) {
@@ -290,34 +322,42 @@ export const requestBooking = mutation({
 			subtotal,
 			total,
 			currency: product.currency,
-			status: "booking_requested",
+			status: instantBook ? "confirmed" : "booking_requested",
 			channel: "whatsapp",
 			source: "storefront",
 			customer: { name, waPhone },
 			deliveryMethod: "booking",
-			bookingCheckIn: args.checkIn,
-			bookingCheckOut: args.checkOut,
+			bookingCheckIn: checkIn,
+			bookingCheckOut: checkOut,
 			bookingProductId: product._id,
+			// Frozen shape (S7) — a later listing edit never re-describes this
+			// order, and every money/date surface reads the span correctly.
+			bookingPackageDays: isPackage ? product.booking?.packageDays : undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for
 			// this weekend surfaces exactly like an order due this weekend.
-			fulfilmentDate: args.checkIn,
+			fulfilmentDate: checkIn,
 			customerNote:
 				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined,
-			// No confirmationPushStatus: nothing is pushed at request time (the
-			// approve fires the one message, S3) — and leaving it unset keeps the
-			// unseen-order machinery keyed to push-path orders only; the New
-			// bucket routes on the status itself.
+			// Request-to-book pushes nothing at request time (approve fires the one
+			// message, S3), and leaving the stamp unset keeps the unseen-order
+			// machinery keyed to push-path orders only. Instant book IS the push
+			// path, so it stamps here exactly as the storefront does.
+			confirmationPushStatus: pushAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
 			orderId,
-			status: "booking_requested",
+			status: instantBook ? "confirmed" : "booking_requested",
+			note: instantBook ? "Booked instantly" : undefined,
 			createdAt: now,
 		});
+		// A confirmed order is the activation milestone — the same one-time stamp
+		// every other confirm site makes.
+		if (instantBook) await stampRetailerActivation(ctx, args.retailerId, now);
 
 		// Same bookkeeping as any created order: usage meter (soft cap), the
 		// sold-once stamp (protects the listing from permanent delete), CRM link.
@@ -333,6 +373,17 @@ export const requestBooking = mutation({
 			orderCreatedAt: now,
 			customerName: name,
 		});
+
+		// The buyer's ONE outbound message, on the instant-book path only — the
+		// exact storefront machinery (stamps, retries, webhook correlation).
+		// Request-to-book stays silent until the seller approves (S3).
+		if (pushAtCreate) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		}
 
 		// Seller attention: the standard new-order email + the seller WhatsApp
 		// alert (86eyhw9zy plumbing — env-gated utility template whose button
