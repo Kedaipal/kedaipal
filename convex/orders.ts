@@ -1840,9 +1840,12 @@ const MAX_INBOX_SCAN = 1000;
  * pre-widen singular `source` (86eyrtz74), still accepted so a bookmarked URL
  * or a client that hasn't reloaded keeps filtering.
  */
-type InboxFilterInput = Omit<InboxFilterArgs, "sources"> & {
+type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
 	source?: "storefront" | "counter" | "claim";
 	sources?: Array<"storefront" | "counter" | "claim">;
+	/** Pre-multi singular bucket, "all" sentinel included (86eyrtz74). */
+	bucket?: "all" | "new" | "in_progress" | "completed" | "cancelled";
+	buckets?: Array<"new" | "in_progress" | "completed" | "cancelled">;
 };
 
 /**
@@ -1856,9 +1859,17 @@ type InboxFilterInput = Omit<InboxFilterArgs, "sources"> & {
  */
 function toInboxFilterArgs({
 	source,
+	bucket,
 	...rest
 }: InboxFilterInput): InboxFilterArgs {
-	return { ...rest, sources: rest.sources ?? (source ? [source] : undefined) };
+	return {
+		...rest,
+		sources: rest.sources ?? (source ? [source] : undefined),
+		// The old singular carried an "all" sentinel; the multi shape says the
+		// same thing by absence.
+		buckets:
+			rest.buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+	};
 }
 
 /** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
@@ -1866,6 +1877,15 @@ function toInboxFilterArgs({
 function bump(tally: Map<string, number>, key: string): void {
 	tally.set(key, (tally.get(key) ?? 0) + 1);
 }
+
+// One workflow bucket, for the MULTI filter (86eyrtz74) — no "all" member:
+// "every bucket" is said by omitting the arg, not by a sentinel inside it.
+const orderBucketValidator = v.union(
+	v.literal("new"),
+	v.literal("in_progress"),
+	v.literal("completed"),
+	v.literal("cancelled"),
+);
 
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
@@ -1883,13 +1903,15 @@ const orderSourceValidator = v.union(
 export const searchOrders = query({
 	args: {
 		retailerId: v.id("retailers"),
-		bucket: v.union(
-			v.literal("all"),
-			v.literal("new"),
-			v.literal("in_progress"),
-			v.literal("completed"),
-			v.literal("cancelled"),
+		// Pre-multi singular ("all" sentinel included), still accepted so a
+		// bookmarked URL or an in-flight client keeps working; the handler folds
+		// it into `buckets` via toInboxFilterArgs. Drop it a release on.
+		bucket: v.optional(
+			v.union(v.literal("all"), orderBucketValidator),
 		),
+		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
+		// real question one value couldn't ask. Empty/absent = every bucket.
+		buckets: v.optional(v.array(orderBucketValidator)),
 		paymentStatuses: v.optional(
 			v.array(
 				v.union(
@@ -1962,6 +1984,7 @@ export const searchOrders = query({
 		{
 			retailerId,
 			bucket,
+			buckets,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -1994,6 +2017,7 @@ export const searchOrders = query({
 		// NARROWING_FILTER_KEYS.
 		const filters = toInboxFilterArgs({
 			bucket,
+			buckets,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -2173,13 +2197,9 @@ export const searchOrders = query({
 // Reusable validators for the inbox-filter args, shared by the export action and
 // its internal page query so the two can't drift.
 const exportFilterValidators = {
-	bucket: v.union(
-		v.literal("all"),
-		v.literal("new"),
-		v.literal("in_progress"),
-		v.literal("completed"),
-		v.literal("cancelled"),
-	),
+	// Same widen-with-legacy shape as searchOrders — see the note there.
+	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
+	buckets: v.optional(v.array(orderBucketValidator)),
 	paymentStatuses: v.optional(
 		v.array(
 			v.union(

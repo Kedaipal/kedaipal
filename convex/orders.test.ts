@@ -9095,6 +9095,39 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		expect(res.facets.category.Cakes).toBe(res.total);
 	});
 
+	test("buckets are multi-select — 'everything closed' in one view", async () => {
+		const t = setup();
+		const { retailer, asA, b, mixed } = await seedForFilters(t);
+		// Close two of the four: one delivered, one cancelled.
+		const close = async (shortId: string, status: "delivered" | "cancelled") => {
+			const doc = await t.run(async (ctx) =>
+				ctx.db
+					.query("orders")
+					.filter((q) => q.eq(q.field("shortId"), shortId))
+					.first(),
+			);
+			if (!doc) throw new Error("missing");
+			await asA.mutation(api.orders.updateStatus, {
+				orderId: doc._id,
+				status,
+			});
+		};
+		await close(b.shortId, "delivered");
+		await close(mixed.shortId, "cancelled");
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["completed", "cancelled"],
+		});
+		expect(res.total).toBe(2);
+		// The legacy singular (old bookmarks, in-flight clients) still narrows.
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "completed",
+		});
+		expect(legacy.total).toBe(1);
+	});
+
 	test("checkout surface is multi-select, and the legacy singular still works", async () => {
 		const t = setup();
 		const { retailer, asA } = await seedForFilters(t);

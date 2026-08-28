@@ -48,6 +48,22 @@ them. That breadth is the point.
 
 ## Buckets
 
+**Multi-select since 86eyrtz74** (was one value with an "all" sentinel).
+"Completed or Cancelled" — everything closed — is a real question the single
+value could not ask, and every other enumerable filter on the inbox is already
+a multi-select, so a seller who has learnt "tap several chips" expects it here
+too. Each chip toggles membership; **"All" is the escape hatch, not a member** —
+it lights only while the set is empty and tapping it empties the set. Chip
+counts stay per-bucket. Chip taps `replace` history like the other
+multi-selects (a set built one tap at a time must not leave an entry per tap).
+The wire keeps accepting the old singular `bucket` (folded in by
+`toInboxFilterArgs`, "all" dropped), so deep links (`?bucket=new` from Home /
+nav badges) and old bookmarks keep working; `InboxFilterArgs` itself carries
+only `buckets`, and its presence-check joins `NARROWING_FILTER_KEYS`, which
+retires the gate's `bucket !== "all"` special case. The per-bucket empty-state
+copy ("No new orders…") only renders for a single-bucket selection; a multi
+set falls back to the generic line.
+
 - **"New" means "the seller hasn't dealt with it yet."** That was originally
   synonymous with `pending`, because an order sat there until the buyer's
   WhatsApp message confirmed it. The confirmation push (86eyf1rck) commits

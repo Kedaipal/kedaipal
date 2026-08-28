@@ -567,6 +567,11 @@ describe("plan gating — Order Inbox (Pro+)", () => {
 		await expect(
 			asA.query(api.orders.searchOrders, { ...base, bucket: "new" }),
 		).rejects.toThrow(/Pro plan/);
+		// The multi form gates identically (86eyrtz74) — narrowsTheInbox treats a
+		// non-empty bucket list as a narrowing like any other filter.
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, buckets: ["new"] }),
+		).rejects.toThrow(/Pro plan/);
 		await expect(
 			asA.query(api.orders.searchOrders, { ...base, searchText: "ORD" }),
 		).rejects.toThrow(/Pro plan/);

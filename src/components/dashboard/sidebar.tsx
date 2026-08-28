@@ -147,7 +147,7 @@ export function Sidebar({
 							// there IS something new, so the link stays plain navigation
 							// the rest of the time. Mirrors the bottom nav.
 							search={
-								newOrdersCount > 0 ? { bucket: "new" as const } : undefined
+								newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
 							}
 						/>
 						<SidebarLink

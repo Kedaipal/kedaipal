@@ -123,7 +123,7 @@ export function BottomNav({
 					// inbox would make the seller re-find it. Only when there IS
 					// something new: otherwise the tab would filter the inbox down to
 					// an empty "New" list every time it's used for plain navigation.
-					search: newOrdersCount > 0 ? { bucket: "new" as const } : undefined,
+					search: newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
 				},
 				{ to: "/app/checkout", label: "Counter", icon: QrCode },
 				{

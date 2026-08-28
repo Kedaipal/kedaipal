@@ -124,7 +124,11 @@ function isPaymentStatus(x: unknown): x is PaymentStatus {
 // All optional (defaults applied in the component) so links elsewhere can target
 // `/app/orders` without specifying search, and defaults stay out of the URL.
 type InboxSearch = {
-	bucket?: InboxBucket;
+	/** Workflow buckets to keep — MULTI since 86eyrtz74, repeated in the URL
+	 * like `pay`/`st`. Absent = every bucket ("All"). A single value still
+	 * parses (`?bucket=new` — every deep link and old bookmark), it just lands
+	 * in a one-element list. */
+	bucket?: OrderBucket[];
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
@@ -198,12 +202,16 @@ export const Route = createFileRoute("/app/orders/")({
 	// exception is `view`, the layout: that falls back to a remembered
 	// preference when the URL doesn't name one (see InboxSearch.view).
 	validateSearch: (search: Record<string, unknown>): InboxSearch => {
-		const rawBucket = search.bucket as InboxBucket;
-		// undefined ≡ "all" — keeps the default out of the URL.
-		const bucket =
-			BUCKET_KEYS.includes(rawBucket) && rawBucket !== "all"
-				? rawBucket
-				: undefined;
+		// undefined ≡ "All" — keeps the default out of the URL. The legacy "all"
+		// sentinel is simply dropped from the list rather than special-cased.
+		const bucket = [
+			...new Set(
+				toList(search.bucket).filter(
+					(x): x is OrderBucket =>
+						BUCKET_KEYS.includes(x as InboxBucket) && x !== "all",
+				),
+			),
+		];
 		const payRaw = search.pay;
 		const payArr = Array.isArray(payRaw)
 			? payRaw
@@ -263,7 +271,7 @@ export const Route = createFileRoute("/app/orders/")({
 				? search.q
 				: undefined;
 		return {
-			bucket,
+			bucket: bucket.length > 0 ? bucket : undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -334,7 +342,7 @@ const INBOX_SORTS: {
 
 function OrdersRoute() {
 	const {
-		bucket = "all",
+		bucket: buckets = [],
 		q = "",
 		pay = [],
 		method = [],
@@ -401,6 +409,7 @@ function OrdersRoute() {
 	);
 	const view = resolveInboxView(urlView, storedView);
 
+	const bucketKey = buckets.join(",");
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
@@ -421,7 +430,7 @@ function OrdersRoute() {
 		setVisibleCount(PAGE_SIZE);
 		setSelected(new Set());
 	}, [
-		bucket,
+		bucketKey,
 		debounced,
 		payKey,
 		methodKey,
@@ -478,7 +487,7 @@ function OrdersRoute() {
 				? inboxEnabled
 					? {
 							retailerId: retailer._id,
-							bucket,
+							buckets: buckets.length > 0 ? buckets : undefined,
 							paymentStatuses: pay.length > 0 ? pay : undefined,
 							paymentMethods: method.length > 0 ? method : undefined,
 							methodUnspecified: munspec || undefined,
@@ -498,7 +507,7 @@ function OrdersRoute() {
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
-					: { retailerId: retailer._id, bucket: "all" as const }
+					: { retailerId: retailer._id }
 				: "skip",
 		),
 		placeholderData: keepPreviousData,
@@ -630,12 +639,22 @@ function OrdersRoute() {
 		cat.length > 0 ||
 		asrc.length > 0;
 
-	function setBucket(next: InboxBucket) {
+	function toggleBucket(next: InboxBucket) {
 		navigate({
-			search: (prev) => ({
-				...prev,
-				bucket: next === "all" ? undefined : next,
-			}),
+			// `replace`, like every other multi-select: a set is built one tap at a
+			// time, and each push was a history entry plus (via scrollRestoration) a
+			// scroll-to-top. The chips stopped being single-shot navigation when
+			// they stopped being single-select.
+			replace: true,
+			search: (prev) => {
+				// "All" is the escape hatch, not a member: it clears the set.
+				if (next === "all") return { ...prev, bucket: undefined };
+				const has = buckets.includes(next);
+				const list = has
+					? buckets.filter((b) => b !== next)
+					: [...buckets, next];
+				return { ...prev, bucket: list.length > 0 ? list : undefined };
+			},
 		});
 	}
 
@@ -691,7 +710,8 @@ function OrdersRoute() {
 			// jumping under the seller while a dropdown is open reads as the page
 			// reloading. `replace` keeps the entry, so the scroll stays put. Matches
 			// the debounced search box, which has always replaced for the same
-			// reason. Bucket chips keep pushing: one click there IS one navigation.
+			// reason — and the bucket chips, which joined it when they went
+			// multi-select (86eyrtz74).
 			replace: true,
 			search: (prev) => {
 				const next = { ...prev };
@@ -952,7 +972,7 @@ function OrdersRoute() {
 				api.orders.exportOrders,
 				{
 					retailerId: retailer._id,
-					bucket,
+					buckets: buckets.length > 0 ? buckets : undefined,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
 					paymentMethods: method.length > 0 ? method : undefined,
 					methodUnspecified: munspec || undefined,
@@ -1308,8 +1328,15 @@ function OrdersRoute() {
 								return (
 									<FilterChip
 										key={key}
-										selected={bucket === key}
-										onClick={() => setBucket(key)}
+										// Multi-select (86eyrtz74): each bucket chip toggles
+										// membership; "All" is lit only while the set is empty,
+										// and tapping it empties the set.
+										selected={
+											key === "all"
+												? buckets.length === 0
+												: buckets.includes(key)
+										}
+										onClick={() => toggleBucket(key)}
 										count={bucketCount(key)}
 										countTone={key === "new" ? "attention" : "muted"}
 									>
@@ -1391,7 +1418,9 @@ function OrdersRoute() {
 				// Table view keeps its table (and so its header filters) when nothing
 				// matches — the empty state renders as a row inside it instead.
 				<EmptyOrders
-					bucket={bucket}
+					// The per-bucket copy ("No new orders…") only makes sense for ONE
+					// bucket; a multi-set or empty set falls back to the generic line.
+					bucket={buckets.length === 1 ? buckets[0] : "all"}
 					searching={searching}
 					filtersActive={filtersActive}
 					mockup={mockup}

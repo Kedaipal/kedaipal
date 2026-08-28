@@ -6,7 +6,7 @@
 
 import { attributionBucket } from "./attribution";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
-import { orderBucket, type OrderStatus } from "./orderBuckets";
+import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
 import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
 
 /**
@@ -42,14 +42,14 @@ function searchHaystack(o: CsvOrder): string {
  * added without touching it (86eyrtz74) — a gate that quietly stops guarding is
  * worse than no gate, because nothing looks wrong.
  *
- * Excluded on purpose: `bucket` (its "all" default isn't a narrowing, so it's
- * compared rather than presence-checked), `searchText` (blank is not a search),
- * and `showPinned`, which WIDENS the result and is all-tier because pinning is.
+ * Excluded on purpose: `searchText` (blank is not a search) and `showPinned`,
+ * which WIDENS the result and is all-tier because pinning is.
  */
 const NARROWING_FILTER_KEYS: Record<
-	Exclude<keyof InboxFilterArgs, "bucket" | "searchText" | "showPinned">,
+	Exclude<keyof InboxFilterArgs, "searchText" | "showPinned">,
 	true
 > = {
+	buckets: true,
 	paymentStatuses: true,
 	paymentMethods: true,
 	methodUnspecified: true,
@@ -66,11 +66,14 @@ const NARROWING_FILTER_KEYS: Record<
 /** True when these args ask for anything beyond "the newest orders, unfiltered"
  * — i.e. when the seller is using a gated inbox surface. */
 export function narrowsTheInbox(args: InboxFilterArgs): boolean {
-	if (args.bucket !== "all") return true;
 	if ((args.searchText ?? "").trim().length > 0) return true;
-	return Object.keys(NARROWING_FILTER_KEYS).some(
-		(key) => args[key as keyof InboxFilterArgs] !== undefined,
-	);
+	return Object.keys(NARROWING_FILTER_KEYS).some((key) => {
+		const value = args[key as keyof InboxFilterArgs];
+		// An empty array narrows nothing (the predicate treats it as "no filter"),
+		// so it must not trip the Pro gate either — the two answer one question.
+		if (Array.isArray(value)) return value.length > 0;
+		return value !== undefined;
+	});
 }
 
 /** True when any of the order's lines was sold under one of `wanted`. */
@@ -86,7 +89,16 @@ function matchesAnyCategory(o: CsvOrder, wanted: ReadonlySet<string>): boolean {
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
 
 export type InboxFilterArgs = {
-	bucket: InboxBucket;
+	/**
+	 * Workflow buckets to keep — MULTI since 86eyrtz74 (was one `bucket` with an
+	 * "all" sentinel). "Completed or Cancelled" — everything closed — is a real
+	 * question the single value could not ask, and every other enumerable filter
+	 * on the inbox is already a multi-select, so a seller who has learnt "tap
+	 * several chips" everywhere else expects it here too. Empty or undefined =
+	 * every bucket, which retires the "all" sentinel from this shape entirely
+	 * (the wire still accepts the old singular; see `toInboxFilterArgs`).
+	 */
+	buckets?: OrderBucket[];
 	paymentStatuses?: Array<"unpaid" | "claimed" | "received">;
 	paymentMethods?: string[];
 	methodUnspecified?: boolean;
@@ -192,6 +204,8 @@ export function buildInboxPredicate(
 		args.attributionSources && args.attributionSources.length > 0
 			? new Set(args.attributionSources)
 			: null;
+	const bucketSet =
+		args.buckets && args.buckets.length > 0 ? new Set(args.buckets) : null;
 	const statusSet =
 		args.statuses && args.statuses.length > 0 ? new Set(args.statuses) : null;
 	const categorySet =
@@ -212,7 +226,7 @@ export function buildInboxPredicate(
 		// Bucket membership goes through the same seen-aware resolver the counts
 		// use, so the chip count and the list can't disagree: an unseen push-path
 		// order shows under "New" and NOT under "In progress" (86eyf1rck).
-		if (args.bucket !== "all" && orderBucket(o) !== args.bucket) return false;
+		if (bucketSet && !bucketSet.has(orderBucket(o))) return false;
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
 		if (statusSet && !statusSet.has(o.status)) return false;
 		if (categorySet && !matchesAnyCategory(o, categorySet)) return false;

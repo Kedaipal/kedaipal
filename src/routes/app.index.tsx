@@ -523,7 +523,7 @@ function DashboardHome() {
 					</Link>
 					<Link
 						to="/app/orders"
-						search={{ bucket: "new" as const }}
+						search={{ bucket: ["new" as const] }}
 						className="flex flex-col gap-0.5 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
 					>
 						{countsLoading ? (
@@ -772,7 +772,7 @@ function DashboardHome() {
 					{newCount > 0 ? (
 						<AttentionRow
 							to="/app/orders"
-							search={{ bucket: "new" as const }}
+							search={{ bucket: ["new" as const] }}
 							icon={Bell}
 							tint="bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
 							title={`${newCount} new order${newCount === 1 ? "" : "s"} to confirm`}
