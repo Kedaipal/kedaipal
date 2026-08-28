@@ -9,8 +9,11 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Download,
+	LayoutGrid,
 	ListChecks,
 	Loader2,
+	Pin,
+	Rows3,
 	Search,
 	ShoppingBag,
 	X,
@@ -31,6 +34,7 @@ import {
 	type InboxSort,
 	sortInboxOrders,
 } from "../../convex/lib/orderInboxFilter";
+import { ORDER_COLUMNS } from "../../convex/lib/orderCsv";
 import {
 	isOrderPaymentMethod,
 	type OrderPaymentMethod,
@@ -50,6 +54,8 @@ import {
 	type OrderSource,
 	type PaymentStatus,
 } from "../components/dashboard/order-filters";
+import { OrderColumnPicker } from "../components/dashboard/order-column-picker";
+import { OrderTable } from "../components/dashboard/order-table";
 import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
@@ -58,6 +64,12 @@ import {
 	StatusBadge,
 } from "../components/dashboard/status-badge";
 import { Button } from "../components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import {
@@ -68,6 +80,8 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { useIsDesktop } from "../hooks/useIsDesktop";
+import { useOrderColumns } from "../hooks/useOrderColumns";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
@@ -92,6 +106,8 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
+/** Card list (mobile + desktop) vs the desktop-only table (86eyrtz74). */
+type InboxView = "cards" | "table";
 const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
 
 function isPaymentStatus(x: unknown): x is PaymentStatus {
@@ -121,6 +137,13 @@ type InboxSearch = {
 	asrc?: string[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
+	/** Card list (default) vs the desktop table (86eyrtz74). Only "table" is
+	 * stored, so a shared link opens the view the sender was actually in. */
+	view?: InboxView;
+	/** Pin privilege OFF (86eyrtz74). Inverted on purpose: keeping pins visible
+	 * is the default, so only the non-default reaches the URL — the same rule
+	 * `sort` and `bucket` follow. */
+	nopin?: boolean;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
@@ -195,6 +218,9 @@ export const Route = createFileRoute("/app/orders/")({
 			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
+			view: search.view === "table" ? "table" : undefined,
+			nopin:
+				search.nopin === true || search.nopin === "true" ? true : undefined,
 		};
 	},
 	component: OrdersRoute,
@@ -242,13 +268,22 @@ function OrdersRoute() {
 		fwin,
 		source,
 		sort = "recent",
+		view = "cards",
+		nopin = false,
 	} = Route.useSearch();
+	// Pin privilege is ON unless the seller explicitly turned it off (see the
+	// `nopin` search param) — pins outranking the filter is the default because
+	// that is the case they pin FOR: park an order on top, filter to something
+	// else, compare.
+	const showPinned = !nopin;
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useDashboardRetailer();
 	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
 	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
+	const setPinned = useMutation(api.orders.setPinned);
+	const [pinBusyId, setPinBusyId] = useState<string | null>(null);
 	const [exporting, setExporting] = useState(false);
 	// Despatch-label print dialog for the ticked selection (86eyp63mp).
 	const [printOpen, setPrintOpen] = useState(false);
@@ -269,6 +304,11 @@ function OrdersRoute() {
 	const [selectMode, setSelectMode] = useState(false);
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [bulkBusy, setBulkBusy] = useState(false);
+	// Column visibility for the table view, persisted per store on this device.
+	// Keyed on "" while the retailer is still loading so the hook order is stable
+	// across the early return below.
+	const columnState = useOrderColumns(retailer?._id ?? "");
+	const isDesktop = useIsDesktop();
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
@@ -300,6 +340,8 @@ function OrdersRoute() {
 		source,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
+		// Toggling pin privilege changes which rows are in the set.
+		nopin,
 	]);
 
 	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
@@ -339,6 +381,10 @@ function OrdersRoute() {
 							source,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							searchText: debounced || undefined,
+							// Pins keep their privilege in the live inbox AND in the
+							// export below — the two must send the same value or the CSV
+							// would hold different rows than the screen it came from.
+							showPinned: showPinned || undefined,
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
@@ -377,6 +423,47 @@ function OrdersRoute() {
 	if (result?.counts) countsRef.current = result.counts;
 	const counts = result?.counts ?? countsRef.current ?? undefined;
 	const total = result?.total ?? 0;
+	const pinnedCount = counts?.pinned ?? 0;
+	const selectionHasPinned = visibleOrders.some(
+		(o) => selected.has(o._id) && o.pinnedAt !== undefined,
+	);
+
+	// Resolve one order's status label (honouring the retailer's custom stage
+	// names, and the counter "Completed" wording). Shared by the card and the
+	// table so the same order can never read differently in the two views.
+	function statusLabelFor(o: {
+		status: string;
+		currentStageId?: string;
+		deliveryMethod?: string;
+		source?: string;
+	}): string {
+		const cs = resolveCurrentStage(
+			{ status: o.status as OrderStatus, currentStageId: o.currentStageId },
+			stages,
+		);
+		const resolved = cs
+			? stageLabel(cs, "en")
+			: resolveAnchorLabel(o.status as OrderStatus, {
+					stages,
+					labels,
+					deliveryMethod: (o.deliveryMethod ?? "delivery") as DeliveryMethod,
+					locale: "en",
+				});
+		// Counter sales complete "at the counter", not via delivery — their done
+		// state reads "Completed", never "Delivered".
+		return displayStatusLabel(
+			{
+				status: o.status as OrderStatus,
+				source: o.source as "storefront" | "counter" | "claim" | undefined,
+			},
+			resolved,
+		);
+	}
+	// The table is a desktop surface, so `view` alone doesn't decide it: a phone
+	// renders cards whatever the URL says (a shared ?view=table link must not
+	// hand a phone a 36-column table). `lg` is 1024px, matching the Tailwind
+	// breakpoint the toggle itself is gated on.
+	const tableView = view === "table" && isDesktop;
 	const allCount = counts
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
 		: undefined;
@@ -398,6 +485,19 @@ function OrdersRoute() {
 				...prev,
 				bucket: next === "all" ? undefined : next,
 			}),
+		});
+	}
+
+	function setShowPinned(next: boolean) {
+		navigate({
+			// Default (on) stays out of the URL; only the opt-out is persisted.
+			search: (prev) => ({ ...prev, nopin: next ? undefined : true }),
+		});
+	}
+
+	function setView(next: InboxView) {
+		navigate({
+			search: (prev) => ({ ...prev, view: next === "table" ? "table" : undefined }),
 		});
 	}
 
@@ -534,10 +634,57 @@ function OrdersRoute() {
 		}
 	}
 
+	// Pin / unpin one order (86eyrtz74). `pinned` is the desired end state, not a
+	// toggle instruction, so a double-tap can't flip it back.
+	async function togglePin(o: { _id: string; pinnedAt?: number }) {
+		setPinBusyId(o._id);
+		try {
+			await setPinned({
+				orderId: o._id as Id<"orders">,
+				pinned: o.pinnedAt === undefined,
+			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPinBusyId(null);
+		}
+	}
+
+	// Bulk unpin — the escape hatch for a pin set that has grown. Pins never
+	// auto-clear (owner decision: a delivered order can still be worth keeping on
+	// top), so clearing them has to be cheap; this reuses the selection flow the
+	// seller already knows rather than inventing a "Clear all" control.
+	async function applyBulkUnpin() {
+		const targets = visibleOrders.filter(
+			(o) => selected.has(o._id) && o.pinnedAt !== undefined,
+		);
+		if (targets.length === 0) return;
+		setBulkBusy(true);
+		try {
+			await Promise.all(
+				targets.map((o) =>
+					setPinned({ orderId: o._id as Id<"orders">, pinned: false }),
+				),
+			);
+			toast.success(
+				`Unpinned ${targets.length} order${targets.length === 1 ? "" : "s"}`,
+			);
+			setSelected(new Set());
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBulkBusy(false);
+		}
+	}
+
 	// Export to CSV for bookkeeping. Exports the ticked selection when any rows
 	// are selected; otherwise everything matching the active filter (NOT just the
 	// loaded page) — the server applies the same predicate as the inbox.
-	async function handleExport() {
+	// `onlyVisibleColumns` comes from the table view's export menu: a seller who
+	// has curated seven columns usually means those seven. From the cards view
+	// there is no column selection to honour, so the caller passes false and the
+	// server exports every column.
+	async function handleExport(onlyVisibleColumns = false) {
 		if (!retailer) return;
 		const selectedIds = [...selected] as Id<"orders">[];
 		setExporting(true);
@@ -557,7 +704,9 @@ function OrdersRoute() {
 					source,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					searchText: debounced || undefined,
+					showPinned: showPinned || undefined,
 					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
+					columnKeys: onlyVisibleColumns ? columnState.visibleKeys : undefined,
 				},
 			);
 			if (count === 0) {
@@ -595,25 +744,65 @@ function OrdersRoute() {
 			>
 				<ListChecks className="size-5" />
 			</Button>
-			<Button
-				type="button"
-				variant="outline"
-				size="icon"
-				className="size-11 rounded-xl"
-				onClick={handleExport}
-				disabled={exporting}
-				aria-label={
-					selected.size > 0
-						? `Export ${selected.size} selected orders`
-						: "Export CSV"
-				}
-			>
-				{exporting ? (
-					<Loader2 className="size-5 animate-spin" />
-				) : (
-					<Download className="size-5" />
-				)}
-			</Button>
+			{/* In TABLE view the export becomes a two-item menu: a seller looking
+			    at seven curated columns usually means those seven, but a
+			    bookkeeper's file usually means all of them, and a dialog on every
+			    export would tax a path they hit often. The counts make the choice
+			    self-explanatory, so it costs one extra tap and no reading.
+			    In CARDS view there is no column selection to honour, so it stays a
+			    plain one-tap button that exports everything. */}
+			{tableView ? (
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							className="size-11 rounded-xl"
+							disabled={exporting}
+							aria-label={
+								selected.size > 0
+									? `Export ${selected.size} selected orders`
+									: "Export CSV"
+							}
+						>
+							{exporting ? (
+								<Loader2 className="size-5 animate-spin" />
+							) : (
+								<Download className="size-5" />
+							)}
+						</Button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-64">
+						<DropdownMenuItem onSelect={() => void handleExport(true)}>
+							Export visible columns ({columnState.visibleKeys.length})
+						</DropdownMenuItem>
+						<DropdownMenuItem onSelect={() => void handleExport(false)}>
+							Export all columns ({ORDER_COLUMNS.length})
+						</DropdownMenuItem>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			) : (
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					className="size-11 rounded-xl"
+					onClick={() => void handleExport(false)}
+					disabled={exporting}
+					aria-label={
+						selected.size > 0
+							? `Export ${selected.size} selected orders`
+							: "Export CSV"
+					}
+				>
+					{exporting ? (
+						<Loader2 className="size-5 animate-spin" />
+					) : (
+						<Download className="size-5" />
+					)}
+				</Button>
+			)}
 		</>
 	);
 
@@ -740,6 +929,51 @@ function OrdersRoute() {
 							</PopoverContent>
 						</Popover>
 
+						{/* Cards ⇄ Table, and the column picker that only means anything
+						    in table view. Both are `hidden lg:flex`: the table is a
+						    desktop surface (see order-table.tsx), so on a phone the
+						    control is not disabled, it does not exist — a toggle for a
+						    view you can't have is worse than no toggle. */}
+						<div className="hidden shrink-0 items-center gap-2 lg:flex">
+							<div className="flex items-center gap-0.5 rounded-xl border border-border bg-card p-0.5">
+								{(
+									[
+										{ value: "cards", label: "Cards", Icon: LayoutGrid },
+										{ value: "table", label: "Table", Icon: Rows3 },
+									] as const
+								).map(({ value, label, Icon }) => {
+									const active = view === value;
+									return (
+										<button
+											key={value}
+											type="button"
+											aria-pressed={active}
+											aria-label={`${label} view`}
+											onClick={() => setView(value)}
+											className={cn(
+												"flex h-10 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-colors",
+												active
+													? "bg-muted text-foreground"
+													: "text-muted-foreground hover:text-foreground",
+											)}
+										>
+											<Icon className="size-4" aria-hidden="true" />
+											{label}
+										</button>
+									);
+								})}
+							</div>
+							{tableView ? (
+								<OrderColumnPicker
+									isVisible={columnState.isVisible}
+									onToggle={columnState.toggle}
+									onReset={columnState.reset}
+									visibleCount={columnState.visibleKeys.length}
+									isCustomised={columnState.isCustomised}
+								/>
+							) : null}
+						</div>
+
 						<OrderFilters
 							value={{
 								payment: pay,
@@ -761,6 +995,33 @@ function OrdersRoute() {
 					</div>
 
 					<FilterChipRow>
+						{/* Pin privilege, leading the row (86eyrtz74). It is FIRST because
+						    it is the seller's OWN urgency marker — the buckets below are
+						    the system's opinion, this one is theirs. It appears only once
+						    something is pinned: a permanent "Pinned 0" is noise, and the
+						    pin control on every row is the surface that teaches the
+						    feature. Turning it off doesn't hide pins, it just stops them
+						    outranking the filter. */}
+						{pinnedCount > 0 ? (
+							<FilterChip
+								tone="accent"
+								selected={showPinned}
+								onClick={() => setShowPinned(!showPinned)}
+								count={pinnedCount}
+								title={
+									showPinned
+										? "Pinned orders stay on top, even when they don't match your filters. Tap to filter them like any other order."
+										: "Pinned orders are being filtered like any other order. Tap to keep them on top."
+								}
+							>
+								<Pin
+									className="size-3.5"
+									fill={showPinned ? "currentColor" : "none"}
+									aria-hidden="true"
+								/>
+								Pinned
+							</FilterChip>
+						) : null}
 						{BUCKET_KEYS.map((key) => {
 							const label =
 								key === "all"
@@ -844,33 +1105,22 @@ function OrdersRoute() {
 				/>
 			) : (
 				<>
+					{tableView ? (
+						<OrderTable
+							orders={visibleOrders}
+							columns={columnState.columns}
+							statusLabelFor={statusLabelFor}
+							selectMode={selectMode}
+							selected={selected}
+							onToggleSelect={toggleSelect}
+							onTogglePin={togglePin}
+							pinBusyId={pinBusyId}
+						/>
+					) : (
 					<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 						{visibleOrders.map((o) => {
 							const isSel = selected.has(o._id);
-							const statusLabel = (() => {
-								const cs = resolveCurrentStage(
-									{
-										status: o.status,
-										currentStageId: o.currentStageId,
-									},
-									stages,
-								);
-								const resolved = cs
-									? stageLabel(cs, "en")
-									: resolveAnchorLabel(o.status as OrderStatus, {
-											stages,
-											labels,
-											deliveryMethod: (o.deliveryMethod ??
-												"delivery") as DeliveryMethod,
-											locale: "en",
-										});
-								// Counter sales complete "at the counter", not via delivery —
-								// their done state reads "Completed", never "Delivered".
-								return displayStatusLabel(
-									{ status: o.status as OrderStatus, source: o.source },
-									resolved,
-								);
-							})();
+							const statusLabel = statusLabelFor(o);
 							const placedAt = formatOrderTimestamp(o.createdAt, now);
 							const age = formatStatusAge(now - o.createdAt);
 							const itemSummary = summarizeOrderCardItems(o.items);
@@ -1004,6 +1254,7 @@ function OrdersRoute() {
 							);
 						})}
 					</ul>
+					)}
 
 					{visibleOrders.length < orders.length ? (
 						<button
@@ -1047,6 +1298,7 @@ function OrdersRoute() {
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}
+					onUnpin={selectionHasPinned ? applyBulkUnpin : undefined}
 					onPrint={retailer ? () => setPrintOpen(true) : undefined}
 					onToggleSelectAll={toggleSelectAll}
 					onExit={exitSelectMode}

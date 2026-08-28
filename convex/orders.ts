@@ -1960,6 +1960,13 @@ export const searchOrders = query({
 			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
 			 */
 			readyToShip: 0,
+			/**
+			 * Orders the seller has pinned (86eyrtz74). Counted over the FULL set
+			 * like every other count, so the Pinned chip states the real total and
+			 * doesn't shrink as the seller filters — the chip is the only standing
+			 * reminder that a pin set exists at all, given pins never auto-clear.
+			 */
+			pinned: 0,
 		};
 		// Which marketing origins actually appear in this seller's window
 		// (86eyq0eq9). Tallied over the FULL scan like `counts` — never over the
@@ -1991,6 +1998,7 @@ export const searchOrders = query({
 				counts.unpaidAmount += o.total;
 			}
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
+			if (o.pinnedAt !== undefined) counts.pinned++;
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
