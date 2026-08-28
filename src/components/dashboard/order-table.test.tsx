@@ -144,6 +144,30 @@ describe("OrderTable", () => {
 		expect(badge.getAttribute("title")).toBe("Ready for Pickup");
 	});
 
+	it("keeps the header — and its filters — when nothing matches", () => {
+		// The dead end this avoids: pick a filter combination that matches
+		// nothing, the table is replaced by a standalone empty panel, and the
+		// header filter you just used is gone along with any way to un-use it.
+		const onClearFilters = vi.fn();
+		renderTable({ orders: [], onClearFilters });
+		expect(screen.getByText(/no orders match these filters/i)).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /order id — click to sort/i }),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /clear all filters/i }));
+		expect(onClearFilters).toHaveBeenCalled();
+	});
+
+	it("offers no Clear button when nothing is filtered", () => {
+		// Otherwise the empty state suggests an undo for something the seller
+		// never did — the list is simply empty.
+		renderTable({ orders: [] });
+		expect(screen.getByText(/no orders match these filters/i)).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /clear all filters/i }),
+		).toBeNull();
+	});
+
 	it("bounds the scroll container, which is what makes the sticky header work", () => {
 		// The trap: the wrapper is a scroll container on BOTH axes (overflow-x
 		// forces overflow-y), so it — not the page — is the sticky containing

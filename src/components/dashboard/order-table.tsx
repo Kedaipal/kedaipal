@@ -122,6 +122,9 @@ export interface OrderTableProps {
 	 * column is filterable. Built by `order-column-filters.ts`; the table stays
 	 * presentational and knows nothing about what any filter means. */
 	columnFilters?: Map<string, OrderColumnFilterBinding>;
+	/** Clear every active filter. Offered from the empty state — omit it when
+	 * nothing is filtered, so the button never appears with nothing to undo. */
+	onClearFilters?: () => void;
 	selectMode: boolean;
 	selected: Set<string>;
 	onToggleSelect: (id: string) => void;
@@ -401,6 +404,7 @@ export function OrderTable({
 	columnWidths,
 	onColumnWidthsChange,
 	columnFilters,
+	onClearFilters,
 }: OrderTableProps) {
 	const navigate = useNavigate();
 
@@ -684,9 +688,42 @@ export function OrderTable({
 						</TableRow>
 					</TableHeader>
 					<TableBody>
-						{topRows.map((row) => renderRow(row, false))}
-						{restRows.map((row, i) =>
-							renderRow(row, i === 0 && topRows.length > 0),
+						{/* The empty state lives INSIDE the table, keeping the header —
+						    and therefore every filter control — on screen. Swapping the
+						    whole table for a standalone empty panel would take the header
+						    filters away at the exact moment the seller needs them: pick a
+						    combination that matches nothing and there would be no way to
+						    un-pick it from where they were standing. */}
+						{sortedRows.length === 0 ? (
+							<TableRow className="hover:bg-transparent">
+								<TableCell
+									colSpan={columns.length + 2}
+									className="px-4 py-10 text-center"
+								>
+									<p className="text-sm font-medium">
+										No orders match these filters
+									</p>
+									<p className="mt-1 text-[13px] text-muted-foreground">
+										Clear one from a column header, or start over below.
+									</p>
+									{onClearFilters ? (
+										<button
+											type="button"
+											onClick={onClearFilters}
+											className="mt-3 inline-flex h-9 items-center rounded-lg border border-border px-3.5 text-[13px] font-medium transition-colors hover:border-foreground/30"
+										>
+											Clear all filters
+										</button>
+									) : null}
+								</TableCell>
+							</TableRow>
+						) : (
+							<>
+								{topRows.map((row) => renderRow(row, false))}
+								{restRows.map((row, i) =>
+									renderRow(row, i === 0 && topRows.length > 0),
+								)}
+							</>
 						)}
 					</TableBody>
 				</Table>

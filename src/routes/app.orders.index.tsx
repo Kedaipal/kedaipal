@@ -1,5 +1,5 @@
 import { convexQuery } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import type { SortingState } from "@tanstack/react-table";
 import { useConvex, useMutation } from "convex/react";
@@ -19,7 +19,7 @@ import {
 	ShoppingBag,
 	X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -459,8 +459,20 @@ function OrdersRoute() {
 		amIAdmin,
 	});
 
-	const result = useQuery(
-		convexQuery(
+	// `placeholderData: keepPreviousData` is load-bearing, not an optimisation.
+	//
+	// Every filter, search or bucket change rewrites the query ARGS, which makes
+	// a new TanStack Query key, which means `data` is `undefined` until the new
+	// Convex subscription resolves. Without this the whole list unmounts into a
+	// skeleton and remounts on every single click — the seller sees the page
+	// "refresh", loses their scroll position, and an open header-filter dropdown
+	// is torn down mid-selection, which makes picking a second value impossible.
+	//
+	// Keeping the previous page means the rows stay put and only their contents
+	// change. The trade is one beat of stale rows under an already-active filter
+	// chip, which `refreshing` below owns up to.
+	const ordersQuery = useQuery({
+		...convexQuery(
 			api.orders.searchOrders,
 			retailer
 				? inboxEnabled
@@ -489,8 +501,13 @@ function OrdersRoute() {
 					: { retailerId: retailer._id, bucket: "all" as const }
 				: "skip",
 		),
-	).data;
-	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
+		placeholderData: keepPreviousData,
+	});
+	const result = ordersQuery.data;
+	/** Showing the PREVIOUS result while a new one loads. Drives the quiet
+	 * pending state on the list — a spinner or skeleton here would reintroduce
+	 * exactly the flash this is here to remove. */
+	const refreshing = ordersQuery.isPlaceholderData;
 
 	if (!retailer) return <OrdersInboxSkeleton />;
 
@@ -515,11 +532,13 @@ function OrdersRoute() {
 	// The scan hit its ceiling — orders older than the newest 1,000 aren't in the
 	// window, so the list and the counts under-report. Surfaced in the footer.
 	const capped = result?.capped ?? false;
-	// Bucket counts are independent of the active filters, so retain the last
-	// known set across refetches — otherwise the chips + due-today banner would
-	// flicker out every time a filter changes (the query reloads).
-	if (result?.counts) countsRef.current = result.counts;
-	const counts = result?.counts ?? countsRef.current ?? undefined;
+	// Bucket counts are independent of the active filters. They used to be held
+	// in a ref across refetches, because the chips and the due-today banner
+	// flickered out every time a filter changed — a hand-rolled fix for one
+	// symptom of the query reloading. `keepPreviousData` above cures the cause
+	// for the whole page, so the ref is gone rather than left as a second
+	// mechanism doing the same job less well.
+	const counts = result?.counts;
 	const total = result?.total ?? 0;
 	const pinnedCount = counts?.pinned ?? 0;
 	const selectionHasPinned = visibleOrders.some(
@@ -560,6 +579,12 @@ function OrdersRoute() {
 	// Header filters (86eyrtz74) — built here because this is where the URL state,
 	// the server's facet counts and the retailer's own stage wording all meet;
 	// the table itself stays presentational.
+	// Header filters (86eyrtz74) — built here because this is where the URL state,
+	// the server's facet counts and the retailer's own stage wording all meet;
+	// the table itself stays presentational. Deliberately NOT memoised: it would
+	// have to sit above the `!retailer` early return to be a legal hook, and
+	// rebuilding six short option arrays per render is not worth restructuring
+	// the component for.
 	const headerFilters = buildOrderColumnFilters({
 		state: {
 			statuses: st,
@@ -658,6 +683,16 @@ function OrdersRoute() {
 	 */
 	function applyColumnFilter(patch: Partial<OrderColumnFilterState>) {
 		navigate({
+			// REPLACE, not push. Two reasons, both about how filters are actually
+			// used: a multi-select is built one tick at a time, so pushing would
+			// leave six history entries behind a single act of filtering; and the
+			// router has `scrollRestoration`, which has no cached position for a new
+			// entry and therefore scrolls to the top on every tick — the list
+			// jumping under the seller while a dropdown is open reads as the page
+			// reloading. `replace` keeps the entry, so the scroll stays put. Matches
+			// the debounced search box, which has always replaced for the same
+			// reason. Bucket chips keep pushing: one click there IS one navigation.
+			replace: true,
 			search: (prev) => {
 				const next = { ...prev };
 				if (patch.statuses)
@@ -700,8 +735,35 @@ function OrdersRoute() {
 		});
 	}
 
+	/** Drop every filter, keeping the bucket, the search term and the view — a
+	 * seller who lands on "nothing matches" wants their filters gone, not their
+	 * place in the app. */
+	function clearAllFilters() {
+		navigate({
+			replace: true,
+			search: (prev) => ({
+				...prev,
+				pay: undefined,
+				method: undefined,
+				munspec: undefined,
+				from: undefined,
+				to: undefined,
+				mockup: undefined,
+				fwin: undefined,
+				sources: undefined,
+				st: undefined,
+				cat: undefined,
+				asrc: undefined,
+			}),
+		});
+	}
+
 	function setFilters(next: OrderFilterValue) {
 		navigate({
+			// Same reasoning as applyColumnFilter: the panel is ticked several times
+			// per visit, and each tick was its own history entry and its own scroll
+			// jump.
+			replace: true,
 			search: (prev) => ({
 				...prev,
 				pay: next.payment.length > 0 ? next.payment : undefined,
@@ -1046,7 +1108,11 @@ function OrdersRoute() {
 			<PageHeader
 				title="Orders"
 				subtitle={
-					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
+					loading
+						? "Loading…"
+						: refreshing
+							? "Updating…"
+							: `${total} order${total === 1 ? "" : "s"}`
 				}
 				actions={inboxEnabled ? headerActions : undefined}
 			/>
@@ -1321,7 +1387,9 @@ function OrdersRoute() {
 
 			{loading ? (
 				<OrderList.Skeleton />
-			) : orders.length === 0 ? (
+			) : orders.length === 0 && !tableView ? (
+				// Table view keeps its table (and so its header filters) when nothing
+				// matches — the empty state renders as a row inside it instead.
 				<EmptyOrders
 					bucket={bucket}
 					searching={searching}
@@ -1329,7 +1397,13 @@ function OrdersRoute() {
 					mockup={mockup}
 				/>
 			) : (
-				<>
+				// `aria-busy` while a filter change is in flight: the rows on screen
+				// are the previous answer for a beat, and a screen reader should not
+				// be told they are the new one. Deliberately NO visual dimming —
+				// flashing 50 rows on every click is the problem this whole change
+				// exists to remove; the count in the header carries the visible cue
+				// instead, because the count is the part that's actually stale.
+				<div className="contents" aria-busy={refreshing}>
 					{tableView ? (
 						<OrderTable
 							orders={visibleOrders}
@@ -1343,6 +1417,7 @@ function OrdersRoute() {
 							columnWidths={columnState.widths}
 							onColumnWidthsChange={columnState.setWidths}
 							columnFilters={headerFilters}
+							onClearFilters={filtersActive ? clearAllFilters : undefined}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}
@@ -1506,7 +1581,14 @@ function OrdersRoute() {
 					    takes newest-by-date THEN filters), so filters/search can't reach
 					    past it — export is the full-history path. The "1,000" mirrors
 					    MAX_INBOX_SCAN in convex/orders.ts. */}
-					<p className="text-center text-xs text-muted-foreground">
+					<p
+						className={cn(
+							"text-center text-xs text-muted-foreground",
+							// "Showing 0 of 0 orders" under a row that already says
+							// "No orders match" is the same fact twice.
+							orders.length === 0 && "hidden",
+						)}
+					>
 						{`Showing ${visibleOrders.length} of ${total} ${total === 1 ? "order" : "orders"}`}
 						{capped ? (
 							<>
@@ -1519,7 +1601,7 @@ function OrdersRoute() {
 						) : null}
 					</p>
 					{selectMode ? <div className="h-24" aria-hidden="true" /> : null}
-				</>
+				</div>
 			)}
 
 			{/* Mounted for the whole of select mode (not gated on a selection) so

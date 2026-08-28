@@ -283,6 +283,35 @@ WhatsApp.
     counter" is a real question a single value could not ask. The singular is
     still accepted and folded in by `toInboxFilterArgs`, so bookmarks survive;
     drop it a release on.
+  - **The list must not remount when a filter changes.** Every filter, search or
+    bucket change rewrites the query ARGS, which makes a new TanStack Query key,
+    which means `data` is `undefined` until the new Convex subscription
+    resolves — so the whole list unmounted into a skeleton and remounted on
+    every single click. The seller saw the page "refresh", lost their scroll
+    position, and an open header dropdown was torn down mid-selection, which
+    made picking a *second* value impossible. Fixed with
+    `placeholderData: keepPreviousData` on the `searchOrders` read: the previous
+    page stays mounted and only its contents change. `isPlaceholderData` drives
+    an `aria-busy` on the list and an "Updating…" subtitle — deliberately no
+    visual dimming of the rows, since flashing them is the thing being removed.
+    A hand-rolled `countsRef` used to hold the bucket counts across refetches
+    for the same reason; it is gone, cured at the cause rather than patched per
+    symptom.
+  - **Filter changes `replace` rather than push.** A multi-select is built one
+    tick at a time, so pushing left six history entries behind a single act of
+    filtering — and with `scrollRestoration: true` a new history entry has no
+    cached position, so the list scrolled to the top on every tick while the
+    dropdown was still open. The debounced search box has always replaced for
+    this reason; the panel and the header filters now match it. **Bucket chips
+    still push** — one click there is one deliberate navigation.
+  - **A zero-result filter keeps the table.** The empty state renders as a row
+    *inside* the table body, so the header — and every filter control on it —
+    stays on screen. Swapping the whole table for a standalone empty panel took
+    the header filters away at the exact moment the seller needed them: pick a
+    combination matching nothing and there was no way to un-pick it from where
+    they stood. The row offers "Clear all filters" only when something is
+    actually filtered, and it drops filters while keeping the bucket, the search
+    term and the view.
   - ⚠️ **The Pro gate is now compiler-enforced.** `searchOrders` decides whether
     a seller is using paid inbox surfaces by asking if any filter is set, and
     that was a hand-maintained list of arg names. Adding three filters without
