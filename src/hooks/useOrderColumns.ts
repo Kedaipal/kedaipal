@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
 	ALL_ORDER_COLUMN_KEYS,
 	DEFAULT_ORDER_COLUMN_KEYS,
+	ORDER_COLUMNS_BY_KEY,
 	type OrderColumn,
-	ORDER_COLUMNS,
 	type OrderColumnKey,
 } from "../../convex/lib/orderCsv";
 
@@ -37,7 +37,9 @@ const VALID_KEYS = new Set<string>(ALL_ORDER_COLUMN_KEYS);
  * whole layout, it just isn't a column any more. A stored list that survives
  * with nothing in it falls back to the defaults so the table is never blank.
  */
-export function parseStoredColumns(raw: string | null): OrderColumnKey[] | null {
+export function parseStoredColumns(
+	raw: string | null,
+): OrderColumnKey[] | null {
 	if (!raw) return null;
 	try {
 		const parsed: unknown = JSON.parse(raw);
@@ -55,9 +57,9 @@ function readInitial(retailerId: string): OrderColumnKey[] {
 	if (typeof window === "undefined") return [...DEFAULT_ORDER_COLUMN_KEYS];
 	try {
 		return (
-			parseStoredColumns(window.localStorage.getItem(storageKey(retailerId))) ?? [
-				...DEFAULT_ORDER_COLUMN_KEYS,
-			]
+			parseStoredColumns(
+				window.localStorage.getItem(storageKey(retailerId)),
+			) ?? [...DEFAULT_ORDER_COLUMN_KEYS]
 		);
 	} catch {
 		return [...DEFAULT_ORDER_COLUMN_KEYS];
@@ -65,16 +67,22 @@ function readInitial(retailerId: string): OrderColumnKey[] {
 }
 
 export interface OrderColumnsState {
-	/** Visible columns, resolved and always in registry order — so toggling a
-	 * column back on returns it to its proper place rather than the end. */
+	/** Visible columns, in the seller's own left-to-right order. */
 	columns: OrderColumn[];
-	/** Visible keys, for the export call. */
+	/** Visible keys IN ORDER — passed to the export so a CSV comes out arranged
+	 * the way the table is. */
 	visibleKeys: OrderColumnKey[];
 	isVisible: (key: OrderColumnKey) => boolean;
+	/** Show/hide. Showing appends to the end — a column you just added belongs
+	 * where you can see it, not slotted invisibly into the middle. */
 	toggle: (key: OrderColumnKey) => void;
+	/** Rearrange the visible set. Takes the full new key order (the shape
+	 * `SortableList` hands back on drop). */
+	reorder: (keys: OrderColumnKey[]) => void;
 	reset: () => void;
-	/** True when the seller has moved away from the default set — drives the
-	 * picker's "Reset" affordance, which otherwise has nothing to undo. */
+	/** True when the seller has moved away from the default set or its order —
+	 * drives the picker's "Reset" affordance, which otherwise has nothing to
+	 * undo. */
 	isCustomised: boolean;
 }
 
@@ -93,7 +101,10 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		(next: OrderColumnKey[]) => {
 			setKeys(next);
 			try {
-				window.localStorage.setItem(storageKey(retailerId), JSON.stringify(next));
+				window.localStorage.setItem(
+					storageKey(retailerId),
+					JSON.stringify(next),
+				);
 			} catch {
 				// localStorage unavailable (private mode, quota) — keep in-memory.
 			}
@@ -124,20 +135,51 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		[retailerId],
 	);
 
+	const reorder = useCallback(
+		(next: OrderColumnKey[]) => {
+			// Trust only keys that are real columns and were already visible — the
+			// list comes back from a drag handler, and a stale id must reorder
+			// nothing rather than resurrect a hidden column.
+			setKeys((prev) => {
+				const allowed = new Set(prev);
+				const cleaned = next.filter((k) => allowed.has(k));
+				if (cleaned.length !== prev.length) return prev;
+				try {
+					window.localStorage.setItem(
+						storageKey(retailerId),
+						JSON.stringify(cleaned),
+					);
+				} catch {
+					// see persist
+				}
+				return cleaned;
+			});
+		},
+		[retailerId],
+	);
+
 	const reset = useCallback(
 		() => persist([...DEFAULT_ORDER_COLUMN_KEYS]),
 		[persist],
 	);
 
-	const columns = ORDER_COLUMNS.filter((c) => visible.has(c.key));
+	// The seller's own order, NOT the registry's — dragging a column left has to
+	// stick, in the table and in the export it feeds.
+	const columns = keys.flatMap((k) => {
+		const col = ORDER_COLUMNS_BY_KEY.get(k);
+		return col ? [col] : [];
+	});
 	return {
 		columns,
 		visibleKeys: columns.map((c) => c.key),
 		isVisible: (key) => visible.has(key),
 		toggle,
+		reorder,
 		reset,
+		// Order counts as customisation: a seller who only dragged columns around
+		// still has something to reset.
 		isCustomised:
 			keys.length !== DEFAULT_ORDER_COLUMN_KEYS.length ||
-			!DEFAULT_ORDER_COLUMN_KEYS.every((k) => visible.has(k)),
+			!DEFAULT_ORDER_COLUMN_KEYS.every((k, i) => keys[i] === k),
 	};
 }

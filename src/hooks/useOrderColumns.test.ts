@@ -41,13 +41,32 @@ describe("useOrderColumns", () => {
 		expect(result.current.isCustomised).toBe(false);
 	});
 
-	it("hydrates a stored layout", () => {
+	it("hydrates a stored layout IN ITS STORED ORDER", () => {
 		window.localStorage.setItem(KEY, JSON.stringify(["total", "shortId"]));
 		const { result } = renderHook(() => useOrderColumns(STORE));
-		// Registry order, NOT the stored order — turning a column back on should
-		// return it to its proper place rather than append it to the end.
-		expect(result.current.visibleKeys).toEqual(["shortId", "total"]);
+		// The seller's dragged order is the point — it drives both the table's
+		// left-to-right and the CSV export's column order, so it must survive a
+		// reload exactly as arranged.
+		expect(result.current.visibleKeys).toEqual(["total", "shortId"]);
 		expect(result.current.isCustomised).toBe(true);
+	});
+
+	it("reorders, and rejects a list that isn't a permutation", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const original = [...result.current.visibleKeys];
+		const reversed = [...original].reverse();
+		act(() => result.current.reorder(reversed));
+		expect(result.current.visibleKeys).toEqual(reversed);
+		// A stale id from a drag handler must reorder nothing rather than drop or
+		// resurrect a column.
+		act(() => result.current.reorder(["shortId"]));
+		expect(result.current.visibleKeys).toEqual(reversed);
+	});
+
+	it("showing a column appends it — where the seller can see it", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		act(() => result.current.toggle("city"));
+		expect(result.current.visibleKeys.at(-1)).toBe("city");
 	});
 
 	it("persists a toggle", () => {
@@ -87,6 +106,10 @@ describe("useOrderColumns", () => {
 		for (const key of ALL_ORDER_COLUMN_KEYS) {
 			if (!result.current.isVisible(key)) act(() => result.current.toggle(key));
 		}
-		expect(result.current.visibleKeys).toEqual([...ALL_ORDER_COLUMN_KEYS]);
+		// Compared as a SET: the order is the seller's (defaults first, then the
+		// order they added the rest), not the registry's.
+		expect(new Set(result.current.visibleKeys)).toEqual(
+			new Set(ALL_ORDER_COLUMN_KEYS),
+		);
 	});
 });

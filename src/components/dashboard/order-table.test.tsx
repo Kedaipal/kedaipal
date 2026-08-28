@@ -52,6 +52,8 @@ function renderTable(overrides: Partial<Parameters<typeof OrderTable>[0]> = {}) 
 		orders: [base],
 		columns: cols("shortId", "customer", "total"),
 		statusLabelFor: () => "Confirmed",
+		sorting: [],
+		onSortingChange: vi.fn(),
 		selectMode: false,
 		selected: new Set<string>(),
 		onToggleSelect: vi.fn(),
@@ -173,5 +175,108 @@ describe("OrderTable", () => {
 		renderTable({ orders: [] });
 		expect(screen.getByText("Order ID")).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
+	});
+});
+
+describe("OrderTable — per-column sorting", () => {
+	const rows: TableOrder[] = [
+		{ ...base, _id: "a", shortId: "ORD-A", total: 8600, createdAt: 300 },
+		{ ...base, _id: "b", shortId: "ORD-B", total: 12500, createdAt: 100 },
+		{ ...base, _id: "c", shortId: "ORD-C", total: 24500, createdAt: 200 },
+	];
+	const idsOnScreen = () =>
+		screen
+			.getAllByText(/ORD-[ABC]/)
+			.map((n) => n.textContent ?? "");
+
+	it("every header is a sort control", () => {
+		renderTable({ orders: rows });
+		expect(
+			screen.getByRole("button", { name: /sort by order id/i }),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /sort by total/i })).toBeTruthy();
+	});
+
+	it("reports the column the seller clicked, biggest-first for money", () => {
+		// Numeric columns open DESCENDING (TanStack's inference, and the right
+		// instinct: clicking Total means "show me the big ones").
+		const { onSortingChange } = renderTable({ orders: rows });
+		fireEvent.click(screen.getByRole("button", { name: /sort by total/i }));
+		expect(onSortingChange).toHaveBeenCalledWith([{ id: "total", desc: true }]);
+	});
+
+	it("text columns open ascending — A first, not Z", () => {
+		const { onSortingChange } = renderTable({ orders: rows });
+		fireEvent.click(screen.getByRole("button", { name: /sort by customer/i }));
+		expect(onSortingChange).toHaveBeenCalledWith([
+			{ id: "customer", desc: false },
+		]);
+	});
+
+	it("sorts money NUMERICALLY, not as text", () => {
+		// The whole reason columns carry a typed sortKey: as strings, "12500"
+		// renders "125.00" and would sort below "86.00".
+		renderTable({ orders: rows, sorting: [{ id: "total", desc: false }] });
+		expect(idsOnScreen()).toEqual(["ORD-A", "ORD-B", "ORD-C"]);
+	});
+
+	it("reverses on desc", () => {
+		renderTable({ orders: rows, sorting: [{ id: "total", desc: true }] });
+		expect(idsOnScreen()).toEqual(["ORD-C", "ORD-B", "ORD-A"]);
+	});
+
+	it("sorts dates by their instant, not their rendered string", () => {
+		// All three render the same day string here, so a lexical sort could not
+		// tell them apart — only the epoch can.
+		renderTable({
+			orders: rows,
+			columns: cols("shortId", "createdAt"),
+			sorting: [{ id: "createdAt", desc: false }],
+		});
+		expect(idsOnScreen()).toEqual(["ORD-B", "ORD-C", "ORD-A"]);
+	});
+
+	it("sinks empty values whichever way the sort runs", () => {
+		// A dateless order is unscheduled, not "earliest" — it must not lead an
+		// ascending sort just because it has no value.
+		const mixed: TableOrder[] = [
+			{ ...base, _id: "x", shortId: "ORD-X", fulfilmentDate: 500 },
+			{ ...base, _id: "y", shortId: "ORD-Y" },
+			{ ...base, _id: "z", shortId: "ORD-Z", fulfilmentDate: 100 },
+		];
+		renderTable({
+			orders: mixed,
+			columns: cols("shortId", "fulfilmentDate"),
+			sorting: [{ id: "fulfilmentDate", desc: false }],
+		});
+		expect(
+			screen.getAllByText(/ORD-[XYZ]/).map((n) => n.textContent),
+		).toEqual(["ORD-Z", "ORD-X", "ORD-Y"]);
+	});
+
+	it("keeps pinned orders on top of ANY sort", () => {
+		// Pinning is a partition, never a competing sort key: the cheapest order
+		// still leads a descending-by-total table when it is pinned.
+		renderTable({
+			orders: [
+				rows[0],
+				rows[1],
+				{ ...rows[2], pinnedAt: 1 },
+			],
+			sorting: [{ id: "total", desc: false }],
+		});
+		expect(idsOnScreen()[0]).toBe("ORD-C");
+	});
+});
+
+describe("OrderTable — column order", () => {
+	it("renders columns in the order it is given, not the registry's", () => {
+		// The seller's drag order has to stick — and it is the same order the CSV
+		// export follows.
+		renderTable({ columns: cols("total", "customer", "shortId") });
+		const headers = screen
+			.getAllByRole("button", { name: /^sort by/i })
+			.map((b) => b.textContent?.trim());
+		expect(headers).toEqual(["Total", "Customer", "Order ID"]);
 	});
 });

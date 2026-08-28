@@ -372,9 +372,16 @@ describe("column subsets (the table's 'export visible columns')", () => {
 		expect(row).toBe("ORD-9001,100.00");
 	});
 
-	test("emits registry order regardless of the order asked for", () => {
+	test("emits the order asked for — the seller's own column arrangement", () => {
+		// Order is honoured, not normalised: a CSV comes out arranged the way the
+		// table is, so "what I see is what I get" covers left-to-right too.
 		const csv = ordersToCsv([minimal], ["total", "shortId"]);
-		expect(csv.split("\r\n")[0]).toBe("Order ID,Total");
+		expect(csv.split("\r\n")[0]).toBe("Total,Order ID");
+	});
+
+	test("a repeated key collapses to its first position", () => {
+		const csv = ordersToCsv([minimal], ["total", "shortId", "total"]);
+		expect(csv.split("\r\n")[0]).toBe("Total,Order ID");
 	});
 
 	test("an unknown key is dropped, not fatal — a stale client still exports", () => {

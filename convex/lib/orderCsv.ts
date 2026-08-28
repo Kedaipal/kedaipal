@@ -197,6 +197,18 @@ export interface OrderColumn {
 	/** Table column width in px. */
 	width: number;
 	value: (o: CsvOrder) => string;
+	/**
+	 * Value the TABLE sorts on, when the rendered string would sort wrong
+	 * (86eyrtz74). Money is a string of digits ("125.00" < "86.00"
+	 * lexically) and a 12-hour time is worse ("3:30 PM" < "9:00 AM"), so those
+	 * columns hand back the underlying number instead. Dates could ride their
+	 * ISO string, but the epoch is exact and needs no reasoning about it.
+	 *
+	 * `undefined` means "no value" and always sinks to the bottom regardless of
+	 * direction — a dateless order is not "earliest", it is unscheduled.
+	 * Columns without a `sortKey` sort on their lowercased display string.
+	 */
+	sortKey?: (o: CsvOrder) => number | string | undefined;
 }
 
 /**
@@ -231,6 +243,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		defaultVisible: true,
 		width: 116,
 		value: (o) => csvDate(o.createdAt),
+		sortKey: (o) => o.createdAt,
 	},
 	{
 		key: "fulfilmentDate",
@@ -239,6 +252,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		defaultVisible: true,
 		width: 128,
 		value: (o) => csvDate(o.fulfilmentDate),
+		sortKey: (o) => o.fulfilmentDate,
 	},
 	{
 		key: "fulfilmentTime",
@@ -249,6 +263,8 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 			o.fulfilmentTimeMinutes === undefined
 				? ""
 				: formatFulfilmentTime(o.fulfilmentTimeMinutes),
+		// "3:30 PM" would sort before "9:00 AM" as text.
+		sortKey: (o) => o.fulfilmentTimeMinutes,
 	},
 	{
 		key: "customer",
@@ -403,6 +419,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "payment",
 		width: 116,
 		value: (o) => csvDate(o.paymentReceivedAt),
+		sortKey: (o) => o.paymentReceivedAt,
 	},
 	{
 		key: "items",
@@ -436,6 +453,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		numeric: true,
 		width: 106,
 		value: (o) => csvAmount(o.subtotal),
+		sortKey: (o) => o.subtotal,
 	},
 	{
 		key: "customWork",
@@ -444,6 +462,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		numeric: true,
 		width: 118,
 		value: (o) => csvAmount(o.mockupQuotedAmount ?? 0),
+		sortKey: (o) => o.mockupQuotedAmount ?? 0,
 	},
 	{
 		key: "pickupFee",
@@ -452,6 +471,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		numeric: true,
 		width: 110,
 		value: (o) => csvAmount(o.pickupFee ?? 0),
+		sortKey: (o) => o.pickupFee ?? 0,
 	},
 	{
 		key: "deliveryFee",
@@ -460,6 +480,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		numeric: true,
 		width: 116,
 		value: (o) => csvAmount(o.deliveryFee ?? 0),
+		sortKey: (o) => o.deliveryFee ?? 0,
 	},
 	{
 		key: "total",
@@ -469,6 +490,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		defaultVisible: true,
 		width: 110,
 		value: (o) => csvAmount(o.total),
+		sortKey: (o) => o.total,
 	},
 	{
 		key: "currency",
@@ -525,22 +547,48 @@ export const DEFAULT_ORDER_COLUMN_KEYS: readonly OrderColumnKey[] =
 	ORDER_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key);
 
 /**
- * Resolve a caller-supplied key list to real columns, in the registry's order.
+ * Resolve a caller-supplied key list to real columns, IN THE ORDER GIVEN.
  *
- * Deliberately order-INDEPENDENT of the input and tolerant of unknown keys: the
- * keys arrive from a client that may be running an older build (a column the
- * seller had visible could have been renamed or dropped), and a stale key must
- * never fail an export — it just isn't a column any more. An empty/undefined
- * list means "everything", so a client that sends nothing still gets a complete
- * export rather than an empty file.
+ * Order is honoured (not normalised to the registry's) so an export matches the
+ * column arrangement the seller dragged into place in the table — "what I see
+ * is what I get" extends to left-to-right, not just which columns appear.
+ * Duplicates collapse to their first position.
+ *
+ * Tolerant of unknown keys: they arrive from a client that may be running an
+ * older build, where a column the seller had visible could since have been
+ * renamed or dropped, and a stale key must never fail an export — it just isn't
+ * a column any more. An empty/undefined list means "everything", so a client
+ * that sends nothing still gets a complete export rather than an empty file.
  */
 export function resolveOrderColumns(
 	keys?: readonly string[],
 ): readonly OrderColumn[] {
 	if (!keys || keys.length === 0) return ORDER_COLUMNS;
-	const wanted = new Set(keys);
-	const picked = ORDER_COLUMNS.filter((c) => wanted.has(c.key));
+	const seen = new Set<string>();
+	const picked: OrderColumn[] = [];
+	for (const key of keys) {
+		if (seen.has(key)) continue;
+		const col = ORDER_COLUMNS_BY_KEY.get(key as OrderColumnKey);
+		if (!col) continue;
+		seen.add(key);
+		picked.push(col);
+	}
 	return picked.length > 0 ? picked : ORDER_COLUMNS;
+}
+
+/**
+ * Comparable value for a column, for the table's per-column sort.
+ *
+ * Falls back to the lowercased display string, so a column that never declared
+ * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
+ */
+export function orderColumnSortValue(
+	column: OrderColumn,
+	o: CsvOrder,
+): number | string | undefined {
+	if (column.sortKey) return column.sortKey(o);
+	const text = column.value(o);
+	return text === "" ? undefined : text.toLowerCase();
 }
 
 /** Header labels for a resolved column set. */

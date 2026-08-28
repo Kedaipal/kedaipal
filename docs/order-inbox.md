@@ -103,12 +103,40 @@ WhatsApp.
   floor.
 - **No new backend.** `searchOrders` already returned full order docs, so the
   table is purely a render mode over data the client had.
+- **Built on `@tanstack/react-table`** — already a dependency, already the house
+  pattern in `customer-list.tsx`. Deliberately *not* shadcn's data-table: that
+  is the same library wrapped in a styling layer we already have our own version
+  of, so adopting it would mean a second set of primitives for no capability we
+  don't get headless.
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same
-  registry the CSV writes, so the table and the export can't disagree. The
-  picker shows every column grouped; visibility persists per store in
-  `localStorage` (`useOrderColumns`), deliberately not in the URL (36 toggles
+  registry the CSV writes, so the table and the export can't disagree, **in
+  which columns appear AND in what order**. Visibility + order persist per store
+  in `localStorage` (`useOrderColumns`), deliberately not in the URL (36 toggles
   would bury the shareable parts) and not in Convex (a personal display
   preference shouldn't cost a write or sync to a colleague).
+- **Drag to reorder** in the Columns panel, via the shared `SortableList`
+  (@dnd-kit) — the project's sorting standard, touch-safe, never arrow buttons.
+  The panel splits into **Shown** (ordered, draggable) and **Add a column**
+  (grouped by registry section): order only means something for columns that are
+  on screen, and adding appends to the end, where the seller can see what they
+  just turned on. `resolveOrderColumns` honours the caller's order, so the
+  exported CSV comes out arranged exactly like the table.
+- **Per-column sorting**, client-side over the window the inbox already holds,
+  so it costs no extra reads. Comparison is **typed, not lexical**: columns
+  carry an optional `sortKey` (see `orderColumnSortValue`) returning the
+  underlying number for money, dates and times — otherwise "125.00" sorts below
+  "86.00" and "3:30 PM" below "9:00 AM". Numeric columns open descending
+  (clicking Total means "show me the big ones"), text ascending. Empty values
+  always sink, whichever direction is active — a dateless order is unscheduled,
+  not earliest. The sort lives in the URL (`?tsort=` / `?tdesc=`) because
+  "these orders, by total" is worth sharing, unlike a 36-toggle layout.
+- **The Sort popover is hidden in table view** — every header is its own sort
+  control there, and two controls fighting over one ordering is worse than
+  either. That is also what buys back the width the Columns chip takes. Cards
+  view keeps it.
+- **Pinned orders stay on top of any sort**, via the table's own row pinning
+  (`keepPinnedRows`, so the pinned block re-sorts with everything else rather
+  than going stale). Pinning is a partition, never a competing sort key.
 - **Export honours the view.** In table view the Export button becomes a
   two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
   rather than a dialog, which would tax a path sellers hit often. In cards view
