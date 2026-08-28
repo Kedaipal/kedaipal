@@ -138,8 +138,10 @@ the strict rule). See
 | Seller dispatch card | `src/components/order/book-delivery-card.tsx` |
 | Seller setup (4th pricing mode inside Delivery charge) | `src/components/settings/fulfilment-tab.tsx` (`DeliveryChargeSection`) |
 
-Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret? }`
-(plain fields, accepted for v1 — flagged in the ticket), `deliverySnapshot`
+Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret?, apiKeyHint? }`
+(**encrypted at rest since 86eyn25gk** — the hint is stamped at save from the
+plaintext; see [`docs/credential-encryption.md`](./credential-encryption.md)),
+`deliverySnapshot`
 gains mode `"lalamove"` + `quotationId`/`vehicleType`/`quotedAt` audit
 fields, and two new tables: `deliveryQuotes` (transient server-side checkout
 quote record) and `deliveryJobs` (the booking ledger — indexes `by_order`,
@@ -149,10 +151,15 @@ quote record) and `deliveryJobs` (the booking ledger — indexes `by_order`,
 
 `resolveLalamoveCredentials(booking)` — the seller's own key pair on the
 retailer row is the ONLY source; absent/half → `null` (feature unavailable,
-checkout falls back gracefully). **No deployment env vars** — sandbox vs
+checkout falls back gracefully). **No per-seller env vars** — sandbox vs
 production is inferred from Lalamove's own key prefix (`pk_test_…` →
 sandbox, else production), so a key can never be pointed at the wrong API
-host and one store can run sandbox keys while another runs prod.
+host and one store can run sandbox keys while another runs prod. Since
+86eyn25gk the stored pair is **encrypted at rest**: the sync resolver is a
+presence check only, and `callLalamove` decrypts via
+`decryptLalamoveCredentials` (re-inferring env from the PLAINTEXT key) right
+before every request — see
+[`docs/credential-encryption.md`](./credential-encryption.md).
 `updateSettings` enforces: enabling requires business address + both key
 parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the
@@ -258,7 +265,34 @@ mid-call (copy points the seller at their Lalamove app, since in the
 crash-mid-POST case the rider order may exist there untracked). Every blocked state renders disabled-with-reason on the
 card (`DispatchBlock` map): wrong status, no map pin on the address (with a
 fix path — never a dead end), booking off, plan gate (Pro chip), no
-credentials, missing buyer/seller phone. That copy lives in
+credentials, missing buyer/seller phone.
+
+**`country_unsupported` is the exception that renders nothing at all** (SG-lite,
+`86eyqgujv`). It is checked FIRST — ahead of even `not_delivery` — because
+every other reason names a fix, and in a market our integration doesn't serve
+there is no fix to name. Before it, a store switched MY→SG fell through to
+`no_seller_phone` and told the seller to *"add a Malaysian (+60) WhatsApp
+number in Settings → Store"*, which the country switch itself refuses to store:
+a closed loop. The card now returns null, including when a completed or failed
+Malaysian trip is on the order — that history belongs on the order timeline
+rather than under a live dispatch card that would re-offer a booking.
+
+**Except while a rider is still out** (PR #221 review). `cancelBooking` carries
+no country gate of its own, so hiding the card on a just-switched store would
+leave a seller with a trip in flight unable to stop one they are *being billed
+for* — a pure UI trap, and the exact shape of trap the country-switch work
+exists to remove. An in-flight card on an unsupported country renders tracking
+and Cancel and nothing else: the booking controls are gated on `!activeJob`
+independently, so nothing there can spend.
+
+`getDeliveryJob.bookingEnabled` agrees with the block reason, so the mark-shipped
+prompt hands an SG seller the courier + consignment form instead of a rider
+prompt. Enabling `deliveryBooking` at all now runs the same country allowlist
+in `updateSettings` — previously that rule only bound a store while it was
+*switching*, so an already-SG store could arm rider booking with nothing in its
+way.
+
+That copy lives in
 `src/lib/dispatch-block.ts` (`dispatchBlockCopy`) because the **mark-shipped
 prompt** renders the same reasons — a rider vendor is never offered the manual
 parcel-courier form, so this copy is their whole explanation before they choose
@@ -326,9 +360,10 @@ secrets → verify → act → ack. Lalamove-specific twists:
   provider truth via a `lastEventAt` guard; the **order never regresses** —
   `picked_up` → `shipped` only from confirmed/packed, `completed` →
   `delivered` only from confirmed/packed/shipped, cancelled orders are never
-  touched, and transitions ride the exported `applyStatusTransition` so
-  WhatsApp notify, stage vocabulary, activation stamping and orderEvents all
-  come free.
+  touched, and transitions ride the exported `applyStatusTransition` so stage
+  vocabulary, activation stamping and orderEvents all come free. (It used to
+  carry a WhatsApp notify too — removed by `86eyd63r8`; see the note under the
+  event table.)
 ### Event-by-event: when it fires, what we do, who is told
 
 | Event | When Lalamove sends it | What we do | Vendor sees | Buyer sees |
@@ -336,13 +371,13 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_STATUS_CHANGED: ASSIGNING_DRIVER` | booking placed / driver bailed and rematching | job pill | "Finding rider" on the order card (live) | nothing — matching churn is noise |
 | `DRIVER_ASSIGNED` | a driver accepted | driver name/phone/plate + shareLink onto the job; link mirrored to `orders.carrierTrackingUrl` (fill-if-unset) | driver row + Call + Live tracking on the card | nothing yet — deliberate: drivers can still bail; the buyer promise starts at pickup |
 | `ORDER_STATUS_CHANGED: ON_GOING` | driver is **heading to the VENDOR** to collect (not to the buyer yet) | job pill | "Rider on the way" (to *you*) | nothing |
-| `ORDER_STATUS_CHANGED: PICKED_UP` | rider has the goods, now heading to the buyer | **order → `shipped`** via `applyStatusTransition` (which also drops a stale `currentStageId` — see note below) | inbox/status flips reactively + orderEvents row | **WhatsApp shipped message with the live-tracking link** — this is the moment the buyer's tracking starts |
-| `ORDER_STATUS_CHANGED: COMPLETED` | goods handed to the buyer | **order → `delivered`** | inbox/status flips reactively + timeline row (no chime — see note); the dispatch card settles to a green **Delivered** summary — booking cost (seller's actual spend), rider name/plate, and a "Trip details" link — never an empty card | **WhatsApp delivered message** |
+| `ORDER_STATUS_CHANGED: PICKED_UP` | rider has the goods, now heading to the buyer | **order → `shipped`** via `applyStatusTransition` (which also drops a stale `currentStageId` — see note below) | inbox/status flips reactively + orderEvents row | order page flips to Shipped and the **live-tracking link appears** on it — reactively, no message (`86eyd63r8`) |
+| `ORDER_STATUS_CHANGED: COMPLETED` | goods handed to the buyer | **order → `delivered`** | inbox/status flips reactively + timeline row (no chime — see note); the dispatch card settles to a green **Delivered** summary — booking cost (seller's actual spend), rider name/plate, and a "Trip details" link — never an empty card | order page flips to Delivered — no message (`86eyd63r8`) |
 | `ORDER_STATUS_CHANGED: EXPIRED` | no driver found in Lalamove's matching window | job → failed + reason | **email** (`deliveryJobFailed`) + **browser alert** + amber card + one-tap Rebook | nothing (order unchanged — buyer was never told a rider existed) |
 | `ORDER_STATUS_CHANGED: CANCELED / REJECTED` | booking cancelled (by vendor on Lalamove's side, by Lalamove, or step 1 of a clone) | job → failed + reason | same failure surfaces as EXPIRED | nothing |
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
-| `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **WhatsApp photo follow-up** to the delivered message ("Delivered! 📸 …", EN+BM) |
+| `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **"Delivery photo" card on the order page** — page-only (`86eyd63r8`) |
 | `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
 
@@ -356,13 +391,22 @@ same idempotent fetch) `lalamove.fetchPodImages` reads
 them as **our** blobs (`deliveryJobs.podImageStorageIds` — Lalamove's URL
 lifetime is undocumented, never hotlink), retrying up to 3× at 2-min
 intervals since the upload can lag the status event. Then: the **buyer**
-gets the photo on WhatsApp as a follow-up to the delivered message
-(`notifyDeliveryPhoto`, transactional, caption EN+BM) **and** a "Delivery
-photo" card on the tracking page (`orders.get` resolves `podImageUrls` on
-delivered delivery orders only — one indexed read on that end-state, the
-hot tracking path pays nothing), and the **vendor** sees thumbnails on
-the delivered dispatch card ("Delivery photo from the rider", tap for
-full size). Races are settled in `storePodImages` (first
+sees a "Delivery photo" card on their order page (`orders.get` resolves
+`podImageUrls` on delivered delivery orders only — one indexed read on
+that end-state, the hot tracking path pays nothing), and the **vendor**
+sees thumbnails on the delivered dispatch card ("Delivery photo from the
+rider… the buyer sees this on their order page", tap for full size).
+
+**POD photos are page-only since [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8).**
+`whatsapp.notifyDeliveryPhoto` — the WhatsApp follow-up that used to carry
+these shots to the buyer ("Delivered! 📸 …", EN+BM) — is **deleted**. It was
+the one send in the codebase that produced **N messages from a single event**
+(up to 3 images, one send each), which is exactly the shape that stops being
+affordable when Meta bills per delivered message from 1 Oct 2026. The order's
+one WhatsApp went out at confirmation; the photo lands on the page that
+message linked to. `fetchPodImages` still downloads and stores the blobs
+identically — only the send was removed. See
+[`one-message-per-order.md`](./one-message-per-order.md). Races are settled in `storePodImages` (first
 set wins, loser's blobs deleted); order/account delete cascades remove the
 blobs. Sandbox never produces a POD (no riders), so the photo path is a
 **first-prod-booking check**; all parsing/storage/race logic is
@@ -379,19 +423,25 @@ status change (same-status replays keep within-anchor custom stages), and
 stored stage whose anchor is BEHIND the canonical status — which also heals
 any already-stale rows with no migration.
 
-**Why the buyer only hears at PICKED_UP and COMPLETED:** those are the two
+**Why only PICKED_UP and COMPLETED move the order:** those are the two
 promises a buyer cares about ("your food is moving" / "it arrived"), and
 they're irreversible. Everything earlier (matching, assignment, rider
-heading to the stall) can churn — notifying it would send the buyer
-false-starts.
+heading to the stall) can churn — flipping the order on it would show the
+buyer false-starts. This reasoning used to govern which events **messaged**
+the buyer; since `86eyd63r8` nothing messages them, so it now governs which
+events move the **order status** their page reflects. The bar is the same one
+and the answer didn't change.
 
 **Why COMPLETED doesn't chime the vendor:** `delivered` is the expected
 happy path — the inbox shows it reactively and the interruption budget
 (chime + system notification) is reserved for events needing ACTION: new
 order, failed booking. Payment is orthogonal: a delivered-but-unpaid order
-(cash on hand-over, pay-later) stays `unpaid` and the existing payment
-machinery (claim buttons, reminder cron, manual reminder) carries it — the
-rider never collects money for us (Lalamove COD is not enabled).
+(cash on hand-over, pay-later) stays `unpaid` and the buyer settles from
+their order page ("How to pay" + "I've paid"); the automatic and manual
+payment reminders that used to back this up are **gone** (`86eyd63r8` — see
+[`payment-reminder.md`](./payment-reminder.md)), so chasing is the seller's
+own message to send. The rider never collects money for us (Lalamove COD is
+not enabled).
 
 Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
 raise a browser alert on devices with order alerts on, leave the order
@@ -411,12 +461,14 @@ deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 3 Aug; server-enforced 14 Aug, ClickUp `86eydum6y`):** while an order has
 an **ACTIVE** rider job, the order-detail stepper's advance into a
 **shipped- or delivered-anchored** stage renders **disabled-with-reason**
-— a manual tap would message the buyer early and, for shipped, without
-the live-tracking link. Confirm/packed advances are never gated
-(pre-pickup work is the seller's), same-anchor custom-stage moves stay
-free, and a **"Update manually" confirm-gated escape** stays reachable so
-a dead webhook never strands the order (cancelling the booking lifts the
-gate outright — a second way out).
+— a manual tap would flip the buyer's order page to "on the way" before
+the rider has the goods and, for shipped, without the live-tracking link
+on it (pre-`86eyd63r8` it would also have fired a premature WhatsApp; the
+page-only consequence is what remains). Confirm/packed advances are never
+gated (pre-pickup work is the seller's), same-anchor custom-stage moves
+stay free, and a **"Update manually" confirm-gated escape** stays
+reachable so a dead webhook never strands the order (cancelling the
+booking lifts the gate outright — a second way out).
 
 The gate originally ALSO required `deliveryJobs.lastEventAt`, i.e. proof
 the webhook was alive, so that webhook-less sellers kept manual control.
@@ -631,6 +683,208 @@ collect", pills Finding rider → Heading to customer → Collected → Arrived,
 — distance is symmetric; `deliveryFeePending`, radius/flat modes and the
 no-fee-pending-under-Lalamove rule all apply unchanged.
 
+## Dispatch pickup-time picker — seller override (19 Aug 2026, ClickUp 86eyp5qd1)
+
+The booking modal's schedule strip is now interactive. Before, the pickup
+moment was **always** the buyer's fulfilment moment (`resolveScheduleAt` on
+`requestedMoment`) with no way to book a different slot — the 3 AM advance
+order left the vendor choosing between a 3 AM rider and no rider.
+
+- **`prepareBooking.scheduleAtOverride`** (`number | "now"`, optional): a
+  number = "come at this exact moment", `"now"` = dispatch immediately even
+  though the buyer's moment is still ahead (goods ready early), omitted = the
+  buyer's moment, byte-identical to before. Resolution is the pure
+  `resolveDispatchSchedule` (convex/lib/lalamove.ts): the default and an
+  explicit pick share `resolveScheduleAt`'s clamps (past/imminent → book now),
+  with ONE asymmetry — an explicit pick beyond Lalamove's 30-day window is
+  **refused with a message**, never silently degraded to an immediate booking
+  (a rider right now is the opposite of what the seller just asked for; the
+  buyer-derived default keeps its silent degrade since orders can't exceed
+  +30d anyway). Quotes are bound to their `scheduleAt`, so every change
+  re-quotes — the price is always for the trip actually being bought.
+- **Modal UX**: the strip says whose time the trip is scheduled for ("the time
+  the buyer asked for" vs "the time you picked") with a **Change time**
+  toggle → date+time inputs + "Use this time" (re-quote) + "Send the rider
+  now" + "Use the buyer's time instead" (reset). Override state fully resets
+  on dialog close/confirm — a dismissed override can never leak into the next
+  booking.
+- **Promise-mismatch warning**: when an override makes the trip differ from a
+  still-future buyer moment, an amber note says the order still promises the
+  buyer the old time and points at **Reschedule** (order detail) *before*
+  booking — deliberately before, because an active booking blocks the
+  reschedule (frozen `quotationId`). The two features compose as
+  *reschedule → book*; the dispatch override alone is for pickup-lead
+  tweaks ("rider leaves 45 min before the promise") and send-now.
+- `prepareBooking` also returns `buyerRequestedMoment` (the untouched buyer
+  moment) so the modal can render that warning without a second read.
+  `confirmBooking`/`deliveryJobs.scheduledAt` are unchanged — the override is
+  already baked into the quote's `scheduledFor`.
+- The seller-side reschedule of the ORDER's fulfilment moment (what the buyer
+  sees) is `orders.rescheduleFulfilment` — see docs/fulfilment-date.md
+  ("Seller reschedule"). Its hard guard: refused while a rider job is ACTIVE.
+
+### Rebook path + order sync (canonical bug 86eyp63xn, Wagyu Walid)
+
+- **Rebook auto-opens the time editor**: a failed/cancelled booking's schedule
+  is stale by definition (that's why it failed), so "Rebook delivery" opens the
+  modal with the date+time inputs already showing instead of hiding them behind
+  "Change time" — Arif's AC1. **Past picks are refused client-side** (20 Aug
+  follow-up): the native `min` only greys the picker — typed/stepped/seeded
+  values below it still land in state and would silently degrade to an
+  immediate booking (and offer the ORDER a past promise via the sync
+  checkbox) — so "Use this time" validates `moment >= now` with an inline
+  reason pointing at "Send the rider now", and the editor's prefill clamps a
+  stale seed to today. Date input bounds `[today, +30d]`
+  (MAX_NOTICE_DAYS); the buyer-facing `minNoticeDays` deliberately does NOT
+  bind the seller (amended off the ticket — a store with 3 days' notice must
+  still be able to rebook a failed delivery for tomorrow).
+- **"Also update the delivery time the buyer sees" (AC2)**: once a moment is
+  picked, a checkbox offers to move the ORDER to it. Confirm then runs
+  `rescheduleFulfilment` **before** `confirmBooking` — the only order where
+  both can move together, since an active job blocks the reschedule; a failed
+  sync aborts the dispatch (booking a trip whose promise update was refused
+  would recreate the exact mismatch this fixes). **Defaults**: ON when the
+  order's moment is already past or a failed booking exists (the rebook path —
+  the old time is wrong by definition), OFF when the buyer's moment is still
+  ahead (a rider leaving earlier than the promise is legitimate and must never
+  rewrite it silently). Never offered for "now" (an immediate dispatch is not
+  a promise to write) or counter orders. With the box ticked the amber
+  mismatch warning retires (the mismatch resolves itself at confirm); left
+  unticked, the warning points at the box instead of a detour.
+
+## Which environment am I in? (21 Aug 2026, ClickUp `86eypncfy`)
+
+Lalamove issues `pk_test_…` (sandbox) and `pk_prod_…` (production) keys, and
+`inferLalamoveEnv` has always routed each to its own API host. What it did NOT
+do was tell anyone — the environment was derived on every call and discarded.
+
+**Why that mattered.** Wagyu Walid was onboarded on 8 Aug with sandbox keys.
+Nothing in the product said so, so for two weeks his live storefront quoted
+buyers through Lalamove's **test environment** and charged those prices for
+real (`ORD-W4AH`: RM27.40). His one "successful" booking was a simulated trip
+no rider could ever run. When the sandbox's play-money wallet drained he got
+`ERR_INSUFFICIENT_BALANCE`, our copy told him to *"top it up in the Lalamove
+app"*, and he topped up a real wallet that the sandbox can never see — nine
+failed attempts across 26 hours before he shipped the order by hand.
+
+Diagnosing it needed a production dig, because the only stored trace of the
+environment was the **host in `deliveryJobs.shareLink`**
+(`share.sandbox.lalamove.com` vs `share.lalamove.com`) — and that exists only
+on bookings that actually committed.
+
+**Now:** `retailers.deliveryBooking.env` is stamped at save from the
+**plaintext** key, exactly like `apiKeyHint` and HitPay's `mode`, and rides
+`DeliveryBookingSummary` + `getDeliveryJob` to the UI.
+
+- Stamped in `retailers.updateSettings` (stamp-on-type, keep-otherwise, cleared
+  with the key) and by the backfill below.
+- **Never derived from a stored value in a query.** A ciphertext doesn't start
+  with `pk_test_`, so inferring post-encryption returns `"production"` for
+  everyone — which would silently suppress the one warning this field exists
+  for. `dispatchContextForOrder` and `getDeliveryJob` therefore read the
+  stamped field, **not** `credentials.env`.
+- `undefined` = a row the backfill hasn't reached. Rendered as **nothing** —
+  never as a green "Live", because a false all-clear is the original bug.
+
+**Surfaced at every point of spend**, not just Settings — a sandbox booking
+looks identical to a real one right up until no rider arrives:
+
+| Surface | What it says |
+| --- | --- |
+| Settings → Fulfilment | `Test keys` / `Live` chip beside the stored key, plus an amber block naming the consequence (simulated trips, buyers quoted test prices, wallet can't be topped up) |
+| Dispatch card (order detail) | Amber "Test mode — no real rider" banner with the `pk_prod_` fix and a link back to Settings |
+| Booking confirm dialog | Compact "Test keys — this dispatches a simulated trip" line, above the price |
+| Booking failure copy | On sandbox, an insufficient-balance refusal explains the test wallet instead of asking for a top-up |
+
+**Deliberately NOT blocked.** Sandbox keys on a production deployment are a
+legitimate testing setup (Zaki uses them); this is a visibility problem, not an
+authorisation one. Loud and unmissable, never refused.
+
+### Backfill (one-shot, per deployment)
+
+```bash
+npx convex run credentials:backfillLalamoveEnv
+```
+
+**Must run wherever `credentials:encryptExistingCredentials` already ran** — by
+the time `env` existed every prod row was ciphertext, so the encrypt backfill
+can't stamp them (it only ever touched plaintext). This one decrypts each
+stored key purely to read its prefix; the plaintext is never stored, logged or
+returned. A key it can't decrypt leaves `env` unset rather than guessing.
+
+### Booking errors are classified by id, not by body text
+
+`friendlyBookingError` used to lowercase the whole response body and match
+`"insufficient" | "balance" | "credit"` anywhere in it. Lalamove ships a
+free-text `message` beside the machine-readable `id`, so any failure whose
+wording happened to contain one of those words was reported as a wallet
+problem — sending a seller to spend money that fixes nothing. It now goes
+through `classifyBookingFailure`, keyed off the `id` (`parseLalamoveErrorCode`,
+the same source `isOutOfServiceAreaError` already used). Text sniffing survives
+only as a last resort for bodies with no parseable id (HTML error pages, socket
+errors), and a *recognised* id we have no copy for stops at `"unknown"` rather
+than falling through to guess.
+
+### The dead quote — a failed confirm must not trap the seller
+
+A quotation is valid for **exactly 5 minutes**. `handleConfirm` used to toast
+the failure and return, leaving the dialog open on that quote — so the obvious
+next move (press "Confirm & dispatch" again) re-sent an expired `quotationId`,
+and the resulting copy pointed at a "Book delivery" button sitting *behind the
+modal overlay*. Wagyu Walid pressed it five times in 5m23s against one
+quotationId before giving up.
+
+Fixed in `BookDeliveryCard`:
+
+- The failure renders **inside** the dialog (a toast is gone before the seller
+  returns from the Lalamove app) and states that nothing was charged.
+- The primary action becomes **"Get a fresh price"** — an in-place re-quote —
+  whenever a confirm has failed *or* the quote has lapsed. Dispatch is only
+  offered while it can actually succeed.
+- `prepareBooking` now returns the quotation's `expiresAt` (parsed all along,
+  previously discarded); the dialog shows a live `Price locked for 4:32`
+  countdown and falls back to its own 5-minute clock if the provider omits it.
+
+### Dispatch can't be tapped by accident (21 Aug 2026, ClickUp `86eypjfuf`)
+
+Reported as: a seller on a tablet reached the booking dialog mid-scroll and a
+booking went out. **The reported mechanism doesn't hold** — worth recording so
+the repro steps aren't chased again:
+
+- A Motorcycle/Car tap calls `prepareBooking`, a **quote**. It writes no
+  `deliveryJobs` row and spends nothing. `reserveBooking` — the only writer —
+  is reached exclusively from `confirmBooking`, so every failed row is a real
+  press of **Confirm & dispatch**.
+- The nine attempts on `ORD-W4AH` are **10–23 seconds apart**. Scroll-slop taps
+  fire in milliseconds; those gaps are a human retrying.
+- Radix wraps the overlay in `RemoveScroll` and `DialogContent` is `fixed` /
+  `overflow-hidden` with no `overflow-y-auto`, so **neither the page nor the
+  dialog scrolls while it's open** — there is no gesture there to mistake for a
+  tap.
+- That store had `promptBookOnPacked: false`, so the auto-open path was never
+  active on it.
+
+What the seller actually hit was the dead-quote trap above: the modal stayed
+open on a spent quotation and Confirm was the only visible action.
+
+**The underlying concern is still real, and is now fixed.** "Confirm &
+dispatch" spends from the seller's wallet on a single tap with no second step,
+and the dialog *can* appear under a finger — `promptBookOnPacked` opens it on
+the packed transition, and the stepper's `bookRequestToken` on a manual
+advance. So the button **arms 600ms after it appears** (`SPEND_ARM_DELAY_MS`):
+
+- Keyed on quote **presence**, not identity — it arms once when the button
+  first appears and stays armed across vehicle/time re-quotes, so switching
+  Motorcycle→Car never re-disables dispatch.
+- Genuinely `disabled`, not an inert click handler: a button that silently
+  swallows a real tap reads as broken.
+- Deliberately **not** applied to Book delivery / Get a fresh price / the
+  vehicle pills — those cost a quote, which is free.
+
+Rejected: pointer-move scroll-vs-tap discrimination (it would guard a gesture
+that can't happen, per the scroll-lock above) and hold-to-confirm (friction on
+every seller's happy path for an accident the arm delay already covers).
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys
@@ -671,13 +925,13 @@ node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderI
 Failure paths: `CANCELED` / `EXPIRED` / `REJECTED` (job fails + one-tap
 rebook); `POD` fires the proof-of-delivery trigger (sandbox has no rider
 photo, so the fetch comes back empty — the photo path is a
-first-prod-booking check). `PICKED_UP` / `COMPLETED` really message the
-order's buyer number — book a test order with your own number to see them
-land.
+first-prod-booking check). `PICKED_UP` / `COMPLETED` move the real order, so
+watch the buyer's order page and the inbox — they no longer send the buyer
+anything (`86eyd63r8`).
 
-To actually see the **POD photo** on its three surfaces (buyer WhatsApp,
-buyer tracking page, vendor card) without a real rider, inject a stand-in
-through the same pipeline — no Lalamove credentials needed:
+To actually see the **POD photo** on both its surfaces (the buyer's order
+page, the vendor card) without a real rider, inject a stand-in through the
+same pipeline — no Lalamove credentials needed:
 
 ```bash
 npx convex run lalamove:devInjectPodImage '{"providerOrderId":"<providerOrderId>"}'

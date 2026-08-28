@@ -47,13 +47,21 @@ export function quickPickDays(
 	maxYmd: string,
 	todayYmd: string,
 	count = 3,
+	/** Optional day filter (store opening hours, 86eyp5rav) — unselectable days
+	 * are skipped and the scan continues forward, so the chips still offer
+	 * `count` REAL choices when the window has them. Bounded by the window
+	 * itself (≤ 31 days), so no extra cap is needed. */
+	isSelectable?: (ymd: string) => boolean,
 ): QuickPickDay[] {
 	if (!minYmd || !maxYmd || minYmd > maxYmd) return [];
 	const tomorrowYmd = addDaysYmd(todayYmd, 1);
 	const days: QuickPickDay[] = [];
-	for (let i = 0; i < count; i++) {
-		const ymd = addDaysYmd(minYmd, i);
-		if (ymd > maxYmd) break;
+	for (
+		let ymd = minYmd;
+		ymd <= maxYmd && days.length < count;
+		ymd = addDaysYmd(ymd, 1)
+	) {
+		if (isSelectable && !isSelectable(ymd)) continue;
 		const label =
 			ymd === todayYmd
 				? "Today"

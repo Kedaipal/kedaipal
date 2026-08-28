@@ -23,6 +23,7 @@
  * CONTAINING any epoch, not just "now") as the day-flooring primitive.
  */
 
+import { attributionBucket } from "./attribution";
 import { todayMytMidnight } from "./fulfilmentDate";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -56,6 +57,10 @@ export type InsightsOrderInput = {
 	securityDeposit?: number;
 	paymentStatus?: string;
 	paymentMethod?: string;
+	/** Checkout surface ("storefront" | "counter") — feeds the source bucket. */
+	source?: string;
+	/** Stamped `?src=` tag, when the buyer arrived with one (86eyq0eq9). */
+	attributionSource?: string;
 	items: ReadonlyArray<{
 		productId: string;
 		variantId?: string;
@@ -92,6 +97,12 @@ export type TrendBucket = { start: number; earned: number; orderCount: number };
  * (received online / self-claimed, no method recorded). */
 export type PaymentStat = { method: string; revenue: number; orderCount: number };
 
+/** One by-source row (86eyq0eq9). `source` is an `attributionBucket` key —
+ * a stamped `?src=` tag, "counter", or "direct". Revenue is EARNED (Σ total
+ * over revenue orders), so Σ rows === the earned KPI — this is "which funnel
+ * produced the order", not "which funnel got paid". */
+export type SourceStat = { source: string; revenue: number; orderCount: number };
+
 export type InsightsAggregate = {
 	/** Σ total over revenue orders. */
 	earned: number;
@@ -106,6 +117,8 @@ export type InsightsAggregate = {
 	trend: TrendBucket[];
 	/** Payment-method slices over collected revenue, sorted by revenue desc. */
 	payments: PaymentStat[];
+	/** By-source rows over earned revenue, sorted by revenue desc. */
+	sources: SourceStat[];
 };
 
 /** Average order value (minor units) — earned ÷ revenue-order count, 0 when none. */
@@ -169,6 +182,7 @@ export function reduceInsights(
 	const productMap = new Map<string, ProductStat>();
 	const trendMap = new Map<number, TrendBucket>();
 	const paymentMap = new Map<string, PaymentStat>();
+	const sourceMap = new Map<string, SourceStat>();
 
 	for (const o of orders) {
 		if (!isRevenueOrder(o.status)) continue;
@@ -178,6 +192,21 @@ export function reduceInsights(
 		// inlined since this module stays dependency-light).
 		const revenue = Math.max(0, o.total - (o.securityDeposit ?? 0));
 		earned += revenue;
+
+		// By-source rows — every revenue order lands in exactly one bucket
+		// (stamped tag → counter → direct), so Σ rows === earned/orderCount.
+		const sourceKey = attributionBucket(o);
+		const sourceRow = sourceMap.get(sourceKey);
+		if (sourceRow) {
+			sourceRow.revenue += o.total;
+			sourceRow.orderCount += 1;
+		} else {
+			sourceMap.set(sourceKey, {
+				source: sourceKey,
+				revenue: o.total,
+				orderCount: 1,
+			});
+		}
 
 		// Trend — earned revenue by MYT day/week bucket.
 		const dayMidnight = todayMytMidnight(o.createdAt);
@@ -232,6 +261,7 @@ export function reduceInsights(
 		products: [...productMap.values()].sort((a, b) => b.revenue - a.revenue),
 		trend: [...trendMap.values()].sort((a, b) => a.start - b.start),
 		payments: [...paymentMap.values()].sort((a, b) => b.revenue - a.revenue),
+		sources: [...sourceMap.values()].sort((a, b) => b.revenue - a.revenue),
 	};
 }
 
@@ -252,6 +282,24 @@ export function mergeProductStats(
 			}
 		} else {
 			map.set(p.key, { ...p });
+		}
+	}
+	return [...map.values()].sort((x, y) => y.revenue - x.revenue);
+}
+
+/** Merge two by-source breakdowns (range + today), summing revenue/count. */
+export function mergeSourceStats(
+	a: ReadonlyArray<SourceStat>,
+	b: ReadonlyArray<SourceStat>,
+): SourceStat[] {
+	const map = new Map<string, SourceStat>();
+	for (const s of [...a, ...b]) {
+		const existing = map.get(s.source);
+		if (existing) {
+			existing.revenue += s.revenue;
+			existing.orderCount += s.orderCount;
+		} else {
+			map.set(s.source, { ...s });
 		}
 	}
 	return [...map.values()].sort((x, y) => y.revenue - x.revenue);

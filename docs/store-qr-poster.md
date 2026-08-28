@@ -167,8 +167,14 @@ a wrap pushes the stack toward the pinned footer (~3mm clearance).
   is unset (so `waUrl` is `undefined`), the counter QR **falls back** to the
   storefront `?src=counter` link, so the poster always prints.
 - **Online QR (bottom)** = storefront `?src=online` from `posterQrUrls()`.
-  **`?src=` is reserved attribution** — the storefront ignores it today; PostHog
-  wiring comes with S3.
+  **`?src=` is CONSUMED as source attribution since `86eyq0eq9`** — the
+  storefront captures it for the session, `orders.create` stamps it as
+  `orders.attributionSource`, and Insights reports these scans as **"Poster
+  QR"** (see `docs/source-attribution.md`). The poster's two tags are **fixed**
+  and describe the sheet itself: a campaign-tagged QR was built and then
+  **rejected** (owner call, Arif) because a printed poster outlives the
+  campaign that produced it and would misattribute every later scan. Campaign
+  tags live on copy-paste links (Home's "Tagged links" row), never on a QR.
 - `StorePoster` is fully presentational: the route resolves both URLs and passes
   `counterUrl` / `onlineUrl` in. `posterQrUrls(origin, slug)` only builds the
   storefront pair used for the online QR + the counter fallback.

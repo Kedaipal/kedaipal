@@ -21,6 +21,7 @@ function renderCard(
 			fallbackPhone=""
 			optedOut={false}
 			canUse={true}
+			country="MY"
 			onSave={onSave}
 			{...overrides}
 		/>,

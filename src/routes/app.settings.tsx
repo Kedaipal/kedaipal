@@ -2,6 +2,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	ArrowLeft,
 	CalendarRange,
@@ -22,10 +23,31 @@ import {
 	UtensilsCrossed,
 	Wrench,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	COUNTRIES,
+	COUNTRY_CURRENCY,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../convex/lib/country";
+import type { CountrySetupItemKey } from "../../convex/lib/countrySetup";
+import { VERIFIABLE } from "../../convex/lib/countrySetup";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
+import {
+	DELIVERY_MODE_LABELS,
+	type DeliveryConfig,
+	deliveryModeAllowed,
+	riderBookingAllowed,
+} from "../../convex/lib/delivery";
+import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
 	defaultTemplate,
@@ -42,14 +64,18 @@ import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
+import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
-import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
+import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { MyPhonePrefix } from "../components/ui/my-phone-input";
+import {
+	MOBILE_PLACEHOLDER,
+	MyPhonePrefix,
+} from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
@@ -60,8 +86,14 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { cn } from "../lib/utils";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
+import {
+	type FixHighlight,
+	highlightFor,
+	highlightRingClass,
+	SETTINGS_ANCHOR,
+	scrollToAnchor,
+} from "../lib/country-setup-copy";
 import { convexErrorMessage } from "../lib/format";
-import { normalizeMyDigits, toMyNationalInput } from "../lib/phone";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -73,6 +105,7 @@ import {
 	STAGE_LABEL_MAX_LENGTH,
 	type StageAnchor,
 } from "../lib/orderStatus";
+import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
 import {
 	settingsNotifyEmailFormSchema,
@@ -83,6 +116,11 @@ import { hasFeature, tierPill } from "../lib/subscription";
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
 	label: c,
+}));
+
+const COUNTRY_OPTIONS = COUNTRIES.map((c) => ({
+	value: c,
+	label: `${COUNTRY_LABELS[c]} (${c})`,
 }));
 
 const LOCALE_OPTIONS = [
@@ -177,9 +215,28 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	},
 ];
 
-function Card({ children }: { children: ReactNode }) {
+/**
+ * `id` is the deep-link anchor: the post-switch checklist links to the exact
+ * card that fixes a row, and `highlight` rings it so the seller lands on the
+ * thing rather than the top of a long tab (86eyqgujv).
+ *
+ * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
+ */
+function Card({
+	children,
+	id,
+	highlight,
+}: {
+	children: ReactNode;
+	id?: string;
+	highlight?: FixHighlight;
+}) {
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			{children}
 		</section>
 	);
@@ -227,15 +284,25 @@ function InfoBanner({
 export const Route = createFileRoute("/app/settings")({
 	// `tab` stays optional: no tab = the grouped index on mobile (desktop falls
 	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
-	validateSearch: (search: Record<string, unknown>) => {
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { tab?: SettingsTab; fix?: CountrySetupItemKey } => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
 				: search.tab;
+		// `fix` is the post-switch checklist's deep link: which card to scroll
+		// to and ring (86eyqgujv). Validated against the known keys so a
+		// hand-typed value can't ring an arbitrary element.
+		const fix =
+			typeof search.fix === "string" && search.fix in SETTINGS_ANCHOR
+				? (search.fix as CountrySetupItemKey)
+				: undefined;
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
 				: undefined,
+			...(fix ? { fix } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -310,7 +377,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab } = Route.useSearch();
+	const { tab, fix } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
@@ -319,6 +386,24 @@ function SettingsRoute() {
 	const [saving, setSaving] = useState(false);
 
 	const availability = useSlugAvailability(newSlug);
+
+	// Deep link from the post-switch checklist (86eyqgujv): scroll to the card
+	// that actually fixes the row and ring it, instead of dropping the seller at
+	// the top of a long tab to hunt for it.
+	const fixAnchor = fix ? SETTINGS_ANCHOR[fix] : undefined;
+	const fixTarget = fix
+		? { anchor: SETTINGS_ANCHOR[fix], highlight: highlightFor(VERIFIABLE[fix]) }
+		: undefined;
+	/** Ring this card when it's the one the checklist sent the seller to. */
+	const ringFor = (anchor: string): FixHighlight | undefined =>
+		fixTarget?.anchor === anchor ? fixTarget.highlight : undefined;
+	useEffect(() => {
+		if (!fixAnchor) return;
+		// The tab body mounts in this same commit, so the target doesn't exist
+		// until after paint — wait a frame rather than racing it.
+		const frame = requestAnimationFrame(() => scrollToAnchor(fixAnchor));
+		return () => cancelAnimationFrame(frame);
+	}, [fixAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
 
@@ -594,13 +679,17 @@ function SettingsRoute() {
 						    email (below). The WA card only mounts when the deployment has
 						    an approved seller template configured (86eyhw9zy). */}
 						{retailer.waOrderAlertsAvailable ? (
-							<Card>
+							<Card
+								id={SETTINGS_ANCHOR.notify_wa_phone}
+								highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+							>
 								<WaOrderAlertsCard
 									enabled={retailer.orderWaAlerts === true}
 									currentPhone={retailer.notifyWaPhone ?? ""}
 									fallbackPhone={retailer.waPhone ?? ""}
 									optedOut={retailer.notifyWaPhoneOptedOut === true}
 									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
+									country={retailer.country}
 									onSave={(patch) => updateSettings(patch)}
 								/>
 							</Card>
@@ -641,6 +730,25 @@ function SettingsRoute() {
 							/>
 						</Card>
 						<Card>
+							<CountryForm
+								current={retailer.country}
+								currency={retailer.currency}
+								deliveryConfig={retailer.deliveryConfig}
+								deliveryBooking={retailer.deliveryBooking}
+								waPhone={retailer.waPhone}
+								notifyWaPhone={retailer.notifyWaPhone}
+								onSave={(patch) => updateSettings(patch)}
+							/>
+							{/* Directly under the picker, so "what did that just do?"
+							    is answered where the question was asked. Renders
+							    nothing for a store that has never switched. */}
+							<CountrySetupPanel
+								onGoToFix={(tab, key) =>
+									navigate({ search: { tab, fix: key } })
+								}
+							/>
+						</Card>
+						<Card>
 							<CurrencyForm
 								current={retailer.currency}
 								onSave={(currency) => updateSettings({ currency })}
@@ -655,23 +763,35 @@ function SettingsRoute() {
 					<div className="flex flex-col gap-6 pt-2">
 						<InfoBanner title="How WhatsApp works on Kedaipal">
 							<p>
-								All automated order messages (confirmations, packed, shipped,
-								delivered) are sent from{" "}
+								Every order sends the buyer{" "}
+								<span className="font-medium text-foreground">
+									one WhatsApp message
+								</span>{" "}
+								— the confirmation — from{" "}
 								<span className="font-medium text-foreground">
 									Kedaipal's shared WhatsApp Business number
 								</span>{" "}
-								on your behalf — no Meta account needed.
+								on your behalf, no Meta account needed.
+							</p>
+							<p>
+								That message links to the buyer's own order page, which updates
+								itself. Packing, shipping, payment and cancellation no longer
+								send a WhatsApp — the buyer sees them on that page.
 							</p>
 							<p>
 								Add your personal WhatsApp number below so buyers can reach you
-								directly. It appears as a tappable contact link in automated
-								messages.
+								directly. It appears as a tappable contact link on their order
+								page.
 							</p>
 						</InfoBanner>
 
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.wa_phone}
+							highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
+						>
 							<WaPhoneForm
 								current={retailer.waPhone ?? ""}
+								country={retailer.country}
 								onSave={(waPhone) => updateSettings({ waPhone })}
 							/>
 						</Card>
@@ -681,7 +801,10 @@ function SettingsRoute() {
 								onSave={(locale) => updateSettings({ locale })}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.message_copy}
+							highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+						>
 							<MessageTemplatesForm
 								current={retailer.messageTemplates}
 								onSave={(messageTemplates) =>
@@ -694,40 +817,56 @@ function SettingsRoute() {
 
 				{activeTab === "payments" ? (
 					<div className="flex flex-col gap-6 pt-2">
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.payment_methods}
+							highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+						>
 							<PaymentMethodsForm
 								current={retailer.paymentMethods ?? []}
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SETTINGS_ANCHOR.hitpay}
+							highlight={ringFor(SETTINGS_ANCHOR.hitpay)}
+						>
 							<OnlinePaymentsCard
 								hitpay={retailer.hitpay}
 								canUse={hasFeature(retailer.subscription, "onlinePayments")}
+								country={retailer.country}
 								onSave={(patch) => updateSettings(patch)}
 							/>
 						</Card>
-						{/* Surfaces the automatic nudge so the behaviour is never a
-						    surprise — see docs/payment-reminder.md. */}
+						{/* Says plainly that nothing chases the buyer automatically, and
+						    names the one manual tool that exists — so the behaviour is
+						    discoverable without a seller assuming a nudge went out that
+						    didn't (docs/payment-reminder.md). */}
 						<p className="px-1 text-xs text-muted-foreground">
-							Unpaid orders get one automatic WhatsApp reminder 11 days after
-							ordering — 3 days before the 14-day payment window closes. Buyers
-							who tapped “I've paid” (or whose payment you've confirmed) are
-							never reminded.
+							Kedaipal doesn't chase unpaid orders automatically. Each order
+							gets one WhatsApp — the confirmation — and it links the buyer to
+							their order page, where these payment details and the “I've paid”
+							button live. If an order is still unpaid on day 11, a “Send
+							payment reminder” button appears on its order page (once per day,
+							until day 14) — sending it is always your call.
 						</p>
 					</div>
 				) : null}
 
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
+						fix={fixTarget}
+						currency={retailer.currency}
 						retailerId={retailer._id}
+						country={retailer.country}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
 						deliveryConfig={retailer.deliveryConfig}
 						businessAddress={retailer.businessAddress}
 						deliveryBooking={retailer.deliveryBooking}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}
+						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}
 					/>
 				) : null}
@@ -1029,15 +1168,20 @@ function LogoForm({
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateLogoUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(file));
+			setLocalPreview(URL.createObjectURL(prepared.blob));
 			await onSave(storageId);
 			toast.success("Logo saved.");
 		} catch (err) {
@@ -1079,7 +1223,7 @@ function LogoForm({
 							{uploading ? "Uploading…" : "Replace"}
 							<input
 								type="file"
-								accept="image/*"
+								accept={IMAGE_ACCEPT}
 								className="hidden"
 								disabled={uploading}
 								onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1100,7 +1244,7 @@ function LogoForm({
 					{uploading ? "Uploading…" : "Tap to upload your logo"}
 					<input
 						type="file"
-						accept="image/*"
+						accept={IMAGE_ACCEPT}
 						className="hidden"
 						disabled={uploading}
 						onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1130,15 +1274,20 @@ function CoverImageForm({
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateCoverImageUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(file));
+			setLocalPreview(URL.createObjectURL(prepared.blob));
 			await onSave(storageId);
 			toast.success("Cover image saved.");
 		} catch (err) {
@@ -1179,7 +1328,7 @@ function CoverImageForm({
 							{uploading ? "Uploading…" : "Replace"}
 							<input
 								type="file"
-								accept="image/*"
+								accept={IMAGE_ACCEPT}
 								className="hidden"
 								disabled={uploading}
 								onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1200,7 +1349,7 @@ function CoverImageForm({
 					{uploading ? "Uploading…" : "Tap to upload a cover image"}
 					<input
 						type="file"
-						accept="image/*"
+						accept={IMAGE_ACCEPT}
 						className="hidden"
 						disabled={uploading}
 						onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -1335,17 +1484,22 @@ function PaymentMethodsForm({
 		if (!file) return;
 		setUploadingKey(key);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateQrUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
 			update(key, {
 				qrImageStorageId: storageId,
-				qrPreviewUrl: URL.createObjectURL(file),
+				qrPreviewUrl: URL.createObjectURL(prepared.blob),
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -1551,7 +1705,7 @@ function PaymentMethodsForm({
 									: "Tap to upload QR image"}
 								<input
 									type="file"
-									accept="image/*"
+									accept={IMAGE_ACCEPT}
 									className="hidden"
 									onChange={(e) =>
 										handleQrFile(m._key, e.target.files?.[0] ?? null)
@@ -1677,15 +1831,17 @@ function PaymentMethodsForm({
 	);
 }
 
-const TEMPLATE_LABELS: Record<TemplateKey, string> = {
-	confirm: "Order confirmation",
-	packed: "Packed",
-	shipped: "Shipped",
-	delivered: "Delivered",
-	cancelled: "Cancelled",
-	unknownFallback: "Unknown message reply",
+// Only the keys still in TEMPLATE_KEYS are editable — the status/fallback copy
+// no longer has a sender, so it has no label here either. Partial + fallback so
+// a key added back to TEMPLATE_KEYS renders instead of crashing.
+const TEMPLATE_LABELS: Partial<Record<TemplateKey, string>> = {
+	confirm: "Your reply",
 };
 
+// The card earns its place on one narrow job: a buyer who types their order
+// number into the shared number gets this reply. The order's own confirmation is
+// a fixed Meta template and is NOT editable here — if TEMPLATE_KEYS ever empties
+// out, delete this card rather than shipping an editor that changes nothing.
 function MessageTemplatesForm({
 	current,
 	onSave,
@@ -1727,10 +1883,14 @@ function MessageTemplatesForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
 				<h3 className="text-sm font-semibold text-foreground">
-					WhatsApp message templates
+					Reply when a buyer messages their order number
 				</h3>
 				<p className="text-xs text-muted-foreground leading-relaxed">
-					Override the default copy. Use{" "}
+					The confirmation your buyers receive is a fixed Meta-approved template
+					— WhatsApp's rule for messaging someone who hasn't replied yet — so it
+					can't be customised. This copy is the reply sent when a buyer writes
+					their order number (e.g. <code className="font-mono">ORD-1234</code>)
+					to our shared number. Use{" "}
 					<code className="font-mono">{"{shortId}"}</code> and{" "}
 					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
 					blank to use the default.
@@ -1762,7 +1922,7 @@ function MessageTemplatesForm({
 						<label key={key} className="flex flex-col gap-1">
 							<div className="flex items-center justify-between">
 								<span className="text-sm font-medium">
-									{TEMPLATE_LABELS[key]}
+									{TEMPLATE_LABELS[key] ?? key}
 								</span>
 								{value ? (
 									<button
@@ -1782,14 +1942,6 @@ function MessageTemplatesForm({
 								maxLength={1000}
 								className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 							/>
-							{key === "confirm" ? (
-								<p className="text-xs text-muted-foreground leading-relaxed">
-									The very first confirmation for an online order is sent from a
-									fixed Meta-approved template (WhatsApp's rule for messaging a
-									buyer who hasn't replied yet). Your copy here takes over from
-									the buyer's first reply onward.
-								</p>
-							) : null}
 						</label>
 					);
 				})}
@@ -1814,7 +1966,6 @@ type StageDraft = {
 	descEn: string;
 	descMs: string;
 	descZh: string;
-	notify: boolean;
 };
 
 function seedToDraft(s: OrderStage): StageDraft {
@@ -1830,7 +1981,6 @@ function seedToDraft(s: OrderStage): StageDraft {
 		descEn: s.description?.en ?? "",
 		descMs: s.description?.ms ?? "",
 		descZh: s.description?.zh ?? "",
-		notify: s.notify,
 	};
 }
 
@@ -1853,7 +2003,6 @@ function draftsToStages(drafts: StageDraft[]): OrderStage[] {
 					},
 				}
 			: {}),
-		notify: d.notify,
 		sortOrder: i,
 	}));
 }
@@ -1918,7 +2067,6 @@ function StageEditor({
 				descEn: "",
 				descMs: "",
 				descZh: "",
-				notify: false, // intermediate stages default off (DECISION 2)
 			},
 		]);
 	}
@@ -2068,15 +2216,9 @@ function StageEditor({
 					</span>
 					<select
 						value={d.anchor}
-						onChange={(e) => {
-							const anchor = e.target.value as StageAnchor;
-							// Confirmed stages never WhatsApp the buyer, so clear notify
-							// when switching to it (keeps the count + UI honest).
-							update(d._key, {
-								anchor,
-								...(anchor === "confirmed" ? { notify: false } : {}),
-							});
-						}}
+						onChange={(e) =>
+							update(d._key, { anchor: e.target.value as StageAnchor })
+						}
 						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					>
 						{STAGE_ANCHORS.map((a) => (
@@ -2136,26 +2278,6 @@ function StageEditor({
 					</label>
 				</div>
 
-				{d.anchor === "confirmed" ? (
-					// Confirmed = the order-accepted moment; the buyer is already
-					// messaged by the confirmation/payment flow, so no per-stage toggle.
-					<p className="text-xs text-muted-foreground">
-						Buyers are notified automatically when the order is confirmed.
-					</p>
-				) : (
-					<label className="flex items-center gap-2 text-sm">
-						<input
-							type="checkbox"
-							checked={d.notify}
-							onChange={(e) => update(d._key, { notify: e.target.checked })}
-							className="size-4"
-						/>
-						<span>
-							Send the buyer a WhatsApp when the order enters this stage
-						</span>
-					</label>
-				)}
-
 				{/* Destructive action lives at the bottom (out of the toggle header) so
 				    it can't be hit while quick-expanding/collapsing. */}
 				<button
@@ -2188,6 +2310,15 @@ function StageEditor({
 					Add stage
 				</Button>
 			</div>
+
+			{/* Stages used to be able to fire a WhatsApp each. They can't any more, so
+			    say what they still do — otherwise a seller who relied on stage pings
+			    just sees the toggle gone. */}
+			<p className="text-xs text-muted-foreground leading-relaxed">
+				Stages are your own words for the steps an order goes through. They name
+				the steps on the buyer's order page too — advancing a stage updates that
+				page instantly, but doesn't send the buyer a WhatsApp.
+			</p>
 
 			{drafts.length === 0 ? (
 				<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
@@ -2279,8 +2410,8 @@ function LocaleForm({
 				    admitted: retailer email alerts have always rendered in it, and
 				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
 				<span className="text-xs text-muted-foreground">
-					Used for order confirmations and shipping updates sent to shoppers —
-					and for the order alerts we send you by email and WhatsApp.
+					Used for the order confirmation buyers receive and their order page —
+					and for the order alerts we send you on WhatsApp.
 				</span>
 			</label>
 
@@ -2291,19 +2422,171 @@ function LocaleForm({
 	);
 }
 
+function CountryForm({
+	current,
+	currency,
+	deliveryConfig,
+	deliveryBooking,
+	waPhone,
+	notifyWaPhone,
+	onSave,
+}: {
+	current: Country;
+	currency: string;
+	/** Read only to warn BEFORE the save about what will need updating after
+	 * it. None of these block the switch any more, and none are cleared by it
+	 * (86eyqgujv) — the checklist below the card tracks them until fixed. */
+	deliveryConfig?: DeliveryConfig;
+	/** Separate from the config above, because pricing and booking are
+	 * independent (`pricing ⊥ booking`): a flat-fee store can still have
+	 * Book-a-rider armed. */
+	deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
+	waPhone?: string;
+	notifyWaPhone?: string;
+	onSave: (patch: { country: Country }) => Promise<unknown>;
+}) {
+	const form = useAppForm({
+		defaultValues: { country: current as string },
+		onSubmit: async ({ value }) => {
+			try {
+				await onSave({ country: value.country as Country });
+				toast.success(
+					value.country === current
+						? "Country saved."
+						: `Country saved — check the list below for anything that still needs updating.`,
+				);
+			} catch (err) {
+				toast.error(convexErrorMessage(err));
+			}
+		},
+	});
+
+	function handleSubmit(e: FormEvent) {
+		submitThenFocusError(form, e);
+	}
+
+	// A stored number that doesn't match the given country's shape. Same
+	// pattern module the validators run — client and server can't disagree.
+	function staleNumber(country: Country, value: string | undefined) {
+		return value && !STORED_MOBILE_PATTERN[country].test(value) ? value : null;
+	}
+
+	return (
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<form.AppField name="country">
+				{(field) => (
+					<field.SelectField
+						label="Store country"
+						options={COUNTRY_OPTIONS}
+						required
+						description="Where your store operates. Checkout accepts this country's phone numbers and addresses, and buyers see forms that match it."
+					/>
+				)}
+			</form.AppField>
+
+			<form.Subscribe
+				selector={(s) => ({
+					canSubmit: s.canSubmit,
+					isSubmitting: s.isSubmitting,
+					values: s.values,
+				})}
+			>
+				{({ canSubmit, isSubmitting, values }) => {
+					const picked = values.country as Country;
+					const expectedCurrency = COUNTRY_CURRENCY[picked];
+					const dirty = values.country !== current;
+					// What the switch will LEAVE BEHIND. Nothing here blocks the
+					// save and nothing is deleted by it — this is the heads-up that
+					// turns "why is my delivery not quoting?" a week later into a
+					// decision made now, with the same list waiting underneath the
+					// card afterwards.
+					const carried = [
+						...(deliveryConfig &&
+						!deliveryModeAllowed(picked, deliveryConfig.mode)
+							? [
+									`your ${DELIVERY_MODE_LABELS[deliveryConfig.mode]} delivery pricing stops quoting (it's kept, and works again if you switch back)`,
+								]
+							: []),
+						...(deliveryBooking?.enabled === true &&
+						!riderBookingAllowed(picked)
+							? ["Lalamove booking goes quiet (your API keys are kept)"]
+							: []),
+						...(staleNumber(picked, waPhone)
+							? ["your store's WhatsApp number stays a foreign number"]
+							: []),
+						...(staleNumber(picked, notifyWaPhone)
+							? ["your order-alerts number stays a foreign number"]
+							: []),
+					];
+					return (
+						<>
+							{expectedCurrency !== currency ? (
+								<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+									Stores in {COUNTRY_LABELS[picked]} usually price in{" "}
+									{expectedCurrency} — yours is set to {currency}. Change it in
+									the Currency card below if that's not intentional.
+								</p>
+							) : null}
+							{dirty ? (
+								<div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-3 text-sm">
+									<p className="font-medium">
+										Switching to {COUNTRY_LABELS[picked]} keeps everything you
+										have set up.
+									</p>
+									{carried.length > 0 ? (
+										<>
+											<p className="text-muted-foreground">
+												Some of it only works in {COUNTRY_LABELS[current]}, so
+												after the switch:
+											</p>
+											<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+												{carried.map((line) => (
+													<li key={line}>{line}</li>
+												))}
+											</ul>
+										</>
+									) : null}
+									<p className="text-muted-foreground">
+										You'll get a checklist here of everything to update — bank
+										details and addresses first.
+									</p>
+								</div>
+							) : null}
+							<Button
+								type="submit"
+								disabled={!dirty || !canSubmit || isSubmitting}
+								className={SAVE_BTN_CLASS}
+							>
+								{isSubmitting ? "Saving…" : "Save country"}
+							</Button>
+						</>
+					);
+				}}
+			</form.Subscribe>
+		</form>
+	);
+}
+
 function CurrencyForm({
 	current,
 	onSave,
 }: {
 	current: string;
-	onSave: (currency: string) => Promise<unknown>;
+	onSave: (
+		currency: string,
+	) => Promise<{ productsCurrencySynced?: number } | null | undefined>;
 }) {
 	const form = useAppForm({
 		defaultValues: { currency: current },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave(value.currency);
-				toast.success("Currency saved.");
+				const result = await onSave(value.currency);
+				const synced = result?.productsCurrencySynced ?? 0;
+				toast.success(
+					synced > 0
+						? `Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
+						: "Currency saved.",
+				);
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
 			}
@@ -2322,7 +2605,7 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
-						description="Used for new products and order totals. Existing products keep their original currency."
+						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching. Orders already placed keep the currency they were placed in, but Insights and customer lifetime totals add those older amounts up as plain numbers, so totals that span the change won't convert."
 					/>
 				)}
 			</form.AppField>
@@ -2384,7 +2667,7 @@ function NotifyEmailForm({
 						placeholder="orders@yourstore.com"
 						type="email"
 						inputMode="email"
-						description="We'll email you here whenever a new order arrives or is confirmed in WhatsApp. Leave blank to turn off email notifications."
+						description="We'll email you here whenever a new order arrives or a buyer says they've paid. If WhatsApp order alerts are on, these arrive on WhatsApp instead — and this email is the backup if one can't be delivered. Leave blank to turn off email notifications."
 					/>
 				)}
 			</form.AppField>
@@ -2413,18 +2696,33 @@ function NotifyEmailForm({
 	);
 }
 
+// The seller-contact description names the store's own mobile kind. The MY
+// line also names the Lalamove sender-contact role — Lalamove is MY-market, so
+// that sentence would be a false promise on an SG store.
+// An order sends the buyer exactly one WhatsApp (the confirmation), so this
+// number's real home is the buyer's order page — that's where they reach the
+// seller for the rest of the order's life. Don't promise "updates" here.
+const WA_PHONE_DESCRIPTION: Record<Country, string> = {
+	MY: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Malaysian mobile — it's also the sender contact when a rider collects from you.",
+	SG: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Singapore mobile with WhatsApp.",
+};
+
 function WaPhoneForm({
 	current,
+	country,
 	onSave,
 }: {
 	current: string;
+	/** Store country — picks the plate + validator arm (SG-lite, 86eynw2dy). */
+	country: Country;
 	onSave: (waPhone: string) => Promise<unknown>;
 }) {
 	const form = useAppForm({
-		// Seeded as the national part — the field wears a fixed `+60` plate, so
-		// the stored `60…` form would render the country code twice.
-		defaultValues: { waPhone: toMyNationalInput(current) },
-		validators: { onChange: settingsWaPhoneFormSchema },
+		// Seeded as the national part — the field wears a fixed `+60`/`+65`
+		// plate, so the stored `60…`/`65…` form would render the country code
+		// twice.
+		defaultValues: { waPhone: toNationalPhoneInput(current, country) },
+		validators: { onChange: settingsWaPhoneFormSchema[country] },
 		onSubmit: async ({ value }) => {
 			try {
 				await onSave(value.waPhone);
@@ -2448,10 +2746,10 @@ function WaPhoneForm({
 						type="tel"
 						inputMode="tel"
 						autoComplete="tel"
-						prefix={<MyPhonePrefix />}
-						placeholder="12-345 6789"
+						prefix={<MyPhonePrefix country={country} />}
+						placeholder={MOBILE_PLACEHOLDER[country]}
 						required
-						description="Shown to buyers in order confirmations and updates so they can reach you directly. Malaysian mobile — it's also the sender contact when a rider collects from you."
+						description={WA_PHONE_DESCRIPTION[country]}
 					/>
 				)}
 			</form.AppField>
@@ -2464,11 +2762,12 @@ function WaPhoneForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting, values }) => {
-					// Compare digits-only, both normalized to the stored `60…` form:
-					// the field holds the national part beside the plate, `current`
+					// Compare digits-only, both normalized to the stored form: the
+					// field holds the national part beside the plate, `current`
 					// carries the country code.
 					const dirty =
-						normalizeMyDigits(values.waPhone) !== normalizeMyDigits(current);
+						normalizeMobileDigits(values.waPhone, country) !==
+						normalizeMobileDigits(current, country);
 					return (
 						<Button
 							type="submit"

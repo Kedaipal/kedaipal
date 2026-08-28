@@ -10,6 +10,11 @@ describe("buildSitemapXml", () => {
 		expect(xml).toContain(`<loc>${SITE}/</loc>`);
 		expect(xml).toContain(`<loc>${SITE}/pricing</loc>`);
 		expect(xml).toContain(`<loc>${SITE}/cost</loc>`);
+		// Legal pack (86eyn25gu) — the Privacy Policy is linked from every
+		// checkout and WhatsApp notice, so crawlers must be able to find it.
+		expect(xml).toContain(`<loc>${SITE}/privacy</loc>`);
+		expect(xml).toContain(`<loc>${SITE}/terms</loc>`);
+		expect(xml).toContain(`<loc>${SITE}/acceptable-use</loc>`);
 		expect(xml.trim().endsWith("</urlset>")).toBe(true);
 	});
 

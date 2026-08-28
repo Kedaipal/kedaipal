@@ -35,6 +35,11 @@ export function buildSitemapXml({
 		`  <url>\n    <loc>${siteUrl}/</loc>\n    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n  </url>`,
 		`  <url>\n    <loc>${siteUrl}/pricing</loc>\n    <changefreq>weekly</changefreq>\n    <priority>0.9</priority>\n  </url>`,
 		`  <url>\n    <loc>${siteUrl}/cost</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.7</priority>\n  </url>`,
+		// Legal pack (86eyn25gu): public policies should be crawlable — the
+		// Privacy Policy is linked from every checkout and WhatsApp notice.
+		`  <url>\n    <loc>${siteUrl}/privacy</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`,
+		`  <url>\n    <loc>${siteUrl}/terms</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`,
+		`  <url>\n    <loc>${siteUrl}/acceptable-use</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`,
 		...stores.map(
 			({ slug, updatedAt }) =>
 				`  <url>\n    <loc>${siteUrl}/${slug}</loc>\n    <lastmod>${day(updatedAt)}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`,

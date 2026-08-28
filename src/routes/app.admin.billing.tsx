@@ -21,7 +21,16 @@ import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { planPrice } from "../../convex/lib/plans";
+import {
+	COUNTRIES,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../convex/lib/country";
+import {
+	BILLING_CURRENCIES,
+	type BillingCurrency,
+	planPrice,
+} from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -39,6 +48,7 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify } from "../lib/slug";
 
@@ -198,7 +208,24 @@ function AdminBillingOverview() {
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
-	const pendingTotal = invoices?.reduce((sum, inv) => sum + inv.total, 0) ?? 0;
+	// Invoices can carry different billing currencies (MYR + SGD), so the
+	// outstanding tile sums per currency — one flattened number would be a lie.
+	const pendingByCurrency = new Map<string, number>();
+	for (const inv of invoices ?? []) {
+		pendingByCurrency.set(
+			inv.currency,
+			(pendingByCurrency.get(inv.currency) ?? 0) + inv.total,
+		);
+	}
+	const outstanding =
+		pendingByCurrency.size === 0
+			? formatPrice(0, "MYR")
+			: [...pendingByCurrency.entries()]
+					.sort(([a], [b]) =>
+						a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b),
+					)
+					.map(([currency, sum]) => formatPrice(sum, currency))
+					.join(" + ");
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
@@ -219,7 +246,7 @@ function AdminBillingOverview() {
 		},
 		{
 			label: "Outstanding",
-			value: invoices === undefined ? "..." : formatPrice(pendingTotal, "MYR"),
+			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
 			className: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -272,6 +299,9 @@ function OnboardClientCard() {
 	const [slugEdited, setSlugEdited] = useState(false);
 	const [waPhone, setWaPhone] = useState("");
 	const [email, setEmail] = useState("");
+	// Store country (SG-lite): rides the invite token so the client's onboarding
+	// form opens pre-set — an SG store must be born SG (currency follows it).
+	const [country, setCountry] = useState<Country>("MY");
 	const [founding, setFounding] = useState(false);
 	const [copied, setCopied] = useState(false);
 
@@ -315,6 +345,7 @@ function OnboardClientCard() {
 					slug: derivedSlug,
 					waPhone,
 					founding: founding && foundingAvailable,
+					country,
 				});
 
 	async function handleCopy() {
@@ -373,16 +404,44 @@ function OnboardClientCard() {
 				) : null}
 			</label>
 
+			<div className="flex flex-col gap-1">
+				<span className="text-sm font-medium">Country</span>
+				<div className="grid max-w-xs grid-cols-2 gap-2">
+					{COUNTRIES.map((c) => (
+						<button
+							key={c}
+							type="button"
+							aria-pressed={country === c}
+							onClick={() => setCountry(c)}
+							className={`min-h-10 rounded-xl border px-4 text-sm font-medium transition-colors ${
+								country === c
+									? "border-accent bg-accent/10 text-foreground"
+									: "border-input bg-background text-muted-foreground hover:border-ring"
+							}`}
+						>
+							{COUNTRY_LABELS[c]}
+						</button>
+					))}
+				</div>
+				<span className="text-xs text-muted-foreground">
+					An SG store is created with SGD pricing — set this before they add
+					products.
+				</span>
+			</div>
+
 			<div className="grid gap-4 sm:grid-cols-2">
 				<label
 					htmlFor="new-retailer-wa-phone"
 					className="flex flex-col gap-1 text-sm font-medium"
 				>
 					<span className="min-h-5">WhatsApp number</span>
+					{/* Follows the country toggle above — the invite rides this number
+					    into createRetailer, which validates it with the same country. */}
 					<MyPhoneInput
 						id="new-retailer-wa-phone"
 						value={waPhone}
 						onChange={setWaPhone}
+						country={country}
 					/>
 				</label>
 				<label className="flex flex-col gap-1 text-sm font-medium">
@@ -513,6 +572,7 @@ function IssueInvoiceForm() {
 	const [plan, setPlan] = useState<"starter" | "pro">("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	const [founding, setFounding] = useState(false);
+	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
@@ -525,13 +585,18 @@ function IssueInvoiceForm() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
 	useEffect(() => {
 		setFounding(isExistingFounding);
+		// Currency resets to the default too — an SGD pick left over from the
+		// previous store must never silently carry to a Malaysian retailer (an SGD
+		// invoice ships with no bank/DuitNow block).
+		setCurrency("MYR");
 	}, [retailerId]);
 
-	// Founding is Pro-only — flipping it on forces Pro.
+	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
+	// currency (RM104 / S$41 monthly).
 	const effectivePlan = founding ? "pro" : plan;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding);
-	const base = planPrice(effectivePlan, cycle, false);
+	const total = planPrice(effectivePlan, cycle, founding, currency);
+	const base = planPrice(effectivePlan, cycle, false, currency);
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -544,10 +609,13 @@ function IssueInvoiceForm() {
 				plan: effectivePlan,
 				billingCycle: cycle,
 				founding,
+				currency,
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
 			setFounding(false);
+			// Reset to the default so the next store isn't silently billed in SGD.
+			setCurrency("MYR");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -637,6 +705,35 @@ function IssueInvoiceForm() {
 						))}
 					</div>
 				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<span className="text-xs font-medium text-muted-foreground">
+						Currency
+					</span>
+					<div className="grid grid-cols-2 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
+						{BILLING_CURRENCIES.map((cur) => (
+							<button
+								key={cur}
+								type="button"
+								onClick={() => setCurrency(cur)}
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all ${
+									currency === cur
+										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+								}`}
+							>
+								{currency === cur ? <Check className="size-3.5" /> : null}
+								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
+							</button>
+						))}
+					</div>
+					{currency === "SGD" ? (
+						<span className="text-[11px] text-muted-foreground">
+							SGD invoices carry no bank/DuitNow block — payment is arranged
+							over WhatsApp.
+						</span>
+					) : null}
+				</div>
 			</div>
 
 			<label className="flex items-center gap-2.5 text-sm">
@@ -665,12 +762,12 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, "MYR")}
+						{formatPrice(total, currency)}
 					</p>
 					{founding ? (
 						<p className="text-xs text-emerald-700">
-							{formatPrice(base, "MYR")} − {formatPrice(base - total, "MYR")}{" "}
-							founding discount
+							{formatPrice(base, currency)} −{" "}
+							{formatPrice(base - total, currency)} founding discount
 						</p>
 					) : null}
 				</div>
@@ -1034,11 +1131,16 @@ function PaymentConfigForm() {
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateQrUploadUrl({});
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
@@ -1153,7 +1255,7 @@ function PaymentConfigForm() {
 									)}
 									<input
 										type="file"
-										accept="image/*"
+										accept={IMAGE_ACCEPT}
 										className="hidden"
 										disabled={uploading}
 										onChange={(e) =>

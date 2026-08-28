@@ -8,6 +8,7 @@ import {
 	isRevenueOrder,
 	mergePaymentStats,
 	mergeProductStats,
+	mergeSourceStats,
 	pickBucketing,
 	productKey,
 	reduceInsights,
@@ -292,6 +293,56 @@ describe("reduceInsights — payment donut", () => {
 	});
 });
 
+describe("reduceInsights — by-source breakdown (86eyq0eq9)", () => {
+	test("buckets by stamped tag → counter → direct; Σ rows === earned", () => {
+		const agg = reduceInsights(
+			[
+				order({ total: 10_000, attributionSource: "tiktok" }),
+				order({ total: 6_000, attributionSource: "tiktok" }),
+				order({ total: 4_000, source: "counter" }), // counter checkout, no stamp
+				order({ total: 9_000, source: "storefront" }), // untagged → direct
+				order({ total: 2_000 }), // legacy undefined source → direct
+				order({ total: 99_000, status: "pending" }), // not revenue → excluded
+			],
+			{ from: D1, bucketing: "day" },
+		);
+		const rowSum = agg.sources.reduce((s, r) => s + r.revenue, 0);
+		expect(rowSum).toBe(agg.earned);
+		expect(agg.earned).toBe(31_000);
+		expect(agg.sources[0]).toMatchObject({
+			source: "tiktok",
+			revenue: 16_000,
+			orderCount: 2,
+		});
+		expect(agg.sources.find((r) => r.source === "counter")).toMatchObject({
+			revenue: 4_000,
+			orderCount: 1,
+		});
+		expect(agg.sources.find((r) => r.source === "direct")).toMatchObject({
+			revenue: 11_000,
+			orderCount: 2,
+		});
+	});
+
+	test("a stamped tag wins even on a counter-derived surface", () => {
+		// A counter-QR storefront fallback scan stamps "counter" explicitly;
+		// the stamp and the derivation must land in the same bucket.
+		const agg = reduceInsights(
+			[
+				order({ total: 5_000, source: "storefront", attributionSource: "counter" }),
+				order({ total: 3_000, source: "counter" }),
+			],
+			{ from: D1, bucketing: "day" },
+		);
+		expect(agg.sources).toHaveLength(1);
+		expect(agg.sources[0]).toMatchObject({
+			source: "counter",
+			revenue: 8_000,
+			orderCount: 2,
+		});
+	});
+});
+
 describe("computeAov", () => {
 	test("earned ÷ order count, rounded; 0 when no orders", () => {
 		expect(computeAov(30_000, 3)).toBe(10_000);
@@ -341,6 +392,22 @@ describe("merge helpers (range + today)", () => {
 		});
 		// re-sorted by revenue desc → Kuih (9k) before Cake (8k)
 		expect(merged[0].key).toBe(productKey("p2"));
+	});
+
+	test("mergeSourceStats sums by source and re-sorts by revenue", () => {
+		const merged = mergeSourceStats(
+			[
+				{ source: "tiktok", revenue: 5_000, orderCount: 1 },
+				{ source: "direct", revenue: 8_000, orderCount: 2 },
+			],
+			[{ source: "tiktok", revenue: 4_000, orderCount: 1 }],
+		);
+		expect(merged[0]).toMatchObject({
+			source: "tiktok",
+			revenue: 9_000,
+			orderCount: 2,
+		});
+		expect(merged[1]).toMatchObject({ source: "direct", revenue: 8_000 });
 	});
 
 	test("mergePaymentStats sums by method", () => {

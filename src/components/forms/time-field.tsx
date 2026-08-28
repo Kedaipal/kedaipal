@@ -8,6 +8,9 @@ interface TimeFieldProps {
 	/** Earliest selectable time, "HH:MM" — set when the chosen day is today so
 	 * a past slot can't be picked. */
 	min?: string;
+	/** Latest selectable time, "HH:MM" — set when the store's opening hours
+	 * (86eyp5rav) close the chosen day before midnight. */
+	max?: string;
 	required?: boolean;
 	description?: string;
 	disabled?: boolean;
@@ -24,6 +27,7 @@ interface TimeFieldProps {
 export function TimeField({
 	label,
 	min,
+	max,
 	required = false,
 	description,
 	disabled = false,
@@ -42,6 +46,7 @@ export function TimeField({
 				name={field.name}
 				type="time"
 				min={min}
+				max={max}
 				step={300}
 				disabled={disabled}
 				value={field.state.value ?? ""}

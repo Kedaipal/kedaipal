@@ -9,7 +9,8 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
-import { assertValidMyMobile } from "./lib/slug";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 const LABEL_MAX = 60;
@@ -167,16 +168,20 @@ function sanitizeFee(raw: number | undefined): number | undefined {
 }
 
 /**
- * The point's contact is a Malaysian mobile (86eyknr2r) — the field renders the
- * `+60` plate, and the number exists so a buyer or a rider can WhatsApp whoever
- * is standing at the pickup point.
+ * The point's contact is a mobile in the STORE's country (86eyknr2r; SG-lite
+ * 86eynw2dy) — the field renders the matching `+60`/`+65` plate, and the number
+ * exists so a buyer or a rider can WhatsApp whoever is standing at the pickup
+ * point.
  */
-function sanitizeManagerWaPhone(raw: string | undefined): string | undefined {
+function sanitizeManagerWaPhone(
+	raw: string | undefined,
+	country: Country,
+): string | undefined {
 	if (raw === undefined) return undefined;
 	const trimmed = raw.trim();
 	if (trimmed.length === 0) return undefined;
 	try {
-		return assertValidMyMobile(trimmed);
+		return assertValidMobileForCountry(trimmed, country);
 	} catch (err) {
 		throw new ConvexError((err as Error).message);
 	}
@@ -410,7 +415,10 @@ export const create = mutation({
 		const cleanCoords = sanitizeCoords(latitude, longitude);
 		const cleanPlaceId = sanitizePlaceId(placeId);
 		const cleanManagerName = sanitizeManagerName(managerName);
-		const cleanManagerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
+		const cleanManagerWaPhone = sanitizeManagerWaPhone(
+			managerWaPhone,
+			access.retailer.country ?? DEFAULT_COUNTRY,
+		);
 
 		// New rows go to the end of the list. Reading the current max sortOrder
 		// keeps numbers stable when the user reorders later — no need to renumber
@@ -442,6 +450,10 @@ export const create = mutation({
 			managerName: cleanManagerName,
 			managerWaPhone: cleanManagerWaPhone,
 			fee: cleanFee,
+			// The country this address was captured in (86eyqgujv). Places
+			// predictions are locked to the store's country, so this is a fact
+			// about the pick, not a guess from its coordinates.
+			country: access.retailer.country ?? DEFAULT_COUNTRY,
 			isActive: true,
 			sortOrder: nextSortOrder,
 			createdAt: now,
@@ -535,6 +547,7 @@ export const update = mutation({
 			managerName: string | undefined;
 			managerWaPhone: string | undefined;
 			fee: number | undefined;
+			country: Country;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -543,6 +556,24 @@ export const update = mutation({
 
 		if (label !== undefined) patch.label = sanitizeLabel(label);
 		if (address !== undefined) patch.address = sanitizeAddress(address);
+		// Re-stamp the captured country only when the ADDRESS itself moved, or a
+		// fresh Places pick landed. The edit dialog submits every field on every
+		// save, so stamping on any save would let a seller clear a wrong-country
+		// flag by editing the schedule note — marking the address fixed without
+		// fixing it (86eyqgujv).
+		const nextPlaceId =
+			placeId === undefined
+				? undefined
+				: placeId === null
+					? null
+					: sanitizePlaceId(placeId);
+		const addressMoved =
+			(patch.address !== undefined && patch.address !== location.address) ||
+			(nextPlaceId !== undefined &&
+				(nextPlaceId ?? undefined) !== location.placeId);
+		if (addressMoved) {
+			patch.country = access.retailer.country ?? DEFAULT_COUNTRY;
+		}
 		if (locationType !== undefined) patch.locationType = locationType;
 		// Empty string clears the note; a value re-sanitizes it.
 		if (scheduleNote !== undefined)
@@ -552,7 +583,10 @@ export const update = mutation({
 		if (managerName !== undefined)
 			patch.managerName = sanitizeManagerName(managerName);
 		if (managerWaPhone !== undefined)
-			patch.managerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
+			patch.managerWaPhone = sanitizeManagerWaPhone(
+				managerWaPhone,
+				access.retailer.country ?? DEFAULT_COUNTRY,
+			);
 
 		// Coordinates flow together. null = clear, number = set. Undefined =
 		// don't touch. Either both lat AND lng must be numbers, or both null.
@@ -570,9 +604,8 @@ export const update = mutation({
 				);
 			}
 		}
-		if (placeId !== undefined) {
-			patch.placeId =
-				placeId === null ? undefined : sanitizePlaceId(placeId);
+		if (nextPlaceId !== undefined) {
+			patch.placeId = nextPlaceId ?? undefined;
 		}
 
 		await ctx.db.patch(pickupLocationId, patch);

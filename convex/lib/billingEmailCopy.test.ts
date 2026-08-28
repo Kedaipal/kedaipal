@@ -61,6 +61,40 @@ describe("renderBillingEmail", () => {
 		expect(html).not.toContain("Maybank");
 	});
 
+	// Cross-border (non-MYR, e.g. an SGD-billed SG seller): the MY rails can't
+	// settle the invoice, so the pay panel becomes a WhatsApp-contact line naming
+	// the invoice as the payment reference — in every locale, HTML and text alike.
+	it("crossBorder replaces the pay panel with a WhatsApp-contact line (en/ms/zh)", () => {
+		const crossBase: BillingEmailVars = {
+			...base,
+			totalFormatted: "SGD 59.00",
+			bankName: undefined,
+			bankAccountName: undefined,
+			bankAccountNumber: undefined,
+			duitnowId: undefined,
+			crossBorder: true,
+		};
+		// The EN fragment skips "We'll" — escapeHtml renders the apostrophe as
+		// &#39; in the HTML body.
+		const expected: Record<"en" | "ms" | "zh", string> = {
+			en: "confirm payment details with you on WhatsApp",
+			ms: "Kami akan sahkan butiran pembayaran",
+			zh: "我们会通过 WhatsApp 与您确认付款方式",
+		};
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const { html, text } = renderBillingEmail(locale, "invoiceIssued", crossBase);
+			expect(html).toContain(expected[locale]);
+			expect(text).toContain(expected[locale]);
+			// The invoice number is substituted in as the payment reference.
+			expect(text).toContain("INV-202607-AB12");
+			// No MY rails, no billing-page pointer (that page shows the DuitNow QR),
+			// no DuitNow QR note.
+			expect(html).not.toContain("Maybank");
+			expect(html).not.toContain("DuitNow");
+			expect(html).not.toContain("Open your billing page");
+		}
+	});
+
 	it("renders Malay copy for the ms locale", () => {
 		const { subject, html } = renderBillingEmail("ms", "invoiceIssued", base);
 		expect(subject).toContain("Bil baru");

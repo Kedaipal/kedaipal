@@ -86,6 +86,68 @@ describe("admin act-as access", () => {
 		expect(await auditCount(t, retailer._id)).toBe(0);
 	});
 
+	test("an admin retiring a seller's country-setup rows is audited (PR #221 review)", async () => {
+		// These acks suppress a payments-at-risk warning the SELLER was meant to
+		// confirm, and there is no un-ack short of another country switch — so
+		// "the seller checked their bank details" must never be indistinguishable
+		// from "an admin clicked through during white-glove setup".
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				country: "SG",
+				countryChangedAt: Date.now(),
+				countryChangedFrom: "MY",
+				paymentMethods: [
+					{
+						type: "bank" as const,
+						label: "Maybank",
+						bankName: "Maybank",
+						bankAccountName: "Owner",
+						bankAccountNumber: "512345678901",
+						sortOrder: 0,
+					},
+				],
+			});
+		});
+
+		const { acked } = await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.retailers.ackCountrySetup, { retailerId: retailer._id });
+		expect(acked).toBe(1);
+		expect(await auditCount(t, retailer._id)).toBe(1);
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.recentAuditForRetailer, { retailerId: retailer._id });
+		expect(rows[0]).toMatchObject({ action: "retailers.ackCountrySetup" });
+	});
+
+	test("the OWNER doing the same ack is not audited (routine own-store write)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				country: "SG",
+				countryChangedAt: Date.now(),
+				countryChangedFrom: "MY",
+				paymentMethods: [
+					{
+						type: "bank" as const,
+						label: "Maybank",
+						bankName: "Maybank",
+						bankAccountName: "Owner",
+						bankAccountNumber: "512345678901",
+						sortOrder: 0,
+					},
+				],
+			});
+		});
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.retailers.ackCountrySetup, {});
+		expect(await auditCount(t, retailer._id)).toBe(0);
+	});
+
 	test("admin can write on a seller's behalf and it is audited", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);

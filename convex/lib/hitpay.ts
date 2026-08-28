@@ -25,6 +25,7 @@
  *    API-key salt (the value shown beside the API key in the dashboard).
  */
 
+import { decryptSecret } from "./credentialCrypto";
 import type { OrderPaymentMethod } from "./paymentMethod";
 
 export type HitpayMode = "sandbox" | "production";
@@ -34,11 +35,20 @@ export const HITPAY_API_BASE: Record<HitpayMode, string> = {
 	production: "https://api.hit-pay.com/v1",
 };
 
-/** Stored connection shape on `retailers.hitpay` (server-only fields). */
+/** Stored connection shape on `retailers.hitpay` (server-only fields).
+ * `apiKey`/`salt` are encrypted at rest (86eyn25gk, `enc.v1.` prefix) once
+ * `CREDENTIALS_ENCRYPTION_KEY` is set; legacy rows may still hold plaintext
+ * until the one-shot backfill runs. */
 export type HitpayConfig = {
 	enabled: boolean;
 	apiKey?: string;
 	salt?: string;
+	/** Last 4 chars of the PLAINTEXT key, stamped at save — queries can't
+	 * derive it once the stored value is ciphertext. */
+	apiKeyHint?: string;
+	/** Sandbox/production, stamped at save from the plaintext key prefix —
+	 * same reason as apiKeyHint. */
+	mode?: HitpayMode;
 	connectedAt?: number;
 	/** The account's enabled rails as HitPay resolves them for this key —
 	 * probed at connect, refreshed on every checkout mint (see schema note). */
@@ -60,13 +70,30 @@ export function inferHitpayMode(apiKey: string): HitpayMode {
 }
 
 /** Both halves of the credential or nothing — half a credential can neither
- * create requests nor verify webhooks. Mirrors resolveLalamoveCredentials. */
+ * create requests nor verify webhooks. Mirrors resolveLalamoveCredentials.
+ *
+ * PRESENCE checks only in queries/mutations: the stored values may be
+ * ciphertext (86eyn25gk), so `apiKey`/`salt`/`mode` here are NOT usable
+ * against HitPay — actions must go through `decryptHitpayCredentials`, which
+ * re-infers `mode` from the plaintext (a ciphertext never starts with
+ * `test_`, so trusting this mode would point sandbox keys at production). */
 export function resolveHitpayCredentials(
 	config: Pick<HitpayConfig, "apiKey" | "salt"> | undefined,
 ): HitpayCredentials | null {
 	const apiKey = config?.apiKey?.trim();
 	const salt = config?.salt?.trim();
 	if (!apiKey || !salt) return null;
+	return { apiKey, salt, mode: inferHitpayMode(apiKey) };
+}
+
+/** Decrypt-at-use (86eyn25gk): the ONLY credential shape safe to send to
+ * HitPay. Call inside actions/httpActions right before the fetch — plaintext
+ * legacy rows pass through unchanged. */
+export async function decryptHitpayCredentials(
+	credentials: HitpayCredentials,
+): Promise<HitpayCredentials> {
+	const apiKey = await decryptSecret(credentials.apiKey);
+	const salt = await decryptSecret(credentials.salt);
 	return { apiKey, salt, mode: inferHitpayMode(apiKey) };
 }
 
@@ -79,6 +106,21 @@ export function hitpayCheckoutConfigured(
 }
 
 /** HitPay's documented minimum request amount (0.30 in major units). */
+/**
+ * How HitPay is NAMED to a seller — the word that goes in the "it landed in
+ * your … account" line of the payment-received alert and email (86eyd63r8).
+ *
+ * It lives on the provider side of the seam on purpose. `receiveGatewayPayment`
+ * and both notifications take the provider as a plain value and know nothing
+ * about HitPay, matching the rest of the order schema (`gatewayPaymentId`,
+ * `by_gateway_request` — never `hitpay*`). A second gateway adds its own label
+ * beside this one and reuses the same Meta template, whose `{{4}}` is exactly
+ * this string. Getting that shape right BEFORE the template is approved is what
+ * saves a re-submission later — and stops a Billplz seller being sent to a
+ * HitPay dashboard they don't have.
+ */
+export const HITPAY_PROVIDER_LABEL = "HitPay";
+
 export const HITPAY_MIN_AMOUNT_SEN = 30;
 
 /** Requests are minted with a fixed expiry so an abandoned link dies on its
@@ -129,8 +171,19 @@ export function mapHitpayPaymentType(
 		case "card":
 		case "cards":
 			return "card";
+		// SG rails (86eyph341). HitPay names PayNow `paynow_online`; the bare
+		// form is accepted too so a naming change upstream can't silently
+		// demote a real settlement to "other".
+		case "paynow_online":
+		case "paynow":
+			return "paynow";
+		// GrabPay is stamped in BOTH markets — the order tag follows the money,
+		// not the store's picker (MY doesn't offer GrabPay by hand).
+		case "grabpay":
+		case "grabpay_direct":
+			return "grabpay";
 		default:
-			// paynow_online (sandbox SG), grabpay, shopee_pay, boost, atome, …
+			// shopee_pay, boost, atome, apple/google pay, …
 			return "other";
 	}
 }

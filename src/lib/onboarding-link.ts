@@ -19,6 +19,11 @@ export type OnboardingInviteFields = {
 	// (creates an active sub + a pending founding invoice). Safe in the URL — the
 	// founding RANK still only claims when an admin marks the invoice paid.
 	founding?: boolean;
+	// Store country (SG-lite). Carried in the invite so an SG client's onboarding
+	// form opens pre-set to Singapore — currency is born from the country at
+	// create, so getting it right BEFORE the first product matters. Only present
+	// when SG (MY is the default shape).
+	country?: "MY" | "SG";
 };
 
 export type OnboardingPrefill = {
@@ -26,6 +31,7 @@ export type OnboardingPrefill = {
 	slug?: string;
 	wa?: string;
 	founding?: boolean;
+	country?: "SG";
 };
 
 /** The query-param key the invite token rides in. */
@@ -58,6 +64,7 @@ export function encodeOnboardingPrefill(
 	const wa = fields.waPhone?.trim();
 	if (wa) payload.wa = wa;
 	if (fields.founding) payload.founding = true;
+	if (fields.country === "SG") payload.country = "SG";
 	return base64UrlEncode(JSON.stringify(payload));
 }
 
@@ -77,6 +84,8 @@ export function decodeOnboardingPrefill(
 			};
 			// Only present when true, so it doesn't pollute the common (non-founding) shape.
 			if (obj.founding === true) prefill.founding = true;
+			// Same posture: only the non-default country rides the token.
+			if (obj.country === "SG") prefill.country = "SG";
 			return prefill;
 		}
 	} catch {

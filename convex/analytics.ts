@@ -35,6 +35,7 @@ import {
 	type PaymentStat,
 	type ProductStat,
 	reduceInsights,
+	type SourceStat,
 	topProducts,
 } from "./lib/insights";
 import { getAccess } from "./subscriptions";
@@ -70,6 +71,8 @@ function toInput(o: OrderDoc): InsightsOrderInput {
 		securityDeposit: o.securityDeposit,
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
+		source: o.source,
+		attributionSource: o.attributionSource,
 		items: o.items,
 	};
 }
@@ -158,6 +161,7 @@ export type InsightsRangeResult =
 			products: ProductStat[];
 			trend: { start: number; earned: number; orderCount: number }[];
 			payments: PaymentStat[];
+			sources: SourceStat[];
 			bucketing: Bucketing;
 			capped: boolean;
 	  };
@@ -204,6 +208,7 @@ export const getInsightsRange = query({
 			products,
 			trend: agg.trend,
 			payments: agg.payments,
+			sources: agg.sources,
 			bucketing,
 			capped,
 		};
@@ -220,6 +225,7 @@ export type InsightsTodayResult =
 			orderCount: number;
 			products: ProductStat[];
 			payments: PaymentStat[];
+			sources: SourceStat[];
 	  };
 
 /**
@@ -253,6 +259,7 @@ export const getTodayStats = query({
 			orderCount: agg.orderCount,
 			products,
 			payments: agg.payments,
+			sources: agg.sources,
 		};
 	},
 });
