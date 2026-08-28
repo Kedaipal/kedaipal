@@ -36,6 +36,7 @@ import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -661,11 +662,16 @@ function TrackingRoute() {
 			{/* Payment deadline (86eyq0epn) — the claim timer continuing until real
 			    money. Rendered only while the clock is LIVE: unpaid (a `claimed`
 			    order shows the being-confirmed card instead — the countdown pauses
-			    on an "I've paid"), not cancelled, and no hold that makes payment
-			    impossible (fee-pending / gateway issue) — the exact states the
-			    auto-cancel sweep skips, so the UI never threatens what the server
-			    wouldn't do. */}
-			{!isCancelled &&
+			    on an "I've paid"), still in a status where the deadline means
+			    something, and no hold that makes payment impossible (fee-pending /
+			    gateway issue) — the exact states the auto-cancel sweep skips, so
+			    the UI never threatens what the server wouldn't do.
+
+			    `paymentDeadlineApplies` covers cancelled AND anything past
+			    `confirmed`: both writers now clear `paymentDueAt` on those
+			    transitions (PR #227 review), and this is the defence for rows
+			    already stranded before that fix shipped. */}
+			{paymentDeadlineApplies(order.status) &&
 			order.paymentDueAt !== undefined &&
 			paymentStatus === "unpaid" &&
 			!deliveryFeeHeld &&

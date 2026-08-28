@@ -8432,3 +8432,111 @@ describe("orders — inbox filter by marketing origin (86eyq0eq9)", () => {
 		expect(res.total).toBe(0);
 	});
 });
+
+describe("orders — a payment deadline dies when the clock stops meaning anything", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** An unpaid order carrying a claim link's payment deadline (86eyq0epn). */
+	async function orderWithDeadline(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		if (!order) throw new Error("seed failed");
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, {
+				paymentDueAt: Date.now() + 10 * 60_000,
+				paymentStatus: "unpaid" as const,
+			}),
+		);
+		return { order, shortId };
+	}
+
+	const dueAt = async (t: ReturnType<typeof setup>, orderId: Id<"orders">) =>
+		(await t.run((ctx) => ctx.db.get(orderId)))?.paymentDueAt;
+
+	// PR #227 review. Sellers routinely advance unpaid orders — that's exactly
+	// why isAutoCancelDue has its "seller advanced it on purpose" arm. But
+	// leaving paymentDueAt set stranded the row in by_payment_due forever: the
+	// 1-minute sweep re-read a set that only grew, and the buyer's page
+	// permanently threatened a cancellation that could never happen.
+	test("advancing an unpaid order past confirmed clears it (updateStatus)", async () => {
+		const t = setup();
+		const { order } = await orderWithDeadline(t);
+
+		// Still live at confirmed — the buyer can pay, the sweep can cancel.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		expect(await dueAt(t, order._id)).toBeDefined();
+
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		expect(await dueAt(t, order._id)).toBeUndefined();
+	});
+
+	// advanceToStage patches `status` on its OWN path, so the cleanup has to be
+	// repeated there — a store on custom stages would otherwise leak exactly
+	// the rows the other writer now clears.
+	test("the custom-stage writer clears it too (advanceToStage)", async () => {
+		const t = setup();
+		const { order } = await orderWithDeadline(t);
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:confirmed",
+		});
+		expect(await dueAt(t, order._id)).toBeDefined();
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		expect(await dueAt(t, order._id)).toBeUndefined();
+	});
+
+	test("cancelling still clears it — the original arm, unchanged", async () => {
+		const t = setup();
+		const { order } = await orderWithDeadline(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		expect(await dueAt(t, order._id)).toBeUndefined();
+	});
+
+	// The invariant the schema states outright: the by_payment_due range only
+	// ever holds LIVE clocks. Assert it the way the cron reads it.
+	test("no stranded rows are left in the by_payment_due range", async () => {
+		const t = setup();
+		const { order } = await orderWithDeadline(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+		});
+
+		const stranded = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_payment_due", (q) => q.gt("paymentDueAt", 0))
+				.collect(),
+		);
+		expect(stranded).toHaveLength(0);
+	});
+});

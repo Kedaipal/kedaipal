@@ -751,8 +751,8 @@ type RetailerPublic = {
 	// `subscription`. See convex/subscriptionUsage.ts.
 	ordersThisMonth?: number;
 	// Claim links (86eyq0epn): the store's remembered default payment window —
-	// seeds the send dialog's chips; the dialog updates it on every send.
-	// OWNER-only (seller config). Unset = the 24h default.
+	// seeds the send controls' chips and is updated on every send. OWNER-only
+	// (seller config). Unset falls back to DEFAULT_CLAIM_WINDOW_MINUTES.
 	claimLinkWindowMinutes?: number;
 	// Claim links (86eyq0epn × 86eyq0eq9): the marketing origin the seller last
 	// tagged a claim with — seeds the send dialog's origin chips. OWNER-only.

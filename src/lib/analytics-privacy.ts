@@ -25,21 +25,37 @@
 export const MASK_PII = { "data-clarity-mask": "true" } as const;
 
 /**
- * True for the buyer order-tracking routes, whose *URL itself* is the secret.
+ * True for the buyer routes whose *URL itself* is the secret.
  *
- * `/track/<token>` carries the buyer's capability token — it grants reading
- * the order, claiming payment, and editing the delivery address/phone with no
- * auth (see CLAUDE.md). Any analytics tool that observes the page address on
- * these routes exports that secret to a third party, so both providers share
- * this one predicate: Clarity refuses to boot (`useClarity`), and GA neither
- * initializes nor sends (`useGoogleAnalytics`). For GA, exclusion beats
- * redacting the sent path: gtag auto-collects the full `page_location` from
- * the browser once loaded, so the library must never load here at all.
+ * Two of them, and both are capability tokens with no auth behind them:
  *
- * Nothing links to `/track` client-side — buyers always arrive from a WhatsApp
- * link, i.e. a fresh document load — so refusing to boot here is a complete
- * exclusion, not a partial one.
+ *  - `/track/<token>` — read the order, claim payment, edit the delivery
+ *    address/phone (see CLAUDE.md).
+ *  - `/claim/<token>` — read the buyer's name/phone and the frozen lines, and
+ *    **write**: `orderClaims.commit` creates a real order and decrements the
+ *    seller's stock. Strictly the stronger of the two.
+ *
+ * Any analytics tool that observes the page address on these routes exports
+ * that secret to a third party, so both providers share this one predicate:
+ * Clarity refuses to boot (`useClarity`), and GA neither initializes nor sends
+ * (`useGoogleAnalytics`). For GA, exclusion beats redacting the sent path:
+ * gtag auto-collects the full `page_location` from the browser once loaded, so
+ * the library must never load here at all. Clarity hooks the History API on
+ * init, so the same applies — plus a session replay of the buyer's checkout.
+ *
+ * Nothing links to either route client-side — buyers always arrive from a
+ * WhatsApp link, i.e. a fresh document load — so refusing to boot here is a
+ * complete exclusion, not a partial one.
+ *
+ * ADD ANY NEW TOKEN-IN-URL BUYER ROUTE HERE. `/claim` was missed when it
+ * shipped (PR #227 review) even though the route was correctly added to
+ * `BUYER_ROUTE_IDS` for the Clerk-off list — the two lists guard the same
+ * class of route and are worth changing together.
  */
-export function isTrackingTokenPath(pathname: string): boolean {
-	return pathname === "/track" || pathname.startsWith("/track/");
+export function isCapabilityTokenPath(pathname: string): boolean {
+	return CAPABILITY_TOKEN_PREFIXES.some(
+		(prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+	);
 }
+
+const CAPABILITY_TOKEN_PREFIXES = ["/track", "/claim"] as const;
