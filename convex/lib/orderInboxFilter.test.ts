@@ -243,3 +243,123 @@ describe("sortInboxOrders", () => {
 		expect(input.map((o) => o.id)).toEqual(["d", "c", "b", "a"]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// 86eyrtz74 — pinning. Two rules, both deliberate and both counter-intuitive
+// enough to need pinning down: a pin OUTRANKS the filter (so the seller can
+// filter to something else and still compare against it), and pinning is a
+// PARTITION, never a sort option competing with newest/due.
+// ---------------------------------------------------------------------------
+
+describe("buildInboxPredicate — pin privilege", () => {
+	const pinned = order({ status: "delivered", pinnedAt: 5_000 });
+
+	test("showPinned keeps a pinned order that fails the bucket", () => {
+		const p = buildInboxPredicate({ bucket: "new", showPinned: true });
+		expect(p(pinned)).toBe(true);
+	});
+
+	test("a pin outranks EVERY other filter at once, not just the bucket", () => {
+		const p = buildInboxPredicate({
+			bucket: "new",
+			paymentStatuses: ["unpaid"],
+			paymentMethods: ["cash"],
+			source: "counter",
+			attributionSources: ["tiktok"],
+			dateFrom: 9_000_000,
+			dateTo: 9_100_000,
+			fulfilmentWindow: "today",
+			mockupPending: true,
+			searchText: "nothing-matches-this",
+			showPinned: true,
+		});
+		expect(p(pinned)).toBe(true);
+	});
+
+	test("without showPinned a pinned order is filtered like any other", () => {
+		expect(buildInboxPredicate({ bucket: "new" })(pinned)).toBe(false);
+		expect(
+			buildInboxPredicate({ bucket: "new", showPinned: false })(pinned),
+		).toBe(false);
+	});
+
+	test("turning the toggle off does NOT hide a pin that legitimately matches", () => {
+		// The toggle removes the pin's privilege; it is not a "hide my pins"
+		// switch. A pinned order inside the filter is still in the filter.
+		const matching = order({ status: "pending", pinnedAt: 5_000 });
+		expect(
+			buildInboxPredicate({ bucket: "new", showPinned: false })(matching),
+		).toBe(true);
+	});
+
+	test("showPinned does not smuggle in UNpinned orders", () => {
+		const p = buildInboxPredicate({ bucket: "new", showPinned: true });
+		expect(p(order({ status: "delivered" }))).toBe(false);
+	});
+});
+
+describe("sortInboxOrders — pinned partition", () => {
+	const rows = [
+		{ id: "c", createdAt: 3_000, fulfilmentDate: 30 },
+		{ id: "b", createdAt: 2_000, fulfilmentDate: 10, pinnedAt: 100 },
+		{ id: "a", createdAt: 1_000, fulfilmentDate: 20, pinnedAt: 200 },
+	];
+
+	test("recent: pins lead, most-recently-pinned first", () => {
+		expect(sortInboxOrders(rows, "recent").map((o) => o.id)).toEqual([
+			"a",
+			"b",
+			"c",
+		]);
+	});
+
+	test("due: pins still lead, ordered by due date among themselves", () => {
+		// b is due sooner than a, so inside the pinned group b wins — the pinned
+		// group obeys the active sort rather than becoming a second list with
+		// its own rules.
+		expect(sortInboxOrders(rows, "due").map((o) => o.id)).toEqual([
+			"b",
+			"a",
+			"c",
+		]);
+	});
+
+	test("a pin sorts ahead even when its due date is the furthest out", () => {
+		const late = [
+			{ id: "soon", fulfilmentDate: 1 },
+			{ id: "pinned-late", fulfilmentDate: 999, pinnedAt: 1 },
+		];
+		expect(sortInboxOrders(late, "due").map((o) => o.id)).toEqual([
+			"pinned-late",
+			"soon",
+		]);
+	});
+
+	test("no pins leaves the existing ordering untouched", () => {
+		const plain = [
+			{ id: "x", fulfilmentDate: 20 },
+			{ id: "y", fulfilmentDate: 10 },
+		];
+		expect(sortInboxOrders(plain, "recent").map((o) => o.id)).toEqual(["x", "y"]);
+		expect(sortInboxOrders(plain, "due").map((o) => o.id)).toEqual(["y", "x"]);
+	});
+
+	test("never mutates the input", () => {
+		const input = [...rows];
+		sortInboxOrders(input, "due");
+		expect(input.map((o) => o.id)).toEqual(["c", "b", "a"]);
+	});
+
+	test("dateless pins still lead, and dateless non-pins still sink", () => {
+		const mixed = [
+			{ id: "dated", fulfilmentDate: 5 },
+			{ id: "dateless" },
+			{ id: "dateless-pin", pinnedAt: 1 },
+		];
+		expect(sortInboxOrders(mixed, "due").map((o) => o.id)).toEqual([
+			"dateless-pin",
+			"dated",
+			"dateless",
+		]);
+	});
+});
