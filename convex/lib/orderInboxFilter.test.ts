@@ -13,7 +13,10 @@ function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
 		createdAt: 1_000,
 		shortId: "ORD-0001",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
-		items: [{ name: "Vanilla Cake", variantLabel: "1kg" }],
+		items: [{ name: "Vanilla Cake", variantLabel: "1kg", quantity: 1 }],
+		subtotal: 12500,
+		total: 12500,
+		currency: "MYR",
 		...overrides,
 	};
 }
@@ -361,5 +364,89 @@ describe("sortInboxOrders — pinned partition", () => {
 			"dated",
 			"dateless",
 		]);
+	});
+});
+
+describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => {
+	// Search used to cover order #, customer name, phone and item names only —
+	// so "find the order with tracking 630002864925" or "the one going to
+	// Puchong" simply didn't work. It now runs over the same column registry the
+	// table renders and the CSV writes.
+	const rich = order({
+		shortId: "ORD-7788",
+		customer: { name: "Nurul Ain", waPhone: "+60123456789" },
+		items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2 }],
+		deliveryAddress: {
+			line1: "12 Jalan Kenari 5",
+			city: "Puchong",
+			state: "Selangor",
+			postcode: "47100",
+			notes: "Gate code 1234",
+		},
+		courierName: "J&T Express",
+		trackingNo: "630002864925",
+		paymentReference: "MBB-88213",
+		customerNote: "no onions please",
+		attributionSource: "tiktok",
+		pickupSnapshot: { label: "Setapak stall", address: "3 Jalan Genting" },
+		cancelledReason: "Buyer changed mind",
+	});
+	const hits = (term: string) =>
+		buildInboxPredicate({ bucket: "all", searchText: term })(rich);
+
+	test("finds by the fields it always could", () => {
+		expect(hits("ORD-7788")).toBe(true);
+		expect(hits("nurul")).toBe(true);
+		expect(hits("kek lapis")).toBe(true);
+	});
+
+	test("finds by tracking number, courier and payment reference", () => {
+		expect(hits("630002864925")).toBe(true);
+		expect(hits("j&t")).toBe(true);
+		expect(hits("MBB-88213")).toBe(true);
+	});
+
+	test("finds by any part of the delivery address", () => {
+		expect(hits("jalan kenari")).toBe(true);
+		expect(hits("puchong")).toBe(true);
+		expect(hits("47100")).toBe(true);
+		expect(hits("gate code")).toBe(true);
+	});
+
+	test("finds by pickup outlet, note, origin and cancel reason", () => {
+		expect(hits("setapak")).toBe(true);
+		expect(hits("no onions")).toBe(true);
+		expect(hits("tiktok")).toBe(true);
+		expect(hits("changed mind")).toBe(true);
+	});
+
+	test("is case-insensitive and still rejects a genuine miss", () => {
+		expect(hits("PUCHONG")).toBe(true);
+		expect(hits("kuala lumpur")).toBe(false);
+	});
+
+	test("phone still matches on TRAILING digits, which substring can't do", () => {
+		// "123456789" has to find "+60123456789" however the seller typed it.
+		expect(hits("123456789")).toBe(true);
+		expect(hits("60123456789")).toBe(true);
+	});
+
+	test("an order with none of those fields is unaffected", () => {
+		const plain = order({ shortId: "ORD-0002" });
+		expect(
+			buildInboxPredicate({ bucket: "all", searchText: "puchong" })(plain),
+		).toBe(false);
+		expect(
+			buildInboxPredicate({ bucket: "all", searchText: "ORD-0002" })(plain),
+		).toBe(true);
+	});
+
+	test("search still ANDs with the other filters, never ORs", () => {
+		expect(
+			buildInboxPredicate({
+				bucket: "completed",
+				searchText: "puchong",
+			})(rich),
+		).toBe(false);
 	});
 });

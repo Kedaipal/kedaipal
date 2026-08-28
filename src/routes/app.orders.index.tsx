@@ -31,7 +31,10 @@ import {
 	INBOX_BUCKETS,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
-import { ORDER_COLUMNS } from "../../convex/lib/orderCsv";
+import {
+	ORDER_COLUMNS,
+	type OrderColumnKey,
+} from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	sortInboxOrders,
@@ -1087,10 +1090,8 @@ function OrdersRoute() {
 						</FilterChipRow>
 						{tableView ? (
 							<OrderColumnPicker
-								columns={columnState.columns}
 								isVisible={columnState.isVisible}
 								onToggle={columnState.toggle}
-								onReorder={columnState.reorder}
 								onReset={columnState.reset}
 								visibleCount={columnState.visibleKeys.length}
 								isCustomised={columnState.isCustomised}
@@ -1172,6 +1173,9 @@ function OrdersRoute() {
 							statusLabelFor={statusLabelFor}
 							sorting={tableSorting}
 							onSortingChange={setTableSorting}
+							onReorderColumns={(keys) =>
+								columnState.reorder(keys as OrderColumnKey[])
+							}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}

@@ -18,6 +18,35 @@ the full inbox. See [`manual-subscription.md`](./manual-subscription.md)
 
 - **Buckets are fulfilment-based**, not a mix of axes: **All / New /
   In progress (confirmed·packed·shipped) / Completed (delivered) / Cancelled**.
+## Search covers every column (86eyrtz74)
+
+Free-text search used to read order #, customer name, phone and item names. It
+now runs over **every column in `ORDER_COLUMNS`** — address, courier, tracking
+number, payment reference, note, pickup outlet, order type, marketing origin,
+cancel reason and the rest — via `searchHaystack` in `orderInboxFilter.ts`. One
+registry means the thing you can search is exactly the thing the table shows and
+the CSV exports; a narrower search shape is how "why can't I find that order by
+its tracking number?" happens.
+
+It is the **same predicate for both views**, server-side in `searchOrders`, so
+cards and table search identically and the export matches what's on screen.
+
+Two deliberate details:
+
+- **Phone keeps its own rule** — trailing-digit matching, so `123456789` finds
+  `+60123456789` however it was stored or typed. Plain substring can't do that.
+- **`Categories (current)` can't participate.** It is resolved from the junction
+  table at export time and isn't on the order document, so it renders blank in
+  the haystack. Searching it would mean a per-product fan-out on every keystroke
+  across the whole scan window.
+
+The haystack is built lazily (only when there IS a term), since it allocates ~36
+strings per order. Expect broader matches than before: a term appearing in a
+shared field — a city every order ships to — now legitimately matches all of
+them. That breadth is the point.
+
+## Buckets
+
 - **"New" means "the seller hasn't dealt with it yet."** That was originally
   synonymous with `pending`, because an order sat there until the buyer's
   WhatsApp message confirmed it. The confirmation push (86eyf1rck) commits
@@ -114,13 +143,16 @@ WhatsApp.
   in `localStorage` (`useOrderColumns`), deliberately not in the URL (36 toggles
   would bury the shareable parts) and not in Convex (a personal display
   preference shouldn't cost a write or sync to a colleague).
-- **Drag to reorder** in the Columns panel, via the shared `SortableList`
-  (@dnd-kit) — the project's sorting standard, touch-safe, never arrow buttons.
-  The panel splits into **Shown** (ordered, draggable) and **Add a column**
-  (grouped by registry section): order only means something for columns that are
-  on screen, and adding appends to the end, where the seller can see what they
-  just turned on. `resolveOrderColumns` honours the caller's order, so the
-  exported CSV comes out arranged exactly like the table.
+- **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
+  as the drag handle. No separate grip: the shared `useSortableSensors` starts a
+  pointer drag only after 8px and a touch drag only after a 250ms hold, so a
+  plain click still falls through to sorting. Reordering a table by dragging its
+  headers is what every spreadsheet user already knows; the first build put a
+  reorder list inside the Columns dropdown, which is nowhere anyone looks.
+  The Columns panel is now **show/hide only**, and turning a column on appends
+  it to the right-hand end, where the seller can see what they added and drag it
+  from there. `resolveOrderColumns` honours the caller's order, so the exported
+  CSV comes out arranged exactly like the table.
 - **Per-column sorting**, client-side over the window the inbox already holds,
   so it costs no extra reads. Comparison is **typed, not lexical**: columns
   carry an optional `sortKey` (see `orderColumnSortValue`) returning the
@@ -134,9 +166,13 @@ WhatsApp.
   control there, and two controls fighting over one ordering is worse than
   either. That is also what buys back the width the Columns chip takes. Cards
   view keeps it.
-- **Pinned orders stay on top of any sort**, via the table's own row pinning
-  (`keepPinnedRows`, so the pinned block re-sorts with everything else rather
-  than going stale). Pinning is a partition, never a competing sort key.
+- **Pinned orders stay on top of any sort, and sort WITHIN their own group.**
+  Implemented by partitioning `getSortedRowModel()` rather than using the
+  table's row pinning: `getTopRows()` returns pinned rows in the order of the
+  pinned-id array, so the pinned block would freeze while the rest re-sorted and
+  the two halves would disagree about what "sorted by total" means. Splitting
+  the already-sorted model keeps the active sort applying inside both halves.
+  Pinning stays a partition, never a competing sort key.
 - **Export honours the view.** In table view the Export button becomes a
   two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
   rather than a dialog, which would tax a path sellers hit often. In cards view

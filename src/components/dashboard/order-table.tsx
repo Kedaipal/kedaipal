@@ -1,3 +1,16 @@
+import {
+	closestCenter,
+	DndContext,
+	type DragEndEvent,
+	type Modifier,
+} from "@dnd-kit/core";
+import {
+	arrayMove,
+	horizontalListSortingStrategy,
+	SortableContext,
+	useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Link } from "@tanstack/react-router";
 import {
 	type ColumnDef,
@@ -17,6 +30,7 @@ import {
 } from "../../../convex/lib/orderCsv";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { cn } from "../../lib/utils";
+import { useSortableSensors } from "../ui/sortable-list";
 import { type OrderStatus, StatusBadge } from "./status-badge";
 
 /**
@@ -67,6 +81,8 @@ export interface OrderTableProps {
 	statusLabelFor: (o: TableOrder) => string;
 	sorting: SortingState;
 	onSortingChange: (next: SortingState) => void;
+	/** New left-to-right column order, after a header drag. */
+	onReorderColumns: (keys: string[]) => void;
 	selectMode: boolean;
 	selected: Set<string>;
 	onToggleSelect: (id: string) => void;
@@ -115,12 +131,95 @@ function Cell({
 	);
 }
 
+/**
+ * Headers only travel sideways. `@dnd-kit/modifiers` isn't a dependency and
+ * this is the whole of what we'd import from it, so it lives here rather than
+ * growing the bundle for two lines.
+ */
+const horizontalOnly: Modifier = ({ transform }) => ({ ...transform, y: 0 });
+
+/**
+ * One column header: a sort button that is also the drag handle.
+ *
+ * There is no separate grip. The shared sensors (`useSortableSensors`) make
+ * that safe — a pointer drag only starts after 8px of movement, and touch after
+ * a 250ms hold — so a plain click still falls through to sorting, and the
+ * seller drags the thing they actually want to move rather than hunting for a
+ * handle. Reordering a table by dragging its headers is the interaction people
+ * already know from every spreadsheet; a list in a dropdown is not.
+ */
+function SortableHeader({
+	id,
+	label,
+	numeric,
+	sortDir,
+	onToggleSort,
+}: {
+	id: string;
+	label: string;
+	numeric?: boolean;
+	sortDir: false | "asc" | "desc";
+	onToggleSort: ((e: unknown) => void) | undefined;
+}) {
+	const {
+		attributes,
+		listeners,
+		setNodeRef,
+		transform,
+		transition,
+		isDragging,
+	} = useSortable({ id });
+	const SortIcon =
+		sortDir === "asc"
+			? ArrowUp
+			: sortDir === "desc"
+				? ArrowDown
+				: ChevronsUpDown;
+	return (
+		<button
+			ref={setNodeRef}
+			type="button"
+			// `touch-none` is what lets a held header drag instead of scrolling the
+			// table sideways under the finger.
+			className={cn(
+				"flex h-[42px] min-w-0 touch-none cursor-grab items-center gap-1 px-2 transition-colors hover:text-foreground active:cursor-grabbing",
+				numeric && "flex-row-reverse",
+				sortDir && "text-foreground",
+				isDragging && "z-20 rounded-md bg-card text-foreground shadow-lg",
+			)}
+			style={{
+				transform: CSS.Transform.toString(transform),
+				transition,
+				opacity: isDragging ? 0.9 : 1,
+			}}
+			onClick={onToggleSort}
+			aria-label={`${label} — click to sort, drag to move`}
+			title={`${label} — drag to reorder`}
+			{...attributes}
+			{...listeners}
+		>
+			<span className="truncate">{label}</span>
+			<SortIcon
+				className={cn(
+					"size-3 shrink-0 transition-opacity",
+					// The neutral glyph stays invisible until the header row is
+					// hovered, so ten columns don't read as ten active controls — but
+					// it is always in the DOM, so widths never jump when a sort lands.
+					sortDir ? "opacity-100" : "opacity-0 group-hover:opacity-40",
+				)}
+				aria-hidden="true"
+			/>
+		</button>
+	);
+}
+
 export function OrderTable({
 	orders,
 	columns,
 	statusLabelFor,
 	sorting,
 	onSortingChange,
+	onReorderColumns,
 	selectMode,
 	selected,
 	onToggleSelect,
@@ -147,25 +246,15 @@ export function OrderTable({
 		[columns, statusLabelFor],
 	);
 
-	const pinnedIds = useMemo(
-		() => orders.filter((o) => o.pinnedAt !== undefined).map((o) => o._id),
-		[orders],
-	);
-
 	const table = useReactTable({
 		data: orders,
 		columns: columnDefs,
-		state: { sorting, rowPinning: { top: pinnedIds, bottom: [] } },
+		state: { sorting },
 		onSortingChange: (updater) =>
 			onSortingChange(
 				typeof updater === "function" ? updater(sorting) : updater,
 			),
 		getRowId: (o) => o._id,
-		enableRowPinning: true,
-		// Pinned rows keep the ACTIVE sort among themselves rather than freezing
-		// in data order — otherwise re-sorting leaves the pinned block stale and
-		// the two halves of the table disagree about what "sorted by total" means.
-		keepPinnedRows: true,
 		getCoreRowModel: getCoreRowModel(),
 		getSortedRowModel: getSortedRowModel(),
 	});
@@ -177,8 +266,34 @@ export function OrderTable({
 		() => new Map(columns.map((c) => [c.key as string, c])),
 		[columns],
 	);
-	const topRows = table.getTopRows();
-	const restRows = table.getCenterRows();
+
+	// Partition the SORTED rows rather than using the table's row pinning:
+	// `getTopRows()` returns pinned rows in the order of the pinned-id array, so
+	// the pinned block would freeze while the rest of the table re-sorted. Taking
+	// the sorted model and splitting it means the active sort applies INSIDE the
+	// pinned group and inside the rest — pinning stays a partition, and both
+	// halves agree on what "sorted by total" means.
+	const sensors = useSortableSensors();
+	const columnKeys = useMemo(
+		() => columns.map((c) => c.key as string),
+		[columns],
+	);
+
+	function handleHeaderDragEnd(event: DragEndEvent) {
+		const { active, over } = event;
+		if (!over || active.id === over.id) return;
+		const from = columnKeys.indexOf(String(active.id));
+		const to = columnKeys.indexOf(String(over.id));
+		if (from < 0 || to < 0) return;
+		onReorderColumns(arrayMove(columnKeys, from, to));
+	}
+
+	const sortedRows = table.getSortedRowModel().rows;
+	const topRows: Row<TableOrder>[] = [];
+	const restRows: Row<TableOrder>[] = [];
+	for (const row of sortedRows) {
+		(row.original.pinnedAt !== undefined ? topRows : restRows).push(row);
+	}
 
 	function renderRow(row: Row<TableOrder>, endsPinnedRun: boolean) {
 		const o = row.original;
@@ -305,53 +420,36 @@ export function OrderTable({
 						<Pin className="size-3.5" aria-hidden="true" />
 						<span className="sr-only">Pinned</span>
 					</span>
-					<div
-						className="grid flex-1 items-center"
-						style={{ gridTemplateColumns: cellGrid }}
+					<DndContext
+						sensors={sensors}
+						collisionDetection={closestCenter}
+						modifiers={[horizontalOnly]}
+						onDragEnd={handleHeaderDragEnd}
 					>
-						{table.getHeaderGroups()[0]?.headers.map((header) => {
-							const col = byKey.get(header.column.id);
-							const dir = header.column.getIsSorted();
-							const SortIcon =
-								dir === "asc"
-									? ArrowUp
-									: dir === "desc"
-										? ArrowDown
-										: ChevronsUpDown;
-							return (
-								<button
-									key={header.id}
-									type="button"
-									onClick={header.column.getToggleSortingHandler()}
-									aria-label={`Sort by ${col?.label ?? header.column.id}`}
-									title={col?.label}
-									className={cn(
-										"flex h-[42px] min-w-0 items-center gap-1 px-2 transition-colors hover:text-foreground",
-										col?.numeric && "flex-row-reverse",
-										dir && "text-foreground",
-									)}
-								>
-									<span className="truncate">
-										{flexRender(
-											header.column.columnDef.header,
-											header.getContext(),
-										)}
-									</span>
-									<SortIcon
-										className={cn(
-											"size-3 shrink-0 transition-opacity",
-											// The neutral glyph stays invisible until the header row
-											// is hovered, so ten columns don't read as ten active
-											// controls — but it is always in the DOM, so widths
-											// never jump when a sort is applied.
-											dir ? "opacity-100" : "opacity-0 group-hover:opacity-40",
-										)}
-										aria-hidden="true"
-									/>
-								</button>
-							);
-						})}
-					</div>
+						<SortableContext
+							items={columnKeys}
+							strategy={horizontalListSortingStrategy}
+						>
+							<div
+								className="grid flex-1 items-center"
+								style={{ gridTemplateColumns: cellGrid }}
+							>
+								{table.getHeaderGroups()[0]?.headers.map((header) => {
+									const col = byKey.get(header.column.id);
+									return (
+										<SortableHeader
+											key={header.id}
+											id={header.column.id}
+											label={col?.label ?? header.column.id}
+											numeric={col?.numeric}
+											sortDir={header.column.getIsSorted()}
+											onToggleSort={header.column.getToggleSortingHandler()}
+										/>
+									);
+								})}
+							</div>
+						</SortableContext>
+					</DndContext>
 				</div>
 
 				<ul>

@@ -7,6 +7,30 @@
 import { attributionBucket } from "./attribution";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
 import { orderBucket, type OrderStatus } from "./orderBuckets";
+import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
+
+/**
+ * Every column's rendered text for one order, lowercased and joined — the
+ * haystack free-text search runs against (86eyrtz74).
+ *
+ * Built from the SAME registry the table renders and the CSV writes, so a
+ * seller can search anything they can see. Built lazily (only when there IS a
+ * term) because it allocates ~36 strings per order.
+ *
+ * One column can't participate: `Categories (current)` is resolved from the
+ * junction table at export time and isn't on the order document, so it renders
+ * blank here. Searching by category would mean a per-product fan-out on every
+ * keystroke across the whole scan window — the Insights/category surfaces are
+ * the right place for that question.
+ */
+function searchHaystack(o: CsvOrder): string {
+	let out = "";
+	for (const column of ORDER_COLUMNS) {
+		const text = column.value(o);
+		if (text !== "") out += `${text.toLowerCase()}\n`;
+	}
+	return out;
+}
 
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
 
@@ -47,24 +71,23 @@ export type InboxFilterArgs = {
 	showPinned?: boolean;
 };
 
-/** The order fields the predicate reads. A structural subset of Doc<"orders">. */
-export type FilterableOrder = {
+/**
+ * The order fields the predicate reads. A structural subset of Doc<"orders">.
+ *
+ * Built on `CsvOrder` since 86eyrtz74, because **search now runs over every
+ * column the seller can see** — address, courier, tracking number, payment
+ * reference, note, order type, origin and the rest — not just order #, name,
+ * phone and item names. One shape means the thing you can search is exactly the
+ * thing the table shows and the CSV exports; a separate, narrower search shape
+ * is how "why can't I find that order by its tracking number?" happens.
+ */
+export type FilterableOrder = CsvOrder & {
 	status: OrderStatus;
 	/** Seen-state, for the "New" bucket on push-path orders (86eyf1rck). */
 	seenAt?: number;
 	confirmationPushStatus?: string;
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
-	paymentMethod?: string;
-	source?: "storefront" | "counter" | "claim";
-	attributionSource?: string;
-	createdAt: number;
-	fulfilmentDate?: number;
-	shortId: string;
-	customer: { name?: string; waPhone?: string };
-	items: Array<{ name: string; variantLabel?: string }>;
-	/** Seller's manual bookmark (86eyrtz74). Absent = not pinned. */
-	pinnedAt?: number;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -131,18 +154,13 @@ export function buildInboxPredicate(
 				return false;
 		}
 		if (term.length > 0) {
-			const name = (o.customer.name ?? "").toLowerCase();
+			// Phone keeps its own rule: match on TRAILING digits, so "123456789"
+			// finds "+60123456789" however the seller stored or typed it. Plain
+			// substring matching can't do that, which is why it survives the
+			// move to the column haystack.
 			const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
-			const idHit = o.shortId.toLowerCase().includes(term);
-			const nameHit = name.length > 0 && name.includes(term);
-			// Phone: match on trailing digits (handles +60 / 0 / local-part typing).
 			const phoneHit = digits.length >= 4 && phone.endsWith(digits);
-			const itemHit = o.items.some(
-				(it) =>
-					it.name.toLowerCase().includes(term) ||
-					(it.variantLabel ?? "").toLowerCase().includes(term),
-			);
-			if (!idHit && !nameHit && !phoneHit && !itemHit) return false;
+			if (!phoneHit && !searchHaystack(o).includes(term)) return false;
 		}
 		return true;
 	};

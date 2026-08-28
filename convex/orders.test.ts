@@ -2945,9 +2945,20 @@ describe("orders — inbox search", () => {
 		const byName = await asA.query(api.orders.searchOrders, {
 			retailerId: retailer._id,
 			bucket: "all",
-			searchText: "ali",
+			searchText: "alice",
 		});
 		expect(byName.orders.map((o) => o._id)).toEqual([o1._id]);
+
+		// Since 86eyrtz74 search spans EVERY column, so a term that appears in a
+		// shared field legitimately matches every order carrying it — here the
+		// city, "Pet(ali)ng Jaya", which all four fixtures share. That breadth is
+		// the feature: the address is searchable now.
+		const byCity = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: "petaling",
+		});
+		expect(byCity.orders.length).toBe(4);
 
 		// Phone trailing digits.
 		const byPhone = await asA.query(api.orders.searchOrders, {

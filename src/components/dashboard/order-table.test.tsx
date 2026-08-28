@@ -54,6 +54,7 @@ function renderTable(overrides: Partial<Parameters<typeof OrderTable>[0]> = {}) 
 		statusLabelFor: () => "Confirmed",
 		sorting: [],
 		onSortingChange: vi.fn(),
+		onReorderColumns: vi.fn(),
 		selectMode: false,
 		selected: new Set<string>(),
 		onToggleSelect: vi.fn(),
@@ -192,22 +193,22 @@ describe("OrderTable — per-column sorting", () => {
 	it("every header is a sort control", () => {
 		renderTable({ orders: rows });
 		expect(
-			screen.getByRole("button", { name: /sort by order id/i }),
+			screen.getByRole("button", { name: /order id — click to sort/i }),
 		).toBeTruthy();
-		expect(screen.getByRole("button", { name: /sort by total/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /total — click to sort/i })).toBeTruthy();
 	});
 
 	it("reports the column the seller clicked, biggest-first for money", () => {
 		// Numeric columns open DESCENDING (TanStack's inference, and the right
 		// instinct: clicking Total means "show me the big ones").
 		const { onSortingChange } = renderTable({ orders: rows });
-		fireEvent.click(screen.getByRole("button", { name: /sort by total/i }));
+		fireEvent.click(screen.getByRole("button", { name: /total — click to sort/i }));
 		expect(onSortingChange).toHaveBeenCalledWith([{ id: "total", desc: true }]);
 	});
 
 	it("text columns open ascending — A first, not Z", () => {
 		const { onSortingChange } = renderTable({ orders: rows });
-		fireEvent.click(screen.getByRole("button", { name: /sort by customer/i }));
+		fireEvent.click(screen.getByRole("button", { name: /customer — click to sort/i }));
 		expect(onSortingChange).toHaveBeenCalledWith([
 			{ id: "customer", desc: false },
 		]);
@@ -275,8 +276,62 @@ describe("OrderTable — column order", () => {
 		// export follows.
 		renderTable({ columns: cols("total", "customer", "shortId") });
 		const headers = screen
-			.getAllByRole("button", { name: /^sort by/i })
+			.getAllByRole("button", { name: /— click to sort/i })
 			.map((b) => b.textContent?.trim());
 		expect(headers).toEqual(["Total", "Customer", "Order ID"]);
+	});
+});
+
+describe("OrderTable — pinned rows sort within their own group", () => {
+	// Pinning partitions; the ACTIVE sort still applies inside each half. If the
+	// pinned block froze in data order (what the table's own row pinning does),
+	// the two halves would disagree about what "sorted by total" means.
+	const rows: TableOrder[] = [
+		{ ...base, _id: "p1", shortId: "ORD-P1", total: 30000, pinnedAt: 10 },
+		{ ...base, _id: "p2", shortId: "ORD-P2", total: 10000, pinnedAt: 20 },
+		{ ...base, _id: "n1", shortId: "ORD-N1", total: 50000 },
+		{ ...base, _id: "n2", shortId: "ORD-N2", total: 20000 },
+	];
+	const order = () =>
+		screen.getAllByText(/ORD-(P|N)\d/).map((n) => n.textContent);
+
+	it("ascending sorts inside the pinned block and inside the rest", () => {
+		renderTable({ orders: rows, sorting: [{ id: "total", desc: false }] });
+		expect(order()).toEqual(["ORD-P2", "ORD-P1", "ORD-N2", "ORD-N1"]);
+	});
+
+	it("descending reverses both halves, pins still on top", () => {
+		renderTable({ orders: rows, sorting: [{ id: "total", desc: true }] });
+		expect(order()).toEqual(["ORD-P1", "ORD-P2", "ORD-N1", "ORD-N2"]);
+	});
+
+	it("a pinned order never falls below an unpinned one, whatever the sort", () => {
+		for (const desc of [false, true]) {
+			cleanup();
+			renderTable({ orders: rows, sorting: [{ id: "total", desc }] });
+			const ids = order();
+			expect(ids.slice(0, 2).every((id) => id?.startsWith("ORD-P"))).toBe(true);
+		}
+	});
+});
+
+describe("OrderTable — headers are the reorder handle", () => {
+	it("each header is both a sort control and a drag handle", () => {
+		renderTable();
+		const header = screen.getByRole("button", {
+			name: /order id — click to sort, drag to move/i,
+		});
+		expect(header).toBeTruthy();
+		// touch-none is what lets a held header drag instead of scrolling the
+		// table sideways under the finger.
+		expect(header.className).toContain("touch-none");
+	});
+
+	it("clicking a header still sorts — the drag sensor has an 8px threshold", () => {
+		const { onSortingChange } = renderTable();
+		fireEvent.click(
+			screen.getByRole("button", { name: /total — click to sort/i }),
+		);
+		expect(onSortingChange).toHaveBeenCalled();
 	});
 });
