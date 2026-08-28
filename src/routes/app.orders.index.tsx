@@ -171,7 +171,10 @@ function isOrderSource(x: unknown): x is OrderSource {
 }
 
 export const Route = createFileRoute("/app/orders/")({
-	// URL is the source of truth for the view (refresh + share preserve it).
+	// URL is the source of truth for what the seller is LOOKING AT — bucket,
+	// filters, search, sort — so refresh and share both preserve it. The one
+	// exception is `view`, the layout: that falls back to a remembered
+	// preference when the URL doesn't name one (see InboxSearch.view).
 	validateSearch: (search: Record<string, unknown>): InboxSearch => {
 		const rawBucket = search.bucket as InboxBucket;
 		// undefined ≡ "all" — keeps the default out of the URL.
