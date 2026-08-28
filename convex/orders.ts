@@ -1611,7 +1611,14 @@ export const prepareManualReminder = internalMutation({
 		ctx,
 		{ shortId },
 	): Promise<
-		| { ok: true; orderId: Id<"orders"> }
+		| {
+				ok: true;
+				orderId: Id<"orders">;
+				/** The stamp this call overwrote, so a send that reaches nobody can
+				 * put it back rather than burning one of the four allowed
+				 * reminders (86eyrtz9t). */
+				previousReminderAt: number | undefined;
+		  }
 		| { ok: false; reason: ManualReminderBlock | "not_found" }
 	> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
@@ -1635,7 +1642,33 @@ export const prepareManualReminder = internalMutation({
 			lastManualReminderAt: now,
 			updatedAt: now,
 		});
-		return { ok: true, orderId: order._id };
+		return {
+			ok: true,
+			orderId: order._id,
+			previousReminderAt: order.lastManualReminderAt,
+		};
+	},
+});
+
+/**
+ * Undo `prepareManualReminder`'s cooldown stamp when the send reached nobody
+ * (86eyrtz9t). The 24h cooldown exists to stop a seller nagging a buyer — not
+ * to charge them for OUR failure (a cap, a quality pause, a Meta blip). The
+ * WABA gateway's own burst caps are the right layer to stop hammering, so
+ * handing the attempt back is safe.
+ */
+export const rollbackManualReminder = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		previousReminderAt: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, previousReminderAt }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return;
+		await ctx.db.patch(orderId, {
+			lastManualReminderAt: previousReminderAt,
+			updatedAt: Date.now(),
+		});
 	},
 });
 
@@ -1662,9 +1695,19 @@ export const sendPaymentReminder = action({
 			shortId,
 		});
 		if (!prep.ok) return { ok: false, reason: prep.reason };
-		await ctx.runAction(internal.whatsapp.notifyManualPaymentReminder, {
-			orderId: prep.orderId,
-		});
+		const reached = await ctx.runAction(
+			internal.whatsapp.notifyManualPaymentReminder,
+			{ orderId: prep.orderId },
+		);
+		if (!reached) {
+			// Nothing left the building — hand the seller their attempt back and
+			// say so, rather than reporting a reminder the buyer never got.
+			await ctx.runMutation(internal.orders.rollbackManualReminder, {
+				orderId: prep.orderId,
+				previousReminderAt: prep.previousReminderAt,
+			});
+			return { ok: false, reason: "send_failed" };
+		}
 		return { ok: true };
 	},
 });

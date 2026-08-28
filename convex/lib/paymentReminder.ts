@@ -89,7 +89,11 @@ export type ManualReminderBlock =
 	| "no_contact"
 	| "too_early"
 	| "window_closed"
-	| "cooldown";
+	| "cooldown"
+	/** Not an eligibility verdict — the send itself reached nobody (86eyrtz9t).
+	 * Returned by the action, never by `manualReminderEligibility`, so the
+	 * seller is never told "sent ✓" for a message the buyer never got. */
+	| "send_failed";
 
 export type ManualReminderEligibility =
 	| { ok: true }

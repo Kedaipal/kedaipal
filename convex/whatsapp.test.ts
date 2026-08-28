@@ -37,9 +37,18 @@ const USER = "user_wa_test";
 
 type FetchCall = { url: string; body: unknown };
 
-function installFetchMock(): {
+/**
+ * @param opts.waStatus  Make every Cloud API send answer with this HTTP status.
+ * @param opts.metaCode  Meta's error code in that body — the seam classifies on
+ *                       it, so 131026 (not on WhatsApp) is terminal while a 503
+ *                       is a retryable blip.
+ */
+function installFetchMock(
+	opts: { waStatus?: number; metaCode?: number } = {},
+): {
 	calls: FetchCall[];
 	waCalls: () => FetchCall[];
+	resendCalls: () => FetchCall[];
 	restore: () => void;
 } {
 	const calls: FetchCall[] = [];
@@ -47,6 +56,17 @@ function installFetchMock(): {
 	globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
 		const body = init?.body ? JSON.parse(init.body as string) : null;
 		calls.push({ url: String(url), body });
+		if (
+			String(url).includes("graph.facebook.com") &&
+			opts.waStatus !== undefined
+		) {
+			return new Response(
+				JSON.stringify(
+					opts.metaCode !== undefined ? { error: { code: opts.metaCode } } : {},
+				),
+				{ status: opts.waStatus },
+			);
+		}
 		return new Response("{}", { status: 200 });
 	}) as unknown as typeof fetch;
 	return {
@@ -55,6 +75,7 @@ function installFetchMock(): {
 		// emails (api.resend.com) are captured by the same fetch mock and would
 		// otherwise inflate counts in WA-focused tests.
 		waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
+		resendCalls: () => calls.filter((c) => c.url.includes("api.resend.com")),
 		restore: () => {
 			globalThis.fetch = original;
 		},
@@ -821,6 +842,33 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 
+	test("a confirmation that reaches nobody is stamped for the cashier, not swallowed (86eyrtz9t)", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				paymentStatus: "received",
+				paymentReceivedAt: Date.now(),
+			}),
+		);
+
+		// 131026 — the number isn't on WhatsApp. Terminal, and the buyer's fault
+		// to fix, so the cashier standing with them is the one who can act.
+		const fetchMock = installFetchMock({ waStatus: 400, metaCode: 131026 });
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+		fetchMock.restore();
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		// Before this the failure was a console.error and nothing else. Now it
+		// lights up the same amber panel on the order detail a storefront
+		// failure does — and `unreachable` (not `system`) so the copy asks them
+		// to check the number rather than apologising for our side.
+		expect(order?.confirmationPushStatus).toBe("failed");
+		expect(order?.confirmationPushFailureKind).toBe("unreachable");
+	});
+
 	test("pay-later → ONE payment ask, no invoice PDF, never raw bank details (86ey98ju1/86eyd63r8)", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
@@ -1445,6 +1493,104 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 			(fetchMock.waCalls()[1].body as { template: { language: { code: string } } })
 				.template.language.code,
 		).toBe("en");
+		fetchMock.restore();
+	});
+
+	// --- the seam's guarantee (86eyrtz9t) ---------------------------------
+	//
+	// These pin the two halves that used to be hand-rolled per call site: a
+	// retryable blip must NOT hand over to email yet, and anything terminal
+	// must hand over immediately. The email is the seller's only other channel,
+	// and it has already suppressed itself at schedule time on the strength of
+	// a predicate that said this alert would fire (86eyd63r8) — so getting
+	// either half wrong means the seller hears nothing at all.
+
+	test("a retryable blip reschedules and does NOT email yet — the fallback stays holstered", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { notifyEmail: "owner@store.test" });
+		});
+		// 503 = Meta's problem, and nothing was delivered — worth another go.
+		const fetchMock = installFetchMock({ waStatus: 503 });
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerNewOrder, {
+			orderId,
+			attempt: 1,
+		});
+
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		// The seller is not told anything yet — a retry is still in flight.
+		expect(fetchMock.resendCalls()).toHaveLength(0);
+		const scheduled = await t.run(async (ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(
+			scheduled.some((f) =>
+				f.name.includes("notifySellerNewOrder"),
+			),
+			"a transient failure should reschedule itself",
+		).toBe(true);
+		fetchMock.restore();
+	});
+
+	test("a terminal rejection emails the seller instead of retrying", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { notifyEmail: "owner@store.test" });
+		});
+		// 132001 — template does not exist in this language. Zaki's "meta
+		// template not set" case: it will be rejected identically forever.
+		const fetchMock = installFetchMock({ waStatus: 400, metaCode: 132001 });
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerNewOrder, {
+			orderId,
+			attempt: 1,
+		});
+		// Counted BEFORE the flush: orders.create schedules its own alert, so
+		// draining the queue would add a second, unrelated send to the tally.
+		const attemptsMade = fetchMock.waCalls().length;
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		// One attempt only for OUR call, then the seller hears about it by email.
+		expect(attemptsMade).toBe(1);
+		const emails = fetchMock.resendCalls();
+		expect(emails.length).toBeGreaterThanOrEqual(1);
+		expect((emails[0].body as { to: string[] }).to).toEqual([
+			"owner@store.test",
+		]);
+		fetchMock.restore();
+	});
+
+	test("the last attempt emails rather than retrying forever", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { notifyEmail: "owner@store.test" });
+		});
+		const fetchMock = installFetchMock({ waStatus: 503 });
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		// PUSH_MAX_ATTEMPTS is 4 — arriving AS attempt 4 exhausts the budget.
+		await t.action(internal.whatsapp.notifySellerNewOrder, {
+			orderId,
+			attempt: 4,
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect(fetchMock.resendCalls().length).toBeGreaterThanOrEqual(1);
 		fetchMock.restore();
 	});
 

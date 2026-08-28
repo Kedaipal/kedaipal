@@ -8,6 +8,96 @@ How a seller learns something happened on an order, across three channels:
 | **Browser** (chime + system notification, below) | new order, rider booking failed | Settings → Store → "Order alerts on this device" | a Kedaipal tab open on that device |
 | **WhatsApp** (`86eyhw9zy`, below) | new order, payment claim, payment received | Settings → Store → "WhatsApp order alerts" | Pro + opt-in + approved Meta template |
 
+## When a send reaches nobody (86eyrtz9t)
+
+Kedaipal runs one shared WABA, and an outbound message can end up delivered to
+no one for reasons that have nothing to do with the code that asked for it: the
+Meta template isn't approved yet, the recipient opted out, the seller hit a cap,
+quality is throttled, Meta is down. **The rule is that such a send must tell
+somebody** — and it is enforced at the seam, not remembered per call site.
+
+### `wa.deliver()` — the delivery-guaranteed sibling of `wa.send()`
+
+`makeGuardedSender(...)` returns both:
+
+| | `send(to, msg)` | `deliver(to, msg, policy)` |
+| --- | --- | --- |
+| Gateway block | returns `{ blocked }` | calls `onUnreachable({ kind: "blocked", status })` |
+| Meta failure | **throws** | classifies via `classifyPushFailure`; retries through `policy.retry`, or calls `onUnreachable({ kind: "failed", failure })` |
+| Returns | the raw receipt | `SendOutcome` — `sent` / `blocked` / `retrying` / `failed` |
+| Throws on failure | yes | **never** |
+
+`policy.onUnreachable` fires **exactly once**, and only when the message is
+known to have reached nobody *and* will not be retried — never on success, never
+on a send that is about to be retried. Omitting `policy.retry` means "this send
+has no retry route", so the first failure is terminal.
+
+`send()` is unchanged and still correct for genuinely fire-and-forget traffic:
+a reply to a buyer who is already mid-conversation, or the CLI diagnostic. The
+distinction is not "important vs unimportant" — it is **whether a second channel
+or a piece of state exists to fall back to.**
+
+### Why this is a seam and not a convention
+
+Six call sites each hand-rolled the same block:
+
+```ts
+const receipt = await wa.send(...);
+if (receipt?.blocked) { await fallback(); return; }
+} catch (err) {
+  const outcome = classifyPushFailure(..., attempt);
+  if (outcome.retry) { reschedule(attempt + 1); return; }
+  await fallback();
+}
+```
+
+Which is exactly why coverage was uneven. Three seller alerts had a thorough
+email fallback; `notifyFoundingWelcome` had a `console.error` and nothing else,
+on the day a seller had just paid and taken a Founding rank; and
+`notifyCounterOrderCreated` swallowed its failures entirely, so the cashier
+never learned the buyer's confirmation hadn't landed.
+
+**`convex/sendFallbackRegistry.test.ts` is the gate.** Every
+`makeGuardedSender` construction in `convex/` must be declared there with its
+posture — `deliver` plus who hears about it, or `fire-and-forget` plus why
+nothing is owed. Add a send site and the build fails until someone has written
+down who hears about it when it reaches nobody. That failure *is* the design
+review.
+
+### Who hears about it, per send
+
+| Send | Audience | Fallback when it reaches nobody |
+| --- | --- | --- |
+| `notifySellerNewOrder` | seller | `email.notifyRetailerOrderAlert` (`force`) |
+| `notifySellerPaymentClaim` | seller | `email.notifyPaymentClaimed` (`force`) |
+| `notifySellerPaymentReceived` | seller | `email.notifyPaymentReceived` (`force`) |
+| `notifyFoundingWelcome` | seller | `email.notifyFoundingWelcome` — also the primary channel when no WA number is saved. Stamps `welcomedAt` itself so neither channel double-sends |
+| `notifyManualPaymentReminder` | buyer | the **action** returns `send_failed`, rolls the 24h cooldown back, and the seller's toast says so |
+| `notifyStorefrontOrderCreated` | buyer | `orders.recordConfirmationPush(failed)` → the seller's amber order-detail panel + the buyer's own write-in recovery route |
+| `notifyCounterOrderCreated` | buyer | same panel — and the cashier may still have the buyer in front of them |
+| `notifyClaimLink` | buyer | `orderClaims.recordClaimSendOutcome` → the claims list offers "Copy link" |
+| `handleInbound` replies | buyer | none owed — they are mid-conversation and the order is already committed and visible on their order page |
+
+### Why there is no buyer email fallback
+
+**There is no buyer email anywhere in the schema.** `customers` carries
+`waPhone`, `name`, `waProfileName`, `notes` and aggregates; `orders` carries
+none; the only two `type="email"` inputs in all of `src/` are admin billing and
+seller settings. So for buyer-facing sends, "fall back to email" is applicable
+to **zero** buyers.
+
+Collecting one would be a feature, not wiring: an optional field on the
+highest-friction screen in the funnel, a new PDPA data category (privacy policy
++ a `PRIVACY_VERSION` bump), and buyer templates in three locales — against a
+wedge that is explicitly *"WhatsApp-first, no email, no app"*, and for a
+fallback that fires on a small fraction of sends. **Deliberately rejected**
+(Zaki, 28 Aug 2026). The buyer-side answer to a failed push is to make the
+**seller** aware, so they can chase in the chat they already own — which is what
+every buyer row in the table above does.
+
+If this is ever revisited it needs its own ticket and a `PRIVACY_VERSION` bump.
+
+
 ## WhatsApp order alerts (86eyhw9zy, Aug 2026)
 
 The Sengloh request: a WhatsApp ping the moment a new order lands, because

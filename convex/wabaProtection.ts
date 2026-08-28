@@ -35,8 +35,13 @@ import {
 import { logGlobalAdminAction, requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage, SendReceipt } from "./lib/channels/types";
+import {
+	classifyPushFailure,
+	type PushFailureKind,
+} from "./lib/confirmationPush";
 import { sendEmail } from "./lib/email";
 import { redactPhone } from "./lib/logRedaction";
+import { WhatsAppSendError } from "./lib/whatsapp";
 import { rateLimiter } from "./lib/rateLimiter";
 import { COUNTRIES } from "./lib/country";
 import {
@@ -75,10 +80,76 @@ type SendDecision =
 	| { allowed: true }
 	| { allowed: false; status: BlockedStatus };
 
+/**
+ * Why a send reached NOBODY. The two arms are not interchangeable to the human
+ * who has to act on it: a `blocked` send never left the building and the reason
+ * is ours (cap, pause, quality) or the recipient's (opt-out, which only THEY
+ * can lift), while a `failed` one hit Meta and came back rejected.
+ */
+export type UnreachableReason =
+	| { kind: "blocked"; status: BlockedStatus }
+	| { kind: "failed"; failure: PushFailureKind; error: unknown };
+
+/**
+ * What a caller of `deliver()` wants done about the two outcomes it can't
+ * decide for itself: whether a transient failure has somewhere to retry TO, and
+ * who to tell when the message reached nobody.
+ */
+export type DeliveryPolicy = {
+	/**
+	 * What this send IS, for the server log — e.g. "seller new-order alert
+	 * ORD-4821". Callers fold their own identifiers in, so the seam stays
+	 * domain-free while the logs stay greppable per order.
+	 */
+	label?: string;
+	/** 1-based attempt number for THIS send (default 1). */
+	attempt?: number;
+	/**
+	 * Re-schedule a transient failure. Omitted ⇒ this send has no retry route,
+	 * so the first failure is terminal and `onUnreachable` fires immediately.
+	 * The seam decides *whether* to retry (via `classifyPushFailure`); the
+	 * caller supplies only the *how*, because rescheduling needs its own
+	 * internal function reference.
+	 */
+	retry?: (nextAttempt: number, delayMs: number) => Promise<unknown>;
+	/**
+	 * Fired EXACTLY ONCE, and only when the message is known to have reached
+	 * nobody and will not be retried. Never on success, never on a send that is
+	 * about to be retried. This is the fallback hook — an email to the seller,
+	 * a stamp the UI reads to offer "copy the link yourself".
+	 */
+	onUnreachable?: (reason: UnreachableReason) => Promise<unknown>;
+};
+
+/** The four terminal-for-now states of a `deliver()` call. */
+export type SendOutcome =
+	| { status: "sent"; providerMessageId?: string }
+	| { status: "blocked"; blocked: BlockedStatus }
+	| { status: "retrying"; nextAttempt: number; delayMs: number }
+	| { status: "failed"; failure: PushFailureKind };
+
 /** A drop-in replacement for the raw channel adapter's send, with guardrails.
  * Resolves with the adapter's receipt (provider message id) when one exists. */
 export type GuardedSender = {
 	send(to: string, msg: OutboundMessage): Promise<SendReceipt | undefined>;
+	/**
+	 * `send()` plus the whole reached-nobody dance: gateway block, Meta failure
+	 * classification, retry scheduling, and the fallback hook — in ONE place
+	 * instead of hand-rolled at each call site.
+	 *
+	 * Use this for any send whose silence would cost someone money or trust.
+	 * Keep plain `send()` for genuinely fire-and-forget traffic (session
+	 * replies to a buyer who is already in the chat, diagnostics), where there
+	 * is no second channel to fall back to and nothing to record.
+	 *
+	 * Unlike `send()`, this NEVER throws on a send failure — every outcome comes
+	 * back as a `SendOutcome` the caller switches on.
+	 */
+	deliver(
+		to: string,
+		msg: OutboundMessage,
+		policy?: DeliveryPolicy,
+	): Promise<SendOutcome>;
 };
 
 /**
@@ -102,59 +173,144 @@ export function makeGuardedSender(
 	category: MessageCategory,
 ): GuardedSender {
 	const adapter = getAdapter("whatsapp");
+
+	/**
+	 * The one gate + log + send path. Returns the blocked decision as a VALUE
+	 * (never throws for a block) and rethrows a Meta failure, so `send` and
+	 * `deliver` share identical guardrail semantics and differ only in what
+	 * they do about the outcome.
+	 */
+	async function attemptSend(
+		to: string,
+		msg: OutboundMessage,
+	): Promise<
+		| { blocked: BlockedStatus }
+		| { blocked?: undefined; receipt: SendReceipt | undefined }
+	> {
+		const logCategory: MessageCategory =
+			msg.kind === "template" ? "utility_template" : category;
+		const templateName = msg.kind === "template" ? msg.templateName : undefined;
+		const decision = await ctx.runMutation(internal.wabaProtection.canSend, {
+			retailerId: retailerId ?? undefined,
+			toPhone: to,
+			category,
+		});
+		if (!decision.allowed) {
+			await ctx.runMutation(internal.wabaProtection.logSend, {
+				retailerId: retailerId ?? undefined,
+				toWaPhone: to,
+				category: logCategory,
+				status: decision.status,
+				templateName,
+			});
+			console.warn("WA send blocked by guardrail", {
+				retailerId,
+				category,
+				status: decision.status,
+			});
+			return { blocked: decision.status };
+		}
+		try {
+			const receipt = await adapter.send(to, msg);
+			await ctx.runMutation(internal.wabaProtection.logSend, {
+				retailerId: retailerId ?? undefined,
+				toWaPhone: to,
+				category: logCategory,
+				status: "sent",
+				templateName,
+			});
+			return { receipt };
+		} catch (err) {
+			await ctx.runMutation(internal.wabaProtection.logSend, {
+				retailerId: retailerId ?? undefined,
+				toWaPhone: to,
+				category: logCategory,
+				status: "failed",
+				errorCode: err instanceof Error ? err.message : String(err),
+				templateName,
+			});
+			throw err;
+		}
+	}
+
 	return {
 		async send(
 			to: string,
 			msg: OutboundMessage,
 		): Promise<SendReceipt | undefined> {
-			const logCategory: MessageCategory =
-				msg.kind === "template" ? "utility_template" : category;
-			const templateName =
-				msg.kind === "template" ? msg.templateName : undefined;
-			const decision = await ctx.runMutation(internal.wabaProtection.canSend, {
-				retailerId: retailerId ?? undefined,
-				toPhone: to,
-				category,
-			});
-			if (!decision.allowed) {
-				await ctx.runMutation(internal.wabaProtection.logSend, {
-					retailerId: retailerId ?? undefined,
-					toWaPhone: to,
-					category: logCategory,
-					status: decision.status,
-					templateName,
-				});
-				console.warn("WA send blocked by guardrail", {
-					retailerId,
-					category,
-					status: decision.status,
-				});
-				// Reported, not thrown (callers must not re-send a blocked message) —
-				// but surfaced so a caller that records delivery state can tell
-				// "suppressed" apart from "delivered".
-				return { blocked: decision.status };
-			}
+			const outcome = await attemptSend(to, msg);
+			// Reported, not thrown (callers must not re-send a blocked message) —
+			// but surfaced so a caller that records delivery state can tell
+			// "suppressed" apart from "delivered".
+			return outcome.blocked !== undefined
+				? { blocked: outcome.blocked }
+				: outcome.receipt;
+		},
+
+		async deliver(
+			to: string,
+			msg: OutboundMessage,
+			policy: DeliveryPolicy = {},
+		): Promise<SendOutcome> {
+			const attempt = policy.attempt ?? 1;
+			let outcome: Awaited<ReturnType<typeof attemptSend>>;
 			try {
-				const receipt = await adapter.send(to, msg);
-				await ctx.runMutation(internal.wabaProtection.logSend, {
-					retailerId: retailerId ?? undefined,
-					toWaPhone: to,
-					category: logCategory,
-					status: "sent",
-					templateName,
-				});
-				return receipt;
+				outcome = await attemptSend(to, msg);
 			} catch (err) {
-				await ctx.runMutation(internal.wabaProtection.logSend, {
-					retailerId: retailerId ?? undefined,
-					toWaPhone: to,
-					category: logCategory,
-					status: "failed",
-					errorCode: err instanceof Error ? err.message : String(err),
-					templateName,
+				// A non-WhatsAppSendError is a bug in our own path, not Meta's
+				// answer. Treat it as `responded` so it can never spin forever.
+				const verdict = classifyPushFailure(
+					err instanceof WhatsAppSendError
+						? {
+								httpStatus: err.httpStatus,
+								metaCode: err.metaCode,
+								responded: err.responded,
+							}
+						: { responded: true },
+					attempt,
+				);
+				if (verdict.retry && policy.retry) {
+					console.warn("WA deliver failed, retrying", {
+						label: policy.label,
+						attempt,
+						delayMs: verdict.delayMs,
+						err,
+					});
+					await policy.retry(attempt + 1, verdict.delayMs);
+					return {
+						status: "retrying",
+						nextAttempt: attempt + 1,
+						delayMs: verdict.delayMs,
+					};
+				}
+				// Transient, but the caller gave us nowhere to retry to — it is
+				// terminal now. Report it as OURS: the classifier's own rule is
+				// that blaming the recipient's number when it may be fine is the
+				// worse of the two errors.
+				const failure: PushFailureKind = verdict.retry
+					? "system"
+					: verdict.kind;
+				console.error("WA deliver reached nobody", {
+					label: policy.label,
+					attempt,
+					failure,
+					err,
 				});
-				throw err;
+				await policy.onUnreachable?.({ kind: "failed", failure, error: err });
+				return { status: "failed", failure };
 			}
+			if (outcome.blocked !== undefined) {
+				// The gateway IS the policy — a block is never retryable here.
+				await policy.onUnreachable?.({
+					kind: "blocked",
+					status: outcome.blocked,
+				});
+				return { status: "blocked", blocked: outcome.blocked };
+			}
+			return {
+				status: "sent",
+				providerMessageId: outcome.receipt?.providerMessageId,
+			};
 		},
 	};
 }

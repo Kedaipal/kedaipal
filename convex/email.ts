@@ -9,10 +9,13 @@ import {
 import { sendEmail } from "./lib/email";
 import {
 	type DeliveryMethod,
+	escapeHtml,
 	type Locale,
 	renderRetailerEmail,
 	type RetailerEmailKey,
+	wrapHtml,
 } from "./lib/emailCopy";
+import { foundingWelcomeEmailParts } from "./lib/foundingWelcomeCopy";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { sellerWaAlertWillAttempt } from "./lib/sellerAlerts";
 import {
@@ -652,5 +655,71 @@ export const notifyGatewayPaymentIssue = internalAction({
 				}`,
 			);
 		}
+	},
+});
+
+/**
+ * The founding-welcome email (86eyrtz9t) — scheduled by
+ * `whatsapp.notifyFoundingWelcome` when its WhatsApp send reached nobody, and
+ * directly when the seller has no WhatsApp number saved at all.
+ *
+ * Before this, a failed founding welcome was a `console.error` and nothing
+ * else: the seller was charged, took a Founding rank, and heard nothing about
+ * the 30% lifetime discount they had just locked in. This is the one message
+ * where silence costs the most trust per send.
+ *
+ * It stamps `welcomedAt` itself, so the WhatsApp path can hand over cleanly
+ * without either channel double-sending on a re-run.
+ */
+export const notifyFoundingWelcome = internalAction({
+	args: { retailerId: v.id("retailers"), rank: v.number() },
+	handler: async (ctx, { retailerId, rank }): Promise<void> => {
+		let meta: {
+			waPhone: string | undefined;
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getFoundingWelcomeMeta, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error("Email founding-welcome lookup failed", err);
+			return;
+		}
+		// No email on file either — nothing more we can do from here. The rank is
+		// still visible on their billing tab, and welcomedAt stays unstamped so a
+		// later re-run can still reach them if they add one.
+		if (!meta || !meta.notifyEmail) {
+			console.warn(
+				`Email founding-welcome skipped: no notifyEmail (retailerId=${retailerId})`,
+			);
+			return;
+		}
+		const billingUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
+		const { subject, headline, ctaLabel, lines } = foundingWelcomeEmailParts(
+			meta.locale,
+			rank,
+		);
+		const html = wrapHtml(
+			"🎉",
+			headline,
+			lines.map((line) => escapeHtml(line)),
+			billingUrl,
+			ctaLabel,
+		);
+		const text = `${lines.join("\n")}\n${billingUrl}`;
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Email founding-welcome failed (retailerId=${retailerId}): ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return;
+		}
+		await ctx.runMutation(internal.whatsapp.markFoundingWelcomed, {
+			retailerId,
+		});
 	},
 });

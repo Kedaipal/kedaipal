@@ -48,6 +48,30 @@ The adapter's `send(to, msg)` maps these to provider payloads. Provider quirks l
 
 When degraded, a `cta` falls back to an image-with-caption (if `imageUrl` is set) or plain text. Today's only `cta` caller (the order-confirm reply) always supplies `imageUrl`, so the paths are: HTTPS (or local-http-upgraded)→`sendCtaUrlWithImage`, public-non-HTTPS→`sendImage`.
 
+## Sending: `send()` vs `deliver()` (86eyrtz9t)
+
+Orchestration never touches an adapter directly — it goes through
+`makeGuardedSender(ctx, retailerId, category)` (see
+[`waba-protection.md`](./waba-protection.md)), which returns two ways to send:
+
+- **`send(to, msg)`** — the guardrails plus the raw result. Returns
+  `{ blocked }` when the gateway suppressed it, **throws** on a Meta failure.
+  Correct for fire-and-forget traffic where no second channel exists.
+- **`deliver(to, msg, policy)`** — `send()` plus the whole reached-nobody dance:
+  block handling, failure classification, retry scheduling, and a single
+  `onUnreachable` hook. **Never throws**; returns a discriminated `SendOutcome`
+  (`sent` / `blocked` / `retrying` / `failed`).
+
+Which one a send site uses is not a style choice — it is declared and enforced
+by `convex/sendFallbackRegistry.test.ts`. See
+[`order-notifications.md`](./order-notifications.md#when-a-send-reaches-nobody-86eyrtz9t)
+for the contract, the per-send fallback table, and why buyer-facing sends fall
+back to seller-visible state rather than email.
+
+A new channel's adapter implements `send` only — `deliver` lives above the
+adapter seam, so retry policy and fallback behaviour are shared across every
+channel rather than reimplemented per provider.
+
 ## Behavior fidelity
 
 The refactor is behavior-preserving. The **one intentional delta**: the webhook's old `400`-on-bad-JSON became `200 + console.error` — a correctly-signed Meta body is always valid JSON, so a malformed signed body is now acked + logged rather than triggering a Meta retry. The `500` (missing `WHATSAPP_APP_SECRET`) / `401` (bad signature) / `200` contract is otherwise preserved exactly. See [`whatsapp-webhook-security.md`](./whatsapp-webhook-security.md).

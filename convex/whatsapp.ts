@@ -18,7 +18,6 @@ import {
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
 	sellerPaymentReceivedTemplateName,
-	WhatsAppSendError,
 } from "./lib/whatsapp";
 import {
 	describeClaimWindow,
@@ -26,11 +25,16 @@ import {
 } from "./lib/orderClaims";
 import {
 	type ConfirmationPushStatus,
-	classifyPushFailure,
 	pushOwnsTheMessage,
 } from "./lib/confirmationPush";
+import { foundingWelcomeBody } from "./lib/foundingWelcomeCopy";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
-import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
+import {
+	type GuardedSender,
+	makeGuardedSender,
+	type SendOutcome,
+	type UnreachableReason,
+} from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { redactPhone } from "./lib/logRedaction";
@@ -358,7 +362,7 @@ async function sendPaymentMessage(
 		// confirmations. Include its own leading newlines.
 		footerLine?: string;
 	},
-): Promise<void> {
+): Promise<SendOutcome> {
 	const {
 		introBody,
 		locale,
@@ -395,22 +399,28 @@ async function sendPaymentMessage(
 	// and degrades to a plain image with caption when buttons can't be honoured
 	// (e.g. non-HTTPS APP_URL in dev). The button opens the buyer's order page,
 	// where "How to pay" + the "I've paid" confirm live.
-	try {
-		await wa.send(toPhone, {
+	const cta = await wa.deliver(
+		toPhone,
+		{
 			kind: "cta",
 			body,
 			buttonText: "Make payment",
 			url: trackingUrl,
 			imageUrl: brandImageUrl,
-		});
-	} catch (err) {
-		console.error("WA payment send failed, falling back to text", err);
-		try {
-			await wa.send(toPhone, { kind: "text", body });
-		} catch (textErr) {
-			console.error("WA payment send failed", textErr);
-		}
-	}
+		},
+		{ label: `payment ask ${shortId} (cta)` },
+	);
+	if (cta.status === "sent") return cta;
+	// A BLOCKED cta would be blocked identically as text — only a genuine send
+	// failure is worth degrading for (an interactive-message quirk on Meta's
+	// side still lets a plain text through). Returning the outcome lets the
+	// caller decide whether silence here is worth telling a human about.
+	if (cta.status !== "failed") return cta;
+	return wa.deliver(
+		toPhone,
+		{ kind: "text", body },
+		{ label: `payment ask ${shortId} (text)` },
+	);
 }
 
 /**
@@ -808,29 +818,33 @@ export const getManualReminderContext = internalQuery({
  */
 export const notifyManualPaymentReminder = internalAction({
 	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	// Reports whether the buyer was actually reached (86eyrtz9t). The seller
+	// tapped a button and burned one of their four allowed reminders — telling
+	// them "sent" for a message that never left is the one answer they can't
+	// act on. Every early return below is a "we deliberately didn't send".
+	handler: async (ctx, { orderId }): Promise<boolean> => {
 		const meta = await ctx
 			.runQuery(internal.whatsapp.getManualReminderContext, { orderId })
 			.catch((err) => {
 				console.error("WA manual-reminder lookup failed", err);
 				return null;
 			});
-		if (!meta) return;
-		if (!meta.customerWaPhone) return;
+		if (!meta) return false;
+		if (!meta.customerWaPhone) return false;
 		// Order left the "open + unpaid" state between the seller's tap and here.
-		if (meta.status === "cancelled") return;
+		if (meta.status === "cancelled") return false;
 		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
-			return;
+			return false;
 		// Custom item re-gated (e.g. buyer requested changes) — payment isn't owed.
-		if (meta.mockupPending) return;
+		if (meta.mockupPending) return false;
 		// Delivery charge re-flagged pending in the gap — the total isn't final.
-		if (meta.deliveryFeePending) return;
+		if (meta.deliveryFeePending) return false;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =
 			meta.trackingToken ??
 			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
-		if (!trackingToken) return; // order vanished — don't ship a dead link
+		if (!trackingToken) return false; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
@@ -839,7 +853,7 @@ export const notifyManualPaymentReminder = internalAction({
 			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
 			trackingUrl,
 		});
-		await sendPaymentMessage(
+		const outcome = await sendPaymentMessage(
 			makeGuardedSender(ctx, meta.retailerId, "session_message"),
 			meta.customerWaPhone,
 			{
@@ -852,6 +866,7 @@ export const notifyManualPaymentReminder = internalAction({
 				currency: meta.currency,
 			},
 		);
+		return outcome.status === "sent";
 	},
 });
 
@@ -924,6 +939,7 @@ export const getFoundingWelcomeMeta = internalQuery({
 		{ retailerId },
 	): Promise<{
 		waPhone: string | undefined;
+		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
 	} | null> => {
@@ -931,6 +947,7 @@ export const getFoundingWelcomeMeta = internalQuery({
 		if (!retailer) return null;
 		return {
 			waPhone: retailer.waPhone,
+			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 		};
@@ -950,15 +967,6 @@ export const markFoundingWelcomed = internalMutation({
 		}
 	},
 });
-
-const foundingWelcomeBody: Record<Locale, (rank: number, billingUrl: string) => string> = {
-	en: (rank, billingUrl) =>
-		`🎉 Welcome, Founding Member #${rank} of 10! Thank you for backing Kedaipal early — your 30% lifetime discount is locked in for good. We'll reach out to set up your white-glove onboarding call. Details: ${billingUrl}`,
-	ms: (rank, billingUrl) =>
-		`🎉 Tahniah! Anda kini Founding Member #${rank} dari 10 di Kedaipal. Terima kasih kerana mempercayai kami awal — diskaun 30% seumur hidup anda kekal selamanya. Pasukan kami akan hubungi anda untuk sesi white-glove. Butiran: ${billingUrl}`,
-	zh: (rank, billingUrl) =>
-		`🎉 恭喜！您现在是 Kedaipal 10 位创始会员中的第 #${rank} 位。谢谢您这么早就信任我们 —— 您的终身 30% 折扣已经锁定，永久有效。我们的团队会联系您安排专属的入驻协助。详情：${billingUrl}`,
-};
 
 /**
  * Scheduled by invoices.markPaid when a Founding rank is claimed. Sends the
@@ -982,21 +990,46 @@ export const notifyFoundingWelcome = internalAction({
 			console.error("WA founding-welcome lookup failed", err);
 			return;
 		}
-		if (!meta || !meta.waPhone) return;
+		if (!meta) return;
+		// No WhatsApp number saved — the email IS the channel here, not a
+		// fallback. (welcomedAt is stamped by the email action, so a re-run
+		// can't double up.)
+		if (!meta.waPhone) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyFoundingWelcome, {
+				retailerId,
+				rank,
+			});
+			return;
+		}
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const billingUrl = `${appUrl}/app/settings?tab=billing`;
-		const body = foundingWelcomeBody[meta.locale](rank, billingUrl);
-		try {
-			await makeGuardedSender(ctx, retailerId, "transactional").send(meta.waPhone, {
+		const result = await makeGuardedSender(
+			ctx,
+			retailerId,
+			"transactional",
+		).deliver(
+			meta.waPhone,
+			{
 				kind: "text",
-				body,
-			});
+				body: foundingWelcomeBody(meta.locale, rank, billingUrl),
+			},
+			{
+				label: `founding welcome #${rank}`,
+				// One shot, no retry route: this is a congratulation, not an order
+				// event, so the first failure is terminal and the email covers it
+				// (86eyrtz9t — previously the failure was logged and nothing else).
+				onUnreachable: () =>
+					ctx.scheduler.runAfter(0, internal.email.notifyFoundingWelcome, {
+						retailerId,
+						rank,
+					}),
+			},
+		);
+		if (result.status === "sent") {
 			await ctx.runMutation(internal.whatsapp.markFoundingWelcomed, {
 				retailerId,
 			});
-		} catch (err) {
-			console.error("WA founding-welcome send failed", err);
 		}
 	},
 });
@@ -1123,8 +1156,14 @@ export const notifySellerNewOrder = internalAction({
 					)
 				: "—";
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
-		try {
-			const receipt = await wa.send(meta.notifyWaPhone, {
+		// The seam owns the reached-nobody dance (86eyrtz9t): a gateway refusal
+		// (opt-out / cap / quality pause), a terminal Meta rejection, and an
+		// exhausted retry all converge on ONE fallback — the email, which
+		// suppressed itself at schedule time on the strength of a predicate that
+		// said this alert would fire (86eyd63r8).
+		await wa.deliver(
+			meta.notifyWaPhone,
+			{
 				kind: "template",
 				templateName,
 				// Same store-locale switch the retailer's EMAIL alerts already use
@@ -1135,52 +1174,24 @@ export const notifySellerNewOrder = internalAction({
 				// Meta appends ONLY this suffix (the shortId; the seller is
 				// authenticated, so no capability token is involved).
 				urlButtonParam: meta.shortId,
-			});
-			// Gateway refused (opt-out / cap / quality pause). It logged the reason,
-			// but the seller heard nothing — hand back to email (86eyd63r8).
-			if (receipt?.blocked) {
-				await ctx.scheduler.runAfter(
-					0,
-					internal.email.notifyRetailerOrderAlert,
-					{ orderId, force: true },
-				);
-				return;
-			}
-		} catch (err) {
-			// Retry a blip; give up immediately on anything Meta will reject
-			// identically next time. On the LAST attempt the email fallback fires
-			// (86eyd63r8) — it no longer goes out unconditionally, so without this
-			// a failed alert would mean the seller never learns about the order.
-			const outcome = classifyPushFailure(
-				err instanceof WhatsAppSendError
-					? {
-							httpStatus: err.httpStatus,
-							metaCode: err.metaCode,
-							responded: err.responded,
-						}
-					: { responded: true },
+			},
+			{
+				label: `seller new-order alert ${meta.shortId}`,
 				attempt,
-			);
-			console.error("WA seller new-order alert failed", {
-				shortId: meta.shortId,
-				attempt,
-				outcome,
-				err,
-			});
-			if (outcome.retry) {
-				await ctx.scheduler.runAfter(
-					outcome.delayMs,
-					internal.whatsapp.notifySellerNewOrder,
-					{ orderId, attempt: attempt + 1 },
-				);
-			} else {
-				await ctx.scheduler.runAfter(
-					0,
-					internal.email.notifyRetailerOrderAlert,
-					{ orderId, force: true },
-				);
-			}
-		}
+				retry: (nextAttempt, delayMs) =>
+					ctx.scheduler.runAfter(
+						delayMs,
+						internal.whatsapp.notifySellerNewOrder,
+						{ orderId, attempt: nextAttempt },
+					),
+				onUnreachable: () =>
+					ctx.scheduler.runAfter(
+						0,
+						internal.email.notifyRetailerOrderAlert,
+						{ orderId, force: true },
+					),
+			},
+		);
 	},
 });
 
@@ -1220,55 +1231,32 @@ export const notifySellerPaymentClaim = internalAction({
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
-		try {
-			const receipt = await wa.send(meta.notifyWaPhone, {
+		// Same seam-owned fallback as the new-order alert (86eyrtz9t).
+		await wa.deliver(
+			meta.notifyWaPhone,
+			{
 				kind: "template",
 				templateName,
 				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
 				bodyParams: [meta.customerName, meta.shortId, money],
 				urlButtonParam: meta.shortId,
-			});
-			// Gateway refused — fall back to email so the claim isn't missed.
-			if (receipt?.blocked) {
-				await ctx.scheduler.runAfter(
-					0,
-					internal.email.notifyPaymentClaimed,
-					{ orderId, force: true },
-				);
-				return;
-			}
-		} catch (err) {
-			const outcome = classifyPushFailure(
-				err instanceof WhatsAppSendError
-					? {
-							httpStatus: err.httpStatus,
-							metaCode: err.metaCode,
-							responded: err.responded,
-						}
-					: { responded: true },
+			},
+			{
+				label: `seller payment-claim alert ${meta.shortId}`,
 				attempt,
-			);
-			console.error("WA seller payment-claim alert failed", {
-				shortId: meta.shortId,
-				attempt,
-				outcome,
-				err,
-			});
-			if (outcome.retry) {
-				await ctx.scheduler.runAfter(
-					outcome.delayMs,
-					internal.whatsapp.notifySellerPaymentClaim,
-					{ orderId, attempt: attempt + 1 },
-				);
-			} else {
-				// Same email fallback as the new-order alert.
-				await ctx.scheduler.runAfter(
-					0,
-					internal.email.notifyPaymentClaimed,
-					{ orderId, force: true },
-				);
-			}
-		}
+				retry: (nextAttempt, delayMs) =>
+					ctx.scheduler.runAfter(
+						delayMs,
+						internal.whatsapp.notifySellerPaymentClaim,
+						{ orderId, attempt: nextAttempt },
+					),
+				onUnreachable: () =>
+					ctx.scheduler.runAfter(0, internal.email.notifyPaymentClaimed, {
+						orderId,
+						force: true,
+					}),
+			},
+		);
 	},
 });
 
@@ -1329,8 +1317,10 @@ export const notifySellerPaymentReceived = internalAction({
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
-		try {
-			const receipt = await wa.send(meta.notifyWaPhone, {
+		// Same seam-owned fallback as the other two seller alerts (86eyrtz9t).
+		await wa.deliver(
+			meta.notifyWaPhone,
+			{
 				kind: "template",
 				templateName,
 				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
@@ -1341,46 +1331,24 @@ export const notifySellerPaymentReceived = internalAction({
 				// review. Never empty (Meta rejects empty parameters outright).
 				bodyParams: [meta.customerName, meta.shortId, money, provider],
 				urlButtonParam: meta.shortId,
-			});
-			if (receipt?.blocked) {
-				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
-					orderId,
-					provider,
-					force: true,
-				});
-				return;
-			}
-		} catch (err) {
-			const outcome = classifyPushFailure(
-				err instanceof WhatsAppSendError
-					? {
-							httpStatus: err.httpStatus,
-							metaCode: err.metaCode,
-							responded: err.responded,
-						}
-					: { responded: true },
+			},
+			{
+				label: `seller payment-received alert ${meta.shortId}`,
 				attempt,
-			);
-			console.error("WA seller payment-received alert failed", {
-				shortId: meta.shortId,
-				attempt,
-				outcome,
-				err,
-			});
-			if (outcome.retry) {
-				await ctx.scheduler.runAfter(
-					outcome.delayMs,
-					internal.whatsapp.notifySellerPaymentReceived,
-					{ orderId, provider, attempt: attempt + 1 },
-				);
-			} else {
-				await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
-					orderId,
-					provider,
-					force: true,
-				});
-			}
-		}
+				retry: (nextAttempt, delayMs) =>
+					ctx.scheduler.runAfter(
+						delayMs,
+						internal.whatsapp.notifySellerPaymentReceived,
+						{ orderId, provider, attempt: nextAttempt },
+					),
+				onUnreachable: () =>
+					ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+						orderId,
+						provider,
+						force: true,
+					}),
+			},
+		);
 	},
 });
 
@@ -1489,8 +1457,15 @@ export const notifyStorefrontOrderCreated = internalAction({
 				: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
-		try {
-			const receipt = await wa.send(meta.customerWaPhone, {
+		// The seam retries a blip rather than handing our problem to the buyer,
+		// and gives up immediately on anything Meta will reject identically next
+		// time (86eyrtz9t). There is no buyer email to fall back TO — no buyer
+		// address exists anywhere in the schema — so "unreachable" here means
+		// stamping the push failed, which is what the seller's order detail and
+		// the buyer's own write-in recovery route both read.
+		const result = await wa.deliver(
+			meta.customerWaPhone,
+			{
 				kind: "template",
 				templateName,
 				languageCode,
@@ -1505,56 +1480,33 @@ export const notifyStorefrontOrderCreated = internalAction({
 				// The approved button URL is https://kedaipal.com/track/{{1}} — Meta
 				// appends ONLY this suffix (the tracking token, not the shortId).
 				urlButtonParam: trackingToken,
-			});
-			if (receipt?.blocked) {
-				// The WABA gateway suppressed it (opt-out, cap, pause). Not our
-				// buyer's fault and not retryable here — the gateway is the policy.
-				// Transactional bypasses gating today, so this is defence in depth.
-				await ctx.runMutation(internal.orders.recordConfirmationPush, {
-					orderId,
-					status: "failed",
-					failureKind: "system",
-				});
-				return;
-			}
+			},
+			{
+				label: `storefront confirm push ${meta.shortId}`,
+				attempt,
+				retry: (nextAttempt, delayMs) =>
+					ctx.scheduler.runAfter(
+						delayMs,
+						internal.whatsapp.notifyStorefrontOrderCreated,
+						{ orderId, attempt: nextAttempt },
+					),
+				// A gateway block is defence in depth (transactional bypasses
+				// gating today) and is never the buyer's number's fault, so it is
+				// reported as ours — same as an exhausted retry.
+				onUnreachable: (reason) =>
+					ctx.runMutation(internal.orders.recordConfirmationPush, {
+						orderId,
+						status: "failed",
+						failureKind:
+							reason.kind === "blocked" ? "system" : reason.failure,
+					}),
+			},
+		);
+		if (result.status === "sent") {
 			await ctx.runMutation(internal.orders.recordConfirmationPush, {
 				orderId,
 				status: "sent",
-				wamid: receipt?.providerMessageId,
-			});
-		} catch (err) {
-			// Retry a blip rather than handing our problem to the buyer; give up
-			// immediately on anything Meta will reject identically next time.
-			const outcome = classifyPushFailure(
-				err instanceof WhatsAppSendError
-					? {
-							httpStatus: err.httpStatus,
-							metaCode: err.metaCode,
-							responded: err.responded,
-						}
-					: // Not a send error at all (a bug in our own code path) — treat as
-						// responded so it can't spin, and report it as ours.
-						{ responded: true },
-				attempt,
-			);
-			console.error("WA storefront confirm push failed", {
-				shortId: meta.shortId,
-				attempt,
-				outcome,
-				err,
-			});
-			if (outcome.retry) {
-				await ctx.scheduler.runAfter(
-					outcome.delayMs,
-					internal.whatsapp.notifyStorefrontOrderCreated,
-					{ orderId, attempt: attempt + 1 },
-				);
-				return;
-			}
-			await ctx.runMutation(internal.orders.recordConfirmationPush, {
-				orderId,
-				status: "failed",
-				failureKind: outcome.kind,
+				wamid: result.providerMessageId,
 			});
 		}
 	},
@@ -1604,6 +1556,21 @@ export const notifyCounterOrderCreated = internalAction({
 		// First-contact PDPA line for the manual-phone path (blank otherwise).
 		const privacy = includePrivacyNotice ? privacyNoticeLine(locale) : "";
 
+		// A counter confirmation that reaches nobody used to be a console.error
+		// and nothing else (86eyrtz9t) — the cashier rang the sale up, the buyer
+		// heard nothing, and the only trace was a server log. There is no buyer
+		// email to fall back to, so the fallback is the HUMAN standing at the
+		// counter: stamping the push failed lights up the same amber panel on the
+		// order detail that a storefront failure does, while they can still ask
+		// the buyer to check their number. (Counter orders are gated out of the
+		// buyer-facing push cards on /track, so nothing changes for the buyer.)
+		const reportUnreachable = (reason: UnreachableReason) =>
+			ctx.runMutation(internal.orders.recordConfirmationPush, {
+				orderId,
+				status: "failed" as const,
+				failureKind: reason.kind === "blocked" ? "system" : reason.failure,
+			});
+
 		if (paid) {
 			const body =
 				renderSystemMessage(locale, "counterOrderConfirmedPaid", {
@@ -1612,11 +1579,14 @@ export const notifyCounterOrderCreated = internalAction({
 					amount: money,
 					trackingUrl,
 				}) + privacy;
-			try {
-				await wa.send(meta.customerWaPhone, { kind: "text", body });
-			} catch (err) {
-				console.error("WA counter-order notify failed", err);
-			}
+			await wa.deliver(
+				meta.customerWaPhone,
+				{ kind: "text", body },
+				{
+					label: `counter confirm ${meta.shortId}`,
+					onUnreachable: reportUnreachable,
+				},
+			);
 		} else {
 			// Pay-later: send the amount + transfer reference + "I've paid" CTA so the
 			// buyer can settle from that chat without ever scanning again (boss ask).
@@ -1630,18 +1600,23 @@ export const notifyCounterOrderCreated = internalAction({
 					amount: money,
 					trackingUrl,
 				}) + privacy;
-			try {
-				await sendPaymentMessage(wa, meta.customerWaPhone, {
-					introBody: intro,
-					locale,
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					trackingUrl,
-					// Counter orders are collected at the counter — no pickup snapshot.
-					pickupSnapshot: undefined,
+			const outcome = await sendPaymentMessage(wa, meta.customerWaPhone, {
+				introBody: intro,
+				locale,
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				trackingUrl,
+				// Counter orders are collected at the counter — no pickup snapshot.
+				pickupSnapshot: undefined,
+			});
+			if (outcome.status === "blocked") {
+				await reportUnreachable({ kind: "blocked", status: outcome.blocked });
+			} else if (outcome.status === "failed") {
+				await reportUnreachable({
+					kind: "failed",
+					failure: outcome.failure,
+					error: undefined,
 				});
-			} catch (err) {
-				console.error("WA counter-order payment ask failed", err);
 			}
 		}
 
@@ -1747,8 +1722,9 @@ export const notifyClaimLink = internalAction({
 		const languageCode = TEMPLATE_LANGUAGE[locale];
 		const money = `${meta.currency} ${(meta.itemsTotal / 100).toFixed(2)}`;
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
-		try {
-			const receipt = await wa.send(meta.waPhone, {
+		const result = await wa.deliver(
+			meta.waPhone,
+			{
 				kind: "template",
 				templateName,
 				languageCode,
@@ -1764,45 +1740,40 @@ export const notifyClaimLink = internalAction({
 					describeClaimWindow(meta.windowMinutes, languageCode),
 				],
 				urlButtonParam: meta.token,
-			});
-			// The gateway reports WHY it suppressed a send, and the reasons are not
-			// interchangeable to a seller: an opted-out buyer has a remedy only
-			// THEY can perform (reply START), while a cap/quality/kill-switch
-			// block is ours and just needs waiting out. Flattening both to
-			// "failed" is what made a real, fixable opt-out read as a mystery
-			// delivery problem and cost a server-log dig to diagnose.
-			const blocked = receipt?.blocked;
-			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
-				claimId,
-				outcome: !blocked
-					? "sent"
-					: blocked === "blocked_optout"
-						? "opted_out"
-						: "blocked",
-			});
-		} catch (err) {
-			const outcome = classifyPushFailure(
-				err instanceof WhatsAppSendError
-					? {
-							httpStatus: err.httpStatus,
-							metaCode: err.metaCode,
-							responded: err.responded,
-						}
-					: { responded: true },
+			},
+			{
+				label: `claim link ${claimId}`,
 				attempt,
-			);
-			console.error("WA claim-link send failed", { claimId, attempt, outcome, err });
-			if (outcome.retry) {
-				await ctx.scheduler.runAfter(
-					outcome.delayMs,
-					internal.whatsapp.notifyClaimLink,
-					{ claimId, attempt: attempt + 1 },
-				);
-				return;
-			}
+				retry: (nextAttempt, delayMs) =>
+					ctx.scheduler.runAfter(
+						delayMs,
+						internal.whatsapp.notifyClaimLink,
+						{ claimId, attempt: nextAttempt },
+					),
+				// The gateway reports WHY it suppressed a send, and the reasons are
+				// not interchangeable to a seller: an opted-out buyer has a remedy
+				// only THEY can perform (reply START), while a cap/quality/
+				// kill-switch block is ours and just needs waiting out. Flattening
+				// both to "failed" is what made a real, fixable opt-out read as a
+				// mystery delivery problem and cost a server-log dig to diagnose.
+				// There is no buyer email to fall back to; the fallback here is the
+				// claims list offering "Copy link" for the seller to send by hand.
+				onUnreachable: (reason) =>
+					ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
+						claimId,
+						outcome:
+							reason.kind === "blocked"
+								? reason.status === "blocked_optout"
+									? "opted_out"
+									: "blocked"
+								: "failed",
+					}),
+			},
+		);
+		if (result.status === "sent") {
 			await ctx.runMutation(internal.orderClaims.recordClaimSendOutcome, {
 				claimId,
-				outcome: "failed",
+				outcome: "sent",
 			});
 		}
 	},

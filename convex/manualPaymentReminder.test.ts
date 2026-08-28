@@ -40,7 +40,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function installFetchMock() {
+function installFetchMock(opts: { waStatus?: number; metaCode?: number } = {}) {
 	const calls: Array<{ url: string; body: unknown }> = [];
 	const original = globalThis.fetch;
 	globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
@@ -48,6 +48,15 @@ function installFetchMock() {
 			url: String(url),
 			body: init?.body ? JSON.parse(init.body as string) : null,
 		});
+		if (
+			String(url).includes("graph.facebook.com") &&
+			opts.waStatus !== undefined
+		) {
+			return new Response(
+				JSON.stringify({ error: { code: opts.metaCode ?? 131026 } }),
+				{ status: opts.waStatus },
+			);
+		}
 		return new Response("{}", { status: 200 });
 	}) as unknown as typeof fetch;
 	return {
@@ -124,6 +133,31 @@ describe("manual payment reminder — the day-11–14 window, enforced server-si
 			const order = await t.run((ctx) => ctx.db.get(orderId));
 			expect(order?.lastManualReminderAt).toBeUndefined();
 			expect(fetchMock.waCalls()).toEqual([]);
+		} finally {
+			fetchMock.restore();
+		}
+	});
+
+	test("a send that reaches nobody reports send_failed and hands the attempt back (86eyrtz9t)", async () => {
+		const t = setup();
+		// 131026 — the buyer's number isn't on WhatsApp. Both the cta and its
+		// text degrade fail, so nothing reached them.
+		const fetchMock = installFetchMock({ waStatus: 400, metaCode: 131026 });
+		try {
+			const { shortId, orderId } = await seedAgedOrder(t, "open", 11 * DAY);
+			const asUser = t.withIdentity({ subject: USER });
+
+			const res = await asUser.action(api.orders.sendPaymentReminder, {
+				shortId,
+			});
+
+			// The seller pressed a button; telling them "sent ✓" for a message
+			// that never left is the one answer they can't act on.
+			expect(res).toEqual({ ok: false, reason: "send_failed" });
+			// And the 24h cooldown is rolled back — an order gets at most four of
+			// these, and a failure on OUR side must not burn one of them.
+			const order = await t.run((ctx) => ctx.db.get(orderId));
+			expect(order?.lastManualReminderAt ?? undefined).toBeUndefined();
 		} finally {
 			fetchMock.restore();
 		}

@@ -867,6 +867,19 @@ function OrderDetailRoute() {
 								they can see and pay for it on their order page. Message them
 								yourself if you'd like to confirm it personally.
 							</p>
+						) : order.source === "counter" ? (
+							// A counter buyer never sees the /track push cards (they're
+							// gated to storefront orders), so there is no "Update my
+							// number" repair on their side to point at — and the cashier
+							// may still have them at the counter. Say what THEY can do.
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								The confirmation to{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
+								deliver — that number may have a typo or no WhatsApp. It's the
+								only message this order sends, so they have nothing in chat to
+								come back to. If they're still with you, check the number and
+								send them the order link yourself.
+							</p>
 						) : (
 							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
 								The confirmation to{" "}
@@ -1220,7 +1233,9 @@ function OrderDetailRoute() {
 																	? "You've already reminded this buyer in the last 24 hours."
 																	: res.reason === "window_closed"
 																		? "The day-14 reminder window has closed."
-																		: "This order can't be reminded right now.",
+																		: res.reason === "send_failed"
+																			? "WhatsApp didn't accept it — the buyer may have opted out, or their number may not be on WhatsApp. This attempt hasn't been counted, so you can try again."
+																			: "This order can't be reminded right now.",
 														});
 													}
 												} finally {
