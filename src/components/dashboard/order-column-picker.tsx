@@ -45,14 +45,21 @@ export function OrderColumnPicker({
 }) {
 	return (
 		<Popover>
+			{/* Shaped like a FilterChip, because it now sits in the chip row: same
+			    h-10 pill, same border. It was an h-9 rounded-xl button in a row of
+			    h-11 ones, which read as misaligned AND sat under the touch floor.
+			    The label collapses to just the count on the narrowest screens —
+			    "10/36" beside the columns glyph is already unambiguous, and the row
+			    has chips to fit. */}
 			<PopoverTrigger asChild>
 				<Button
 					type="button"
 					variant="outline"
-					className="h-9 gap-2 rounded-xl px-3 text-[13px] font-medium"
+					aria-label={`Columns: ${visibleCount} of ${ORDER_COLUMNS.length} shown`}
+					className="h-10 shrink-0 gap-1.5 rounded-full border-border px-3.5 text-[13px] font-medium"
 				>
 					<Columns3 className="size-4" aria-hidden="true" />
-					Columns
+					<span className="hidden sm:inline">Columns</span>
 					<span className="tabular-nums text-muted-foreground">
 						{visibleCount}/{ORDER_COLUMNS.length}
 					</span>

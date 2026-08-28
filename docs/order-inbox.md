@@ -80,12 +80,27 @@ WhatsApp.
   hard rule for wide content) and its row controls **grow to 44px touch targets
   below `lg`** — with the checkbox's *visual* box staying 18px inside that target,
   since growing the box itself would give a phone a giant empty square.
-- **The switch is one compact icon button**, not a segmented `Cards | Table`
-  control: the segmented version cost ~150px of a 390px toolbar that search and
-  filters already compete for. The trigger shows only the CURRENT view's icon
-  (grid / rows) and the dropdown names both with a tick on the active one. The
-  column picker sits beside it and is equally available on a phone — a table you
-  can't re-column there is half a view.
+- **Where the controls live** — settled after the first build crowded five of
+  them into one row and squeezed the search input down to its own padding:
+  - **The view switch is in the PAGE HEADER**, beside Select and Export. Those
+    three are one family — things you do *to* the list — while search, sort and
+    filters *narrow* it. Splitting the families is what keeps the search row
+    from running out of width, and it means the next display preference has an
+    obvious home. It is a segmented control, not a dropdown: two options, both
+    worth showing, current one readable at a glance.
+  - **The column picker rides the chip row**, right-aligned and *outside* the
+    scroller, so a control that only exists in table view can't scroll off a
+    phone and become undiscoverable. It configures the table, so it sits with
+    the table's own controls, and it is shaped like a `FilterChip` (h-10 pill)
+    to belong to that row. Its label collapses to just the count below `sm:`.
+  - **The search row is only ever Search · Sort · Filters.** Sort goes icon-only
+    below `sm:`, where its label and chevron cost ~70px the input needs more.
+
+  Two of the three faults this fixed were bugs rather than taste: the search was
+  `flex-1 min-w-0` against four `shrink-0` siblings totalling ~404px on a 390px
+  screen (so it collapsed and Filters wrapped alone), and the column picker was
+  `h-9` in a row of `h-11` controls — visibly misaligned and under the touch
+  floor.
 - **No new backend.** `searchOrders` already returned full order docs, so the
   table is purely a render mode over data the client had.
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same

@@ -733,6 +733,42 @@ function OrdersRoute() {
 
 	const headerActions = (
 		<>
+			{/* View switch, leading the header cluster (86eyrtz74). It sits HERE and
+			    not in the search row because Cards/Table, Select and Export are one
+			    family — things you do TO the list — while search, sort and filters
+			    narrow it. Keeping the two families apart is also what stops the
+			    search row running out of width on a phone, which is how this
+			    started: five controls in one row squeezed the input to its own
+			    padding. A segmented control rather than a dropdown: two options,
+			    both worth showing, and the current one reads at a glance. */}
+			<div className="flex h-11 shrink-0 items-center rounded-xl border border-border bg-muted/60 p-0.5">
+				{(
+					[
+						{ value: "cards", label: "Cards", Icon: LayoutGrid },
+						{ value: "table", label: "Table", Icon: Rows3 },
+					] as const
+				).map(({ value, label, Icon }) => {
+					const active = view === value;
+					return (
+						<button
+							key={value}
+							type="button"
+							aria-pressed={active}
+							aria-label={`${label} view`}
+							title={`${label} view`}
+							onClick={() => setView(value)}
+							className={cn(
+								"flex size-10 items-center justify-center rounded-[10px] transition-colors",
+								active
+									? "bg-background text-foreground shadow-sm"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							<Icon className="size-4.5" aria-hidden="true" />
+						</button>
+					);
+				})}
+			</div>
 			<Button
 				type="button"
 				variant={selectMode ? "secondary" : "outline"}
@@ -872,17 +908,20 @@ function OrdersRoute() {
 									aria-label={`Sort: ${
 										INBOX_SORTS.find((s) => s.value === sort)?.label
 									}`}
-									className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:border-accent/40"
+									// Icon-only on the narrowest screens: the label and chevron
+									// cost ~70px that the search input needs more. From `sm:`
+									// up there is room to name the current sort.
+									className="flex h-11 w-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-border bg-card text-sm font-medium text-foreground transition-colors hover:border-accent/40 sm:w-auto sm:px-3"
 								>
 									<ArrowUpDown
-										className="size-4 text-muted-foreground"
+										className="size-4.5 text-muted-foreground sm:size-4"
 										aria-hidden="true"
 									/>
-									<span className="whitespace-nowrap">
+									<span className="hidden whitespace-nowrap sm:inline">
 										{INBOX_SORTS.find((s) => s.value === sort)?.short}
 									</span>
 									<ChevronDown
-										className="size-4 text-muted-foreground"
+										className="hidden size-4 text-muted-foreground sm:block"
 										aria-hidden="true"
 									/>
 								</button>
@@ -929,68 +968,6 @@ function OrdersRoute() {
 							</PopoverContent>
 						</Popover>
 
-						{/* View switch — one compact icon button at EVERY width. A
-						    segmented Cards|Table control costs ~150px of a 390px toolbar
-						    that search and filters already compete for, so the trigger
-						    shows only the CURRENT view's icon and the menu names both.
-						    The column picker sits beside it and is equally available on
-						    a phone — a table you can't re-column there is half a view. */}
-						<div className="flex shrink-0 items-center gap-2">
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
-									<Button
-										type="button"
-										variant="outline"
-										size="icon"
-										className="size-11 shrink-0 rounded-xl lg:size-10"
-										aria-label={`View: ${tableView ? "Table" : "Cards"}. Change view`}
-									>
-										{tableView ? (
-											<Rows3 className="size-5" aria-hidden="true" />
-										) : (
-											<LayoutGrid className="size-5" aria-hidden="true" />
-										)}
-									</Button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="end" className="w-48">
-									{(
-										[
-											{ value: "cards", label: "Cards", Icon: LayoutGrid },
-											{ value: "table", label: "Table", Icon: Rows3 },
-										] as const
-									).map(({ value, label, Icon }) => (
-										<DropdownMenuItem
-											key={value}
-											onSelect={() => setView(value)}
-											className="gap-2.5"
-										>
-											<Icon
-												className="size-4 text-muted-foreground"
-												aria-hidden="true"
-											/>
-											<span className="flex-1">{label}</span>
-											<Check
-												className={cn(
-													"size-4 text-accent",
-													view === value ? "opacity-100" : "opacity-0",
-												)}
-												aria-hidden="true"
-											/>
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuContent>
-							</DropdownMenu>
-							{tableView ? (
-								<OrderColumnPicker
-									isVisible={columnState.isVisible}
-									onToggle={columnState.toggle}
-									onReset={columnState.reset}
-									visibleCount={columnState.visibleKeys.length}
-									isCustomised={columnState.isCustomised}
-								/>
-							) : null}
-						</div>
-
 						<OrderFilters
 							value={{
 								payment: pay,
@@ -1011,7 +988,14 @@ function OrdersRoute() {
 						/>
 					</div>
 
-					<FilterChipRow>
+					{/* The chip row scrolls; the column picker does NOT. It sits
+					    outside the scroller and holds the right edge, so a control that
+					    only exists in table view can't scroll off a phone and become
+					    undiscoverable. It lives here rather than in the search row
+					    because it configures the TABLE, not the result set — the same
+					    reason the view switch moved up into the header. */}
+					<div className="flex items-center gap-2">
+					<FilterChipRow className="min-w-0 flex-1">
 						{/* Pin privilege, leading the row (86eyrtz74). It is FIRST because
 						    it is the seller's OWN urgency marker — the buckets below are
 						    the system's opinion, this one is theirs. It appears only once
@@ -1057,6 +1041,16 @@ function OrdersRoute() {
 							);
 						})}
 					</FilterChipRow>
+					{tableView ? (
+						<OrderColumnPicker
+							isVisible={columnState.isVisible}
+							onToggle={columnState.toggle}
+							onReset={columnState.reset}
+							visibleCount={columnState.visibleKeys.length}
+							isCustomised={columnState.isCustomised}
+						/>
+					) : null}
+					</div>
 				</section>
 			) : null}
 
