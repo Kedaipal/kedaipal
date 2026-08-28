@@ -15,27 +15,28 @@ import { useMutation } from "convex/react";
 import { useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { Country } from "../../../convex/lib/country";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
 	todayMytMidnight,
 } from "../../../convex/lib/fulfilmentDate";
 import type { Locale } from "../../../convex/lib/locale";
+import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import {
 	addMytMonths,
+	type BookingSelection,
 	conflictCeiling,
 	mytMonthStart,
 	nextBookingSelection,
-	type BookingSelection,
 	type SelectionContext,
 } from "../../lib/booking-dates";
 import {
 	convexErrorMessage,
-	formatMyMobile,
+	formatMobile,
 	formatPrice,
 } from "../../lib/format";
-import { myWaPhoneCheckoutSchema } from "../../lib/schemas";
-import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { MyPhoneInput } from "../ui/my-phone-input";
@@ -51,12 +52,16 @@ export function BookingCheckoutForm({
 	storeSlug,
 	productSlug,
 	locale,
+	country,
 }: {
 	retailerId: Id<"retailers">;
 	storeName: string;
 	storeSlug: string;
 	productSlug: string;
 	locale?: Locale;
+	/** The store's country (SG-lite) — keys the phone plate + validator so a
+	 * booking checkout accepts exactly what the ordinary checkout does. */
+	country: Country;
 }) {
 	const navigate = useNavigate();
 	const requestBooking = useMutation(api.bookings.requestBooking);
@@ -145,7 +150,7 @@ export function BookingCheckoutForm({
 			? conflictCeiling(selection.checkIn, ctx)
 			: null;
 
-	const parsedPhone = myWaPhoneCheckoutSchema.safeParse(phone);
+	const parsedPhone = waPhoneCheckoutSchema[country].safeParse(phone);
 	const nameOk = name.trim().length >= 3;
 	const rangeOk = nights >= 1;
 	const blockedReason = !rangeOk
@@ -265,6 +270,7 @@ export function BookingCheckoutForm({
 				<div className="flex flex-col gap-1.5 text-sm font-medium">
 					<label htmlFor="booking-wa-phone">WhatsApp number</label>
 					<MyPhoneInput
+						country={country}
 						id="booking-wa-phone"
 						value={phone}
 						onChange={setPhone}
@@ -274,8 +280,8 @@ export function BookingCheckoutForm({
 					{parsedPhone.success ? (
 						<span className="text-sm font-medium text-accent-emphasis">
 							{ms
-								? `Keputusan tempahan akan dihantar ke ${formatMyMobile(parsedPhone.data)} — pastikan nombor ini betul.`
-								: `We'll WhatsApp the decision to ${formatMyMobile(parsedPhone.data)} — check it's right.`}
+								? `Keputusan tempahan akan dihantar ke ${formatMobile(parsedPhone.data)} — pastikan nombor ini betul.`
+								: `We'll WhatsApp the decision to ${formatMobile(parsedPhone.data)} — check it's right.`}
 						</span>
 					) : (
 						<span className="text-xs font-normal text-muted-foreground">
@@ -342,8 +348,8 @@ export function BookingCheckoutForm({
 							{conflict.maxStayNights} night
 							{conflict.maxStayNights === 1 ? "" : "s"}
 						</span>{" "}
-						(check out {formatFulfilmentDate(conflict.latestCheckOut)}) — or
-						tap a different check-in to stay longer.
+						(check out {formatFulfilmentDate(conflict.latestCheckOut)}) — or tap
+						a different check-in to stay longer.
 					</p>
 				) : selection.checkIn !== undefined &&
 					selection.checkOut === undefined ? (

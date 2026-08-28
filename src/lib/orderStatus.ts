@@ -256,15 +256,10 @@ export type OrderStage = {
 	anchor: StageAnchor;
 	label: StageLabel;
 	description?: StageText;
-	notify: boolean;
 	sortOrder: number;
 };
 
 export const MAX_ORDER_STAGES = 20; // DECISION 5
-// Interim cap on how many stages may ping the buyer on WhatsApp, so a seller
-// can't rack up messaging cost by enabling notify on many stages. Revisit with
-// the WABA rate-limit / tier-cost work.
-export const MAX_NOTIFY_STAGES = 5;
 // Stage labels render on the same timeline pills as Phase-1 labels, so share the
 // single-line cap. Descriptions are a sentence or two of buyer-visible context.
 export const STAGE_LABEL_MAX_LENGTH = STATUS_LABEL_MAX_LENGTH;
@@ -281,8 +276,7 @@ export function defaultStageId(anchor: StageAnchor): string {
  * retailer's `statusLabels` relabel + the delivery/self_collect presets carry
  * straight in). This is THE general model — a retailer who never configures
  * stages flows through the exact same stage code as one who does (no legacy
- * branch). `notify: true` because every default stage is an anchor milestone
- * (DECISION 2).
+ * branch).
  */
 export function synthesizeDefaultStages(opts: {
 	labels?: StatusLabels;
@@ -303,7 +297,6 @@ export function synthesizeDefaultStages(opts: {
 				locale: "ms",
 			}),
 		},
-		notify: true,
 		sortOrder: i,
 	}));
 }
@@ -443,23 +436,13 @@ export function collectStageConfigErrors(stages: OrderStage[]): string[] {
 	}
 	// Boundary milestones are singular: exactly one "Accepted" (confirmed) and one
 	// "Done" (delivered). Multi-stage granularity lives in the middle band; these
-	// two are natural single moments (and keep the dashboard advance + confirm-
-	// notify logic clean).
+	// two are natural single moments (and keep the dashboard advance logic
+	// clean).
 	if (stages.filter((s) => s.anchor === "confirmed").length > 1) {
 		errors.push(`Only one "${ANCHOR_UI_LABELS.confirmed}" stage is allowed.`);
 	}
 	if (stages.filter((s) => s.anchor === "delivered").length > 1) {
 		errors.push(`Only one "${ANCHOR_UI_LABELS.delivered}" stage is allowed.`);
-	}
-	// Cap how many stages may WhatsApp the buyer, to bound messaging cost. Confirmed
-	// stages never send (the confirm flow owns that moment), so they don't count.
-	if (
-		stages.filter((s) => s.notify && s.anchor !== "confirmed").length >
-		MAX_NOTIFY_STAGES
-	) {
-		errors.push(
-			`At most ${MAX_NOTIFY_STAGES} stages can notify the buyer on WhatsApp.`,
-		);
 	}
 	// Anchors must be monotonically non-decreasing by sortOrder — you can't place
 	// an "In production" stage before an "Accepted" one. Skipping anchors and
@@ -483,29 +466,6 @@ export function collectStageConfigErrors(stages: OrderStage[]): string[] {
 export function assertValidOrderStages(stages: OrderStage[]): void {
 	const errors = collectStageConfigErrors(stages);
 	if (errors.length > 0) throw new Error(errors[0]);
-}
-
-/**
- * Decide what buyer notification (if any) an advance into `stage` should fire.
- * `stage.notify` is the single source of truth:
- *  - notify=false → nothing;
- *  - `confirmed` anchor → nothing here (the confirm/payment flow owns buyer
- *    comms at confirmation, same as today — avoids a duplicate);
- *  - anchor CROSSING (canonical status changed) → "canonical": reuse the rich
- *    status copy (messageTemplates-aware), zero regression vs Phase 1;
- *  - move WITHIN an anchor (status unchanged) → "stage": generic stage update.
- * Pure so the routing is unit-tested without sending WhatsApp.
- */
-export type StageNotifyPlan = "canonical" | "stage" | "none";
-
-export function stageNotifyPlan(args: {
-	notify: boolean;
-	targetAnchor: StageAnchor;
-	statusChanged: boolean;
-}): StageNotifyPlan {
-	if (!args.notify) return "none";
-	if (args.targetAnchor === "confirmed") return "none";
-	return args.statusChanged ? "canonical" : "stage";
 }
 
 /**

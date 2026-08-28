@@ -51,7 +51,8 @@ import {
 import { effectiveKind } from "./lib/productKind";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyMobile } from "./lib/slug";
+import { DEFAULT_COUNTRY } from "./lib/country";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { applyStatusTransition, MAX_CUSTOMER_NOTE } from "./orders";
 import { recordOrderCreated } from "./subscriptionUsage";
 
@@ -177,7 +178,13 @@ export const requestBooking = mutation({
 		}
 		let waPhone: string;
 		try {
-			waPhone = assertValidMyMobile(args.customer.waPhone);
+			// Judged by the STORE's country (SG-lite) — the same bridge
+			// orders.create uses, so a booking checkout can't reject a number
+			// the ordinary checkout would accept.
+			waPhone = assertValidMobileForCountry(
+				args.customer.waPhone,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}

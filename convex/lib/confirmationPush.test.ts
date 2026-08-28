@@ -3,6 +3,7 @@ import {
 	classifyPushFailure,
 	PUSH_MAX_ATTEMPTS,
 	PUSH_RETRY_DELAYS_MS,
+	pushOwnsTheMessage,
 } from "./confirmationPush";
 
 describe("classifyPushFailure — retryable classes", () => {
@@ -79,5 +80,29 @@ describe("classifyPushFailure — permanent rejects terminate on the first try",
 				1,
 			),
 		).toMatchObject({ retry: false });
+	});
+});
+
+describe("pushOwnsTheMessage — who is allowed to send the buyer's one message", () => {
+	test("no push path (legacy order) → the inbound reply is the one message", () => {
+		expect(pushOwnsTheMessage(undefined)).toBe(false);
+	});
+
+	test("a failed push reached nobody, so the inbound reply still goes", () => {
+		expect(pushOwnsTheMessage("failed")).toBe(false);
+	});
+
+	test.each(["deferred", "sending", "sent", "recovered"] as const)(
+		"%s → the push owns it; a free-form reply would be a second billable send",
+		(status) => {
+			expect(pushOwnsTheMessage(status)).toBe(true);
+		},
+	);
+
+	test("deferred counts as owned even though nothing has been sent yet", () => {
+		// The message is merely waiting on a final price. Replying now would mean
+		// the buyer gets this reply AND the template later — the exact double-send
+		// the guard exists to stop.
+		expect(pushOwnsTheMessage("deferred")).toBe(true);
 	});
 });

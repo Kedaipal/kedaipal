@@ -5,14 +5,19 @@
  * OWN HitPay account, pastes the API key + salt from HitPay's API Keys page,
  * and buyers get a "Pay now" hosted checkout on their order pages that
  * auto-confirms payment. The card front-loads the three things a seller must
- * understand BEFORE connecting (payout timing, fees, SSM eligibility) as
- * short bullets — no wall of text. Disconnect + pause are never plan-gated
- * (downgrade never traps); connecting is Pro.
+ * understand BEFORE connecting (payout timing, fees, business-registry
+ * eligibility) as short bullets — no wall of text. Disconnect + pause are
+ * never plan-gated (downgrade never traps); connecting is Pro.
+ *
+ * Everything country-shaped — which rails are pitched, the registry a seller
+ * must hold, and the "not instant like a direct …" comparison — is keyed off
+ * the store's country (SG-lite, 86eyph341). Malaysia's copy is unchanged.
  */
 
 import { ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import type { Country } from "../../../convex/lib/country";
 import { convexErrorMessage } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
@@ -40,13 +45,17 @@ type HitpayPatch = {
 export function OnlinePaymentsCard({
 	hitpay,
 	canUse,
+	country,
 	onSave,
 }: {
 	hitpay: HitpaySummary | undefined;
 	/** Client mirror of PLAN_FEATURES.onlinePayments (server is the lock). */
 	canUse: boolean;
+	/** Store country — picks the pitched rails + the eligibility/settlement copy. */
+	country: Country;
 	onSave: (patch: HitpayPatch) => Promise<unknown>;
 }) {
+	const copy = COUNTRY_COPY[country];
 	const [apiKey, setApiKey] = useState("");
 	const [salt, setSalt] = useState("");
 	const [editingKeys, setEditingKeys] = useState(false);
@@ -267,7 +276,7 @@ export function OnlinePaymentsCard({
 					{/* Capability pitch — explicitly captioned so it never reads as a
 					    promise: buyers only see what the seller enables in HitPay. */}
 					<div className="flex flex-col gap-1.5">
-						<MethodLogos codes={PITCH_CODES} />
+						<MethodLogos codes={copy.pitchCodes} />
 						<p className="text-[11px] text-muted-foreground">
 							…and more. You pick which methods to switch on in your HitPay
 							dashboard — buyers only ever see the ones you've enabled.
@@ -287,15 +296,15 @@ export function OnlinePaymentsCard({
 						</Bullet>
 						<Bullet>
 							Money reaches your bank in <strong>2–3 working days</strong> (not
-							instant like a direct DuitNow transfer).
+							instant like a direct {copy.instantRail} transfer).
 						</Bullet>
 						<Bullet>
-							HitPay charges a small fee per payment (from ~1.2% for DuitNow
-							QR). <strong>Kedaipal takes nothing.</strong>
+							HitPay charges a small fee per payment ({copy.feeHint}).{" "}
+							<strong>Kedaipal takes nothing.</strong>
 						</Bullet>
 						<Bullet>
-							You'll need an <strong>SSM-registered business</strong> — HitPay
-							approves new accounts in 1–3 days.
+							You'll need a <strong>{copy.registry}</strong> — HitPay approves
+							new accounts in 1–3 days.
 						</Bullet>
 					</ul>
 
@@ -409,12 +418,61 @@ const METHOD_ICONS: Record<string, Array<{ src: string; alt: string }>> = {
 	grabpay_direct: [{ src: "/img/payment/grabpay.svg", alt: "GrabPay" }],
 	shopee_pay: [{ src: "/img/payment/shopeepay.svg", alt: "ShopeePay" }],
 	boost: [{ src: "/img/payment/boost.svg", alt: "Boost" }],
-	paynow_online: [{ src: "/img/payment/paynow.svg", alt: "PayNow" }],
+	// NOTE: no `paynow_online` entry on purpose. `public/img/payment/paynow.svg`
+	// is a base64 PNG in an <svg> shell (the recurring defect audited in
+	// docs/landing-funnel.md) — rendering it beside the genuine vectors gives
+	// the ransom-note row the brand rules warn about. PayNow falls through to
+	// the wordmark chip below, the same call the landing strip made.
 };
 
-/** What the pitch shows before any account is connected — HitPay's MY
- * capability, explicitly captioned as "what you enable is what buyers see". */
-const PITCH_CODES = ["touch_n_go", "duitnow", "fpx", "card"];
+/** Wordmark chips for rails we have no brand-approved vector for — the
+ * ShopeePay precedent. Without this the fallback prints the raw API code
+ * ("paynow online"), which is not how the rail is spelled anywhere. */
+const METHOD_CHIP_LABELS: Record<string, string> = {
+	paynow_online: "PayNow",
+	paynow: "PayNow",
+};
+
+/**
+ * What the pitch shows before any account is connected — HitPay's capability
+ * in that market, explicitly captioned as "what you enable is what buyers
+ * see". Note these are HitPay's own API codes, NOT the order-method enum: NETS
+ * is hand-pickable on an SG order (a terminal at the counter) but isn't a rail
+ * we mint, so it never appears here.
+ */
+const PITCH_CODES: Record<Country, string[]> = {
+	MY: ["touch_n_go", "duitnow", "fpx", "card"],
+	SG: ["paynow_online", "card", "grabpay"],
+};
+
+/** Country-shaped strings for the pre-connect pitch. Exhaustive `Record` so a
+ * third country is a compile error, never a silent Malaysia fallback. */
+const COUNTRY_COPY: Record<
+	Country,
+	{
+		pitchCodes: string[];
+		/** The rail a seller compares payout speed against ("not instant like a
+		 * direct … transfer") — the way THEY normally get paid today. */
+		instantRail: string;
+		/** Deliberately structural, not a quoted rate we'd have to keep true:
+		 * QR/bank rails are the cheapest at every PSP, cards the dearest. */
+		feeHint: string;
+		registry: string;
+	}
+> = {
+	MY: {
+		pitchCodes: PITCH_CODES.MY,
+		instantRail: "DuitNow",
+		feeHint: "from ~1.2% for DuitNow QR",
+		registry: "SSM-registered business",
+	},
+	SG: {
+		pitchCodes: PITCH_CODES.SG,
+		instantRail: "PayNow",
+		feeHint: "lowest on PayNow, higher on cards",
+		registry: "UEN — an ACRA-registered business",
+	},
+};
 
 /**
  * Method chips. With `codes` (the connected account's probed list) it renders
@@ -433,7 +491,8 @@ function MethodLogos({ codes }: { codes: string[] }) {
 							key={code}
 							className="flex h-7 items-center rounded-md border border-border bg-white px-2 text-[10px] font-medium text-muted-foreground"
 						>
-							{code.replace(/_/g, " ")}
+							{METHOD_CHIP_LABELS[code.toLowerCase()] ??
+								code.replace(/_/g, " ")}
 						</span>
 					);
 				}

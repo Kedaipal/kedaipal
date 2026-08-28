@@ -26,10 +26,11 @@ import { Input } from "../ui/input";
 
 // Manual courier + tracking number on mark-shipped (86eyehvk4). Two entry
 // points share one fieldset: the mark-shipped prompt (MarkShippedDialog) and
-// the order-detail card's edit mode (ShipmentTrackingCard). Neither ever
-// messages the buyer on its own — tracking entered AT mark-shipped rides the
-// shipped WhatsApp update that's already going out; tracking added later
-// surfaces on the buyer's tracking page only (Meta bills per message).
+// the order-detail card's edit mode (ShipmentTrackingCard). Neither messages
+// the buyer — an order sends exactly one WhatsApp, at confirmation, and it's
+// long gone by ship time (Meta bills per message). Whenever the courier +
+// number are entered, they surface on the buyer's live order page, so the copy
+// below promises that page and never a chat update.
 
 const OTHER = "__other";
 // Sellers ship with one courier — remember the last pick per device so the
@@ -183,9 +184,9 @@ function ShipmentFieldset({
 					? "No tracking info will be attached — you can add it later from this order."
 					: selected
 						? selected.buildTrackingUrl
-							? `The buyer gets a ${selected.label} tracking link automatically.`
-							: `${selected.label} has no public tracking page — the buyer sees the number to copy instead.`
-						: "The buyer sees the courier name and number to copy — paste a link if the courier has a tracking page."}
+							? `The buyer's order page gets a ${selected.label} tracking link automatically.`
+							: `${selected.label} has no public tracking page — the buyer's order page shows the number to copy instead.`
+						: "The buyer's order page shows the courier name and number to copy — paste a link if the courier has a tracking page."}
 			</p>
 		</div>
 	);
@@ -279,9 +280,9 @@ export function MarkShippedDialog({
 						</DialogDescription>
 					) : (
 						<DialogDescription>
-							Add the courier and tracking number — it goes into the
-							buyer&apos;s WhatsApp update and tracking page. Optional; you can
-							also add it later from this order.
+							Add the courier and tracking number — it appears on the
+							buyer&apos;s order page, so they can follow the parcel instead of
+							asking you. Optional; you can also add it later from this order.
 						</DialogDescription>
 					)}
 				</DialogHeader>
@@ -485,8 +486,8 @@ export function ShipmentTrackingCard({
 				</div>
 			) : (
 				<p className="text-sm text-muted-foreground">
-					No tracking added yet — the buyer&apos;s tracking page shows it once
-					you add it.
+					No tracking added yet — the buyer&apos;s order page shows it the
+					moment you add it.
 				</p>
 			)}
 		</section>

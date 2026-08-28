@@ -159,3 +159,56 @@ describe("POST /webhook/whatsapp — outbound statuses (86eyf1rck)", () => {
 		expect(order?.confirmationPushStatus).toBe("failed");
 	});
 });
+
+describe("GET /internal/business-report", () => {
+	const REPORT_SECRET = "test-report-secret";
+
+	afterEach(() => {
+		delete process.env.BUSINESS_REPORT_SECRET;
+	});
+
+	test("500s when the secret is not configured, rather than 401", async () => {
+		// A broken deploy must not be mistakable for an auth failure.
+		delete process.env.BUSINESS_REPORT_SECRET;
+		const res = await setup().fetch("/internal/business-report", {
+			method: "GET",
+			headers: { "X-Report-Secret": REPORT_SECRET },
+		});
+		expect(res.status).toBe(500);
+	});
+
+	test("rejects a request with no secret header", async () => {
+		process.env.BUSINESS_REPORT_SECRET = REPORT_SECRET;
+		const res = await setup().fetch("/internal/business-report", {
+			method: "GET",
+		});
+		expect(res.status).toBe(401);
+	});
+
+	test("rejects a wrong secret", async () => {
+		process.env.BUSINESS_REPORT_SECRET = REPORT_SECRET;
+		const res = await setup().fetch("/internal/business-report", {
+			method: "GET",
+			headers: { "X-Report-Secret": "not-the-secret" },
+		});
+		expect(res.status).toBe(401);
+	});
+
+	test("returns the report for a correct secret", async () => {
+		// Also the only test that runs the aggregation against the REAL schema —
+		// the pure tests prove arithmetic, this proves the reads and index names.
+		process.env.BUSINESS_REPORT_SECRET = REPORT_SECRET;
+		const res = await setup().fetch("/internal/business-report", {
+			method: "GET",
+			headers: { "X-Report-Secret": REPORT_SECRET },
+		});
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Content-Type")).toContain("application/json");
+		const body = await res.json();
+		expect(body.window.startYmd).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(body.mrr.byCurrency).toEqual({});
+		expect(body.pastDue.total).toBe(0);
+		expect(body.orders.capped).toBe(false);
+		expect(body.founding).toEqual({ reserved: 0, remaining: 10, paid: 0 });
+	});
+});

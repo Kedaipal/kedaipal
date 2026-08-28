@@ -5,13 +5,16 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { COUNTRY_LABELS, type Country } from "../../../convex/lib/country";
+import { STORED_MOBILE_PATTERN } from "../../../convex/lib/slug";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
-import { toMyNationalInput } from "../../lib/phone";
-import { myWaPhoneFormOptionalSchema } from "../../lib/schemas";
+import { toNationalPhoneInput } from "../../lib/phone";
+import { waPhoneFormOptionalSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
@@ -20,7 +23,7 @@ import {
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
-import { MyPhonePrefix } from "../ui/my-phone-input";
+import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
 
 interface PickupLocationEditDialogProps {
 	open: boolean;
@@ -31,6 +34,12 @@ interface PickupLocationEditDialogProps {
 	 */
 	location: Doc<"pickupLocations"> | undefined;
 	retailerId: Id<"retailers">;
+	/** The store's country (SG-lite) — the address search covers it (Places
+	 * region lock), the placeholder names it, and the manager-contact field
+	 * wears its plate + validator arm. */
+	country: Country;
+	/** Storefront currency — the fee field wears its symbol (86eyqgujv). */
+	currency: string;
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
@@ -94,6 +103,8 @@ export function PickupLocationEditDialog({
 	onClose,
 	location,
 	retailerId,
+	country,
+	currency,
 	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
@@ -129,6 +140,21 @@ export function PickupLocationEditDialog({
 	const lockedWithExistingFee =
 		!canChargeFee && Boolean(location?.fee && location.fee > 0);
 
+	// A manager number kept from before a country switch (86eyqgujv). The
+	// switch deliberately no longer wipes these, which would otherwise trap the
+	// seller here: the field wears this country's plate and its validator
+	// rejects a foreign number, so a seller opening this dialog to fix the
+	// ADDRESS would find Save blocked by a phone field they never touched,
+	// under a value they can't read ("60123456789" beneath a +65 plate).
+	//
+	// So the field starts empty and the old number is stated above it, with
+	// what saving will do. Nothing is lost until they choose to save.
+	const carriedContact =
+		location?.managerWaPhone &&
+		!STORED_MOBILE_PATTERN[country].test(location.managerWaPhone)
+			? location.managerWaPhone
+			: null;
+
 	const form = useAppForm({
 		defaultValues: {
 			label: location?.label ?? "",
@@ -136,8 +162,12 @@ export function PickupLocationEditDialog({
 			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
-			// National part only — the field wears a fixed `+60` plate.
-			managerWaPhone: toMyNationalInput(location?.managerWaPhone),
+			// National part only — the field wears the store-country plate. A
+			// carried foreign number has no national part under this plate, so it
+			// starts blank and is explained beneath instead.
+			managerWaPhone: carriedContact
+				? ""
+				: toNationalPhoneInput(location?.managerWaPhone, country),
 		},
 		// Label errors render on the field itself (aria-invalid + message beneath);
 		// the address + fee inputs aren't shared fields, so they carry their own
@@ -149,10 +179,11 @@ export function PickupLocationEditDialog({
 				scheduleNote: z.string(),
 				notes: z.string(),
 				managerName: z.string(),
-				// Optional, but a number that IS typed must be a MY mobile — the
-				// field wears the `+60` plate and the server asserts the same shape,
-				// so failing fast here beats a round-trip to learn it.
-				managerWaPhone: myWaPhoneFormOptionalSchema,
+				// Optional, but a number that IS typed must be a mobile in the
+				// store's country — the field wears the matching plate and the
+				// server asserts the same shape, so failing fast here beats a
+				// round-trip to learn it.
+				managerWaPhone: waPhoneFormOptionalSchema[country],
 			}),
 		},
 		onSubmit: async ({ value }) => {
@@ -334,11 +365,12 @@ export function PickupLocationEditDialog({
 								initialValue={location?.address ?? ""}
 								label="Address"
 								required
-								placeholder="Start typing an address in Malaysia…"
+								country={country}
+								placeholder={`Start typing an address in ${COUNTRY_LABELS[country]}…`}
 								description={
 									hasCoords
-										? "✓ Pinned via Google Maps — buyers will get a tappable location pin in WhatsApp."
-										: "Pick a Google suggestion to enable the WhatsApp location pin. You can also type freely if your spot isn't on Google yet."
+										? "✓ Pinned via Google Maps — buyers get one-tap Waze and Google Maps directions on their order page."
+										: "Pick a Google suggestion so buyers get one-tap Waze / Google Maps directions on their order page. You can also type freely if your spot isn't on Google yet — buyers then just see the address."
 								}
 								onSelect={handleAutocompleteSelect}
 								onTextChange={handleManualAddressEdit}
@@ -376,7 +408,7 @@ export function PickupLocationEditDialog({
 								</label>
 								<div className="relative">
 									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-										RM
+										{currencySymbol(currency)}
 									</span>
 									<input
 										id="pickup-fee-input"
@@ -495,12 +527,21 @@ export function PickupLocationEditDialog({
 											type="tel"
 											inputMode="tel"
 											autoComplete="tel"
-											prefix={<MyPhonePrefix />}
-											placeholder="12-345 6789"
+											prefix={<MyPhonePrefix country={country} />}
+											placeholder={MOBILE_PLACEHOLDER[country]}
 											description="Optional — whoever is at this point when a buyer or rider needs to reach it."
 										/>
 									)}
 								</form.AppField>
+								{carriedContact ? (
+									<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+										This point's saved contact is{" "}
+										<span className="font-medium">+{carriedContact}</span>, from
+										before you moved the store to {COUNTRY_LABELS[country]}.
+										Enter a {COUNTRY_LABELS[country]} number above, or leave
+										this blank — saving will remove the old one.
+									</p>
+								) : null}
 							</div>
 
 							{serverError ? (

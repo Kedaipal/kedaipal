@@ -191,3 +191,146 @@ point's hours are governed by its own schedule note.
   moment" + the scheduled-booking paragraph). The shared rule is
   `resolveScheduleAt`: ≥30 min ahead and within ~30 days schedules,
   anything else books now.
+
+## Update (2026-08-19, 86eyp5rav): store opening hours
+
+A buyer scheduled a **3:00 AM delivery** two days out — nothing told checkout
+when the store can actually operate. Stores now carry an optional weekly
+schedule, and the fulfilment moment must fall inside it.
+
+- **Storage:** `retailers.openingHours` — 7 entries indexed by weekday
+  (**0 = Sunday**, the `getUTCDay` index `formatFulfilmentDate` already reads
+  off a MYT-shifted date, so the two can never disagree about which weekday a
+  date is). Per day `{ open, close, closed? }` in minutes since MYT midnight,
+  `0 ≤ open < close ≤ 1439` — **23:59 is the ceiling** because a native
+  `<input type="time">` cannot express "24:00" and fulfilment times are
+  already `< 1440`, so "open 24 hours" is `{0, 1439}` and there is no
+  midnight special case anywhere. Boundaries are **inclusive** (delivering AT
+  closing time is fine — the freeAbove posture). A closed day keeps its
+  open/close values so re-opening it in settings restores them.
+  **Undefined = open 24/7** (every pre-existing store, zero migration); an
+  explicitly-saved all-24h week **normalizes back to unset** (one spelling,
+  the minOrderValue posture); an **all-closed week is rejected** (the
+  working-method-invariant posture — the store could never take an order).
+  All-tier, public-safe (both retailer reads carry it).
+- **One pure module, one author:** `convex/lib/openingHours.ts` —
+  `sanitizeOpeningHours` (updateSettings), `assertWithinOpeningHours`
+  (`orders.create` AND the checkout submit mirror, so the words match),
+  `selectableTimeWindow` (the lead floor raised to opening, capped by
+  closing — with hours unset it degrades to exactly the pre-hours floor
+  behaviour), `defaultTimeWithinHours` (the 10:00-AM/floor prefill clamped
+  into the window), `openNowStatus` (storefront header line),
+  `openingHoursSpecification` (Store JSON-LD).
+- **What it constrains — and what it deliberately doesn't.** Only the
+  buyer's fulfilment date/time at storefront checkout: browsing and placing
+  orders stay 24/7 (the whole point of an async order hub), **counter
+  checkout is exempt** (seller standing there — the min-notice posture,
+  pinned by test), and **pickup orders validate day-level only** (they have
+  no time field; the pickup point's own `scheduleNote` keeps carrying the
+  point-level detail). A closed day rejects for BOTH methods.
+- **Checkout UX:** day chips **skip closed days and scan forward** (three
+  real choices still show; for delivery, a today whose window has passed is
+  skipped too), the default date is the first day the store can actually
+  fulfil, the time input carries the window as native `min`/`max` **plus the
+  hours named in its helper text** (the rule is never silent), the 30s
+  repair pulls an invalidated slot into the window, and a closed day picked
+  via the native date input (which can't skip weekdays) gets an immediate
+  inline explanation naming the weekday. Server re-validates everything.
+- **Storefront display:** stores WITH configured hours get a live
+  "Open now · closes 9:00 PM" / "Closed · opens 9:00 AM tomorrow" line in
+  the shared `StorefrontHeader` (all four buyer pages), tapping open the
+  weekly schedule in a dialog; the 24/7 default renders nothing (no clutter
+  where the rule doesn't bind). SSR-safe via `suppressHydrationWarning` on
+  the clock-dependent text + a minute tick. The store home's JSON-LD gains
+  `openingHoursSpecification` (open days only — the default claims nothing
+  rather than asserting "always open").
+- **Settings → Fulfilment**, first card (hours are the most fundamental
+  timing rule, above notice): summary view ("Open 24 hours, every day" when
+  unset) → an editor that leads with a **mode choice** (Zaki's round-2
+  feedback — setting 7 rows one by one was the entry fee, and the browser's
+  native time dropdown was ugly): **"Same every day"** (the default — ONE
+  time range + tap-to-toggle weekday chips for rest days; editing the range
+  writes every row, closed days included, so re-opening a chip inherits it;
+  switching to this mode visibly unifies onto the first open day's range)
+  vs **"Different per day"** (the 7-row editor, Monday-first display over
+  the Sunday-indexed array). Mode is derived on entry: open days sharing one
+  range read as "same". Both modes pick times through the new **themed
+  `ui/time-picker.tsx`** — a field-styled trigger opening a single
+  scrollable 30-min-step list (Google-Calendar pattern, 11:59 PM appended as
+  the terminal option), replacing the unstyled native dropdown on dashboard
+  surfaces; the buyer checkout's TimeField deliberately STAYS native (on
+  phones it opens the OS wheel, which no custom popover beats — the ugliness
+  was a desktop-dashboard problem). Disabled-with-reason Save on an
+  all-closed draft, quiet "Reset to open 24/7" (`openingHours: null`).
+- **NO hidden ±1h buffer** (the "first slot an hour after open" idea was
+  considered and rejected): a hidden offset makes the displayed hours lie
+  ("you open at 9 — why can't I pick 9?"), and prep headroom already has
+  explicit levers — min notice, the 15-min lead floor, or simply tighter
+  hours. An explicit "prep buffer" setting is a clean follow-up if a real
+  seller asks.
+- **v1 limits** (each a follow-up if a real seller asks): one range per day,
+  no overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception dates.
+  Known corner: a long notice (e.g. 27 days) combined with closed days can
+  leave a mostly-closed selectable window — chips go sparse and submit
+  explains; the server gate keeps it correct.
+
+## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
+
+The escape hatch the 3 AM advance order exposed: a buyer scheduled a delivery
+two days out at 3:00 AM and nothing in the product could change it — both
+fulfilment fields were write-once at `orders.create`, and dispatch would only
+offer a rider *at 3 AM*. Now the seller agrees a new time with the buyer in
+chat and records it on the order.
+
+- **`orders.rescheduleFulfilment`** (owner-or-admin via `requireRetailerAccess`,
+  admin act-as audited): patches `fulfilmentDate` (+ `fulfilmentTimeMinutes` on
+  delivery orders) and writes a `fulfilment_rescheduled (from … to …)`
+  orderEvent in the `delivery_fee_set` note style. Omitting the time keeps the
+  existing one — a date-only change can never silently drop the clock. A
+  passed time on a self-collect order is ignored (mirrors create). A dateless
+  legacy order may be *given* a date (`from unset`).
+- **Window**: `pending`/`confirmed`/`packed` only; refused on
+  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), and
+  once a collection order's goods have arrived (`collectedAt`).
+- **The hard guard is the ACTIVE Lalamove job**: a booking is frozen against
+  its `quotationId` and will NOT follow the order, so rescheduling under it
+  would desync the buyer's promise from the trip. Server throws; the dialog
+  opens onto an explanation pointing at "cancel the booking first". Order of
+  operations is therefore *reschedule → book*, never the reverse.
+- **The buyer-facing minimum-notice floor does NOT apply** — the notice window
+  protects the seller's lead time and the seller is the one moving the date.
+  The `[today, +30d]` range still holds (validation passes notice `0` to
+  `assertValidFulfilmentDate`).
+- **The buyer sees it instantly, with zero new plumbing**: the tracking page
+  reads `orders.get` reactively, later stage messages/emails render from live
+  order fields, and the inbox due-today buckets/sort are live reads.
+  Deliberately **no new WhatsApp send** (one-msg-per-order posture) — messages
+  already sent keep the old time; the chat agreement covers that, and the
+  dialog's helper copy says so ("agree the new time with them in chat first").
+- **UI**: `RescheduleFulfilmentDialog` on order detail's Fulfillment card —
+  renders only inside the reschedule window ("Reschedule", or "Set date" on a
+  dateless order), native date+time inputs, live "the buyer's order page will
+  show …" preview. **Past/beyond-window picks are refused live** (20 Aug
+  follow-up — native min/max are advisory): a passed day, a passed time today,
+  or a beyond-30d day disables Save with a visible reason, the fee preview
+  skips invalid moments (a quote would legitimise them), and an overdue
+  order's prefill clamps to today (keeping the agreed time-of-day). The
+  server's range check stays the backstop. On a **bookable Lalamove order** the dialog also fetches a
+  debounced **"Lalamove for this slot"** price for the picked moment (rider
+  prices are slot-sensitive) with the frozen buyer-paid fee named beside it —
+  purely the seller's cost outlook, re-quoted for real at booking; flat/
+  radius/weight stores never see it (their fees aren't time-sensitive). The
+  Fulfillment card itself is two stacked rows (header + Reschedule up top,
+  date/time on its own full-width line under a separator) so the badge, time
+  and control never fight for one mobile line.
+- Dispatch needs no change to follow: `prepareBooking` re-derives
+  `requestedMoment` from the live order doc on every quote. The companion
+  dispatch-side picker (book a rider at a *different* moment than the order
+  promises) lives in docs/delivery-lalamove.md.
+- **Prevention shipped alongside** (86eyp5rav, the section above): opening
+  hours now gate the buyer's picker at checkout + `orders.create`. This
+  reschedule is the vendor-side correction for orders that predate the
+  setting or were agreed as exceptions — the seller's own controls are
+  deliberately NOT bound by opening hours (the vendor is the authority on
+  their own exceptions), which is also why the canonical rebook bug
+  (86eyp63xn, Wagyu Walid) is fixed by this pair and not by hours alone.

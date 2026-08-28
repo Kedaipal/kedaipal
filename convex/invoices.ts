@@ -21,7 +21,12 @@ import {
 	type SubscriptionInvoiceData,
 } from "./lib/pdf/document";
 import { buildSubscriptionInvoicePdf } from "./lib/pdf/render";
-import { type BillingCycle, type Plan, planPrice } from "./lib/plans";
+import {
+	type BillingCurrency,
+	type BillingCycle,
+	type Plan,
+	planPrice,
+} from "./lib/plans";
 import { getPaymentProvider } from "./payments/provider";
 import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
@@ -165,15 +170,27 @@ export const issueInvoice = mutation({
 		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		founding: v.boolean(),
+		// Billing currency (default MYR). SGD serves Singapore-based sellers —
+		// their invoice carries no MY bank/DuitNow block (those rails are MYR-only)
+		// and prices come from the SGD table in lib/plans.
+		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
 		// Optional override; normally the system sets it (issue date + grace) so the
 		// admin doesn't pick a date. The actual paid CYCLE starts at mark-paid.
 		dueDate: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, plan, billingCycle, founding, dueDate: dueDateArg },
+		{
+			retailerId,
+			plan,
+			billingCycle,
+			founding,
+			currency: currencyArg,
+			dueDate: dueDateArg,
+		},
 	): Promise<{ invoiceId: Id<"invoices"> }> => {
 		await requireAdmin(ctx);
+		const currency: BillingCurrency = currencyArg ?? "MYR";
 		if (plan === "scale")
 			throw new ConvexError("Scale is unavailable for v1.");
 		if (founding && plan !== "pro")
@@ -199,8 +216,8 @@ export const issueInvoice = mutation({
 			);
 
 		const cycle = billingCycle as BillingCycle;
-		const base = planPrice(plan, cycle, false);
-		const total = planPrice(plan, cycle, founding);
+		const base = planPrice(plan, cycle, false, currency);
+		const total = planPrice(plan, cycle, founding, currency);
 		const now = Date.now();
 		// System-set pay-by deadline (issue date + grace). The subscription's billing
 		// cycle is set later at mark-paid, so Pro only starts once payment lands.
@@ -218,7 +235,7 @@ export const issueInvoice = mutation({
 			amount: base,
 			foundingDiscount: founding ? base - total : undefined,
 			total,
-			currency: "MYR",
+			currency,
 			periodStart: now,
 			periodEnd: nextPeriodEnd(billingCycle, now),
 			dueDate,

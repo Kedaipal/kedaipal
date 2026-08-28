@@ -225,11 +225,11 @@ import {
 } from "./orderStatus";
 
 function stage(over: Partial<OrderStage> & Pick<OrderStage, "id" | "anchor" | "sortOrder">): OrderStage {
-	return { label: { en: "X" }, notify: false, ...over };
+	return { label: { en: "X" }, ...over };
 }
 
 describe("synthesizeDefaultStages", () => {
-	test("produces the 4 band anchors in order, all notifying", () => {
+	test("produces the 4 band anchors in order", () => {
 		const s = synthesizeDefaultStages({});
 		expect(s.map((x) => x.anchor)).toEqual([
 			"confirmed",
@@ -237,7 +237,6 @@ describe("synthesizeDefaultStages", () => {
 			"shipped",
 			"delivered",
 		]);
-		expect(s.every((x) => x.notify)).toBe(true);
 		expect(s.map((x) => x.id)).toEqual([
 			"default:confirmed",
 			"default:packed",
@@ -461,29 +460,11 @@ describe("anchorOrdinal", () => {
 	});
 });
 
-describe("stageNotifyPlan", () => {
-	test("notify=false → none", () => {
-		expect(stageNotifyPlan({ notify: false, targetAnchor: "packed", statusChanged: true })).toBe("none");
-	});
-	test("confirmed anchor → none (confirm flow owns it)", () => {
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "confirmed", statusChanged: true })).toBe("none");
-	});
-	test("anchor crossing → canonical (rich copy)", () => {
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "packed", statusChanged: true })).toBe("canonical");
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "delivered", statusChanged: true })).toBe("canonical");
-	});
-	test("within an anchor → stage (generic update)", () => {
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "packed", statusChanged: false })).toBe("stage");
-	});
-});
-
-import { stageNotifyPlan } from "./orderStatus";
-
 describe("resolveAnchorLabel", () => {
 	const custom = [
-		{ id: "a", anchor: "confirmed" as const, label: { en: "Accepted" }, notify: true, sortOrder: 0 },
-		{ id: "b", anchor: "packed" as const, label: { en: "Sewing" }, notify: false, sortOrder: 1 },
-		{ id: "c", anchor: "packed" as const, label: { en: "Pressing" }, notify: false, sortOrder: 2 },
+		{ id: "a", anchor: "confirmed" as const, label: { en: "Accepted" }, sortOrder: 0 },
+		{ id: "b", anchor: "packed" as const, label: { en: "Sewing" }, sortOrder: 1 },
+		{ id: "c", anchor: "packed" as const, label: { en: "Pressing" }, sortOrder: 2 },
 	];
 	test("uses the first stage of the anchor", () => {
 		expect(resolveAnchorLabel("packed", { stages: custom })).toBe("Sewing");
@@ -502,7 +483,7 @@ describe("resolveAnchorLabel", () => {
 
 import { resolveAnchorLabel } from "./orderStatus";
 
-describe("collectStageConfigErrors — boundary + notify caps", () => {
+describe("collectStageConfigErrors — boundary rules", () => {
 	test("rejects two Accepted (confirmed) stages", () => {
 		const bad = [
 			stage({ id: "a", anchor: "confirmed", sortOrder: 0 }),
@@ -517,30 +498,7 @@ describe("collectStageConfigErrors — boundary + notify caps", () => {
 		];
 		expect(collectStageConfigErrors(bad).join(" ")).toMatch(/Only one "Done"/);
 	});
-	test("rejects more than MAX_NOTIFY_STAGES notifying stages", () => {
-		const many = Array.from({ length: MAX_NOTIFY_STAGES + 1 }, (_, i) =>
-			stage({ id: `p${i}`, anchor: "packed", sortOrder: i, notify: true }),
-		);
-		expect(collectStageConfigErrors(many).join(" ")).toMatch(/can notify the buyer/);
-	});
-	test("exactly MAX_NOTIFY_STAGES notifying is fine", () => {
-		const ok = Array.from({ length: MAX_NOTIFY_STAGES }, (_, i) =>
-			stage({ id: `p${i}`, anchor: "packed", sortOrder: i, notify: true }),
-		);
-		expect(collectStageConfigErrors(ok).filter((e) => /can notify/.test(e))).toEqual([]);
-	});
-	test("confirmed notify is not counted toward the cap", () => {
-		const stages = [
-			stage({ id: "c", anchor: "confirmed", sortOrder: 0, notify: true }),
-			...Array.from({ length: MAX_NOTIFY_STAGES }, (_, i) =>
-				stage({ id: `p${i}`, anchor: "packed", sortOrder: i + 1, notify: true }),
-			),
-		];
-		expect(collectStageConfigErrors(stages).filter((e) => /can notify/.test(e))).toEqual([]);
-	});
 });
-
-import { MAX_NOTIFY_STAGES } from "./orderStatus";
 
 // Counter-checkout "Completed" override — kept identical in
 // src/lib/orderStatus.test.ts so the mirrored resolvers can't drift.

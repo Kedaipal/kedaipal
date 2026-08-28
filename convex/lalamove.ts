@@ -34,11 +34,16 @@ import {
 	parseOrderResponse,
 	parsePodImages,
 	parseQuotationResponse,
+	decryptLalamoveCredentials,
+	resolveDispatchSchedule,
 	resolveLalamoveCredentials,
+	classifyBookingFailure,
 	resolveScheduleAt,
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { DEFAULT_COUNTRY } from "./lib/country";
+import { riderBookingAllowed } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -56,23 +61,27 @@ export class LalamoveApiError extends Error {
 	}
 }
 
-/** Signed fetch against the Lalamove REST API. */
+/** Signed fetch against the Lalamove REST API. The single decrypt-at-use
+ * choke point (86eyn25gk): credentials arrive from internal queries possibly
+ * still carrying ciphertext, and the env must come from the PLAINTEXT key —
+ * decrypting here fixes every caller at once. */
 async function callLalamove(
 	credentials: LalamoveCredentials,
 	method: "GET" | "POST" | "DELETE" | "PATCH",
 	path: string,
 	body?: { data: Record<string, unknown> },
 ): Promise<unknown> {
+	const live = await decryptLalamoveCredentials(credentials);
 	const bodyStr = body ? JSON.stringify(body) : "";
 	const headers = await buildLalamoveHeaders({
-		credentials,
+		credentials: live,
 		method,
 		path,
 		body: bodyStr,
 		timestamp: Date.now(),
 		requestId: crypto.randomUUID(),
 	});
-	const res = await fetch(`${LALAMOVE_BASE_URL[credentials.env]}${path}`, {
+	const res = await fetch(`${LALAMOVE_BASE_URL[live.env]}${path}`, {
 		method,
 		headers,
 		...(body ? { body: bodyStr } : {}),
@@ -608,6 +617,7 @@ export const applyWebhookEvent = internalMutation({
 /** Why the Book-delivery button is unavailable — rendered disabled-with-reason
  * on order detail (never a dead end; each reason maps to copy + a fix path). */
 export type DispatchBlock =
+	| "country_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -628,6 +638,14 @@ function dispatchBlockReason(args: {
 	planOk: boolean;
 }): DispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
+	// Country FIRST — ahead of even `not_delivery`, because every reason below
+	// names a fix, and in a market Lalamove doesn't serve there is no fix to
+	// name. A store switched from Malaysia keeps `deliveryBooking.enabled`, so
+	// without this the card fell through to `no_seller_phone` and told a
+	// Singapore seller to "add a Malaysian (+60) WhatsApp number" — advice the
+	// country switch itself refuses to let them take (86eyqgujv).
+	if (!riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
+		return "country_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
@@ -690,6 +708,14 @@ type DispatchContext =
 			 * resolveScheduleAt decides at prepare time whether it is still
 			 * ahead (schedule for then) or past/imminent (book now). */
 			requestedMoment?: number;
+			/** Which Lalamove world this store books in, read from the STAMPED
+			 * `deliveryBooking.env` (86eypncfy). Deliberately NOT
+			 * `credentials.env`: that is inferred from the stored value, which is
+			 * ciphertext, and a ciphertext never starts with `pk_test_` — so it
+			 * reads "production" for everyone and would silently suppress the one
+			 * warning that matters. Undefined = a row the backfill hasn't stamped
+			 * yet; callers must treat that as "unknown", never as production. */
+			env?: "sandbox" | "production";
 			credentials: LalamoveCredentials;
 	  };
 
@@ -783,6 +809,7 @@ async function dispatchContextForOrder(
 			remarks,
 		},
 		buyerContactFallback: buyerMyPhone === null,
+		env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
 		deliveryDirection: collection ? "collection" : "standard",
@@ -829,24 +856,35 @@ export const getDispatchContext = internalQuery({
 });
 
 
-/** Map a Lalamove API failure to seller-facing copy — the wallet case gets
- * the explicit "top up" ask the ticket requires; everything else stays
- * honest-but-generic (the raw body is in the logs). */
-function friendlyBookingError(err: unknown): string {
+/**
+ * Map a Lalamove API failure to seller-facing copy, via the error ID rather
+ * than a substring of the raw body (86eypncfy — the old body sniffing
+ * reported anything merely containing "credit"/"balance" as a wallet
+ * problem).
+ *
+ * `env` matters for exactly one case and it is the case that cost us a
+ * vendor: on a SANDBOX key an insufficient-balance refusal is not a wallet
+ * problem at all. Lalamove's test environment has its own play-money wallet
+ * that no real top-up can ever reach, so "top it up in the Lalamove app"
+ * sends the seller to spend money that cannot possibly help — which is
+ * precisely what happened to Wagyu Walid across 26 hours and nine attempts.
+ */
+function friendlyBookingError(
+	err: unknown,
+	env?: "sandbox" | "production",
+): string {
 	if (err instanceof LalamoveApiError) {
-		const body = err.body.toLowerCase();
-		if (
-			body.includes("insufficient") ||
-			body.includes("balance") ||
-			body.includes("credit")
-		) {
-			return "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove app, then retry the booking.";
-		}
-		if (body.includes("expired") || body.includes("quotation")) {
-			return "The price quote expired — tap Book delivery again for a fresh price.";
-		}
-		if (body.includes("phone")) {
-			return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+		switch (classifyBookingFailure(err.body)) {
+			case "wallet":
+				return env === "sandbox"
+					? "These are Lalamove TEST keys, so this booking is hitting the sandbox — its balance is play money and topping up your real wallet can't change it. Paste your live keys (they start with pk_prod_) in Settings → Fulfilment to book real riders."
+					: "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove Business account these API keys belong to — a top-up in the personal Lalamove app credits a different wallet — then book again.";
+			case "quote_expired":
+				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
+			case "bad_phone":
+				return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+			case "out_of_range":
+				return "Lalamove doesn't serve this drop-off address. The order needs to go out another way.";
 		}
 	}
 	return "Lalamove couldn't process the booking right now. Please try again in a moment.";
@@ -867,10 +905,17 @@ export const prepareBooking = action({
 		vehicleType: v.optional(
 			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 		),
+		// Per-booking pickup-moment override (86eyp5qd1): the modal's time
+		// picker. A number = "come at this exact moment" (rider leaves earlier
+		// than the promise, or a 3am ask moved to a sane slot), "now" = dispatch
+		// immediately even though the buyer's moment is still ahead. Omitted →
+		// the buyer's fulfilment moment, exactly as before. Quotes are bound to
+		// their scheduleAt, so any change here re-runs this action.
+		scheduleAtOverride: v.optional(v.union(v.number(), v.literal("now"))),
 	},
 	handler: async (
 		ctx,
-		{ shortId, vehicleType: vehicleOverride },
+		{ shortId, vehicleType: vehicleOverride, scheduleAtOverride },
 	): Promise<
 		| {
 				ok: false;
@@ -887,11 +932,22 @@ export const prepareBooking = action({
 				vehicleType: string;
 				buyerContactFallback: boolean;
 				/** The pickup moment this quotation was scheduled for — the
-				 * buyer's fulfilment date+time when still ahead at prepare time
-				 * (86eyg0n8e follow-up). Undefined = the rider comes now (the
-				 * moment is past/imminent, or the order carries no time). The
-				 * dialog says which; confirmBooking stamps it on the job. */
+				 * buyer's fulfilment date+time (or the seller's override,
+				 * 86eyp5qd1) when still ahead at prepare time. Undefined = the
+				 * rider comes now (the moment is past/imminent, or the order
+				 * carries no time). The dialog says which; confirmBooking stamps
+				 * it on the job. */
 				scheduledFor?: number;
+				/** The buyer's own fulfilment moment, untouched by any override —
+				 * lets the modal warn when the trip being bought no longer
+				 * matches what the order promises the buyer (86eyp5qd1). */
+				buyerRequestedMoment?: number;
+				/** When this quotation stops being bookable — Lalamove honours one
+				 * for exactly 5 minutes (86eypncfy). Parsed all along and thrown
+				 * away, which let the confirm dialog sit on a dead quote and
+				 * re-send it forever. Undefined = the provider didn't say; the
+				 * client falls back to its own 5-minute clock from receipt. */
+				expiresAt?: number;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -900,8 +956,17 @@ export const prepareBooking = action({
 		if (!context.ok) return context;
 		const vehicleType = vehicleOverride ?? context.vehicleType;
 		// The buyer's ask is the DEFAULT; past or imminent books now — the
-		// same pure rule the checkout quote used to price the fee.
-		const scheduledFor = resolveScheduleAt(context.requestedMoment);
+		// same pure rule the checkout quote used to price the fee. A seller
+		// override (86eyp5qd1) rides the same clamps; only an explicit pick
+		// beyond Lalamove's 30-day window is refused outright.
+		const schedule = resolveDispatchSchedule(
+			scheduleAtOverride,
+			context.requestedMoment,
+		);
+		if (!schedule.ok) {
+			return { ok: false, reason: "quote_failed", message: schedule.message };
+		}
+		const scheduledFor = schedule.scheduleAt;
 		try {
 			const response = await callLalamove(
 				context.credentials,
@@ -933,6 +998,12 @@ export const prepareBooking = action({
 				vehicleType,
 				buyerContactFallback: context.buyerContactFallback,
 				scheduledFor,
+				buyerRequestedMoment: context.requestedMoment,
+				expiresAt: parsed.expiresAt
+					? (Number.isFinite(Date.parse(parsed.expiresAt))
+						? Date.parse(parsed.expiresAt)
+						: undefined)
+					: undefined,
 			};
 		} catch (err) {
 			console.warn("[lalamove] dispatch quote failed", {
@@ -942,7 +1013,7 @@ export const prepareBooking = action({
 			return {
 				ok: false,
 				reason: "quote_failed",
-				message: friendlyBookingError(err),
+				message: friendlyBookingError(err, context.env),
 			};
 		}
 	},
@@ -1050,7 +1121,7 @@ export const confirmBooking = action({
 				shortId: args.shortId,
 				message: err instanceof Error ? err.message : String(err),
 			});
-			const message = friendlyBookingError(err);
+			const message = friendlyBookingError(err, context.env);
 			// Free the slot so the seller can rebook immediately; the released row
 			// doubles as the amber failed card.
 			await ctx.runMutation(internal.lalamove.releaseReservation, {
@@ -1332,23 +1403,13 @@ export const fetchPodImages = internalAction({
 		});
 		if (!stored) return; // lost an idempotency race — mutation cleaned our blobs
 
-		// Collection jobs keep the photo as the SELLER's hand-over record only —
-		// it shows the rider dropping the buyer's gear at the seller's own
-		// doorstep, and the order isn't delivered, so the "Delivered! 📸"
-		// follow-up would be flatly wrong for the buyer.
-		if (context.deliveryDirection === "collection") return;
-
-		const imageUrls: string[] = [];
-		for (const id of storageIds) {
-			const url = await ctx.storage.getUrl(id);
-			if (url) imageUrls.push(url);
-		}
-		if (imageUrls.length > 0) {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
-				orderId: context.orderId,
-				imageUrls,
-			});
-		}
+		// The rider's drop-off photo is NOT WhatsApp'd (86eyd63r8) — for either
+		// trip direction. It was the one send in the codebase that produced N
+		// messages from a single event (up to 3 images), and the order's single
+		// message has long since gone out. Standard deliveries show the photos on
+		// the buyer's tracking page + the seller's dispatch card; collection jobs
+		// stay seller-only (86eyg0n8e — the shot is the rider at the SELLER's
+		// door, and orders.get already hides it from the track page).
 	},
 });
 
@@ -1406,19 +1467,7 @@ export const devInjectPodImage = internalAction({
 			storageIds: [storageId],
 		});
 		if (!stored) return "job already has POD images — nothing injected";
-		const url = await ctx.storage.getUrl(storageId);
-		if (url) {
-			const jobRow = await ctx.runQuery(internal.lalamove.getPodJobOrder, {
-				jobId,
-			});
-			if (jobRow) {
-				await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
-					orderId: jobRow.orderId,
-					imageUrls: [url],
-				});
-			}
-		}
-		return `injected 1 POD image onto job ${jobId} — check the order card + buyer WhatsApp`;
+		return `injected 1 POD image onto job ${jobId} — check the order card + the buyer's tracking page`;
 	},
 });
 
@@ -1578,6 +1627,12 @@ export const getDeliveryJob = query({
 		 * `job.deliveryDirection`; the two only diverge after a mode switch (and
 		 * routinely once direction varies per order — per-product v2). */
 		deliveryDirection: "standard" | "collection";
+		/** Which Lalamove world a booking from this card would hit (86eypncfy).
+		 * "sandbox" means no real rider can ever be dispatched and the buyer's
+		 * fee was priced by the test environment, so the card says so out loud
+		 * at every point of spend. Undefined = un-stamped row (pre-backfill) —
+		 * rendered as nothing rather than a false all-clear. */
+		env?: "sandbox" | "production";
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1628,7 +1683,13 @@ export const getDeliveryJob = query({
 		}
 		return {
 			promptBookOnPacked,
-			bookingEnabled: retailer.deliveryBooking?.enabled === true,
+			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
+			// Agrees with `blockReason` by construction: a stored `enabled` flag
+			// carried in from Malaysia is not a working booking setup, and the
+			// mark-shipped prompt keys off this to decide rider-vs-courier.
+			bookingEnabled:
+				retailer.deliveryBooking?.enabled === true &&
+				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
 			job: latest
@@ -1706,7 +1767,12 @@ export const devProbeScheduleAt = internalAction({
 			retailerId,
 		});
 		if (!probe) return { error: "no retailer with Lalamove credentials" };
-		if (probe.credentials.env !== "sandbox") {
+		// Judge sandbox-ness on the PLAINTEXT key — the stored value may be
+		// ciphertext, whose pre-decrypt env always reads "production".
+		const probeCredentials = await decryptLalamoveCredentials(
+			probe.credentials,
+		);
+		if (probeCredentials.env !== "sandbox") {
 			return { error: "refusing: not a sandbox key pair" };
 		}
 		const out: Record<string, string> = {};

@@ -21,6 +21,8 @@ export const BUYER_ROUTE_IDS: ReadonlySet<string> = new Set([
 	"/$slug_/c/$categorySlug",
 	"/$slug_/p/$productSlug",
 	"/track/$token",
+	// Claim-link checkout (86eyq0epn) — a buyer surface like /track.
+	"/claim/$token",
 ]);
 
 export function isBuyerRouteId(routeId: string): boolean {

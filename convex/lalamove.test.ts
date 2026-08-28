@@ -5,9 +5,14 @@
 // convex/lib/lalamove.test.ts; signature auth in lalamoveSignature.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import {
+	decryptSecret,
+	encryptSecret,
+	isEncrypted,
+} from "./lib/credentialCrypto";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -379,6 +384,47 @@ describe("getWebhookContext (secret resolution)", () => {
 		expect(foreign.jobId).toBeNull();
 		expect(foreign.secrets).toEqual([]);
 	});
+
+	// Encrypted-at-rest rows (86eyn25gk): the QUERY hands out the stored
+	// ciphertext untouched (queries can't decrypt), and the webhook route's
+	// decryptSecret call recovers the plaintext signing secret — pinned here
+	// since the route itself is a one-line wrap around the sandbox-verified
+	// verifier.
+	test("encrypted secret: query returns ciphertext, decryptSecret recovers the signing secret", async () => {
+		vi.stubEnv(
+			"CREDENTIALS_ENCRYPTION_KEY",
+			btoa("0123456789abcdef0123456789abcdef"),
+		);
+		try {
+			const t = setup();
+			const retailer = await seedRetailer(t);
+			const storedSecret = await encryptSecret("sk_byo");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(retailer._id, {
+					deliveryBooking: {
+						enabled: true,
+						vehicleType: "MOTORCYCLE" as const,
+						apiKey: await encryptSecret("pk_byo"),
+						apiSecret: storedSecret,
+						apiKeyHint: "_byo",
+					},
+				});
+			});
+			const orderId = await seedOrder(t, retailer._id);
+			await seedJob(t, retailer._id, orderId);
+
+			const context = await t.query(internal.lalamove.getWebhookContext, {
+				providerOrderId: "LLM-1",
+				apiKey: "pk_byo",
+			});
+			expect(context.secrets).toHaveLength(1);
+			expect(isEncrypted(context.secrets[0])).toBe(true);
+			expect(context.secrets[0]).not.toContain("sk_byo");
+			expect(await decryptSecret(context.secrets[0])).toBe("sk_byo");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
 });
 
 describe("orders.create — live quote consumption", () => {
@@ -661,9 +707,174 @@ describe("updateSettings — deliveryBooking guards", () => {
 			promptBookOnPacked: false,
 			deliveryDirection: "standard",
 			apiKeyHint: "abcd",
+			// A non-`pk_test_` key is a live one (86eypncfy).
+			env: "production",
 		});
 		// The raw secret must never appear anywhere in the owner payload.
 		expect(JSON.stringify(retailer)).not.toContain("sk_byo_secret");
+	});
+
+	test("a pk_test_ key is stamped and reported as sandbox (86eypncfy)", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_sandboxkey",
+				apiSecret: "sk_test_sandboxsecret",
+			},
+		});
+		const sandbox = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(sandbox?.deliveryBooking?.env).toBe("sandbox");
+
+		// Swapping to a live pair re-stamps — the badge must follow the key, or
+		// a seller who fixes their setup keeps being told they're in test mode.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_prod_livekey",
+				apiSecret: "sk_prod_livesecret",
+			},
+		});
+		const live = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(live?.deliveryBooking?.env).toBe("production");
+
+		// A save that doesn't touch the keys keeps the stamp (the apiKeyHint
+		// rule) — toggling vehicle must not blank the warning.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: { enabled: true, vehicleType: "CAR" },
+		});
+		expect(
+			(await asUser(t).query(api.retailers.getMyRetailer))?.deliveryBooking
+				?.env,
+		).toBe("production");
+
+		// Clearing the keys clears the stamp — an unset credential has no
+		// environment to report.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: false,
+				vehicleType: "CAR",
+				apiKey: "",
+				apiSecret: "",
+			},
+		});
+		expect(
+			(await asUser(t).query(api.retailers.getMyRetailer))?.deliveryBooking
+				?.env,
+		).toBeUndefined();
+	});
+
+	test("getDeliveryJob reports the store's Lalamove environment", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_sandboxkey",
+				apiSecret: "sk_test_sandboxsecret",
+			},
+		});
+		const orderId = await seedOrder(t, retailer._id);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		// The card can only warn about test keys if the read carries the fact.
+		expect(dispatch?.env).toBe("sandbox");
+	});
+
+	test("Singapore: enabling rider booking is refused (86eyqgujv)", async () => {
+		// The hole the country-switch guard never covered. #210 refuses carrying
+		// an ENABLED booking INTO Singapore, but that check lives inside the
+		// `args.country !== undefined` branch — so a store already on SG could
+		// turn Lalamove on with nothing in its way. Same allowlist as the
+		// delivery-charge branch, judged on the effective country.
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			country: "SG",
+			waPhone: "",
+		});
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "pk_byo_abcd",
+					apiSecret: "sk_byo_secret",
+				},
+			}),
+		).rejects.toThrow(/Malaysia-only/i);
+	});
+
+	test("Singapore: a booking carried in from MY blocks with country_unsupported, not a phone fix (86eyqgujv)", async () => {
+		// Zaki's report. Patched straight onto the row because that is the real
+		// provenance: this store was switched to SG before the guards shipped,
+		// so it holds an enabled Lalamove booking no mutation would grant today.
+		// Before the fix the card fell through to `no_seller_phone` and told the
+		// seller to add a +60 number — advice the country switch itself refuses.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo_abcd",
+				apiSecret: "sk_byo_secret",
+			},
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { country: "SG", waPhone: undefined });
+		});
+
+		const orderId = await seedOrder(t, retailer._id, { currency: "SGD" });
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		expect(dispatch?.blockReason).toBe("country_unsupported");
+		// The mark-shipped prompt keys off this to choose rider-vs-courier: an
+		// SG seller must get the courier + consignment-number form.
+		expect(dispatch?.bookingEnabled).toBe(false);
+	});
+
+	test("Malaysia is untouched — the same setup still books (86eyqgujv)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			waPhone: "60123456789",
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo_abcd",
+				apiSecret: "sk_byo_secret",
+			},
+		});
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "1 Jalan Test",
+				city: "KL",
+				postcode: "50000",
+				state: "Kuala Lumpur",
+				latitude: 3.14,
+				longitude: 101.7,
+			},
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		expect(dispatch?.blockReason).toBeNull();
+		expect(dispatch?.bookingEnabled).toBe(true);
 	});
 
 	test("re-saving without keys keeps the stored ones; empty string clears", async () => {

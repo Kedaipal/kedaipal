@@ -471,7 +471,11 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(session?.status).toBe("buyer_identified");
 	});
 
-	test("a client price on a NON-custom line is ignored (server price wins)", async () => {
+	// Seller price adjustment on a STANDARD line (Wagyu Walid's ask): the counter
+	// mutation is owner-or-admin only, so a supplied unitPrice is the seller's own
+	// pricing call (negotiated discount/bump) and is honored — unlike the buyer
+	// storefront, where the catalog price is always authoritative.
+	test("a seller price adjustment on a standard line is honored", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const variantId = await seedVariant(t, USER_A, retailer._id, {
@@ -483,12 +487,61 @@ describe("counterCheckout — createOrderFromSession", () => {
 			.withIdentity({ subject: USER_A })
 			.mutation(api.counterCheckout.createOrderFromSession, {
 				sessionId,
-				items: [{ variantId, quantity: 1, unitPrice: 1 }], // tampered → ignored
+				items: [{ variantId, quantity: 2, unitPrice: 1000 }], // RM10 agreed vs RM12 catalog
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(1000);
+		expect(order?.total).toBe(2000);
+	});
+
+	test("a standard line without unitPrice still charges the catalog price", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
 				paidInPerson: true,
 				paymentMethod: "cash",
 			});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.items[0]?.price).toBe(1200);
+	});
+
+	test("an invalid adjusted price on a standard line is rejected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				paidInPerson: true,
+			}),
+		).rejects.toThrow(/Set a price/);
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 10.5 }], // not integer sen
+				paidInPerson: true,
+			}),
+		).rejects.toThrow(/Set a price/);
+		// Session survives the rejections — the vendor can fix and retry.
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
 	});
 });
 
@@ -1269,5 +1322,94 @@ describe("counterCheckout — minimum order rules exemption", () => {
 		expect(shortId).toMatch(/^ORD-/);
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.total).toBe(500);
+	});
+});
+
+describe("counterCheckout — opening hours exemption (86eyp5rav)", () => {
+	test("a counter order on a CLOSED day still creates — the seller is standing there", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		// Close the store on TODAY's weekday (0 = Sunday, MYT), the min-notice
+		// exemption posture: storefront checkout would refuse this date.
+		const today =
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000;
+		const todayDow = new Date(today + 8 * 3600_000).getUTCDay();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: Array.from({ length: 7 }, (_, i) =>
+					i === todayDow
+						? { open: 540, close: 1080, closed: true }
+						: { open: 0, close: 1439 },
+				),
+			},
+		);
+		const sessionId = await boundSession(t, retailer._id);
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				fulfilmentDate: today,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.fulfilmentDate).toBe(today);
+		expect(order?.status).toBe("confirmed");
+	});
+});
+
+describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () => {
+	async function seedSgRetailer(t: ReturnType<typeof setup>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Stall",
+			slug: "sg-stall",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		return retailer;
+	}
+
+	test("a bare 8-digit SG number is prefixed to the inbound 65… form (M3)", async () => {
+		// Before SG-lite this was stored UNPREFIXED ("81234567") while Meta
+		// delivers the same buyer inbound as "6581234567" — forking the
+		// (retailerId, waPhone) customer row.
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		await seedCustomer(t, retailer._id, "6581234567", "Wei Ling");
+
+		const { sessionId, reclaimed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "81234567",
+				name: "Wei Ling",
+			});
+		expect(reclaimed).toBe(false);
+
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("6581234567");
+		// Keyed identically to what a scan bind would store → existing customer
+		// matched instead of forked.
+		expect(session?.isNewCustomer).toBe(false);
+		expect(session?.customerId).toBeDefined();
+	});
+
+	test("a foreign number still passes through for a walk-in from anywhere", async () => {
+		// The counter bind stays loose on purpose — an MY tourist at an SG stall
+		// keys their full international number and it is stored as typed.
+		const t = setup();
+		await seedSgRetailer(t);
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "+60 12-345 6789",
+				name: "Aiman",
+			});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("60123456789");
 	});
 });

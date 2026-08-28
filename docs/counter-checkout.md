@@ -1,10 +1,27 @@
 # Counter Checkout (in-person order spine)
 
+> **Claim links (`86eyq0epn`)** build on this surface: instead of finishing the
+> sale at the counter, the seller can **send the keyed cart to the buyer** as a
+> price-locked WhatsApp checkout link ("Send to buyer to complete" on the build
+> screen; "Waiting on buyers" panel on the landing). See
+> [`docs/claim-links.md`](./claim-links.md) — including the rule that a counter
+> sale or session dismissal cancels the session's open claim, and the payment
+> deadline that carries onto the committed order (an unpaid claim order
+> auto-cancels so the stock it held comes back).
+
 > ClickUp [`86ey0e82j`](https://app.clickup.com/t/86ey0e82j). Lands **Bearcamp**
 > (first paying customer — sells at a physical counter + online). The first brick
 > of the offline→online **order spine**: a seller-initiated, in-person order that
 > stays WhatsApp-linked, so confirmation / payment / tracking flow through the
 > shared WABA like any storefront order.
+>
+> **⚠️ One message per order (4 Aug 2026, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).**
+> A counter order sends the buyer **one** WhatsApp — the order confirmation —
+> and nothing else. The receipt/invoice **PDF is no longer WhatsApp'd**: it's
+> Download / Share on the cashier's Done screen, and a Receipt button on the
+> buyer's own order page (whose link is in that one message). The explicit
+> two-message contract this doc used to describe ("a text, then the PDF") is
+> now one. See [`one-message-per-order.md`](./one-message-per-order.md).
 >
 > **Status: V1 shipped** — backend spine (schema, session/token lifecycle,
 > inbound `KP-<token>` intent routing, live bind, expiry cron) **+** the
@@ -103,9 +120,12 @@ After a **paid-in-person** order is created, the success screen offers an
 optional **"Mark as completed"** button (one tap → `delivered`).
 
 **`orders.source` — the checkout surface** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)):
-a first-class field on `orders`, `v.union("storefront","counter")`, distinct from
-`channel` (the messaging transport, always WhatsApp). `createOrderFromSession`
-stamps `"counter"`; the storefront `orders.create` stamps `"storefront"`.
+a first-class field on `orders`, `v.union("storefront","counter","claim")`,
+distinct from `channel` (the messaging transport, always WhatsApp).
+`createOrderFromSession` stamps `"counter"`; the storefront `orders.create`
+stamps `"storefront"`; a claim-link commit stamps `"claim"` (86eyq0epn — a
+seller-keyed cart the BUYER completed, so it deliberately keeps the
+buyer-chosen fulfilment surfaces that `"counter"` hides).
 Optional/dev-only widen, no backfill — **undefined reads as `"storefront"`** (same
 posture as `pickupSnapshot.locationType`). It drives per-surface UI:
 
@@ -164,13 +184,48 @@ price are agreed face-to-face — so the block is lifted:
   `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
   No image is required either.
 - **Price trust boundary.** `createOrderFromSession` takes a per-item
-  `unitPrice`, but trusts it **only for `isCustom` lines** (validated as a
-  positive integer in sen — the **same rule as any product price**, no upper cap,
-  since the vendor's business could be high-value: watches, renovations, B2B
-  services); every normal line always uses the authoritative `variant.price`, so a
-  tampered client can't reprice a fixed product. That custom-only trust — not any
-  ceiling — is the actual security control. The vendor-set price is autosaved on
-  the draft (`unitPrice`) so a resume restores it.
+  `unitPrice` (validated as a positive integer in sen — the **same rule as any
+  product price**, no upper cap, since the vendor's business could be high-value:
+  watches, renovations, B2B services). It is **required** on an `isCustom` line
+  (no catalog price exists) and **optional** on a standard line — see "Seller
+  price adjustment" below. Trusting it is safe because this mutation is
+  **owner-or-admin only** (`requireSessionAccess`): the caller is the
+  authenticated seller pricing their own order, never a buyer — that auth gate,
+  not any ceiling, is the actual security control. (The buyer storefront path is
+  a different mutation and always charges the authoritative `variant.price`.)
+  The vendor-set price is autosaved on the draft (`unitPrice`) so a resume
+  restores it.
+
+## Seller price adjustment on standard lines (2026-08-20)
+
+Asked for by **Wagyu Walid**: create an order with the customer's details and a
+**negotiated price after picking the product** — a counter discount/bump on a
+normal fixed-price item, without the workaround of adding a custom line to every
+product.
+
+- **UI** (`app.checkout.tsx`): tapping a cart line opens the **line-edit sheet**
+  (`CartLineEditDialog`, keyed per line) — the single home for that line's
+  quantity stepper + RM price input (pre-selected on focus so typing replaces
+  it), with the catalog price named beneath and a one-tap `Reset` when the
+  typed price differs; `Remove` and `Save` sit in the footer. The row keeps a
+  **pencil icon** as the visible affordance (discoverability — never a
+  long-press). Everything commits **atomically on Save** — the running total
+  never flickers through half-typed values (the earlier inline editor applied
+  per-keystroke, so typing "9.50" walked the total through RM 9 → 9.5 → 9.50,
+  and its tap-to-toggle price row closed on double-taps). Save also **flushes
+  the draft immediately** instead of waiting out the 700 ms autosave debounce,
+  with a visible error toast on failure — the passive autosave is deliberately
+  silent, and a `BuildOrderScreen` remount inside that window would otherwise
+  rehydrate the last-saved draft and silently revert the adjustment (observed
+  in dev). An adjusted line shows the catalog price struck through, and the
+  review modal (`ConfirmCheckoutDialog`) prints `· was RM x̶` so the last-look
+  step catches a fat-fingered override.
+- **Wire format:** the client sends `unitPrice` only when the line is custom or
+  adjusted; an absent `unitPrice` means "charge the catalog price". Adjustments
+  autosave on the draft like custom prices, so a resume restores them.
+- **Server:** same validation as a custom price (positive integer sen, no cap).
+  The order item snapshot stores the charged price — same as custom lines, no
+  extra column.
 
 See [`custom-option.md`](./custom-option.md) and
 [`proof-approval.md`](./proof-approval.md).
@@ -234,13 +289,13 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | Session table + indexes | `convex/schema.ts` |
 | `createCheckoutSession` / `getCheckoutSession` / `cancelCheckoutSession` | `convex/counterCheckout.ts` |
 | `bindCheckoutSession` (internal, called by webhook) | `convex/counterCheckout.ts` |
-| `createOrderFromSession` (server-priced, pay-in-person, completes session) | `convex/counterCheckout.ts` |
+| `createOrderFromSession` (catalog-priced with optional seller adjustment, pay-in-person, completes session) | `convex/counterCheckout.ts` |
 | Inbound routing → bind + buyer reply | `convex/whatsapp.ts` (`handleInbound`) |
 | Buyer order confirmation + tracking link | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
 | **iPad-first seller UI** (start → QR → live bind → catalog/cart → pay → done) | `src/routes/app.checkout.tsx` |
-| Receipt/invoice **send to buyer's WhatsApp** + download/share (Done screen) | `src/components/order/send-order-document.tsx`, `orders.sendOrderDocumentToBuyer` |
+| Receipt/invoice **download / share** (Done screen) — never sent on WhatsApp | `src/components/order/order-document-actions.tsx` |
 | Nav entry ("Counter") | `sidebar.tsx`, `bottom-nav.tsx` |
 | Tests | `counterCheckout.test.ts`, `inboundIntent.test.ts`, `whatsapp.test.ts` |
 
@@ -249,18 +304,23 @@ self_collect` (collected at the counter), customer linked from the bound session
 **Pay-in-person** → `paymentStatus: received` immediately + a structured
 `order.paymentMethod` (see below); **pay-later** → left `unpaid` and the buyer's
 WhatsApp confirmation carries a pay-&-track link (the normal handshake). Either
-way the buyer gets a WhatsApp confirmation with their tracking link, so the order
-is WhatsApp-linked and status updates flow through the shared WABA.
+way the buyer gets **one** WhatsApp confirmation with their tracking link — and
+that link is where everything after it happens, since status changes no longer
+message anyone (`86eyd63r8`).
 
 **Payment method (`order.paymentMethod`, `convex/lib/paymentMethod.ts`):** a
-structured enum — `cash | duitnow | tng | bank_transfer | card | other` — captured
+structured enum — `cash | duitnow | tng | bank_transfer | fpx | card | other |
+paynow | paylah | nets | grabpay` — captured
 **only where it's reliably known**: the Counter Checkout "Paid now" picker (the
 seller witnesses the payment) and the seller's "mark payment received" action (the
 seller has just verified the channel — an optional chip row on that dialog). The
 buyer's online "I've paid" self-claim **never** sets it, so an online order stays
 `undefined` = "online / unknown" (we don't fake a value). Surfaced on the seller
 order detail's "Payment received" line **and filterable on the orders inbox**
-("Method" chips → `searchOrders.paymentMethods`). Enables later analytics on the
+("Method" chips → `searchOrders.paymentMethods`). The picker + the filter chips
+offer **the store's country rails only** (`COUNTRY_PAYMENT_METHODS`, see
+[`sg-lite.md`](./sg-lite.md#payment-rails-86eyph341)) — the enum above is the
+wider set of what may be *stamped*. Enables later analytics on the
 reliable in-person data without adding buyer-side friction. Legacy counter orders
 that stored the method as a `"In-person (…)"` reference string are migrated by
 `migrations:backfillCounterPaymentMethod`.
@@ -268,43 +328,55 @@ that stored the method as a `"In-person (…)"` reference string are migrated by
 ## Receipt / invoice to the buyer — scan once, no rescan ([`86ey4fz3w`](https://app.clickup.com/t/86ey4fz3w))
 
 The whole point of the QR is that the buyer scans it **once** to bind their
-WhatsApp number. Everything after — confirmation, receipt, invoice, payment
-details — rides that same chat **automatically**, so they never scan again and
-the seller doesn't have to remember a manual step.
+WhatsApp number. Everything after rides that same chat, so they never scan again
+and the seller doesn't have to remember a manual step.
+
+> **Revised by [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8) (4 Aug 2026):
+> "everything after" is now ONE message, not a message plus a PDF.** The
+> auto-send of the receipt/invoice document is deleted. That PDF was a walk-in
+> order's **second** billable message, and a walk-in gets one like every other
+> buyer. Nothing else about the flow changed — the buyer still scans once, still
+> gets the confirmation with their order link, and can still open (and download)
+> the document from that page any time.
 
 - **Humanized, localized copy.** The inline English bind reply + counter
   confirmation strings were moved into the `whatsappCopy` catalog as system
-  messages (`counterCheckoutBound` / `Expired` / `Used`, `counterOrderConfirmed{Paid,Unpaid}`),
-  warmed up, and **localized to the store's locale** (`bindCheckoutSession` now
-  returns `locale`; `not_found`, which has no store, stays English). Same
+  messages (`storeQrConnected` / `storeQrBusy`, `counterOrderConfirmed{Paid,Unpaid}`),
+  warmed up, and **localized to the store's locale**. Same
   transactional category — order messages bypass WABA gating.
-- **Automatic send on checkout** (`whatsapp.notifyCounterOrderCreated`, scheduled
+- **The one automatic send** (`whatsapp.notifyCounterOrderCreated`, scheduled
   by `createOrderFromSession`) — the buyer's chat gets, with no seller action:
-  - **Paid now** → a "confirmed & paid" text, then the **Receipt** PDF.
+  - **Paid now** → a "confirmed & paid" text with the order-page link.
   - **Pay later** → a lean payment ask — the amount + order-page link (in the
     intro copy) + transfer-reference line + the **"Make payment"** CTA button (via
-    `sendPaymentMessage`), then the **Invoice** PDF. Raw bank/QR details are
-    **never sent in the chat** (ticket 86ey98ju1) — the link points to the order
-    page's "How to pay", and the invoice PDF carries the actual details as the
-    formal document. The intro carries the link, so no separate "see how to pay"
-    block is appended (the buyer sees the link once, not twice).
+    `sendPaymentMessage`). Raw bank/QR details are **never sent in the chat**
+    (ticket 86ey98ju1) — the link points to the order page's "How to pay", which
+    is also where the invoice PDF is downloadable. The intro carries the link, so
+    no separate "see how to pay" block is appended (the buyer sees the link once,
+    not twice).
+  - **~~then the Receipt / Invoice PDF~~** — removed (`86eyd63r8`).
 - **One PDF, two faces:** `buildOrderReceiptPdf` keys off `OrderReceiptData.paid` —
   an unpaid order prints **"Invoice"** + the "How to pay" block, a settled one
-  prints **"Receipt"**. No separate invoice builder or table.
-- **Delivery plumbing:** `orders.sendOrderDocument` (internal, orderId-keyed, no
-  auth — trusted scheduler) and the manual `orders.sendOrderDocumentToBuyer`
-  (seller-auth via `resolveSharedOrder(shortId)`) both call the shared
-  `deliverOrderDocument`: render → store transiently (a URL Meta fetches) → send
-  as a WhatsApp **`document`** (channel-adapter outbound kind) `transactional` →
-  scheduled `deleteTransientStorage` reclaims the blob (deterministic, never
-  persisted).
-- **Done screen = resend + download/share** (`src/components/order/send-order-document.tsx`):
-  since the document is already sent automatically, the screen frames it as
-  *"already sent — resend or download here if you need to"* (Resend → the manual
-  action, Download/Share → `orders.generateReceiptPdf` bytes via the OS share
-  sheet, falling back to download on desktop). Only renders on the fresh-create
-  path (has the `shortId` + accurate paid state); a resend from **order detail**
-  is a noted follow-up.
+  prints **"Receipt"**. No separate invoice builder or table. Still generated on
+  demand from the order, still never persisted; only its delivery changed.
+- **~~Delivery plumbing~~ — deleted with the send** (`86eyd63r8`):
+  `orders.sendOrderDocument`, `orders.sendOrderDocumentToBuyer`,
+  `sendDocumentInputs`, `orderDocumentInputsById`, `deliverOrderDocument` and
+  `deleteTransientStorage` are gone, along with the transient-storage dance that
+  existed only so Meta could fetch a URL. The `document` outbound kind stays on
+  the channel adapter (unused for now). The two remaining readers of the PDF —
+  the Done screen and the buyer's order page — both call
+  `orders.generateReceiptPdf` and get bytes directly.
+- **Done screen = download / share, and it says so**
+  (`src/components/order/order-document-actions.tsx`, renamed from
+  `send-order-document.tsx`): no Resend button, because there is nothing to
+  resend. The screen frames the document as *hand it over now if they want one*
+  — Download, or Share via the OS sheet — and states plainly: *"It isn't sent on
+  WhatsApp — they can open it any time from the order page we linked them to."*
+  An **anonymous cash sale** gets different copy again: no WhatsApp went out at
+  all, so there is no order page for them to reach, and this is their only copy.
+  Only renders on the fresh-create path (has the `shortId` + accurate paid
+  state).
 
 ### Pay-at-bind — payment info right after the scan ([`86ey5kq7p`](https://app.clickup.com/t/86ey5kq7p))
 
@@ -493,6 +565,56 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
 
+## A checkout is frozen while its claim link is out (2026-08-27)
+
+Sending a claim link (`86eyq0epn`) turns the cart into an **offer**, so the
+session stops being editable:
+
+- `listOpenSessions` **omits** it — it lives under "Waiting on buyers" instead.
+  One card per state, and no dismiss button beside a live offer.
+- `saveSessionDraft` and `createOrderFromSession` refuse
+  (`SESSION_CLAIM_LOCK_REASON`).
+- Opening it renders `WaitingOnBuyerScreen` (read-only), whose only way back to
+  editing is a confirmed **Cancel link**.
+- Dismissing the whole checkout still cancels the claim with it.
+
+Full rationale and the table of what each edit used to do:
+[`claim-links.md` § The CHECKOUT is frozen from the moment the link is sent](./claim-links.md).
+
+## Stock is stated in the catalog, not discovered at checkout (2026-08-27)
+
+Zaki, testing `86eyq0epn`: *"for items with 0 stock is not obvious, only at
+checkout then will get the 0 stock error. able to add to cart even."* The
+server rule never changed — `createOrderFromSession` has always refused a
+sold-out line. What was missing was saying it **before** the seller builds a
+cart in front of a waiting customer.
+
+The rules are pure and unit-tested in [`src/lib/counter-stock.ts`](../src/lib/counter-stock.ts),
+built on the existing `isSellable` so the counter and the storefront can't
+disagree about what "sold out" means:
+
+| State | Row says | Control |
+| --- | --- | --- |
+| tracked, `onHand <= 0` | **Sold out** (destructive red) | Add is disabled and relabelled "Sold out" |
+| tracked, `onHand <= 3` | **Only N left** (amber) | Stepper capped at N |
+| tracked, healthy | `N left` (muted) | Stepper capped at N |
+| made-to-order | **Made to order** (muted) | no ceiling |
+
+- **Made-to-order says so** instead of showing nothing. A blank where its
+  neighbours show a count reads as missing data, when in fact it *is* the
+  answer: no number because there is no ceiling.
+- **The stepper stops where the server would.** `maxAddableQty` mirrors the
+  stock check, so the seller finds the ceiling by feel (a dead `+` with a
+  reason) instead of by error message at create.
+- **Product level**: `productSoldOut` (every choice unsellable) puts a
+  **SOLD OUT** chip on the list row and a veil + chip on the grid tile, and
+  dims the thumbnail. The product stays **tappable** — the seller still needs
+  to open it to see *which* size ran out, or to sell a made-to-order sibling
+  that survives its sold-out neighbours.
+- A mixed product (fixed sizes + a made-to-order "Custom", see
+  [`custom-option.md`](./custom-option.md)) is never marked sold out: the
+  custom line is always orderable.
+
 ## Header — one "New order" dropdown (`86eyd67y1`)
 
 Every way to start a checkout is grouped behind a **single** accent `New order`
@@ -555,8 +677,9 @@ normalized by
 scan produces** (`0xx…` → `60xx…`; `60…`/`+60…` kept) so it resolves-or-creates the
 exact same `(retailerId, waPhone)` customer — a returning buyer is recognised, never
 forked. The bind is direct (no webhook, no rate-limit/cap — those guard the public
-poster token, not a logged-in seller). The buyer still gets the WhatsApp confirmation
-+ receipt/invoice and a CRM row. **PDPA:** the buyer never scanned, so the confirmation
+poster token, not a logged-in seller). The buyer still gets the one WhatsApp
+confirmation (and a CRM row); the receipt/invoice is on the order page it links
+to, not in the chat (`86eyd63r8`). **PDPA:** the buyer never scanned, so the confirmation
 is our first message to them — it carries the same notice-at-collection line as the
 poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
 `includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
@@ -566,9 +689,10 @@ session window, so a free-form send may be rejected by Meta. Sends are best-effo
 fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
 **Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
 post-86ey98ju1) gets the order-page link + **"Make payment"** button on the
-order-create message plus the bank/QR details inside the **invoice PDF**
-(`How to pay` block) — never raw digits in the chat. (The old scan-time pay-ahead
-push was removed for everyone by 86ey98ju1.)
+order-create message; the bank/QR details live on the order page's `How to pay`
+block and in the downloadable **invoice PDF** — never raw digits in the chat.
+(The old scan-time pay-ahead push was removed for everyone by 86ey98ju1; the
+invoice PDF stopped being WhatsApp'd in 86eyd63r8.)
 
 **Anonymous** — `counterCheckout.startAnonymousSession`. A cash sale with **no phone
 contact**: the session has no `waPhone`/`customerId` (an optional name is allowed —
@@ -592,8 +716,9 @@ order is `customer: {name: undefined, waPhone: undefined}` (both already optiona
 
 ## Pending
 
-- **Resend from order detail** — the "Send receipt/invoice to buyer" action is
-  currently only on the counter Done screen; order detail has Download only.
+- ~~**Resend from order detail**~~ — moot: nothing sends the document any more
+  (`86eyd63r8`), so Download is the whole feature and order detail already has
+  it. The buyer self-serves the same PDF from `/track/<token>`.
 - ~~**Pay-at-scan message rework** ([`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1))~~
   — moot: the scan-time payment push was removed entirely by 86ey98ju1 (payment
   info now rides the order-create CTA + invoice PDF).
