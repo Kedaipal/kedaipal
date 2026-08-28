@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ChevronRight,
@@ -193,22 +193,13 @@ function ProductsRoute() {
 		!!retailer &&
 		!retailer.actingAsAdmin &&
 		!hasFeature(retailer.subscription, "categories");
+	const convex = useConvex();
 	const products = useQuery(
 		convexQuery(
 			api.products.listAll,
 			retailer ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
-	// Category names for the export's `categories` column (86eyrtz74). A separate
-	// query, not a field on `listAll`: that list is a hot read on every visit and
-	// this is a junction fan-out only the Export button needs.
-	const categoryNamesByProduct = useQuery(
-		convexQuery(
-			api.categories.namesByProduct,
-			retailer ? { retailerId: retailer._id } : "skip",
-		),
-	).data;
-
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");
 	const [status, setStatus] = useState<StatusFilter>("all");
@@ -292,6 +283,17 @@ function ProductsRoute() {
 		}
 		setExporting(kind);
 		try {
+			// Category names for the `categories` column (86eyrtz74). Fetched ONCE,
+			// here — not as a `useQuery` subscription. It is a fan-out over the
+			// junction table, and the products page is a hot read that runs on
+			// every visit; subscribing would have made the hot path pay the
+			// fan-out (and re-pay it on every category edit) for data only this
+			// button needs, which is the exact cost the query was split out to
+			// avoid. Same one-shot pattern the orders route uses for exportOrders.
+			const categoryNamesByProduct = await convex.query(
+				api.categories.namesByProduct,
+				{ retailerId: retailer._id },
+			);
 			// One row per exportable variant. The first eleven columns stay
 			// round-trippable with the import parser; the rest are the catalogue
 			// report (86eyrtz74) — see src/lib/product-export.ts.
@@ -301,7 +303,7 @@ function ProductsRoute() {
 				description: p.description,
 				options: p.options ?? [],
 				currency: p.currency,
-				categories: categoryNamesByProduct?.[p._id],
+				categories: categoryNamesByProduct[p._id],
 				active: p.active,
 				hidden: p.hidden,
 				hiddenByCategory: p.hiddenByCategory,

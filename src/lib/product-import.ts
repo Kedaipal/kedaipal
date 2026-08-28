@@ -36,7 +36,9 @@ const EXPORT_ONLY_COLUMN_NAMES = [
 	"currency",
 	"categories",
 	"product_status",
-	"variant_status",
+	// NOTE: `variant_status` is deliberately NOT here — it is the one report
+	// column the import reads back, to keep a round-trip from resurrecting
+	// deactivated variants. See VariantImportRow.active.
 	"storefront",
 	"product_url",
 	"min_order_qty",
@@ -276,6 +278,20 @@ export interface VariantImportRow {
 	// undefined = the weight cell was blank → preserve the existing variant's
 	// weight on update (server falls back to 0 on insert). See validateVariantRow.
 	parcelWeightG: number | undefined;
+	/**
+	 * Read from the export's `variant_status` column (86eyrtz74). Absent column
+	 * or any value other than "inactive" → true, so every hand-made sheet and
+	 * every pre-existing export behaves exactly as before.
+	 *
+	 * This exists for ROUND-TRIP FIDELITY, not as an editable field. The export
+	 * now includes variants the seller built and switched off; without reading
+	 * this back, the create path (`insertVariants`: `active ?? true`) would
+	 * resurrect them live and purchasable at their old price — export a
+	 * catalogue, import it into a second store, and the switched-off variants
+	 * come back on. The update path never patches `active` at all, so an
+	 * existing product's variant state is untouched either way.
+	 */
+	active: boolean;
 }
 
 export interface GroupedVariant {
@@ -410,6 +426,10 @@ export function validateVariantRow(
 	if (errors.length > 0) return { rowNumber, raw, errors };
 
 	const groupingKey = (handle.length > 0 ? handle : name).toLowerCase();
+	// Only the exact word "inactive" switches a row off — anything else (blank,
+	// missing column, "active", junk) reads as active, so a malformed cell can
+	// never silently hide a variant the seller meant to sell.
+	const active = (raw.variant_status ?? "").trim().toLowerCase() !== "inactive";
 	return {
 		rowNumber,
 		groupingKey,
@@ -421,6 +441,7 @@ export function validateVariantRow(
 		price,
 		onHand,
 		parcelWeightG,
+		active,
 	};
 }
 
@@ -555,7 +576,10 @@ export function buildVariantGrid(
 				price: r.price,
 				onHand: r.onHand,
 				parcelWeightG: r.parcelWeightG,
-				active: true,
+				// Was hardcoded `true`, which resurrected deactivated variants on
+				// the create path once the export started including them
+				// (86eyrtz74). See VariantImportRow.active.
+				active: r.active,
 			};
 		autoFilled++;
 		return {

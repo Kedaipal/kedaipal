@@ -9,6 +9,7 @@ import {
 	type ExportableVariant,
 	isExportableVariant,
 	PRODUCT_IMPORT_ROUNDTRIP_COLUMNS,
+	REPORT_COLUMNS,
 	productsToCsvString,
 	productsToXlsxBlob,
 } from "./product-export";
@@ -223,9 +224,9 @@ describe("product export — round-trip contract", () => {
 		]);
 	});
 
-	test("the report columns are all export-only, and named as such", () => {
+	test("the report columns follow, in registry order", () => {
 		const header = productsToCsvString([reportProduct]).split("\n")[0];
-		expect(header.split(",").slice(11)).toEqual([...EXPORT_ONLY_COLUMNS]);
+		expect(header.split(",").slice(11)).toEqual([...REPORT_COLUMNS]);
 	});
 
 	test("an exported sheet re-parses through the import parser", () => {
@@ -362,5 +363,76 @@ describe("product export — which variants are included", () => {
 		expect(rowOf(csv, 1).variant_status).toBe("active");
 		expect(rowOf(csv, 2).variant_status).toBe("inactive");
 		expect(rowOf(csv, 2).sku).toBe("KEK-2");
+	});
+});
+
+describe("round-trip preserves sellability (PR #230 review, MEDIUM)", () => {
+	// The export started including variants the seller built and switched off.
+	// The import's CREATE path defaults a provided row to active
+	// (`insertVariants`: `active ?? true`), so without reading `variant_status`
+	// back, exporting a catalogue and importing it into a second store — or
+	// re-importing after deleting the product — resurrected those variants live
+	// and purchasable at their old price.
+	const withDeactivated: ExportableProduct = {
+		...reportProduct,
+		variants: [
+			reportProduct.variants[0],
+			{
+				optionValues: ["2kg"],
+				sku: "KEK-2",
+				price: 16000,
+				onHand: 4,
+				parcelWeightG: 2200,
+				active: false,
+			},
+		],
+	};
+
+	test("an exported inactive variant re-imports as INACTIVE", () => {
+		const parsed = parseProductsCsv(productsToCsvString(withDeactivated ? [withDeactivated] : []));
+		expect(parsed.errorRows).toEqual([]);
+		const variants = parsed.products[0].variants;
+		const one = variants.find((v) => v.sku === "KEK-1");
+		const two = variants.find((v) => v.sku === "KEK-2");
+		expect(one?.active).toBe(true);
+		expect(two?.active).toBe(false);
+	});
+
+	test("a sheet with no variant_status column still imports everything active", () => {
+		// Every hand-made sheet and every pre-86eyrtz74 export must behave
+		// exactly as before — absence of the column is not "inactive".
+		const legacy = "name,price,stock\nKek Lapis,86.00,10\n";
+		const parsed = parseProductsCsv(legacy);
+		expect(parsed.errorRows).toEqual([]);
+		expect(parsed.products[0].variants.every((v) => v.active)).toBe(true);
+	});
+
+	test("only the exact word 'inactive' switches a row off", () => {
+		// A malformed cell must never silently hide a variant the seller sells.
+		for (const cell of ["", "active", "ACTIVE", "disabled", "0", "nonsense"]) {
+			const csv = `name,price,stock,variant_status\nKek,86.00,10,${cell}\n`;
+			expect(parseProductsCsv(csv).products[0].variants[0].active).toBe(true);
+		}
+		const off = "name,price,stock,variant_status\nKek,86.00,10,  Inactive \n";
+		expect(parseProductsCsv(off).products[0].variants[0].active).toBe(false);
+	});
+
+	test("variant_status is NOT advertised as an ignored column", () => {
+		// It is the one report column the import reads, so the import screen must
+		// not tell the seller it will be discarded.
+		const header = productsToCsvString([reportProduct]).split("\n")[0];
+		expect(header).toContain("variant_status");
+		expect(exportOnlyColumnsPresent(header.split(","))).not.toContain(
+			"variant_status",
+		);
+	});
+
+	test("every other report column is still ignored, and still announced", () => {
+		const header = productsToCsvString([reportProduct]).split("\n")[0];
+		expect(exportOnlyColumnsPresent(header.split(","))).toEqual([
+			...EXPORT_ONLY_COLUMNS,
+		]);
+		expect(EXPORT_ONLY_COLUMNS).not.toContain("variant_status");
+		expect(REPORT_COLUMNS).toContain("variant_status");
 	});
 });

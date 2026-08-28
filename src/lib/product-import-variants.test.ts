@@ -22,6 +22,7 @@ function row(over: Partial<VariantImportRow>): VariantImportRow {
 		price: 1000,
 		onHand: 1,
 		parcelWeightG: 0,
+		active: true,
 		...over,
 	};
 }

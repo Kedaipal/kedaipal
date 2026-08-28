@@ -2369,10 +2369,13 @@ export const exportOrders = action({
 			}
 		}
 
-		// Pinned first, then fulfilment order — the SAME ordering the inbox
-		// applies, so a seller who exports what's on screen gets the rows in the
-		// order they were reading them. `sortInboxOrders` owns that rule for both
-		// surfaces; the `Pinned` column keeps the rows identifiable in Excel.
+		// Pinned first, then fulfilment date. The pinned-first PARTITION is shared
+		// with the inbox (`sortInboxOrders` owns that rule for both surfaces, so a
+		// pin can never be trimmed away by a `limit`), but the sort inside each
+		// partition is deliberately fixed to "due" here rather than mirroring the
+		// inbox's "recent" default: a bookkeeping file wants the fulfilment queue,
+		// and the export has always sorted this way. The `Pinned` column keeps
+		// those rows identifiable once the file is open in Excel.
 		const sorted = sortInboxOrders(rows, "due");
 		return {
 			csv: ordersToCsv(sorted, columnKeys),

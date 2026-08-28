@@ -19,6 +19,10 @@ import { VARIANT_IMPORT_COLUMNS } from "./product-import";
  *     `EXPORT_ONLY_COLUMNS`, and called out by the import screen
  *     (`exportOnlyColumnsPresent`) rather than silently ignored.
  *
+ *     ONE exception: `variant_status` is read back on the CREATE path
+ *     (`ROUNDTRIP_REPORT_COLUMNS`) so the round-trip cannot resurrect a variant
+ *     the seller switched off. Read for fidelity, never as an editable field.
+ *
  * Prices are written as major-unit strings ("120.50"); flags read "Yes"/blank
  * rather than "false", which would be text clutter on most rows.
  */
@@ -26,12 +30,8 @@ import { VARIANT_IMPORT_COLUMNS } from "./product-import";
 /** Columns the import reads. Never reorder or rename — a seller's sheet keys on them. */
 export const PRODUCT_IMPORT_ROUNDTRIP_COLUMNS = VARIANT_IMPORT_COLUMNS;
 
-/**
- * Columns added for reporting (86eyrtz74). The import IGNORES every one of
- * these: editing them in a sheet and re-importing changes nothing. Exported
- * from here so the import screen can say so out loud instead of no-op'ing.
- */
-export const EXPORT_ONLY_COLUMNS = [
+/** Every reporting column added by 86eyrtz74, in export order. */
+export const REPORT_COLUMNS = [
 	"currency",
 	"categories",
 	"product_status",
@@ -47,9 +47,31 @@ export const EXPORT_ONLY_COLUMNS = [
 	"photos",
 ] as const;
 
+/**
+ * The report columns the import READS BACK, for round-trip fidelity only.
+ *
+ * Just `variant_status`. The export includes variants the seller built and then
+ * switched off (see `isExportableVariant`); the import's create path defaults a
+ * provided row to active, so without reading this back, exporting a catalogue
+ * and importing it into a second store — or re-importing after deleting a
+ * product — would resurrect those variants live and purchasable at their old
+ * price. It is NOT an editable field: on an existing product the import never
+ * patches `active` at all, in either direction.
+ */
+export const ROUNDTRIP_REPORT_COLUMNS = ["variant_status"] as const;
+
+/**
+ * Report columns the import ignores entirely: editing them in a sheet and
+ * re-importing changes nothing. Exported so the import screen can say so out
+ * loud instead of no-op'ing silently.
+ */
+export const EXPORT_ONLY_COLUMNS: readonly string[] = REPORT_COLUMNS.filter(
+	(c) => !(ROUNDTRIP_REPORT_COLUMNS as readonly string[]).includes(c),
+);
+
 export const PRODUCT_EXPORT_COLUMNS = [
 	...PRODUCT_IMPORT_ROUNDTRIP_COLUMNS,
-	...EXPORT_ONLY_COLUMNS,
+	...REPORT_COLUMNS,
 ] as const;
 
 export interface ExportableVariant {

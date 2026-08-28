@@ -105,7 +105,7 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
-/** Card list (mobile + desktop) vs the desktop-only table (86eyrtz74). */
+/** Card list vs table (86eyrtz74). Both are available at every width. */
 type InboxView = "cards" | "table";
 const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
 
