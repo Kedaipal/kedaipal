@@ -8767,8 +8767,8 @@ describe("orders — export gaps (86eyrtz74)", () => {
 		expect(at("Address line 1")).toBe(validAddress.line1);
 		expect(at("City")).toBe(validAddress.city);
 		expect(at("Postcode")).toBe(validAddress.postcode);
-		// Deduped + sorted union across the order's products.
-		expect(at("Categories (current)")).toBe("Bestseller, Kuih");
+		// Deduped + sorted union across the order's lines, frozen at checkout.
+		expect(at("Categories")).toBe("Bestseller, Kuih");
 		// The identity that was broken before this ticket.
 		const sum =
 			Number(at("Subtotal")) +
@@ -8850,5 +8850,113 @@ describe("orders — item thumbnails (86eyrtz74)", () => {
 			.withIdentity({ subject: USER_A })
 			.query(api.orders.getItemImageUrls, { shortId: "ORD-NOPE" });
 		expect(urls).toEqual([]);
+	});
+});
+
+describe("orders — categories frozen at checkout (86eyrtz74)", () => {
+	async function seedCategorised(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 100,
+			name: "Kek Lapis",
+		});
+		const { categoryId: kuih } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Kuih",
+			slug: "kuih",
+		});
+		const { categoryId: best } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Bestseller",
+			slug: "bestseller",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [kuih, best],
+		});
+		return { retailer, asA, productId, kuih, best };
+	}
+
+	async function place(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		return (await t.query(api.orders.get, { token: await tk(t, shortId) }))!;
+	}
+
+	test("stamps the category names onto every line, sorted", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedCategorised(t);
+		const order = await place(t, retailer._id, productId);
+		expect(order.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
+	});
+
+	test("re-categorising later does NOT rewrite the sold order", async () => {
+		// The whole reason for freezing: a sales report must stay true when the
+		// seller reorganises their catalogue.
+		const t = setup();
+		const { retailer, asA, productId, best } = await seedCategorised(t);
+		const order = await place(t, retailer._id, productId);
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [best],
+		});
+		const after = await t.query(api.orders.get, {
+			token: await tk(t, order.shortId),
+		});
+		expect(after?.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
+	});
+
+	test("an uncategorised product leaves the field ABSENT, not empty", async () => {
+		// "no categories" and "not recorded" must not look identical on an old
+		// order — absence is what tells them apart.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const order = await place(t, retailer._id, productId);
+		expect(order.items[0].categoryNames).toBeUndefined();
+	});
+
+	test("the export reads the frozen names — no lookup, no drift", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedCategorised(t);
+		await place(t, retailer._id, productId);
+		// Re-categorise AFTER the sale; the export must still show the old truth.
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "categories"],
+		});
+		const [header, row] = csv.split("\r\n");
+		expect(header).toBe("Order ID,Categories");
+		expect(row).toContain('"Bestseller, Kuih"');
+	});
+
+	test("SEARCH can now find an order by its category", async () => {
+		// The one thing a live lookup could never do: matching it would have meant
+		// a per-product read on every keystroke across the whole scan window.
+		const t = setup();
+		const { retailer, asA, productId } = await seedCategorised(t);
+		const order = await place(t, retailer._id, productId);
+		const hit = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: "bestseller",
+		});
+		expect(hit.orders.map((o) => o._id)).toEqual([order._id]);
 	});
 });

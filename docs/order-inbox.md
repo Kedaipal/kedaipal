@@ -35,10 +35,8 @@ Two deliberate details:
 
 - **Phone keeps its own rule** — trailing-digit matching, so `123456789` finds
   `+60123456789` however it was stored or typed. Plain substring can't do that.
-- **`Categories (current)` can't participate.** It is resolved from the junction
-  table at export time and isn't on the order document, so it renders blank in
-  the haystack. Searching it would mean a per-product fan-out on every keystroke
-  across the whole scan window.
+- **Categories participate**, because they are frozen onto the order at checkout
+  (see below). That was the one column a live lookup could never have covered.
 
 The haystack is built lazily (only when there IS a term), since it allocates ~36
 strings per order. Expect broader matches than before: a term appearing in a
@@ -132,11 +130,16 @@ WhatsApp.
   floor.
 - **No new backend.** `searchOrders` already returned full order docs, so the
   table is purely a render mode over data the client had.
-- **Built on `@tanstack/react-table`** — already a dependency, already the house
-  pattern in `customer-list.tsx`. Deliberately *not* shadcn's data-table: that
-  is the same library wrapped in a styling layer we already have our own version
-  of, so adopting it would mean a second set of primitives for no capability we
-  don't get headless.
+- **Markup is the shadcn `Table` primitives** (`src/components/ui/table.tsx`,
+  added in 86eyrtz74) over a real `<table>`; **logic is `@tanstack/react-table`**,
+  already a dependency and already the pattern in `customer-list.tsx`. The two
+  are complements, not alternatives — shadcn's table is markup with no logic,
+  TanStack is logic with no markup, and shadcn's own "data table" is exactly
+  this pairing. Column widths come from `<colgroup>` + `table-fixed`.
+- **Row navigation**: the row carries `onClick`, and the Order ID cell carries a
+  real `<Link>`. A `<tr>` cannot be an anchor, so the link is what keeps
+  middle-click, cmd-click and keyboard navigation working; the row click is the
+  convenience on top. Same shape as `customer-list.tsx`.
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same
   registry the CSV writes, so the table and the export can't disagree, **in
   which columns appear AND in what order**. Visibility + order persist per store

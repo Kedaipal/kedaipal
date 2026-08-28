@@ -376,6 +376,8 @@ type OrderItemSnapshot = {
 	variantLabel?: string;
 	price: number;
 	quantity: number;
+	/** Categories the product was filed under at sale time (86eyrtz74). */
+	categoryNames?: string[];
 };
 
 /**
@@ -979,6 +981,8 @@ export const create = mutation({
 				variantLabel: label || undefined,
 				price: variant.price,
 				quantity: item.quantity,
+				// Filled in below, once per distinct product.
+				categoryNames: undefined as string[] | undefined,
 			});
 			ruleItems.push({
 				productId: variant.productId,
@@ -993,6 +997,20 @@ export const create = mutation({
 				quantity: item.quantity,
 				isCustom: variant.isCustom === true,
 			});
+		}
+
+		// Freeze the categories each product was filed under at this moment
+		// (86eyrtz74). One junction read per DISTINCT product — paid once, here,
+		// instead of on every export row and every search keystroke forever.
+		const categoryNames = await resolveCategoryNames(
+			ctx,
+			snapshotItems.map((i) => i.productId),
+		);
+		for (const line of snapshotItems) {
+			const names = categoryNames.get(line.productId);
+			// Absent rather than `[]` for an uncategorised product: "no categories"
+			// and "not recorded" should not look identical on an old order.
+			if (names && names.length > 0) line.categoryNames = names;
 		}
 
 		const itemSubtotal = snapshotItems.reduce(
@@ -2141,6 +2159,8 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		source: o.source,
 		attributionSource: o.attributionSource,
 		customer: o.customer,
+		// `items` already carries the frozen `categoryNames` per line — nothing
+		// to resolve, which is the whole point of freezing at create.
 		items: o.items,
 		subtotal: o.subtotal,
 		mockupQuotedAmount: o.mockupQuotedAmount,
@@ -2171,53 +2191,39 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 }
 
 /**
- * Fill in `categories` for a page of export rows (86eyrtz74).
+ * Category names for a set of products, resolved once per distinct id
+ * (86eyrtz74). Used at ORDER CREATE to freeze `items[].categoryNames`, so every
+ * later read — table, export, search — is free.
  *
- * Categories are a pure browse layer and are deliberately NEVER frozen onto an
- * order line (docs/product-categories.md), so this is a LIVE lookup — the
- * column is labelled "Categories (current)" for that reason.
- *
- * Batched by distinct `productId` across the whole page, with a memo shared
- * across pages by the caller: a 500-row page of a repeat-order store touches a
- * handful of products, and the naive per-line fan-out would be thousands of
- * index reads for the same answer. Category names are resolved once per
- * category id for the same reason.
+ * Archived categories are included: they name a real grouping the seller was
+ * using at the time, and this is a record of that moment.
  */
-async function attachOrderCategories(
-	ctx: QueryCtx,
-	orders: Doc<"orders">[],
-	rows: CsvOrder[],
-	memo: Map<string, string[]>,
-): Promise<void> {
-	const unseen = new Set<Id<"products">>();
-	for (const o of orders) {
-		for (const it of o.items) if (!memo.has(it.productId)) unseen.add(it.productId);
-	}
-	for (const productId of unseen) {
+async function resolveCategoryNames(
+	ctx: MutationCtx,
+	productIds: Iterable<Id<"products">>,
+): Promise<Map<string, string[]>> {
+	const out = new Map<string, string[]>();
+	const nameById = new Map<string, string>();
+	for (const productId of new Set(productIds)) {
 		const joins = await ctx.db
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
 			.collect();
 		const names: string[] = [];
 		for (const j of joins) {
-			const cat = await ctx.db.get(j.categoryId);
-			// Archived categories still name a real grouping the seller used, so
-			// they stay in the export — dropping them would blank the column for
-			// a store mid-reorganisation.
-			if (cat) names.push(cat.name);
+			let name = nameById.get(j.categoryId);
+			if (name === undefined) {
+				const cat = await ctx.db.get(j.categoryId);
+				if (!cat) continue;
+				name = cat.name;
+				nameById.set(j.categoryId, name);
+			}
+			names.push(name);
 		}
-		memo.set(productId, names);
+		names.sort((a, b) => a.localeCompare(b));
+		out.set(productId, names);
 	}
-	for (const [i, o] of orders.entries()) {
-		const row = rows[i];
-		if (!row) continue;
-		// Deduped ACROSS lines: the column answers "what kinds of thing is this
-		// order", not "what is each line" — a 12-line order of one category
-		// should read "Kuih", not "Kuih, Kuih, Kuih…".
-		const names = new Set<string>();
-		for (const it of o.items) for (const n of memo.get(it.productId) ?? []) names.add(n);
-		row.categories = [...names].sort((a, b) => a.localeCompare(b));
-	}
+	return out;
 }
 
 async function assertExportAccess(
@@ -2277,13 +2283,8 @@ export const exportPage = internalQuery({
 			.paginate(paginationOpts);
 		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
 		const matched = page.page.filter(predicate);
-		const rows = matched.map(orderToCsvSource);
-		// Memo is per-page: each page is its own transaction, so it can't span
-		// them. Within a 500-row page it still collapses a repeat-order store's
-		// thousands of line lookups down to one read per distinct product.
-		await attachOrderCategories(ctx, matched, rows, new Map());
 		return {
-			rows,
+			rows: matched.map(orderToCsvSource),
 			scanned: page.page.length,
 			isDone: page.isDone,
 			cursor: page.continueCursor,
@@ -2301,9 +2302,7 @@ export const exportByIds = internalQuery({
 		const owned = fetched.filter(
 			(o): o is Doc<"orders"> => o?.retailerId === retailerId,
 		);
-		const rows = owned.map(orderToCsvSource);
-		await attachOrderCategories(ctx, owned, rows, new Map());
-		return rows;
+		return owned.map(orderToCsvSource);
 	},
 });
 

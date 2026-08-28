@@ -73,14 +73,15 @@ export type CsvOrder = {
 	 * the export now carries it so the two can be reconciled. */
 	attributionSource?: string;
 	customer: { name?: string; waPhone?: string };
-	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
-	/** Names of every category the order's products belong to, deduped across
-	 * lines. Resolved LIVE at export time, not frozen on the order — categories
-	 * are a pure browse layer by design (docs/product-categories.md), so this is
-	 * "what these products are filed under today", which can differ from what
-	 * they were filed under when sold. Named "Categories (current)" for exactly
-	 * that reason. */
-	categories?: string[];
+	items: Array<{
+		name: string;
+		variantLabel?: string;
+		quantity: number;
+		/** Categories the product was filed under AT SALE TIME (86eyrtz74) —
+		 * frozen per line at order create, not looked up. See
+		 * `orders.items[].categoryNames` in convex/schema.ts. */
+		categoryNames?: string[];
+	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
 	 * `computeOrderTotals` ADDS it to `total` alongside the fees, so WITHOUT
@@ -126,6 +127,21 @@ export type CsvOrder = {
 	 * identifiable — and removable — once the CSV is open in Excel. */
 	pinnedAt?: number;
 };
+
+/**
+ * The categories an order touched — deduped and sorted across its lines.
+ *
+ * Deduped ACROSS lines because the column answers "what kinds of thing is this
+ * order", not "what is each line": a 12-line order of one category should read
+ * "Kuih", not "Kuih, Kuih, Kuih…". The per-line values stay per-line on the
+ * document so a future sales-by-category report can attribute revenue to a
+ * line rather than guessing from the union.
+ */
+export function orderCategoryNames(o: CsvOrder): string[] {
+	const names = new Set<string>();
+	for (const it of o.items) for (const n of it.categoryNames ?? []) names.add(n);
+	return [...names].sort((a, b) => a.localeCompare(b));
+}
 
 export type OrderColumnKey =
 	| "shortId"
@@ -439,12 +455,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 	},
 	{
 		key: "categories",
-		label: "Categories (current)",
+		label: "Categories",
 		group: "items",
 		width: 180,
-		// Comma-separated flat list of every category across the order's
-		// products, deduped. See CsvOrder.categories for the drift caveat.
-		value: (o) => (o.categories ?? []).join(", "),
+		// Deduped, sorted union across the order's lines — the per-line values
+		// are frozen at sale time, so this needs no reads and no "(current)"
+		// hedge: it is what these products WERE filed under when sold.
+		value: (o) => orderCategoryNames(o).join(", "),
 	},
 	{
 		key: "subtotal",

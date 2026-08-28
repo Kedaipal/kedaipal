@@ -9,6 +9,7 @@ import {
 	escapeCsvField,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
+	orderCategoryNames,
 	orderToCsvRow,
 	ordersToCsv,
 } from "./orderCsv";
@@ -296,18 +297,45 @@ describe("address + pickup columns (the reported gap)", () => {
 	});
 });
 
-describe("categories column", () => {
-	test("comma-separated, deduped across lines, sorted", () => {
-		const o: CsvOrder = { ...minimal, categories: ["Pastry", "Kuih"] };
-		expect(cell({ ...o, categories: ["Kuih", "Pastry"] }, "Categories (current)")).toBe(
+describe("categories column — frozen per line at sale time", () => {
+	const twoLines = (a?: string[], b?: string[]): CsvOrder => ({
+		...minimal,
+		items: [
+			{ name: "Kek Lapis", quantity: 1, categoryNames: a },
+			{ name: "Karipap", quantity: 2, categoryNames: b },
+		],
+	});
+
+	test("deduped and sorted across lines, comma-separated", () => {
+		// A 12-line order of one category should read "Kuih", not "Kuih, Kuih…".
+		expect(cell(twoLines(["Pastry", "Kuih"], ["Kuih"]), "Categories")).toBe(
 			"Kuih, Pastry",
 		);
 	});
-	test("absent categories read blank, never 'undefined'", () => {
-		expect(cell(minimal, "Categories (current)")).toBe("");
+
+	test("a line with no categories contributes nothing", () => {
+		expect(cell(twoLines(["Kuih"], undefined), "Categories")).toBe("Kuih");
 	});
-	test("the header names the drift — it is a live lookup, not a snapshot", () => {
-		expect(CSV_COLUMNS).toContain("Categories (current)");
+
+	test("an order with no recorded categories reads blank, never 'undefined'", () => {
+		// Historical orders predate the field and are deliberately not backfilled
+		// — stamping today's categorisation onto them would manufacture exactly
+		// the false history freezing exists to prevent.
+		expect(cell(minimal, "Categories")).toBe("");
+	});
+
+	test("the header no longer hedges — the value is a snapshot, not a lookup", () => {
+		expect(CSV_COLUMNS).toContain("Categories");
+		expect(CSV_COLUMNS).not.toContain("Categories (current)");
+	});
+
+	test("orderCategoryNames is the shared union helper", () => {
+		expect(orderCategoryNames(twoLines(["B", "A"], ["A", "C"]))).toEqual([
+			"A",
+			"B",
+			"C",
+		]);
+		expect(orderCategoryNames(minimal)).toEqual([]);
 	});
 });
 

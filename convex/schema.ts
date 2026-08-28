@@ -886,6 +886,26 @@ export default defineSchema({
 				// Human label of the chosen option values ("1kg / Fillet"). Empty
 				// for single-variant products. Frozen at order-create time.
 				variantLabel: v.optional(v.string()),
+				// Names of the categories this product was filed under WHEN SOLD
+				// (86eyrtz74). Frozen like `name`/`variantLabel`/`price` rather
+				// than looked up live, for four reasons: the inbox table and the
+				// CSV export stop paying a junction fan-out per row; free-text
+				// SEARCH can cover categories at all (a live lookup can't, without
+				// a per-product read on every keystroke); a sales report stays
+				// historically true when the seller reorganises their catalogue;
+				// and it matches how every other sale-time fact on this document
+				// behaves (pickupSnapshot, deliverySnapshot, price).
+				//
+				// PER-LINE, not a deduped union on the order: the union is what
+				// today's single column needs, but it cannot attribute revenue on
+				// an order spanning two categories, and "sales by category" is the
+				// obvious next question. The union derives from these for free.
+				//
+				// Optional with NO backfill — absence means "not recorded", the
+				// same posture as `attributionSource`. Stamping today's
+				// categorisation onto historical orders would manufacture exactly
+				// the false history this field exists to prevent.
+				categoryNames: v.optional(v.array(v.string())),
 				price: v.number(),
 				quantity: v.number(),
 			}),

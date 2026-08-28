@@ -7,25 +7,31 @@ import {
 } from "../../../convex/lib/orderCsv";
 import { OrderTable, type TableOrder } from "./order-table";
 
-// The table renders <Link>, which needs a router. A stub keeps this a unit test
-// of the table rather than of TanStack Router.
+// The table renders <Link> and navigates on row click, both of which need a
+// router. Stubs keep this a unit test of the table rather than of TanStack
+// Router; `navigateSpy` lets the row-click tests assert where it went.
+const navigateSpy = vi.fn();
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({
 		children,
 		className,
-		style,
+		onClick,
 	}: {
 		children: React.ReactNode;
 		className?: string;
-		style?: React.CSSProperties;
+		onClick?: (e: React.MouseEvent) => void;
 	}) => (
-		<a href="/stub" className={className} style={style}>
+		<a href="/stub" className={className} onClick={onClick}>
 			{children}
 		</a>
 	),
+	useNavigate: () => navigateSpy,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	navigateSpy.mockClear();
+});
 
 const base: TableOrder = {
 	_id: "o1",
@@ -155,27 +161,49 @@ describe("OrderTable", () => {
 		).toBe(false);
 	});
 
-	it("in select mode the row selects instead of navigating", () => {
+	it("in select mode a row click selects instead of navigating", () => {
 		// A stray click while ticking twenty rows must not throw the seller out of
 		// the selection they were building.
 		const { onToggleSelect } = renderTable({ selectMode: true });
-		expect(screen.queryByRole("link")).toBeNull();
-		fireEvent.click(
-			screen.getAllByRole("button", { name: /select order ORD-1001/i })[0],
-		);
+		fireEvent.click(screen.getByText("Aisha"));
 		expect(onToggleSelect).toHaveBeenCalledWith("o1");
+		expect(navigateSpy).not.toHaveBeenCalled();
 	});
 
-	it("out of select mode the row is a link to the order", () => {
+	it("out of select mode a row click opens the order", () => {
 		renderTable();
-		expect(screen.getByRole("link")).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /select order/i })).toBeNull();
+		fireEvent.click(screen.getByText("Aisha"));
+		expect(navigateSpy).toHaveBeenCalledWith({
+			to: "/app/orders/$shortId",
+			params: { shortId: "ORD-1001" },
+		});
+	});
+
+	it("the Order ID cell is a REAL link — a <tr> can't be one", () => {
+		// Keeps middle-click, cmd-click and keyboard navigation working, which a
+		// row-level onClick alone would break.
+		renderTable();
+		const link = screen.getByRole("link", { name: "ORD-1001" });
+		expect(link).toBeTruthy();
+		// Clicking it must not ALSO fire the row's navigate.
+		fireEvent.click(link);
+		expect(navigateSpy).not.toHaveBeenCalled();
 	});
 
 	it("renders nothing extra for an empty list", () => {
 		renderTable({ orders: [] });
 		expect(screen.getByText("Order ID")).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
+	});
+
+	it("uses real table markup, not divs", () => {
+		// Visual consistency with customer-list.tsx and the rest of the app.
+		const { container } = render(<div />);
+		void container;
+		renderTable();
+		expect(document.querySelector("table")).toBeTruthy();
+		expect(document.querySelector("thead")).toBeTruthy();
+		expect(document.querySelectorAll("tbody tr").length).toBe(1);
 	});
 });
 

@@ -16,7 +16,19 @@ Two tables (additive, dev-only widen — no migration) + one derived field on `p
 
 Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history.
 
-> **Consequence for the order export (86eyrtz74):** the orders CSV has a categories column, and because nothing is frozen it is a **live lookup** — what those products are filed under *today*, which can differ from what they were filed under when the order was placed. The column is named **"Categories (current)"** to say so. Freezing `categoryNames` onto `orders.items` was considered and rejected: nobody has asked for point-in-time category history, they want to pivot sales by category, and freezing would reverse the decision above and need a backfill. Resolved by `attachOrderCategories` in `convex/orders.ts` — batched by distinct `productId` per export page, deduped and sorted across the order's lines. Archived categories still appear (they name a real grouping the seller used). They are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
+> **⚠️ Superseded for ORDERS (86eyrtz74): categories ARE now frozen onto order lines.** The paragraph above still describes the *catalogue* — a product's categories stay live, and re-categorising changes the storefront immediately. But `orders.items[].categoryNames` is stamped at checkout from the categories in force at that moment, and never changes afterwards.
+>
+> The first pass did it as a live lookup (`attachOrderCategories`, batched per export page) with the column named "Categories (current)" to flag the drift. That was wrong on four counts, and freezing fixes all of them: the inbox table and the CSV stop paying a junction fan-out per row; **free-text search can cover categories at all** (a live lookup would need a per-product read on every keystroke across the scan window); a sales report stays historically true when the seller reorganises; and it matches how every other sale-time fact on the order behaves — `pickupSnapshot`, `deliverySnapshot`, `variantLabel`, `price`.
+>
+> Note that the original rationale for *not* freezing — "so re-categorizing later can't rewrite order history" — argued for the opposite of what it produced: a live lookup is precisely what lets re-categorising rewrite what a past order appears to be.
+>
+> **Per-line, not a deduped union on the order.** The union is all today's single column needs, but it cannot attribute revenue on an order spanning two categories, and "sales by category" is the obvious next question. The union derives for free via `orderCategoryNames()` in `convex/lib/orderCsv.ts`.
+>
+> **No backfill.** Absent means "not recorded" — the same posture as `attributionSource`. Stamping today's categorisation onto historical orders would manufacture exactly the false history that freezing exists to prevent, so orders placed before this ship show a blank Categories cell, permanently and honestly. Archived categories ARE included at stamp time: they name a real grouping the seller was using.
+>
+> `categories.namesByProduct` remains and is still a live lookup — it feeds the **product** export, where live catalogue state is the correct answer.
+>
+> Categories are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
 
 ## Hidden categories
 
