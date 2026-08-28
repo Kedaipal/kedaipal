@@ -226,9 +226,10 @@ export function paymentDueAtCommit(
 }
 
 /** Bounded extension when a payment session starts / payment becomes possible.
- * Never shortens, never freezes indefinitely (a freeze would be exploitable:
- * tap Pay, close the tab, hold the stock forever). The buyer sees the clock
- * jump — visible and honest. */
+ * Never shortens, and never the unbounded freeze that was rejected (tap Pay,
+ * close the tab, hold the stock forever). The buyer sees the clock jump —
+ * visible and honest. See GATEWAY_SESSION_GRACE_MS for the one place this
+ * bound is renewable rather than absolute. */
 export function extendedPaymentDue(currentDueAt: number, now: number): number {
 	return Math.max(currentDueAt, now + CLAIM_PAYMENT_RUNWAY_MS);
 }
@@ -249,6 +250,24 @@ export function extendedPaymentDue(currentDueAt: number, now: number): number {
  *  - `gatewayPaymentIssue` — money already moved oddly; a human is sorting it;
  *  - live gateway session — the buyer may be mid-payment on HitPay's page.
  */
+/**
+ * Statuses in which a payment deadline still means something.
+ *
+ * Past these the seller has decided to fulfil an unpaid order on purpose, so
+ * the clock is dead: the sweep must not cancel it (`isAutoCancelDue`), the
+ * order is no longer frozen (`isPaymentWindowLocked`), and — the part PR #227
+ * review caught — `paymentDueAt` must be CLEARED by whichever writer moved the
+ * status. Leaving it set stranded the row in the `by_payment_due` range
+ * forever (a growing set the 1-minute sweep re-read and never resolved) and
+ * left the buyer's page threatening a cancellation that could never happen.
+ *
+ * Both status writers must consult this: `applyStatusTransition` AND
+ * `advanceToStage`, which patches `status` on its own path.
+ */
+export function paymentDeadlineApplies(status: string): boolean {
+	return status === "pending" || status === "confirmed";
+}
+
 export function isAutoCancelDue(
 	order: {
 		paymentDueAt?: number;
@@ -262,7 +281,7 @@ export function isAutoCancelDue(
 ): boolean {
 	if (order.paymentDueAt === undefined || now <= order.paymentDueAt)
 		return false;
-	if (order.status !== "pending" && order.status !== "confirmed") return false;
+	if (!paymentDeadlineApplies(order.status)) return false;
 	if ((order.paymentStatus ?? "unpaid") !== "unpaid") return false;
 	if (order.deliveryFeePending === true) return false;
 	if (order.gatewayPaymentIssue !== undefined && order.gatewayPaymentIssue !== null)
@@ -301,7 +320,7 @@ export function isPaymentWindowLocked(order: {
 	paymentStatus?: string;
 }): boolean {
 	if (order.paymentDueAt === undefined) return false;
-	if (order.status !== "pending" && order.status !== "confirmed") return false;
+	if (!paymentDeadlineApplies(order.status)) return false;
 	// `claimed` still locks: the buyer says they've transferred against THIS
 	// date and is waiting on the seller to verify it. Only money actually
 	// received reopens the order — the same line `isAutoCancelDue` draws.
