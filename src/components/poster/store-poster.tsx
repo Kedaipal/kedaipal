@@ -1,4 +1,5 @@
 import QRCode from "react-qr-code";
+import type { Country } from "../../../convex/lib/country";
 import { m } from "../../paraglide/messages";
 
 /**
@@ -10,6 +11,20 @@ import { m } from "../../paraglide/messages";
  * eagerly present and fully opaque the moment it renders.
  */
 export type PosterLocale = "en" | "ms";
+
+/**
+ * The language a store's poster opens in, by country. Buyer-facing print, so
+ * it follows the buyers who will stand in front of it: Bahasa Melayu in
+ * Malaysia, English in Singapore (BM on a Singapore counter is simply the
+ * wrong language — 86eyqgujv). The seller can still switch it per print.
+ *
+ * A `Record` so a third country is a compile error here rather than a silent
+ * fall back to BM — the exhaustive-lookup posture the `Locale` sweep set.
+ */
+export const POSTER_DEFAULT_LOCALE: Record<Country, PosterLocale> = {
+	MY: "ms",
+	SG: "en",
+};
 
 /**
  * Poster template: "both" = the approved two-QR v2 sheet (default);
@@ -50,11 +65,18 @@ interface StorePosterProps {
 }
 
 /**
- * Storefront QR fallbacks. `?src=` is a reserved attribution tag (PostHog
- * later) that the storefront ignores today. `online` is the poster's online
- * QR; `counter` is only the fallback the route uses when the walk-in `waUrl`
- * isn't available (WABA number unset) — the primary counter target is the KPS
- * deep link. See docs/store-qr-poster.md.
+ * Storefront QR targets. `?src=` is the storefront attribution tag
+ * (86eyq0eq9): the storefront captures it for the session and stamps it onto
+ * the order, so Insights reports these scans as "Poster QR" / "Counter".
+ *
+ * These two tags are FIXED and describe the printed sheet itself — a poster is
+ * a physical artifact that outlives any campaign, so it must not carry a
+ * campaign tag (owner call, Arif). Campaign links are copy-paste links, built
+ * elsewhere; see docs/source-attribution.md.
+ *
+ * `counter` is only the fallback the route uses when the walk-in `waUrl` isn't
+ * available (WABA number unset) — the primary counter target is the KPS deep
+ * link. See docs/store-qr-poster.md.
  */
 export function posterQrUrls(
 	origin: string,

@@ -223,6 +223,24 @@ needs its own exclusion:
 If lint or tests fail in ways that don't match your diff, a stray nested
 worktree is the first thing to suspect.
 
+**Status (2026-08-24, ClickUp `86eyqgy05`): `.claude/worktrees/` is now empty.**
+Nine stale trees holding 1,929 duplicate test files were audited and removed.
+All nine had HEADs already reachable from `origin/staging`, so no committed
+work was at risk; every dirty tree was archive-committed first, so removal
+needed no `--force` and nothing was discarded. One genuinely unique piece of
+work — the in-progress inbound intent router (ClickUp `86ey0e80h`) — was
+committed to its own branch before removal.
+
+**Both exclusions are retained deliberately, and must not be removed as dead
+config.** They are now *preventative*: the directory regenerates the moment
+anyone uses Claude Code's `EnterWorktree`, and the failure it causes (phantom
+test failures from another branch, or a Biome "nested root configuration"
+abort) is confusing enough that it cost two separate debugging sessions to
+diagnose the first time. The exclusions cost nothing to keep.
+
+All task work belongs in a **sibling** worktree instead — `../kedaipal-wt-<id>`,
+branched from `origin/staging` — never inside the repo.
+
 ## Dependency pinning — TanStack is exact-pinned (2026-08-07, ClickUp 86eyjadx7)
 
 `package.json` used to spec six TanStack packages as the `latest` dist-tag.
@@ -253,6 +271,67 @@ The rules, enforced by `src/lib/dependency-pins.test.ts` (runs in the gate):
 imported nowhere (a scaffold leftover), and it was the only thing pulling
 `@tanstack/react-query`/`query-core` into the lockfile. If a future change
 adopts TanStack Query directly, add it as a first-class pinned dependency.
+
+## App versioning — calendar `YYYY.MM.N` (2026-08-24, ClickUp 86eyqgxna)
+
+Before this, the app had **no version at all** — no `version` in `package.json`,
+zero git tags. Nothing identified a deploy, so "what version are you on?" had no
+answer and a prod incident couldn't be pinned to a build.
+
+**The scheme is `YYYY.MM.N`** — 4-digit year, zero-padded month, then the
+release ordinal within that month, resetting monthly (`2026.08.1`, `2026.08.2`,
+`2026.09.1`).
+
+**Deliberately not semver.** There is no public API and no consumer pinning
+against Kedaipal, so major/minor/patch would carry no meaning — every release
+would be an arbitrary minor that tells a reader nothing. A calendar version
+sorts naturally and says at a glance how stale a deploy is, which is the only
+question anyone actually asks of it. A bare build number (`147`) was rejected
+for the same reason: it conveys no recency.
+
+### The convention: bump by hand in the release PR
+
+`package.json` is the **single source of truth**, and it is bumped **manually in
+the staging→main release PR** — deliberately not auto-incremented by CI.
+
+That is not laziness. A human choosing the number is the same moment they decide
+whether the release is notable enough to interrupt sellers with a "What's new"
+modal (ClickUp `86eyqgxv9`). Automating the bump removes the only natural
+checkpoint for that judgement.
+
+### What enforces it
+
+- **`src/lib/app-version.test.ts`** runs in the gate and fails if
+  `package.json`'s version is missing or is not a valid `YYYY.MM.N`. It rejects
+  semver, months outside `01`–`12`, an unpadded month (which sorts wrong as a
+  string), ordinal `0`, and a leading-zero ordinal — `2026.08.01` and
+  `2026.08.1` must never both be valid, or the release-notes "have I seen this
+  version?" check has two answers for one build.
+- **`vite.config.ts`** throws at config time if there is no version, and inlines
+  it as `__APP_VERSION__` via `define` so runtime code never imports
+  `package.json` into the client bundle. `src/lib/app-version.ts` is the only
+  reader.
+- **`deploy.yml`'s `tag` job** tags `main` as `v<version>` after a successful
+  deploy — only what actually shipped gets tagged.
+
+### If the version wasn't bumped
+
+The tag job emits a **loud warning and continues** — it does not fail the
+deploy. A hotfix to prod at 2am must never be blocked on remembering a version
+bump; shipping the fix matters more than the tag. But an un-bumped release
+silently ships under the previous version, which breaks the release-notes
+"show once per version" contract, so the warning names that consequence
+explicitly.
+
+### Where a seller sees it
+
+`AppVersionRow` renders in the dashboard chrome — the More panel on mobile, the
+sidebar footer on desktop — not in a Settings tab. Its one job is support, so it
+must be findable from whatever screen the seller is already on. It is
+copy-to-clipboard because the realistic flow is reading it into a WhatsApp
+message to us, and a mistyped version sends support down the wrong path. Hidden
+while the sidebar is collapsed (the rail is icon-width and the row cannot
+degrade into it legibly).
 
 ## Known gaps (deferred to the full CI/CD ticket)
 

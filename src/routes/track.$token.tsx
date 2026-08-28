@@ -40,10 +40,12 @@ import {
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
+import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -52,7 +54,7 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
-import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
+import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -287,8 +289,8 @@ function OrderNotFound() {
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
 			<h1 className="text-2xl font-bold">Order not found</h1>
 			<p className="text-sm text-muted-foreground">
-				This tracking link is invalid or has expired. Please use the latest link
-				from your WhatsApp chat with the store.
+				This tracking link is invalid or has expired. Please use the link from
+				your WhatsApp order confirmation, or message the store for a new one.
 			</p>
 		</main>
 	);
@@ -460,7 +462,7 @@ function TrackingRoute() {
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentConfig = getPaymentConfig(paymentStatus);
 	// While a custom item still awaits mockup approval, the price isn't final, so
-	// the payment ask is held back (no live "I've paid" — see the bot flow too).
+	// the payment ask is held back (no live "I've paid").
 	// Gate opens on approval or seller waiver. Shared gate — same source as the
 	// server (lib/order). `mockupGateOpen` is the distinct "actively opened"
 	// concept used only for the receipt below.
@@ -641,12 +643,6 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						waPhone={order.customer.waPhone}
 					/>
-				) : order.confirmationPushStatus === "deferred" &&
-					order.status === "confirmed" ? (
-					// Confirmed-only, like the `sent` arm: the card promises a future
-					// message, which is false on a cancelled order (belt — cancel also
-					// clears the stamp) and stale noise once fulfilment moves on.
-					<PushDeferredCard ms={order.retailerLocale === "ms"} />
 				) : order.confirmationPushStatus === "sent" &&
 					order.status === "confirmed" ? (
 					<ConfirmationSentCard
@@ -714,6 +710,21 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
+			{/* Why the order was cancelled, when a robot did it (86eyq0epn): a
+			    buyer who ran out of payment time must not come back to a bare
+			    "Cancelled" and wonder — say what happened and what to do next.
+			    Human cancellations carry no reason stamp and keep today's copy. */}
+			{isCancelled && order.cancelledReason === "payment_window_expired" ? (
+				<div className="mt-6 flex items-start gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">
+					<Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
+					<p>
+						The payment window for this order ran out, so it was cancelled
+						and the items were released. Still want it? Message the store —
+						they can send you a fresh order link.
+					</p>
+				</div>
+			) : null}
+
 			{/* Current status card */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 				<span className={config?.color}>{config?.icon}</span>
@@ -728,6 +739,26 @@ function TrackingRoute() {
 					</p>
 				</div>
 			</div>
+
+			{/* Payment deadline (86eyq0epn) — the claim timer continuing until real
+			    money. Rendered only while the clock is LIVE: unpaid (a `claimed`
+			    order shows the being-confirmed card instead — the countdown pauses
+			    on an "I've paid"), still in a status where the deadline means
+			    something, and no hold that makes payment impossible (fee-pending /
+			    gateway issue) — the exact states the auto-cancel sweep skips, so
+			    the UI never threatens what the server wouldn't do.
+
+			    `paymentDeadlineApplies` covers cancelled AND anything past
+			    `confirmed`: both writers now clear `paymentDueAt` on those
+			    transitions (PR #227 review), and this is the defence for rows
+			    already stranded before that fix shipped. */}
+			{paymentDeadlineApplies(order.status) &&
+			order.paymentDueAt !== undefined &&
+			paymentStatus === "unpaid" &&
+			!deliveryFeeHeld &&
+			!gatewayIssueUnresolved ? (
+				<PaymentDueCountdown dueAt={order.paymentDueAt} />
+			) : null}
 
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
 			    and held back on a booking REQUEST: nothing is payable until the seller
@@ -842,9 +873,9 @@ function TrackingRoute() {
 									Awaiting delivery charge
 								</Button>
 								<p className="text-xs opacity-80">
-									{order.storeName || "The seller"} is confirming your delivery
-									charge on WhatsApp — payment opens with the final total right
-									after.
+									{order.storeName || "The seller"} is still working out your
+									delivery charge — payment opens here with the final total as
+									soon as they set it.
 								</p>
 							</>
 						) : confirmingGateway ? (
@@ -902,21 +933,29 @@ function TrackingRoute() {
 					) : null}
 
 					{paymentStatus === "claimed" ? (
-						<div className="flex items-center justify-between gap-3 text-sm">
-							<p className="opacity-80">
-								Awaiting store confirmation
-								{order.paymentClaimedAt
-									? ` · ${formatRelativeTime(order.paymentClaimedAt)}`
-									: ""}
+						<>
+							<div className="flex items-center justify-between gap-3 text-sm">
+								<p className="opacity-80">
+									Awaiting store confirmation
+									{order.paymentClaimedAt
+										? ` · ${formatRelativeTime(order.paymentClaimedAt)}`
+										: ""}
+								</p>
+								<button
+									type="button"
+									onClick={() => setClaimingPayment(true)}
+									className="shrink-0 font-medium underline-offset-2 hover:underline"
+								>
+									Update proof
+								</button>
+							</div>
+							{/* The confirmation is the order's only WhatsApp (86eyd63r8) —
+							    "payment received" is a page state now, so say where to look
+							    instead of leaving the buyer waiting on a message. */}
+							<p className="text-xs opacity-80">
+								{`This page updates the moment ${order.storeName || "the store"} confirms your payment.`}
 							</p>
-							<button
-								type="button"
-								onClick={() => setClaimingPayment(true)}
-								className="shrink-0 font-medium underline-offset-2 hover:underline"
-							>
-								Update proof
-							</button>
-						</div>
+						</>
 					) : null}
 				</section>
 			) : null}
@@ -1113,8 +1152,9 @@ function TrackingRoute() {
 				</div>
 			) : null}
 
-			{/* Rider drop-off photo (proof of delivery) — same shot the WhatsApp
-			    delivered follow-up carried; only exists on delivered rider orders. */}
+			{/* Rider drop-off photo (proof of delivery) — this page is the ONLY
+			    place the buyer sees it (86eyd63r8 removed the WhatsApp delivered
+			    follow-up); only exists on delivered rider orders. */}
 			{order.podImageUrls?.length ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -1136,6 +1176,9 @@ function TrackingRoute() {
 									src={url}
 									alt="Proof of delivery"
 									aspect="h-72 w-full"
+									// A photo of the buyer's own doorstep, erased with the
+									// order — keep it off the public edge cache.
+									sensitive
 								/>
 							</a>
 						))}
@@ -1376,7 +1419,9 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
+				country={order.retailerCountry}
 				subtotal={order.subtotal}
+				currency={order.currency}
 				fulfilmentDate={order.fulfilmentDate}
 				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
 				collectsFromCustomer={isCollection}
@@ -1500,8 +1545,8 @@ function TrackingRoute() {
 				{deliveryFeeHeld ? (
 					<p className="px-3 text-xs text-muted-foreground">
 						Your address is outside the store&apos;s standard delivery zones —
-						they&apos;ll confirm the delivery charge with you on WhatsApp and
-						it&apos;ll be added to this total.
+						once they set the delivery charge it&apos;s added to this total,
+						right here on this page.
 					</p>
 				) : null}
 				{/* Buyer self-serves a PDF receipt — generated on demand from this
@@ -1550,6 +1595,21 @@ function TrackingRoute() {
 						: `Message ${order.storeName || "the store"}`}
 				</a>
 			) : null}
+
+			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
+			    only web surface after checkout — and the ONLY one for counter
+			    buyers, whose consent notice arrives on WhatsApp. Link the policy
+			    that notice names. */}
+			<p className="mt-8 text-center text-xs text-muted-foreground">
+				<a
+					href="/privacy"
+					target="_blank"
+					rel="noopener noreferrer"
+					className="underline hover:text-foreground"
+				>
+					{order.retailerLocale === "ms" ? "Dasar Privasi" : "Privacy Policy"}
+				</a>
+			</p>
 		</main>
 	);
 }
@@ -1642,6 +1702,11 @@ type TrackedOrder = NonNullable<FunctionReturnType<typeof api.orders.get>>;
  * there is nothing left for the buyer to send, so this card says exactly that
  * (and offers a plain open-WhatsApp anchor for buyers who want the chat now).
  * No auto-redirect anywhere on this path.
+ *
+ * Since 86eyd63r8 that push is the order's ONLY outbound message — no status
+ * updates, no payment prompts — so the card also has to hand the buyer this
+ * page as the thing to keep. Overstating what WhatsApp will carry (the old copy
+ * pointed at the chat for "how to pay") would strand them.
  */
 function ConfirmationSentCard({
 	ms,
@@ -1667,8 +1732,8 @@ function ConfirmationSentCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? "Tak perlu hantar apa-apa — semak WhatsApp anda untuk pengesahan dan cara membayar. Halaman ini sentiasa menunjukkan status terkini pesanan anda."
-					: "Nothing to send — check your WhatsApp for the confirmation and how to pay. This page always shows your order's latest status."}
+					? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+					: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a
@@ -1680,31 +1745,6 @@ function ConfirmationSentCard({
 					{ms ? "Buka WhatsApp" : "Open WhatsApp"}
 				</a>
 			</Button>
-		</section>
-	);
-}
-
-/**
- * Order committed but its price isn't final yet (86eyfq0w5) — a mockup quote
- * or an arranged delivery fee is outstanding, so the WhatsApp confirmation
- * (whose template states the total) deliberately waits. Say so, or the
- * checkout promise of "confirmation lands in your WhatsApp" looks broken.
- * The mockup/fee sections further down the page carry the actual next step.
- */
-function PushDeferredCard({ ms }: { ms: boolean }) {
-	return (
-		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
-			<CheckCircle className="size-5 shrink-0 text-accent" />
-			<div className="min-w-0 flex-1">
-				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					{ms ? "Pesanan diterima" : "Order placed"}
-				</p>
-				<p className="text-sm">
-					{ms
-						? "Kami akan hantar pengesahan WhatsApp anda sebaik sahaja harga disahkan."
-						: "We'll send your WhatsApp confirmation as soon as your price is confirmed."}
-				</p>
-			</div>
 		</section>
 	);
 }
@@ -1723,7 +1763,7 @@ function PushSendingCard({
 	ms: boolean;
 	waPhone: string | undefined;
 }) {
-	const pretty = waPhone ? formatMyMobile(waPhone) : "";
+	const pretty = waPhone ? formatMobile(waPhone) : "";
 	return (
 		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 			<Loader2 className="size-5 shrink-0 animate-spin text-muted-foreground" />
@@ -1769,7 +1809,7 @@ function PushFailedCard({
 	const storeName = order.storeName || (ms ? "kedai" : "the store");
 	const unreachable = order.confirmationPushFailureKind !== "system";
 	const pretty = order.customer.waPhone
-		? formatMyMobile(order.customer.waPhone)
+		? formatMobile(order.customer.waPhone)
 		: "";
 	const updatePhone = useMutation(api.orders.updateBuyerPhone);
 	const [editing, setEditing] = useState(false);
@@ -1824,11 +1864,11 @@ function PushFailedCard({
 			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
 				{unreachable
 					? ms
-						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad.`
-						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final.`
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
 					: ms
-						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah.`
-						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below.`}
+						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah. Simpan pautan ini — ini halaman pesanan anda.`
+						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below. Keep this link — this page is your order.`}
 			</p>
 
 			{unreachable ? (
@@ -1842,14 +1882,17 @@ function PushFailedCard({
 						</label>
 						{/* Same plated control as the storefront checkout field this is
 						    repairing — the buyer has already met it once, and it's the
-						    only shape `assertValidMyMobile` behind it accepts. Its own
-						    neutral chrome inside the amber card, so the control reads as
-						    a control and not as part of the warning. */}
+						    only shape `assertValidMobileForCountry` behind it accepts
+						    (judged by the store's country, which rides the order
+						    payload). Its own neutral chrome inside the amber card, so
+						    the control reads as a control and not as part of the
+						    warning. */}
 						<MyPhoneInput
 							id="repair-wa-phone"
 							ref={phoneInputRef}
 							value={value}
 							onChange={setValue}
+							country={order.retailerCountry}
 							className="bg-white dark:bg-amber-950"
 						/>
 						<div className="flex gap-2">
@@ -2020,8 +2063,8 @@ function SendOrderCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
-					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
+					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan — selepas itu ikut pesanan anda di halaman ini. Simpan pautan ini.`
+					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it — after that you follow the order on this page. Keep this link.`}
 			</p>
 			{sending ? (
 				<Button className="h-12 w-full text-base" disabled>
@@ -2074,7 +2117,13 @@ function SendOrderCard({
 	);
 }
 
-/** Buyer-facing mockup review: approve or request changes on the seller's proof. */
+/**
+ * Buyer-facing mockup review: approve or request changes on the seller's proof.
+ * Nothing here sends the buyer a WhatsApp (86eyd63r8) — the order's one message
+ * already went out when the seller submitted the mockup, and every follow-up
+ * (a revised mockup, the unlocked payment) lands on this page. Toasts must say
+ * what changes HERE, never promise a chat message.
+ */
 function MockupReview({
 	token,
 	order,
@@ -2100,7 +2149,7 @@ function MockupReview({
 		setBusy(true);
 		try {
 			await approve({ token });
-			toast.success("Mockup approved — thank you!");
+			toast.success("Mockup approved — the seller will start your order.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -2125,7 +2174,7 @@ function MockupReview({
 		setBusy(true);
 		try {
 			await requestChanges({ token, note: note.trim() || undefined });
-			toast.success("Sent — the seller will update your mockup");
+			toast.success("Request sent — the updated mockup appears on this page.");
 			setShowNote(false);
 			setNote("");
 		} catch (err) {
@@ -2163,6 +2212,8 @@ function MockupReview({
 						caption="Your mockup"
 						wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 						className="block max-h-72 w-full object-contain"
+						// Order-owned blob (orderBlobs.ts) — erased on hard delete.
+						sensitive
 					/>
 				) : (
 					<div className="grid grid-cols-2 gap-2">
@@ -2172,6 +2223,8 @@ function MockupReview({
 								src={url}
 								alt={`Your mockup ${i + 1}`}
 								caption={`Your mockup ${i + 1}`}
+								// Order-owned blob — erased on hard delete.
+								sensitive
 								wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 								className="block aspect-square w-full object-cover"
 							/>

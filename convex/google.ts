@@ -19,6 +19,7 @@
 
 import { ConvexError, v } from "convex/values";
 import { type ActionCtx, action } from "./_generated/server";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { rateLimiter } from "./lib/rateLimiter";
 
 // New Places API endpoints. Old `maps.googleapis.com/maps/api/place/...`
@@ -26,9 +27,14 @@ import { rateLimiter } from "./lib/rateLimiter";
 const AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete";
 const PLACE_DETAILS_BASE = "https://places.googleapis.com/v1/places";
 
-// Lock results to Malaysia for v1. When we expand markets, take a country
-// arg on the action and validate against an allowlist.
-const REGION_CODES = ["my"] as const;
+// Results are locked to the store's country (SG-lite, 86eynw29u). The action's
+// `country` arg is validated against the closed Country union — an omitted
+// country is MY, so every pre-existing caller keeps the original lock.
+// Place-details fetches carry no region (a place id is already unambiguous).
+const REGION_CODES: Record<Country, readonly string[]> = {
+	MY: ["my"],
+	SG: ["sg"],
+};
 
 // Essentials field mask — gives us everything we need (formatted address,
 // structured components for delivery field auto-fill, lat/lng for the maps
@@ -75,10 +81,13 @@ export const autocompleteAddress = action({
 		// Required for public (unauthenticated) storefront callers; ignored when
 		// Clerk identity is present. See `resolveRateKey`.
 		retailerId: v.optional(v.id("retailers")),
+		// The store's country — scopes predictions to it (see REGION_CODES).
+		// Optional so pre-SG callers keep the MY lock.
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
 	},
 	handler: async (
 		ctx,
-		{ input, sessionToken, retailerId },
+		{ input, sessionToken, retailerId, country },
 	): Promise<{
 		predictions: Array<{
 			placeId: string;
@@ -106,7 +115,7 @@ export const autocompleteAddress = action({
 			body: JSON.stringify({
 				input: trimmed,
 				sessionToken,
-				includedRegionCodes: REGION_CODES,
+				includedRegionCodes: REGION_CODES[country ?? DEFAULT_COUNTRY],
 				languageCode: "en",
 			}),
 		});

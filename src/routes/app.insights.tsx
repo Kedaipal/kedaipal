@@ -4,6 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { AlertTriangle, Share2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
 import type { ProductMetric } from "../../convex/lib/insights";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -12,6 +13,7 @@ import { KpiRow } from "../components/insights/kpi-row";
 import { LockedTeaser } from "../components/insights/locked-teaser";
 import { PaymentDonut } from "../components/insights/payment-donut";
 import { RevenueTrend } from "../components/insights/revenue-trend";
+import { SourceBreakdown } from "../components/insights/source-breakdown";
 import { TopProducts } from "../components/insights/top-products";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -34,7 +36,7 @@ function InsightsRoute() {
 	const [range, setRange] = useState(initial);
 	const [metric, setMetric] = useState<ProductMetric>("revenue");
 
-	const currency = retailer?.currency ?? "MYR";
+	const currency = retailer?.currency ?? DEFAULT_CURRENCY;
 	const hasAccess = hasFeature(retailer?.subscription, "insights");
 
 	const { from, to } = range;
@@ -168,6 +170,7 @@ function InsightsRoute() {
 							collected={view.collected}
 							currency={currency}
 						/>
+						<SourceBreakdown sources={view.sources} currency={currency} />
 					</div>
 				</>
 			)}

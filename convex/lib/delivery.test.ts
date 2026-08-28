@@ -3,8 +3,10 @@ import { describe, expect, test } from "vitest";
 import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_FEE_MAX,
+	DELIVERY_MODE_LABELS,
 	DELIVERY_ZONES_MAX,
 	type DeliveryConfig,
+	deliveryModeAllowed,
 	haversineKm,
 	resolveDeliveryQuote,
 	sanitizeDeliveryConfig,
@@ -763,5 +765,66 @@ describe("sanitizeDeliveryConfig — weight mode", () => {
 				onUnpriceable: "arrange",
 			}),
 		).toThrow(/positive/);
+	});
+});
+
+describe("deliveryModeAllowed (SG-lite, 86eynw29u)", () => {
+	test("MY allows every pricing mode", () => {
+		for (const mode of ["flat", "radius", "weight", "lalamove"] as const) {
+			expect(deliveryModeAllowed("MY", mode)).toBe(true);
+		}
+	});
+
+	test("SG allows only flat — radius/weight/lalamove are MY-shaped", () => {
+		expect(deliveryModeAllowed("SG", "flat")).toBe(true);
+		for (const mode of ["radius", "weight", "lalamove"] as const) {
+			expect(deliveryModeAllowed("SG", mode)).toBe(false);
+		}
+	});
+});
+
+describe("DELIVERY_MODE_LABELS (SG-lite, 86eynw29u)", () => {
+	test("every pricing mode has a human label", () => {
+		// The country card names the mode that blocks a country switch. A mode
+		// added without a label would print "undefined pricing" at the seller.
+		for (const mode of ["flat", "radius", "weight", "lalamove"] as const) {
+			expect(DELIVERY_MODE_LABELS[mode]).toBeTruthy();
+			expect(DELIVERY_MODE_LABELS[mode]).not.toMatch(/undefined/);
+		}
+	});
+});
+
+describe("a Malaysian pricing mode carried into Singapore (86eyqgujv)", () => {
+	// Load-bearing: this is WHY the country switch does not need to drop a
+	// seller's rate card. The obvious "fall back to free" would be a money
+	// leak — free cross-border shipping on every order. The resolver already
+	// refuses to price what it can't price, so the config is harmless to
+	// carry, reversible if the seller switches back, and the checklist can ask
+	// them to replace it rather than the switch destroying it.
+	test("an SG address matches no MY zone → held for the seller, never free", () => {
+		const quote = resolveDeliveryQuote({
+			config: WEIGHT_ARRANGE,
+			subtotal: 12000,
+			origin: undefined,
+			destination: undefined,
+			state: "Singapore",
+			cartWeight: OK_2KG,
+		});
+		expect(quote.kind).toBe("pending");
+		expect(quote.kind === "pending" && quote.reason).toBe("unserved_state");
+		expect(quote).not.toHaveProperty("fee");
+	});
+
+	test("the block policy refuses delivery outright — also never free", () => {
+		const quote = resolveDeliveryQuote({
+			config: WEIGHT_BLOCK,
+			subtotal: 12000,
+			origin: undefined,
+			destination: undefined,
+			state: "Singapore",
+			cartWeight: OK_2KG,
+		});
+		expect(quote.kind).toBe("blocked");
+		expect(quote.kind === "blocked" && quote.reason).toBe("unserved_state");
 	});
 });

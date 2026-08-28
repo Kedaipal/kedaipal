@@ -12,8 +12,10 @@ never pollute the production analytics.
 | Microsoft Clarity     | Session replays + heatmaps (UX/friction) | `@microsoft/clarity` | [`useClarity`](../src/hooks/useClarity.ts)      | `VITE_CLARITY_PROJECT_ID` |
 
 Both hooks are called in `RootDocument` ([`src/routes/__root.tsx`](../src/routes/__root.tsx)),
-so analytics load on every route (storefront + `/app`). ClickUp `86eyb7021`
-(Clarity).
+so analytics load on every route (storefront + `/app`) **except the
+capability-token routes `/track/*` and `/claim/*`, which neither provider ever
+observes** — see Privacy §1. ClickUp `86eyb7021` (Clarity), `86eyn25fk` (GA
+tracking-token exclusion), PR #227 review (`/claim`).
 
 ## Why the npm package, not a `<script>` snippet
 
@@ -32,7 +34,7 @@ sessions by seller or plan.
 ```ts
 const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
 if (!projectId || clarityInitialized) return;
-if (isClarityExcludedPath(pathname)) return;
+if (isCapabilityTokenPath(pathname)) return;
 Clarity.init(projectId);
 ```
 
@@ -65,17 +67,43 @@ Session replay is materially more invasive than pageview analytics — it ships 
 reconstruction of the rendered page to a third party. Three controls, all in the
 repo rather than behind a dashboard toggle:
 
-### 1. `/track/*` is never recorded
+### 1. Capability-token routes never reach either provider
 
-`isClarityExcludedPath` refuses to boot Clarity on the buyer tracking page.
-Masking governs DOM content, not the **recorded page address**, and
-`/track/<token>` carries the buyer's capability secret in the URL — that token
-grants reading the order, claiming payment, and editing the delivery
-address/phone with no auth (see CLAUDE.md). Recording it would export the secret
-to Microsoft and to anyone with Clarity dashboard access.
+[`isCapabilityTokenPath`](../src/lib/analytics-privacy.ts) is the single
+predicate both hooks share: `useClarity` refuses to boot on them, and
+`useGoogleAnalytics` neither initializes nor sends a pageview there. Masking
+governs DOM content, not the **observed page address**, and these URLs *are*
+the secret:
 
-Nothing links to `/track` client-side (buyers arrive from a WhatsApp link, i.e.
-a fresh document load), so the exclusion is complete rather than best-effort.
+| Route | What the token in the URL grants, with no auth |
+| --- | --- |
+| `/track/<token>` | Read the order, claim payment, edit the delivery address/phone (see CLAUDE.md). |
+| `/claim/<token>` | Read the buyer's name/phone and the frozen lines, **and commit**: `orderClaims.commit` creates a real order and decrements the seller's stock. |
+
+Recording either would export the secret to Microsoft/Google and to anyone with
+either dashboard's access — for Clarity, alongside a session replay of the
+buyer's checkout.
+
+**Any new buyer route with a token in its path belongs in that predicate.**
+`/claim` shipped guarded against Clerk (`BUYER_ROUTE_IDS`) but not against
+analytics; the two lists cover the same class of route and are worth changing
+together.
+
+For GA specifically, full exclusion beats redacting the sent path: gtag
+auto-collects the real `page_location` from the browser on every hit once the
+library is loaded, so a redacted manual pageview would still leak the URL. The
+library simply never loads on token pages; a buyer who navigates from /track
+into the storefront boots GA on that first non-token pathname.
+
+**Ops note (GA property setting, not repo):** keep GA4 Enhanced Measurement's
+"Page changes based on browser history events" OFF — if enabled, gtag fires
+its own page_view with the full URL on SPA navigations, bypassing the hook.
+No client-side link navigates into `/track` or `/claim` today, so this is
+defence in depth, not a live hole.
+
+Nothing links to either route client-side (buyers arrive from a WhatsApp link,
+i.e. a fresh document load), so the exclusion is complete rather than
+best-effort.
 
 ### 2. PII regions are masked in markup
 
@@ -91,15 +119,38 @@ dashboard setting for that subtree:
 
 | Surface | File |
 | --- | --- |
-| Customer list rows | `src/components/dashboard/customer-card.tsx` |
+| Customer list — mobile cards | `src/components/dashboard/customer-card.tsx` |
+| Customer list — desktop table | `src/components/dashboard/customer-list.tsx` |
 | Customer detail (name, phone, notes) | `src/components/dashboard/customer-detail.tsx` |
+| Customer detail route header (name in PageHeader + mobile h2) | `src/routes/app.customers.$customerId.tsx` |
 | Delivery address + notes (order detail *and* tracking page) | `src/components/storefront/delivery-address-display.tsx` |
-| Order detail — buyer note / reference photo | `src/routes/app.orders.$shortId.tsx` |
-| Order detail — customer + CRM block | `src/routes/app.orders.$shortId.tsx` |
+| Order detail — buyer note / reference photo, customer + CRM block, push-failed card (phone), mockup change note, notify-manager message | `src/routes/app.orders.$shortId.tsx` |
+| Orders inbox — buyer name on every card | `src/routes/app.orders.index.tsx` |
+| Home — recent-orders buyer names | `src/routes/app.index.tsx` |
+| Counter — open-sessions list, both BuyerCard branches, 3 dialog descriptions | `src/routes/app.checkout.tsx` |
+| Done screen — download/share button labels + helper copy | `src/components/order/order-document-actions.tsx` |
+| Lalamove rider name/plate (third-party PII) | `src/components/order/book-delivery-card.tsx` |
+| Pickup-point manager name + phone (third-party PII) | `src/components/settings/fulfilment-tab.tsx` |
+| Storefront checkout — the phone-echo line (the one rendered-text PII on the storefront; inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
 
-`grep -rn MASK_PII src` audits coverage. **Any new surface that renders a
-customer's name, phone, address, or notes must carry it** — this is a
-fail-closed convention only if it's applied.
+`grep -rn MASK_PII src` audits coverage, and
+`src/lib/analytics-privacy.test.tsx` **pins a minimum spread count per file**
+— deleting a mask goes red, and a new PII surface must be added to that table.
+**Any new surface that renders a customer's name, phone, address, or notes
+must carry it.**
+
+Three limits of masking, encoded as conventions rather than attributes:
+
+- **Dialogs portal to `document.body`** — an ancestor's mask can't reach a
+  `ConfirmDialog`/`DialogDescription`; the mask must ride the description
+  node itself (see the three counter-checkout dialogs).
+- **Toasts also portal** outside every masked subtree — so toast copy never
+  interpolates a buyer name (pinned by test).
+- **Masking covers text nodes, not attributes** — `href`s like the Maps link,
+  `wa.me` deep links, and `tel:` still embed the address/phone in the DOM
+  snapshot. Those are attribute values on interaction elements Clarity does
+  not display as text, accepted as-is; don't move PII into visible text near
+  them.
 
 ### 3. Disclosure
 

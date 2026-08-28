@@ -4,6 +4,7 @@ import {
 	hasFeature,
 	hasSubscribed,
 	isCrmLocked,
+	isOrderInboxLocked,
 	orderCapState,
 	resolveBannerState,
 	type SubscriptionView,
@@ -299,5 +300,71 @@ describe("isCrmLocked", () => {
 				subscription: sub({ features: undefined }),
 			}),
 		).toBe(false);
+	});
+});
+
+describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", () => {
+	const starterSub = sub({
+		features: {
+			crm: false,
+			orderInbox: false,
+			chargeablePickup: false,
+			categories: false,
+			insights: false,
+			radiusDelivery: false,
+			delivery: false,
+			onlinePayments: false,
+			waOrderAlerts: false,
+		},
+	});
+
+	test("locks Starter — the drill-down would apply a filter they can't use", () => {
+		expect(
+			isOrderInboxLocked({ actingAsAdmin: false, subscription: starterSub }),
+		).toBe(true);
+	});
+
+	test("never locks while the payload is still loading (no wall flash)", () => {
+		expect(isOrderInboxLocked(undefined)).toBe(false);
+		expect(isOrderInboxLocked(null)).toBe(false);
+	});
+
+	test("admin act-as sees through the gate, as the server does", () => {
+		expect(
+			isOrderInboxLocked({ actingAsAdmin: true, subscription: starterSub }),
+		).toBe(false);
+	});
+
+	test("Pro / fail-open payloads are never locked", () => {
+		expect(
+			isOrderInboxLocked({
+				actingAsAdmin: false,
+				subscription: sub({ features: undefined }),
+			}),
+		).toBe(false);
+	});
+
+	test("tracks the inbox feature specifically, not CRM", () => {
+		// A plan with CRM but no inbox must still lock the drill-down — the two
+		// gates are independent and this row rides the inbox one.
+		const crmOnly = sub({
+			features: {
+				crm: true,
+				orderInbox: false,
+				chargeablePickup: false,
+				categories: false,
+				insights: false,
+				radiusDelivery: false,
+				delivery: false,
+				onlinePayments: false,
+				waOrderAlerts: false,
+			},
+		});
+		expect(
+			isOrderInboxLocked({ actingAsAdmin: false, subscription: crmOnly }),
+		).toBe(true);
+		expect(isCrmLocked({ actingAsAdmin: false, subscription: crmOnly })).toBe(
+			false,
+		);
 	});
 });

@@ -140,19 +140,41 @@ export function featuresForPlan(plan: Plan): PlanFeatures {
 	return { ...PLAN_FEATURES[plan] };
 }
 
-// Standard monthly price (minor units / sen).
-export const PLAN_MONTHLY_PRICE: Record<Plan, number> = {
-	starter: 7900,
-	pro: 14900,
-	scale: 29900,
+/** Currencies Kedaipal itself invoices subscriptions in. Distinct from the
+ * storefront `SUPPORTED_CURRENCIES` (lib/currency.ts) — a seller's shop can
+ * trade in more currencies than we bill in. Exhaustive Records below make a
+ * future billing currency a compile error, never a silent MYR fallback. */
+export type BillingCurrency = "MYR" | "SGD";
+export const BILLING_CURRENCIES: BillingCurrency[] = ["MYR", "SGD"];
+
+// Standard monthly price per billing currency (minor units — sen / cents).
+// SGD numbers come from the Aug 2026 SG pricing deck (S$29 / S$59 / S$119).
+export const PLAN_MONTHLY_PRICES: Record<
+	BillingCurrency,
+	Record<Plan, number>
+> = {
+	MYR: { starter: 7900, pro: 14900, scale: 29900 },
+	SGD: { starter: 2900, pro: 5900, scale: 11900 },
 };
 
-// Founding Member monthly price — 30% lifetime discount (manual v1). Only the
-// Pro number is reachable at launch; Scale kept for when it activates.
-export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> = {
-	pro: 10400, // RM104
-	scale: 20900, // RM209
+// MYR shorthand for the table above.
+export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
+
+// Founding Member monthly price — 30% lifetime discount (manual v1), per
+// billing currency, rounded DOWN to a whole unit the same way in each (MYR
+// RM104.30 → RM104; SGD S$41.30 → S$41, S$83.30 → S$83). Only the Pro number
+// is reachable at launch; Scale kept for when it activates.
+export const FOUNDING_MONTHLY_PRICES: Record<
+	BillingCurrency,
+	Record<"pro" | "scale", number>
+> = {
+	MYR: { pro: 10400, scale: 20900 },
+	SGD: { pro: 4100, scale: 8300 },
 };
+
+// MYR shorthand for the founding table above.
+export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
+	FOUNDING_MONTHLY_PRICES.MYR;
 
 // Annual billing = 10 months paid, 12 received (~17% off), per CLAUDE.md.
 export const ANNUAL_MONTHS_CHARGED = 10;
@@ -162,11 +184,12 @@ export function planPrice(
 	plan: Plan,
 	cycle: BillingCycle,
 	founding = false,
+	currency: BillingCurrency = "MYR",
 ): number {
 	const monthly =
 		founding && (plan === "pro" || plan === "scale")
-			? FOUNDING_MONTHLY_PRICE[plan]
-			: PLAN_MONTHLY_PRICE[plan];
+			? FOUNDING_MONTHLY_PRICES[currency][plan]
+			: PLAN_MONTHLY_PRICES[currency][plan];
 	return cycle === "annual" ? monthly * ANNUAL_MONTHS_CHARGED : monthly;
 }
 

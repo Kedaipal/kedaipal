@@ -3,6 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
+import {
+	type OpeningHours,
+	openingHoursSpecification,
+} from "../../convex/lib/openingHours";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
@@ -14,7 +18,13 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import {
+	absoluteProxiedImageUrl,
+	imageSrcSet,
+	proxiedImageUrl,
+} from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
 
 interface StorefrontLoaderData {
@@ -32,6 +42,9 @@ interface StorefrontLoaderData {
 	// cover image `StorefrontHeader` renders with `priority` — not whichever
 	// URL happens to win the OG-image precedence.
 	coverImageUrl: string | undefined;
+	// Store opening hours (86eyp5rav) — feeds the Store JSON-LD's
+	// openingHoursSpecification (local SEO). Undefined = open 24/7, no block.
+	openingHours: OpeningHours | undefined;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -60,6 +73,12 @@ export const Route = createFileRoute("/$slug")({
 
 		const retailer = result.retailer;
 
+		// Social cards + JSON-LD go through the image proxy too: link unfurlers
+		// are known to skip oversized images outright, and a 4 MB cover is
+		// exactly the kind of thing they drop — so this is a correctness fix for
+		// WhatsApp previews, not only a weight one. Absolute because an unfurler
+		// can't resolve a root-relative path.
+		//
 		// OG/social-share image precedence: cover banner (wide, ideal for a
 		// summary_large_image card) → logo → first product image.
 		let ogImageUrl: string | undefined =
@@ -92,8 +111,11 @@ export const Route = createFileRoute("/$slug")({
 			locale: retailer.locale ?? "en",
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
-			ogImageUrl,
+			ogImageUrl: ogImageUrl
+				? absoluteProxiedImageUrl(ogImageUrl, SITE_URL)
+				: undefined,
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
+			openingHours: retailer.openingHours,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -106,6 +128,7 @@ export const Route = createFileRoute("/$slug")({
 			coverImageUrl,
 			checkoutPhone,
 			locale,
+			openingHours,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
 		const ogLocale = OG_LOCALE[locale];
@@ -144,6 +167,13 @@ export const Route = createFileRoute("/$slug")({
 			description,
 			...(ogImageUrl ? { image: ogImageUrl } : {}),
 			...(checkoutPhone ? { telephone: `+${checkoutPhone}` } : {}),
+			// Configured hours only — the 24/7 default claims nothing rather
+			// than asserting "always open" (86eyp5rav).
+			...(openingHours
+				? {
+						openingHoursSpecification: openingHoursSpecification(openingHours),
+					}
+				: {}),
 		};
 
 		return {
@@ -153,8 +183,22 @@ export const Route = createFileRoute("/$slug")({
 				// LCP preload — StorefrontHeader renders this URL with `priority`
 				// the moment retailer data resolves; hinting the browser before
 				// the JS bundle even parses shaves the fetch off the critical path.
+				// The preload MUST name the same candidate StorefrontHeader will
+				// actually request — it renders the cover through AppImage, which
+				// proxies it and emits a srcset. Preloading the raw storage URL
+				// would download a file the page never uses AND leave the real LCP
+				// element unpreloaded, so `imagesrcset`/`imagesizes` mirror the
+				// component's own `sizes="100vw"`.
 				...(coverImageUrl
-					? [{ rel: "preload", as: "image", href: coverImageUrl }]
+					? [
+							{
+								rel: "preload",
+								as: "image",
+								href: proxiedImageUrl(coverImageUrl),
+								imagesrcset: imageSrcSet(coverImageUrl) ?? undefined,
+								imagesizes: "100vw",
+							},
+						]
 					: []),
 			],
 			scripts: [
@@ -214,6 +258,9 @@ function StorefrontSkeleton() {
 
 function StorefrontRoute() {
 	const { slug } = Route.useParams();
+	// Persist the visit's ?src=/utm_source tag for this session (86eyq0eq9) —
+	// checkout stamps it onto the order so Insights can report per-source.
+	useCaptureAttribution(slug);
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),

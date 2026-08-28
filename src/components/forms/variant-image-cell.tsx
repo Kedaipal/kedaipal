@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage } from "../../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
 import { AppImage } from "../ui/app-image";
 
@@ -37,11 +38,16 @@ export function VariantImageCell({
 		if (!file) return;
 		setUploading(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			// Validate the response shape before trusting it — an error body would
@@ -49,7 +55,7 @@ export function VariantImageCell({
 			const body = (await res.json()) as { storageId?: unknown };
 			if (typeof body.storageId !== "string")
 				throw new Error("Upload failed: unexpected response");
-			onUploaded(body.storageId, URL.createObjectURL(file));
+			onUploaded(body.storageId, URL.createObjectURL(prepared.blob));
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -83,7 +89,7 @@ export function VariantImageCell({
 			)}
 			<input
 				type="file"
-				accept="image/*"
+				accept={IMAGE_ACCEPT}
 				disabled={uploading}
 				onChange={(e) => void handleFile(e.target.files)}
 				className="hidden"
