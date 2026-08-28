@@ -902,3 +902,82 @@ describe("categories hidden (storefront suppression)", () => {
 		).toEqual(["Nasi Lemak"]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// namesByProduct — the product export's `categories` column (86eyrtz74)
+// ---------------------------------------------------------------------------
+
+describe("categories.namesByProduct", () => {
+	test("maps every product to its category names, sorted", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const kuih = await createCategory(t, USER_A, retailer._id, "Kuih");
+		const best = await createCategory(t, USER_A, retailer._id, "Bestseller");
+		const p1 = await seedProduct(t, USER_A, retailer._id, "Kek Lapis");
+		const p2 = await seedProduct(t, USER_A, retailer._id, "Karipap");
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: p1,
+			categoryIds: [kuih, best],
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: p2,
+			categoryIds: [kuih],
+		});
+
+		const map = await asA.query(api.categories.namesByProduct, {
+			retailerId: retailer._id,
+		});
+		// Sorted so an export diffed against last week's doesn't churn on order.
+		expect(map[p1]).toEqual(["Bestseller", "Kuih"]);
+		expect(map[p2]).toEqual(["Kuih"]);
+	});
+
+	test("a product in no category is simply absent, not an empty array", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const p = await seedProduct(t, USER_A, retailer._id);
+		const map = await asA.query(api.categories.namesByProduct, {
+			retailerId: retailer._id,
+		});
+		expect(map[p]).toBeUndefined();
+	});
+
+	test("ARCHIVED categories are still named — unlike the editor picker", async () => {
+		// The column records how the seller has filed things; blanking it
+		// mid-reorganisation would read as data loss.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const cat = await createCategory(t, USER_A, retailer._id, "Seasonal");
+		const p = await seedProduct(t, USER_A, retailer._id);
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: p,
+			categoryIds: [cat],
+		});
+		await asA.mutation(api.categories.setActive, {
+			categoryId: cat,
+			active: false,
+		});
+		const map = await asA.query(api.categories.namesByProduct, {
+			retailerId: retailer._id,
+		});
+		expect(map[p]).toEqual(["Seasonal"]);
+		// The picker, by contrast, must only offer live categories.
+		expect(
+			await asA.query(api.categories.getProductCategoryIds, { productId: p }),
+		).toEqual([]);
+	});
+
+	test("another retailer cannot read your category map", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await seedRetailer(t, USER_B);
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.query(api.categories.namesByProduct, { retailerId: retailer._id }),
+		).rejects.toThrow();
+	});
+});

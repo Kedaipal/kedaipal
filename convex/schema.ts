@@ -1477,6 +1477,26 @@ export default defineSchema({
 		// read time (see orderBuckets.isUnseenOrder), so legacy and counter orders
 		// need no backfill and behave exactly as before.
 		seenAt: v.optional(v.number()),
+		// The seller's manual bookmark (86eyrtz74) — set when they pin an order,
+		// cleared when they unpin. Absent = not pinned, so nothing to backfill
+		// (the `seenAt` posture).
+		//
+		// Deliberately NEVER auto-cleared: a delivered or cancelled order is still
+		// worth keeping on top (a dispute to chase, a repeat order to copy), so the
+		// system does not get to decide the seller is finished with it. Pin and
+		// unpin are both manual, always.
+		//
+		// It is a SORT + VISIBILITY key, not a filter dimension: pinned orders
+		// sort first in every bucket/filter/sort combination, and while the
+		// inbox's "Pinned" toggle is on they are kept even when they DON'T match
+		// the active filter — sellers pin an order precisely so they can filter to
+		// something else and compare against it. No index: the inbox already holds
+		// its scan window in memory and partitions client-side.
+		//
+		// Writers MUST NOT bump `updatedAt` — that drives the time-in-status badge,
+		// and bookmarking an order is not progress on it (same trap `markSeen`
+		// documents above).
+		pinnedAt: v.optional(v.number()),
 		// Meta's message id (wamid) for the confirmation push. The statuses
 		// webhook identifies messages ONLY by this id, so it's the correlation key
 		// that lets a delivery failure find its order (see by_confirmation_wamid).

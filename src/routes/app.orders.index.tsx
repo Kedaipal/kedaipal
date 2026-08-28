@@ -1,6 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import type { SortingState } from "@tanstack/react-table";
 import { useConvex, useMutation } from "convex/react";
 import {
 	ArrowUpDown,
@@ -9,8 +10,11 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Download,
+	LayoutGrid,
 	ListChecks,
 	Loader2,
+	Pin,
+	Rows3,
 	Search,
 	ShoppingBag,
 	X,
@@ -27,6 +31,7 @@ import {
 	INBOX_BUCKETS,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
+import { ORDER_COLUMNS } from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	sortInboxOrders,
@@ -44,12 +49,14 @@ import {
 	type BulkAction,
 	OrderBulkBar,
 } from "../components/dashboard/order-bulk-bar";
+import { OrderColumnPicker } from "../components/dashboard/order-column-picker";
 import {
 	OrderFilters,
 	type OrderFilterValue,
 	type OrderSource,
 	type PaymentStatus,
 } from "../components/dashboard/order-filters";
+import { OrderTable } from "../components/dashboard/order-table";
 import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
@@ -59,6 +66,12 @@ import {
 } from "../components/dashboard/status-badge";
 import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { Button } from "../components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import {
@@ -69,6 +82,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { useOrderColumns } from "../hooks/useOrderColumns";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
@@ -93,6 +107,8 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
+/** Card list vs table (86eyrtz74). Both are available at every width. */
+type InboxView = "cards" | "table";
 const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
 
 function isPaymentStatus(x: unknown): x is PaymentStatus {
@@ -122,6 +138,20 @@ type InboxSearch = {
 	asrc?: string[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
+	/** Card list (default) vs the desktop table (86eyrtz74). Only "table" is
+	 * stored, so a shared link opens the view the sender was actually in. */
+	view?: InboxView;
+	/** Table view's per-column sort: the column key, and `tdesc` for direction
+	 * (86eyrtz74). In the URL — unlike column layout, which is a 36-toggle
+	 * preference and lives in localStorage — because "these orders, sorted by
+	 * total" is a view worth sharing, the same reason `bucket` and `sort` are
+	 * here. Ignored in cards view, which keeps the `sort` popover. */
+	tsort?: string;
+	tdesc?: boolean;
+	/** Pin privilege OFF (86eyrtz74). Inverted on purpose: keeping pins visible
+	 * is the default, so only the non-default reaches the URL — the same rule
+	 * `sort` and `bucket` follow. */
+	nopin?: boolean;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
@@ -196,6 +226,18 @@ export const Route = createFileRoute("/app/orders/")({
 			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
+			view: search.view === "table" ? "table" : undefined,
+			// Validated against the registry so a hand-edited or stale key can
+			// never put the table into an unsortable state.
+			tsort:
+				typeof search.tsort === "string" &&
+				ORDER_COLUMNS.some((c) => c.key === search.tsort)
+					? search.tsort
+					: undefined,
+			tdesc:
+				search.tdesc === true || search.tdesc === "true" ? true : undefined,
+			nopin:
+				search.nopin === true || search.nopin === "true" ? true : undefined,
 		};
 	},
 	component: OrdersRoute,
@@ -243,13 +285,27 @@ function OrdersRoute() {
 		fwin,
 		source,
 		sort = "recent",
+		view = "cards",
+		nopin = false,
+		tsort,
+		tdesc = false,
 	} = Route.useSearch();
+	// TanStack Table's own sorting shape, derived from the URL so a sorted table
+	// survives refresh and can be shared.
+	const tableSorting: SortingState = tsort ? [{ id: tsort, desc: tdesc }] : [];
+	// Pin privilege is ON unless the seller explicitly turned it off (see the
+	// `nopin` search param) — pins outranking the filter is the default because
+	// that is the case they pin FOR: park an order on top, filter to something
+	// else, compare.
+	const showPinned = !nopin;
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useDashboardRetailer();
 	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
 	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
+	const setPinned = useMutation(api.orders.setPinned);
+	const [pinBusyId, setPinBusyId] = useState<string | null>(null);
 	const [exporting, setExporting] = useState(false);
 	// Despatch-label print dialog for the ticked selection (86eyp63mp).
 	const [printOpen, setPrintOpen] = useState(false);
@@ -270,6 +326,10 @@ function OrdersRoute() {
 	const [selectMode, setSelectMode] = useState(false);
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [bulkBusy, setBulkBusy] = useState(false);
+	// Column visibility for the table view, persisted per store on this device.
+	// Keyed on "" while the retailer is still loading so the hook order is stable
+	// across the early return below.
+	const columnState = useOrderColumns(retailer?._id ?? "");
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
@@ -301,6 +361,8 @@ function OrdersRoute() {
 		source,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
+		// Toggling pin privilege changes which rows are in the set.
+		nopin,
 	]);
 
 	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
@@ -350,6 +412,10 @@ function OrdersRoute() {
 							source,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							searchText: debounced || undefined,
+							// Pins keep their privilege in the live inbox AND in the
+							// export below — the two must send the same value or the CSV
+							// would hold different rows than the screen it came from.
+							showPinned: showPinned || undefined,
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
@@ -388,6 +454,49 @@ function OrdersRoute() {
 	if (result?.counts) countsRef.current = result.counts;
 	const counts = result?.counts ?? countsRef.current ?? undefined;
 	const total = result?.total ?? 0;
+	const pinnedCount = counts?.pinned ?? 0;
+	const selectionHasPinned = visibleOrders.some(
+		(o) => selected.has(o._id) && o.pinnedAt !== undefined,
+	);
+
+	// Resolve one order's status label (honouring the retailer's custom stage
+	// names, and the counter "Completed" wording). Shared by the card and the
+	// table so the same order can never read differently in the two views.
+	function statusLabelFor(o: {
+		status: string;
+		currentStageId?: string;
+		deliveryMethod?: string;
+		source?: string;
+	}): string {
+		const cs = resolveCurrentStage(
+			{ status: o.status as OrderStatus, currentStageId: o.currentStageId },
+			stages,
+		);
+		const resolved = cs
+			? stageLabel(cs, "en")
+			: resolveAnchorLabel(o.status as OrderStatus, {
+					stages,
+					labels,
+					deliveryMethod: (o.deliveryMethod ?? "delivery") as DeliveryMethod,
+					locale: "en",
+				});
+		// Counter sales complete "at the counter", not via delivery — their done
+		// state reads "Completed", never "Delivered".
+		return displayStatusLabel(
+			{
+				status: o.status as OrderStatus,
+				source: o.source as "storefront" | "counter" | "claim" | undefined,
+			},
+			resolved,
+		);
+	}
+	// Table view is available at EVERY width (owner call, 28 Aug). The first
+	// build gated it to `lg` and up on the grounds that a wide table can't fit a
+	// phone — but a seller away from their desk still wants the scan-many-orders
+	// view, and a horizontally scrolling table is a normal mobile pattern. So the
+	// table scrolls inside its own container (never the page) and its controls
+	// grow to 44px touch targets below `lg`, rather than the view being withheld.
+	const tableView = view === "table";
 	const allCount = counts
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
 		: undefined;
@@ -408,6 +517,35 @@ function OrdersRoute() {
 			search: (prev) => ({
 				...prev,
 				bucket: next === "all" ? undefined : next,
+			}),
+		});
+	}
+
+	function setShowPinned(next: boolean) {
+		navigate({
+			// Default (on) stays out of the URL; only the opt-out is persisted.
+			search: (prev) => ({ ...prev, nopin: next ? undefined : true }),
+		});
+	}
+
+	function setTableSorting(next: SortingState) {
+		const first = next[0];
+		navigate({
+			// Cleared sort leaves the URL clean; ascending is the default direction
+			// so only `desc` is persisted — the `sort`/`bucket` convention.
+			search: (prev) => ({
+				...prev,
+				tsort: first?.id,
+				tdesc: first?.desc ? true : undefined,
+			}),
+		});
+	}
+
+	function setView(next: InboxView) {
+		navigate({
+			search: (prev) => ({
+				...prev,
+				view: next === "table" ? "table" : undefined,
 			}),
 		});
 	}
@@ -545,10 +683,57 @@ function OrdersRoute() {
 		}
 	}
 
+	// Pin / unpin one order (86eyrtz74). `pinned` is the desired end state, not a
+	// toggle instruction, so a double-tap can't flip it back.
+	async function togglePin(o: { _id: string; pinnedAt?: number }) {
+		setPinBusyId(o._id);
+		try {
+			await setPinned({
+				orderId: o._id as Id<"orders">,
+				pinned: o.pinnedAt === undefined,
+			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPinBusyId(null);
+		}
+	}
+
+	// Bulk unpin — the escape hatch for a pin set that has grown. Pins never
+	// auto-clear (owner decision: a delivered order can still be worth keeping on
+	// top), so clearing them has to be cheap; this reuses the selection flow the
+	// seller already knows rather than inventing a "Clear all" control.
+	async function applyBulkUnpin() {
+		const targets = visibleOrders.filter(
+			(o) => selected.has(o._id) && o.pinnedAt !== undefined,
+		);
+		if (targets.length === 0) return;
+		setBulkBusy(true);
+		try {
+			await Promise.all(
+				targets.map((o) =>
+					setPinned({ orderId: o._id as Id<"orders">, pinned: false }),
+				),
+			);
+			toast.success(
+				`Unpinned ${targets.length} order${targets.length === 1 ? "" : "s"}`,
+			);
+			setSelected(new Set());
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBulkBusy(false);
+		}
+	}
+
 	// Export to CSV for bookkeeping. Exports the ticked selection when any rows
 	// are selected; otherwise everything matching the active filter (NOT just the
 	// loaded page) — the server applies the same predicate as the inbox.
-	async function handleExport() {
+	// `onlyVisibleColumns` comes from the table view's export menu: a seller who
+	// has curated seven columns usually means those seven. From the cards view
+	// there is no column selection to honour, so the caller passes false and the
+	// server exports every column.
+	async function handleExport(onlyVisibleColumns = false) {
 		if (!retailer) return;
 		const selectedIds = [...selected] as Id<"orders">[];
 		setExporting(true);
@@ -568,7 +753,9 @@ function OrdersRoute() {
 					source,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					searchText: debounced || undefined,
+					showPinned: showPinned || undefined,
 					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
+					columnKeys: onlyVisibleColumns ? columnState.visibleKeys : undefined,
 				},
 			);
 			if (count === 0) {
@@ -595,6 +782,42 @@ function OrdersRoute() {
 
 	const headerActions = (
 		<>
+			{/* View switch, leading the header cluster (86eyrtz74). It sits HERE and
+			    not in the search row because Cards/Table, Select and Export are one
+			    family — things you do TO the list — while search, sort and filters
+			    narrow it. Keeping the two families apart is also what stops the
+			    search row running out of width on a phone, which is how this
+			    started: five controls in one row squeezed the input to its own
+			    padding. A segmented control rather than a dropdown: two options,
+			    both worth showing, and the current one reads at a glance. */}
+			<div className="flex h-11 shrink-0 items-center rounded-xl border border-border bg-muted/60 p-0.5">
+				{(
+					[
+						{ value: "cards", label: "Cards", Icon: LayoutGrid },
+						{ value: "table", label: "Table", Icon: Rows3 },
+					] as const
+				).map(({ value, label, Icon }) => {
+					const active = view === value;
+					return (
+						<button
+							key={value}
+							type="button"
+							aria-pressed={active}
+							aria-label={`${label} view`}
+							title={`${label} view`}
+							onClick={() => setView(value)}
+							className={cn(
+								"flex size-10 items-center justify-center rounded-[10px] transition-colors",
+								active
+									? "bg-background text-foreground shadow-sm"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							<Icon className="size-4.5" aria-hidden="true" />
+						</button>
+					);
+				})}
+			</div>
 			<Button
 				type="button"
 				variant={selectMode ? "secondary" : "outline"}
@@ -606,25 +829,65 @@ function OrdersRoute() {
 			>
 				<ListChecks className="size-5" />
 			</Button>
-			<Button
-				type="button"
-				variant="outline"
-				size="icon"
-				className="size-11 rounded-xl"
-				onClick={handleExport}
-				disabled={exporting}
-				aria-label={
-					selected.size > 0
-						? `Export ${selected.size} selected orders`
-						: "Export CSV"
-				}
-			>
-				{exporting ? (
-					<Loader2 className="size-5 animate-spin" />
-				) : (
-					<Download className="size-5" />
-				)}
-			</Button>
+			{/* In TABLE view the export becomes a two-item menu: a seller looking
+			    at seven curated columns usually means those seven, but a
+			    bookkeeper's file usually means all of them, and a dialog on every
+			    export would tax a path they hit often. The counts make the choice
+			    self-explanatory, so it costs one extra tap and no reading.
+			    In CARDS view there is no column selection to honour, so it stays a
+			    plain one-tap button that exports everything. */}
+			{tableView ? (
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							className="size-11 rounded-xl"
+							disabled={exporting}
+							aria-label={
+								selected.size > 0
+									? `Export ${selected.size} selected orders`
+									: "Export CSV"
+							}
+						>
+							{exporting ? (
+								<Loader2 className="size-5 animate-spin" />
+							) : (
+								<Download className="size-5" />
+							)}
+						</Button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-64">
+						<DropdownMenuItem onSelect={() => void handleExport(true)}>
+							Export visible columns ({columnState.visibleKeys.length})
+						</DropdownMenuItem>
+						<DropdownMenuItem onSelect={() => void handleExport(false)}>
+							Export all columns ({ORDER_COLUMNS.length})
+						</DropdownMenuItem>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			) : (
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					className="size-11 rounded-xl"
+					onClick={() => void handleExport(false)}
+					disabled={exporting}
+					aria-label={
+						selected.size > 0
+							? `Export ${selected.size} selected orders`
+							: "Export CSV"
+					}
+				>
+					{exporting ? (
+						<Loader2 className="size-5 animate-spin" />
+					) : (
+						<Download className="size-5" />
+					)}
+				</Button>
+			)}
 		</>
 	);
 
@@ -692,70 +955,79 @@ function OrdersRoute() {
 
 						{/* Sort — the fix for "due orders bury my new ones". Default is
 						    Newest first (matches WhatsApp/Shopee); Due date is the opt-in
-						    fulfilment-queue view. Applied client-side, so it's instant. */}
-						<Popover open={sortOpen} onOpenChange={setSortOpen}>
-							<PopoverTrigger asChild>
-								<button
-									type="button"
-									aria-label={`Sort: ${
-										INBOX_SORTS.find((s) => s.value === sort)?.label
-									}`}
-									className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:border-accent/40"
-								>
-									<ArrowUpDown
-										className="size-4 text-muted-foreground"
-										aria-hidden="true"
-									/>
-									<span className="whitespace-nowrap">
-										{INBOX_SORTS.find((s) => s.value === sort)?.short}
-									</span>
-									<ChevronDown
-										className="size-4 text-muted-foreground"
-										aria-hidden="true"
-									/>
-								</button>
-							</PopoverTrigger>
-							<PopoverContent align="end" className="w-60 p-1">
-								<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-									Sort by
-								</p>
-								<div className="flex flex-col">
-									{INBOX_SORTS.map((opt) => {
-										const active = opt.value === sort;
-										return (
-											<button
-												key={opt.value}
-												type="button"
-												onClick={() => {
-													setSort(opt.value);
-													setSortOpen(false);
-												}}
-												className={cn(
-													"flex items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted",
-													active && "bg-muted",
-												)}
-											>
-												<Check
+						    fulfilment-queue view. Applied client-side, so it's instant.
+						    HIDDEN in table view: every column header there is its own
+						    sort control, and two controls fighting over one ordering is
+						    worse than either. This is also what buys back the width the
+						    column picker takes. */}
+						{tableView ? null : (
+							<Popover open={sortOpen} onOpenChange={setSortOpen}>
+								<PopoverTrigger asChild>
+									<button
+										type="button"
+										aria-label={`Sort: ${
+											INBOX_SORTS.find((s) => s.value === sort)?.label
+										}`}
+										// Icon-only on the narrowest screens: the label and chevron
+										// cost ~70px that the search input needs more. From `sm:`
+										// up there is room to name the current sort.
+										className="flex h-11 w-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-border bg-card text-sm font-medium text-foreground transition-colors hover:border-accent/40 sm:w-auto sm:px-3"
+									>
+										<ArrowUpDown
+											className="size-4.5 text-muted-foreground sm:size-4"
+											aria-hidden="true"
+										/>
+										<span className="hidden whitespace-nowrap sm:inline">
+											{INBOX_SORTS.find((s) => s.value === sort)?.short}
+										</span>
+										<ChevronDown
+											className="hidden size-4 text-muted-foreground sm:block"
+											aria-hidden="true"
+										/>
+									</button>
+								</PopoverTrigger>
+								<PopoverContent align="end" className="w-60 p-1">
+									<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+										Sort by
+									</p>
+									<div className="flex flex-col">
+										{INBOX_SORTS.map((opt) => {
+											const active = opt.value === sort;
+											return (
+												<button
+													key={opt.value}
+													type="button"
+													onClick={() => {
+														setSort(opt.value);
+														setSortOpen(false);
+													}}
 													className={cn(
-														"size-4 shrink-0 text-accent",
-														active ? "opacity-100" : "opacity-0",
+														"flex items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted",
+														active && "bg-muted",
 													)}
-													aria-hidden="true"
-												/>
-												<span className="min-w-0">
-													<span className="block text-sm font-medium">
-														{opt.label}
+												>
+													<Check
+														className={cn(
+															"size-4 shrink-0 text-accent",
+															active ? "opacity-100" : "opacity-0",
+														)}
+														aria-hidden="true"
+													/>
+													<span className="min-w-0">
+														<span className="block text-sm font-medium">
+															{opt.label}
+														</span>
+														<span className="block text-xs text-muted-foreground">
+															{opt.hint}
+														</span>
 													</span>
-													<span className="block text-xs text-muted-foreground">
-														{opt.hint}
-													</span>
-												</span>
-											</button>
-										);
-									})}
-								</div>
-							</PopoverContent>
-						</Popover>
+												</button>
+											);
+										})}
+									</div>
+								</PopoverContent>
+							</Popover>
+						)}
 
 						<OrderFilters
 							value={{
@@ -777,25 +1049,71 @@ function OrdersRoute() {
 						/>
 					</div>
 
-					<FilterChipRow>
-						{BUCKET_KEYS.map((key) => {
-							const label =
-								key === "all"
-									? "All"
-									: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
-							return (
+					{/* The chip row scrolls; the column picker does NOT. It sits
+					    outside the scroller and holds the right edge, so a control that
+					    only exists in table view can't scroll off a phone and become
+					    undiscoverable. It lives here rather than in the search row
+					    because it configures the TABLE, not the result set — the same
+					    reason the view switch moved up into the header. */}
+					<div className="flex items-center gap-2">
+						<FilterChipRow className="min-w-0 flex-1">
+							{/* Pin privilege, leading the row (86eyrtz74). It is FIRST because
+						    it is the seller's OWN urgency marker — the buckets below are
+						    the system's opinion, this one is theirs. It appears only once
+						    something is pinned: a permanent "Pinned 0" is noise, and the
+						    pin control on every row is the surface that teaches the
+						    feature. Turning it off doesn't hide pins, it just stops them
+						    outranking the filter. */}
+							{pinnedCount > 0 ? (
 								<FilterChip
-									key={key}
-									selected={bucket === key}
-									onClick={() => setBucket(key)}
-									count={bucketCount(key)}
-									countTone={key === "new" ? "attention" : "muted"}
+									tone="accent"
+									selected={showPinned}
+									onClick={() => setShowPinned(!showPinned)}
+									count={pinnedCount}
+									title={
+										showPinned
+											? "Pinned orders stay on top, even when they don't match your filters. Tap to filter them like any other order."
+											: "Pinned orders are being filtered like any other order. Tap to keep them on top."
+									}
 								>
-									{label}
+									<Pin
+										className="size-3.5"
+										fill={showPinned ? "currentColor" : "none"}
+										aria-hidden="true"
+									/>
+									Pinned
 								</FilterChip>
-							);
-						})}
-					</FilterChipRow>
+							) : null}
+							{BUCKET_KEYS.map((key) => {
+								const label =
+									key === "all"
+										? "All"
+										: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
+								return (
+									<FilterChip
+										key={key}
+										selected={bucket === key}
+										onClick={() => setBucket(key)}
+										count={bucketCount(key)}
+										countTone={key === "new" ? "attention" : "muted"}
+									>
+										{label}
+									</FilterChip>
+								);
+							})}
+						</FilterChipRow>
+						{tableView ? (
+							<OrderColumnPicker
+								columns={columnState.columns}
+								isVisible={columnState.isVisible}
+								onToggle={columnState.toggle}
+								onReorder={columnState.reorder}
+								onReset={columnState.reset}
+								visibleCount={columnState.visibleKeys.length}
+								isCustomised={columnState.isCustomised}
+							/>
+						) : null}
+					</div>
 				</section>
 			) : null}
 
@@ -832,7 +1150,10 @@ function OrdersRoute() {
 			    so it never claims an empty queue before it knows. Hidden for
 			    pickup-only stores, which have no parcels to label, and it rides the
 			    same Order Inbox plan gate as the bulk actions it sits with. */}
-			{inboxEnabled && !loading && retailer && (retailer.offerDelivery ?? true) ? (
+			{inboxEnabled &&
+			!loading &&
+			retailer &&
+			(retailer.offerDelivery ?? true) ? (
 				<ReadyToShipStrip
 					retailerId={retailer._id}
 					count={counts?.readyToShip ?? 0}
@@ -861,166 +1182,158 @@ function OrdersRoute() {
 				/>
 			) : (
 				<>
-					<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
-						{visibleOrders.map((o) => {
-							const isSel = selected.has(o._id);
-							const statusLabel = (() => {
-								const cs = resolveCurrentStage(
-									{
-										status: o.status,
-										currentStageId: o.currentStageId,
-									},
-									stages,
-								);
-								const resolved = cs
-									? stageLabel(cs, "en")
-									: resolveAnchorLabel(o.status as OrderStatus, {
-											stages,
-											labels,
-											deliveryMethod: (o.deliveryMethod ??
-												"delivery") as DeliveryMethod,
-											locale: "en",
-										});
-								// Counter sales complete "at the counter", not via delivery —
-								// their done state reads "Completed", never "Delivered".
-								return displayStatusLabel(
-									{ status: o.status as OrderStatus, source: o.source },
-									resolved,
-								);
-							})();
-							const placedAt = formatOrderTimestamp(o.createdAt, now);
-							const age = formatStatusAge(now - o.createdAt);
-							const itemSummary = summarizeOrderCardItems(o.items);
-							const cardInner = (
-								<div className="flex min-w-0 flex-1 flex-col">
-									{/* Name + money get the hierarchy. */}
-									<div className="flex items-center justify-between gap-2.5">
-										{/* Mask only the name — items/prices/status are the useful replay signal. */}
-										<span
-											{...MASK_PII}
-											className="min-w-0 truncate text-[15px] font-semibold"
-										>
-											{orderCustomerLabel(o.customer)}
-										</span>
-										<span className="shrink-0 text-[15px] font-bold tabular-nums">
-											{formatPrice(o.total, o.currency)}
-										</span>
-									</div>
-									<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
-										<span className="font-mono">#{o.shortId}</span>
-										<span aria-hidden="true">·</span>
-										{/* Absolute placed-at datetime + relative age, so the seller
+					{tableView ? (
+						<OrderTable
+							orders={visibleOrders}
+							columns={columnState.columns}
+							statusLabelFor={statusLabelFor}
+							sorting={tableSorting}
+							onSortingChange={setTableSorting}
+							selectMode={selectMode}
+							selected={selected}
+							onToggleSelect={toggleSelect}
+							onTogglePin={togglePin}
+							pinBusyId={pinBusyId}
+						/>
+					) : (
+						<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
+							{visibleOrders.map((o) => {
+								const isSel = selected.has(o._id);
+								const statusLabel = statusLabelFor(o);
+								const placedAt = formatOrderTimestamp(o.createdAt, now);
+								const age = formatStatusAge(now - o.createdAt);
+								const itemSummary = summarizeOrderCardItems(o.items);
+								const cardInner = (
+									<div className="flex min-w-0 flex-1 flex-col">
+										{/* Name + money get the hierarchy. */}
+										<div className="flex items-center justify-between gap-2.5">
+											{/* Mask only the name — items/prices/status are the useful replay signal. */}
+											<span
+												{...MASK_PII}
+												className="min-w-0 truncate text-[15px] font-semibold"
+											>
+												{orderCustomerLabel(o.customer)}
+											</span>
+											<span className="shrink-0 text-[15px] font-bold tabular-nums">
+												{formatPrice(o.total, o.currency)}
+											</span>
+										</div>
+										<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
+											<span className="font-mono">#{o.shortId}</span>
+											<span aria-hidden="true">·</span>
+											{/* Absolute placed-at datetime + relative age, so the seller
 										    reads "when" AND "how long ago" without opening the
 										    detail. */}
-										<span className="tabular-nums">{placedAt}</span>
-										<span>({age === "just now" ? age : `${age} ago`})</span>
-									</div>
-									{/* What was ordered — qty × product · variant (ClickUp
+											<span className="tabular-nums">{placedAt}</span>
+											<span>({age === "just now" ? age : `${age} ago`})</span>
+										</div>
+										{/* What was ordered — qty × product · variant (ClickUp
 									    86ey9uny8). Capped rows + "+N more" so big counter orders
 									    can't stretch the card; per-line amounts appear from `sm:`
 									    up (phones keep the grouped list without the price column;
 									    the bold total above is the number that matters there). */}
-									<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
-										{itemSummary.lines.map((it, i) => (
-											<div
-												key={it.variantId ?? `${it.productId}-${i}`}
-												className="flex items-center justify-between gap-3 text-[13px] leading-5"
-											>
-												<span className="min-w-0 truncate">
-													<span className="tabular-nums text-muted-foreground">
-														{it.quantity}&times;
-													</span>{" "}
-													<span className="font-medium">{it.name}</span>
-													{it.variantLabel ? (
-														<span className="text-muted-foreground">
-															{" "}
-															&middot; {it.variantLabel}
-														</span>
-													) : null}
-												</span>
-												<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
-													{formatPrice(it.lineTotal, o.currency)}
-												</span>
-											</div>
-										))}
-										{itemSummary.moreCount > 0 ? (
-											<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
-												<span>
-													+{itemSummary.moreCount} more item
-													{itemSummary.moreCount === 1 ? "" : "s"}
-												</span>
-												<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
-													{formatPrice(itemSummary.moreAmount, o.currency)}
-												</span>
-											</div>
-										) : null}
-									</div>
-									{/* mt-auto pins this row to the card bottom, so status +
+										<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
+											{itemSummary.lines.map((it, i) => (
+												<div
+													key={it.variantId ?? `${it.productId}-${i}`}
+													className="flex items-center justify-between gap-3 text-[13px] leading-5"
+												>
+													<span className="min-w-0 truncate">
+														<span className="tabular-nums text-muted-foreground">
+															{it.quantity}&times;
+														</span>{" "}
+														<span className="font-medium">{it.name}</span>
+														{it.variantLabel ? (
+															<span className="text-muted-foreground">
+																{" "}
+																&middot; {it.variantLabel}
+															</span>
+														) : null}
+													</span>
+													<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
+														{formatPrice(it.lineTotal, o.currency)}
+													</span>
+												</div>
+											))}
+											{itemSummary.moreCount > 0 ? (
+												<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
+													<span>
+														+{itemSummary.moreCount} more item
+														{itemSummary.moreCount === 1 ? "" : "s"}
+													</span>
+													<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
+														{formatPrice(itemSummary.moreAmount, o.currency)}
+													</span>
+												</div>
+											) : null}
+										</div>
+										{/* mt-auto pins this row to the card bottom, so status +
 									    chevron align across a desktop grid row even when the
 									    neighbour card has more item lines (grid stretches all
 									    cells in a row to the tallest; see cardClass h-full). */}
-									<div className="mt-auto flex items-center gap-1.5 pt-2.5">
-										<StatusBadge
-											status={o.status as OrderStatus}
-											label={statusLabel}
-										/>
-										<OrderContextBadge order={o} now={now} />
-										<span className="ml-auto flex items-center gap-1.5">
-											<DeliveryMethodIcon
-												method={o.deliveryMethod ?? "delivery"}
+										<div className="mt-auto flex items-center gap-1.5 pt-2.5">
+											<StatusBadge
+												status={o.status as OrderStatus}
+												label={statusLabel}
 											/>
-											{!selectMode ? (
-												<ChevronRight
-													className="size-4.5 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5"
-													aria-hidden="true"
+											<OrderContextBadge order={o} now={now} />
+											<span className="ml-auto flex items-center gap-1.5">
+												<DeliveryMethodIcon
+													method={o.deliveryMethod ?? "delivery"}
 												/>
-											) : null}
-										</span>
-									</div>
-								</div>
-							);
-							const cardClass = cn(
-								"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
-								isSel
-									? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
-									: "border-border hover:border-ring hover:shadow-sm",
-							);
-							return (
-								<li key={o._id}>
-									{selectMode ? (
-										<button
-											type="button"
-											aria-pressed={isSel}
-											aria-label={`Select order ${o.shortId}`}
-											onClick={() => toggleSelect(o._id)}
-											className={cardClass}
-										>
-											<span
-												aria-hidden="true"
-												className={cn(
-													"mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-lg border transition-colors",
-													isSel
-														? "border-accent bg-accent text-accent-foreground"
-														: "border-border bg-background",
-												)}
-											>
-												{isSel ? <Check className="size-3.5" /> : null}
+												{!selectMode ? (
+													<ChevronRight
+														className="size-4.5 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5"
+														aria-hidden="true"
+													/>
+												) : null}
 											</span>
-											{cardInner}
-										</button>
-									) : (
-										<Link
-											to="/app/orders/$shortId"
-											params={{ shortId: o.shortId }}
-											className={cardClass}
-										>
-											{cardInner}
-										</Link>
-									)}
-								</li>
-							);
-						})}
-					</ul>
+										</div>
+									</div>
+								);
+								const cardClass = cn(
+									"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
+									isSel
+										? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
+										: "border-border hover:border-ring hover:shadow-sm",
+								);
+								return (
+									<li key={o._id}>
+										{selectMode ? (
+											<button
+												type="button"
+												aria-pressed={isSel}
+												aria-label={`Select order ${o.shortId}`}
+												onClick={() => toggleSelect(o._id)}
+												className={cardClass}
+											>
+												<span
+													aria-hidden="true"
+													className={cn(
+														"mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-lg border transition-colors",
+														isSel
+															? "border-accent bg-accent text-accent-foreground"
+															: "border-border bg-background",
+													)}
+												>
+													{isSel ? <Check className="size-3.5" /> : null}
+												</span>
+												{cardInner}
+											</button>
+										) : (
+											<Link
+												to="/app/orders/$shortId"
+												params={{ shortId: o.shortId }}
+												className={cardClass}
+											>
+												{cardInner}
+											</Link>
+										)}
+									</li>
+								);
+							})}
+						</ul>
+					)}
 
 					{visibleOrders.length < orders.length ? (
 						<button
@@ -1064,6 +1377,7 @@ function OrdersRoute() {
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}
+					onUnpin={selectionHasPinned ? applyBulkUnpin : undefined}
 					onPrint={retailer ? () => setPrintOpen(true) : undefined}
 					onToggleSelectAll={toggleSelectAll}
 					onExit={exitSelectMode}
