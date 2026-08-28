@@ -19,6 +19,7 @@ import {
 	MapPin,
 	MessageCircle,
 	Package,
+	Pin,
 	Phone,
 	StickyNote,
 	Trash2,
@@ -315,6 +316,14 @@ function OrderDetailRoute() {
 	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
 	// stamp just means it stays flagged as new, which is the safe direction.
 	const markSeen = useMutation(api.orders.markSeen);
+	const setPinned = useMutation(api.orders.setPinned);
+	const [pinBusy, setPinBusy] = useState(false);
+	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
+	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
+	// server-side in one batched read rather than a lookup per row.
+	const itemImageUrls = useQuery(
+		convexQuery(api.orders.getItemImageUrls, { shortId }),
+	).data;
 	const orderId = order?._id;
 	const alreadySeen = order?.seenAt !== undefined;
 	useEffect(() => {
@@ -616,6 +625,48 @@ function OrderDetailRoute() {
 
 	const askForProofUrl = buildAskForProofWaUrl();
 
+	const isPinned = order.pinnedAt !== undefined;
+	const pinTargetId = order._id;
+	async function togglePin() {
+		setPinBusy(true);
+		try {
+			await setPinned({ orderId: pinTargetId, pinned: !isPinned });
+			toast.success(isPinned ? "Unpinned" : "Pinned to the top of your inbox");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPinBusy(false);
+		}
+	}
+
+	// One pin control, rendered in both the desktop header and the mobile header
+	// row — the same button, so the two can't drift.
+	const pinButton = (
+		<Button
+			type="button"
+			variant={isPinned ? "secondary" : "outline"}
+			size="icon"
+			className="size-10 shrink-0 rounded-xl lg:size-9"
+			aria-pressed={isPinned}
+			aria-label={isPinned ? "Unpin this order" : "Pin this order"}
+			// The tooltip is where the rule is stated — the feature is otherwise
+			// invisible until the seller has used it once.
+			title={
+				isPinned
+					? "Pinned — stays on top of your inbox until you unpin it"
+					: "Pin to the top of your inbox"
+			}
+			disabled={pinBusy}
+			onClick={() => void togglePin()}
+		>
+			<Pin
+				className={cn("size-4.5", isPinned && "text-accent-emphasis dark:text-accent")}
+				fill={isPinned ? "currentColor" : "none"}
+				aria-hidden="true"
+			/>
+		</Button>
+	);
+
 	return (
 		<div className="flex flex-col gap-5 lg:max-w-3xl">
 			<PageHeader
@@ -627,6 +678,7 @@ function OrderDetailRoute() {
 				back={{ to: "/app/orders", label: "Orders" }}
 				actions={
 					<>
+						{pinButton}
 						{/* Label first: it's the operational step (the parcel is going
 						    out now); the receipt is bookkeeping, any time after. */}
 						{canPrintLabel(order) ? (
@@ -669,6 +721,7 @@ function OrderDetailRoute() {
 						{order.source === "claim" ? " · Claim link" : ""}
 					</p>
 				</div>
+				{pinButton}
 				<StatusBadge
 					status={order.status}
 					label={displayStatusLabel(
@@ -1521,6 +1574,18 @@ function OrderDetailRoute() {
 							key={item.variantId ?? `${item.productId}-${i}`}
 							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
 						>
+							{/* Thumbnail (86eyrtz74) — variant photo, else the product's.
+							    A packing aid, not a record: the image is deliberately not
+							    frozen onto the order, so a replaced photo shows the new one
+							    and a deleted one degrades to AppImage's fallback box rather
+							    than a broken image or a collapsed row. Fixed size so the
+							    name never gets squeezed to two characters on a phone. */}
+							<AppImage
+								src={itemImageUrls?.[i] ?? undefined}
+								alt={item.name}
+								sizes="44px"
+								className="size-11 shrink-0 rounded-xl border border-border object-cover"
+							/>
 							<div className="min-w-0 flex-1">
 								<p className="truncate text-sm font-medium">
 									{item.name}

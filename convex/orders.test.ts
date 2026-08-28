@@ -2924,6 +2924,8 @@ describe("orders — inbox search", () => {
 			// Nothing is packed AND paid here, so the despatch queue is empty
 			// (86eyp63mp — covered properly in convex/awb.test.ts).
 			readyToShip: 0,
+			// Nothing pinned (86eyrtz74 — pinning is covered below).
+			pinned: 0,
 		});
 		expect(all.total).toBe(4);
 
@@ -8538,5 +8540,304 @@ describe("orders — a payment deadline dies when the clock stops meaning anythi
 				.collect(),
 		);
 		expect(stranded).toHaveLength(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 86eyrtz74 — pinning, the widened export, and order-detail thumbnails.
+// ---------------------------------------------------------------------------
+
+describe("orders — pinning (86eyrtz74)", () => {
+	async function seedOrder(t: ReturnType<typeof setup>, userId: string) {
+		const retailer = await seedRetailer(t, userId);
+		const productId = await seedProduct(t, userId, retailer._id, { stock: 100 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		return { retailer, productId, order: order! };
+	}
+
+	test("pin stamps pinnedAt; unpin clears it", async () => {
+		const t = setup();
+		const { retailer, order } = await seedOrder(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.orders.setPinned, {
+			orderId: order._id,
+			pinned: true,
+		});
+		let rows = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(rows.orders[0].pinnedAt).toBeTypeOf("number");
+		expect(rows.counts.pinned).toBe(1);
+
+		await asA.mutation(api.orders.setPinned, {
+			orderId: order._id,
+			pinned: false,
+		});
+		rows = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(rows.orders[0].pinnedAt).toBeUndefined();
+		expect(rows.counts.pinned).toBe(0);
+	});
+
+	test("pinning never bumps updatedAt — the time-in-status badge reads it", async () => {
+		const t = setup();
+		const { order } = await seedOrder(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const before = order.updatedAt;
+		await asA.mutation(api.orders.setPinned, {
+			orderId: order._id,
+			pinned: true,
+		});
+		const after = await t.query(api.orders.get, {
+			token: await tk(t, order.shortId),
+		});
+		expect(after?.updatedAt).toBe(before);
+	});
+
+	test("is idempotent — the desired end state, not a toggle", async () => {
+		const t = setup();
+		const { order } = await seedOrder(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.setPinned, {
+			orderId: order._id,
+			pinned: true,
+		});
+		const first = await t.query(api.orders.get, {
+			token: await tk(t, order.shortId),
+		});
+		// A second identical call must not re-stamp (which would reshuffle the
+		// pinned group under the seller) and must not flip it back.
+		await asA.mutation(api.orders.setPinned, {
+			orderId: order._id,
+			pinned: true,
+		});
+		const second = await t.query(api.orders.get, {
+			token: await tk(t, order.shortId),
+		});
+		expect(second?.pinnedAt).toBe(first?.pinnedAt);
+	});
+
+	test("another retailer cannot pin your order", async () => {
+		const t = setup();
+		const { order } = await seedOrder(t, USER_A);
+		await seedRetailer(t, USER_B);
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.orders.setPinned, { orderId: order._id, pinned: true }),
+		).rejects.toThrow();
+	});
+
+	test("a pin survives a filter it does not match, and only while the toggle is on", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+		const mk = async (name: string) => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name, waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return (await t.query(api.orders.get, { token: await tk(t, shortId) }))!;
+		};
+		const stillNew = await mk("Aisha");
+		const done = await mk("Bala");
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: done._id,
+			status: "delivered",
+		});
+		await asA.mutation(api.orders.setPinned, {
+			orderId: done._id,
+			pinned: true,
+		});
+
+		// The whole point: filter to New, and the pinned COMPLETED order is still
+		// there to compare against.
+		const withPins = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+			showPinned: true,
+		});
+		expect(withPins.orders.map((o) => o._id).sort()).toEqual(
+			[stillNew._id, done._id].sort(),
+		);
+		// ...and it leads the list.
+		expect(withPins.orders[0]._id).toBe(done._id);
+
+		// Toggle off → the filter means exactly what it says again.
+		const withoutPins = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+			showPinned: false,
+		});
+		expect(withoutPins.orders.map((o) => o._id)).toEqual([stillNew._id]);
+	});
+});
+
+describe("orders — export gaps (86eyrtz74)", () => {
+	test("exports the address, the categories, and a reconciling total", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 100,
+			name: "Kek Lapis",
+		});
+		const { categoryId: catId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Kuih",
+			slug: "kuih",
+		});
+		const { categoryId: cat2 } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Bestseller",
+			slug: "bestseller",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [catId, cat2],
+		});
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+
+		const { csv, count } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(count).toBe(1);
+		const [header, row] = csv.split("\r\n");
+		const at = (label: string) => {
+			// A real RFC-4180 row reader — the categories cell contains a comma, so
+			// a naive split tears the row apart and silently shifts every column
+			// after it.
+			const cells: string[] = [];
+			let cur = "";
+			let quoted = false;
+			for (let i = 0; i < row.length; i++) {
+				const ch = row[i];
+				if (quoted) {
+					if (ch === '"') {
+						if (row[i + 1] === '"') {
+							cur += '"';
+							i++;
+						} else quoted = false;
+					} else cur += ch;
+				} else if (ch === '"') quoted = true;
+				else if (ch === ",") {
+					cells.push(cur);
+					cur = "";
+				} else cur += ch;
+			}
+			cells.push(cur);
+			return cells[header.split(",").indexOf(label)] ?? "";
+		};
+		expect(at("Address line 1")).toBe(validAddress.line1);
+		expect(at("City")).toBe(validAddress.city);
+		expect(at("Postcode")).toBe(validAddress.postcode);
+		// Deduped + sorted union across the order's products.
+		expect(at("Categories (current)")).toBe("Bestseller, Kuih");
+		// The identity that was broken before this ticket.
+		const sum =
+			Number(at("Subtotal")) +
+			Number(at("Custom work")) +
+			Number(at("Pickup fee")) +
+			Number(at("Delivery fee"));
+		expect(sum.toFixed(2)).toBe(at("Total"));
+	});
+
+	test("columnKeys narrows the export; an unknown key can't break it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "total", "aColumnFromAnOlderBuild"],
+		});
+		expect(csv.split("\r\n")[0]).toBe("Order ID,Total");
+	});
+
+	test("never exports the buyer's tracking token", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const token = await tk(t, shortId);
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(token.length).toBeGreaterThan(10);
+		expect(csv).not.toContain(token);
+	});
+});
+
+describe("orders — item thumbnails (86eyrtz74)", () => {
+	test("returns one entry per line, in line order, null when there is no image", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		// seedProduct uploads no images, so every line resolves to null — the
+		// caller renders AppImage's fallback rather than a broken image.
+		const urls = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.getItemImageUrls, { shortId });
+		expect(urls).toEqual([null]);
+	});
+
+	test("an unknown order yields no entries rather than throwing", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const urls = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.getItemImageUrls, { shortId: "ORD-NOPE" });
+		expect(urls).toEqual([]);
 	});
 });
