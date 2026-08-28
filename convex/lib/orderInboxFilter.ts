@@ -17,11 +17,10 @@ import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
  * seller can search anything they can see. Built lazily (only when there IS a
  * term) because it allocates ~36 strings per order.
  *
- * One column can't participate: `Categories (current)` is resolved from the
- * junction table at export time and isn't on the order document, so it renders
- * blank here. Searching by category would mean a per-product fan-out on every
- * keystroke across the whole scan window — the Insights/category surfaces are
- * the right place for that question.
+ * Every column participates, categories included — they are frozen onto the
+ * order at checkout, so no lookup is needed. Sellers who want the precise
+ * version of a column question reach for that column's header filter instead;
+ * this is the "I half-remember something about this order" path.
  */
 function searchHaystack(o: CsvOrder): string {
 	let out = "";
@@ -30,6 +29,58 @@ function searchHaystack(o: CsvOrder): string {
 		if (text !== "") out += `${text.toLowerCase()}\n`;
 	}
 	return out;
+}
+
+/**
+ * Every arg that NARROWS the list, as a key set the compiler forces you to keep
+ * complete: adding a field to `InboxFilterArgs` fails this object to typecheck
+ * until it is listed here too.
+ *
+ * It exists because the Pro gate in `searchOrders` decides "is this seller using
+ * the paid inbox surfaces?" by asking whether any filter is set, and that was a
+ * hand-maintained list. It silently failed OPEN the moment three filters were
+ * added without touching it (86eyrtz74) — a gate that quietly stops guarding is
+ * worse than no gate, because nothing looks wrong.
+ *
+ * Excluded on purpose: `bucket` (its "all" default isn't a narrowing, so it's
+ * compared rather than presence-checked), `searchText` (blank is not a search),
+ * and `showPinned`, which WIDENS the result and is all-tier because pinning is.
+ */
+const NARROWING_FILTER_KEYS: Record<
+	Exclude<keyof InboxFilterArgs, "bucket" | "searchText" | "showPinned">,
+	true
+> = {
+	paymentStatuses: true,
+	paymentMethods: true,
+	methodUnspecified: true,
+	dateFrom: true,
+	dateTo: true,
+	fulfilmentWindow: true,
+	mockupPending: true,
+	statuses: true,
+	categories: true,
+	sources: true,
+	attributionSources: true,
+};
+
+/** True when these args ask for anything beyond "the newest orders, unfiltered"
+ * — i.e. when the seller is using a gated inbox surface. */
+export function narrowsTheInbox(args: InboxFilterArgs): boolean {
+	if (args.bucket !== "all") return true;
+	if ((args.searchText ?? "").trim().length > 0) return true;
+	return Object.keys(NARROWING_FILTER_KEYS).some(
+		(key) => args[key as keyof InboxFilterArgs] !== undefined,
+	);
+}
+
+/** True when any of the order's lines was sold under one of `wanted`. */
+function matchesAnyCategory(o: CsvOrder, wanted: ReadonlySet<string>): boolean {
+	for (const item of o.items) {
+		for (const name of item.categoryNames ?? []) {
+			if (wanted.has(name)) return true;
+		}
+	}
+	return false;
 }
 
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
@@ -43,10 +94,33 @@ export type InboxFilterArgs = {
 	dateTo?: number;
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
 	mockupPending?: boolean;
-	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in).
-	// Legacy orders with no stamped source read as "storefront". Undefined = no
-	// source filtering. See orders.source in convex/schema.ts.
-	source?: "storefront" | "counter" | "claim";
+	/**
+	 * Exact order status (86eyrtz74), multi-select — OR within itself, AND with
+	 * everything else.
+	 *
+	 * Deliberately a SEPARATE dimension from `bucket`, not a replacement for it.
+	 * A bucket is the coarse workflow stage a seller navigates by ("what's in
+	 * progress"); this is the precise state a seller *questions* ("what is packed
+	 * or shipped — out of my hands but not delivered"), which no single bucket
+	 * expresses. They compose: bucket narrows, statuses narrow further.
+	 */
+	statuses?: OrderStatus[];
+	/**
+	 * Category names frozen on the order's lines (86eyrtz74), multi-select. An
+	 * order matches when ANY of its lines carries ANY of these names — a mixed
+	 * order belongs to every category it contains, which is what "show me the
+	 * cake orders" means to a seller with a cake and a drink on one ticket.
+	 *
+	 * Only possible because categories are frozen at checkout: a live junction
+	 * lookup per order is not something a filter predicate can afford.
+	 */
+	categories?: string[];
+	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in)
+	// vs "claim". Legacy orders with no stamped source read as "storefront".
+	// MULTI-select since 86eyrtz74 (was one value) — "online or claim link, but
+	// not counter" is a real question and a single value can't ask it. Empty or
+	// undefined = no source filtering. See orders.source in convex/schema.ts.
+	sources?: Array<"storefront" | "counter" | "claim">;
 	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
 	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
 	// OR within the filter, ANDed with the rest), because "how did my socials
@@ -118,6 +192,18 @@ export function buildInboxPredicate(
 		args.attributionSources && args.attributionSources.length > 0
 			? new Set(args.attributionSources)
 			: null;
+	const statusSet =
+		args.statuses && args.statuses.length > 0 ? new Set(args.statuses) : null;
+	const categorySet =
+		args.categories && args.categories.length > 0
+			? new Set(args.categories)
+			: null;
+	// `Set<string>`, not `Set<OrderSource>`: `CsvOrder.source` is a plain string
+	// (the CSV shape predates the union) and a legacy row can hold anything.
+	const sourceSet =
+		args.sources && args.sources.length > 0
+			? new Set<string>(args.sources)
+			: null;
 	const pinPrivilege = args.showPinned === true;
 	return (o) => {
 		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
@@ -128,9 +214,10 @@ export function buildInboxPredicate(
 		// order shows under "New" and NOT under "In progress" (86eyf1rck).
 		if (args.bucket !== "all" && orderBucket(o) !== args.bucket) return false;
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
+		if (statusSet && !statusSet.has(o.status)) return false;
+		if (categorySet && !matchesAnyCategory(o, categorySet)) return false;
 		// Source filter — legacy/undefined source reads as "storefront".
-		if (args.source !== undefined && (o.source ?? "storefront") !== args.source)
-			return false;
+		if (sourceSet && !sourceSet.has(o.source ?? "storefront")) return false;
 		// Marketing-origin filter — bucketed through the SAME resolver Insights
 		// reports with (attribution.ts), so a row in the by-source breakdown and
 		// the inbox it drills into can never disagree about which orders count.

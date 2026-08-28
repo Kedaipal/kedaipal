@@ -49,6 +49,11 @@ import {
 	type BulkAction,
 	OrderBulkBar,
 } from "../components/dashboard/order-bulk-bar";
+import {
+	buildOrderColumnFilters,
+	METHOD_UNSPECIFIED,
+	type OrderColumnFilterState,
+} from "../components/dashboard/order-column-filters";
 import { OrderColumnPicker } from "../components/dashboard/order-column-picker";
 import {
 	OrderFilters,
@@ -60,10 +65,7 @@ import { OrderTable } from "../components/dashboard/order-table";
 import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
-import {
-	type OrderStatus,
-	StatusBadge,
-} from "../components/dashboard/status-badge";
+import { StatusBadge } from "../components/dashboard/status-badge";
 import { Button } from "../components/ui/button";
 import {
 	DropdownMenu,
@@ -101,6 +103,8 @@ import { summarizeOrderCardItems } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
+	ORDER_STATUS_KEYS,
+	type OrderStatus,
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
@@ -132,8 +136,17 @@ type InboxSearch = {
 	mockup?: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
-	/** Checkout surface (online vs counter). */
-	source?: OrderSource;
+	/** Checkout surfaces to keep (online / counter / claim link). MULTI since
+	 * 86eyrtz74 — "everything that isn't a walk-in" is a real question that one
+	 * value can't ask. A legacy singular `?source=` is still read and folded in,
+	 * so old bookmarks keep working. */
+	sources?: OrderSource[];
+	/** Exact order statuses to keep (86eyrtz74) — repeated in the URL like
+	 * `pay`/`method`. A separate, finer dimension from `bucket`: the bucket is
+	 * the coarse stage you navigate by, this is the precise one you question. */
+	st?: OrderStatus[];
+	/** Frozen line categories to keep (86eyrtz74). Free-form seller names. */
+	cat?: string[];
 	/** Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys. Repeated
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
@@ -168,6 +181,15 @@ function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 
 function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
+}
+
+function isOrderStatusKey(x: unknown): x is OrderStatus {
+	return ORDER_STATUS_KEYS.includes(x as OrderStatus);
+}
+
+/** A repeated search param arrives as a value, an array, or nothing. */
+function toList(raw: unknown): unknown[] {
+	return Array.isArray(raw) ? raw : raw != null ? [raw] : [];
 }
 
 export const Route = createFileRoute("/app/orders/")({
@@ -217,6 +239,25 @@ export const Route = createFileRoute("/app/orders/")({
 				}),
 			),
 		];
+		const sources = [
+			...new Set(
+				[...toList(search.sources), ...toList(search.source)].filter(
+					isOrderSource,
+				),
+			),
+		];
+		const st = [...new Set(toList(search.st).filter(isOrderStatusKey))];
+		// Category names are the seller's own words — no allowlist to validate
+		// against, so they are only de-duplicated and length-capped. An unknown
+		// name simply matches nothing, which is the honest outcome for a stale
+		// link to a category that has since been renamed.
+		const cat = [
+			...new Set(
+				toList(search.cat).flatMap((x) =>
+					typeof x === "string" && x.length > 0 && x.length <= 120 ? [x] : [],
+				),
+			),
+		];
 		const q =
 			typeof search.q === "string" && search.q.length > 0
 				? search.q
@@ -233,7 +274,11 @@ export const Route = createFileRoute("/app/orders/")({
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
-			source: isOrderSource(search.source) ? search.source : undefined,
+			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
+			// link shared before this shipped still filters (86eyrtz74).
+			sources: sources.length > 0 ? sources : undefined,
+			st: st.length > 0 ? st : undefined,
+			cat: cat.length > 0 ? cat : undefined,
 			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
@@ -299,7 +344,9 @@ function OrdersRoute() {
 		to,
 		mockup = false,
 		fwin,
-		source,
+		sources = [],
+		st = [],
+		cat = [],
 		sort = "recent",
 		view: urlView,
 		nopin = false,
@@ -357,6 +404,9 @@ function OrdersRoute() {
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
+	const sourcesKey = sources.join(",");
+	const stKey = st.join(",");
+	const catKey = cat.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
 	useEffect(() => {
 		navigate({
@@ -381,7 +431,9 @@ function OrdersRoute() {
 		to,
 		mockup,
 		fwin,
-		source,
+		sourcesKey,
+		stKey,
+		catKey,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
 		// Toggling pin privilege changes which rows are in the set.
@@ -422,7 +474,9 @@ function OrdersRoute() {
 							dateTo: to,
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
-							source,
+							sources: sources.length > 0 ? sources : undefined,
+							statuses: st.length > 0 ? st : undefined,
+							categories: cat.length > 0 ? cat : undefined,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							searchText: debounced || undefined,
 							// Pins keep their privilege in the live inbox AND in the
@@ -503,6 +557,29 @@ function OrdersRoute() {
 			resolved,
 		);
 	}
+	// Header filters (86eyrtz74) — built here because this is where the URL state,
+	// the server's facet counts and the retailer's own stage wording all meet;
+	// the table itself stays presentational.
+	const headerFilters = buildOrderColumnFilters({
+		state: {
+			statuses: st,
+			categories: cat,
+			sources,
+			paymentStatuses: pay,
+			paymentMethods: munspec ? [...method, METHOD_UNSPECIFIED] : method,
+			attributionSources: asrc,
+			fulfilmentWindow: fwin,
+		},
+		facets: result?.facets,
+		availableSources: result?.availableSources ?? [],
+		availableCategories: result?.availableCategories ?? [],
+		country: retailer.country,
+		// The same resolver the Status column renders with, so the filter offers
+		// the seller's own stage words rather than our internal keys.
+		statusLabel: (status) => statusLabelFor({ status }),
+		onApply: applyColumnFilter,
+	});
+
 	// Table view is available at EVERY width (owner call, 28 Aug). The first
 	// build gated it to `lg` and up on the grounds that a wide table can't fit a
 	// phone — but a seller away from their desk still wants the scan-many-orders
@@ -523,7 +600,10 @@ function OrdersRoute() {
 		to != null ||
 		mockup ||
 		fwin != null ||
-		source != null;
+		sources.length > 0 ||
+		st.length > 0 ||
+		cat.length > 0 ||
+		asrc.length > 0;
 
 	function setBucket(next: InboxBucket) {
 		navigate({
@@ -569,6 +649,57 @@ function OrdersRoute() {
 		});
 	}
 
+	/**
+	 * Apply a header-filter change. Every dimension lands in the URL exactly
+	 * where the filter panel already puts it, so the two surfaces are one state
+	 * rather than two that must be kept in step — and the CSV export, which
+	 * re-reads these same params, can't come back with different rows than the
+	 * screen it was launched from.
+	 */
+	function applyColumnFilter(patch: Partial<OrderColumnFilterState>) {
+		navigate({
+			search: (prev) => {
+				const next = { ...prev };
+				if (patch.statuses)
+					next.st =
+						patch.statuses.length > 0
+							? (patch.statuses as OrderStatus[])
+							: undefined;
+				if (patch.categories)
+					next.cat = patch.categories.length > 0 ? patch.categories : undefined;
+				if (patch.sources)
+					next.sources =
+						patch.sources.length > 0
+							? (patch.sources as OrderSource[])
+							: undefined;
+				if (patch.paymentStatuses)
+					next.pay =
+						patch.paymentStatuses.length > 0
+							? (patch.paymentStatuses as PaymentStatus[])
+							: undefined;
+				if (patch.paymentMethods) {
+					// Split the picker's "" sentinel back into the boolean the URL and
+					// the predicate have always used for "no method recorded".
+					const concrete = patch.paymentMethods.filter(
+						(m): m is OrderPaymentMethod =>
+							m !== METHOD_UNSPECIFIED && isOrderPaymentMethod(m),
+					);
+					next.method = concrete.length > 0 ? concrete : undefined;
+					next.munspec = patch.paymentMethods.includes(METHOD_UNSPECIFIED)
+						? true
+						: undefined;
+				}
+				if (patch.attributionSources)
+					next.asrc =
+						patch.attributionSources.length > 0
+							? patch.attributionSources
+							: undefined;
+				if ("fulfilmentWindow" in patch) next.fwin = patch.fulfilmentWindow;
+				return next;
+			},
+		});
+	}
+
 	function setFilters(next: OrderFilterValue) {
 		navigate({
 			search: (prev) => ({
@@ -584,7 +715,12 @@ function OrdersRoute() {
 					next.attributionSources.length > 0
 						? next.attributionSources
 						: undefined,
-				source: next.source,
+				sources: next.sources.length > 0 ? next.sources : undefined,
+				st:
+					next.statuses.length > 0
+						? (next.statuses as OrderStatus[])
+						: undefined,
+				cat: next.categories.length > 0 ? next.categories : undefined,
 			}),
 		});
 	}
@@ -762,7 +898,9 @@ function OrdersRoute() {
 					dateTo: to,
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
-					source,
+					sources: sources.length > 0 ? sources : undefined,
+					statuses: st.length > 0 ? st : undefined,
+					categories: cat.length > 0 ? cat : undefined,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					searchText: debounced || undefined,
 					showPinned: showPinned || undefined,
@@ -1044,12 +1182,18 @@ function OrdersRoute() {
 								to,
 								mockup,
 								fwin,
-								source,
+								sources,
+								statuses: st,
+								categories: cat,
 								attributionSources: asrc,
 							}}
 							onChange={setFilters}
 							country={retailer.country}
 							availableSources={result?.availableSources}
+							availableCategories={result?.availableCategories}
+							// One resolver for both surfaces, so the panel and the Status
+							// column can never call the same state two different things.
+							statusLabel={(status) => statusLabelFor({ status })}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
 						/>
@@ -1198,6 +1342,7 @@ function OrdersRoute() {
 							}
 							columnWidths={columnState.widths}
 							onColumnWidthsChange={columnState.setWidths}
+							columnFilters={headerFilters}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}

@@ -34,6 +34,7 @@ import {
 } from "../../../convex/lib/orderCsv";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { cn } from "../../lib/utils";
+import { ColumnFilterMenu } from "../ui/column-filter-menu";
 import { useSortableSensors } from "../ui/sortable-list";
 import {
 	Table,
@@ -43,6 +44,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "../ui/table";
+import type { OrderColumnFilterBinding } from "./order-column-filters";
 import { type OrderStatus, StatusBadge } from "./status-badge";
 
 /**
@@ -115,6 +117,11 @@ export interface OrderTableProps {
 	/** Seller-dragged widths, keyed by column. Absent = registry default. */
 	columnWidths: ColumnSizingState;
 	onColumnWidthsChange: (next: ColumnSizingState) => void;
+	/** Header filters, keyed by column (86eyrtz74). A column with no entry
+	 * simply doesn't show the funnel — its presence is what tells the seller the
+	 * column is filterable. Built by `order-column-filters.ts`; the table stays
+	 * presentational and knows nothing about what any filter means. */
+	columnFilters?: Map<string, OrderColumnFilterBinding>;
 	selectMode: boolean;
 	selected: Set<string>;
 	onToggleSelect: (id: string) => void;
@@ -206,6 +213,7 @@ function SortableHeader({
 	width,
 	isResizing,
 	isLast,
+	filter,
 }: {
 	id: string;
 	label: string;
@@ -226,6 +234,8 @@ function SortableHeader({
 	 * divider but no handle — a drag there would just push the table wider with
 	 * nothing to show for it. */
 	isLast: boolean;
+	/** This column's header filter, when it has one. */
+	filter?: OrderColumnFilterBinding;
 }) {
 	const {
 		attributes,
@@ -255,33 +265,53 @@ function SortableHeader({
 				isDragging && "z-20 bg-card shadow-lg",
 			)}
 		>
-			<button
-				type="button"
-				// `touch-none` is what lets a held header drag instead of scrolling
-				// the table sideways under the finger.
+			{/* The label (sort + drag) and the funnel share the cell. `pr-1.5` keeps
+			    the funnel clear of the resize handle straddling the border. */}
+			<div
 				className={cn(
-					"flex w-full min-w-0 touch-none cursor-grab items-center gap-1 transition-colors hover:text-foreground active:cursor-grabbing",
+					"flex min-w-0 items-center gap-1 pr-1.5",
 					numeric && "flex-row-reverse",
-					sortDir && "text-foreground",
 				)}
-				onClick={onToggleSort}
-				aria-label={`${label} — click to sort, drag to move`}
-				title={`${label} — drag to reorder`}
-				{...attributes}
-				{...listeners}
 			>
-				<span className="truncate">{label}</span>
-				<SortIcon
+				<button
+					type="button"
+					// `touch-none` is what lets a held header drag instead of scrolling
+					// the table sideways under the finger.
 					className={cn(
-						"size-3 shrink-0 transition-opacity",
-						// The neutral glyph stays invisible until the header row is
-						// hovered, so ten columns don't read as ten active controls —
-						// but it is always in the DOM, so widths never jump.
-						sortDir ? "opacity-100" : "opacity-0 group-hover:opacity-40",
+						"flex min-w-0 flex-1 touch-none cursor-grab items-center gap-1 transition-colors hover:text-foreground active:cursor-grabbing",
+						numeric && "flex-row-reverse",
+						sortDir && "text-foreground",
 					)}
-					aria-hidden="true"
-				/>
-			</button>
+					onClick={onToggleSort}
+					aria-label={`${label} — click to sort, drag to move`}
+					title={`${label} — drag to reorder`}
+					{...attributes}
+					{...listeners}
+				>
+					<span className="truncate">{label}</span>
+					<SortIcon
+						className={cn(
+							"size-3 shrink-0 transition-opacity",
+							// The neutral glyph stays invisible until the header row is
+							// hovered, so ten columns don't read as ten active controls —
+							// but it is always in the DOM, so widths never jump.
+							sortDir ? "opacity-100" : "opacity-0 group-hover:opacity-40",
+						)}
+						aria-hidden="true"
+					/>
+				</button>
+
+				{filter ? (
+					<ColumnFilterMenu
+						label={filter.label}
+						options={filter.options}
+						selected={filter.selected}
+						onChange={filter.onChange}
+						mode={filter.mode}
+						emptyHint={filter.emptyHint}
+					/>
+				) : null}
+			</div>
 
 			{/* The column divider IS the resize handle. One element does both jobs:
 			    it rules the header into a grid (which is most of what makes a table
@@ -370,6 +400,7 @@ export function OrderTable({
 	pinBusyId,
 	columnWidths,
 	onColumnWidthsChange,
+	columnFilters,
 }: OrderTableProps) {
 	const navigate = useNavigate();
 
@@ -645,6 +676,7 @@ export function OrderTable({
 											width={header.column.getSize()}
 											isResizing={header.column.getIsResizing()}
 											isLast={i === all.length - 1}
+											filter={columnFilters?.get(header.column.id)}
 										/>
 									);
 								})}

@@ -8961,3 +8961,169 @@ describe("orders — categories frozen at checkout (86eyrtz74)", () => {
 		expect(hit.orders.map((o) => o._id)).toEqual([order._id]);
 	});
 });
+
+describe("orders — column header filters (86eyrtz74)", () => {
+	/** A store with two categories and four orders across them, at three
+	 * different statuses. */
+	async function seedForFilters(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const cakeId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Kek Lapis",
+			stock: 100,
+		});
+		const drinkId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Teh Ais",
+			stock: 100,
+		});
+		const { categoryId: cakes } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Cakes",
+			slug: "cakes",
+		});
+		const { categoryId: drinks } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Drinks",
+			slug: "drinks",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: cakeId,
+			categoryIds: [cakes],
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: drinkId,
+			categoryIds: [drinks],
+		});
+		const place = async (productIds: Id<"products">[]) => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: productIds.map((productId) => ({ productId, quantity: 1 })),
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const doc = await t.run(async (ctx) =>
+				ctx.db
+					.query("orders")
+					.filter((q) => q.eq(q.field("shortId"), shortId))
+					.first(),
+			);
+			if (!doc) throw new Error("seed failed");
+			return doc;
+		};
+		const a = await place([cakeId]);
+		const b = await place([drinkId]);
+		const mixed = await place([cakeId, drinkId]);
+		const d = await place([cakeId]);
+		// Spread them across statuses so the status filter has something to say.
+		for (const [orderId, status] of [
+			[a._id, "confirmed"],
+			[b._id, "packed"],
+			[mixed._id, "packed"],
+		] as const) {
+			await asA.mutation(api.orders.updateStatus, { orderId, status });
+		}
+		return { retailer, asA, a, b, mixed, d };
+	}
+
+	test("filters by exact status, several at once", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			statuses: ["confirmed", "packed"],
+		});
+		expect(res.total).toBe(3);
+		expect(
+			res.orders.every((o) => ["confirmed", "packed"].includes(o.status)),
+		).toBe(true);
+	});
+
+	test("filters by frozen category — a mixed order counts for BOTH", async () => {
+		const t = setup();
+		const { retailer, asA, mixed } = await seedForFilters(t);
+		const cakes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Cakes"],
+		});
+		expect(cakes.total).toBe(3); // a, mixed, d
+		const drinks = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Drinks"],
+		});
+		expect(drinks.total).toBe(2); // b, mixed
+		// The one ticket carrying a cake AND a drink is in both answers.
+		for (const res of [cakes, drinks]) {
+			expect(res.orders.some((o) => o.shortId === mixed.shortId)).toBe(true);
+		}
+	});
+
+	test("facet counts are tallied over the UNFILTERED window", async () => {
+		// The picker must not shrink as it is used: an option that vanished once
+		// selected reads as orders disappearing, and strands the seller with no
+		// way back to the option they just left.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			statuses: ["packed"],
+		});
+		expect(res.total).toBe(2);
+		expect(res.facets.status).toEqual({
+			pending: 1,
+			confirmed: 1,
+			packed: 2,
+		});
+		expect(res.facets.category).toEqual({ Cakes: 3, Drinks: 2 });
+		expect(res.availableCategories).toEqual(["Cakes", "Drinks"]);
+	});
+
+	test("an order counts ONCE per category, never once per line", async () => {
+		// The number beside an option has to be the number of rows it will show.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Cakes"],
+		});
+		expect(res.facets.category.Cakes).toBe(res.total);
+	});
+
+	test("checkout surface is multi-select, and the legacy singular still works", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			sources: ["storefront", "counter"],
+		});
+		expect(both.total).toBe(4);
+		// A URL bookmarked before the widen must keep filtering (86eyrtz74).
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			source: "counter",
+		});
+		expect(legacy.total).toBe(0);
+	});
+
+	test("the CSV export honours the header filters, or it isn't the same list", async () => {
+		// The invariant orderInboxFilter.ts exists for: export what's on screen.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const { csv, count } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Drinks"],
+			statuses: ["packed"],
+		});
+		expect(count).toBe(2); // b + mixed
+		expect(csv).toContain("Drinks");
+	});
+});

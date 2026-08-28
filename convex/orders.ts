@@ -57,13 +57,18 @@ import {
 	minQuantityMessage,
 } from "./lib/minOrderRules";
 import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
-import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
+import {
+	type CsvOrder,
+	orderCategoryNames,
+	ordersToCsv,
+} from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
 	manualReminderEligibility,
 } from "./lib/paymentReminder";
 import {
 	buildInboxPredicate,
+	narrowsTheInbox,
 	type InboxFilterArgs,
 	needsMockup,
 	sortInboxOrders,
@@ -1830,6 +1835,38 @@ const MAX_INBOX_SCAN = 1000;
 // Checkout-surface filter value, shared by the live inbox (`searchOrders`) and
 // the CSV export so the two can't drift. Matches orders.source; legacy orders
 // (no stamped source) read as "storefront" in the predicate.
+/**
+ * The filter args as the WIRE carries them — `InboxFilterArgs` plus the
+ * pre-widen singular `source` (86eyrtz74), still accepted so a bookmarked URL
+ * or a client that hasn't reloaded keeps filtering.
+ */
+type InboxFilterInput = Omit<InboxFilterArgs, "sources"> & {
+	source?: "storefront" | "counter" | "claim";
+	sources?: Array<"storefront" | "counter" | "claim">;
+};
+
+/**
+ * Fold the legacy singular `source` into `sources`, in ONE place.
+ *
+ * This exists because the export used to reach the predicate through a blanket
+ * `as InboxFilterArgs` cast, which would have silently dropped `source` the
+ * moment the field was widened — the export quietly returning more rows than
+ * the seller was looking at, which is precisely the divergence
+ * `lib/orderInboxFilter.ts` exists to prevent. A cast is not a conversion.
+ */
+function toInboxFilterArgs({
+	source,
+	...rest
+}: InboxFilterInput): InboxFilterArgs {
+	return { ...rest, sources: rest.sources ?? (source ? [source] : undefined) };
+}
+
+/** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
+ * worth a name. */
+function bump(tally: Map<string, number>, key: string): void {
+	tally.set(key, (tally.get(key) ?? 0) + 1);
+}
+
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
@@ -1888,6 +1925,18 @@ export const searchOrders = query({
 		// Checkout surface: "storefront" (online) vs "counter" (walk-in). Legacy
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
+	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
+	// bucket is the coarse stage a seller navigates by; this is the precise one
+	// they question ("packed OR shipped"). Driven from the Status column header.
+	statuses: v.optional(v.array(statusValidator)),
+	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
+	// ANY line carries ANY of these. Free-form names (the seller's own
+	// catalogue), so v.string(); the picker is driven by `availableCategories`.
+	categories: v.optional(v.array(v.string())),
+	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
+	// accepted so a bookmarked URL or an in-flight client from before the widen
+	// keeps working; the handler folds it into `sources`. Drop it a release on.
+	sources: v.optional(v.array(orderSourceValidator)),
 		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
 		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
 		// ANDs with the rest. Free-form by design (sellers invent their own
@@ -1921,6 +1970,9 @@ export const searchOrders = query({
 			fulfilmentWindow,
 			mockupPending,
 			source,
+			sources,
+			statuses,
+			categories,
 			attributionSources,
 			searchText,
 			showPinned,
@@ -1935,19 +1987,29 @@ export const searchOrders = query({
 		// filters, search) require the feature. Admin act-as bypasses, same as
 		// the soft-lock. The Starter UI hides these controls; this is the
 		// defense-in-depth backstop.
-		const usesInboxFeatures =
-			bucket !== "all" ||
-			paymentStatuses !== undefined ||
-			paymentMethods !== undefined ||
-			methodUnspecified !== undefined ||
-			dateFrom !== undefined ||
-			dateTo !== undefined ||
-			fulfilmentWindow !== undefined ||
-			mockupPending !== undefined ||
-			source !== undefined ||
-			attributionSources !== undefined ||
-			(searchText !== undefined && searchText.trim().length > 0);
-		if (usesInboxFeatures && !access.actingAsAdmin)
+		//
+		// Built ONCE and used for both the gate and the predicate, so the thing
+		// being gated and the thing being applied cannot be different sets of
+		// filters. `narrowsTheInbox` is compiler-enforced complete — see
+		// NARROWING_FILTER_KEYS.
+		const filters = toInboxFilterArgs({
+			bucket,
+			paymentStatuses,
+			paymentMethods,
+			methodUnspecified,
+			dateFrom,
+			dateTo,
+			fulfilmentWindow,
+			mockupPending,
+			source,
+			sources,
+			statuses,
+			categories,
+			attributionSources,
+			searchText,
+			showPinned,
+		});
+		if (narrowsTheInbox(filters) && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
 
 		const all = await ctx.db
@@ -1994,6 +2056,18 @@ export const searchOrders = query({
 		// the picker. Free-form tags mean the filter UI cannot hardcode a list;
 		// this is that list, and it costs nothing (we already hold every row).
 		const sourceTally = new Map<string, number>();
+		// Per-option counts for the column header filters (86eyrtz74), tallied
+		// over the SAME full window and by the same rule: a picker that shrank as
+		// you used it would make the seller think orders had vanished. Showing the
+		// count next to each option is most of what makes a header filter usable —
+		// it answers "is there anything in there?" before you commit to the click.
+		const statusTally = new Map<string, number>();
+		const categoryTally = new Map<string, number>();
+		const checkoutSourceTally = new Map<string, number>();
+		const paymentStatusTally = new Map<string, number>();
+		// "" is the count of orders with no recorded method, which the picker
+		// offers as "Unspecified" — a real answer, not a gap.
+		const paymentMethodTally = new Map<string, number>();
 
 		for (const o of all) {
 			const b = orderBucket(o);
@@ -2019,26 +2093,19 @@ export const searchOrders = query({
 			}
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
+			bump(statusTally, o.status);
+			bump(checkoutSourceTally, o.source ?? "storefront");
+			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
+			bump(paymentMethodTally, o.paymentMethod ?? "");
+			// An order counts ONCE per category it contains, never once per line —
+			// a two-cake order is one order in the "Cakes" filter, and the count
+			// beside the option has to be the number of rows it will show.
+			for (const name of orderCategoryNames(o)) bump(categoryTally, name);
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
 		// exact same rules (see lib/orderInboxFilter.ts).
-		const filtered = all.filter(
-			buildInboxPredicate({
-				bucket,
-				paymentStatuses,
-				paymentMethods,
-				methodUnspecified,
-				dateFrom,
-				dateTo,
-				fulfilmentWindow,
-				mockupPending,
-				source,
-				attributionSources,
-				searchText,
-				showPinned,
-			}),
-		);
+		const filtered = all.filter(buildInboxPredicate(filters));
 		// Pinned first, then newest-created (the scan order) — the inbox's default
 		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
 		// over this stable window (the same `sortInboxOrders`), so toggling never
@@ -2068,6 +2135,23 @@ export const searchOrders = query({
 			availableSources: [...sourceTally.entries()]
 				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 				.map(([key]) => key),
+			// Category names present in this window, most-used first with an
+			// alphabetical tie-break — the `availableSources` rule, for the same
+			// reason: a picker that reshuffles under the seller is worse than one
+			// in a slightly arbitrary but stable order.
+			availableCategories: [...categoryTally.entries()]
+				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+				.map(([key]) => key),
+			// Per-option row counts for the header filters. Plain objects rather
+			// than Maps so they cross the wire.
+			facets: {
+				status: Object.fromEntries(statusTally),
+				category: Object.fromEntries(categoryTally),
+				source: Object.fromEntries(checkoutSourceTally),
+				paymentStatus: Object.fromEntries(paymentStatusTally),
+				paymentMethod: Object.fromEntries(paymentMethodTally),
+				attribution: Object.fromEntries(sourceTally),
+			},
 			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
 			// 1,000 are outside the window, so the list AND counts under-report.
 			// The inbox surfaces this in a footer; export is the full-history path.
@@ -2122,6 +2206,18 @@ const exportFilterValidators = {
 	),
 	mockupPending: v.optional(v.boolean()),
 	source: v.optional(orderSourceValidator),
+	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
+	// bucket is the coarse stage a seller navigates by; this is the precise one
+	// they question ("packed OR shipped"). Driven from the Status column header.
+	statuses: v.optional(v.array(statusValidator)),
+	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
+	// ANY line carries ANY of these. Free-form names (the seller's own
+	// catalogue), so v.string(); the picker is driven by `availableCategories`.
+	categories: v.optional(v.array(v.string())),
+	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
+	// accepted so a bookmarked URL or an in-flight client from before the widen
+	// keeps working; the handler folds it into `sources`. Drop it a release on.
+	sources: v.optional(v.array(orderSourceValidator)),
 	searchText: v.optional(v.string()),
 	// Pin privilege (86eyrtz74) — kept in the SHARED validator set so an export
 	// of a filtered view contains exactly the rows the seller was looking at,
@@ -2306,7 +2402,7 @@ export const exportPage = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
-		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
+		const predicate = buildInboxPredicate(toInboxFilterArgs(filters));
 		const matched = page.page.filter(predicate);
 		return {
 			rows: matched.map(orderToCsvSource),

@@ -12,12 +12,21 @@ afterEach(cleanup);
 
 const EMPTY: Pick<
 	OrderFilterValue,
-	"payment" | "method" | "methodUnspecified" | "attributionSources"
+	| "payment"
+	| "method"
+	| "methodUnspecified"
+	| "attributionSources"
+	| "sources"
+	| "statuses"
+	| "categories"
 > = {
 	payment: [],
 	method: [],
 	methodUnspecified: false,
 	attributionSources: [],
+	sources: [],
+	statuses: [],
+	categories: [],
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -55,24 +64,46 @@ describe("OrderFilters", () => {
 				from: 1,
 				to: 2,
 				mockup: true,
-				source: "counter",
+				sources: ["counter"],
 				attributionSources: ["tiktok", "direct"],
+				statuses: [],
+				categories: [],
 			}),
 		).toBe(9);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
+		// Each selected surface counts on its own, like payment (86eyrtz74).
 		expect(
-			activeFilterCount({ ...EMPTY, mockup: false, source: "storefront" }),
-		).toBe(1);
+			activeFilterCount({
+				...EMPTY,
+				mockup: false,
+				sources: ["storefront", "claim"],
+			}),
+		).toBe(2);
 	});
 
-	it("toggling an order-type chip reports the source", () => {
+	it("toggling an order-type chip reports the surface", () => {
 		const { onChange } = renderFilters();
 		openFilters();
 		fireEvent.click(screen.getByRole("button", { name: "Counter" }));
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
 			mockup: false,
-			source: "counter",
+			sources: ["counter"],
+		});
+	});
+
+	it("order type is MULTI-select — surfaces add up rather than replace", () => {
+		// "Online or claim link, but not counter" is a real question; the
+		// single-value version could never ask it (86eyrtz74).
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, sources: ["storefront"] },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: "Claim link" }));
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			sources: ["storefront", "claim"],
 		});
 	});
 
@@ -201,5 +232,59 @@ describe("OrderFilters — country-scoped method chips", () => {
 			...methodChoicesFor("MY", []),
 			"paynow",
 		]);
+	});
+});
+
+describe("OrderFilters — status + categories mirror the header filters (86eyrtz74)", () => {
+	it("counts a status and a category like any other filter", () => {
+		expect(
+			activeFilterCount({
+				...EMPTY,
+				mockup: false,
+				statuses: ["packed", "shipped"],
+				categories: ["Cakes"],
+			}),
+		).toBe(3);
+	});
+
+	it("shows a header-set status as a removable token", () => {
+		// The gap this closes: filter by Status from the table, then hide the
+		// Status column or switch to cards — without a token the filter would be
+		// invisible AND unclearable.
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+			statusLabel: (st) => (st === "packed" ? "Ready for Pickup" : st),
+		});
+		fireEvent.click(
+			screen.getByRole("button", { name: /remove filter: ready for pickup/i }),
+		);
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			statuses: [],
+		});
+	});
+
+	it("lets a cards-view seller set a status, which has no table header to click", () => {
+		const { onChange } = renderFilters({
+			statusLabel: (st) => (st === "packed" ? "Ready for Pickup" : st),
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: "Ready for Pickup" }));
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			statuses: ["packed"],
+		});
+	});
+
+	it("hides the category section until there is a real choice to make", () => {
+		renderFilters({ availableCategories: ["Cakes"] });
+		openFilters();
+		expect(screen.queryByText("Categories")).toBeNull();
+		cleanup();
+		renderFilters({ availableCategories: ["Cakes", "Drinks"] });
+		openFilters();
+		expect(screen.getByText("Categories")).toBeTruthy();
 	});
 });

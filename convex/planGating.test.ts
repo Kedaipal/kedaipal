@@ -585,6 +585,37 @@ describe("plan gating — Order Inbox (Pro+)", () => {
 		await expect(
 			asA.query(api.orders.searchOrders, { ...base, dateFrom: 0 }),
 		).rejects.toThrow(/Pro plan/);
+		// The header filters (86eyrtz74). These were added to the query WITHOUT
+		// being added to the gate's hand-maintained arg list, which failed open
+		// silently — hence `narrowsTheInbox` is now compiler-enforced complete.
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, statuses: ["packed"] }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, categories: ["Cakes"] }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, sources: ["counter"] }),
+		).rejects.toThrow(/Pro plan/);
+		// The pre-widen singular still gates, or a stale bookmark would be a hole.
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, source: "counter" }),
+		).rejects.toThrow(/Pro plan/);
+	});
+
+	test("pinning stays all-tier — showPinned must not trip the gate", async () => {
+		// `showPinned` WIDENS the result rather than narrowing it, and pinning is
+		// an all-tier feature, so its visibility rule has to be one too.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await setPlan(t, retailer._id, "starter");
+		const asA = t.withIdentity({ subject: USER_A });
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			showPinned: true,
+		});
+		expect(res.total).toBe(0);
 	});
 
 	test("bulkUpdateStatus is Pro+ (single updateStatus stays open)", async () => {

@@ -241,6 +241,56 @@ WhatsApp.
   always sink, whichever direction is active — a dateless order is unscheduled,
   not earliest. The sort lives in the URL (`?tsort=` / `?tdesc=`) because
   "these orders, by total" is worth sharing, unlike a 36-toggle layout.
+- **Filter from the column header** (86eyrtz74). A funnel in the header of
+  every filterable column opens a multi-select list of that column's values.
+  Filterable today: **Status, Categories, Order type, Came from, Payment,
+  Payment method** (multi) and **Fulfilment date** (single — the due windows
+  overlap, so offering them as a set would let a seller build a combination that
+  reads like an intersection and behaves like a union).
+  - **`ui/column-filter-menu.tsx` is generic** and knows nothing about orders —
+    it takes options, a selection and a handler, so the next table reuses it
+    whole. Everything order-specific (which columns, where the options come
+    from, how a selection maps to URL state) is `order-column-filters.ts`.
+    Adding a filterable column is one entry there.
+  - **The rule for what earns a header slot:** the filter is *about that
+    column's values* and those values are enumerable. Date RANGES (two bounds,
+    no option list), cross-cutting toggles like "needs mockup" that aren't any
+    column, and the summary of everything applied stay in the panel.
+  - **Header filters MIRROR the panel; they do not replace it.** Moving them out
+    would strip cards view of its filters entirely and remove the one surface
+    that shows every active filter at once. Both write the same URL state
+    through the same shared predicate, so a filter set in one is active in the
+    other and the CSV export honours whichever was used. The panel gained
+    matching **Status** and **Categories** sections for exactly this reason: set
+    a status from the header, then hide the Status column or switch to cards,
+    and without a token in the panel the filter would be invisible *and*
+    unclearable.
+  - **Counts beside every option**, tallied over the UNFILTERED window
+    (`searchOrders.facets`) — the same rule `availableSources` already followed.
+    They answer "is there anything in there?" before the seller commits, and an
+    option showing `0` is the answer to "why is my list empty?". The picker
+    never shrinks as it is used; one that did would read as orders vanishing.
+    An order counts **once per category**, never once per line, so the number
+    beside an option is the number of rows it will show.
+  - **Two new server dimensions.** `statuses` is exact order status, multi, and
+    deliberately a *separate* dimension from `bucket` rather than a replacement:
+    a bucket is the coarse stage you navigate by, this is the precise one you
+    question ("packed OR shipped — out of my hands but not delivered"), which no
+    single bucket expresses. `categories` matches when ANY line carries ANY
+    chosen name — a mixed ticket belongs to every category it contains — and is
+    only affordable because categories are frozen at checkout.
+  - **`source` widened to `sources`** (multi): "online or claim link, but not
+    counter" is a real question a single value could not ask. The singular is
+    still accepted and folded in by `toInboxFilterArgs`, so bookmarks survive;
+    drop it a release on.
+  - ⚠️ **The Pro gate is now compiler-enforced.** `searchOrders` decides whether
+    a seller is using paid inbox surfaces by asking if any filter is set, and
+    that was a hand-maintained list of arg names. Adding three filters without
+    touching it made the gate **fail open, silently**. It is now
+    `narrowsTheInbox()` over `NARROWING_FILTER_KEYS`, a `Record` keyed off
+    `InboxFilterArgs` — add a field to that type and this object stops
+    compiling until you classify it. `showPinned` is excluded because it WIDENS
+    the result and pinning is all-tier.
 - **The Sort popover is hidden in table view** — every header is its own sort
   control there, and two controls fighting over one ordering is worse than
   either. That is also what buys back the width the Columns chip takes. Cards

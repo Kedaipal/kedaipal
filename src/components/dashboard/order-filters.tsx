@@ -9,6 +9,7 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
+import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
@@ -52,8 +53,22 @@ export interface OrderFilterValue {
 	mockup: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
-	/** Checkout surface (online vs counter). Unset = both. */
-	source?: OrderSource;
+	/**
+	 * Checkout surfaces to keep (online / counter / claim link). MULTI since
+	 * 86eyrtz74, matching every other enumerable filter — "everything that isn't
+	 * a walk-in" is a real question and one value could not ask it. Empty = all
+	 * surfaces.
+	 */
+	sources: OrderSource[];
+	/**
+	 * Exact order statuses to keep (86eyrtz74). Mirrors the Status column's own
+	 * header filter — both write this, so a filter set in the table is visible
+	 * and clearable here, and a cards-view seller (who has no table headers) can
+	 * still set it.
+	 */
+	statuses: string[];
+	/** Frozen line categories to keep (86eyrtz74). Same mirroring rule. */
+	categories: string[];
 	/**
 	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
 	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
@@ -75,7 +90,9 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0) +
 		(v.fwin != null ? 1 : 0) +
-		(v.source != null ? 1 : 0) +
+		v.sources.length +
+		v.statuses.length +
+		v.categories.length +
 		v.attributionSources.length
 	);
 }
@@ -147,14 +164,30 @@ type FilterToken = {
 function activeFilterTokens(
 	v: OrderFilterValue,
 	mockupCount?: number,
+	/** Resolves a raw status to the retailer's own stage wording, so a token
+	 * reads the same as the Status column it came from. */
+	statusLabel?: (status: string) => string,
 ): FilterToken[] {
 	const tokens: FilterToken[] = [];
-	if (v.source) {
+	for (const st of v.statuses) {
 		tokens.push({
-			key: `source-${v.source}`,
-			label:
-				SOURCE_OPTIONS.find((o) => o.value === v.source)?.label ?? v.source,
-			clear: (x) => ({ ...x, source: undefined }),
+			key: `status-${st}`,
+			label: statusLabel?.(st) ?? st,
+			clear: (x) => ({ ...x, statuses: x.statuses.filter((y) => y !== st) }),
+		});
+	}
+	for (const c of v.categories) {
+		tokens.push({
+			key: `cat-${c}`,
+			label: c,
+			clear: (x) => ({ ...x, categories: x.categories.filter((y) => y !== c) }),
+		});
+	}
+	for (const src of v.sources) {
+		tokens.push({
+			key: `source-${src}`,
+			label: SOURCE_OPTIONS.find((o) => o.value === src)?.label ?? src,
+			clear: (x) => ({ ...x, sources: x.sources.filter((y) => y !== src) }),
 		});
 	}
 	for (const a of v.attributionSources) {
@@ -224,7 +257,9 @@ export function clearedFilters(): OrderFilterValue {
 		to: undefined,
 		mockup: false,
 		fwin: undefined,
-		source: undefined,
+		sources: [],
+		statuses: [],
+		categories: [],
 		attributionSources: [],
 	};
 }
@@ -256,6 +291,8 @@ export function OrderFilters({
 	onChange,
 	country,
 	availableSources,
+	availableCategories,
+	statusLabel,
 	mockupCount,
 	resultCount,
 }: {
@@ -272,6 +309,12 @@ export function OrderFilters({
 	 * (one origin = every order, nothing to narrow).
 	 */
 	availableSources?: string[];
+	/** Category names present in the seller's window, most-used first — the same
+	 * list the Categories header filter offers (86eyrtz74). */
+	availableCategories?: string[];
+	/** The retailer's own wording for each raw status, so this panel and the
+	 * Status column never call the same state two different things. */
+	statusLabel?: (status: string) => string;
 	/** Orders awaiting a mockup — drives the toggle's count badge. The toggle is
 	 * hidden when there are none (and it isn't already on). */
 	mockupCount?: number;
@@ -284,7 +327,7 @@ export function OrderFilters({
 	const [customDates, setCustomDates] = useState(false);
 	const count = activeFilterCount(value);
 	const showMockup = (mockupCount ?? 0) > 0 || value.mockup;
-	const tokens = activeFilterTokens(value, mockupCount);
+	const tokens = activeFilterTokens(value, mockupCount, statusLabel);
 	const clearFilters = () => onChange(clearedFilters());
 
 	function togglePayment(p: PaymentStatus) {
@@ -404,6 +447,64 @@ export function OrderFilters({
 							)}
 						</div>
 
+						{/* Status leads: it is the dimension sellers reach for first, and
+						    the one the Status column's own header filter mirrors. Placed
+						    by urgency, not by what happened to be here already. */}
+						<div className="flex flex-col gap-2">
+							<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+								Status
+							</span>
+							<div className="flex flex-wrap gap-2">
+								{ORDER_STATUS_KEYS.map((st) => (
+									<FilterChip
+										key={st}
+										tone="accent"
+										selected={value.statuses.includes(st)}
+										onClick={() =>
+											onChange({
+												...value,
+												statuses: value.statuses.includes(st)
+													? value.statuses.filter((x) => x !== st)
+													: [...value.statuses, st],
+											})
+										}
+									>
+										{statusLabel?.(st) ?? st}
+									</FilterChip>
+								))}
+							</div>
+						</div>
+
+						{/* Only shown once there is more than one category to choose
+						    between — a single-option filter is a control that can only
+						    ever narrow to what you already have. */}
+						{(availableCategories?.length ?? 0) > 1 ? (
+							<div className="flex flex-col gap-2">
+								<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+									Categories
+								</span>
+								<div className="flex flex-wrap gap-2">
+									{availableCategories?.map((c) => (
+										<FilterChip
+											key={c}
+											tone="accent"
+											selected={value.categories.includes(c)}
+											onClick={() =>
+												onChange({
+													...value,
+													categories: value.categories.includes(c)
+														? value.categories.filter((x) => x !== c)
+														: [...value.categories, c],
+												})
+											}
+										>
+											{c}
+										</FilterChip>
+									))}
+								</div>
+							</div>
+						) : null}
+
 						<div className="flex flex-col gap-2">
 							<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
 								Due date
@@ -437,12 +538,13 @@ export function OrderFilters({
 									<FilterChip
 										key={opt.value}
 										tone="accent"
-										selected={value.source === opt.value}
+										selected={value.sources.includes(opt.value)}
 										onClick={() =>
 											onChange({
 												...value,
-												source:
-													value.source === opt.value ? undefined : opt.value,
+												sources: value.sources.includes(opt.value)
+													? value.sources.filter((v) => v !== opt.value)
+													: [...value.sources, opt.value],
 											})
 										}
 									>
