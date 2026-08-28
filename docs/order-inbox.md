@@ -61,6 +61,150 @@ the full inbox. See [`manual-subscription.md`](./manual-subscription.md)
   out of In-progress while still being worked. Payment is a multi-select filter.
 - **Phase it:** Phase 1 was the inbox; Phase 2 added bulk actions.
 
+## Views: Cards and Table (86eyrtz74)
+
+`?view=table` switches the list to a spreadsheet-shaped table. It exists for a
+retention reason, not a cosmetic one: Hermoolah reported exporting to Excel
+*"just because they are too used to excel"* — the inbox already filtered and
+sorted as well as a spreadsheet, it just didn't look like one, and once a seller
+is in a spreadsheet the order is a stale copy with no status, bulk actions or
+WhatsApp.
+
+- **Two views, not three.** The existing card list *is* the list view; a third
+  mode would be a menu with nothing behind it.
+- **Available at EVERY width.** The first build gated the table to `lg` and up;
+  the owner reversed that (28 Aug) — *"they might need a quick look while on the
+  move"*. Withholding the view was the wrong trade: a horizontally scrolling
+  table is a normal mobile pattern, so instead the table **scrolls inside its own
+  container, never the page** (`min-w-0` + `overflow-x-auto`, the design system's
+  hard rule for wide content) and its row controls **grow to 44px touch targets
+  below `lg`** — with the checkbox's *visual* box staying 18px inside that target,
+  since growing the box itself would give a phone a giant empty square.
+- **Where the controls live** — settled after the first build crowded five of
+  them into one row and squeezed the search input down to its own padding:
+  - **The view switch is in the PAGE HEADER**, beside Select and Export. Those
+    three are one family — things you do *to* the list — while search, sort and
+    filters *narrow* it. Splitting the families is what keeps the search row
+    from running out of width, and it means the next display preference has an
+    obvious home. It is a segmented control, not a dropdown: two options, both
+    worth showing, current one readable at a glance.
+  - **The column picker rides the chip row**, right-aligned and *outside* the
+    scroller, so a control that only exists in table view can't scroll off a
+    phone and become undiscoverable. It configures the table, so it sits with
+    the table's own controls, and it is shaped like a `FilterChip` (h-10 pill)
+    to belong to that row. Its label collapses to just the count below `sm:`.
+  - **The search row is only ever Search · Sort · Filters.** Sort goes icon-only
+    below `sm:`, where its label and chevron cost ~70px the input needs more.
+
+  Two of the three faults this fixed were bugs rather than taste: the search was
+  `flex-1 min-w-0` against four `shrink-0` siblings totalling ~404px on a 390px
+  screen (so it collapsed and Filters wrapped alone), and the column picker was
+  `h-9` in a row of `h-11` controls — visibly misaligned and under the touch
+  floor.
+- **No new backend.** `searchOrders` already returned full order docs, so the
+  table is purely a render mode over data the client had.
+- **Built on `@tanstack/react-table`** — already a dependency, already the house
+  pattern in `customer-list.tsx`. Deliberately *not* shadcn's data-table: that
+  is the same library wrapped in a styling layer we already have our own version
+  of, so adopting it would mean a second set of primitives for no capability we
+  don't get headless.
+- **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same
+  registry the CSV writes, so the table and the export can't disagree, **in
+  which columns appear AND in what order**. Visibility + order persist per store
+  in `localStorage` (`useOrderColumns`), deliberately not in the URL (36 toggles
+  would bury the shareable parts) and not in Convex (a personal display
+  preference shouldn't cost a write or sync to a colleague).
+- **Drag to reorder** in the Columns panel, via the shared `SortableList`
+  (@dnd-kit) — the project's sorting standard, touch-safe, never arrow buttons.
+  The panel splits into **Shown** (ordered, draggable) and **Add a column**
+  (grouped by registry section): order only means something for columns that are
+  on screen, and adding appends to the end, where the seller can see what they
+  just turned on. `resolveOrderColumns` honours the caller's order, so the
+  exported CSV comes out arranged exactly like the table.
+- **Per-column sorting**, client-side over the window the inbox already holds,
+  so it costs no extra reads. Comparison is **typed, not lexical**: columns
+  carry an optional `sortKey` (see `orderColumnSortValue`) returning the
+  underlying number for money, dates and times — otherwise "125.00" sorts below
+  "86.00" and "3:30 PM" below "9:00 AM". Numeric columns open descending
+  (clicking Total means "show me the big ones"), text ascending. Empty values
+  always sink, whichever direction is active — a dateless order is unscheduled,
+  not earliest. The sort lives in the URL (`?tsort=` / `?tdesc=`) because
+  "these orders, by total" is worth sharing, unlike a 36-toggle layout.
+- **The Sort popover is hidden in table view** — every header is its own sort
+  control there, and two controls fighting over one ordering is worse than
+  either. That is also what buys back the width the Columns chip takes. Cards
+  view keeps it.
+- **Pinned orders stay on top of any sort**, via the table's own row pinning
+  (`keepPinnedRows`, so the pinned block re-sorts with everything else rather
+  than going stale). Pinning is a partition, never a competing sort key.
+- **Export honours the view.** In table view the Export button becomes a
+  two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
+  rather than a dialog, which would tax a path sellers hit often. In cards view
+  there is no column selection to honour, so it stays a one-tap button that
+  exports everything.
+
+## Pinned orders (86eyrtz74)
+
+`orders.pinnedAt` — the seller's manual bookmark. Buckets and filters are all
+*rule-based*, so before this there was no way to mark "this specific order needs
+me" for a reason the system can't infer (a dispute, a promised callback, an
+order being compared against).
+
+Three rules, all owner decisions, all counter-intuitive enough to be worth
+stating:
+
+1. **Never auto-unpin.** Not on delivered, not on cancelled. A finished order
+   can still be worth keeping on top, and the system doesn't get to decide the
+   seller is done with it. Pin and unpin are both manual, always.
+2. **A pin outranks the filter.** While the **Pinned** chip is on (the default),
+   a pinned order stays in the list even when it fails every other filter —
+   because that is the case sellers pin *for*: park an order on top, filter to
+   something else, compare. Turning the chip off removes the privilege; it does
+   **not** hide pins that legitimately match. Implemented as a short-circuit at
+   the top of `buildInboxPredicate`, so the export inherits it and the CSV holds
+   exactly what was on screen.
+3. **Pinned-first is a partition, not a sort option.** `sortInboxOrders` splits
+   pinned from the rest and applies the active sort inside each — pinning is
+   orthogonal to newest/due and must not become a third option competing with
+   them. Under `recent`, most-recently-pinned leads (the pin you just made jumps
+   to the top, which is the confirmation it worked); under `due`, the fulfilment
+   date wins and pinned-at is only the tiebreaker.
+
+**All tiers.** A one-bit annotation on an order the seller can already see is
+not an inbox *search* feature; gating it behind Pro would mean a Starter
+watching pinned rows sort to the top of a list they were never allowed to pin
+into. Only the soft-lock applies.
+
+**Never bumps `updatedAt`** — bookmarking is not progress on the order, and that
+field drives the time-in-status badge (the `markSeen` trap).
+
+**Discoverability + the staleness escape hatch.** The pin control is on every
+card, every table row and the order detail header, always rendered (never
+hover-only). The **Pinned N** chip appears once something is pinned, leads the
+chip row — the seller's own urgency outranks the system's buckets — and its
+count is tallied over the full window, so it states the real total and doesn't
+shrink under a filter. Since pins never auto-clear, that count is the standing
+reminder the set exists; clearing several is **Unpin** in the existing bulk
+bar, offered only when the selection actually holds a pinned order.
+
+**Known limit:** a pinned order older than the 1,000-row scan window
+(`MAX_INBOX_SCAN`) is outside the inbox's reach and won't surface. Acceptable
+for v1 — export is the full-history path — but it means the chip's count can
+exceed what a seller can see if they pin something and then place 1,000 orders.
+
+## Line-item thumbnails (86eyrtz74)
+
+Order detail renders each line's photo — the **variant's** first image, else the
+**product's**, else `AppImage`'s fallback box. Resolved by
+`orders.getItemImageUrls`, batched per distinct variant/product id, returning
+one entry per line **in line order** (the same product can appear on two lines).
+
+The image is deliberately **not** frozen onto the order the way name and price
+are: it is a packing aid, not a financial record, so a replaced photo should
+show the new one everywhere. The cost is that a deleted photo leaves a line with
+no thumbnail — which is why it must render through `AppImage` and degrade to the
+fallback rather than a broken image.
+
 ## ⚠️ Two deliberate deviations from the ticket (`86expm4xx`)
 
 The implementation differs from two acceptance criteria **on purpose** — recorded

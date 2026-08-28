@@ -304,6 +304,48 @@ export const listProductsForCategory = query({
  * links untouched, so they must not surface here (surfacing them would let an
  * archived membership invisibly consume the picker's cap).
  */
+/**
+ * Category NAMES for every product in the store, keyed by product id
+ * (86eyrtz74) — the product export's `categories` column.
+ *
+ * A separate query rather than a field on `products.listAll`, deliberately: the
+ * dashboard product list is a hot read that runs on every visit, and this is a
+ * fan-out over the junction table needed only when someone clicks Export. The
+ * same reasoning is why `categories.productCount` is denormalized in the first
+ * place (see docs/product-categories.md, "Read model").
+ *
+ * Scoped by `by_retailer` on the junction and resolved once per distinct
+ * category, so the cost is (junction rows + categories), not (products x
+ * categories). ARCHIVED categories are included — unlike
+ * `getProductCategoryIds`, which seeds an editor picker and must only offer
+ * live ones. Here the column is a record of how the seller has filed things,
+ * and blanking it mid-reorganisation would read as data loss.
+ */
+export const namesByProduct = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<Record<string, string[]>> => {
+		await requireRetailerOwner(ctx, retailerId);
+		const joins = await ctx.db
+			.query("productCategories")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		const nameById = new Map<string, string>();
+		for (const id of new Set(joins.map((j) => j.categoryId))) {
+			const category = await ctx.db.get(id);
+			if (category) nameById.set(id, category.name);
+		}
+		const out: Record<string, string[]> = {};
+		for (const j of joins) {
+			const name = nameById.get(j.categoryId);
+			if (!name) continue;
+			(out[j.productId] ??= []).push(name);
+		}
+		// Sorted so an export diffed against last week's doesn't churn on order.
+		for (const names of Object.values(out)) names.sort((a, b) => a.localeCompare(b));
+		return out;
+	},
+});
+
 export const getProductCategoryIds = query({
 	args: { productId: v.id("products") },
 	handler: async (ctx, { productId }): Promise<Id<"categories">[]> => {
