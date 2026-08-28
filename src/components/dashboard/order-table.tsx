@@ -14,11 +14,14 @@ import { type OrderStatus, StatusBadge } from "./status-badge";
  * same column registry (`convex/lib/orderCsv.ts`), which is what keeps "what I
  * see" and "what I export" the same thing.
  *
- * DESKTOP ONLY. The caller renders cards below `lg` and hides the view toggle
- * there — a 36-column table on a 390px screen is not a compromise worth making,
- * and the job this replaces (bookkeeping in a spreadsheet) happens at a laptop.
- * That is also why the 44px touch floor doesn't bind here: it is a mouse
- * surface, per the design system's carve-out.
+ * Available at EVERY width (owner call, 28 Aug — the first build gated it to
+ * `lg` and up). A seller away from their desk still wants the scan-many-orders
+ * view, so instead of withholding it on a phone the table:
+ *   - scrolls horizontally inside its OWN container, never the page (the design
+ *     system's hard rule for wide content), with `min-w-0` on the wrapper so a
+ *     flex parent can't let it push the body wide;
+ *   - grows both row controls to 44px touch targets below `lg`, dropping to
+ *     compact 32px at `lg` and up where the touch floor doesn't apply.
  *
  * Layout is flex-then-grid, not one grid: the two control columns are fixed
  * flex children and the data cells live in an inner grid that the header
@@ -99,15 +102,15 @@ export function OrderTable({
 	const cellGrid = columns.map((c) => `${c.width}px`).join(" ");
 
 	return (
-		<div className="overflow-x-auto rounded-2xl border border-border">
+		<div className="min-w-0 overflow-x-auto rounded-2xl border border-border">
 			<div className="min-w-max">
 				{/* Header. `sticky` keeps it under the seller's eye through a long
 				    scroll — the single biggest thing a spreadsheet does that a card
 				    list doesn't. */}
 				<div className="sticky top-0 z-10 flex h-[42px] items-center border-b border-border bg-muted/70 text-[11px] font-bold uppercase tracking-wider text-muted-foreground backdrop-blur-sm">
-					<span className="w-10 shrink-0" aria-hidden="true" />
+					<span className="w-11 shrink-0 lg:w-10" aria-hidden="true" />
 					<span
-						className="flex w-10 shrink-0 items-center justify-center"
+						className="flex w-11 shrink-0 items-center justify-center lg:w-10"
 						title="Pinned"
 					>
 						<Pin className="size-3.5" aria-hidden="true" />
@@ -161,26 +164,34 @@ export function OrderTable({
 									isSel ? "bg-accent/10" : "hover:bg-muted/40",
 								)}
 							>
-								<span className="flex w-10 shrink-0 items-center justify-center">
+								<span className="flex w-11 shrink-0 items-center justify-center lg:w-10">
 									{selectMode ? (
 										<button
 											type="button"
 											aria-pressed={isSel}
 											aria-label={`Select order ${o.shortId}`}
 											onClick={() => onToggleSelect(o._id)}
-											className={cn(
-												"flex size-[18px] items-center justify-center rounded-md border transition-colors",
-												isSel
-													? "border-accent bg-accent text-accent-foreground"
-													: "border-border bg-background hover:border-ring",
-											)}
+											// The BUTTON carries the 44px touch target; the box
+											// inside stays 18px. Growing the box itself would give
+											// a phone a giant empty square instead of a checkbox.
+											className="flex size-11 items-center justify-center rounded-lg transition-colors hover:bg-muted lg:size-8"
 										>
-											{isSel ? <Check className="size-3" /> : null}
+											<span
+												aria-hidden="true"
+												className={cn(
+													"flex size-[18px] items-center justify-center rounded-md border transition-colors",
+													isSel
+														? "border-accent bg-accent text-accent-foreground"
+														: "border-border bg-background",
+												)}
+											>
+												{isSel ? <Check className="size-3" /> : null}
+											</span>
 										</button>
 									) : null}
 								</span>
 
-								<span className="flex w-10 shrink-0 items-center justify-center">
+								<span className="flex w-11 shrink-0 items-center justify-center lg:w-10">
 									<button
 										type="button"
 										aria-pressed={isPinned}
@@ -193,7 +204,7 @@ export function OrderTable({
 										disabled={pinBusyId === o._id}
 										onClick={() => onTogglePin(o)}
 										className={cn(
-											"flex size-8 items-center justify-center rounded-lg transition-colors disabled:opacity-50",
+											"flex size-11 items-center justify-center rounded-lg transition-colors disabled:opacity-50 lg:size-8",
 											isPinned
 												? "text-accent hover:bg-accent/10"
 												: // Always rendered, never hover-only: a control the

@@ -144,6 +144,8 @@ describe("groupVariantRows — auto-fill", () => {
 			productCount: 1,
 			variantCount: 4,
 			autoFilledCount: 2,
+			// groupVariantRows has no headers — parseVariantImport fills this in.
+			ignoredColumns: [],
 		});
 	});
 
@@ -351,6 +353,8 @@ describe("parseVariantImport — end to end", () => {
 			productCount: 2,
 			variantCount: 2,
 			autoFilledCount: 0,
+			// A legacy hand-made sheet carries no export-only columns (86eyrtz74).
+			ignoredColumns: [],
 		});
 		expect(res.products.every((p) => p.options.length === 0)).toBe(true);
 	});

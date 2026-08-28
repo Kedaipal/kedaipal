@@ -72,11 +72,20 @@ WhatsApp.
 
 - **Two views, not three.** The existing card list *is* the list view; a third
   mode would be a menu with nothing behind it.
-- **Table is DESKTOP-ONLY.** Below `lg` the toggle isn't rendered and cards are
-  forced — including for a `?view=table` link shared from a laptop, which is why
-  the gate is `useIsDesktop()` in JS and not only `hidden lg:flex` in CSS. A
-  36-column table on a 390px screen is not a compromise worth making, and the
-  job it replaces happens at a laptop.
+- **Available at EVERY width.** The first build gated the table to `lg` and up;
+  the owner reversed that (28 Aug) — *"they might need a quick look while on the
+  move"*. Withholding the view was the wrong trade: a horizontally scrolling
+  table is a normal mobile pattern, so instead the table **scrolls inside its own
+  container, never the page** (`min-w-0` + `overflow-x-auto`, the design system's
+  hard rule for wide content) and its row controls **grow to 44px touch targets
+  below `lg`** — with the checkbox's *visual* box staying 18px inside that target,
+  since growing the box itself would give a phone a giant empty square.
+- **The switch is one compact icon button**, not a segmented `Cards | Table`
+  control: the segmented version cost ~150px of a 390px toolbar that search and
+  filters already compete for. The trigger shows only the CURRENT view's icon
+  (grid / rows) and the dropdown names both with a tick on the active one. The
+  column picker sits beside it and is equally available on a phone — a table you
+  can't re-column there is half a view.
 - **No new backend.** `searchOrders` already returned full order docs, so the
   table is purely a render mode over data the client had.
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same

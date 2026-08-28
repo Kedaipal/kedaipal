@@ -80,7 +80,6 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
-import { useIsDesktop } from "../hooks/useIsDesktop";
 import { useOrderColumns } from "../hooks/useOrderColumns";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
@@ -308,7 +307,6 @@ function OrdersRoute() {
 	// Keyed on "" while the retailer is still loading so the hook order is stable
 	// across the early return below.
 	const columnState = useOrderColumns(retailer?._id ?? "");
-	const isDesktop = useIsDesktop();
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
@@ -459,11 +457,13 @@ function OrdersRoute() {
 			resolved,
 		);
 	}
-	// The table is a desktop surface, so `view` alone doesn't decide it: a phone
-	// renders cards whatever the URL says (a shared ?view=table link must not
-	// hand a phone a 36-column table). `lg` is 1024px, matching the Tailwind
-	// breakpoint the toggle itself is gated on.
-	const tableView = view === "table" && isDesktop;
+	// Table view is available at EVERY width (owner call, 28 Aug). The first
+	// build gated it to `lg` and up on the grounds that a wide table can't fit a
+	// phone — but a seller away from their desk still wants the scan-many-orders
+	// view, and a horizontally scrolling table is a normal mobile pattern. So the
+	// table scrolls inside its own container (never the page) and its controls
+	// grow to 44px touch targets below `lg`, rather than the view being withheld.
+	const tableView = view === "table";
 	const allCount = counts
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
 		: undefined;
@@ -929,40 +929,57 @@ function OrdersRoute() {
 							</PopoverContent>
 						</Popover>
 
-						{/* Cards ⇄ Table, and the column picker that only means anything
-						    in table view. Both are `hidden lg:flex`: the table is a
-						    desktop surface (see order-table.tsx), so on a phone the
-						    control is not disabled, it does not exist — a toggle for a
-						    view you can't have is worse than no toggle. */}
-						<div className="hidden shrink-0 items-center gap-2 lg:flex">
-							<div className="flex items-center gap-0.5 rounded-xl border border-border bg-card p-0.5">
-								{(
-									[
-										{ value: "cards", label: "Cards", Icon: LayoutGrid },
-										{ value: "table", label: "Table", Icon: Rows3 },
-									] as const
-								).map(({ value, label, Icon }) => {
-									const active = view === value;
-									return (
-										<button
+						{/* View switch — one compact icon button at EVERY width. A
+						    segmented Cards|Table control costs ~150px of a 390px toolbar
+						    that search and filters already compete for, so the trigger
+						    shows only the CURRENT view's icon and the menu names both.
+						    The column picker sits beside it and is equally available on
+						    a phone — a table you can't re-column there is half a view. */}
+						<div className="flex shrink-0 items-center gap-2">
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<Button
+										type="button"
+										variant="outline"
+										size="icon"
+										className="size-11 shrink-0 rounded-xl lg:size-10"
+										aria-label={`View: ${tableView ? "Table" : "Cards"}. Change view`}
+									>
+										{tableView ? (
+											<Rows3 className="size-5" aria-hidden="true" />
+										) : (
+											<LayoutGrid className="size-5" aria-hidden="true" />
+										)}
+									</Button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end" className="w-48">
+									{(
+										[
+											{ value: "cards", label: "Cards", Icon: LayoutGrid },
+											{ value: "table", label: "Table", Icon: Rows3 },
+										] as const
+									).map(({ value, label, Icon }) => (
+										<DropdownMenuItem
 											key={value}
-											type="button"
-											aria-pressed={active}
-											aria-label={`${label} view`}
-											onClick={() => setView(value)}
-											className={cn(
-												"flex h-10 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-colors",
-												active
-													? "bg-muted text-foreground"
-													: "text-muted-foreground hover:text-foreground",
-											)}
+											onSelect={() => setView(value)}
+											className="gap-2.5"
 										>
-											<Icon className="size-4" aria-hidden="true" />
-											{label}
-										</button>
-									);
-								})}
-							</div>
+											<Icon
+												className="size-4 text-muted-foreground"
+												aria-hidden="true"
+											/>
+											<span className="flex-1">{label}</span>
+											<Check
+												className={cn(
+													"size-4 text-accent",
+													view === value ? "opacity-100" : "opacity-0",
+												)}
+												aria-hidden="true"
+											/>
+										</DropdownMenuItem>
+									))}
+								</DropdownMenuContent>
+							</DropdownMenu>
 							{tableView ? (
 								<OrderColumnPicker
 									isVisible={columnState.isVisible}

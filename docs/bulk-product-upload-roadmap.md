@@ -2,6 +2,51 @@
 
 Review of the current bulk import flow and a prioritized list of features that would measurably help retailers. Not a plan — a reference menu to pull from when we pick up the next round of work.
 
+## Shipped — the export became a catalogue report (2026-08-28, `86eyrtz74`)
+
+The export used to be *only* an import template: eleven columns, the exact shape
+the parser reads. It answered "how do I bulk-edit prices" and nothing else — a
+seller could not see their own categories, storefront visibility or order rules
+anywhere except one product at a time.
+
+It now does **two jobs in one file**, in a deliberate order:
+
+1. **Columns 1–11 are unchanged** (`PRODUCT_IMPORT_ROUNDTRIP_COLUMNS`), same
+   names, same positions, forever. The export → edit → re-import round-trip is
+   untouched.
+2. **Columns 12–24 are the report** (`EXPORT_ONLY_COLUMNS`): `currency`,
+   `categories`, `product_status`, `variant_status`, `storefront`,
+   `product_url`, `min_order_qty`, `min_notice_days`, `stock_policy`,
+   `needs_mockup`, `custom_line`, `reserved`, `photos`.
+
+**The import ignores every report column** — `bulkUpsert` only ever patches
+name/description/currency and price/onHand/parcelWeightG, so re-importing an
+edited sheet can never clobber them, but it also cannot apply an edit to them.
+That would be a silent no-op, so `exportOnlyColumnsPresent()` detects them and
+the import screen says out loud which columns won't be applied. The two lists
+live in separate modules (the import must not depend on the export's shape) and
+a test asserts they match.
+
+**Categories** come from `categories.namesByProduct` — a query of its own, not a
+field on `products.listAll`, because that list is a hot read on every dashboard
+visit and this is a junction fan-out only the Export button needs (the same
+reasoning behind the denormalized `categories.productCount`). Archived
+categories are included: the column records how the seller has filed things, and
+blanking it mid-reorganisation would read as data loss.
+
+**Which variants export changed too.** Previously: active only, with
+"manually deactivated variants are not exported" as a known limitation. Now a
+variant is exported when it is active **or** carries data the seller put there
+(`isExportableVariant`: has a SKU, or a non-zero price or stock). That cleanly
+separates a variant the seller built and switched off — real catalogue data,
+previously invisible — from the auto-filled cartesian gaps, which are exactly
+`{no sku, price 0, stock 0, inactive}` and would otherwise drag fourteen blank
+rows into a 5×4 product's export.
+
+**Still deferred:** the import CONSUMING `categories` (bulk re-categorisation
+from a sheet) is the obvious next step and is genuinely useful for a 200-product
+catalogue — it needs name→category resolution and a rule for unknown names.
+
 ## Shipped — variant-aware import/export (2026-06-04)
 
 The importer + exporter were reworked for the variant schema (subtask of

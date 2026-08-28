@@ -19,6 +19,44 @@ export const PRODUCT_IMPORT_REQUIRED_COLUMNS = [
 
 export const PRODUCT_IMPORT_OPTIONAL_COLUMNS = ["sku", "description"] as const;
 
+/**
+ * Columns the product EXPORT adds for reporting that this parser does not read
+ * (86eyrtz74) — categories, storefront visibility, order rules, stock policy…
+ *
+ * Listed here, not imported from `product-export.ts`, on purpose: this module
+ * is the import contract and must not depend on the export's shape. Kept in
+ * sync by a test that asserts the two lists match.
+ *
+ * `bulkUpsert` never writes these fields, so re-importing an exported sheet
+ * cannot clobber them — but it cannot apply an edit to them either. The import
+ * screen names them rather than letting a seller retype a category and watch
+ * nothing happen.
+ */
+const EXPORT_ONLY_COLUMN_NAMES = [
+	"currency",
+	"categories",
+	"product_status",
+	"variant_status",
+	"storefront",
+	"product_url",
+	"min_order_qty",
+	"min_notice_days",
+	"stock_policy",
+	"needs_mockup",
+	"custom_line",
+	"reserved",
+	"photos",
+] as const;
+
+/**
+ * Which report-only columns this sheet carries — i.e. which of the seller's
+ * edits will NOT be applied. Empty for a hand-made sheet or an older export.
+ */
+export function exportOnlyColumnsPresent(headers: string[]): string[] {
+	const present = new Set(headers.map((h) => h.trim().toLowerCase()));
+	return EXPORT_ONLY_COLUMN_NAMES.filter((c) => present.has(c));
+}
+
 export const PRODUCT_IMPORT_COLUMNS = [
 	"sku",
 	"name",
@@ -265,6 +303,12 @@ export interface GroupedImportResult {
 		productCount: number;
 		variantCount: number;
 		autoFilledCount: number;
+		/**
+		 * Report-only columns this sheet carries (86eyrtz74) — present when the
+		 * seller is re-importing an export. Edits to these are NOT applied, so
+		 * the screen says so rather than letting the change vanish.
+		 */
+		ignoredColumns: string[];
 	};
 }
 
@@ -609,6 +653,7 @@ export function groupVariantRows(
 			productCount: products.length,
 			variantCount,
 			autoFilledCount: autoFilledTotal,
+			ignoredColumns: [],
 		},
 	};
 }
@@ -638,7 +683,12 @@ export function parseVariantImport(
 					],
 				},
 			],
-			summary: { productCount: 0, variantCount: 0, autoFilledCount: 0 },
+			summary: {
+				productCount: 0,
+				variantCount: 0,
+				autoFilledCount: 0,
+				ignoredColumns: [],
+			},
 		};
 	}
 
@@ -664,6 +714,10 @@ export function parseVariantImport(
 	return {
 		products: grouped.products,
 		errorRows: [...errorRows, ...grouped.errorRows],
-		summary: grouped.summary,
+		// Headers are only known here, not inside groupVariantRows.
+		summary: {
+			...grouped.summary,
+			ignoredColumns: exportOnlyColumnsPresent(headers),
+		},
 	};
 }

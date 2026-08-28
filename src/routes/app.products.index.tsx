@@ -43,6 +43,7 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
+import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -198,6 +199,15 @@ function ProductsRoute() {
 			retailer ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
+	// Category names for the export's `categories` column (86eyrtz74). A separate
+	// query, not a field on `listAll`: that list is a hot read on every visit and
+	// this is a junction fan-out only the Export button needs.
+	const categoryNamesByProduct = useQuery(
+		convexQuery(
+			api.categories.namesByProduct,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");
@@ -282,12 +292,23 @@ function ProductsRoute() {
 		}
 		setExporting(kind);
 		try {
-			// One row per active variant, round-trippable with the import parser.
+			// One row per exportable variant. The first eleven columns stay
+			// round-trippable with the import parser; the rest are the catalogue
+			// report (86eyrtz74) — see src/lib/product-export.ts.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
 				handle: p._id,
 				name: p.name,
 				description: p.description,
 				options: p.options ?? [],
+				currency: p.currency,
+				categories: categoryNamesByProduct?.[p._id],
+				active: p.active,
+				hidden: p.hidden,
+				hiddenByCategory: p.hiddenByCategory,
+				url: `${storefrontUrl(retailer.slug)}/p/${p.slug}`,
+				minQuantity: p.minQuantity,
+				minNoticeDays: p.minNoticeDays,
+				imageCount: p.imageUrls?.length ?? 0,
 				variants: p.variants.map((vr) => ({
 					optionValues: vr.optionValues,
 					sku: vr.sku,
@@ -295,6 +316,12 @@ function ProductsRoute() {
 					onHand: vr.onHand,
 					parcelWeightG: vr.parcelWeightG,
 					active: vr.active,
+					reserved: vr.reserved,
+					blockWhenOutOfStock: vr.blockWhenOutOfStock,
+					requiresProof: vr.requiresProof,
+					isCustom: vr.isCustom,
+					customLabel: vr.customLabel,
+					imageCount: vr.imageUrls?.length,
 				})),
 			}));
 			const fileBase = `kedaipal-${retailer.slug}`;
