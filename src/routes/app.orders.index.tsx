@@ -1196,6 +1196,8 @@ function OrdersRoute() {
 							onReorderColumns={(keys) =>
 								columnState.reorder(keys as OrderColumnKey[])
 							}
+							columnWidths={columnState.widths}
+							onColumnWidthsChange={columnState.setWidths}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}

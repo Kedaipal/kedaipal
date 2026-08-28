@@ -12,11 +12,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 /**
  * Choose WHICH columns the orders table shows (86eyrtz74).
  *
- * Show/hide only. **Reordering happens by dragging the table headers**, where
- * every spreadsheet user already expects it — a reorder list buried inside a
- * dropdown is not somewhere anyone thinks to look for it. This panel just names
- * the 36 available columns, grouped by the registry's own sections so a seller
- * hunting for the address doesn't scan an alphabetical wall.
+ * Show/hide only. **Reordering and resizing happen on the table headers** —
+ * drag a header to move it, drag its right border to resize it — where every
+ * spreadsheet user already expects them; a reorder list buried in a dropdown is
+ * not somewhere anyone thinks to look. This panel just names the 36 available
+ * columns, grouped by the registry's own sections so a seller hunting for the
+ * address doesn't scan an alphabetical wall.
+ *
+ * The subtitle is where both gestures get *told* to the seller, since neither
+ * announces itself — this panel is the one place they already come looking when
+ * they want to change the table's shape.
  *
  * Turning a column on appends it to the right-hand end, where the seller can
  * see what they just added rather than having it slotted invisibly into the
@@ -76,14 +81,15 @@ export function OrderColumnPicker({
 				<div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
 					<div className="min-w-0">
 						<p className="text-[13px] font-semibold">Columns</p>
-						<p className="text-[11.5px] text-muted-foreground">
-							Drag the table headers to reorder — exports follow
+						<p className="text-[11.5px] leading-snug text-muted-foreground">
+							Drag a header to reorder, its edge to resize — exports follow
 						</p>
 					</div>
 					{isCustomised ? (
 						<button
 							type="button"
 							onClick={onReset}
+							title="Restore the default columns, order and widths"
 							className="shrink-0 text-[12.5px] font-medium text-accent-emphasis hover:underline dark:text-accent"
 						>
 							Reset

@@ -14,6 +14,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	type ColumnDef,
+	type ColumnSizingState,
 	flexRender,
 	getCoreRowModel,
 	getSortedRowModel,
@@ -25,6 +26,9 @@ import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Pin } from "lucide-react";
 import { useMemo } from "react";
 import {
 	type CsvOrder,
+	clampColumnWidth,
+	ORDER_COLUMN_MAX_WIDTH,
+	ORDER_COLUMN_MIN_WIDTH,
 	type OrderColumn,
 	orderColumnSortValue,
 } from "../../../convex/lib/orderCsv";
@@ -58,7 +62,16 @@ import { type OrderStatus, StatusBadge } from "./status-badge";
  * shadcn's own "data table" is exactly this pairing.
  *
  * Column widths come from `<colgroup>` with `table-fixed`, so a long address
- * column can't collapse the rest.
+ * column can't collapse the rest, and each one is **draggable by its right
+ * border** between `ORDER_COLUMN_MIN_WIDTH` and `ORDER_COLUMN_MAX_WIDTH`
+ * (double-click the handle to restore the registry default). Widths persist per
+ * store beside visibility and order.
+ *
+ * The header is **sticky from `lg` up, and only there**, because a sticky header
+ * needs its scroll container to be bounded — see the `wrapperClassName` note on
+ * `ui/table.tsx`. Below `lg` the table would need a nested VERTICAL scroll
+ * region on top of its horizontal one to make that work, which is a bad trade on
+ * touch, so phones keep one honest page scroll and no sticky header.
  *
  * **Row navigation** follows the house pattern: the row carries an `onClick`
  * and the Order ID cell carries a real `<Link>`. A `<tr>` cannot be an anchor,
@@ -99,6 +112,9 @@ export interface OrderTableProps {
 	onSortingChange: (next: SortingState) => void;
 	/** New left-to-right column order, after a header drag. */
 	onReorderColumns: (keys: string[]) => void;
+	/** Seller-dragged widths, keyed by column. Absent = registry default. */
+	columnWidths: ColumnSizingState;
+	onColumnWidthsChange: (next: ColumnSizingState) => void;
 	selectMode: boolean;
 	selected: Set<string>;
 	onToggleSelect: (id: string) => void;
@@ -112,6 +128,11 @@ export interface OrderTableProps {
  * growing the bundle for two lines.
  */
 const horizontalOnly: Modifier = ({ transform }) => ({ ...transform, y: 0 });
+
+/** The select + pin columns, which are not TanStack columns and never resize:
+ * 44px each on touch, 40px from `lg`. Counted at the touch size so the width
+ * floor is never an under-estimate. */
+const CONTROL_COLUMNS_WIDTH = 88;
 
 /** Cells the registry can't render as plain text — a badge, a link, a masked
  * name. Everything else falls through to `column.value()`, so adding a column
@@ -179,12 +200,32 @@ function SortableHeader({
 	numeric,
 	sortDir,
 	onToggleSort,
+	onResizeStart,
+	onResizeReset,
+	onResizeBy,
+	width,
+	isResizing,
+	isLast,
 }: {
 	id: string;
 	label: string;
 	numeric?: boolean;
 	sortDir: false | "asc" | "desc";
 	onToggleSort: ((e: unknown) => void) | undefined;
+	/** TanStack's resize handler — bound to BOTH mouse and touch starts, which
+	 * is the shape it expects; a pointer-only binding leaves touch dragging
+	 * dead, because the move/end listeners it attaches are per-input-type. */
+	onResizeStart: (e: unknown) => void;
+	onResizeReset: () => void;
+	/** Nudge by a signed number of px — the keyboard path (see the handle). */
+	onResizeBy: (delta: number) => void;
+	/** Current rendered width, for `aria-valuenow`. */
+	width: number;
+	isResizing: boolean;
+	/** The right-most column has no neighbour to give width to, so it gets a
+	 * divider but no handle — a drag there would just push the table wider with
+	 * nothing to show for it. */
+	isLast: boolean;
 }) {
 	const {
 		attributes,
@@ -208,7 +249,9 @@ function SortableHeader({
 				transition,
 			}}
 			className={cn(
-				"bg-muted/70 backdrop-blur-sm",
+				// Solid, not translucent: once the header actually sticks (lg+), rows
+				// scrolling underneath must not show through it.
+				"group/head relative bg-muted",
 				isDragging && "z-20 bg-card shadow-lg",
 			)}
 		>
@@ -239,6 +282,76 @@ function SortableHeader({
 					aria-hidden="true"
 				/>
 			</button>
+
+			{/* The column divider IS the resize handle. One element does both jobs:
+			    it rules the header into a grid (which is most of what makes a table
+			    read as a spreadsheet) and it puts the grab target exactly where
+			    every spreadsheet user already aims. Sitting OUTSIDE the sortable
+			    button is what keeps a resize from starting a column drag — dnd-kit's
+			    listeners are on the button, so they never see this pointer down.
+
+			    The right-most column gets the rule but no handle: it has no
+			    neighbour to take width from, so a drag there would push the table
+			    wider with nothing to show for it. */}
+			{isLast ? (
+				<span
+					aria-hidden="true"
+					className="absolute inset-y-0 right-0 z-10 flex w-4 translate-x-1/2 items-center justify-center"
+				>
+					<span className="h-1/2 w-px rounded-full bg-border" />
+				</span>
+			) : (
+				// A resizer is ARIA's window-splitter: a FOCUSABLE separator carrying
+				// its current and permitted values. Honouring that isn't box-ticking —
+				// it is what makes column width reachable at all without a mouse.
+				// Arrow keys nudge (Shift for a bigger step); Home restores the
+				// default, the same escape hatch the double-click gives.
+				// biome-ignore lint/a11y/useSemanticElements: <hr> is the semantic separator for a static rule; this is the FOCUSABLE window-splitter variant, which has to carry tabIndex, aria-value*, and key + pointer handlers, and sit as a positioned overlay inside a <th>. An <hr> can do none of that.
+				<span
+					role="separator"
+					tabIndex={0}
+					aria-orientation="vertical"
+					aria-label={`Resize ${label}`}
+					aria-valuenow={width}
+					aria-valuemin={ORDER_COLUMN_MIN_WIDTH}
+					aria-valuemax={ORDER_COLUMN_MAX_WIDTH}
+					aria-valuetext={`${width} pixels`}
+					title="Drag or use ← → to resize · double-click to reset"
+					onMouseDown={onResizeStart}
+					onTouchStart={onResizeStart}
+					onDoubleClick={onResizeReset}
+					onKeyDown={(e) => {
+						const step = e.shiftKey ? 40 : 8;
+						if (e.key === "ArrowLeft") {
+							e.preventDefault();
+							onResizeBy(-step);
+						} else if (e.key === "ArrowRight") {
+							e.preventDefault();
+							onResizeBy(step);
+						} else if (e.key === "Home") {
+							e.preventDefault();
+							onResizeReset();
+						}
+					}}
+					// `touch-none` is what lets a dragged handle resize instead of
+					// scrolling the table sideways under the finger.
+					className="absolute inset-y-0 right-0 z-10 flex w-4 translate-x-1/2 cursor-col-resize touch-none items-center justify-center rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+				>
+					<span
+						aria-hidden="true"
+						className={cn(
+							// Idle it is just a hairline ruling the header into a grid.
+							// Hovering the header grows and darkens it — that step is the
+							// only thing that says "this is a control", since a 1px line
+							// otherwise reads as decoration. `bg-border` on `bg-muted` is
+							// deliberately quiet but does resolve at 1:1; it was checked in
+							// a browser against the real tokens rather than guessed.
+							"h-1/2 w-px rounded-full bg-border transition-all group-hover/head:h-full group-hover/head:bg-muted-foreground/50",
+							isResizing && "h-full w-0.5 bg-accent",
+						)}
+					/>
+				</span>
+			)}
 		</TableHead>
 	);
 }
@@ -255,6 +368,8 @@ export function OrderTable({
 	onToggleSelect,
 	onTogglePin,
 	pinBusyId,
+	columnWidths,
+	onColumnWidthsChange,
 }: OrderTableProps) {
 	const navigate = useNavigate();
 
@@ -263,6 +378,9 @@ export function OrderTable({
 			columns.map((c) => ({
 				id: c.key,
 				header: c.label,
+				// The registry width is the DEFAULT size; a seller-dragged width in
+				// `columnWidths` overrides it, and clearing that entry restores this.
+				size: c.width,
 				// The registry IS the accessor: one definition drives the cell, the
 				// CSV and the sort, so the three can't disagree about a column.
 				accessorFn: (o: TableOrder) => orderColumnSortValue(c, o),
@@ -281,15 +399,37 @@ export function OrderTable({
 	const table = useReactTable({
 		data: orders,
 		columns: columnDefs,
-		state: { sorting },
+		state: { sorting, columnSizing: columnWidths },
 		onSortingChange: (updater) =>
 			onSortingChange(
 				typeof updater === "function" ? updater(sorting) : updater,
+			),
+		enableColumnResizing: true,
+		// "onChange" = the column follows the pointer. "onEnd" would only commit on
+		// release, which is cheaper but means dragging a border does nothing
+		// visible until you let go — the opposite of what a spreadsheet does.
+		columnResizeMode: "onChange",
+		defaultColumn: {
+			minSize: ORDER_COLUMN_MIN_WIDTH,
+			maxSize: ORDER_COLUMN_MAX_WIDTH,
+		},
+		onColumnSizingChange: (updater) =>
+			onColumnWidthsChange(
+				typeof updater === "function" ? updater(columnWidths) : updater,
 			),
 		getRowId: (o) => o._id,
 		getCoreRowModel: getCoreRowModel(),
 		getSortedRowModel: getSortedRowModel(),
 	});
+
+	const leafColumns = table.getVisibleLeafColumns();
+	// The table's own width, so `table-fixed` honours the colgroup EXACTLY once
+	// the columns overflow their container. As a floor rather than a fixed width:
+	// under-filled (two or three columns shown) the table still spans the box and
+	// the browser stretches proportionally, which beats a strip of dead space.
+	const contentWidth =
+		CONTROL_COLUMNS_WIDTH +
+		leafColumns.reduce((sum, c) => sum + c.getSize(), 0);
 
 	const byKey = useMemo(
 		() => new Map(columns.map((c) => [c.key as string, c])),
@@ -300,6 +440,25 @@ export function OrderTable({
 		() => columns.map((c) => c.key as string),
 		[columns],
 	);
+
+	/** Double-clicking a handle drops the stored width, so `getSize()` falls back
+	 * to the registry default — the spreadsheet convention, and the only way back
+	 * from a width the seller regrets short of resetting the whole layout. */
+	function resetColumnWidth(id: string) {
+		if (columnWidths[id] === undefined) return;
+		const next = { ...columnWidths };
+		delete next[id];
+		onColumnWidthsChange(next);
+	}
+
+	/** Keyboard nudge. Clamped here as well as on read, so holding an arrow key
+	 * can't walk a column past its bounds. */
+	function nudgeColumnWidth(id: string, from: number, delta: number) {
+		onColumnWidthsChange({
+			...columnWidths,
+			[id]: clampColumnWidth(from + delta),
+		});
+	}
 
 	function handleHeaderDragEnd(event: DragEndEvent) {
 		const { active, over } = event;
@@ -412,9 +571,7 @@ export function OrderTable({
 				{row.getVisibleCells().map((cell) => (
 					<TableCell
 						key={cell.id}
-						className={cn(
-							byKey.get(cell.column.id)?.numeric && "text-right",
-						)}
+						className={cn(byKey.get(cell.column.id)?.numeric && "text-right")}
 					>
 						{flexRender(cell.column.columnDef.cell, cell.getContext())}
 					</TableCell>
@@ -431,26 +588,34 @@ export function OrderTable({
 				modifiers={[horizontalOnly]}
 				onDragEnd={handleHeaderDragEnd}
 			>
-				<Table className="table-fixed">
+				<Table
+					className="table-fixed"
+					style={{ minWidth: `${contentWidth}px` }}
+					// The bounded height is what MAKES the sticky header work: the
+					// wrapper is already a scroll container on both axes (overflow-x
+					// forces overflow-y), so without a cap it never scrolls vertically
+					// and a sticky header silently rides away with the page. `lg` and up
+					// only — a nested vertical scroll on top of the horizontal one is a
+					// bad trade on touch. Don't remove this without removing the sticky.
+					wrapperClassName="lg:max-h-[70dvh]"
+				>
 					{/* Fixed widths live here, not on each cell: without them a long
-					    address column collapses every other column to nothing. */}
+					    address column collapses every other column to nothing. Driven by
+					    `getSize()`, so a dragged border moves the whole column. */}
 					<colgroup>
 						<col className="w-11 lg:w-10" />
 						<col className="w-11 lg:w-10" />
-						{columns.map((c) => (
-							<col key={c.key} style={{ width: `${c.width}px` }} />
+						{leafColumns.map((c) => (
+							<col key={c.id} style={{ width: `${c.getSize()}px` }} />
 						))}
 					</colgroup>
-					{/* `sticky` keeps the header under the seller's eye through a long
+					{/* Sticky keeps the header under the seller's eye through a long
 					    scroll — the single biggest thing a spreadsheet does that a card
 					    list doesn't. */}
-					<TableHeader className="group sticky top-0 z-10">
-						<TableRow className="hover:bg-transparent">
-							<TableHead className="bg-muted/70 backdrop-blur-sm" />
-							<TableHead
-								className="bg-muted/70 text-center backdrop-blur-sm"
-								title="Pinned"
-							>
+					<TableHeader className="group z-10 lg:sticky lg:top-0">
+						<TableRow className="border-b-border hover:bg-transparent">
+							<TableHead className="bg-muted" />
+							<TableHead className="bg-muted text-center" title="Pinned">
 								<Pin className="mx-auto size-3.5" aria-hidden="true" />
 								<span className="sr-only">Pinned</span>
 							</TableHead>
@@ -458,7 +623,7 @@ export function OrderTable({
 								items={columnKeys}
 								strategy={horizontalListSortingStrategy}
 							>
-								{table.getHeaderGroups()[0]?.headers.map((header) => {
+								{table.getHeaderGroups()[0]?.headers.map((header, i, all) => {
 									const col = byKey.get(header.column.id);
 									return (
 										<SortableHeader
@@ -468,6 +633,18 @@ export function OrderTable({
 											numeric={col?.numeric}
 											sortDir={header.column.getIsSorted()}
 											onToggleSort={header.column.getToggleSortingHandler()}
+											onResizeStart={header.getResizeHandler()}
+											onResizeReset={() => resetColumnWidth(header.column.id)}
+											onResizeBy={(delta) =>
+												nudgeColumnWidth(
+													header.column.id,
+													header.column.getSize(),
+													delta,
+												)
+											}
+											width={header.column.getSize()}
+											isResizing={header.column.getIsResizing()}
+											isLast={i === all.length - 1}
 										/>
 									);
 								})}

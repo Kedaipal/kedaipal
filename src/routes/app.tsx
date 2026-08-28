@@ -143,71 +143,71 @@ function AppShell() {
 		// Sidebar and BottomNav are BOTH mounted at all times (hidden by
 		// breakpoint), so per-nav state would auto-open two dialogs (86eyqgxv9).
 		<WhatsNewProvider locale={retailer?.locale ?? "en"}>
-		<div className="flex min-h-dvh">
-			<Sidebar
-				retailer={retailer}
-				newOrdersCount={newOrdersCount}
-				isAdmin={isAdmin}
-				adminBadge={adminOwnStore}
-			/>
-			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
-				{retailer?.actingAsAdmin ? (
-					<div className="print:hidden">
-						<ActingAsBanner storeName={retailer.storeName} />
-					</div>
-				) : null}
-				<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />
-				{/* Store-specific banners only when operating a store. */}
-				{retailer ? (
-					<div className="print:hidden">
-						<SendingPausedBanner
-							paused={retailer.sendingPaused}
-							reason={retailer.sendingPauseReason}
-							slug={retailer.slug}
-						/>
-						<ConsentBanner
-							versions={{
-								termsVersion: retailer.termsVersion,
-								privacyVersion: retailer.privacyVersion,
-								aupVersion: retailer.aupVersion,
-							}}
-						/>
-						{/* Admins run free on their own store — no trial/past-due nag. */}
-						{adminOwnStore ? null : (
-							<SubscriptionBanner
-								subscription={retailer.subscription}
-								ordersThisMonth={retailer.ordersThisMonth}
+			<div className="flex min-h-dvh">
+				<Sidebar
+					retailer={retailer}
+					newOrdersCount={newOrdersCount}
+					isAdmin={isAdmin}
+					adminBadge={adminOwnStore}
+				/>
+				<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
+					{retailer?.actingAsAdmin ? (
+						<div className="print:hidden">
+							<ActingAsBanner storeName={retailer.storeName} />
+						</div>
+					) : null}
+					<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />
+					{/* Store-specific banners only when operating a store. */}
+					{retailer ? (
+						<div className="print:hidden">
+							<SendingPausedBanner
+								paused={retailer.sendingPaused}
+								reason={retailer.sendingPauseReason}
 								slug={retailer.slug}
 							/>
-						)}
-					</div>
-				) : null}
-				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
-					<Outlet />
-					{/* Invisible: browser order alerts (chime + system notification)
+							<ConsentBanner
+								versions={{
+									termsVersion: retailer.termsVersion,
+									privacyVersion: retailer.privacyVersion,
+									aupVersion: retailer.aupVersion,
+								}}
+							/>
+							{/* Admins run free on their own store — no trial/past-due nag. */}
+							{adminOwnStore ? null : (
+								<SubscriptionBanner
+									subscription={retailer.subscription}
+									ordersThisMonth={retailer.ordersThisMonth}
+									slug={retailer.slug}
+								/>
+							)}
+						</div>
+					) : null}
+					<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
+						<Outlet />
+						{/* Invisible: browser order alerts (chime + system notification)
 					    for this device — see Settings → Store → Order alerts. */}
-					<OrderNotificationsBridge retailerId={retailer?._id} />
-				</main>
-				<BottomNav
-					newOrdersCount={newOrdersCount}
-					// Admin tabs when there's no seller store to run, OR whenever an admin
-					// is inside the admin area — so every admin page is reachable on mobile.
-					adminNav={!retailer || (isAdmin && onAdminRoute)}
-					// With a store, the admin row leads with an "App" tab back to it.
-					hasStore={!!retailer}
-					crmLocked={
-						!!retailer &&
-						!retailer.actingAsAdmin &&
-						!hasFeature(retailer.subscription, "crm")
-					}
-					insightsLocked={
-						!!retailer &&
-						!retailer.actingAsAdmin &&
-						!hasFeature(retailer.subscription, "insights")
-					}
-				/>
+						<OrderNotificationsBridge retailerId={retailer?._id} />
+					</main>
+					<BottomNav
+						newOrdersCount={newOrdersCount}
+						// Admin tabs when there's no seller store to run, OR whenever an admin
+						// is inside the admin area — so every admin page is reachable on mobile.
+						adminNav={!retailer || (isAdmin && onAdminRoute)}
+						// With a store, the admin row leads with an "App" tab back to it.
+						hasStore={!!retailer}
+						crmLocked={
+							!!retailer &&
+							!retailer.actingAsAdmin &&
+							!hasFeature(retailer.subscription, "crm")
+						}
+						insightsLocked={
+							!!retailer &&
+							!retailer.actingAsAdmin &&
+							!hasFeature(retailer.subscription, "insights")
+						}
+					/>
+				</div>
 			</div>
-		</div>
 		</WhatsNewProvider>
 	);
 }

@@ -151,6 +151,21 @@ WhatsApp.
   are complements, not alternatives — shadcn's table is markup with no logic,
   TanStack is logic with no markup, and shadcn's own "data table" is exactly
   this pairing. Column widths come from `<colgroup>` + `table-fixed`.
+- **The header is sticky from `lg` up — and it wasn't, before.** `sticky top-0`
+  had been on the header since the table shipped and did **nothing**: CSS forces
+  `overflow-y` to `auto` as soon as `overflow-x` is, so the scroll wrapper — not
+  the page — was the sticky containing block, and with no bounded height it never
+  scrolled vertically, so the header rode away with the page. Verified in a
+  browser, not assumed. The fix is `lg:max-h-[70dvh]` on the wrapper, which makes
+  it a real scroll viewport. **`lg` and up only:** below that, making the header
+  stick would mean a nested *vertical* scroll region stacked on the horizontal
+  one, which is a bad trade on touch — phones keep one honest page scroll and no
+  sticky header. A test pins both halves, because deleting the height looks like
+  harmless tidying and would silently kill the sticky again.
+- **Headers read as a band, not a caption** — 12px `font-bold` at
+  `text-foreground/75` rather than 11px `text-muted-foreground`, on a solid
+  `bg-muted` (translucency is not an option once the header actually sticks), at
+  `h-11` so the sort control also clears the 44px touch floor.
 - **A status pill never wraps.** `StatusBadge` is `inline-block` + `truncate`
   + `max-w-full`: as a plain inline span, a label too long for its container
   ("Ready for Pickup" in a 116px cell, any long custom stage name on a narrow
@@ -165,10 +180,14 @@ WhatsApp.
   convenience on top. Same shape as `customer-list.tsx`.
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same
   registry the CSV writes, so the table and the export can't disagree, **in
-  which columns appear AND in what order**. Visibility + order persist per store
-  in `localStorage` (`useOrderColumns`), deliberately not in the URL (36 toggles
-  would bury the shareable parts) and not in Convex (a personal display
-  preference shouldn't cost a write or sync to a colleague).
+  which columns appear AND in what order**. Visibility, order **and width**
+  persist per store in `localStorage` (`useOrderColumns`), deliberately not in
+  the URL (36 toggles would bury the shareable parts) and not in Convex (a
+  personal display preference shouldn't cost a write or sync to a colleague).
+  Widths live under their own storage key: they change on every frame of a drag
+  while the key list changes on a toggle, and a separate key means a layout
+  written by an older build still loads instead of failing a shape check and
+  dropping the seller's arrangement.
 - **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
   as the drag handle. No separate grip: the shared `useSortableSensors` starts a
   pointer drag only after 8px and a touch drag only after a 250ms hold, so a
@@ -179,6 +198,40 @@ WhatsApp.
   it to the right-hand end, where the seller can see what they added and drag it
   from there. `resolveOrderColumns` honours the caller's order, so the exported
   CSV comes out arranged exactly like the table.
+- **Drag a column's right border to resize it**, between `ORDER_COLUMN_MIN_WIDTH`
+  and `ORDER_COLUMN_MAX_WIDTH` (80–640px). Both bounds exist to prevent dead
+  ends, not to second-guess a layout: below ~80px a header truncates to two
+  characters and a sort glyph — a column you can no longer identify, with no
+  handle left to drag back — and above 640px one column pushes the rest out of
+  the viewport with no visible cue why. **Double-click a handle** to restore that
+  column's registry default; **Reset** in the Columns panel restores all three
+  dimensions at once (a reset that left widths behind would be a half-undo, and
+  there is no other way to clear them wholesale).
+  - **The divider IS the handle.** One element rules the header into a grid —
+    most of what makes a table read as a spreadsheet — and puts the grab target
+    exactly where a spreadsheet user already aims. It sits *outside* the sortable
+    button, which is what stops a resize from starting a column drag: dnd-kit's
+    listeners are on the button, so they never see that pointer down. Idle it is
+    a half-height hairline; hovering the header grows and darkens it (a 1px line
+    with no hover step reads as decoration, not a control); resizing turns it
+    mint. The **right-most column has no handle** — it has no neighbour to take
+    width from.
+  - **The handle is a real ARIA window-splitter**, not a decorative sliver: a
+    focusable `separator` carrying `aria-valuenow/min/max`, with **← →** to
+    nudge (Shift for a bigger step) and **Home** to restore the default. That
+    started as a lint error and turned out to be the right design — a drag-only
+    handle makes column width unreachable without a mouse, and the keyboard path
+    is ~10 lines. It costs one tab stop per column, sitting immediately after
+    that column's sort button, which reads as coherent rather than as noise.
+  - `columnResizeMode: "onChange"`, so the column follows the pointer. `"onEnd"`
+    is cheaper but means dragging a border does nothing visible until you let
+    go — the opposite of what a spreadsheet does. The localStorage write is
+    debounced (300ms) instead, since the sizing callback fires every frame.
+  - The table carries `minWidth: <sum of column widths>` so `table-fixed`
+    honours the `<colgroup>` exactly once the columns overflow. As a floor, not a
+    fixed width: with only two or three columns shown the table still spans its
+    box and the browser stretches proportionally, which beats a strip of dead
+    space.
 - **Per-column sorting**, client-side over the window the inbox already holds,
   so it costs no extra reads. Comparison is **typed, not lexical**: columns
   carry an optional `sortKey` (see `orderColumnSortValue`) returning the

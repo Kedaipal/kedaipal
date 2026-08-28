@@ -57,7 +57,9 @@ export function TikTokIcon({ className }: GlyphProps) {
 	return <Glyph className={className} path={TIKTOK_PATH} brand="TikTok" />;
 }
 export function InstagramIcon({ className }: GlyphProps) {
-	return <Glyph className={className} path={INSTAGRAM_PATH} brand="Instagram" />;
+	return (
+		<Glyph className={className} path={INSTAGRAM_PATH} brand="Instagram" />
+	);
 }
 export function FacebookIcon({ className }: GlyphProps) {
 	return <Glyph className={className} path={FACEBOOK_PATH} brand="Facebook" />;

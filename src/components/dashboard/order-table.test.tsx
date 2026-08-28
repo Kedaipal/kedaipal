@@ -2,6 +2,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	ORDER_COLUMN_MAX_WIDTH,
+	ORDER_COLUMN_MIN_WIDTH,
 	ORDER_COLUMNS_BY_KEY,
 	type OrderColumnKey,
 } from "../../../convex/lib/orderCsv";
@@ -67,10 +69,12 @@ function renderTable(
 		selected: new Set<string>(),
 		onToggleSelect: vi.fn(),
 		onTogglePin: vi.fn(),
+		columnWidths: {},
+		onColumnWidthsChange: vi.fn(),
 		...overrides,
 	};
-	render(<OrderTable {...props} />);
-	return props;
+	const view = render(<OrderTable {...props} />);
+	return { ...props, ...view };
 }
 
 describe("OrderTable", () => {
@@ -138,6 +142,103 @@ describe("OrderTable", () => {
 		expect(badge.className).toContain("truncate");
 		// Truncated text still has to be readable.
 		expect(badge.getAttribute("title")).toBe("Ready for Pickup");
+	});
+
+	it("bounds the scroll container, which is what makes the sticky header work", () => {
+		// The trap: the wrapper is a scroll container on BOTH axes (overflow-x
+		// forces overflow-y), so it — not the page — is the sticky containing
+		// block. With no height cap it never scrolls vertically and `lg:sticky`
+		// does nothing at all, silently. Deleting the max-height looks like
+		// harmless tidying; this test is the tripwire.
+		const { container } = renderTable();
+		const scroller = container.querySelector(".overflow-x-auto");
+		expect(scroller?.className).toContain("lg:max-h-");
+		const head = container.querySelector("thead");
+		expect(head?.className).toContain("lg:sticky");
+	});
+
+	it("gives every column but the last a resize handle", () => {
+		renderTable({ columns: cols("shortId", "customer", "total") });
+		expect(
+			screen.getByRole("separator", { name: /resize order id/i }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("separator", { name: /resize customer/i }),
+		).toBeTruthy();
+		// The right-most column has no neighbour to take width from — a handle
+		// there would drag against nothing.
+		expect(
+			screen.queryByRole("separator", { name: /resize total/i }),
+		).toBeNull();
+	});
+
+	it("double-clicking a handle drops that column's stored width", () => {
+		// Back to the registry default, the spreadsheet convention — and the only
+		// way out of a regretted width short of resetting the whole layout.
+		const { onColumnWidthsChange } = renderTable({
+			columns: cols("shortId", "customer", "total"),
+			columnWidths: { shortId: 300, customer: 220 },
+		});
+		fireEvent.doubleClick(
+			screen.getByRole("separator", { name: /resize order id/i }),
+		);
+		expect(onColumnWidthsChange).toHaveBeenCalledWith({ customer: 220 });
+	});
+
+	it("resizes from the keyboard, which a drag handle alone can never do", () => {
+		const { onColumnWidthsChange } = renderTable({
+			columns: cols("shortId", "customer", "total"),
+			columnWidths: { shortId: 200 },
+		});
+		const handle = screen.getByRole("separator", { name: /resize order id/i });
+		fireEvent.keyDown(handle, { key: "ArrowRight" });
+		expect(onColumnWidthsChange).toHaveBeenLastCalledWith({ shortId: 208 });
+		fireEvent.keyDown(handle, { key: "ArrowLeft", shiftKey: true });
+		expect(onColumnWidthsChange).toHaveBeenLastCalledWith({ shortId: 160 });
+		// Home is the keyboard twin of the double-click.
+		fireEvent.keyDown(handle, { key: "Home" });
+		expect(onColumnWidthsChange).toHaveBeenLastCalledWith({});
+	});
+
+	it("a keyboard nudge can't walk a column past its bounds", () => {
+		const { onColumnWidthsChange } = renderTable({
+			columns: cols("shortId", "customer", "total"),
+			columnWidths: { shortId: ORDER_COLUMN_MIN_WIDTH },
+		});
+		fireEvent.keyDown(
+			screen.getByRole("separator", { name: /resize order id/i }),
+			{ key: "ArrowLeft", shiftKey: true },
+		);
+		expect(onColumnWidthsChange).toHaveBeenLastCalledWith({
+			shortId: ORDER_COLUMN_MIN_WIDTH,
+		});
+	});
+
+	it("reports the current width to assistive tech, so a splitter isn't a mystery control", () => {
+		renderTable({
+			columns: cols("shortId", "customer", "total"),
+			columnWidths: { shortId: 210 },
+		});
+		const handle = screen.getByRole("separator", { name: /resize order id/i });
+		expect(handle.getAttribute("aria-valuenow")).toBe("210");
+		expect(handle.getAttribute("aria-valuemin")).toBe(
+			String(ORDER_COLUMN_MIN_WIDTH),
+		);
+		expect(handle.getAttribute("aria-valuemax")).toBe(
+			String(ORDER_COLUMN_MAX_WIDTH),
+		);
+	});
+
+	it("a resize never starts a column drag — the handle is outside the drag target", () => {
+		// dnd-kit's listeners live on the header BUTTON; the handle is its sibling,
+		// so a pointer down on the border can't be read as a reorder.
+		const { onReorderColumns } = renderTable({
+			columns: cols("shortId", "customer", "total"),
+		});
+		const handle = screen.getByRole("separator", { name: /resize order id/i });
+		fireEvent.mouseDown(handle, { clientX: 120 });
+		fireEvent.mouseUp(handle, { clientX: 200 });
+		expect(onReorderColumns).not.toHaveBeenCalled();
 	});
 
 	it("pins from the row, passing the order back", () => {

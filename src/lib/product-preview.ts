@@ -69,15 +69,16 @@ export function draftPreviewOverlay(draft: ProductFormDraft) {
 
 	// Mirror productWithVariants: quote lines (proof-gated at price 0) are
 	// excluded from the displayed range.
-	const isQuote = (vr: PreviewVariant) =>
-		vr.requiresProof && vr.price === 0;
+	const isQuote = (vr: PreviewVariant) => vr.requiresProof && vr.price === 0;
 	const prices = variants.filter((vr) => !isQuote(vr)).map((vr) => vr.price);
 	const minQty = Number(draft.minQuantity.trim());
 
 	return {
 		name: draft.name.trim() || "Untitled product",
 		description:
-			draft.description.trim().length > 0 ? draft.description.trim() : undefined,
+			draft.description.trim().length > 0
+				? draft.description.trim()
+				: undefined,
 		imageStorageIds: draft.images.map((i) => i.id),
 		imageUrls: draft.images.map((i) => i.url),
 		options: draft.editor.options,
@@ -91,7 +92,6 @@ export function draftPreviewOverlay(draft: ProductFormDraft) {
 			vr.blockWhenOutOfStock ? vr.onHand > 0 : true,
 		),
 		hidden: draft.hidden,
-		minQuantity:
-			Number.isInteger(minQty) && minQty >= 2 ? minQty : undefined,
+		minQuantity: Number.isInteger(minQty) && minQty >= 2 ? minQty : undefined,
 	};
 }

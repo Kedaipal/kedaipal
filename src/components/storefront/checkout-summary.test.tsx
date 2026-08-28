@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { CartItem, UseCart } from "../../hooks/useCart";
 import {
-	CheckoutSummary,
 	type CheckoutQuoteView,
+	CheckoutSummary,
 	CheckoutTotals,
 } from "./checkout-summary";
 

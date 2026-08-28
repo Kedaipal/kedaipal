@@ -199,6 +199,30 @@ export const ORDER_COLUMN_GROUP_LABELS: Record<OrderColumnGroup, string> = {
 	money: "Money",
 };
 
+/**
+ * Resize bounds for a table column, in px (86eyrtz74).
+ *
+ * The floor keeps a column readable — below ~80px a header truncates to two
+ * characters and a sort glyph, which is a column you can no longer identify,
+ * and a column dragged to nothing has no handle left to drag back. The ceiling
+ * stops one column (an address, a long item list) from being dragged so wide
+ * that everything else is pushed out of the viewport with no visible cue as to
+ * why. Both are deliberately generous: they exist to prevent dead ends, not to
+ * second-guess the seller's layout.
+ */
+export const ORDER_COLUMN_MIN_WIDTH = 80;
+export const ORDER_COLUMN_MAX_WIDTH = 640;
+
+/** Hold a width inside those bounds. Applied on every path that can set one —
+ * a keyboard nudge, and reading a stored layout back — so a width the bounds
+ * have since moved past can't survive a reload. */
+export function clampColumnWidth(width: number): number {
+	return Math.min(
+		ORDER_COLUMN_MAX_WIDTH,
+		Math.max(ORDER_COLUMN_MIN_WIDTH, Math.round(width)),
+	);
+}
+
 export interface OrderColumn {
 	key: OrderColumnKey;
 	/** CSV header AND table header — one label, so a seller reading the table
@@ -210,7 +234,9 @@ export interface OrderColumn {
 	/** In the table's default column set. The rest are opt-in via the picker —
 	 * every column is available, but 36 at once is unreadable. */
 	defaultVisible?: boolean;
-	/** Table column width in px. */
+	/** Table column width in px — the DEFAULT. The seller can drag it between
+	 * `ORDER_COLUMN_MIN_WIDTH` and `ORDER_COLUMN_MAX_WIDTH`, and double-clicking
+	 * the handle returns the column to this value. */
 	width: number;
 	value: (o: CsvOrder) => string;
 	/**

@@ -174,7 +174,7 @@ function productToExportRows(p: ExportableProduct): ExportRow[] {
 		needs_mockup: yesBlank(vr.requiresProof),
 		// Label rather than "Yes": on a custom line the seller's own wording is
 		// the useful answer, and its presence already means isCustom.
-		custom_line: vr.isCustom ? (vr.customLabel?.trim() || "Custom") : "",
+		custom_line: vr.isCustom ? vr.customLabel?.trim() || "Custom" : "",
 		reserved: vr.reserved ? String(vr.reserved) : "0",
 		photos: String(vr.imageCount ?? p.imageCount ?? 0),
 	}));

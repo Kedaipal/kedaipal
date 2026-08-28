@@ -1,7 +1,6 @@
 import ExcelJS from "exceljs";
 import { describe, expect, test } from "vitest";
 import { parseProductsCsv } from "./csv";
-import { exportOnlyColumnsPresent } from "./product-import";
 import {
 	buildExportFilename,
 	EXPORT_ONLY_COLUMNS,
@@ -9,10 +8,11 @@ import {
 	type ExportableVariant,
 	isExportableVariant,
 	PRODUCT_IMPORT_ROUNDTRIP_COLUMNS,
-	REPORT_COLUMNS,
 	productsToCsvString,
 	productsToXlsxBlob,
+	REPORT_COLUMNS,
 } from "./product-export";
+import { exportOnlyColumnsPresent } from "./product-import";
 
 const sampleProducts: ExportableProduct[] = [
 	{
@@ -389,7 +389,9 @@ describe("round-trip preserves sellability (PR #230 review, MEDIUM)", () => {
 	};
 
 	test("an exported inactive variant re-imports as INACTIVE", () => {
-		const parsed = parseProductsCsv(productsToCsvString(withDeactivated ? [withDeactivated] : []));
+		const parsed = parseProductsCsv(
+			productsToCsvString(withDeactivated ? [withDeactivated] : []),
+		);
 		expect(parsed.errorRows).toEqual([]);
 		const variants = parsed.products[0].variants;
 		const one = variants.find((v) => v.sku === "KEK-1");

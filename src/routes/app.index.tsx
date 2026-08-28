@@ -599,10 +599,7 @@ function DashboardHome() {
 					</div>
 					{/* Campaign-tagged variants of the same link (86eyq0eq9) — sits
 					    with the link actions, never on a QR surface. */}
-					<TaggedShareLinks
-						storefrontUrl={storefrontUrl}
-						onCopy={stampShare}
-					/>
+					<TaggedShareLinks storefrontUrl={storefrontUrl} onCopy={stampShare} />
 				</section>
 			) : null}
 

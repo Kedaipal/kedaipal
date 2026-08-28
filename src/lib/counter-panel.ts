@@ -53,9 +53,7 @@ export interface PrimaryAction {
  * The single primary action. There is exactly one at any time — two competing
  * full-width buttons in the same slot is what made the old panel ambiguous.
  */
-export function counterPrimaryAction(
-	input: PrimaryActionInput,
-): PrimaryAction {
+export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 	const { mode, empty, unpriced, money, windowMinutes, buyerName } = input;
 	if (mode === "send") {
 		const reason = empty

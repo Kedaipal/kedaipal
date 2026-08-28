@@ -188,9 +188,10 @@ describe("the shipped RELEASES content", () => {
 		for (const r of RELEASES) {
 			for (const e of r.entries) {
 				if (e.href === undefined) continue;
-				expect(e.href.startsWith("/app"), `${e.href} must start with /app`).toBe(
-					true,
-				);
+				expect(
+					e.href.startsWith("/app"),
+					`${e.href} must start with /app`,
+				).toBe(true);
 			}
 		}
 	});
@@ -249,9 +250,7 @@ describe("the shipped RELEASES content", () => {
 
 		for (const r of RELEASES) {
 			for (const e of r.entries) {
-				const tab = new URLSearchParams(e.href?.split("?")[1] ?? "").get(
-					"tab",
-				);
+				const tab = new URLSearchParams(e.href?.split("?")[1] ?? "").get("tab");
 				if (tab === null) continue;
 				expect(
 					tabs.includes(tab),

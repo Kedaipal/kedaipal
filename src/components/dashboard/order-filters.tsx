@@ -470,7 +470,8 @@ export function OrderFilters({
 									))}
 								</div>
 								<p className="text-[11px] text-muted-foreground">
-									Where the buyer came from — tag your links on Home to add more.
+									Where the buyer came from — tag your links on Home to add
+									more.
 								</p>
 							</div>
 						) : null}

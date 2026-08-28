@@ -18,15 +18,15 @@ import {
 } from "lucide-react";
 import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
-import { AppVersionRow } from "./app-version-row";
-import { WhatsNewNavItem } from "./whats-new";
 import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
+import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
+import { WhatsNewNavItem } from "./whats-new";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>

@@ -323,11 +323,7 @@ function MoreTab({
 						{/* `close` so shutting the notes returns the seller to the page
 						    they were on, not to a still-open More sheet — every sibling
 						    row here already closes it. */}
-						<WhatsNewNavItem
-							variant="row"
-							className="flex-1"
-							onOpen={close}
-						/>
+						<WhatsNewNavItem variant="row" className="flex-1" onOpen={close} />
 						{/* No extra right padding: the pill's 44px touch target already
 						    insets it from the panel edge, and `pr-3` on top pushed it
 						    visually adrift of the rows above. */}
