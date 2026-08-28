@@ -84,6 +84,31 @@ worse than no entry at all. Keep them apart.
 6. **Most releases earn no entry at all.** An empty release is simply absent
    from the array — nothing shown, nothing stamped.
 
+### When the version isn't known yet — author in the release PR
+
+Step 2 says `version` must match the `package.json` that ships the change, but
+that number is chosen **by hand in the staging→main release PR**
+([`ci.md`](./ci.md#the-convention-bump-by-hand-in-the-release-pr)) — so a
+feature PR merging into `staging` usually cannot know it. Both releases so far
+have therefore been authored in a **release-notes PR of their own**, opened
+against `staging` immediately before the release PR:
+
+1. Bump `package.json` to the new `YYYY.MM.N`.
+2. Add the release to `RELEASES` with that version, newest first.
+3. Decide `notable` — the same PR, because it is the same judgement.
+4. Merge to `staging`, so the staging→main PR carries the bump and the notes as
+   one unit.
+
+Authoring in the feature's own PR — step 1 of *How to add an entry* — still
+holds wherever the version *is* already known: a hotfix straight to `main`, or a
+second feature landing into an already-bumped release. It is the better place
+when it is available, since the copy then ships with the code it describes.
+
+What must never split is **the bump and the notes**. Notes for a version the
+build isn't running are dropped by `releasesInBuild` with no error anywhere, so
+the release announces nothing and looks like it worked. A test pins that the
+newest entry is never ahead of `package.json`.
+
 Ordering, duplicate versions, non-empty English copy and in-app hrefs are all
 pinned by `src/lib/releases.test.ts`, so a malformed entry fails the gate rather
 than rendering badly.
