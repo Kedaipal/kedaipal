@@ -1,9 +1,20 @@
-// Pure CSV serialization for the orders-inbox bulk export. The export's job is
-// bookkeeping — one row per order, amounts as plain numbers so spreadsheets sum
-// them — so this is intentionally NOT a PDF. No Convex imports; unit-tested in
-// orders.test.ts. See docs/invoices-receipts.md.
+// The order-inbox COLUMN REGISTRY — one definition of "what an order looks like
+// as a row", shared by the CSV export and the dashboard's table view.
+//
+// Why one registry: the table exists to stop sellers exporting to Excel out of
+// habit (86eyrtz74), which only works if the table shows everything the export
+// does. Two lists would drift the first time a column was added to one of them,
+// and the seller would be back in Excel. So `ORDER_COLUMNS` below is the single
+// source of truth: the CSV writes it in order, the table renders from it, and
+// the table's "export visible columns" passes a subset of the same keys.
+//
+// Amounts are plain numbers so spreadsheets sum them — the export's job is
+// bookkeeping, which is why this is NOT a PDF. No Convex imports; unit-tested
+// in orderCsv.test.ts. See docs/invoices-receipts.md + docs/order-inbox.md.
 
+import { sourceLabel } from "./attribution";
 import { orderCustomerLabel } from "./customer";
+import { formatFulfilmentTime } from "./fulfilmentDate";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -23,13 +34,30 @@ export function csvAmount(minorUnits: number): string {
 	return (minorUnits / 100).toFixed(2);
 }
 
+/** Flag columns read as "Yes"/"" — never "false", which a spreadsheet shows as
+ * text clutter on the majority of rows that don't have the flag. */
+function csvFlag(on: boolean | undefined): string {
+	return on ? "Yes" : "";
+}
+
 export type CsvOrder = {
 	shortId: string;
 	createdAt: number;
 	fulfilmentDate?: number;
+	/** Buyer's chosen time slot, minutes since MYT midnight. Stored separately
+	 * from `fulfilmentDate` (which keeps a whole-day invariant), so it needs its
+	 * own column — a date alone can't tell a made-to-order seller when the
+	 * customer is actually coming. */
+	fulfilmentTimeMinutes?: number;
 	status: string;
 	paymentStatus?: string;
 	paymentMethod?: string;
+	/** Buyer/seller-entered payment reference — the join key for reconciling a
+	 * bank statement, and the single most-requested bookkeeping field. */
+	paymentReference?: string;
+	/** When the money actually landed. Distinct from `createdAt`: cash-flow
+	 * accounting is keyed on the date PAID, not the date ordered. */
+	paymentReceivedAt?: number;
 	deliveryMethod?: string;
 	/** Frozen trip direction (86eyg0n8e). A collection order's rider went
 	 * buyer -> store, so the Fulfilment CELL reads "collection" instead of
@@ -38,91 +66,550 @@ export type CsvOrder = {
 	 * direction varies per order), so the header must stay fixed — a
 	 * seller's bookkeeping template keys on column names. */
 	deliveryDirection?: string;
+	/** Checkout surface (storefront / counter / claim). The inbox filters on it;
+	 * before 86eyrtz74 the export couldn't tell a walk-in from a web order. */
+	source?: string;
+	/** Marketing origin the buyer arrived from (86eyq0eq9). Insights reports it;
+	 * the export now carries it so the two can be reconciled. */
+	attributionSource?: string;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
+	/** Names of every category the order's products belong to, deduped across
+	 * lines. Resolved LIVE at export time, not frozen on the order — categories
+	 * are a pure browse layer by design (docs/product-categories.md), so this is
+	 * "what these products are filed under today", which can differ from what
+	 * they were filed under when sold. Named "Categories (current)" for exactly
+	 * that reason. */
+	categories?: string[];
 	subtotal: number;
+	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
+	 * `computeOrderTotals` ADDS it to `total` alongside the fees, so WITHOUT
+	 * this column `Subtotal + Pickup fee + Delivery fee` silently fails to
+	 * reconcile against `Total` on every custom order — the bug this column
+	 * exists to fix. Prints "0.00" (never blank) so the identity sums. */
+	mockupQuotedAmount?: number;
 	/** Frozen per-location pickup fee (minor units). Undefined/0 = free — the
-	 * column prints "0.00" (never blank) so `Subtotal + Pickup fee + Delivery
-	 * fee = Total` sums in a spreadsheet for a standard order. (A made-to-order/
-	 * custom order also folds a mockup quote into `total`, and there's no quote
-	 * column, so that identity doesn't hold there — the quote never was in the
-	 * export.) */
+	 * column prints "0.00" (never blank) so `Subtotal + Custom work + Pickup fee
+	 * + Delivery fee = Total` sums in a spreadsheet for every order shape. */
 	pickupFee?: number;
 	/** Frozen delivery charge (minor units) — same "0.00 never blank" rule as
 	 * pickupFee so the totals identity sums. */
 	deliveryFee?: number;
+	/** True while the delivery charge is still unquoted: `total` is provisional
+	 * and understates the final bill. Without this column the Total column lies
+	 * with no way to tell which rows are affected. */
+	deliveryFeePending?: boolean;
 	total: number;
 	currency: string;
 	customerNote?: string;
+	/** Structured shipping address. Split across columns rather than joined into
+	 * one cell so a seller can mail-merge into a courier portal — the reported
+	 * gap that started 86eyrtz74. Absent on self-collect orders. */
+	deliveryAddress?: {
+		line1: string;
+		line2?: string;
+		city: string;
+		state: string;
+		postcode: string;
+		notes?: string;
+	};
+	/** Frozen pickup location for self-collect orders. The sibling of the address
+	 * gap: without it a multi-outlet seller cannot split self-collect orders by
+	 * outlet. Survives the location being deleted later (it's a snapshot). */
+	pickupSnapshot?: { label: string; address: string };
 	/** Manual parcel-courier shipment info (delivery orders marked shipped via
 	 * J&T/DD Cold Chain/etc). Blank when not attached — most orders. */
 	courierName?: string;
 	trackingNo?: string;
+	cancelledReason?: string;
+	/** Seller's manual bookmark (86eyrtz74). Exported so a pinned row stays
+	 * identifiable — and removable — once the CSV is open in Excel. */
+	pinnedAt?: number;
 };
 
-/** Fixed column order — the header row and every record follow this. */
-export const CSV_COLUMNS = [
-	"Order ID",
-	"Order date",
-	"Fulfilment date",
-	"Customer",
-	"Phone",
-	"Fulfilment",
-	// Courier + consignment number sit with the fulfilment column they refine.
-	"Courier",
-	"Tracking no",
-	"Status",
-	"Payment",
-	"Payment method",
-	"Items",
-	"Subtotal",
-	"Pickup fee",
-	"Delivery fee",
-	"Total",
-	"Currency",
-	"Note",
-] as const;
+export type OrderColumnKey =
+	| "shortId"
+	| "createdAt"
+	| "fulfilmentDate"
+	| "fulfilmentTime"
+	| "customer"
+	| "phone"
+	| "fulfilment"
+	| "addressLine1"
+	| "addressLine2"
+	| "city"
+	| "state"
+	| "postcode"
+	| "addressNotes"
+	| "pickupLocation"
+	| "pickupAddress"
+	| "courierName"
+	| "trackingNo"
+	| "status"
+	| "orderType"
+	| "attribution"
+	| "paymentStatus"
+	| "paymentMethod"
+	| "paymentReference"
+	| "paidAt"
+	| "items"
+	| "categories"
+	| "subtotal"
+	| "customWork"
+	| "pickupFee"
+	| "deliveryFee"
+	| "total"
+	| "currency"
+	| "feePending"
+	| "note"
+	| "cancelledReason"
+	| "pinned";
 
-/** One order -> the column values (same order as CSV_COLUMNS). */
-export function orderToCsvRow(o: CsvOrder): string[] {
-	const items = o.items
-		.map(
-			(it) =>
-				`${it.quantity}x ${it.name}${
-					it.variantLabel ? ` (${it.variantLabel})` : ""
-				}`,
-		)
-		.join("; ");
-	return [
-		o.shortId,
-		csvDate(o.createdAt),
-		csvDate(o.fulfilmentDate),
+/** Column groups, used to section the table's show/hide picker. */
+export type OrderColumnGroup =
+	| "order"
+	| "customer"
+	| "fulfilment"
+	| "payment"
+	| "items"
+	| "money";
+
+export const ORDER_COLUMN_GROUP_LABELS: Record<OrderColumnGroup, string> = {
+	order: "Order",
+	customer: "Customer",
+	fulfilment: "Fulfilment",
+	payment: "Payment",
+	items: "Items",
+	money: "Money",
+};
+
+export interface OrderColumn {
+	key: OrderColumnKey;
+	/** CSV header AND table header — one label, so a seller reading the table
+	 * and a seller reading the spreadsheet are looking at the same word. */
+	label: string;
+	group: OrderColumnGroup;
+	/** Right-aligned + tabular in the table (amounts). */
+	numeric?: boolean;
+	/** In the table's default column set. The rest are opt-in via the picker —
+	 * every column is available, but 36 at once is unreadable. */
+	defaultVisible?: boolean;
+	/** Table column width in px. */
+	width: number;
+	value: (o: CsvOrder) => string;
+	/**
+	 * Value the TABLE sorts on, when the rendered string would sort wrong
+	 * (86eyrtz74). Money is a string of digits ("125.00" < "86.00"
+	 * lexically) and a 12-hour time is worse ("3:30 PM" < "9:00 AM"), so those
+	 * columns hand back the underlying number instead. Dates could ride their
+	 * ISO string, but the epoch is exact and needs no reasoning about it.
+	 *
+	 * `undefined` means "no value" and always sinks to the bottom regardless of
+	 * direction — a dateless order is not "earliest", it is unscheduled.
+	 * Columns without a `sortKey` sort on their lowercased display string.
+	 */
+	sortKey?: (o: CsvOrder) => number | string | undefined;
+}
+
+/**
+ * Every column, in export order.
+ *
+ * ORDERING RULE: the 18 columns that existed before 86eyrtz74 keep their
+ * relative order — new columns are interleaved where they belong rather than
+ * bolted on the end, so a seller's name-keyed spreadsheet template still reads
+ * left-to-right in the same sequence. The one thing that MUST stay adjacent is
+ * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee · Total`
+ * reconciles by inspection, which is the whole point of adding Custom work.
+ *
+ * DELIBERATELY ABSENT: `trackingToken`. It is the capability that unlocks the
+ * buyer's no-auth tracking page (see schema `orders.trackingToken`), so it must
+ * never reach a spreadsheet that gets emailed to a bookkeeper. Same for the
+ * internal ids, storage ids and `gateway*` / `confirmationPush*` plumbing —
+ * none of it is bookkeeping data.
+ */
+export const ORDER_COLUMNS: readonly OrderColumn[] = [
+	{
+		key: "shortId",
+		label: "Order ID",
+		group: "order",
+		defaultVisible: true,
+		width: 108,
+		value: (o) => o.shortId,
+	},
+	{
+		key: "createdAt",
+		label: "Order date",
+		group: "order",
+		defaultVisible: true,
+		width: 116,
+		value: (o) => csvDate(o.createdAt),
+		sortKey: (o) => o.createdAt,
+	},
+	{
+		key: "fulfilmentDate",
+		label: "Fulfilment date",
+		group: "fulfilment",
+		defaultVisible: true,
+		width: 128,
+		value: (o) => csvDate(o.fulfilmentDate),
+		sortKey: (o) => o.fulfilmentDate,
+	},
+	{
+		key: "fulfilmentTime",
+		label: "Fulfilment time",
+		group: "fulfilment",
+		width: 124,
+		value: (o) =>
+			o.fulfilmentTimeMinutes === undefined
+				? ""
+				: formatFulfilmentTime(o.fulfilmentTimeMinutes),
+		// "3:30 PM" would sort before "9:00 AM" as text.
+		sortKey: (o) => o.fulfilmentTimeMinutes,
+	},
+	{
+		key: "customer",
+		label: "Customer",
+		group: "customer",
+		defaultVisible: true,
+		width: 160,
 		// "" (not "Anonymous") stays the default for a phone-only order with no
 		// name, so existing exports are unchanged; an anonymous walk-in (no phone)
 		// reads "Walk-in customer" instead of blank.
-		orderCustomerLabel(o.customer, ""),
-		o.customer.waPhone ?? "",
-		o.deliveryDirection === "collection" ? "collection" : (o.deliveryMethod ?? ""),
-		o.courierName ?? "",
-		o.trackingNo ?? "",
-		o.status,
-		o.paymentStatus ?? "unpaid",
-		o.paymentMethod ?? "",
-		items,
-		csvAmount(o.subtotal),
-		csvAmount(o.pickupFee ?? 0),
-		csvAmount(o.deliveryFee ?? 0),
-		csvAmount(o.total),
-		o.currency,
-		o.customerNote ?? "",
-	];
+		value: (o) => orderCustomerLabel(o.customer, ""),
+	},
+	{
+		key: "phone",
+		label: "Phone",
+		group: "customer",
+		defaultVisible: true,
+		width: 140,
+		value: (o) => o.customer.waPhone ?? "",
+	},
+	{
+		key: "fulfilment",
+		label: "Fulfilment",
+		group: "fulfilment",
+		defaultVisible: true,
+		width: 116,
+		value: (o) =>
+			o.deliveryDirection === "collection"
+				? "collection"
+				: (o.deliveryMethod ?? ""),
+	},
+	{
+		key: "addressLine1",
+		label: "Address line 1",
+		group: "fulfilment",
+		width: 200,
+		value: (o) => o.deliveryAddress?.line1 ?? "",
+	},
+	{
+		key: "addressLine2",
+		label: "Address line 2",
+		group: "fulfilment",
+		width: 170,
+		value: (o) => o.deliveryAddress?.line2 ?? "",
+	},
+	{
+		key: "city",
+		label: "City",
+		group: "fulfilment",
+		width: 130,
+		value: (o) => o.deliveryAddress?.city ?? "",
+	},
+	{
+		key: "state",
+		label: "State",
+		group: "fulfilment",
+		width: 130,
+		value: (o) => o.deliveryAddress?.state ?? "",
+	},
+	{
+		key: "postcode",
+		label: "Postcode",
+		group: "fulfilment",
+		width: 100,
+		value: (o) => o.deliveryAddress?.postcode ?? "",
+	},
+	{
+		key: "addressNotes",
+		label: "Address notes",
+		group: "fulfilment",
+		width: 180,
+		value: (o) => o.deliveryAddress?.notes ?? "",
+	},
+	{
+		key: "pickupLocation",
+		label: "Pickup location",
+		group: "fulfilment",
+		width: 150,
+		value: (o) => o.pickupSnapshot?.label ?? "",
+	},
+	{
+		key: "pickupAddress",
+		label: "Pickup address",
+		group: "fulfilment",
+		width: 200,
+		value: (o) => o.pickupSnapshot?.address ?? "",
+	},
+	{
+		key: "courierName",
+		label: "Courier",
+		group: "fulfilment",
+		width: 120,
+		value: (o) => o.courierName ?? "",
+	},
+	{
+		key: "trackingNo",
+		label: "Tracking no",
+		group: "fulfilment",
+		width: 150,
+		value: (o) => o.trackingNo ?? "",
+	},
+	{
+		key: "status",
+		label: "Status",
+		group: "order",
+		defaultVisible: true,
+		width: 116,
+		value: (o) => o.status,
+	},
+	{
+		key: "orderType",
+		label: "Order type",
+		group: "order",
+		width: 110,
+		// Legacy orders carry no stamped source and read as "storefront" —
+		// the same default the inbox predicate applies.
+		value: (o) => o.source ?? "storefront",
+	},
+	{
+		key: "attribution",
+		label: "Came from",
+		group: "order",
+		width: 124,
+		value: (o) =>
+			o.attributionSource ? sourceLabel(o.attributionSource) : "",
+	},
+	{
+		key: "paymentStatus",
+		label: "Payment",
+		group: "payment",
+		defaultVisible: true,
+		width: 110,
+		value: (o) => o.paymentStatus ?? "unpaid",
+	},
+	{
+		key: "paymentMethod",
+		label: "Payment method",
+		group: "payment",
+		width: 140,
+		value: (o) => o.paymentMethod ?? "",
+	},
+	{
+		key: "paymentReference",
+		label: "Payment reference",
+		group: "payment",
+		width: 170,
+		value: (o) => o.paymentReference ?? "",
+	},
+	{
+		key: "paidAt",
+		label: "Paid on",
+		group: "payment",
+		width: 116,
+		value: (o) => csvDate(o.paymentReceivedAt),
+		sortKey: (o) => o.paymentReceivedAt,
+	},
+	{
+		key: "items",
+		label: "Items",
+		group: "items",
+		defaultVisible: true,
+		width: 280,
+		value: (o) =>
+			o.items
+				.map(
+					(it) =>
+						`${it.quantity}x ${it.name}${
+							it.variantLabel ? ` (${it.variantLabel})` : ""
+						}`,
+				)
+				.join("; "),
+	},
+	{
+		key: "categories",
+		label: "Categories (current)",
+		group: "items",
+		width: 180,
+		// Comma-separated flat list of every category across the order's
+		// products, deduped. See CsvOrder.categories for the drift caveat.
+		value: (o) => (o.categories ?? []).join(", "),
+	},
+	{
+		key: "subtotal",
+		label: "Subtotal",
+		group: "money",
+		numeric: true,
+		width: 106,
+		value: (o) => csvAmount(o.subtotal),
+		sortKey: (o) => o.subtotal,
+	},
+	{
+		key: "customWork",
+		label: "Custom work",
+		group: "money",
+		numeric: true,
+		width: 118,
+		value: (o) => csvAmount(o.mockupQuotedAmount ?? 0),
+		sortKey: (o) => o.mockupQuotedAmount ?? 0,
+	},
+	{
+		key: "pickupFee",
+		label: "Pickup fee",
+		group: "money",
+		numeric: true,
+		width: 110,
+		value: (o) => csvAmount(o.pickupFee ?? 0),
+		sortKey: (o) => o.pickupFee ?? 0,
+	},
+	{
+		key: "deliveryFee",
+		label: "Delivery fee",
+		group: "money",
+		numeric: true,
+		width: 116,
+		value: (o) => csvAmount(o.deliveryFee ?? 0),
+		sortKey: (o) => o.deliveryFee ?? 0,
+	},
+	{
+		key: "total",
+		label: "Total",
+		group: "money",
+		numeric: true,
+		defaultVisible: true,
+		width: 110,
+		value: (o) => csvAmount(o.total),
+		sortKey: (o) => o.total,
+	},
+	{
+		key: "currency",
+		label: "Currency",
+		group: "money",
+		width: 96,
+		value: (o) => o.currency,
+	},
+	{
+		key: "feePending",
+		label: "Fee pending",
+		group: "money",
+		width: 116,
+		value: (o) => csvFlag(o.deliveryFeePending),
+	},
+	{
+		key: "note",
+		label: "Note",
+		group: "items",
+		width: 220,
+		value: (o) => o.customerNote ?? "",
+	},
+	{
+		key: "cancelledReason",
+		label: "Cancelled reason",
+		group: "order",
+		width: 180,
+		value: (o) => o.cancelledReason ?? "",
+	},
+	{
+		key: "pinned",
+		label: "Pinned",
+		group: "order",
+		width: 92,
+		value: (o) => csvFlag(o.pinnedAt !== undefined),
+	},
+] as const;
+
+/** Lookup by key — the table and the export both resolve subsets through this. */
+export const ORDER_COLUMNS_BY_KEY = new Map<OrderColumnKey, OrderColumn>(
+	ORDER_COLUMNS.map((c) => [c.key, c]),
+);
+
+/** Every column LABEL, in export order — the header row of a full export. */
+export const CSV_COLUMNS: readonly string[] = ORDER_COLUMNS.map((c) => c.label);
+
+/** Every key, in export order. */
+export const ALL_ORDER_COLUMN_KEYS: readonly OrderColumnKey[] =
+	ORDER_COLUMNS.map((c) => c.key);
+
+/** The table's opening column set — the ten that answer "what is this order?"
+ * without a horizontal scroll. Everything else is one tap away in the picker. */
+export const DEFAULT_ORDER_COLUMN_KEYS: readonly OrderColumnKey[] =
+	ORDER_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key);
+
+/**
+ * Resolve a caller-supplied key list to real columns, IN THE ORDER GIVEN.
+ *
+ * Order is honoured (not normalised to the registry's) so an export matches the
+ * column arrangement the seller dragged into place in the table — "what I see
+ * is what I get" extends to left-to-right, not just which columns appear.
+ * Duplicates collapse to their first position.
+ *
+ * Tolerant of unknown keys: they arrive from a client that may be running an
+ * older build, where a column the seller had visible could since have been
+ * renamed or dropped, and a stale key must never fail an export — it just isn't
+ * a column any more. An empty/undefined list means "everything", so a client
+ * that sends nothing still gets a complete export rather than an empty file.
+ */
+export function resolveOrderColumns(
+	keys?: readonly string[],
+): readonly OrderColumn[] {
+	if (!keys || keys.length === 0) return ORDER_COLUMNS;
+	const seen = new Set<string>();
+	const picked: OrderColumn[] = [];
+	for (const key of keys) {
+		if (seen.has(key)) continue;
+		const col = ORDER_COLUMNS_BY_KEY.get(key as OrderColumnKey);
+		if (!col) continue;
+		seen.add(key);
+		picked.push(col);
+	}
+	return picked.length > 0 ? picked : ORDER_COLUMNS;
+}
+
+/**
+ * Comparable value for a column, for the table's per-column sort.
+ *
+ * Falls back to the lowercased display string, so a column that never declared
+ * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
+ */
+export function orderColumnSortValue(
+	column: OrderColumn,
+	o: CsvOrder,
+): number | string | undefined {
+	if (column.sortKey) return column.sortKey(o);
+	const text = column.value(o);
+	return text === "" ? undefined : text.toLowerCase();
+}
+
+/** Header labels for a resolved column set. */
+export function csvHeaderRow(columns: readonly OrderColumn[]): string[] {
+	return columns.map((c) => c.label);
+}
+
+/** One order -> the column values, aligned to `columns`. */
+export function orderToCsvRow(
+	o: CsvOrder,
+	columns: readonly OrderColumn[] = ORDER_COLUMNS,
+): string[] {
+	return columns.map((c) => c.value(o));
 }
 
 /**
  * Escape one field per RFC 4180, with CSV-injection defense: a value starting
  * with `= + - @` (or a tab/CR) is prefixed with a `'` so a spreadsheet treats it
- * as text, not a formula — buyer-controlled fields (name, note) flow into this
- * export. Quoting wraps any field containing a comma, quote, or newline.
+ * as text, not a formula — buyer-controlled fields (name, note, and now every
+ * address line) flow into this export. Quoting wraps any field containing a
+ * comma, quote, or newline.
  */
 export function escapeCsvField(value: string): string {
 	let v = value;
@@ -136,7 +623,20 @@ export function toCsv(rows: string[][]): string {
 	return rows.map((r) => r.map(escapeCsvField).join(",")).join("\r\n");
 }
 
-/** Full export document: header row + one row per order. */
-export function ordersToCsv(orders: CsvOrder[]): string {
-	return toCsv([[...CSV_COLUMNS], ...orders.map(orderToCsvRow)]);
+/**
+ * Full export document: header row + one row per order.
+ *
+ * `columnKeys` narrows the export to a subset — the table's "export visible
+ * columns" path. Omit it (the cards view, and any older client) to export every
+ * column.
+ */
+export function ordersToCsv(
+	orders: CsvOrder[],
+	columnKeys?: readonly string[],
+): string {
+	const columns = resolveOrderColumns(columnKeys);
+	return toCsv([
+		csvHeaderRow(columns),
+		...orders.map((o) => orderToCsvRow(o, columns)),
+	]);
 }

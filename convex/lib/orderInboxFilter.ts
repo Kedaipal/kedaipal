@@ -32,6 +32,19 @@ export type InboxFilterArgs = {
 	// FROM. Empty or undefined = no attribution filtering.
 	attributionSources?: string[];
 	searchText?: string;
+	/**
+	 * Pin privilege (86eyrtz74). When true, a PINNED order is kept even if it
+	 * fails every other rule above; when false, pins are filtered like any other
+	 * order.
+	 *
+	 * This is deliberately not "filter to pinned only". Sellers pin an order so
+	 * they can then filter the inbox to something else and compare against it —
+	 * so the pin has to survive the filter, or the feature does nothing for its
+	 * main use. Turning the toggle off is how they get a filter that means
+	 * exactly what it says. Applied by `buildInboxPredicate` so the live inbox
+	 * and the export can't diverge (the invariant this module exists for).
+	 */
+	showPinned?: boolean;
 };
 
 /** The order fields the predicate reads. A structural subset of Doc<"orders">. */
@@ -50,6 +63,8 @@ export type FilterableOrder = {
 	shortId: string;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{ name: string; variantLabel?: string }>;
+	/** Seller's manual bookmark (86eyrtz74). Absent = not pinned. */
+	pinnedAt?: number;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -80,7 +95,11 @@ export function buildInboxPredicate(
 		args.attributionSources && args.attributionSources.length > 0
 			? new Set(args.attributionSources)
 			: null;
+	const pinPrivilege = args.showPinned === true;
 	return (o) => {
+		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
+		// InboxFilterArgs.showPinned for why a pin outranks the filter.
+		if (pinPrivilege && o.pinnedAt !== undefined) return true;
 		// Bucket membership goes through the same seen-aware resolver the counts
 		// use, so the chip count and the list can't disagree: an unseen push-path
 		// order shows under "New" and NOT under "In progress" (86eyf1rck).
@@ -164,10 +183,32 @@ export function compareInboxOrder(
  * newest-created first (the `by_retailer` scan order) — `recent` returns that
  * order untouched, and `due` relies on it for the within-date tiebreaker (see
  * compareInboxOrder). Always returns a fresh array; never mutates the input.
+ *
+ * Pinned orders (86eyrtz74) are partitioned to the FRONT, with the chosen sort
+ * applied independently inside each partition. It is a partition, not a sort
+ * key: pinning is orthogonal to "newest" and "due", so it must not become a
+ * third sort option competing with them, and every bucket/filter/sort
+ * combination has to put pins on top or the feature is unreliable.
+ *
+ * Within the pinned group, most-recently-pinned leads under `recent` (the pin
+ * you just made jumps to the top, which is the confirmation that it worked);
+ * under `due` the fulfilment date wins and pinned-at is only the tiebreaker,
+ * because a pinned group that ignored the due sort would be a second list
+ * obeying different rules.
  */
-export function sortInboxOrders<T extends { fulfilmentDate?: number }>(
-	orders: readonly T[],
-	sort: InboxSort,
-): T[] {
-	return sort === "due" ? [...orders].sort(compareInboxOrder) : [...orders];
+export function sortInboxOrders<
+	T extends { fulfilmentDate?: number; pinnedAt?: number },
+>(orders: readonly T[], sort: InboxSort): T[] {
+	const pinned: T[] = [];
+	const rest: T[] = [];
+	for (const o of orders) (o.pinnedAt !== undefined ? pinned : rest).push(o);
+	if (pinned.length === 0) {
+		return sort === "due" ? [...rest].sort(compareInboxOrder) : rest;
+	}
+	pinned.sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
+	if (sort === "due") {
+		pinned.sort(compareInboxOrder);
+		rest.sort(compareInboxOrder);
+	}
+	return [...pinned, ...rest];
 }

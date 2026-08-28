@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ChevronRight,
@@ -43,6 +43,7 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
+import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -192,13 +193,13 @@ function ProductsRoute() {
 		!!retailer &&
 		!retailer.actingAsAdmin &&
 		!hasFeature(retailer.subscription, "categories");
+	const convex = useConvex();
 	const products = useQuery(
 		convexQuery(
 			api.products.listAll,
 			retailer ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
-
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");
 	const [status, setStatus] = useState<StatusFilter>("all");
@@ -282,12 +283,34 @@ function ProductsRoute() {
 		}
 		setExporting(kind);
 		try {
-			// One row per active variant, round-trippable with the import parser.
+			// Category names for the `categories` column (86eyrtz74). Fetched ONCE,
+			// here — not as a `useQuery` subscription. It is a fan-out over the
+			// junction table, and the products page is a hot read that runs on
+			// every visit; subscribing would have made the hot path pay the
+			// fan-out (and re-pay it on every category edit) for data only this
+			// button needs, which is the exact cost the query was split out to
+			// avoid. Same one-shot pattern the orders route uses for exportOrders.
+			const categoryNamesByProduct = await convex.query(
+				api.categories.namesByProduct,
+				{ retailerId: retailer._id },
+			);
+			// One row per exportable variant. The first eleven columns stay
+			// round-trippable with the import parser; the rest are the catalogue
+			// report (86eyrtz74) — see src/lib/product-export.ts.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
 				handle: p._id,
 				name: p.name,
 				description: p.description,
 				options: p.options ?? [],
+				currency: p.currency,
+				categories: categoryNamesByProduct[p._id],
+				active: p.active,
+				hidden: p.hidden,
+				hiddenByCategory: p.hiddenByCategory,
+				url: `${storefrontUrl(retailer.slug)}/p/${p.slug}`,
+				minQuantity: p.minQuantity,
+				minNoticeDays: p.minNoticeDays,
+				imageCount: p.imageUrls?.length ?? 0,
 				variants: p.variants.map((vr) => ({
 					optionValues: vr.optionValues,
 					sku: vr.sku,
@@ -295,6 +318,12 @@ function ProductsRoute() {
 					onHand: vr.onHand,
 					parcelWeightG: vr.parcelWeightG,
 					active: vr.active,
+					reserved: vr.reserved,
+					blockWhenOutOfStock: vr.blockWhenOutOfStock,
+					requiresProof: vr.requiresProof,
+					isCustom: vr.isCustom,
+					customLabel: vr.customLabel,
+					imageCount: vr.imageUrls?.length,
 				})),
 			}));
 			const fileBase = `kedaipal-${retailer.slug}`;
