@@ -17,6 +17,7 @@ import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
+import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
@@ -138,6 +139,10 @@ function AppShell() {
 	if (retailer === null && !storelessAdmin) return <ShellSkeleton />;
 
 	return (
+		// Mounted once around the whole shell, not inside a nav component:
+		// Sidebar and BottomNav are BOTH mounted at all times (hidden by
+		// breakpoint), so per-nav state would auto-open two dialogs (86eyqgxv9).
+		<WhatsNewProvider locale={retailer?.locale ?? "en"}>
 		<div className="flex min-h-dvh">
 			<Sidebar
 				retailer={retailer}
@@ -203,6 +208,7 @@ function AppShell() {
 				/>
 			</div>
 		</div>
+		</WhatsNewProvider>
 	);
 }
 

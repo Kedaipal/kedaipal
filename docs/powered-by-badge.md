@@ -32,8 +32,11 @@ Placed after the product `<section>` and before the fixed `<CartBar>`, with
 page on short catalogs, after the content on long ones).
 
 - Links to `https://kedaipal.com?src=storefront_badge`. The `?src=` tag is the
-  repo's reserved PostHog attribution convention (same as the poster QR links in
-  `store-poster.tsx`), so the click path is measurable.
+  repo's attribution convention (same param the poster QR links use). NOTE:
+  this one targets the kedaipal.com **marketing site**, not a storefront, so
+  the storefront's seller-facing source attribution (`86eyq0eq9`,
+  `docs/source-attribution.md`) never sees it — it tags **Kedaipal's own**
+  acquisition (the `86eye3eyp` CAC concern), measurable once PostHog lands.
 - Opens in a new tab (`target="_blank" rel="noopener noreferrer"`) so the buyer
   never loses the store they were browsing.
 - The wordmark image carries `alt="Kedaipal"` and the link an explicit

@@ -14,6 +14,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
+import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -126,6 +127,8 @@ function CheckoutSkeleton() {
 function CheckoutRoute() {
 	const { slug } = Route.useParams();
 	const { booking } = Route.useSearch();
+	// A tagged link can land straight on checkout — capture here too.
+	useCaptureAttribution(slug);
 	// Live query keeps the page reactive after the SSR'd loader response —
 	// same pattern as the store home and category pages.
 	const result = useQuery(
@@ -171,6 +174,7 @@ function CheckoutRoute() {
 							storeSlug={retailer.slug}
 							productSlug={booking}
 							locale={retailer.locale}
+							country={retailer.country}
 						/>
 					</div>
 				</div>
@@ -227,6 +231,7 @@ function CheckoutRoute() {
 						storeSlug={retailer.slug}
 						checkoutPhone={retailer.checkoutPhone}
 						locale={retailer.locale}
+						country={retailer.country}
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
@@ -234,6 +239,7 @@ function CheckoutRoute() {
 							retailer.deliveryCollectsFromCustomer ?? false
 						}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
 					/>

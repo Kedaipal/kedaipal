@@ -1,13 +1,20 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
+import { reportSecretMatches } from "./lib/businessReport";
 import { getAdapter } from "./lib/channels/registry";
-import { decimalStringToSen, verifyHitpayWebhook } from "./lib/hitpay";
+import { decryptSecret } from "./lib/credentialCrypto";
+import {
+	decimalStringToSen,
+	HITPAY_PROVIDER_LABEL,
+	verifyHitpayWebhook,
+} from "./lib/hitpay";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
+import { redactPhone } from "./lib/logRedaction";
 import { extractWabaHealthEvents } from "./lib/wabaWebhook";
 
 const http = httpRouter();
@@ -69,15 +76,16 @@ http.route({
 		// Signature OK — the adapter parses the raw body we already verified into
 		// channel-agnostic envelopes.
 		const messages = adapter.parseInbound(rawBody, req.headers);
-		// Log the inbound identity triplet (phone + pushname + a short text preview)
-		// so the WhatsApp identity-binding flow used by order confirmation — and the
-		// Counter Checkout `KP-<token>` flipped flow (ClickUp 86ey0e80x) — is
-		// observable end-to-end without decoding raw payloads.
+		// Redacted correlation data only (last-4 phone, text LENGTH, pushname
+		// presence): platform logs sit outside the schema with their own retention,
+		// so buyer phones, pushnames and message bodies never land in them. The
+		// identity-binding / counter-scan flows stay observable via handleInbound's
+		// intent logs, which are redacted the same way (86eyn25gd).
 		console.log("WA webhook POST", {
 			messageCount: messages.length,
-			firstFrom: messages[0]?.channelUserId,
-			firstProfileName: messages[0]?.profileName,
-			firstText: messages[0]?.text?.slice(0, 60),
+			firstFrom: redactPhone(messages[0]?.channelUserId),
+			firstHasProfileName: Boolean(messages[0]?.profileName),
+			firstTextLength: messages[0]?.text?.length ?? 0,
 		});
 		for (const msg of messages) {
 			await ctx.runAction(internal.whatsapp.handleInbound, {
@@ -95,7 +103,7 @@ http.route({
 			if (ev.status !== "failed") continue;
 			console.warn("WA outbound message failed", {
 				providerMessageId: ev.providerMessageId,
-				recipientId: ev.recipientId,
+				recipientId: redactPhone(ev.recipientId),
 				errorDetail: ev.errorDetail,
 			});
 			await ctx.runMutation(internal.orders.markConfirmationPushFailed, {
@@ -207,7 +215,9 @@ http.route({
 				rawBody,
 				envelope,
 				path,
-				apiSecret,
+				// Stored secrets may be encrypted at rest (86eyn25gk); the
+				// signature is always over the plaintext secret.
+				apiSecret: await decryptSecret(apiSecret),
 			});
 			if (result.valid) {
 				verified = true;
@@ -291,7 +301,12 @@ http.route({
 			return new Response("server misconfigured", { status: 500 });
 		}
 
-		const valid = await verifyHitpayWebhook(fields, context.salt);
+		// The stored salt may be encrypted at rest (86eyn25gk) — HitPay signs
+		// with the plaintext, so decrypt before verifying.
+		const valid = await verifyHitpayWebhook(
+			fields,
+			await decryptSecret(context.salt),
+		);
 		if (!valid) {
 			console.warn("HitPay webhook rejected: invalid hmac", { requestId });
 			return new Response("invalid signature", { status: 401 });
@@ -324,6 +339,7 @@ http.route({
 				paymentId: fields.payment_id,
 				amountSen,
 				currency: fields.currency ?? "",
+				provider: HITPAY_PROVIDER_LABEL,
 			},
 		);
 		if (result.applied) {
@@ -339,6 +355,48 @@ http.route({
 			reason: result.reason,
 		});
 		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
+ * Kedaipal's own weekly business numbers, for the founder's scheduled report.
+ *
+ * Guarded by a shared secret rather than Clerk auth because the caller is an
+ * unattended scheduled job with no user session. The secret only ever unlocks
+ * this one read — there is no mutation path here, and the payload carries
+ * aggregates only, never buyer or seller PII.
+ *
+ * Failure shapes match the webhook routes above, and in the same ORDER: an
+ * unset env var is a 500 (our misconfiguration), a bad secret is a 401 (the
+ * caller's problem). Conflating them would make a broken deploy look like an
+ * auth failure. See docs/founder-business-report.md.
+ */
+http.route({
+	path: "/internal/business-report",
+	method: "GET",
+	handler: httpAction(async (ctx, req) => {
+		const expected = process.env.BUSINESS_REPORT_SECRET;
+		if (!expected) {
+			console.error(
+				"business report rejected: BUSINESS_REPORT_SECRET is not configured",
+			);
+			return new Response("server misconfigured", { status: 500 });
+		}
+
+		const provided = req.headers.get("X-Report-Secret");
+		if (!(await reportSecretMatches(provided, expected))) {
+			console.warn("business report rejected: invalid X-Report-Secret");
+			return new Response("invalid signature", { status: 401 });
+		}
+
+		// Deliberately NOT wrapped in try/catch: if the aggregation throws (say a
+		// read budget is exceeded), the caller must get a 500 and write nothing,
+		// rather than a half-computed report that reads as real numbers.
+		const report = await ctx.runQuery(internal.admin.businessReport, {});
+		return new Response(JSON.stringify(report), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
 	}),
 });
 

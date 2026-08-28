@@ -1,30 +1,39 @@
 /**
- * The one Malaysian phone control (86eyknr2r).
+ * The one plated phone control (86eyknr2r; per-country since SG-lite
+ * 86eynw28q/86eynw2dy).
  *
- * Every field in the app that takes a Malaysian number renders the same shape —
- * flag, fixed `+60`, a rule, then what the user types — as every payment/ride
- * app in this market does (Grab, Shopee, Touch 'n Go, Stripe). Before this the
- * repo had three shapes for one question: this plate (storefront checkout
- * only), a bare `<input type="tel">` with a placeholder, and a 250-country
- * searchable combobox, which is a control with one valid answer for a
- * Malaysia-only product.
+ * Every field in the app that takes a store-country phone number renders the
+ * same shape — flag, fixed `+60`/`+65`, a rule, then what the user types — as
+ * every payment/ride app in this market does (Grab, Shopee, Touch 'n Go,
+ * Stripe). Before this the repo had three shapes for one question: this plate
+ * (storefront checkout only), a bare `<input type="tel">` with a placeholder,
+ * and a 250-country searchable combobox, which is a control with one valid
+ * answer per store.
  *
- * The plate is **a promise about what the field accepts**: a field wearing it
- * must be MY-only server-side, or it tells the user to type something the
- * validator then rejects. Every adopting call site pairs with
- * `assertValidMyMobile` (see `convex/lib/slug.ts`). The counter's manual buyer
- * bind deliberately does NOT wear it — it passes a foreign number through by
- * design, for a cashier serving a walk-in who isn't Malaysian.
+ * The plate is **a promise about what the field accepts**: the country it
+ * renders and the country the validator judges by must be the SAME retailer
+ * country, or it tells the user to type something the save then rejects. Every
+ * adopting call site pairs with `assertValidMobileForCountry` (see
+ * `convex/lib/slug.ts`) and threads the store's country into `country` here.
+ * The default stays "MY" so the platform's own Malaysia-fixed fields need no
+ * prop. The counter's manual buyer bind deliberately does NOT wear the plate —
+ * it passes a foreign number through by design, for a cashier serving a
+ * walk-in from anywhere.
  *
  * Two hosts, one plate, so they can't drift:
- *   - form-bound  → `TextField` with `prefix={<MyPhonePrefix />}`
+ *   - form-bound  → `TextField` with `prefix={<MyPhonePrefix country={…} />}`
  *   - plain state → `MyPhoneInput` (value/onChange), for the `useState` forms
  * Both render through `InputPrefixFrame` (`ui/input-prefix-frame.tsx`), which
  * owns the border, focus ring and invalid styling for the composite control.
  */
 
-import { InputPrefixFrame } from "#/components/ui/input-prefix-frame";
+import {
+	COUNTRY_DIAL_CODE,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../../convex/lib/country";
 import { Input } from "#/components/ui/input";
+import { InputPrefixFrame } from "#/components/ui/input-prefix-frame";
 
 /**
  * Jalur Gemilang at 2:1 — 14 stripes, navy canton, crescent + 14-point star.
@@ -33,7 +42,7 @@ import { Input } from "#/components/ui/input";
  * Emoji regional-indicator pairs don't render as flags on Windows (Segoe UI
  * Emoji has no flag glyphs — you get the letters "MY"), and the `flags` module
  * is a single barrel of ~250 country SVGs, which would land the whole set in
- * the public storefront bundle for one country. This is ~20 lines and ships
+ * the public storefront bundle for two countries. This is ~20 lines and ships
  * nothing extra.
  */
 function FlagMY({ title }: { title: string }) {
@@ -65,18 +74,78 @@ function FlagMY({ title }: { title: string }) {
 	);
 }
 
+/** A five-pointed star (unit outer radius, centred on 0,0) — reused for the
+ * SG flag's pentagon of stars via translate/scale. */
+const STAR_5_POINTS =
+	"0,-1 0.235,-0.324 0.951,-0.309 0.380,0.124 0.588,0.809 0,0.4 -0.588,0.809 -0.380,0.124 -0.951,-0.309 -0.235,-0.324";
+
 /**
- * The plate's contents — flag + dial code. Drop into `TextField`'s `prefix`
- * slot; the frame draws the divider around it.
+ * The Singapore flag at the same 2:1 plate ratio — red top half, white bottom,
+ * white crescent + pentagon of five stars in the red canton. Same inline-SVG
+ * posture as `FlagMY` (no emoji, no flag-set dependency).
  */
-export function MyPhonePrefix() {
+function FlagSG({ title }: { title: string }) {
+	return (
+		<svg
+			viewBox="0 0 28 14"
+			role="img"
+			aria-label={title}
+			className="h-3.5 w-7 shrink-0 rounded-[2px] ring-1 ring-black/10"
+		>
+			<rect width="28" height="14" fill="#fff" />
+			<rect width="28" height="7" fill="#ED2939" />
+			{/* Crescent: a white disc with a red disc bitten out of it. */}
+			<circle cx="5.2" cy="3.5" r="2.5" fill="#fff" />
+			<circle cx="6.2" cy="3.5" r="2.15" fill="#ED2939" />
+			{/* Pentagon of five stars beside the crescent. */}
+			{[
+				[9.5, 1.9],
+				[8.0, 3.0],
+				[11.0, 3.0],
+				[8.6, 4.7],
+				[10.4, 4.7],
+			].map(([x, y]) => (
+				<polygon
+					key={`${x}-${y}`}
+					fill="#fff"
+					points={STAR_5_POINTS}
+					transform={`translate(${x} ${y}) scale(0.75)`}
+				/>
+			))}
+		</svg>
+	);
+}
+
+const FLAG: Record<Country, (props: { title: string }) => React.ReactElement> =
+	{
+		MY: FlagMY,
+		SG: FlagSG,
+	};
+
+/**
+ * Default placeholder per country — the bare national number the plate asks
+ * for, and (pinned by test) a value the country's own schema accepts.
+ */
+export const MOBILE_PLACEHOLDER: Record<Country, string> = {
+	MY: "12-345 6789",
+	SG: "9123 4567",
+};
+
+/**
+ * The plate's contents — flag + dial code for the store's country. Drop into
+ * `TextField`'s `prefix` slot; the frame draws the divider around it.
+ */
+export function MyPhonePrefix({ country = "MY" }: { country?: Country }) {
+	const Flag = FLAG[country];
 	return (
 		<>
-			<FlagMY title="Malaysia" />
+			<Flag title={COUNTRY_LABELS[country]} />
 			{/* Inherits the plate's muted colour on purpose — the dial code is
 			    fixed, the digits beside it are the user's. Same weighting Grab and
-			    Shopee use, and it stops `+60` competing with the number. */}
-			<span className="text-base font-medium tabular-nums">+60</span>
+			    Shopee use, and it stops the code competing with the number. */}
+			<span className="text-base font-medium tabular-nums">
+				+{COUNTRY_DIAL_CODE[country]}
+			</span>
 		</>
 	);
 }
@@ -89,18 +158,22 @@ type MyPhoneInputProps = Omit<
 	/** Receives the raw typed string — normalize on submit, not per keystroke. */
 	onChange: (value: string) => void;
 	isError?: boolean;
+	/** The store's country — picks the flag, dial code, and placeholder. MUST
+	 * match the country the save path validates by (the plate's promise). */
+	country?: Country;
 };
 
 /**
- * Standalone MY phone field for the plain-`useState` forms (settings cards,
+ * Standalone plated phone field for the plain-`useState` forms (settings cards,
  * the buyer's number-repair form, onboarding, the admin console). Form-bound
- * callers should use `TextField` with `prefix={<MyPhonePrefix />}` instead so
- * they inherit label/description/error wiring.
+ * callers should use `TextField` with `prefix={<MyPhonePrefix country={…} />}`
+ * instead so they inherit label/description/error wiring.
  *
- * The value is whatever the user typed — `myWaPhoneCheckoutSchema` (client) and
- * `assertValidMyMobile` (server) both accept the bare national number the plate
- * asks for (`12-345 6789`), a local `012-…`, and a full `60…`, so nobody is
- * punished for reading the badge or for ignoring it.
+ * The value is whatever the user typed — `waPhoneCheckoutSchema[country]`
+ * (client) and `assertValidMobileForCountry` (server) both accept the bare
+ * national number the plate asks for (`12-345 6789` / `9123 4567`), the local
+ * MY `012-…`, and the full international form, so nobody is punished for
+ * reading the badge or for ignoring it.
  */
 export function MyPhoneInput({
 	value,
@@ -108,12 +181,13 @@ export function MyPhoneInput({
 	isError = false,
 	disabled = false,
 	className,
-	placeholder = "12-345 6789",
+	country = "MY",
+	placeholder,
 	...props
 }: MyPhoneInputProps) {
 	return (
 		<InputPrefixFrame
-			prefix={<MyPhonePrefix />}
+			prefix={<MyPhonePrefix country={country} />}
 			invalid={isError}
 			disabled={disabled}
 			className={className}
@@ -127,7 +201,7 @@ export function MyPhoneInput({
 				// `aria-invalid` or a screen-reader user gets no signal at all.
 				isError={isError}
 				disabled={disabled}
-				placeholder={placeholder}
+				placeholder={placeholder ?? MOBILE_PLACEHOLDER[country]}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				className="min-h-11 px-3 text-base"

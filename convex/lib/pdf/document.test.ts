@@ -26,7 +26,10 @@ describe("formatMoney", () => {
 	test("renders negatives (discount lines) with a leading minus", () => {
 		expect(formatMoney(-4500, "MYR")).toBe("-RM 45.00");
 	});
-	test("falls back to the currency code prefix for non-MYR", () => {
+	test("SGD gets the S$ prefix (SG subscription invoices)", () => {
+		expect(formatMoney(5900, "SGD")).toBe("S$ 59.00");
+	});
+	test("falls back to the currency code prefix for unmapped currencies", () => {
 		expect(formatMoney(100, "USD")).toBe("USD 1.00");
 	});
 });
@@ -247,6 +250,22 @@ describe("invoiceToSubscriptionData", () => {
 			billingConfig: null,
 		});
 		expect(data.billedToContact).toBe("kedaipal.com/sweet");
+		expect(data.issuerBank).toEqual([]);
+	});
+
+	test("a non-MYR invoice carries NO payment blocks — the MY rails can't settle it", () => {
+		const data = invoiceToSubscriptionData({
+			invoice: {
+				...invoice,
+				foundingDiscount: undefined,
+				amount: 5900,
+				total: 5900,
+				currency: "SGD",
+			},
+			retailer: { storeName: "Lion City Bakes", slug: "lion-city" },
+			billingConfig: { bankName: "Maybank", bankAccountNumber: "111" },
+		});
+		expect(data.currency).toBe("SGD");
 		expect(data.issuerBank).toEqual([]);
 	});
 });

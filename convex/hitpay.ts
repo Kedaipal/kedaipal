@@ -28,14 +28,17 @@ import {
 import {
 	buildPaymentRequestParams,
 	decimalStringToSen,
+	decryptHitpayCredentials,
 	HITPAY_API_BASE,
 	HITPAY_MIN_AMOUNT_SEN,
+	HITPAY_PROVIDER_LABEL,
 	HITPAY_REQUEST_REUSE_MS,
 	type HitpayCredentials,
 	type HitpayPaymentRequest,
 	resolveHitpayCredentials,
 } from "./lib/hitpay";
 import { isMockupGateClosed } from "./lib/order";
+import { extendedPaymentDue } from "./lib/orderClaims";
 import { rateLimiter } from "./lib/rateLimiter";
 import { orderByToken } from "./orders";
 
@@ -177,6 +180,16 @@ export const recordCheckoutRequest = internalMutation({
 			gatewayRequestedAmount: amountSen,
 			gatewayRequestedCurrency: currency,
 			gatewayRequestedAt: Date.now(),
+			// A payment session just STARTED — on a deadline-carrying order
+			// (86eyq0epn) that guarantees the runway, so a buyer who taps Pay
+			// with 40 seconds left watches the clock jump instead of being
+			// cancelled mid-checkout. Bounded extension, never a freeze (a
+			// freeze would be exploitable: tap Pay, close the tab, hold the
+			// stock forever); the sweep additionally leaves any order alone
+			// while gatewayRequestedAt is inside the session grace.
+			...(order.paymentDueAt !== undefined
+				? { paymentDueAt: extendedPaymentDue(order.paymentDueAt, Date.now()) }
+				: {}),
 			updatedAt: Date.now(),
 		});
 		return { ok: true, replacedRequestId };
@@ -248,14 +261,18 @@ export const refreshAccountMethods = internalAction({
 		params.set("send_email", "false");
 		params.set("expires_after", "5 mins");
 
+		// Decrypt-at-use (86eyn25gk): the query hands over stored (possibly
+		// encrypted) values; mode comes from the plaintext key.
+		const credentials = await decryptHitpayCredentials(context.credentials);
+
 		let response: Response;
 		try {
 			response = await fetch(
-				`${HITPAY_API_BASE[context.credentials.mode]}/payment-requests`,
+				`${HITPAY_API_BASE[credentials.mode]}/payment-requests`,
 				{
 					method: "POST",
 					headers: {
-						"X-BUSINESS-API-KEY": context.credentials.apiKey,
+						"X-BUSINESS-API-KEY": credentials.apiKey,
 						"Content-Type": "application/x-www-form-urlencoded",
 						"X-Requested-With": "XMLHttpRequest",
 					},
@@ -386,14 +403,18 @@ export const createCheckout = action({
 		});
 		if (!siteUrl) params.delete("webhook");
 
+		// Decrypt-at-use (86eyn25gk): stored credentials may be ciphertext, and
+		// mode must be judged on the plaintext key.
+		const credentials = await decryptHitpayCredentials(context.credentials);
+
 		let response: Response;
 		try {
 			response = await fetch(
-				`${HITPAY_API_BASE[context.credentials.mode]}/payment-requests`,
+				`${HITPAY_API_BASE[credentials.mode]}/payment-requests`,
 				{
 					method: "POST",
 					headers: {
-						"X-BUSINESS-API-KEY": context.credentials.apiKey,
+						"X-BUSINESS-API-KEY": credentials.apiKey,
 						"Content-Type": "application/x-www-form-urlencoded",
 						"X-Requested-With": "XMLHttpRequest",
 					},
@@ -464,12 +485,15 @@ async function deletePaymentRequest(
 	caller: string,
 ): Promise<void> {
 	try {
+		// Decrypt-at-use (86eyn25gk) — inside the try so a decryption failure
+		// degrades like any other best-effort delete failure.
+		const live = await decryptHitpayCredentials(credentials);
 		const response = await fetch(
-			`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${requestId}`,
+			`${HITPAY_API_BASE[live.mode]}/payment-requests/${requestId}`,
 			{
 				method: "DELETE",
 				headers: {
-					"X-BUSINESS-API-KEY": credentials.apiKey,
+					"X-BUSINESS-API-KEY": live.apiKey,
 					"X-Requested-With": "XMLHttpRequest",
 				},
 			},
@@ -568,6 +592,7 @@ export const verifyCheckout = action({
 			amountSen: settled.amountSen,
 			currency: settled.currency,
 			paymentType: settled.paymentType,
+			provider: HITPAY_PROVIDER_LABEL,
 		});
 		// `duplicate` = this payment (or a manual mark) already settled the order,
 		// so "received" is the truth. `gone` is NOT that — the order was
@@ -599,11 +624,13 @@ async function fetchSettledPayment(
 } | null> {
 	let response: Response;
 	try {
+		// Decrypt-at-use (86eyn25gk); failure degrades to "not settled".
+		const live = await decryptHitpayCredentials(credentials);
 		response = await fetch(
-			`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${requestId}`,
+			`${HITPAY_API_BASE[live.mode]}/payment-requests/${requestId}`,
 			{
 				headers: {
-					"X-BUSINESS-API-KEY": credentials.apiKey,
+					"X-BUSINESS-API-KEY": live.apiKey,
 					"X-Requested-With": "XMLHttpRequest",
 				},
 			},

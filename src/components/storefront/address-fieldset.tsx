@@ -1,6 +1,8 @@
 import { MapPin, Search } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { type Country, DEFAULT_COUNTRY } from "../../../convex/lib/country";
+import { displayAddressState } from "../../lib/address-display";
 import { parseGoogleAddress } from "../../lib/google-address";
 import { type CheckoutAddressValues, MY_STATES } from "../../lib/schemas";
 import { withFieldGroup } from "../forms/form";
@@ -69,6 +71,14 @@ export const AddressFieldset = withFieldGroup({
 	props: {
 		retailerId: undefined as Id<"retailers"> | undefined,
 		/**
+		 * The STORE's country (SG-lite, 86eynw29u) — keys the whole variant:
+		 * which Google region the search covers, how a pick parses, and which
+		 * manual fields render. SG shows a 6-digit postal-code field and NO
+		 * state/city inputs (Singapore has no state tier — the submit handlers
+		 * stamp both as "Singapore"); MY keeps the classic shape.
+		 */
+		country: DEFAULT_COUNTRY as Country,
+		/**
 		 * False when the store prices delivery from **coordinates** (a live
 		 * Lalamove quote, or radius bands that block out-of-range): a hand-typed
 		 * address there can never be quoted or dispatched, so offering manual
@@ -93,6 +103,7 @@ export const AddressFieldset = withFieldGroup({
 	render: ({
 		group,
 		retailerId,
+		country,
 		allowManualEntry,
 		legend,
 		collectsFromCustomer,
@@ -101,6 +112,7 @@ export const AddressFieldset = withFieldGroup({
 			const parsed = parseGoogleAddress(
 				payload.addressComponents,
 				payload.formattedAddress,
+				country,
 			);
 			group.setFieldValue("line1", parsed.line1);
 			group.setFieldValue("city", parsed.city);
@@ -174,51 +186,84 @@ export const AddressFieldset = withFieldGroup({
 			</group.AppField>
 		);
 
-		const manualFields = (
-			<>
-				<group.AppField name="line1" listeners={pinInvalidation}>
-					{(field) => (
-						<field.TextField
-							label="Address line 1"
-							placeholder="12 Jln Mawar 3, Taman Mawar"
-							autoComplete="address-line1"
-							required
-						/>
-					)}
-				</group.AppField>
+		// SG addresses have no state tier and one city — line1 + a 6-digit
+		// postal code IS the whole manual form (submit stamps city/state as
+		// "Singapore"). MY keeps the postcode/city pair + state select.
+		const manualFields =
+			country === "SG" ? (
+				<>
+					<group.AppField name="line1" listeners={pinInvalidation}>
+						{(field) => (
+							<field.TextField
+								label="Address line 1"
+								placeholder="12 Bedok North Ave 3"
+								autoComplete="address-line1"
+								required
+							/>
+						)}
+					</group.AppField>
 
-				<div className="grid grid-cols-2 gap-3">
 					<group.AppField name="postcode" listeners={pinInvalidation}>
 						{(field) => (
 							<field.TextField
-								label="Postcode"
-								placeholder="47301"
+								label="Postal code"
+								placeholder="238859"
 								inputMode="numeric"
 								autoComplete="postal-code"
 								required
 							/>
 						)}
 					</group.AppField>
-
-					<group.AppField name="city" listeners={pinInvalidation}>
+				</>
+			) : (
+				<>
+					<group.AppField name="line1" listeners={pinInvalidation}>
 						{(field) => (
 							<field.TextField
-								label="City"
-								placeholder="Petaling Jaya"
-								autoComplete="address-level2"
+								label="Address line 1"
+								placeholder="12 Jln Mawar 3, Taman Mawar"
+								autoComplete="address-line1"
 								required
 							/>
 						)}
 					</group.AppField>
-				</div>
 
-				<group.AppField name="state" listeners={pinInvalidation}>
-					{(field) => (
-						<field.SelectField label="State" options={stateOptions} required />
-					)}
-				</group.AppField>
-			</>
-		);
+					<div className="grid grid-cols-2 gap-3">
+						<group.AppField name="postcode" listeners={pinInvalidation}>
+							{(field) => (
+								<field.TextField
+									label="Postcode"
+									placeholder="47301"
+									inputMode="numeric"
+									autoComplete="postal-code"
+									required
+								/>
+							)}
+						</group.AppField>
+
+						<group.AppField name="city" listeners={pinInvalidation}>
+							{(field) => (
+								<field.TextField
+									label="City"
+									placeholder="Petaling Jaya"
+									autoComplete="address-level2"
+									required
+								/>
+							)}
+						</group.AppField>
+					</div>
+
+					<group.AppField name="state" listeners={pinInvalidation}>
+						{(field) => (
+							<field.SelectField
+								label="State"
+								options={stateOptions}
+								required
+							/>
+						)}
+					</group.AppField>
+				</>
+			);
 
 		return (
 			// No border/background of its own: both callers already sit inside a
@@ -256,6 +301,7 @@ export const AddressFieldset = withFieldGroup({
 							<>
 								<GoogleAddressAutocomplete
 									retailerId={retailerId}
+									country={country}
 									placeholder="Start typing your address…"
 									description={
 										allowManualEntry
@@ -299,7 +345,11 @@ function ConfirmedAddressCard({
 	onSearchAgain: () => void;
 }) {
 	const locality = [postcode, city].filter(Boolean).join(" ").trim();
-	const region = [locality, state].filter(Boolean).join(", ");
+	// The state line is dropped when it just repeats the city — SG addresses
+	// hold "Singapore" in both (src/lib/address-display.ts).
+	const region = [locality, displayAddressState({ city, state })]
+		.filter(Boolean)
+		.join(", ");
 	return (
 		// Tinted fill, no border — inside an already-bordered section a second
 		// outline just boxes a box; the accent wash carries "confirmed" on its own.

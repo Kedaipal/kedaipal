@@ -10,6 +10,8 @@ export {
 	wazeNavUrl,
 } from "../../convex/lib/mapsUrl";
 
+import { SG_STATE_LABEL } from "../../convex/lib/address";
+import { type Country, DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { type CheckoutAddressValues, MY_STATES, type MyState } from "./schemas";
 
 /**
@@ -107,7 +109,23 @@ function composeLine1(
 export function parseGoogleAddress(
 	components: GoogleAddressComponent[],
 	formattedAddress: string,
+	// The STORE's country — keys the parse arm explicitly (SG-lite, 86eynw29u)
+	// rather than guessing it from the components: the autocomplete is already
+	// region-locked server-side, so the pick can only be in this country.
+	country: Country = DEFAULT_COUNTRY,
 ): GoogleParsedAddress {
+	if (country === "SG") {
+		// Singapore has no state tier and the whole island is one city — both
+		// fields carry the canonical literal the server arm enforces. Google's
+		// SG results put the 6-digit postal code under postal_code as usual.
+		return {
+			line1: composeLine1(components, formattedAddress),
+			city: SG_STATE_LABEL,
+			state: SG_STATE_LABEL,
+			postcode: getLongText(components, "postal_code"),
+		};
+	}
+
 	const stateRaw = getLongText(components, "administrative_area_level_1");
 	const state = normalizeMyState(stateRaw) ?? "";
 

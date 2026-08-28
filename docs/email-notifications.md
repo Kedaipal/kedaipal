@@ -9,7 +9,9 @@ Reference doc for the retailer-facing email notification system. **Already imple
 1. **Recipient allowlist** — test numbers are capped at ~5 explicitly-listed recipients. Any retailer outside the list silently fails.
 2. **24-hour customer-service window** — free-form text only works within 24h of the recipient last messaging the bot. Business-initiated alerts after the window need approved templates, which require Meta business verification — incompatible with the founder's Singaporean-in-MY entity reality (see `PROJECT_CONTEXT.md`).
 
-**Decision:** retailer-facing notifications go via email (Resend). Shopper-facing WhatsApp is untouched — `wa.me` cart handoff, inbound `ORD-XXXX` webhook, confirm reply with payment instructions, and `notifyStatusChange` for packed/shipped/delivered/cancelled all still work because they're either inbound-triggered or sent within the live conversation window.
+**Decision:** retailer-facing notifications go via email (Resend). Shopper-facing WhatsApp is a separate channel: the `wa.me` cart handoff, the inbound `ORD-XXXX` webhook, and the order's **one** confirmation message.
+
+> **Updated 2026-08-04 ([`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)):** this line used to add "…and `notifyStatusChange` for packed/shipped/delivered/cancelled all still work". Those sends are **deleted** — an order sends the buyer exactly one WhatsApp message and everything after it lives on `/track/<token>`. See [`one-message-per-order.md`](./one-message-per-order.md). **Email is unaffected**, and its role grew: for a seller, email is now the richest push channel Kedaipal has, since the buyer side deliberately has almost none.
 
 ## What got built
 
@@ -76,7 +78,7 @@ When adding a new retailer-facing alert (e.g. `paymentClaimed` — see `payment-
 
 ## Known limitations
 
-- **convex-test fake-timer noise.** Scheduled actions inside `vi.useFakeTimers()` log `Email retailer notify lookup failed: Transaction not started` on stderr. Same root cause as the pre-existing WA `notifyStatusChange` noise. Errors are swallowed; tests still pass. Not fixable without upstream convex-test changes.
+- **convex-test fake-timer noise.** Scheduled actions inside `vi.useFakeTimers()` log `Email retailer notify lookup failed: Transaction not started` on stderr. Same root cause as the WhatsApp scheduled-send noise (historically `notifyStatusChange`, now the confirmation push). Errors are swallowed; tests still pass. Not fixable without upstream convex-test changes.
 - **No retry / dead-letter.** A 4xx from Resend (e.g. unverified domain) drops the alert with a Convex log. Acceptable at MVP scale; revisit if reliability bites.
 - **Plain HTML, no React Email.** Two messages don't justify a templating dep. Reconsider when adding 5+ message types or when needing inline preview headers / dark-mode handling.
 
