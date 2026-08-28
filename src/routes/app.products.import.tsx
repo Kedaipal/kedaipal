@@ -90,6 +90,7 @@ function toApiProduct(p: GroupedProductImport) {
 	return {
 		name: p.name,
 		description: p.description,
+		active: p.active,
 		options: p.options,
 		variants: p.variants.map((vr) => ({
 			optionValues: vr.optionValues,

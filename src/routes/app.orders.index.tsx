@@ -1277,6 +1277,7 @@ function OrdersRoute() {
 							country={retailer.country}
 							availableSources={result?.availableSources}
 							availableCategories={result?.availableCategories}
+							facets={result?.facets}
 							// One resolver for both surfaces, so the panel and the Status
 							// column can never call the same state two different things.
 							statusLabel={(status) => statusLabelFor({ status })}

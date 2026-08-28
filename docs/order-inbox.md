@@ -272,6 +272,20 @@ WhatsApp.
     column's values* and those values are enumerable. Date RANGES (two bounds,
     no option list), cross-cutting toggles like "needs mockup" that aren't any
     column, and the summary of everything applied stay in the panel.
+  - **One control, both surfaces.** `ui/filter-option-row.tsx` — a box, a label
+    and a count — is rendered by the header menus *and* by the Filters dialog.
+    They were two shapes for one idea (chips in the dialog, rows in the header),
+    which made the app look like two apps and taught the seller the same filter
+    twice. The dialog was rebuilt on it (86eyrtz74): two columns of sectioned
+    option rows, counts on **every** option, active selections as removable
+    tokens above the fold, and a **sticky apply bar** carrying `Clear all (N)`
+    and the live `Show N orders` — previously the apply button could sit below
+    the fold on a phone, which is the one control the panel exists to reach.
+    Sections are ordered by how often a seller reaches for them (Status first),
+    not by what happened to be there. Payment method renders
+    `methodChoicesFor(country, selected)`, never the raw country list: a rail
+    the country doesn't offer but the seller HAS selected still shows, or it is
+    a filter they can neither see nor switch off.
   - **Header filters MIRROR the panel; they do not replace it.** Moving them out
     would strip cards view of its filters entirely and remove the one surface
     that shows every active filter at once. Both write the same URL state

@@ -1,6 +1,7 @@
-import { Check, ListFilter, Search, X } from "lucide-react";
+import { ListFilter, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cn } from "../../lib/utils";
+import { FilterOptionRow } from "./filter-option-row";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 
 /**
@@ -162,7 +163,7 @@ export function ColumnFilterMenu({
 					</div>
 				) : null}
 
-				<div className="max-h-[50vh] overflow-y-auto py-1">
+				<div className="max-h-[50vh] overflow-y-auto p-1">
 					{options.length === 0 ? (
 						<p className="px-3 py-3 text-[12.5px] text-muted-foreground">
 							{emptyHint}
@@ -172,59 +173,16 @@ export function ColumnFilterMenu({
 							No match for “{term.trim()}”
 						</p>
 					) : (
-						shown.map((o) => {
-							const on = selected.includes(o.value);
-							return (
-								<button
-									key={o.value}
-									type="button"
-									// A toggle button, not a `menuitemcheckbox`: this popover is
-									// not a menu, and a menu-item role inside a non-menu
-									// container is a lie assistive tech has to work around.
-									// `aria-pressed` says exactly what each row is in both
-									// modes.
-									aria-pressed={on}
-									// Spelled out rather than left to name concatenation: the
-									// label and count spans are adjacent with no whitespace
-									// between them, so the computed name would be "Delivered0".
-									aria-label={
-										o.count === undefined
-											? o.label
-											: `${o.label}, ${o.count} ${o.count === 1 ? "order" : "orders"}`
-									}
-									onClick={() => toggle(o.value)}
-									className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
-								>
-									<span
-										aria-hidden="true"
-										className={cn(
-											"flex size-4 shrink-0 items-center justify-center border transition-colors",
-											mode === "single" ? "rounded-full" : "rounded",
-											on
-												? "border-accent bg-accent text-accent-foreground"
-												: "border-border",
-										)}
-									>
-										{on ? <Check className="size-3" /> : null}
-									</span>
-									<span className="min-w-0 flex-1 truncate">{o.label}</span>
-									{o.count !== undefined ? (
-										// A zero is worth showing, not hiding: it is the answer to
-										// "why did my list go empty when I picked that?".
-										<span
-											className={cn(
-												"shrink-0 tabular-nums text-[11.5px]",
-												o.count === 0
-													? "text-muted-foreground/40"
-													: "text-muted-foreground",
-											)}
-										>
-											{o.count}
-										</span>
-									) : null}
-								</button>
-							);
-						})
+						shown.map((o) => (
+							<FilterOptionRow
+								key={o.value}
+								label={o.label}
+								count={o.count}
+								selected={selected.includes(o.value)}
+								shape={mode === "single" ? "radio" : "checkbox"}
+								onToggle={() => toggle(o.value)}
+							/>
+						))
 					)}
 				</div>
 			</PopoverContent>

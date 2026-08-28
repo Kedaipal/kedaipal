@@ -429,12 +429,40 @@ describe("round-trip preserves sellability (PR #230 review, MEDIUM)", () => {
 		);
 	});
 
+	test("an exported ARCHIVED product re-imports as archived", () => {
+		// The product-level twin of the variant bug above, and reachable the same
+		// way: in a second store no SKU matches, so every row takes the create
+		// path — where `active` was hardcoded true and an archived product came
+		// back live on the storefront.
+		const archived: ExportableProduct = { ...reportProduct, active: false };
+		const parsed = parseProductsCsv(productsToCsvString([archived]));
+		expect(parsed.errorRows).toEqual([]);
+		expect(parsed.products[0].active).toBe(false);
+	});
+
+	test("a hand-made sheet with no product_status column imports as ACTIVE", () => {
+		// Absence must never be read as "archived" — a seller's own spreadsheet
+		// has no such column and every row of it is a product they want to sell.
+		const parsed = parseProductsCsv(
+			"name,sku,price,stock\nKek Lapis,KEK-9,120.00,5",
+		);
+		expect(parsed.errorRows).toEqual([]);
+		expect(parsed.products[0].active).toBe(true);
+	});
+
+	test("a live product still round-trips as live", () => {
+		const parsed = parseProductsCsv(productsToCsvString([reportProduct]));
+		expect(parsed.products[0].active).toBe(true);
+	});
+
 	test("every other report column is still ignored, and still announced", () => {
 		const header = productsToCsvString([reportProduct]).split("\n")[0];
 		expect(exportOnlyColumnsPresent(header.split(","))).toEqual([
 			...EXPORT_ONLY_COLUMNS,
 		]);
-		expect(EXPORT_ONLY_COLUMNS).not.toContain("variant_status");
-		expect(REPORT_COLUMNS).toContain("variant_status");
+		for (const roundtrip of ["variant_status", "product_status"]) {
+			expect(EXPORT_ONLY_COLUMNS).not.toContain(roundtrip);
+			expect(REPORT_COLUMNS).toContain(roundtrip);
+		}
 	});
 });
