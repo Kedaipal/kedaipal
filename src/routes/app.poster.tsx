@@ -6,11 +6,13 @@ import { ImagePlus, Loader2, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import {
+	POSTER_DEFAULT_LOCALE,
 	type PosterLocale,
 	type PosterVariant,
 	posterQrUrls,
@@ -83,8 +85,15 @@ function PosterRoute() {
 	const [confirmRotate, setConfirmRotate] = useState(false);
 	const [rotating, setRotating] = useState(false);
 	// Poster copy is buyer-facing, so the seller picks its language here —
-	// default BM (Malaysian buyers) — independent of the dashboard locale.
-	const [posterLocale, setPosterLocale] = useState<PosterLocale>("ms");
+	// independent of the dashboard locale. The DEFAULT follows the store's
+	// country: BM for Malaysian buyers, English for Singaporean ones (BM would
+	// be the wrong language on a Singapore counter — 86eyqgujv).
+	// `null` = the seller hasn't chosen, so the poster follows the store's
+	// country. Kept as a sentinel rather than seeding useState from the
+	// retailer: this hook runs before the `!retailer` guard below, so a seeded
+	// initializer would read `undefined` on first render and lock every store
+	// to BM regardless of country.
+	const [posterLocale, setPosterLocale] = useState<PosterLocale | null>(null);
 	// Poster template: the approved two-QR sheet (default) or a single giant
 	// DuitNow-style QR for one context. Session-only, like the other toggles.
 	const [template, setTemplate] = useState<PosterVariant>("both");
@@ -154,6 +163,12 @@ function PosterRoute() {
 
 	if (!retailer) return <PosterSkeleton />;
 
+	// Until the seller picks a language the poster speaks the one its buyers do
+	// (86eyqgujv). Derived here rather than in state so it stays correct for a
+	// store whose country resolved after the first render.
+	const effectivePosterLocale =
+		posterLocale ?? POSTER_DEFAULT_LOCALE[retailer.country ?? DEFAULT_COUNTRY];
+
 	// Left QR = the walk-in KPS deep link when available; else the storefront
 	// `?src=counter` fallback so the poster always prints. Right QR = storefront.
 	const { counter: counterFallback, online: onlineUrl } = posterQrUrls(
@@ -217,7 +232,7 @@ function PosterRoute() {
 							{ value: "ms", label: "BM" },
 							{ value: "en", label: "EN" },
 						]}
-						value={posterLocale}
+						value={effectivePosterLocale}
 						onChange={(v) => setPosterLocale(v as PosterLocale)}
 					/>
 					<div className="flex flex-col gap-1.5">
@@ -331,7 +346,7 @@ function PosterRoute() {
 						slug={retailer.slug}
 						logoUrl={retailer.logoUrl}
 						headerImageUrl={useCover ? coverImageUrl : null}
-						locale={posterLocale}
+						locale={effectivePosterLocale}
 						counterUrl={counterUrl}
 						onlineUrl={onlineUrl}
 						variant={template}

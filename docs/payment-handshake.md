@@ -4,7 +4,16 @@ The manual, two-button payment confirmation flow. **Shipped and in production** 
 
 No payment gateway is involved: this solves the "did the money land?" handshake on top of the bank-transfer / DuitNow QR flow retailers already use. Customer payment money never touches Kedaipal — the retailer owns the gateway/bank account.
 
-**Source files:** [`convex/orders.ts`](../convex/orders.ts) (`claimPayment`, `markPaymentReceived`, `generateOrderProofUploadUrl`, `getPaymentProofUrl`), [`convex/schema.ts`](../convex/schema.ts) (payment fields), [`convex/whatsapp.ts`](../convex/whatsapp.ts) (`notifyPaymentReceived`).
+**Source files:** [`convex/orders.ts`](../convex/orders.ts) (`claimPayment`, `markPaymentReceived`, `generateOrderProofUploadUrl`, `getPaymentProofUrl`), [`convex/schema.ts`](../convex/schema.ts) (payment fields), [`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx) (both buyer-facing halves of the handshake).
+
+> **The handshake no longer sends anything (2026-08-04, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).**
+> `whatsapp.notifyPaymentReceived` — the "✅ Payment received" WhatsApp — is
+> deleted, along with the day-11 and manual payment reminders. The buttons, the
+> states and the audit trail are all unchanged; what changed is that the buyer
+> learns the outcome on their **order page**, live, instead of by message. The
+> page is reactive, so a buyer sitting on it sees the flip the instant the seller
+> taps Confirm. See [`one-message-per-order.md`](./one-message-per-order.md) and
+> [`payment-reminder.md`](./payment-reminder.md).
 
 ## Payment is independent of fulfilment
 
@@ -46,7 +55,7 @@ In the dashboard, the retailer reviews the claimed reference + proof screenshot 
 - **Idempotent** — if already `received`, returns immediately (no-op second click).
 - Sets `paymentStatus: "received"` + `paymentReceivedAt`.
 - **Auto-confirm**: if the order is still `pending`, it bumps `status → confirmed` in the same transaction and writes a `"payment_received_auto_confirm"` event. Otherwise it writes a `"payment_received"` event (optionally suffixed with the retailer's note).
-- Schedules `notifyPaymentReceived` (WhatsApp). This **bypasses** the normal `notifyStatusChange` path so that an auto-confirm doesn't send two messages — the shopper gets one "✅ Payment received…" message.
+- **Sends the buyer nothing** (`86eyd63r8`). It used to schedule `notifyPaymentReceived`, deliberately bypassing `notifyStatusChange` so an auto-confirm didn't fire two messages; both sends are now deleted, so the double-send problem that special case existed to solve is gone with them. The buyer's Payment card flips to received on their order page, live. The seller's mark-received dialog says the buyer isn't messaged.
 
 ## Transfer reference
 
@@ -98,9 +107,19 @@ paymentMethods?: Array<{
 ## Payment method (`order.paymentMethod`)
 
 Separate from `paymentStatus` (the handshake state) and from the retailer's payout
-config (`lib/payment.ts`): a structured tag of **how the buyer settled** —
-`cash | duitnow | tng | bank_transfer | card | other` (`convex/lib/paymentMethod.ts`).
-Captured **only where reliably known** — Counter Checkout "Paid now," and an
+config (`lib/payment.ts`): a structured tag of **how the buyer settled**
+(`convex/lib/paymentMethod.ts`). Two lists, deliberately not the same one:
+
+- **`ORDER_PAYMENT_METHODS` — what may be stamped.** `cash | duitnow | tng |
+  bank_transfer | fpx | card | other | paynow | paylah | nets | grabpay`. A set
+  spanning every country, because the HitPay gateway stamps whatever rail the
+  buyer really used — an MY order settled through GrabPay is `grabpay` even
+  though MY's picker doesn't offer it by hand.
+- **`COUNTRY_PAYMENT_METHODS` — what the seller is offered**, per
+  `retailers.country` (see [`sg-lite.md`](./sg-lite.md#payment-rails-86eyph341)).
+
+Never gate a label, a filter match, or a stamp on the country list — only the
+pickers. Captured **only where reliably known** — Counter Checkout "Paid now," and an
 optional chip on the seller's "mark payment received" dialog (they've just verified
 the channel). The buyer's "I've paid" self-claim never sets it, so online orders
 stay `undefined` = online/unknown. **Filterable on the orders inbox** (the

@@ -38,11 +38,13 @@ afterEach(cleanup);
  * and exposes live address values for assertions. */
 function Harness({
 	initial = { ...emptyAddress },
+	country = "MY" as const,
 	allowManualEntry = true,
 	collectsFromCustomer = false,
 	onState,
 }: {
 	initial?: CheckoutAddressValues;
+	country?: "MY" | "SG";
 	allowManualEntry?: boolean;
 	collectsFromCustomer?: boolean;
 	onState: (values: CheckoutAddressValues) => void;
@@ -56,6 +58,7 @@ function Harness({
 				form={form}
 				fields="address"
 				retailerId={undefined}
+				country={country}
 				allowManualEntry={allowManualEntry}
 				legend={undefined}
 				collectsFromCustomer={collectsFromCustomer}
@@ -204,6 +207,64 @@ describe("AddressFieldset — manual entry escape hatch", () => {
 		expect(
 			(screen.getByLabelText(/Address line 1/i) as HTMLInputElement).value,
 		).toBe("Kampung Baru, Lot 5");
+	});
+});
+
+describe("AddressFieldset — SG variant (86eynw29u)", () => {
+	it("manual entry shows line1 + a postal-code field and NO state/city inputs", () => {
+		render(<Harness country="SG" onState={() => {}} />);
+		openManualEntry();
+		expect(screen.getByLabelText(/Address line 1/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Postal code/i)).toBeTruthy();
+		// Singapore has no state tier — neither field exists to contradict it.
+		expect(screen.queryByLabelText(/^City/i)).toBeNull();
+		expect(screen.queryByLabelText(/^State/i)).toBeNull();
+	});
+
+	it("a Google pick parses city and state to the 'Singapore' literal", () => {
+		let latest = { ...emptyAddress };
+		render(
+			<Harness
+				country="SG"
+				onState={(v) => {
+					latest = v;
+				}}
+			/>,
+		);
+		fireEvent.click(screen.getByText("mock-pick"));
+		expect(latest.city).toBe("Singapore");
+		expect(latest.state).toBe("Singapore");
+		expect(latest.latitude).toBe("3.1456");
+	});
+
+	it("the confirmed card never prints 'Singapore, Singapore'", () => {
+		render(
+			<Harness
+				country="SG"
+				initial={{
+					...emptyAddress,
+					line1: "12 Bedok North Ave 3",
+					city: "Singapore",
+					state: "Singapore",
+					postcode: "238859",
+					latitude: "1.3",
+					longitude: "103.8",
+					placeId: "sg-place",
+				}}
+				onState={() => {}}
+			/>,
+		);
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		expect(screen.getByText("238859 Singapore")).toBeTruthy();
+		expect(screen.queryByText(/Singapore, Singapore/)).toBeNull();
+	});
+
+	it("MY manual entry keeps the classic postcode/city/state shape", () => {
+		render(<Harness country="MY" onState={() => {}} />);
+		openManualEntry();
+		expect(screen.getByLabelText(/Postcode/i)).toBeTruthy();
+		expect(screen.getByLabelText(/^City/i)).toBeTruthy();
+		expect(screen.getByLabelText(/^State/i)).toBeTruthy();
 	});
 });
 

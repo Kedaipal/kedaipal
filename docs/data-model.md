@@ -117,7 +117,7 @@ The tenant root. One per Clerk user.
 | `currency`, `locale` | string?, `"en"\|"ms"`? | Defaults for the store. |
 | `messageTemplates` | object? | Per-locale, per-status WhatsApp copy overrides. Omitted keys fall back to [`convex/lib/whatsappCopy.ts`](../convex/lib/whatsappCopy.ts). Supports `{shortId}`, `{storeName}`. |
 | `paymentInstructions` | object? | Bank name/account + QR storage ID + note, shown in the confirmation reply. Each sub-field independent. |
-| `termsAcceptedAt` / `Version`, `privacyAcceptedAt` / `Version`, `aupAcceptedAt` / `Version`, `acceptanceIp` | number?/string? | Legal consent tracking. Versions mirror [`convex/lib/legal.ts`](../convex/lib/legal.ts). See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md#legal-consent). |
+| `termsAcceptedAt` / `Version`, `privacyAcceptedAt` / `Version`, `aupAcceptedAt` / `Version` | number?/string? | Legal consent tracking. Versions mirror [`convex/lib/legal.ts`](../convex/lib/legal.ts). See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md#legal-consent). |
 | `channel` | `"whatsapp"` | Future-proofing literal. |
 
 **Indexes:** `by_user` (Clerk lookup on every dashboard request), `by_slug` (storefront routing).

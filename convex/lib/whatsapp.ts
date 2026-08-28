@@ -33,6 +33,42 @@ export function orderConfirmTemplateName(): string | undefined {
 }
 
 /**
+ * Collapse a value into a safe WhatsApp TEMPLATE parameter.
+ *
+ * Meta rejects parameters containing newlines, tabs, or 4+ consecutive spaces,
+ * and `classifyPushFailure` treats that rejection (132007) as TERMINAL — so one
+ * pasted tab in a buyer's name kills the send outright, with no retry. The risk
+ * is real for any buyer-controlled string: `sanitizeCustomerName` trims the ends
+ * but never the interior, and a WhatsApp pushname is whatever the buyer typed
+ * into their own profile. A whitespace-only value degenerates to the caller's
+ * fallback rather than an empty param (also a Meta rejection).
+ *
+ * Every buyer- or seller-authored string entering `bodyParams` goes through
+ * this — it is the one choke point, so a new template can't reintroduce the bug.
+ */
+export function templateParam(
+	raw: string | undefined | null,
+	fallback: string,
+): string {
+	return (raw ?? "").replace(/\s+/g, " ").trim() || fallback;
+}
+
+/**
+ * Claim links (86eyq0epn) — the Meta-approved utility template that hands the
+ * buyer their price-locked checkout link. Same env-gating posture as the
+ * confirm template: unset ⇒ WhatsApp sends are unavailable and the seller
+ * falls back to the copyable wa.me link the claims UI always offers, so the
+ * code ships decoupled from Meta template review. The registered button URL
+ * base must be `https://kedaipal.com/claim/{{1}}`, added via Meta's
+ * **Add variable** control (never hand-typed braces — the 86eyheqzv lesson;
+ * the pre-router placeholder rescue covers a mis-registration either way).
+ */
+export function claimLinkTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CLAIM_LINK_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * Seller WhatsApp order alerts (86eyhw9zy) — the Meta-approved utility
  * templates that notify the SELLER's own number (sellers have no open service
  * window with the shared WABA, so free-form text can't reach them). Same
@@ -48,6 +84,22 @@ export function sellerNewOrderTemplateName(): string | undefined {
 /** See sellerNewOrderTemplateName — the buyer-says-they've-paid sibling. */
 export function sellerPaymentClaimTemplateName(): string | undefined {
 	const name = process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * See sellerNewOrderTemplateName — the money-actually-landed sibling, fired by
+ * the HitPay gateway receive (86eyd63r8). Deliberately a THIRD template rather
+ * than a reuse of the claim one: a claim asks the seller to go check their bank
+ * and confirm, while a settled gateway payment has already auto-confirmed the
+ * order and needs nothing from them. Sending "please verify" on a payment we
+ * verified ourselves manufactures work that doesn't exist.
+ *
+ * Body params are the claim template's exact three — {{1}} customer, {{2}}
+ * shortId, {{3}} money — so the two stay interchangeable at the call site.
+ */
+export function sellerPaymentReceivedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE;
 	return name && name.trim().length > 0 ? name.trim() : undefined;
 }
 

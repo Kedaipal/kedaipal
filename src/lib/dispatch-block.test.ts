@@ -6,6 +6,7 @@ import { dispatchBlockCopy, UNKNOWN_BLOCK_COPY } from "./dispatch-block";
 // Record in dispatch-block.ts stops compiling — and this list going stale is
 // caught by the "no reason falls back to the generic line" case below.
 const ALL_REASONS: DispatchBlock[] = [
+	"country_unsupported",
 	"not_delivery",
 	"bad_status",
 	"job_active",
@@ -38,6 +39,16 @@ describe("dispatchBlockCopy", () => {
 		expect(dispatchBlockCopy("booking_disabled")).toContain("Settings");
 		expect(dispatchBlockCopy("plan_gated")).toContain("Pro");
 		expect(dispatchBlockCopy("no_coords")).toContain("map pin");
+	});
+
+	it("country_unsupported offers the alternative instead of a fix (86eyqgujv)", () => {
+		// The one reason with no setting to change: our Lalamove integration is
+		// Malaysian. Pointing a Singapore seller at Settings would be a dead end,
+		// so the line names what they do instead — ship it themselves.
+		const copy = dispatchBlockCopy("country_unsupported");
+		expect(copy).not.toContain("Settings");
+		expect(copy).toMatch(/Malaysian stores/);
+		expect(copy).toMatch(/shipped yourself/);
 	});
 
 	it("falls back to a generic line for reasons it doesn't know", () => {

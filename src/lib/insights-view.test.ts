@@ -61,6 +61,7 @@ function rangePayload(over: Partial<RangePayload> = {}): RangePayload {
 		products: [],
 		trend: [],
 		payments: [],
+		sources: [],
 		bucketing: "day",
 		capped: false,
 		...over,
@@ -75,6 +76,7 @@ function todayPayload(over: Partial<TodayPayload> = {}): TodayPayload {
 		orderCount: 0,
 		products: [],
 		payments: [],
+		sources: [],
 		...over,
 	};
 }

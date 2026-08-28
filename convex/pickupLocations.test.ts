@@ -1432,3 +1432,101 @@ describe("pickupLocations — fee", () => {
 		expect(rows[0].fee).toBe(500);
 	});
 });
+
+describe("pickupLocations — SG store manager contact (SG-lite, 86eynw2dy)", () => {
+	async function seedSgRetailer(t: ReturnType<typeof convexTest>) {
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "SG Store",
+			slug: "sg-pickup-store",
+			country: "SG",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		return retailer;
+	}
+
+	test("accepts a +65 manager number in the bare local form", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const { pickupLocationId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Bedok point",
+				address: "12 Bedok North Ave 1",
+				managerWaPhone: "9123 4567",
+			});
+		const row = await t.run((ctx) => ctx.db.get(pickupLocationId));
+		expect(row?.managerWaPhone).toBe("6591234567");
+	});
+
+	test("rejects an MY manager number with the SG copy", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Bedok point",
+				address: "12 Bedok North Ave 1",
+				managerWaPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/Singapore mobile/i);
+	});
+});
+
+describe("pickup point country stamps (SG-lite, 86eyqgujv)", () => {
+	test("create stamps the store's country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "stamp");
+		const id = await seedLocation(t, USER_A, retailer._id, "Shop");
+		const row = await t.run(async (ctx) => ctx.db.get(id));
+		expect(row?.country).toBe("MY");
+	});
+
+	test("a country switch stamps existing points with the OLD country", async () => {
+		// A pickup point is the one wrong-country item a BUYER is shown before
+		// they travel, so it has to become a stated fact the checklist can rank
+		// first — not something inferred from coordinates later.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "switch");
+		const id = await seedLocation(t, USER_A, retailer._id, "Shop");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(id, { country: undefined });
+		});
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { country: "SG", waPhone: "" });
+		const row = await t.run(async (ctx) => ctx.db.get(id));
+		expect(row?.country).toBe("MY");
+	});
+
+	test("editing the ADDRESS re-stamps; editing anything else does not", async () => {
+		// The edit dialog submits every field on every save. Stamping on any
+		// save would let a seller clear a wrong-country flag by touching the
+		// schedule note — marking the address fixed without fixing it.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "restamp");
+		const id = await seedLocation(t, USER_A, retailer._id, "Shop");
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			country: "SG",
+			waPhone: "",
+		});
+
+		// Same address, different label → still stamped with the old country.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId: id,
+			label: "Shop (renamed)",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+		});
+		expect((await t.run(async (ctx) => ctx.db.get(id)))?.country).toBe("MY");
+
+		// A genuinely new address → re-stamped to where the store is now.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId: id,
+			address: "Blk 123 Ang Mo Kio Ave 4, #05-678, Singapore 560123",
+		});
+		expect((await t.run(async (ctx) => ctx.db.get(id)))?.country).toBe("SG");
+	});
+});

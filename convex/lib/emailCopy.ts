@@ -21,6 +21,7 @@ export type RetailerEmailKey =
 	| "newOrder"
 	| "orderConfirmed"
 	| "paymentClaimed"
+	| "paymentReceived"
 	| "mockupApproved"
 	| "mockupChangesRequested"
 	| "mockupDeclined"
@@ -40,11 +41,21 @@ export type RetailerEmailVars = {
 	deliveryDirection?: "standard" | "collection";
 	storeName: string;
 	dashboardUrl: string;
-	// Optional — only set when key === "paymentClaimed". Reference the shopper
-	// typed into the "I've paid" form (e.g. their bank transaction ID) and a
-	// resolved Convex storage URL for the screenshot, if any.
+	// Set on "paymentReceived": how the gateway is NAMED to the seller
+	// ("HitPay"), threaded from the provider-specific caller rather than
+	// hardcoded — the same value the WhatsApp alert puts in {{4}}, so the two
+	// channels can never name different accounts for one payment.
+	gatewayProvider?: string;
+	// Optional — set on "paymentClaimed" (the reference the shopper typed into
+	// the "I've paid" form, e.g. their bank transaction ID, plus a resolved
+	// Convex storage URL for the screenshot) and on "paymentReceived" (the
+	// gateway's payment id, which is what the seller looks the charge up by).
 	paymentReference?: string;
-	proofUrl?: string;
+	// Whether the buyer attached a payment screenshot. The email deliberately
+	// links the DASHBOARD to view it, never the raw storage URL (86eyn25gu):
+	// storage URLs are long-lived and unauthenticated, so one forwarded email
+	// would hand the buyer's bank screenshot to anyone holding the link.
+	hasProof?: boolean;
 	// Optional — only set when key === "mockupChangesRequested".
 	mockupChangeNote?: string;
 	// Optional — only set when key === "gatewayMismatch" (86eyb6z3a). What the
@@ -254,8 +265,8 @@ const en = {
 		const refLine = v.paymentReference
 			? `Reference: <strong>${escapeHtml(v.paymentReference)}</strong>`
 			: `Reference: <em>not provided</em>`;
-		const proofLine = v.proofUrl
-			? `<a href="${escapeHtml(v.proofUrl)}" style="color:#2563eb;text-decoration:underline;">View receipt screenshot</a>`
+		const proofLine = v.hasProof
+			? `<a href="${escapeHtml(v.dashboardUrl)}" style="color:#2563eb;text-decoration:underline;">View receipt screenshot in your dashboard</a>`
 			: `Screenshot: <em>not provided</em>`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
@@ -274,10 +285,39 @@ const en = {
 		const refTextLine = v.paymentReference
 			? `Reference: ${v.paymentReference}`
 			: `Reference: not provided`;
-		const proofTextLine = v.proofUrl
-			? `Screenshot: ${v.proofUrl}`
+		const proofTextLine = v.hasProof
+			? `Screenshot: attached — view it in your dashboard`
 			: `Screenshot: not provided`;
 		const text = `🪙 Payment claimed for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nVerify in your bank app, then confirm in your dashboard.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ Payment received for ${v.shortId} · ${v.totalFormatted}`;
+		const gateway = escapeHtml(v.gatewayProvider ?? "the gateway");
+		const refLine = v.paymentReference
+			? `${gateway} ref: <strong>${escapeHtml(v.paymentReference)}</strong>`
+			: undefined;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
+			`Customer: ${escapeHtml(v.customerName)}`,
+			...(refLine ? [refLine] : []),
+			// The load-bearing difference from paymentClaimed: nothing is asked of
+			// the seller. We verified this with HitPay ourselves and the order is
+			// already confirmed — sending them to their bank app would invent work.
+			`Paid online through ${gateway}. The order is confirmed — nothing to check.`,
+		];
+		const html = wrapHtml(
+			"✅",
+			`Payment received for ${v.shortId}`,
+			lines,
+			v.dashboardUrl,
+			"Open dashboard",
+		);
+		const gatewayText = v.gatewayProvider ?? "the gateway";
+		const refTextLine = v.paymentReference
+			? `\n${gatewayText} ref: ${v.paymentReference}`
+			: "";
+		const text = `✅ Payment received for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}${refTextLine}\n\nPaid online through ${gatewayText}. The order is confirmed — nothing to check.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
@@ -416,12 +456,16 @@ const ms = {
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
-		const subject = `🪙 Pembayaran diterima untuk ${v.shortId} · ${v.totalFormatted}`;
+		// "Pelanggan kata dah bayar", not "Pembayaran diterima" — this is a CLAIM
+		// the seller still has to verify, and the money-really-landed sibling
+		// (paymentReceived) now owns "diterima". Fixed in passing; the old wording
+		// promised settlement the seller hadn't confirmed yet.
+		const subject = `🪙 Pelanggan kata dah bayar — ${v.shortId} · ${v.totalFormatted}`;
 		const refLine = v.paymentReference
 			? `Rujukan: <strong>${escapeHtml(v.paymentReference)}</strong>`
 			: `Rujukan: <em>tidak dinyatakan</em>`;
-		const proofLine = v.proofUrl
-			? `<a href="${escapeHtml(v.proofUrl)}" style="color:#2563eb;text-decoration:underline;">Lihat tangkapan resit</a>`
+		const proofLine = v.hasProof
+			? `<a href="${escapeHtml(v.dashboardUrl)}" style="color:#2563eb;text-decoration:underline;">Lihat tangkapan resit di dashboard anda</a>`
 			: `Tangkapan resit: <em>tidak dinyatakan</em>`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
@@ -432,7 +476,7 @@ const ms = {
 		];
 		const html = wrapHtml(
 			"🪙",
-			`Pembayaran diterima untuk ${v.shortId}`,
+			`Pelanggan kata dah bayar — ${v.shortId}`,
 			lines,
 			v.dashboardUrl,
 			"Buka dashboard",
@@ -440,10 +484,36 @@ const ms = {
 		const refTextLine = v.paymentReference
 			? `Rujukan: ${v.paymentReference}`
 			: `Rujukan: tidak dinyatakan`;
-		const proofTextLine = v.proofUrl
-			? `Tangkapan resit: ${v.proofUrl}`
+		const proofTextLine = v.hasProof
+			? `Tangkapan resit: dilampirkan — lihat di dashboard anda`
 			: `Tangkapan resit: tidak dinyatakan`;
-		const text = `🪙 Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nSahkan di aplikasi bank anda, kemudian sahkan di dashboard.\n${v.dashboardUrl}`;
+		const text = `🪙 Pelanggan kata dah bayar — ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nSahkan di aplikasi bank anda, kemudian sahkan di dashboard.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ Pembayaran diterima untuk ${v.shortId} · ${v.totalFormatted}`;
+		const gateway = escapeHtml(v.gatewayProvider ?? "gateway");
+		const refLine = v.paymentReference
+			? `Rujukan ${gateway}: <strong>${escapeHtml(v.paymentReference)}</strong>`
+			: undefined;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
+			`Pelanggan: ${escapeHtml(v.customerName)}`,
+			...(refLine ? [refLine] : []),
+			`Dibayar dalam talian melalui ${gateway}. Pesanan sudah disahkan — tiada apa perlu disemak.`,
+		];
+		const html = wrapHtml(
+			"✅",
+			`Pembayaran diterima untuk ${v.shortId}`,
+			lines,
+			v.dashboardUrl,
+			"Buka dashboard",
+		);
+		const gatewayText = v.gatewayProvider ?? "gateway";
+		const refTextLine = v.paymentReference
+			? `\nRujukan ${gatewayText}: ${v.paymentReference}`
+			: "";
+		const text = `✅ Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}${refTextLine}\n\nDibayar dalam talian melalui ${gatewayText}. Pesanan sudah disahkan — tiada apa perlu disemak.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
@@ -590,8 +660,8 @@ const zh = {
 		const refLine = v.paymentReference
 			? `备注：<strong>${escapeHtml(v.paymentReference)}</strong>`
 			: `备注：<em>未提供</em>`;
-		const proofLine = v.proofUrl
-			? `<a href="${escapeHtml(v.proofUrl)}" style="color:#2563eb;text-decoration:underline;">查看收据截图</a>`
+		const proofLine = v.hasProof
+			? `<a href="${escapeHtml(v.dashboardUrl)}" style="color:#2563eb;text-decoration:underline;">在后台查看收据截图</a>`
 			: `截图：<em>未提供</em>`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
@@ -610,10 +680,36 @@ const zh = {
 		const refTextLine = v.paymentReference
 			? `备注：${v.paymentReference}`
 			: `备注：未提供`;
-		const proofTextLine = v.proofUrl
-			? `截图：${v.proofUrl}`
+		const proofTextLine = v.hasProof
+			? `截图：已提交 — 请在后台查看`
 			: `截图：未提供`;
 		const text = `🪙 已收到 ${v.shortId} 的付款提交\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}\n${refTextLine}\n${proofTextLine}\n\n请在银行 App 核实，然后在后台确认。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	paymentReceived: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ ${v.shortId} 款项已入账 · ${v.totalFormatted}`;
+		const gateway = escapeHtml(v.gatewayProvider ?? "支付网关");
+		const refLine = v.paymentReference
+			? `${gateway} 单号：<strong>${escapeHtml(v.paymentReference)}</strong>`
+			: undefined;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
+			`顾客：${escapeHtml(v.customerName)}`,
+			...(refLine ? [refLine] : []),
+			`已通过 ${gateway} 在线支付，订单已确认 — 无需核实。`,
+		];
+		const html = wrapHtml(
+			"✅",
+			`${v.shortId} 款项已入账`,
+			lines,
+			v.dashboardUrl,
+			"打开后台",
+		);
+		const gatewayText = v.gatewayProvider ?? "支付网关";
+		const refTextLine = v.paymentReference
+			? `\n${gatewayText} 单号：${v.paymentReference}`
+			: "";
+		const text = `✅ ${v.shortId} 款项已入账\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}${refTextLine}\n\n已通过 ${gatewayText} 在线支付，订单已确认 — 无需核实。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {

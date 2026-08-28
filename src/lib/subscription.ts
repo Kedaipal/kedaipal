@@ -55,6 +55,26 @@ export function isCrmLocked(
 	);
 }
 
+/**
+ * True when this seller cannot use the ORDER INBOX filters (Starter, not admin
+ * act-as) — the same shape as `isCrmLocked`, for the same reason: a control
+ * that silently does nothing is worse than one that isn't offered. Used by the
+ * order detail's "Came from" row, whose drill-down applies an inbox filter
+ * (86eyq0eq9); on Starter the origin still shows, just as plain text.
+ */
+export function isOrderInboxLocked(
+	retailer:
+		| { actingAsAdmin?: boolean; subscription?: SubscriptionView }
+		| null
+		| undefined,
+): boolean {
+	return (
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "orderInbox")
+	);
+}
+
 /** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
 export const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",

@@ -53,3 +53,43 @@ describe("quickPickDays", () => {
 		expect(quickPickDays("2026-08-02", "2026-08-01", "2026-07-29")).toEqual([]);
 	});
 });
+
+describe("quickPickDays — isSelectable filter (store opening hours, 86eyp5rav)", () => {
+	it("skips filtered-out days and scans forward so three REAL choices show", () => {
+		const days = quickPickDays(
+			"2026-07-01",
+			"2026-07-31",
+			"2026-07-01",
+			3,
+			(ymd) => ymd !== "2026-07-02", // store closed on the 2nd
+		);
+		expect(days.map((d) => d.ymd)).toEqual([
+			"2026-07-01",
+			"2026-07-03",
+			"2026-07-04",
+		]);
+		expect(days[0].label).toBe("Today");
+	});
+
+	it("returns fewer chips when the window can't fill the count", () => {
+		const days = quickPickDays(
+			"2026-07-01",
+			"2026-07-03",
+			"2026-07-01",
+			3,
+			(ymd) => ymd === "2026-07-02", // only one open day in the window
+		);
+		expect(days.map((d) => d.ymd)).toEqual(["2026-07-02"]);
+	});
+
+	it("today skipped by the filter never labels another day 'Today'", () => {
+		const days = quickPickDays(
+			"2026-07-01",
+			"2026-07-31",
+			"2026-07-01",
+			2,
+			(ymd) => ymd !== "2026-07-01",
+		);
+		expect(days[0]).toEqual({ ymd: "2026-07-02", label: "Tomorrow" });
+	});
+});

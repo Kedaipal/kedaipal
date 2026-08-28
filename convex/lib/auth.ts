@@ -126,6 +126,28 @@ export async function logDestructiveAdminAction(
 	await insertAuditRow(ctx, access, action, targetId);
 }
 
+/**
+ * Audit a GLOBAL admin action — one with no store in scope (e.g. the manual
+ * WABA opt-out, which suppresses sends across every retailer on the shared
+ * number). `retailerId` stays unset, so per-store audit views simply don't
+ * list these. Never put full PII in `targetId` — the audit log has no
+ * retention; callers pass a last-4 phone hint and the acted-on row itself
+ * holds the full value.
+ */
+export async function logGlobalAdminAction(
+	ctx: MutationCtx,
+	adminUserId: string,
+	action: string,
+	targetId?: string,
+): Promise<void> {
+	await ctx.db.insert("adminAuditLog", {
+		adminUserId,
+		action,
+		targetId,
+		ts: Date.now(),
+	});
+}
+
 async function insertAuditRow(
 	ctx: MutationCtx,
 	access: RetailerAccess,

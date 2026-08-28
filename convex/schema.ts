@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
@@ -25,12 +26,13 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
-		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
-		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
-		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
-		// route alerts to whoever runs orders — same split as notifyEmail vs the
-		// Clerk email. Stored in the normalized inbound form ("60…", via
-		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		// Seller WhatsApp order alerts (86eyhw9zy): the mobile (in the store's
+		// country — SG-lite 86eynw2dy) that receives them. Deliberately SEPARATE
+		// from `waPhone` (the buyer-facing store contact / wa.me fallback /
+		// Lalamove sender) so a multi-person store can route alerts to whoever
+		// runs orders — same split as notifyEmail vs the Clerk email. Stored in
+		// the normalized inbound form ("60…"/"65…", via
+		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
 		// Opt-in switch for the seller WhatsApp order alerts (new order +
 		// payment claim, sent as Meta utility templates to notifyWaPhone).
@@ -47,6 +49,31 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
+		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
+		// rule reads: checkout phone plate/validator arm, address variant, Places
+		// autocomplete region, and the currency a new store defaults to. Undefined
+		// = MY (every pre-existing store, zero migration). Closed set in
+		// convex/lib/country.ts.
+		country: v.optional(countryValidator),
+		// The last country SWITCH (SG-lite, 86eyqgujv). Unset = this store has
+		// never moved country, which is every store born in its own market — the
+		// post-switch checklist skips them entirely, so it costs nothing to read.
+		//
+		// Switching is a different path from being created in a country: it
+		// leaves Malaysian addresses, bank details and rate cards behind on
+		// surfaces a buyer and a courier can see. Nothing is refused and nothing
+		// is deleted (refusing deadlocks — Places predictions are locked to the
+		// store's CURRENT country, so "fix your address first" is impossible);
+		// instead every carried value is inert where it matters and
+		// convex/lib/countrySetup.ts names what is left to fix.
+		countryChangedAt: v.optional(v.number()),
+		countryChangedFrom: v.optional(countryValidator),
+		// Checklist rows the seller has confirmed by hand. ONLY unverifiable
+		// items can be acknowledged — a bank account's country is free text we
+		// cannot judge, so the seller confirms it. A stamped wrong-country
+		// address is a fact and is never retired by a tick. Cleared on every
+		// switch (a new move re-opens every question).
+		countrySetupAcked: v.optional(v.array(v.string())),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -172,7 +199,13 @@ export default defineSchema({
 							zh: v.optional(v.string()),
 						}),
 					),
-					notify: v.boolean(),
+					// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle
+					// is gone: an order sends exactly ONE message (the confirmation
+					// push) and stages are a seller/timeline vocabulary only. Widened to
+					// optional so already-saved stage lists still validate; nothing
+					// writes it any more (sanitizeOrderStages drops it), so it decays to
+					// absent on the seller's next save. Narrow it away later.
+					notify: v.optional(v.boolean()),
 					sortOrder: v.number(),
 				}),
 			),
@@ -209,17 +242,18 @@ export default defineSchema({
 			),
 		),
 		// Legal consent tracking. Versions are ISO dates mirrored from
-		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time;
-		// acceptanceIp is a best-effort client IP captured at acceptance for
-		// legal defensibility. Stamped at onboarding (createRetailer) and on
-		// re-acceptance (recordConsentAcceptance).
+		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time.
+		// Stamped at onboarding (createRetailer) and on re-acceptance
+		// (recordConsentAcceptance). An `acceptanceIp` field existed here until
+		// 86eyn25fu but was dropped: no client ever passed it (provably always
+		// undefined) and Convex mutations can't observe the request IP, so a
+		// "legal defensibility" column that's always empty was worse than none.
 		termsAcceptedAt: v.optional(v.number()),
 		termsVersion: v.optional(v.string()),
 		privacyAcceptedAt: v.optional(v.number()),
 		privacyVersion: v.optional(v.string()),
 		aupAcceptedAt: v.optional(v.number()),
 		aupVersion: v.optional(v.string()),
-		acceptanceIp: v.optional(v.string()),
 		// Retailer opt-in for offering self-collect at checkout. Storefront only
 		// surfaces the self-collect option when this is true AND the retailer has
 		// at least one active pickup location. New retailers default to true
@@ -248,6 +282,23 @@ export default defineSchema({
 				latitude: v.number(),
 				longitude: v.number(),
 				placeId: v.optional(v.string()),
+				// The country this address was CAPTURED in (SG-lite, 86eyqgujv).
+				// Stamped at save from the store's country the way
+				// deliveryBooking.env is stamped from the key prefix — never
+				// derived from a stored value at read time. Coordinates cannot
+				// answer this: Singapore's bounding box (lat 1.13–1.47) contains
+				// Johor Bahru at 1.4655 N, so a geometric test would call a
+				// Malaysian seller's address Singaporean.
+				//
+				// Unset = captured before we tracked it, which for every row that
+				// exists today means it matches its store (no store had switched
+				// country when this shipped). Read as "matches" — fail open, so
+				// no existing label or setting changes behaviour. The country
+				// switch stamps un-stamped rows with the OLD country at the one
+				// moment that fact is known for certain, so every switch from
+				// here on is fully covered without a backfill that would have to
+				// guess.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
@@ -320,16 +371,34 @@ export default defineSchema({
 		// yet still book Lalamove riders). `enabled` requires `businessAddress`
 		// AND the seller's own key pair (enforced in updateSettings). BYO-ONLY
 		// (decision revised 21 Jul): `apiKey`/`apiSecret` are the seller's own
-		// Lalamove credentials (plain fields per current convention, accepted for
-		// v1) — there is NO platform fallback; Kedaipal never books or pays on a
-		// seller's behalf. Sandbox vs production is inferred from the key prefix.
-		// See docs/delivery-lalamove.md.
+		// Lalamove credentials — there is NO platform fallback; Kedaipal never
+		// books or pays on a seller's behalf. ENCRYPTED AT REST since 86eyn25gk
+		// (`enc.v1.` envelope, key = env CREDENTIALS_ENCRYPTION_KEY; legacy rows
+		// may hold plaintext until credentials:encryptExistingCredentials runs).
+		// Sandbox vs production is inferred from the PLAINTEXT key prefix at
+		// decrypt time in actions; `apiKeyHint` is stamped at save because
+		// queries can't derive it from ciphertext. See
+		// docs/credential-encryption.md + docs/delivery-lalamove.md.
 		deliveryBooking: v.optional(
 			v.object({
 				enabled: v.boolean(),
 				vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 				apiKey: v.optional(v.string()),
 				apiSecret: v.optional(v.string()),
+				// Last 4 chars of the plaintext key, for the settings UI.
+				apiKeyHint: v.optional(v.string()),
+				// Which Lalamove world these keys talk to (86eypncfy), stamped at
+				// save from the PLAINTEXT key (`pk_test_…` → sandbox). Ciphertext
+				// always reads as "production", so a query can no more derive this
+				// than it can the hint — and unlike the hint this one is
+				// load-bearing: a sandbox key books trips no rider will ever run
+				// and prices real buyers off the test environment, so every
+				// surface that spends money has to be able to say so. Undefined =
+				// not yet stamped (pre-backfill row), which the UI treats as
+				// "unknown", never as "production".
+				env: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
@@ -354,20 +423,28 @@ export default defineSchema({
 			}),
 		),
 		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
-		// `apiKey`/`salt` are the seller's OWN HitPay credentials (plain fields per
-		// current convention; never exposed to clients — reads emit only a
-		// HitpaySummary). Sandbox vs production is inferred from the key prefix
-		// ("test_" → sandbox, verified against a live sandbox key). `enabled` false
-		// pauses the buyer's Pay-now button WITHOUT wiping the keys, so a seller
-		// can switch online payments off and back on instantly. Enabling is
-		// Pro-gated; disabling/clearing never is (downgrade never traps), and an
-		// order's gateway fields keep working on every tier. `connectedAt` stamps
-		// the first save that stored a full credential. See docs/hitpay-gateway.md.
+		// `apiKey`/`salt` are the seller's OWN HitPay credentials (never exposed
+		// to clients — reads emit only a HitpaySummary). ENCRYPTED AT REST since
+		// 86eyn25gk (`enc.v1.` envelope, env CREDENTIALS_ENCRYPTION_KEY; legacy
+		// rows may hold plaintext until the one-shot backfill runs). Sandbox vs
+		// production ("test_" prefix) is judged on the PLAINTEXT key — `mode` +
+		// `apiKeyHint` are stamped at save because queries can't derive them
+		// from ciphertext. `enabled` false pauses the buyer's Pay-now button
+		// WITHOUT wiping the keys, so a seller can switch online payments off
+		// and back on instantly. Enabling is Pro-gated; disabling/clearing never
+		// is (downgrade never traps), and an order's gateway fields keep working
+		// on every tier. `connectedAt` stamps the first save that stored a full
+		// credential. See docs/credential-encryption.md + docs/hitpay-gateway.md.
 		hitpay: v.optional(
 			v.object({
 				enabled: v.boolean(),
 				apiKey: v.optional(v.string()),
 				salt: v.optional(v.string()),
+				// Stamped at save from the plaintext key (see comment above).
+				apiKeyHint: v.optional(v.string()),
+				mode: v.optional(
+					v.union(v.literal("sandbox"), v.literal("production")),
+				),
 				connectedAt: v.optional(v.number()),
 				// The ACCOUNT's enabled payment methods, as HitPay resolves them for
 				// this key (e.g. ["duitnow","touch_n_go"]). Learned from a throwaway
@@ -389,6 +466,51 @@ export default defineSchema({
 		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
 		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store opening hours (86eyp5rav) — 7 entries indexed by weekday (0 =
+		// Sunday, the getUTCDay index on a MYT-shifted date). Per day: open/close
+		// in minutes since MYT midnight (0 ≤ open < close ≤ 1439 — 23:59 is the
+		// ceiling, "24:00" isn't expressible in a time input), boundaries
+		// INCLUSIVE; `closed: true` = shut all day (open/close keep their last
+		// values so re-opening restores them). Undefined = open 24/7 (default —
+		// every pre-existing store; an all-24h week normalizes back to unset so
+		// "no constraint" has one spelling). Constrains ONLY the buyer's
+		// fulfilment date/time at storefront checkout — browsing/ordering stay
+		// 24/7, counter checkout is exempt. ≥1 open day enforced (the
+		// working-method-invariant posture). Public-safe (shown on the
+		// storefront header). See convex/lib/openingHours.ts.
+		openingHours: v.optional(
+			v.array(
+				v.object({
+					open: v.number(),
+					close: v.number(),
+					closed: v.optional(v.boolean()),
+				}),
+			),
+		),
+		// Despatch-label template (86eyp63mp) — what this store's printed parcel
+		// label shows, and on what paper. Undefined = every default (a4-4up,
+		// logo/COD/weight/note on, contents off) — every pre-existing store, zero
+		// migration. EVERY field is optional so a future toggle is a widen rather
+		// than a migration, and `sanitizeAwbConfig` drops any field that equals
+		// its default (an all-default save normalises the whole object back to
+		// unset) so "the defaults" has one spelling. All-tier and owner-only —
+		// never in the public storefront payload. NOTE: this is Kedaipal's own
+		// despatch label, NOT a courier-issued consignment note; it carries the
+		// courier name + tracking number the seller records manually (86eyehvk4).
+		// See convex/lib/awbConfig.ts + docs/despatch-labels.md.
+		awbConfig: v.optional(
+			v.object({
+				paperSize: v.optional(
+					v.union(v.literal("a6"), v.literal("a4-4up")),
+				),
+				showLogo: v.optional(v.boolean()),
+				showItems: v.optional(v.boolean()),
+				showCod: v.optional(v.boolean()),
+				showWeight: v.optional(v.boolean()),
+				showNote: v.optional(v.boolean()),
+				footerText: v.optional(v.string()),
+			}),
+		),
 		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
 		// subtotal a storefront order must reach before checkout. Undefined = no
 		// minimum (default; 0 normalizes to unset via sanitizeMinOrderValue).
@@ -421,6 +543,27 @@ export default defineSchema({
 		// checklist's activation states. See docs/activation-checklist.md.
 		activatedAt: v.optional(v.number()),
 		linkSharedAt: v.optional(v.number()),
+		// Highest release version whose "What's new" notes this seller has seen
+		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
+		// a boolean can only answer "dismissed once", so the next release would
+		// be suppressed by the previous release's flag.
+		//
+		// Stored per-ACCOUNT rather than per-device (localStorage) so a seller on
+		// a phone and a tablet isn't shown the same modal twice, and so we can
+		// see which sellers have actually been told about a feature — the point
+		// of shipping an announcement at all.
+		//
+		// UNSET means "caught up", never "has seen nothing": every existing
+		// seller on rollout day, and every new signup, is stamped to the running
+		// version on first read and shown nothing. Replaying a backlog at someone
+		// who has been using the product for months reads like the product is
+		// talking to somebody else. That one rule covers both cohorts with no
+		// signup-flow change and no backfill.
+		//
+		// Written only by `releases.markSeen`, which resolves the retailer from
+		// the CALLER's own identity — so admin act-as can never consume the
+		// seller's announcement (the markLinkShared posture).
+		lastSeenReleaseVersion: v.optional(v.string()),
 		// Founding Member denormalized flags (fast storefront reads). Set once when
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
@@ -436,6 +579,22 @@ export default defineSchema({
 		// alphabet), NEVER the slug; rotating replaces it and kills old posters.
 		// See docs/counter-checkout.md (store QR poster, 86ey5m35w).
 		counterQrToken: v.optional(v.string()),
+		// Claim links (86eyq0epn): the store's default payment window (minutes) for
+		// a "send to buyer" claim link — remembered from the seller's last send (the
+		// send controls say so), no separate Settings card. Unset falls back to
+		// DEFAULT_CLAIM_WINDOW_MINUTES in convex/lib/orderClaims.ts — read it
+		// there rather than restating the number here, which is how this comment
+		// came to claim 24h after the default moved to 15 minutes.
+		claimLinkWindowMinutes: v.optional(v.number()),
+		// Claim links (86eyq0epn): the marketing origin the seller last tagged a
+		// claim with — an `attributionBucket` key ("tiktok-live", "instagram",
+		// …). Remembered exactly like the window above, so a seller sets it once
+		// at the top of a live and every claim that session inherits it. Unset =
+		// untagged (the order then buckets "direct", the pre-attribution
+		// behaviour). Deliberately seller-chosen rather than derived: a claim
+		// link serves a TikTok Live, a phone order and a DM quote alike, and
+		// only the seller knows which.
+		claimLinkSource: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -801,10 +960,28 @@ export default defineSchema({
 		// defaulted (not buyer-chosen) fulfilment date, so their date badge is hidden
 		// and their "delivered" completion reads "Completed" (never "Delivered").
 		// Per-row read only — no index; the inbox source filter is an in-memory
-		// predicate in convex/lib/orderInboxFilter.ts.
+		// predicate in convex/lib/orderInboxFilter.ts. "claim" = a claim-link order
+		// (86eyq0epn): seller-keyed lines at LOCKED prices, completed by the buyer
+		// on /claim/<token> — buyer-chosen fulfilment like a storefront order, so
+		// every `source === "counter"` UI branch (hidden date badge, "Completed"
+		// wording) deliberately does NOT apply to it.
 		source: v.optional(
-			v.union(v.literal("storefront"), v.literal("counter")),
+			v.union(
+				v.literal("storefront"),
+				v.literal("counter"),
+				v.literal("claim"),
+			),
 		),
+		// Marketing source the BUYER arrived from (86eyq0eq9) — the `?src=` /
+		// `utm_source` tag on the storefront link ("tiktok", "instagram",
+		// "online" = poster QR, free-form seller tags; present-but-garbage
+		// sanitizes to "other"). Stamped once at create on STOREFRONT orders
+		// only — counter orders derive their report bucket from `source`, and
+		// absence = direct — so there is nothing to backfill. Sanitized by
+		// convex/lib/attribution.ts (the one author, shared with the client).
+		// Per-row read only — no index; the insights by-source breakdown reads
+		// it inside the existing bounded `by_retailer` range scan.
+		attributionSource: v.optional(v.string()),
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),
@@ -1037,6 +1214,13 @@ export default defineSchema({
 		// 2026 — late-added tracking is track-page-only). Delivery orders only.
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// When a despatch label carrying this order was last generated (86eyp63mp).
+		// "Printed" means "label PDF built and handed to the seller" — we can't see
+		// the physical printer, and that's close enough for the print queue's
+		// "Printed · 2h ago" chip. Re-prints re-stamp (latest wins; it's a fact,
+		// not a one-shot), and a batch stamps only the orders actually included,
+		// never the skipped ones. Undefined = never printed.
+		labelPrintedAt: v.optional(v.number()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.
@@ -1064,6 +1248,29 @@ export default defineSchema({
 		// daily cron at schedule time so it never double-sends. Undefined = not
 		// sent (yet, or never became due). See docs/payment-reminder.md.
 		paymentReminderSentAt: v.optional(v.number()),
+		// Hard payment deadline (epoch-ms) — "field present = the clock is live".
+		// v1 stamper: a claim-link commit (86eyq0epn) carries the claim's window
+		// onto the order (floored to commit + CLAIM_PAYMENT_RUNWAY_MS so the
+		// buyer always has runway to actually pay), because stock decrements at
+		// commit and an unpaid order would otherwise hold inventory forever.
+		// The sweep cron (orderClaims.cancelUnpaidDueOrders) auto-cancels a due
+		// order ONLY while it is truly unpaid AND payable — never `claimed` (an
+		// "I've paid" is a human-verified promise, cancelling it would burn a
+		// buyer whose transfer landed), never while `deliveryFeePending` (the
+		// buyer CAN'T pay yet), never while a HitPay checkout session is live
+		// (gatewayRequestedAt within grace — mid-payment cancellation is how
+		// money lands on a cancelled order). Starting a payment session extends
+		// the deadline (visible clock jump, bounded — never an indefinite
+		// freeze, which would be exploitable). CLEARED on payment received and
+		// on any cancellation, so the by_payment_due index range only ever
+		// holds live clocks. See docs/claim-links.md.
+		paymentDueAt: v.optional(v.number()),
+		// Why this order was cancelled, when the cause wasn't a human tapping
+		// Cancel — lets the buyer's cancelled banner explain itself instead of a
+		// bare "Cancelled" (payment_window_expired = the paymentDueAt sweep).
+		// Undefined on every human cancellation, so absence means "the store
+		// cancelled it".
+		cancelledReason: v.optional(v.literal("payment_window_expired")),
 		// When the seller last MANUALLY re-sent the payment details to the buyer
 		// from the order page (distinct from the automatic paymentReminderSentAt
 		// so the two triggers never corrupt each other's once-only logic). Drives
@@ -1222,6 +1429,9 @@ export default defineSchema({
 		// The previous-id twin keeps payments on a REPLACED (re-priced /
 		// double-minted) link correlatable instead of silently 200-acked.
 		.index("by_gateway_request", ["gatewayRequestId"])
+		// The payment-deadline sweep's range read (paymentDueAt < now). Kept tiny
+		// by the field's present-means-live contract above.
+		.index("by_payment_due", ["paymentDueAt"])
 		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
 
 	/**
@@ -1263,6 +1473,18 @@ export default defineSchema({
 		latitude: v.optional(v.number()),
 		longitude: v.optional(v.number()),
 		placeId: v.optional(v.string()),
+		// The country this point's address was CAPTURED in (SG-lite, 86eyqgujv).
+		// Same posture as retailers.businessAddress.country: stamped at save from
+		// the store's country, never derived from the coordinates (Singapore's
+		// bounding box contains Johor Bahru). Unset reads as "matches"; the
+		// country switch stamps un-stamped rows with the OLD country.
+		//
+		// A pickup point is the one wrong-country item a BUYER is shown directly,
+		// at checkout, before they travel — so it is named on the post-switch
+		// checklist (ranked `buyer_visible`, under the two money rows) rather
+		// than quietly hidden. Hiding them would break the working-method
+		// invariant on a pickup-only store.
+		country: v.optional(countryValidator),
 		// Optional contact info for the person running this pickup spot. When
 		// set, the seller order detail page surfaces a "Notify <name>" wa.me
 		// button so the seller can forward the order details in one tap.
@@ -1499,6 +1721,107 @@ export default defineSchema({
 		// full-table scan (orderId is set only on completed sessions).
 		.index("by_order", ["orderId"]),
 
+	// --- Claim links (TikTok Live, 86eyq0epn — docs/claim-links.md) -----------
+	// A seller-keyed, price-LOCKED order handed to the buyer to complete: the
+	// seller builds the lines in Counter Checkout (incl. per-line price overrides,
+	// 86eyphh8r), sends the buyer a WhatsApp link, and the buyer finishes address,
+	// fulfilment date and payment on /claim/<token>. The order commits (and stock
+	// decrements) only at buyer completion — a claim is an OFFER, not an order.
+	// Lines are FROZEN here at send: the counter session draft is explicitly a
+	// non-authoritative scratchpad whose prices re-resolve at create, so "price
+	// locked" needs its own snapshot. Expiry is a FIXED deadline (Zaki's checkout
+	// timer — option (a): it gates buyer COMPLETION only; a committed order's
+	// payment then follows the normal flow). Resend never moves it.
+	orderClaims: defineTable({
+		retailerId: v.id("retailers"),
+		// The counter session the claim was sent from. One LIVE claim per session:
+		// sending again supersedes (cancels) the previous open claim — the old
+		// link must die when the cart or price changed.
+		sessionId: v.id("counterCheckoutSessions"),
+		sellerUserId: v.string(),
+		// Buyer identity frozen at send (from the session bind). `waPhone` is
+		// required — an anonymous session has nobody to send a link to.
+		customerId: v.optional(v.id("customers")),
+		waPhone: v.string(),
+		buyerName: v.optional(v.string()),
+		// Frozen, price-locked lines — the exact snapshot shape orders.items uses,
+		// resolved + validated server-side at send (seller price overrides applied,
+		// custom lines already priced). Commit copies these verbatim; it re-reads
+		// the variant rows ONLY for live stock / parcel weight, never for price.
+		lines: v.array(
+			v.object({
+				productId: v.id("products"),
+				variantId: v.id("productVariants"),
+				name: v.string(),
+				variantLabel: v.optional(v.string()),
+				price: v.number(), // sen — LOCKED at send
+				quantity: v.number(),
+			}),
+		),
+		currency: v.string(),
+		// Buyer capability for /claim/<token> — same generator + posture as
+		// orders.trackingToken (unguessable, never the shortId).
+		token: v.string(),
+		status: v.union(
+			v.literal("open"),
+			v.literal("completed"), // buyer committed → orderId set
+			v.literal("cancelled"), // seller released it (or superseded by a resend-with-changes)
+			v.literal("expired"), // fixed deadline passed (cron flips; reads judge live)
+		),
+		// FIXED deadline (epoch-ms) — never slides, resend never resets it.
+		expiresAt: v.number(),
+		windowMinutes: v.number(),
+		// Marketing origin frozen at send (86eyq0eq9 × 86eyq0epn) — carried onto
+		// the committed order's `attributionSource` so Insights counts a live
+		// drop's revenue against the channel that produced it. Sanitized with
+		// the shared `sanitizeAttributionSource`; unset = untagged.
+		attributionSource: v.optional(v.string()),
+		// Resend guard (Zaki): cooldown + hard cap live in convex/lib/orderClaims.ts;
+		// these two power both the server check and the disabled-with-reason button.
+		sentCount: v.number(),
+		lastSentAt: v.number(),
+		// Outcome of the LAST WhatsApp send attempt — "failed" surfaces the
+		// copy-the-link-yourself fallback on the claims list (WABA send can be
+		// blocked by caps/opt-out; the link itself still works).
+		// Outcome of the LAST WhatsApp send attempt. Five values, because the
+		// seller's NEXT MOVE differs in each case and a single "failed" hid the
+		// only one the buyer can actually fix:
+		//   sent        — nothing to do.
+		//   opted_out   — this buyer sent STOP to the shared WABA, so the
+		//                 gateway suppressed it. The ONLY remedy is the buyer
+		//                 replying START; the UI says so by name instead of
+		//                 blaming delivery. (This is the common one in practice:
+		//                 a tester's own number usually carries an old STOP.)
+		//   blocked     — the gateway refused for a reason that is OURS, not the
+		//                 buyer's (cap reached, quality throttle, kill switch).
+		//                 Waiting or copying the link is the move.
+		//   failed      — Meta rejected it or the network died. Copy the link.
+		//   unavailable — claim-link sending isn't configured on this deployment
+		//                 at all; retrying fails identically, so Copy link is the
+		//                 only offer.
+		// In every non-sent case the LINK ITSELF still works, deadline intact —
+		// which is why Copy link is always on the card.
+		lastSendOutcome: v.optional(
+			v.union(
+				v.literal("sent"),
+				v.literal("opted_out"),
+				v.literal("blocked"),
+				v.literal("failed"),
+				v.literal("unavailable"),
+			),
+		),
+		// Set at completion — lets a re-opened link show the order's track page.
+		orderId: v.optional(v.id("orders")),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_token", ["token"])
+		.index("by_retailer_status", ["retailerId", "status"])
+		// Drives the expiry + purge crons (same shape as counterCheckoutSessions).
+		.index("by_status_expiry", ["status", "expiresAt"])
+		// One-live-claim-per-session lookup at send + counter build-screen state.
+		.index("by_session", ["sessionId"]),
+
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by
 	// createRetailer). Entitlement caps are DENORMALIZED here so feature-gating
@@ -1651,6 +1974,9 @@ export default defineSchema({
 	// retailer. An active opt-out is a row with `reactivatedAt` unset; START/MULA
 	// stamps `reactivatedAt` to re-opt-in. Transactional order messages are NOT
 	// suppressed (a buyer mid-order must still get order updates) — see canSend.
+	// NEVER purged — an opt-out is the buyer's standing legal instruction
+	// (convex/lib/retention.ts, docs/data-retention.md); reads must stay indexed
+	// + bounded (`by_created` serves the admin 30-day stats window).
 	optOuts: defineTable({
 		waPhone: v.string(),
 		source: v.union(
@@ -1665,13 +1991,26 @@ export default defineSchema({
 		triggeredByRetailerId: v.optional(v.id("retailers")),
 		reactivatedAt: v.optional(v.number()),
 		createdAt: v.number(),
-	}).index("by_phone", ["waPhone"]),
+	})
+		.index("by_phone", ["waPhone"])
+		// The 30-day opt-out stat on the admin vendor list (86eyetzt7). The table
+		// is append-only and NEVER purged, so that read must never be a full scan.
+		.index("by_created", ["createdAt"])
+		// The live do-not-message set, for the admin register (86eyn25gu).
+		// Rows are never deleted — opting back in stamps `reactivatedAt`, which is
+		// the consent ledger — so "who is currently opted out" is exactly the rows
+		// where that stamp is absent. Indexed rather than scanned-and-filtered:
+		// re-activations accumulate forever, so a bounded newest-first scan would
+		// slowly start returning pages of re-activated rows and hiding live ones.
+		.index("by_active", ["reactivatedAt"]),
 
 	// WABA quality-rating history, one row per Meta health webhook
 	// (phone_number_quality_update / account_update). The gateway reads the LATEST
 	// row (by_observed desc) to auto-throttle: LOW → pause all but transactional;
 	// MEDIUM/UNKNOWN → pause marketing only. History (not a singleton) so we can
-	// see trend + implement sustained-recovery later.
+	// see trend + implement sustained-recovery later. Retention: 90 days, but the
+	// newest row is ALWAYS kept regardless of age — purging it would fail the
+	// gateway open to HIGH (convex/lib/retention.ts).
 	wabaHealth: defineTable({
 		qualityRating: v.union(
 			v.literal("HIGH"),
@@ -1703,7 +2042,10 @@ export default defineSchema({
 	// cost/abuse attribution ("who sent what, when, blocked why"). `retailerId`
 	// optional for system replies to an unknown inbound sender. delivered/read are
 	// reserved for a future Meta message-status webhook; today we log sent/failed/
-	// blocked_* at send time.
+	// blocked_* at send time. The fastest-growing table in the schema — raw rows
+	// are purged after 90 days, rolled up into `messageLogRollups` first so the
+	// cost ledger survives in aggregate (`by_sent` drives the purge cron's range
+	// read). See convex/lib/retention.ts + docs/data-retention.md.
 	outboundMessageLog: defineTable({
 		retailerId: v.optional(v.id("retailers")),
 		toWaPhone: v.string(),
@@ -1728,7 +2070,47 @@ export default defineSchema({
 		sentAt: v.number(),
 	})
 		.index("by_retailer_sent", ["retailerId", "sentAt"])
-		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
+		.index("by_phone_sent", ["toWaPhone", "sentAt"])
+		.index("by_sent", ["sentAt"]),
+
+	// Monthly rollups of PURGED outboundMessageLog rows — the WhatsApp cost
+	// ledger's permanent aggregate memory (ClickUp 86eyetzt7). Before the purge
+	// cron deletes an expired log row it folds the row into its
+	// (retailer × MYT month × category × status) bucket here, in the SAME
+	// transaction, so per-retailer volume/cost accounting (Meta bills per-send
+	// from Oct 2026) survives the raw rows. Deliberately drops `templateName` +
+	// `toWaPhone`: per-template/per-recipient detail is a 90-day view on the raw
+	// log; this is the forever ledger. Row count is bounded by construction:
+	// retailers × months × 4 categories × 8 statuses. `retailerId` optional to
+	// mirror outboundMessageLog (system replies to an unknown sender carry none).
+	messageLogRollups: defineTable({
+		retailerId: v.optional(v.id("retailers")),
+		/** MYT calendar month, "YYYY-MM" (lib/retention.ts mytMonthKey). */
+		month: v.string(),
+		category: v.union(
+			v.literal("transactional"),
+			v.literal("utility_template"),
+			v.literal("marketing_template"),
+			v.literal("session_message"),
+		),
+		status: v.union(
+			v.literal("sent"),
+			v.literal("delivered"),
+			v.literal("read"),
+			v.literal("failed"),
+			v.literal("blocked_optout"),
+			v.literal("blocked_capreached"),
+			v.literal("blocked_quality"),
+			v.literal("blocked_retailer_paused"),
+		),
+		count: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_month_category_status", [
+		"retailerId",
+		"month",
+		"category",
+		"status",
+	]),
 
 	// --- Admin console audit trail (ClickUp 86ey25er1, docs/admin-console.md) --
 	// One row per admin-on-behalf ("act-as") write during white-glove onboarding.
@@ -1736,14 +2118,19 @@ export default defineSchema({
 	// in convex/lib/auth.ts); every write they make on a store they don't own is
 	// stamped here so edits are attributable to a person. Owner writes are NOT
 	// logged — only the admin exception. `targetId` is the affected doc id when
-	// known at write time (updates/deletes); omitted for creates.
+	// known at write time (updates/deletes); omitted for creates. Retention:
+	// 24 months (`by_ts` drives the purge cron) — see convex/lib/retention.ts.
 	adminAuditLog: defineTable({
 		adminUserId: v.string(), // Clerk subject of the acting admin
-		retailerId: v.id("retailers"), // store acted upon
+		// Store acted upon. Optional since 86eyn25gu: global actions (the manual
+		// WABA opt-out) have no store in scope — those rows simply don't appear
+		// in per-retailer audit views.
+		retailerId: v.optional(v.id("retailers")),
 		action: v.string(), // e.g. "products.create", "retailers.updateSettings"
 		targetId: v.optional(v.string()),
 		ts: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_admin", ["adminUserId"]),
+		.index("by_admin", ["adminUserId"])
+		.index("by_ts", ["ts"]),
 });

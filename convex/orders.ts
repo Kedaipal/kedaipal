@@ -4,8 +4,6 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
-	type ActionCtx,
-	internalAction,
 	internalMutation,
 	internalQuery,
 	mutation,
@@ -20,8 +18,16 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import {
+	attributionBucket,
+	sanitizeAttributionSource,
+} from "./lib/attribution";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
+import {
+	isStoredImageRenderable,
+	UNRENDERABLE_PROOF_MESSAGE,
+} from "./lib/imageContentType";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
 import {
@@ -39,8 +45,11 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
+	hhmmFromMinutes,
 	matchesFulfilmentWindow,
+	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
+import { assertWithinOpeningHours } from "./lib/openingHours";
 import {
 	collectMinQuantityShortfalls,
 	type MinRuleItem,
@@ -60,12 +69,20 @@ import {
 	needsMockup,
 } from "./lib/orderInboxFilter";
 import {
+	extendedPaymentDue,
+	isPaymentWindowLocked,
+	PAYMENT_WINDOW_LOCK_REASON,
+	paymentDeadlineApplies,
+} from "./lib/orderClaims";
+import { isReadyToShipForLabel } from "./lib/pdf/awb";
+import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
 	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
+import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
 	type CartWeightItem,
@@ -73,6 +90,7 @@ import {
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
 	type DeliveryQuoteReason,
+	deliveryModeAllowed,
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 	summarizeCartWeight,
@@ -89,10 +107,10 @@ import {
 	type OrderStage,
 	resolveStages,
 	stageLabel,
-	stageNotifyPlan,
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	type OrderReceiptData,
 	orderToReceiptData,
@@ -108,14 +126,14 @@ import {
 	mapHitpayPaymentType,
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyMobile } from "./lib/slug";
+import { assertValidMobileForCountry } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
-import { renderSystemMessage } from "./lib/whatsappCopy";
-import { makeGuardedSender } from "./wabaProtection";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
-const addressValidator = v.object({
+// Shared with convex/orderClaims.ts (claim-link commit runs the same
+// storefront validation + delivery resolution — one author for both paths).
+export const addressValidator = v.object({
 	line1: v.string(),
 	line2: v.optional(v.string()),
 	city: v.string(),
@@ -201,7 +219,7 @@ function blockedDeliveryMessage(
  *    setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
-function resolveDeliveryForOrder(
+export function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
 	address:
@@ -219,6 +237,18 @@ function resolveDeliveryForOrder(
 	pendingReason?: DeliveryQuoteReason;
 } {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
+	// Country/mode mismatch (SG-lite belt-and-braces — updateSettings refuses
+	// storing this): resolving would either throw a nonsense state error or
+	// silently strand the order fee-pending, so refuse with the same
+	// seller-side framing the checkout preview shows for this store.
+	if (
+		config &&
+		!deliveryModeAllowed(retailer.country ?? DEFAULT_COUNTRY, config.mode)
+	) {
+		throw new ConvexError(
+			"Delivery pricing isn't working for this store right now — it's on the store's side. Message them on WhatsApp to sort it out.",
+		);
+	}
 	if (config?.mode === "radius" && !retailer.businessAddress) {
 		// Shouldn't happen (updateSettings refuses radius without an address) —
 		// fail open to free delivery rather than blocking the storefront.
@@ -273,7 +303,7 @@ function resolveDeliveryForOrder(
  * (a cheap-nearby-pin quote can't be replayed against a far delivery
  * address; ~11 m tolerance absorbs float noise, not geography).
  */
-async function loadCheckoutDeliveryQuote(
+export async function loadCheckoutDeliveryQuote(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
@@ -302,7 +332,9 @@ async function loadCheckoutDeliveryQuote(
 	};
 }
 
-function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
+export function buildPickupSnapshot(
+	location: Doc<"pickupLocations">,
+): PickupSnapshot {
 	return {
 		label: location.label,
 		address: location.address,
@@ -433,39 +465,71 @@ export const ensureTrackingToken = internalMutation({
  * Drives the tracking page's state card and the seller-side delivery note.
  */
 /**
- * Transactional claim for a deferred confirmation push (86eyfq0w5). Called by
- * the gate-open mutations (mockup approve/waive/decline-with-remainder,
- * setDeliveryFee) in the SAME transaction as their gate patch: it re-reads the
- * order (ctx.db.get sees this transaction's own writes), and only when NO hold
- * remains flips deferred → sending and schedules the one send.
+ * One-shot: release every order still stamped `deferred` (86eyd63r8).
  *
- * The flip IS the de-dup. Convex mutations are serializable, so exactly one
- * gate-open transaction can ever observe "deferred" with both holds clear —
- * a second gate event racing in (seller sets the fee a second after the buyer
- * approves the mockup) serializes after the winner, sees "sending", and
- * schedules nothing. That's what makes "double-hold sends exactly once" hold
- * under concurrency, not just under the tidy orderings tests produce; a claim
- * inside the ACTION couldn't guarantee it, because two in-flight actions read
- * their metadata before either outcome commits.
+ * `deferred` was the 86eyfq0w5 state for an order whose total wasn't final —
+ * its confirmation waited for a price-settling mutation to claim it. Orders now
+ * push at create with the price named as words, so nothing produces `deferred`
+ * any more and nothing claims it either; without this, any row already in that
+ * state at deploy time would sit there forever and its buyer would never get
+ * their one message.
+ *
+ * MUST RUN ON EVERY DEPLOYMENT that had the deferred path live:
+ *
+ *   npx convex run orders:releaseDeferredPushes
+ *
+ * Idempotent, and self-converging: every row it touches leaves the `deferred`
+ * state, so re-running picks up the next batch. `done: false` in the result
+ * means run it again. Batched rather than `.collect()`ed because `orders` is the
+ * largest table in the database and a full collect can breach Convex's
+ * per-query read limit on a busy deployment.
+ *
+ * Cancelled orders have their stamp cleared instead of released — the promise
+ * died with the order. A missing buyer number needs no special case here; the
+ * send action's own guard covers it.
  */
-async function claimDeferredPush(
-	ctx: MutationCtx,
-	orderId: Id<"orders">,
-): Promise<void> {
-	const fresh = await ctx.db.get(orderId);
-	if (!fresh || fresh.confirmationPushStatus !== "deferred") return;
-	if (fresh.status === "cancelled") return;
-	if (isMockupGateClosed(fresh) || fresh.deliveryFeePending === true) return;
-	await ctx.db.patch(orderId, {
-		confirmationPushStatus: "sending",
-		updatedAt: Date.now(),
-	});
-	await ctx.scheduler.runAfter(
-		0,
-		internal.whatsapp.notifyStorefrontOrderCreated,
-		{ orderId },
-	);
-}
+const DEFERRED_RELEASE_BATCH = 200;
+
+export const releaseDeferredPushes = internalMutation({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ released: number; skipped: number; done: boolean }> => {
+		const deferred = await ctx.db
+			.query("orders")
+			.filter((q) => q.eq(q.field("confirmationPushStatus"), "deferred"))
+			.take(DEFERRED_RELEASE_BATCH);
+		let released = 0;
+		let skipped = 0;
+		for (const order of deferred) {
+			if (order.status === "cancelled") {
+				// Same reasoning as applyStatusTransition's cancel branch: a deferred
+				// stamp is a promise about a message, and there's no order to promise
+				// about. Clear it rather than leave the buyer's page claiming one is
+				// on the way.
+				await ctx.db.patch(order._id, {
+					confirmationPushStatus: undefined,
+					updatedAt: Date.now(),
+				});
+				skipped++;
+				continue;
+			}
+			await ctx.db.patch(order._id, {
+				confirmationPushStatus: "sending",
+				updatedAt: Date.now(),
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId: order._id },
+			);
+			released++;
+		}
+		const done = deferred.length < DEFERRED_RELEASE_BATCH;
+		console.log("[orders] deferred-push release", { released, skipped, done });
+		return { released, skipped, done };
+	},
+});
 
 export const recordConfirmationPush = internalMutation({
 	args: {
@@ -566,9 +630,15 @@ export const updateBuyerPhone = mutation({
 			);
 		}
 
+		// The repair field wears the same country plate as the checkout field it
+		// fixes — judge the new number by the STORE's country (SG-lite).
+		const orderRetailer = await ctx.db.get(order.retailerId);
 		let normalized: string;
 		try {
-			normalized = assertValidMyMobile(waPhone);
+			normalized = assertValidMobileForCountry(
+				waPhone,
+				orderRetailer?.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -643,6 +713,11 @@ export const create = mutation({
 		// read from our own record. Missing/stale/mismatched → the order falls
 		// back to the store's onUnquotable policy. See docs/delivery-lalamove.md.
 		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
+		// Marketing source the buyer arrived from (86eyq0eq9) — the session's
+		// captured `?src=`/`utm_source` tag. Client sends its cleaned copy but
+		// the server re-sanitizes (authoritative); a bad value can never block
+		// the order — it buckets to "other". See convex/lib/attribution.ts.
+		attributionSource: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -660,8 +735,16 @@ export const create = mutation({
 		// = the legacy buyer-sends-first flow (phone missing or template env unset).
 		confirmedAtCreate?: boolean;
 	}> => {
-		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
+		// Rate limit FIRST — public endpoint, throttle per storefront before any
+		// DB reads. Two limits on one key: the burst bucket shapes a live drop,
+		// the daily ceiling bounds total confirmation-push spend (each order
+		// schedules a Meta-billed template send that bypasses WABA gating — see
+		// lib/rateLimiter.ts for the full cost model).
 		await rateLimiter.limit(ctx, "orderCreate", {
+			key: args.retailerId,
+			throws: true,
+		});
+		await rateLimiter.limit(ctx, "orderCreateDaily", {
 			key: args.retailerId,
 			throws: true,
 		});
@@ -689,27 +772,45 @@ export const create = mutation({
 				"Delivery orders should not include a pickup location",
 			);
 		}
+		// Loaded before the address + phone checks below — the store's country
+		// picks the address shape AND which validator arm judges the buyer's
+		// number (SG-lite, 86eynw28q + 86eynw29u).
+		const retailer = await ctx.db.get(args.retailerId);
+		if (!retailer) throw new ConvexError("Retailer not found");
+		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
+
+		// Address shape follows the STORE's country — SG stores take 6-digit
+		// postal codes with "Singapore" as the state; MY keeps the 5-digit +
+		// MY_STATES shape.
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
 		if (args.deliveryAddress) {
 			try {
-				sanitizedAddress = assertValidAddress(args.deliveryAddress);
+				sanitizedAddress = assertValidAddress(
+					args.deliveryAddress,
+					retailerCountry,
+				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
 		}
 
+
 		// Customer waPhone: the storefront form requires it (86eyf1rck — the
 		// confirmation push needs a reachable number), but it stays optional at
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
-		// WhatsApp webhook stamps the number on the inbound message. MY-aware
-		// normalization (assertValidMyMobile): buyers type local numbers
-		// ("012-345 6789"), and the stored form must match what Meta delivers
-		// inbound (60…) or the customer record would fork.
+		// WhatsApp webhook stamps the number on the inbound message.
+		// Country-aware normalization (assertValidMobileForCountry, keyed off
+		// the STORE's country): buyers type local numbers ("012-345 6789" /
+		// "9123 4567"), and the stored form must match what Meta delivers
+		// inbound (60… / 65…) or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMyMobile(args.customer.waPhone);
+				customerWaPhone = assertValidMobileForCountry(
+					args.customer.waPhone,
+					retailerCountry,
+				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
@@ -732,9 +833,6 @@ export const create = mutation({
 			);
 		const sanitizedCustomerNote =
 			trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
-
-		const retailer = await ctx.db.get(args.retailerId);
-		if (!retailer) throw new ConvexError("Retailer not found");
 
 		// Fulfilment date is validated AFTER the item loop below — the effective
 		// notice window is max(store setting, every item's per-product override),
@@ -958,6 +1056,25 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Store opening hours (86eyp5rav): the fulfilment moment must fall inside
+		// them — a closed day rejects for BOTH methods, the time window applies
+		// only where a time exists (delivery; pickup is date-only, its point's
+		// schedule note carries the detail). The storefront mirrors this check
+		// pre-submit via the same shared function, so a buyer only hits it from
+		// a stale tab or a direct call. Counter checkout doesn't run this path
+		// (the seller is standing there — the min-notice posture). Unset hours
+		// = open 24/7, the check no-ops.
+		if (sanitizedFulfilmentDate !== undefined) {
+			try {
+				assertWithinOpeningHours(
+					retailer.openingHours,
+					sanitizedFulfilmentDate,
+					sanitizedFulfilmentTime,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
 		// authoritative price, whatever the client previewed. Needs the item
@@ -1044,18 +1161,15 @@ export const create = mutation({
 		// No step depends on the buyer surviving Meta's wa.me interstitial.
 		// Template env unset ⇒ exact legacy behaviour (pending + ?send=1 handoff).
 		//
-		// The push TIMING depends on whether the total is final (86eyfq0w5). The
-		// approved template states "Total: {{3}}" — false while a price is
-		// outstanding (a price-on-quote line is RM 0.00 until quoted; a
-		// fee-pending total grows by the arranged fee). So a non-final order still
-		// COMMITS here exactly like any other — confirmed, activation, customer
-		// link, no wa.me step anywhere — but its push is stamped "deferred" and
-		// fires from the gate-open sites (mockup approve/waive/decline,
-		// setDeliveryFee) once the price is agreed, replacing the free-form
-		// payment prompt those sites used to send (which a push-path buyer's
-		// window-less chat couldn't receive anyway). The message is then always
-		// sent with a true, final total.
-		const totalIsFinal = !requiresMockup && !deliveryFeePending;
+		// EVERY order pushes at create, whether or not its total is final
+		// (86eyd63r8, superseding the 86eyfq0w5 deferral). A price-on-quote line
+		// is RM 0.00 until quoted and a fee-pending total grows by the arranged
+		// fee, so the message can't always carry a number — but the fix for that
+		// is to SAY so in the money parameter (PENDING_TOTAL_LABEL), not to
+		// withhold the message. Deferring it meant a made-to-order buyer left
+		// checkout with no confirmation and no link to the order page they
+		// approve their mockup on, sometimes for days; and it bought nothing,
+		// since the price still isn't final when they read it.
 		const confirmedAtCreate =
 			customerWaPhone !== undefined &&
 			orderConfirmTemplateName() !== undefined;
@@ -1071,6 +1185,7 @@ export const create = mutation({
 			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: args.channel,
 			source: "storefront",
+			attributionSource: sanitizeAttributionSource(args.attributionSource),
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
 			deliveryDirection,
@@ -1094,13 +1209,8 @@ export const create = mutation({
 			// Stamped in the SAME transaction as the insert so the push state is
 			// never ambiguous: a confirmed storefront order with no stamp would be
 			// indistinguishable from one whose send is still in flight, and the
-			// tracking page needs to tell the buyer which it is. Non-final totals
-			// start "deferred" — the send waits for the price to be confirmed.
-			confirmationPushStatus: confirmedAtCreate
-				? totalIsFinal
-					? "sending"
-					: "deferred"
-				: undefined,
+			// tracking page needs to tell the buyer which it is.
+			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -1166,9 +1276,9 @@ export const create = mutation({
 		// The buyer's WhatsApp confirmation — the ONE outbound message this order
 		// sends (Meta bills per message from Oct 2026). Fire-and-forget like the
 		// email; a send failure stamps confirmationPushStatus, never fails create.
-		// A deferred (non-final-total) order schedules nothing here — its push
-		// fires from the gate-open sites once the price is confirmed.
-		if (confirmedAtCreate && totalIsFinal) {
+		// Unconditional: a held price rides in the message as words, not as a
+		// reason to hold the message back.
+		if (confirmedAtCreate) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.whatsapp.notifyStorefrontOrderCreated,
@@ -1263,6 +1373,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
 	retailerLocale: Locale;
+	// Store country (SG-lite), resolved (undefined rows read as "MY"). The track
+	// page keys the buyer phone-repair plate/validator arm and the address-edit
+	// dialog's variant off it — this payload is that page's ONLY retailer read,
+	// so the by-slug field alone can't reach it.
+	retailerCountry: Country;
 	// Store name + the vendor's own WhatsApp number, for the buyer "Message the
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
@@ -1402,6 +1517,7 @@ export const get = query({
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
+			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the
@@ -1476,137 +1592,19 @@ export const generateReceiptPdf = action({
 	},
 });
 
-/** The resolved inputs needed to render + send an order's receipt/invoice PDF. */
-type OrderDocumentInputs = {
-	data: OrderReceiptData;
-	shortId: string;
-	paid: boolean;
-	waPhone: string;
-	retailerId: Id<"retailers">;
-	locale: Locale;
-};
-
-type OrderDocumentInputsResult =
-	| ({ ok: true } & OrderDocumentInputs)
-	| { ok: false; reason: "not_found" | "no_phone" };
-
-/**
- * Build the render+send inputs from an already-resolved order. Shared by the
- * auth'd (shortId) and trusted (orderId) input queries so the view-model shaping
- * lives in one place. `no_phone` is the one state that can't be sent.
- */
-async function buildOrderDocumentInputs(
-	ctx: QueryCtx,
-	order: Doc<"orders">,
-): Promise<({ ok: true } & OrderDocumentInputs) | { ok: false; reason: "no_phone" }> {
-	const waPhone = order.customer.waPhone?.trim();
-	if (!waPhone) return { ok: false, reason: "no_phone" };
-	const retailer = await ctx.db.get(order.retailerId);
-	return {
-		ok: true,
-		data: orderToReceiptData({
-			order,
-			storeName: retailer?.storeName ?? "",
-			paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
-		}),
-		shortId: order.shortId,
-		paid: (order.paymentStatus ?? "unpaid") === "received",
-		waPhone,
-		retailerId: order.retailerId,
-		locale: (retailer?.locale as Locale | undefined) ?? "en",
-	};
-}
-
-/**
- * Render the order's receipt (paid) / invoice (unpaid) PDF, host it transiently
- * (Convex storage → a URL Meta fetches), send it to the buyer's WhatsApp as a
- * `document` (transactional — bypasses per-seller caps like the order confirm),
- * then schedule the blob's cleanup (the PDF is deterministic, never persisted).
- * Shared by the manual "resend" button and the automatic post-checkout send.
- */
-async function deliverOrderDocument(
-	ctx: ActionCtx,
-	inputs: OrderDocumentInputs,
-): Promise<{ ok: boolean; reason?: string }> {
-	const bytes = await buildOrderReceiptPdf(inputs.data);
-	const storageId = await ctx.storage.store(
-		new Blob([bytes as BlobPart], { type: "application/pdf" }),
-	);
-	const url = await ctx.storage.getUrl(storageId);
-	if (!url) {
-		await ctx.storage.delete(storageId).catch(() => {});
-		return { ok: false, reason: "storage" };
-	}
-	const filename = `${inputs.paid ? "Receipt" : "Invoice"}-${inputs.shortId}.pdf`;
-	const caption = renderSystemMessage(
-		inputs.locale,
-		inputs.paid ? "orderReceiptCaption" : "orderInvoiceCaption",
-		{ shortId: inputs.shortId, storeName: inputs.data.storeName },
-	);
-	let sent = false;
-	try {
-		await makeGuardedSender(ctx, inputs.retailerId, "transactional").send(
-			inputs.waPhone,
-			{ kind: "document", documentUrl: url, filename, caption },
-		);
-		sent = true;
-	} catch (err) {
-		console.error("WA order-document send failed", err);
-	}
-	// Meta fetches the link within seconds; hold the blob briefly so that fetch
-	// (and any transient retry) succeeds, then reclaim the storage. Runs whether or
-	// not the send succeeded (a failed send already left it unreferenced).
-	await ctx.scheduler.runAfter(
-		10 * 60 * 1000,
-		internal.orders.deleteTransientStorage,
-		{ storageId },
-	);
-	return sent ? { ok: true } : { ok: false, reason: "send_failed" };
-}
-
-/**
- * Assemble the send inputs behind the auth seam — only the owning seller (or an
- * admin acting-as) with a valid `shortId` gets through (resolveSharedOrder). A
- * buyer's tracking token is intentionally NOT accepted: the manual send is a
- * dashboard action, and the buyer self-serves the receipt on their tracking page.
- */
-export const sendDocumentInputs = internalQuery({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<OrderDocumentInputsResult> => {
-		const order = await resolveSharedOrder(ctx, { shortId });
-		if (!order) return { ok: false, reason: "not_found" };
-		return buildOrderDocumentInputs(ctx, order);
-	},
-});
-
-/**
- * Seller-only manual "resend": render + send the order's receipt/invoice to the
- * buyer's WhatsApp. Auth via resolveSharedOrder (owned shortId). The document is
- * also sent AUTOMATICALLY right after counter checkout (see orders.sendOrderDocument
- * + whatsapp.notifyCounterOrderCreated); this is the re-send / recovery path.
- */
-export const sendOrderDocumentToBuyer = action({
-	args: { shortId: v.string() },
-	handler: async (
-		ctx,
-		{ shortId },
-	): Promise<{ ok: boolean; reason?: string }> => {
-		const inputs = await ctx.runQuery(internal.orders.sendDocumentInputs, {
-			shortId,
-		});
-		if (!inputs.ok) return { ok: false, reason: inputs.reason };
-		return deliverOrderDocument(ctx, inputs);
-	},
-});
-
 /**
  * Auth + eligibility + atomic cooldown stamp for a manual payment reminder, in
- * one mutation so two fast taps can't both slip past the 6h gate (compare on the
- * freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as via
- * resolveSharedOrder — the same seam the resend-document action uses; throws
+ * one mutation so two fast taps can't both slip past the 24h gate (compare on
+ * the freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as
+ * via resolveSharedOrder — the same seam the receipt PDF uses; throws
  * ConvexError on not-authenticated / forbidden. Returns the block reason (no
  * stamp) when the order isn't in a remindable state, else stamps and hands back
- * the orderId for the send. See docs/payment-reminder.md.
+ * the orderId for the send.
+ *
+ * The window rules (day 11–14, 24h cooldown — 86eyd63r8 revision) live in the
+ * pure `manualReminderEligibility`, shared verbatim with the dashboard button,
+ * so the disabled-with-reason UI and this lock can never disagree.
+ * See docs/payment-reminder.md.
  */
 export const prepareManualReminder = internalMutation({
 	args: { shortId: v.string() },
@@ -1643,15 +1641,17 @@ export const prepareManualReminder = internalMutation({
 });
 
 /**
- * Seller-triggered "Send payment reminder" — re-sends the buyer the full payment
- * message (amount + transfer ref + methods + QR + "I've paid" CTA) for an unpaid
- * order, on demand. Doubles as recovery when the buyer never received the first
- * bot confirmation. Auth + eligibility + the 6h cooldown stamp happen atomically
- * in prepareManualReminder; the actual send is best-effort through the WABA
- * `session_message` gateway (kill switch / caps / opt-outs apply, and may
- * silently not deliver outside Meta's 24h window — same caveat as every session
- * send). A blocked reason is returned WITHOUT sending, so the button can explain
- * why. See docs/payment-reminder.md.
+ * Seller-triggered "Send payment reminder" — the one deliberate exception to
+ * one-message-per-order (86eyd63r8): each send is a human tap, not an
+ * automation, and the window is boxed to days 11–14 of the open-payment window
+ * at most once per 24h (so an order can ever receive at most 4). Re-sends the
+ * buyer the full payment message (amount + transfer ref + "Make payment" CTA
+ * to their order page). Auth + eligibility + the cooldown stamp happen
+ * atomically in prepareManualReminder; the actual send is best-effort through
+ * the WABA `session_message` gateway (kill switch / caps / opt-outs apply, and
+ * may silently not deliver outside Meta's 24h service window — the button's
+ * helper says so). A blocked reason is returned WITHOUT sending, so the button
+ * can explain why. See docs/payment-reminder.md.
  */
 export const sendPaymentReminder = action({
 	args: { shortId: v.string() },
@@ -1671,53 +1671,12 @@ export const sendPaymentReminder = action({
 });
 
 /**
- * Inputs for the AUTOMATIC send — keyed by orderId, no auth: this runs from the
- * trusted post-checkout scheduler, not a client. Mirrors sendDocumentInputs but
- * skips the ownership check.
- */
-export const orderDocumentInputsById = internalQuery({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<OrderDocumentInputsResult> => {
-		const order = await ctx.db.get(orderId);
-		if (!order) return { ok: false, reason: "not_found" };
-		return buildOrderDocumentInputs(ctx, order);
-	},
-});
-
-/**
- * Automatic post-checkout send of the receipt/invoice PDF, scheduled by the
- * counter-order confirmation flow (whatsapp.notifyCounterOrderCreated). Internal
- * + orderId-keyed; delegates to the shared deliverOrderDocument. Best-effort —
- * the seller can resend from the Done screen if it fails.
- */
-export const sendOrderDocument = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (
-		ctx,
-		{ orderId },
-	): Promise<{ ok: boolean; reason?: string }> => {
-		const inputs = await ctx.runQuery(internal.orders.orderDocumentInputsById, {
-			orderId,
-		});
-		if (!inputs.ok) return { ok: false, reason: inputs.reason };
-		return deliverOrderDocument(ctx, inputs);
-	},
-});
-
-/** Reclaim a transiently-stored document blob (see deliverOrderDocument). */
-export const deleteTransientStorage = internalMutation({
-	args: { storageId: v.id("_storage") },
-	handler: async (ctx, { storageId }): Promise<void> => {
-		await ctx.storage.delete(storageId);
-	},
-});
-
-/**
  * Public: resolve the seller's payment methods for the buyer's tracking page,
- * keyed by the tracking token (the capability — same details already go to the
- * buyer in the WhatsApp confirm reply). Legacy-aware via `resolvePaymentMethods`;
- * QR storage ids resolved to URLs. Returns `null` when the seller has nothing
- * configured (track page hides it).
+ * keyed by the tracking token (the capability). This page is the ONLY place a
+ * buyer sees bank details — they left WhatsApp in 86ey98ju1, and the order's one
+ * message (86eyd63r8) carries the tracking link, not the numbers. Legacy-aware
+ * via `resolvePaymentMethods`; QR storage ids resolved to URLs. Returns `null`
+ * when the seller has nothing configured (track page hides it).
  */
 export const getPaymentMethods = query({
 	args: { token: v.string() },
@@ -1854,6 +1813,7 @@ const MAX_INBOX_SCAN = 1000;
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
+	v.literal("claim"),
 );
 
 /**
@@ -1908,6 +1868,12 @@ export const searchOrders = query({
 		// Checkout surface: "storefront" (online) vs "counter" (walk-in). Legacy
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
+		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
+		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
+		// ANDs with the rest. Free-form by design (sellers invent their own
+		// tags), so this is v.string() rather than a literal union; the picker is
+		// driven by `availableSources` below. Distinct dimension from `source`.
+		attributionSources: v.optional(v.array(v.string())),
 		searchText: v.optional(v.string()),
 		// Max rows to return. OMIT it for the inbox: the query then returns the
 		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
@@ -1929,6 +1895,7 @@ export const searchOrders = query({
 			fulfilmentWindow,
 			mockupPending,
 			source,
+			attributionSources,
 			searchText,
 			limit,
 		},
@@ -1951,6 +1918,7 @@ export const searchOrders = query({
 			fulfilmentWindow !== undefined ||
 			mockupPending !== undefined ||
 			source !== undefined ||
+			attributionSources !== undefined ||
 			(searchText !== undefined && searchText.trim().length > 0);
 		if (usesInboxFeatures && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
@@ -1977,10 +1945,27 @@ export const searchOrders = query({
 			unpaid: 0,
 			/** Sum of `total` across those unpaid open orders (RM outstanding). */
 			unpaidAmount: 0,
+			/**
+			 * Packed + paid parcel orders waiting to go out (86eyp63mp) — the
+			 * one-click "print all despatch labels" queue. Computed here, over the
+			 * FULL set like every other count, precisely so the control's number is
+			 * the store's real backlog and doesn't move when the seller filters the
+			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
+			 */
+			readyToShip: 0,
 		};
+		// Which marketing origins actually appear in this seller's window
+		// (86eyq0eq9). Tallied over the FULL scan like `counts` — never over the
+		// filtered set — so picking one source can't make the others vanish from
+		// the picker. Free-form tags mean the filter UI cannot hardcode a list;
+		// this is that list, and it costs nothing (we already hold every row).
+		const sourceTally = new Map<string, number>();
+
 		for (const o of all) {
 			const b = orderBucket(o);
 			counts[b]++;
+			const asrc = attributionBucket(o);
+			sourceTally.set(asrc, (sourceTally.get(asrc) ?? 0) + 1);
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 			const open = b === "new" || b === "in_progress";
 			// Counter orders default their date to today at create — they're not a
@@ -1998,6 +1983,7 @@ export const searchOrders = query({
 				counts.unpaid++;
 				counts.unpaidAmount += o.total;
 			}
+			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
@@ -2013,6 +1999,7 @@ export const searchOrders = query({
 				fulfilmentWindow,
 				mockupPending,
 				source,
+				attributionSources,
 				searchText,
 			}),
 		);
@@ -2031,6 +2018,14 @@ export const searchOrders = query({
 			orders: sorted.slice(0, take),
 			total: sorted.length,
 			counts,
+			// Most-used origin first — the picker mirrors the Insights ordering.
+			// Ties break ALPHABETICALLY, not by scan order: equal-count origins
+			// would otherwise swap places every time a new order lands, and a
+			// filter list that reshuffles under the seller is worse than one in
+			// a slightly arbitrary but stable order.
+			availableSources: [...sourceTally.entries()]
+				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+				.map(([key]) => key),
 			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
 			// 1,000 are outside the window, so the list AND counts under-report.
 			// The inbox surfaces this in a footer; export is the full-history path.
@@ -2070,6 +2065,10 @@ const exportFilterValidators = {
 	),
 	paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
 	methodUnspecified: v.optional(v.boolean()),
+	// Marketing origin (86eyq0eq9) — kept in lockstep with the inbox so a CSV
+	// export of a filtered view contains exactly the rows the seller was
+	// looking at (the invariant orderInboxFilter.ts exists to protect).
+	attributionSources: v.optional(v.array(v.string())),
 	dateFrom: v.optional(v.number()),
 	dateTo: v.optional(v.number()),
 	fulfilmentWindow: v.optional(
@@ -2412,13 +2411,35 @@ export async function applyStatusTransition(
 		trackingNo: string;
 		currentStageId: string | undefined;
 		confirmationPushStatus: undefined;
+		paymentDueAt: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
-	// A deferred push is a PROMISE about the future ("your confirmation is
-	// coming once the price is confirmed") — cancelling the order invalidates
-	// it, so clear the stamp or the buyer's page keeps making a claim about an
-	// order that no longer exists. Terminal states (sent/failed/recovered) are
-	// history, not promises, and survive cancellation untouched.
-	if (status === "cancelled" && order.confirmationPushStatus === "deferred") {
+	// A payment deadline dies whenever the clock stops meaning anything — every
+	// cancellation (seller, admin, or the auto-cancel sweep) AND every advance
+	// past `confirmed`, because a seller who packs an unpaid order has decided
+	// to fulfil it. Clearing on cancel alone (PR #227 review) stranded those
+	// rows in the by_payment_due range forever: the 1-minute sweep re-read a
+	// set that only grew, and the buyer's page threatened a cancellation the
+	// server would never carry out. Keeps the schema's stated invariant true —
+	// the index range only ever holds live clocks.
+	if (!paymentDeadlineApplies(status) && order.paymentDueAt !== undefined) {
+		patch.paymentDueAt = undefined;
+	}
+	// `sending` and `deferred` are PROMISES about a message ("your confirmation
+	// is on its way") — cancelling the order invalidates them, so clear the
+	// stamp or the buyer's page keeps promising a message that will never come:
+	// the send action returns early on a cancelled order, so a stamp left at
+	// `sending` would be stuck there forever. Terminal states
+	// (sent/failed/recovered) are history, not promises, and survive untouched
+	// — as does a send that races this and lands anyway, since
+	// recordConfirmationPush writes the true outcome after us.
+	//
+	// `deferred` is legacy (86eyfq0w5); nothing creates it any more, but rows
+	// can still be in it until `releaseDeferredPushes` has run.
+	if (
+		status === "cancelled" &&
+		(order.confirmationPushStatus === "sending" ||
+			order.confirmationPushStatus === "deferred")
+	) {
 		patch.confirmationPushStatus = undefined;
 	}
 	// Courier fields describe a parcel shipment, so they only apply to delivery
@@ -2461,11 +2482,12 @@ export async function applyStatusTransition(
 		await stampRetailerActivation(ctx, order.retailerId, now);
 	}
 
-	// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
-	// mutation stays a pure transaction and the action runs with network access.
-	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
-		orderId: order._id,
-	});
+	// No WhatsApp here. Status changes — including cancellation — are silent by
+	// policy (86eyd63r8): an order gets exactly ONE outbound message, the
+	// confirmation push, and the tracking page carries every state after it. The
+	// seller is told plainly at each send-nothing surface (the advance stepper,
+	// the cancel dialog, the bulk bar) so "the buyer wasn't told" is never a
+	// surprise. See docs/one-message-per-order.md.
 
 	// NOTE: Lalamove dispatch is never triggered server-side. Marking a delivery
 	// order packed surfaces a "book a rider now?" prompt CLIENT-side (opt-in
@@ -2699,23 +2721,12 @@ async function deleteOrderCascade(
 		await reverseCancellationEffects(ctx, order, now);
 	}
 
-	// 2. Delete owned storage blobs. Dedupe (the legacy singular mockup field is
-	//    kept in sync as `mockupImageStorageIds[0]`) and swallow per-blob errors —
-	//    a blob may already be gone; a missing blob must not abort the cascade.
-	const blobIds = new Set<string>();
-	if (order.customerImageStorageId) blobIds.add(order.customerImageStorageId);
-	if (order.paymentProofStorageId) blobIds.add(order.paymentProofStorageId);
-	for (const id of order.mockupImageStorageIds ??
-		(order.mockupImageStorageId ? [order.mockupImageStorageId] : [])) {
-		blobIds.add(id);
-	}
-	for (const id of blobIds) {
-		try {
-			await ctx.storage.delete(id);
-		} catch {
-			// already deleted / never existed — nothing to reclaim
-		}
-	}
+	// 2. Delete owned storage blobs — via the SHARED helper (86eyetzbk), which is
+	//    the one place that knows what an order owns. The account cascade
+	//    (retailers.deleteUser) open-coded its own shorter list and leaked the
+	//    buyer image + mockups; sharing means a future blob field is freed by
+	//    both callers or neither.
+	await deleteOrderOwnedBlobs(ctx, order);
 
 	// 3. Delete the order's event timeline.
 	const events = await ctx.db
@@ -2946,7 +2957,18 @@ export const advanceToStage = mutation({
 			statusChangedAt: number;
 			updatedAt: number;
 			collectedAt: number;
+			paymentDueAt: undefined;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Custom stages patch `status` here rather than through
+		// applyStatusTransition, so the payment-deadline cleanup has to be
+		// repeated — same rule, same reason (see that helper). Without this a
+		// store on custom stages leaks exactly the rows the other path fixed.
+		if (
+			!paymentDeadlineApplies(targetStatus) &&
+			order.paymentDueAt !== undefined
+		) {
+			patch.paymentDueAt = undefined;
+		}
 		// Set-if-unset, so a later manual advance can't move the arrival moment.
 		if (collectingFromBuyer && markCollected === true) {
 			patch.collectedAt = now;
@@ -2983,23 +3005,9 @@ export const advanceToStage = mutation({
 			createdAt: now,
 		});
 
-		const plan = stageNotifyPlan({
-			notify: stage.notify,
-			targetAnchor: targetStatus,
-			statusChanged,
-		});
-		if (plan === "canonical") {
-			// Anchor crossing → rich canonical copy (messageTemplates-aware).
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
-				orderId,
-			});
-		} else if (plan === "stage") {
-			// Within the same anchor → generic stage update.
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStageEntry, {
-				orderId,
-				stageId: stage.id,
-			});
-		}
+		// Custom stages are a seller-side vocabulary for the inbox and the buyer's
+		// tracking timeline — they never message the buyer (86eyd63r8). The old
+		// per-stage `notify` toggle and its MAX_NOTIFY_STAGES cap are gone with it.
 		await logAdminAction(ctx, access, "orders.advanceStage", orderId);
 	},
 });
@@ -3155,9 +3163,18 @@ export const updateDeliveryAddress = mutation({
 			throw new ConvexError("Self-collect orders do not have a delivery address");
 		}
 
+		// The retailer resolves first because the address SHAPE follows the
+		// store's country (SG-lite): SG orders re-validate against the 6-digit
+		// postal-code + "Singapore" arm, MY against the classic shape.
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+
 		let sanitized: ReturnType<typeof assertValidAddress>;
 		try {
-			sanitized = assertValidAddress(deliveryAddress);
+			sanitized = assertValidAddress(
+				deliveryAddress,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -3172,8 +3189,6 @@ export const updateDeliveryAddress = mutation({
 		// drop the buyer onto a seller-calculates path. Pending-only gate above
 		// means no payment has been asked for yet, so the total is still safe to
 		// move.
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new ConvexError("Store not found");
 		const liveQuote = await loadCheckoutDeliveryQuote(
 			ctx,
 			order.retailerId,
@@ -3280,7 +3295,6 @@ export const setDeliveryFee = mutation({
 		if (fee > DELIVERY_FEE_MAX)
 			throw new ConvexError("Delivery charge is unrealistically large — check the amount");
 
-		const wasPending = order.deliveryFeePending === true;
 		const snapshot: DeliverySnapshot | undefined =
 			fee > 0 ? { fee, mode: "manual" } : undefined;
 		const now = Date.now();
@@ -3306,6 +3320,14 @@ export const setDeliveryFee = mutation({
 			deliveryFeePendingReason: undefined,
 			subtotal,
 			total,
+			// A fee-pending order was UNPAYABLE, so its payment deadline was
+			// suspended (the auto-cancel sweep skips fee-pending rows). The fee
+			// landing is the moment it becomes payable — guarantee the runway,
+			// or a deadline that lapsed during the seller's own pricing delay
+			// would cancel the order the instant it could finally be paid.
+			...(order.paymentDueAt !== undefined
+				? { paymentDueAt: extendedPaymentDue(order.paymentDueAt, now) }
+				: {}),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -3314,25 +3336,126 @@ export const setDeliveryFee = mutation({
 			note: `delivery_fee_set (fee ${fee})`,
 			createdAt: now,
 		});
-		// Release the held payment ask. A push-path order (86eyfq0w5) gets its
-		// DEFERRED confirmation template — the action re-checks the mockup hold,
-		// so a doubly-held order sends exactly once, after both clear. Legacy
-		// orders keep the free-form held-payment ask, with the original guards
-		// (fee actually resolved, buyer already confirmed, mockup not also
-		// holding — that path prompts via notifyPaymentDue).
-		if (wasPending && order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, orderId);
-		} else if (
-			wasPending &&
-			order.status !== "pending" &&
-			!isMockupGateClosed(order) &&
-			order.customer.waPhone
-		) {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryFeeSet, {
-				orderId,
-			});
-		}
+		// No WhatsApp here (86eyd63r8). The buyer's one message went out at
+		// checkout saying the total was still to be confirmed, and its button
+		// opens the order page — which is reading this fee live, the moment this
+		// mutation commits. A second send to restate a number they can already
+		// see is exactly what the one-message rule exists to stop.
 		await logAdminAction(ctx, access, "orders.setDeliveryFee", orderId);
+	},
+});
+
+/**
+ * Seller (or admin act-as): move an order's fulfilment date/time — the
+ * 3am-advance-order fix (86eyp5qd1). The buyer picks the moment at checkout
+ * and until now nothing could change it, so a vendor faced with a 3 AM
+ * delivery ask had no way out but to serve it or ghost it. The seller agrees
+ * a new time with the buyer in chat, records it here, and every live surface
+ * follows: the buyer's tracking page updates instantly (reactive read), later
+ * stage messages/emails render from live fields, dispatch re-derives its
+ * schedule from the order. Deliberately NO new WhatsApp send (one-msg-per-
+ * order posture) — messages already sent keep the old time; the chat
+ * agreement covers that gap, and the order page is the record.
+ *
+ * The buyer-facing minimum-notice floor does NOT apply — the notice window
+ * exists to protect the seller's lead time, and here the seller is the one
+ * moving the date. The [today, +30d] range still holds (checkout's ceiling).
+ *
+ * All-tier: this is a correctness escape hatch, not a feature to upsell.
+ */
+export const rescheduleFulfilment = mutation({
+	args: {
+		orderId: v.id("orders"),
+		fulfilmentDate: v.number(),
+		// Only meaningful on delivery orders (mirrors create — self-collect and
+		// counter orders are date-only). Omitted → the order's existing time is
+		// kept, so a date-only change can never silently drop the clock.
+		fulfilmentTimeMinutes: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, fulfilmentDate, fulfilmentTimeMinutes },
+	): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
+		if (order.status === "cancelled")
+			throw new ConvexError("This order was cancelled");
+		if (order.status === "shipped" || order.status === "delivered")
+			throw new ConvexError(
+				"This order is already on its way — the fulfilment date can't change now",
+			);
+		if (order.source === "counter")
+			throw new ConvexError(
+				"Counter orders are fulfilled on the spot — there's no date to move",
+			);
+		// Collection (86eyg0n8e): the date answers "when do we collect?" — once
+		// the goods are with the seller that question is history, and moving the
+		// date would rewrite it.
+		if (order.collectedAt !== undefined)
+			throw new ConvexError(
+				"This order was already collected — the date can't change now",
+			);
+		// The buyer is inside a claim link's payment window (86eyq0epn): they
+		// hold a confirmed order with a live countdown and may be mid-payment.
+		// The dialog hides the trigger behind the same predicate; this is the
+		// backstop, so a stale tab can't move the date under a paying buyer.
+		if (isPaymentWindowLocked(order))
+			throw new ConvexError(PAYMENT_WINDOW_LOCK_REASON);
+		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
+		// will NOT follow the order — rescheduling under it would desync the
+		// buyer's promise from the trip actually booked. The dialog says so and
+		// points at cancelling the booking first; this is the backstop.
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", orderId))
+			.collect();
+		if (jobs.some((j) => isActiveJobStatus(j.status)))
+			throw new ConvexError(
+				"A rider booking is active for this order — cancel the booking first, then reschedule",
+			);
+
+		let sanitizedDate: number;
+		try {
+			// Notice floor 0 on purpose — see the docblock.
+			sanitizedDate = assertValidFulfilmentDate(fulfilmentDate, 0);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		const isDelivery = (order.deliveryMethod ?? "delivery") === "delivery";
+		let sanitizedTime: number | undefined;
+		if (fulfilmentTimeMinutes !== undefined && isDelivery) {
+			try {
+				sanitizedTime = assertValidFulfilmentTime(fulfilmentTimeMinutes);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		const nextTime = isDelivery
+			? (sanitizedTime ?? order.fulfilmentTimeMinutes)
+			: order.fulfilmentTimeMinutes;
+
+		const now = Date.now();
+		// Audit trail in the delivery_fee_set style — compact, ASCII, greppable.
+		const stamp = (d: number | undefined, tm: number | undefined) =>
+			d === undefined
+				? "unset"
+				: tm === undefined
+					? ymdFromEpoch(d)
+					: `${ymdFromEpoch(d)} ${hhmmFromMinutes(tm)}`;
+		await ctx.db.patch(orderId, {
+			fulfilmentDate: sanitizedDate,
+			fulfilmentTimeMinutes: nextTime,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: `fulfilment_rescheduled (from ${stamp(order.fulfilmentDate, order.fulfilmentTimeMinutes)} to ${stamp(sanitizedDate, nextTime)})`,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "orders.rescheduleFulfilment", orderId);
 	},
 });
 
@@ -3442,6 +3565,17 @@ export const claimPayment = mutation({
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
 		}
+		// The SELLER has to look at this proof to decide whether money arrived,
+		// and they're a different person from whoever uploaded it — so a file
+		// they can't open must not reach them. The client refuses undecodable
+		// uploads already; this closes the direct-call gap that a client guard
+		// structurally cannot. See convex/lib/imageContentType.ts.
+		if (
+			proofStorageId &&
+			!(await isStoredImageRenderable(ctx, proofStorageId as Id<"_storage">))
+		) {
+			throw new ConvexError(UNRENDERABLE_PROOF_MESSAGE);
+		}
 		// Payment is gated behind mockup approval — the buyer's tracking page
 		// disables "I've paid" while the gate is closed; reject a direct call too.
 		if (isMockupGateClosed(order)) {
@@ -3506,9 +3640,11 @@ export const claimPayment = mutation({
  * The one author of the payment-received state change, shared by the seller's
  * `markPaymentReceived` and the HitPay gateway's webhook receive (86eyb6z3a) so
  * the two paths can never drift: paymentStatus → received, pending orders
- * auto-confirm (+ the activation stamp), the orderEvents row is written, and
- * `notifyPaymentReceived` is scheduled — deliberately NOT `notifyStatusChange`,
- * so an auto-confirm sends exactly one WhatsApp message.
+ * auto-confirm (+ the activation stamp), and the orderEvents row is written.
+ * NO WhatsApp goes out here (86eyd63r8, one message per order): the buyer's
+ * order page flips to "Payment received" live, and both callers' seller
+ * surfaces say so — the confirm dialog for the manual path, the paid card for
+ * the gateway path.
  *
  * Callers own their guards: the seller path throws on the mockup/delivery-fee
  * holds (the money hasn't moved yet, so refusing is safe); the gateway path
@@ -3535,6 +3671,11 @@ async function applyPaymentReceived(
 		...extraPatch,
 		paymentStatus: "received",
 		paymentReceivedAt: now,
+		// Real money retires the payment deadline (86eyq0epn) — the ONE receive
+		// core every path runs through, so the countdown stops on `received` and
+		// never on a mere claim. Unconditional: clearing an unset field is a
+		// no-op.
+		paymentDueAt: undefined,
 		// The single retirement point for an unresolved gateway payment (PR #178
 		// review, finding 1). Whatever route settles the order — the seller
 		// reconciling the odd payment in their HitPay dashboard and marking it
@@ -3570,19 +3711,12 @@ async function applyPaymentReceived(
 			createdAt: now,
 		});
 	}
-
-	await ctx.scheduler.runAfter(
-		0,
-		internal.whatsapp.notifyPaymentReceived,
-		{ orderId: order._id },
-	);
 }
 
 /**
  * Retailer-only mutation: mark that the payment has landed in the bank app.
- * Auto-bumps `pending → confirmed` (the new payment-received WhatsApp message
- * already covers the shopper-facing handshake, so this skips the regular
- * `notifyStatusChange` to avoid sending two messages).
+ * Auto-bumps `pending → confirmed`. Nothing is WhatsApp'd (86eyd63r8) — the
+ * buyer's order page shows the received state live.
  */
 export const markPaymentReceived = mutation({
 	args: {
@@ -3637,7 +3771,7 @@ export const markPaymentReceived = mutation({
  *    checkout link paid after a re-price records an event + emails the seller
  *    instead of auto-receiving (the money moved; a human reconciles it);
  *  - otherwise it applies the exact `markPaymentReceived` semantics via
- *    `applyPaymentReceived` (auto-confirm, activation, WhatsApp receipt).
+ *    `applyPaymentReceived` (auto-confirm, activation — no WhatsApp, 86eyd63r8).
  * Deliberately NO hold guards here: checkout creation enforces them, and
  * money that has already moved must never be silently dropped.
  *
@@ -3655,10 +3789,16 @@ export const receiveGatewayPayment = internalMutation({
 		amountSen: v.number(),
 		currency: v.string(),
 		paymentType: v.optional(v.string()),
+		// How the gateway is NAMED to the seller ("HitPay") — passed in by the
+		// provider-specific caller rather than known here, like every other
+		// `gateway*` field on this table. It reaches the seller's alert and email
+		// verbatim, so it must never be empty (Meta rejects empty template
+		// parameters outright).
+		provider: v.string(),
 	},
 	handler: async (
 		ctx,
-		{ orderId, paymentId, amountSen, currency, paymentType },
+		{ orderId, paymentId, amountSen, currency, paymentType, provider },
 	): Promise<{
 		applied: boolean;
 		reason?: "duplicate" | "amount_mismatch" | "cancelled" | "gone";
@@ -3681,8 +3821,8 @@ export const receiveGatewayPayment = internalMutation({
 			// Pay-after-cancel (PR #172 review, finding 2): createCheckout refuses
 			// cancelled orders, but a link minted BEFORE the cancel stays payable
 			// at HitPay for up to an hour. An authentic late payment must never
-			// resurrect the order or WhatsApp the buyer "payment received" — it
-			// needs a human and a refund. Event + seller email, no state flip.
+			// resurrect the order — it needs a human and a refund. Event + seller
+			// email, no state flip.
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: order.status,
@@ -3762,6 +3902,22 @@ export const receiveGatewayPayment = internalMutation({
 				paymentReference: paymentId,
 			},
 		});
+
+		// Tell the seller their buyer paid (86eyd63r8). This is the ONE receive
+		// path no human on their side witnessed — `markPaymentReceived` is their
+		// own click and deliberately notifies nothing. Both are scheduled: the
+		// email self-suppresses whenever the WhatsApp alert will actually reach
+		// them, and the alert forces the email back if it gives up, so exactly one
+		// channel fires and it's never zero.
+		await ctx.scheduler.runAfter(0, internal.email.notifyPaymentReceived, {
+			orderId,
+			provider,
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifySellerPaymentReceived,
+			{ orderId, provider },
+		);
 		return { applied: true };
 	},
 });
@@ -4055,9 +4211,12 @@ export const submitMockup = mutation({
 					: "mockup_submitted",
 			createdAt: now,
 		});
-		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
-			orderId,
-		});
+		// No WhatsApp here (86eyd63r8). The buyer already has this order's one
+		// message — sent at checkout, with the total named as "to be confirmed"
+		// and a button onto the order page. That page is where the mockup and its
+		// quote appear and where the buyer approves them, live, so submitting is
+		// not an event that needs its own send. The seller is in that chat by hand
+		// anyway; a made-to-order design is a conversation, not a notification.
 		await logAdminAction(ctx, access, "orders.submitMockup", orderId);
 	},
 });
@@ -4152,19 +4311,6 @@ export const approveMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
 			orderId: order._id,
 		});
-		// Gate is now open → the price is agreed. A push-path order (86eyfq0w5)
-		// gets its DEFERRED confirmation template now — first and only message,
-		// carrying the final quoted total (the action re-checks the fee hold, so
-		// a doubly-held order sends exactly once). Legacy orders keep the
-		// free-form payment prompt their open chat can actually receive.
-		if (order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, order._id);
-		} else {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-				orderId: order._id,
-				reason: "approved",
-			});
-		}
 	},
 });
 
@@ -4234,17 +4380,6 @@ export const waiveMockup = mutation({
 			note: "mockup_waived",
 			createdAt: now,
 		});
-		// Gate forced open without buyer approval → the buyer still needs to pay.
-		// Push-path orders get their deferred confirmation template (86eyfq0w5);
-		// legacy orders get the free-form payment prompt.
-		if (order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, orderId);
-		} else {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-				orderId,
-				reason: "waived",
-			});
-		}
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
@@ -4330,10 +4465,12 @@ export const declineMockupItem = mutation({
 				status: "cancelled",
 				mockupStatus: undefined,
 				mockupQuotedAmount: undefined,
-				// The deferred-push promise dies with the order (see
+				// The promise of a message dies with the order (see
 				// applyStatusTransition's cancel branch — this cancel path bypasses
-				// that helper, so it clears the stamp itself).
+				// that helper, so it clears the stamp itself; same two in-flight
+				// states, same reasoning).
 				confirmationPushStatus:
+					order.confirmationPushStatus === "sending" ||
 					order.confirmationPushStatus === "deferred"
 						? undefined
 						: order.confirmationPushStatus,
@@ -4381,17 +4518,6 @@ export const declineMockupItem = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
 			orderId: order._id,
 		});
-		// The gate is now open and the buyer owes for the ready-made remainder.
-		// Push-path orders get their deferred confirmation template now — even if
-		// somehow already paid, it's still the order's first (and correct)
-		// message. Legacy unpaid orders get the free-form payment nudge.
-		if (order.confirmationPushStatus === "deferred") {
-			await claimDeferredPush(ctx, order._id);
-		} else if ((order.paymentStatus ?? "unpaid") === "unpaid")
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-				orderId: order._id,
-				reason: "declined",
-			});
 	},
 });
 
