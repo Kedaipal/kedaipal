@@ -71,7 +71,12 @@ export type ReleaseIconName =
 	| "wallet"
 	| "megaphone"
 	| "settings"
-	| "chart";
+	| "chart"
+	// Deliberately the SAME glyph as the Table half of the Cards/Table switch in
+	// the orders header, not a generic grid icon: an announcement whose tile
+	// matches the control the seller has to find is a shorter walk than one that
+	// merely decorates the row.
+	| "table";
 
 export interface ReleaseEntry {
 	/** One line, benefit-first. Shown as the entry heading. */
@@ -104,6 +109,74 @@ export interface Release {
  * entry would make "everything newer than X" return the wrong set.
  */
 export const RELEASES: Release[] = [
+	{
+		version: "2026.08.2",
+		date: "2026-08-28",
+		// Earns the modal: the orders page a seller opens every morning now has a
+		// second view, a pin, and an export that answers questions the old one
+		// could not. A seller who reads nothing keeps exporting to Excel out of
+		// habit — which is the exact behaviour this release exists to end.
+		//
+		// This is also the FIRST release that can actually open it. 2026.08.1
+		// shipped the feature itself, so every seller was silently caught up to
+		// it (see `resolveWhatsNew`); they now hold a stored version, and this one
+		// is newer.
+		notable: true,
+		entries: [
+			{
+				title: {
+					en: "Your orders as a table — the spreadsheet view, without leaving Kedaipal",
+				},
+				body: {
+					en: "Switch between Cards and Table at the top of your orders page. Table gives you one row per order and sorts on any heading you tap. Use Columns to choose what you see and drag them into the order you want — we remember your layout for next time. It scrolls sideways on a phone, so it's there when you're on the move. Unlike a spreadsheet, what you're looking at is live, and you can still act on every order in front of you.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "table",
+			},
+			{
+				title: {
+					en: "Pin the orders you need to keep an eye on",
+				},
+				body: {
+					en: "Tap the pin on any order — on a card, a table row, or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				title: {
+					en: "See a photo of every item while you pack",
+				},
+				body: {
+					en: "Open an order and each line now carries its product photo — the variant's own picture where you've set one. Less squinting at three near-identical names to work out which box to reach for.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "package",
+			},
+			{
+				title: {
+					en: "Your order export finally has the address — and the totals add up",
+				},
+				body: {
+					en: "The download was missing where the order was going: no delivery address, no pickup point, for any order. Both are in there now, along with your categories, the payment reference, the date it was paid, and the custom-work quote that used to sit inside the total with no column of its own — so Subtotal + Custom work + Pickup fee + Delivery fee now matches Total on every order, including made-to-order ones. In Table view, Export lets you take just the columns you're looking at, or every column we hold.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				title: {
+					en: "Your product export is a full catalogue report now",
+				},
+				body: {
+					en: "It used to be only the re-upload template. It now also shows each product's categories, whether it's on your storefront and its link, stock policy and reserved stock, minimum order rules, and how many photos it has. The first eleven columns haven't moved, so editing the file and uploading it back works exactly as before — and if you edit one of the new columns, the upload screen now tells you it won't be applied instead of quietly ignoring it.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+		],
+	},
 	{
 		// The FIRST versioned release. `package.json` is already `2026.08.1` and
 		// no `v*` tag exists yet, so this one number covers everything shipping

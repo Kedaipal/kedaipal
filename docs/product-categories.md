@@ -14,7 +14,9 @@ Two tables (additive, dev-only widen — no migration) + one derived field on `p
 - **`productCategories`** (junction) — `productId, categoryId, retailerId` (denormalized for the account-deletion cascade), `sortOrder` (position **within** the category, independent of the product's global sortOrder), `createdAt`. Indexes `by_product`, `by_category_sort`, `by_product_category`, `by_retailer`.
 - **`products.hiddenByCategory?`** (new) — denormalized: true when every category the product is in is hidden, so it drops off the storefront (see [Hidden categories](#hidden-categories)). No change to `orders`.
 
-Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history. They are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
+Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history.
+
+> **Consequence for the order export (86eyrtz74):** the orders CSV has a categories column, and because nothing is frozen it is a **live lookup** — what those products are filed under *today*, which can differ from what they were filed under when the order was placed. The column is named **"Categories (current)"** to say so. Freezing `categoryNames` onto `orders.items` was considered and rejected: nobody has asked for point-in-time category history, they want to pivot sales by category, and freezing would reverse the decision above and need a backfill. Resolved by `attachOrderCategories` in `convex/orders.ts` — batched by distinct `productId` per export page, deduped and sorted across the order's lines. Archived categories still appear (they name a real grouping the seller used). They are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
 
 ## Hidden categories
 
