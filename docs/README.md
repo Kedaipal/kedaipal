@@ -27,6 +27,7 @@ How the product actually works. Read in this order.
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
+| [landing-video-demo.md](./landing-video-demo.md) | The 30-second demo on `/`: why it sits directly under the hero, the 21.5 MB → 928 KB encode recipe, the `preload="none"` loading posture, and the player's autoplay/pause/reduced-motion rules. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 
 ## Architecture & security
