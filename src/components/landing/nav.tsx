@@ -3,9 +3,12 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check, Globe, Menu, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "../../../convex/lib/locale";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { getLocale, locales, setLocale } from "../../paraglide/runtime";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -64,6 +67,28 @@ function LanguageSwitcher() {
 				))}
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+/**
+ * WhatsApp deep-link to Kedaipal's support number, prefilled with a demo
+ * request — never a filled/accent pill (86eye3p6z §C: exactly one primary
+ * button per page), so this rides the same `outline` treatment as the auth
+ * CTA's sibling slot.
+ */
+function BookDemoLink({ className }: { className?: string }) {
+	const supportWa = useSupportWaNumber();
+	return (
+		<Button asChild variant="outline" size="lg" className={className}>
+			<a
+				href={buildWaContactLink(m.demo_wa_message(), supportWa)}
+				target="_blank"
+				rel="noopener noreferrer"
+			>
+				<WhatsAppIcon className="size-4" />
+				{m.book_demo_cta()}
+			</a>
+		</Button>
 	);
 }
 
@@ -166,7 +191,7 @@ export function Nav() {
 				)}
 			>
 				<div className="flex h-14 items-center justify-between pl-4 pr-2 md:h-16 md:pl-6 md:pr-3">
-					<Link to="/" className="flex items-center" aria-label={m.nav_home()}>
+					<Link to="/" className="flex min-h-11 items-center" aria-label={m.nav_home()}>
 						<AppImage
 							src="/logo-3.svg"
 							alt="Kedaipal"
@@ -191,6 +216,7 @@ export function Nav() {
 					</div>
 					<div className="flex items-center gap-1.5">
 						<LanguageSwitcher />
+						<BookDemoLink className="hidden rounded-full px-4 lg:inline-flex" />
 						<NavAuthCta />
 						<Button
 							type="button"
@@ -226,8 +252,9 @@ export function Nav() {
 								{m.nav_pricing()}
 							</Link>
 						</div>
-						<div className="mt-3 border-t border-border/70 pt-3">
+						<div className="mt-3 flex flex-col gap-2 border-t border-border/70 pt-3">
 							<MobileMenuAuthCta onClose={closeMenu} />
+							<BookDemoLink className="h-12 w-full rounded-full" />
 						</div>
 					</div>
 				)}
