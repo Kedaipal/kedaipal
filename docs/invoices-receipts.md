@@ -23,15 +23,16 @@ ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
 ## Reconciliation with the existing codebase
 
-> **Cell values are human-readable, not stored enums (86eyrtz74).** `Order
-> type` exports *Online / Counter / Claim link*, `Payment` exports *Paid* (not
-> `received`), `Payment method` uses the settings-screen rail names,
-> `Fulfilment` reads *Self-collect*, and `Cancelled reason` humanizes
-> `payment_window_expired` to *Payment window expired*. This matches what the
-> table shows — one registry, one truth. **A bookkeeping formula matching the
-> old raw values (`="received"`, `="storefront"`) needs updating.** `Status`
-> exports the capitalised anchor and does **not** carry a retailer's custom
-> stage name; see [`z8r3fdadkm`](https://app.clickup.com/t/z8r3fdadkm).
+> **The CSV writes STORED values, deliberately (86eyrtz74).** `Order type`
+> exports `storefront`, `Payment` exports `received`, `Fulfilment` exports
+> `self_collect`. A CSV is read by other software as well as by people, so a
+> bookkeeping formula matching `="received"` keeps working — this export has
+> never changed an enum's spelling and should not start.
+>
+> The **table** shows the same columns worded for a person ("Storefront",
+> "Paid", "Self-collect") via the registry's `display`, which is a view concern
+> and stays out of `value`. If you want the pretty wording in a spreadsheet,
+> that is a formatting step there, not a change here.
 
 The ticket was drafted assuming nothing existed. In reality the **subscription
 billing spine already shipped** (`86expn2qg`, [`manual-subscription.md`](./manual-subscription.md)):

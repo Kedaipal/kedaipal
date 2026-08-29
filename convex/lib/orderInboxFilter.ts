@@ -7,7 +7,11 @@
 import { attributionBucket } from "./attribution";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
 import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
-import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
+import {
+	type CsvOrder,
+	ORDER_COLUMNS,
+	orderColumnDisplay,
+} from "./orderCsv";
 
 /**
  * Every column's rendered text for one order, lowercased and joined — the
@@ -25,8 +29,13 @@ import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
 function searchHaystack(o: CsvOrder): string {
 	let out = "";
 	for (const column of ORDER_COLUMNS) {
-		const text = column.value(o);
-		if (text !== "") out += `${text.toLowerCase()}\n`;
+		// BOTH the stored value and the on-screen wording, where they differ
+		// (86eyrtz74). A seller typing "storefront" is reading the column; one
+		// typing "received" may be reading an old export or a colleague's note.
+		// Indexing both means neither guess comes back empty.
+		for (const text of new Set([column.value(o), orderColumnDisplay(column, o)])) {
+			if (text !== "") out += `${text.toLowerCase()}\n`;
+		}
 	}
 	return out;
 }

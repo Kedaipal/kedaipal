@@ -3,6 +3,7 @@ import {
 	type CsvOrder,
 	METHOD_UNSPECIFIED_CELL,
 	ORDER_COLUMNS_BY_KEY,
+	orderColumnDisplay,
 } from "../../../convex/lib/orderCsv";
 import {
 	buildOrderColumnFilters,
@@ -47,6 +48,9 @@ function filters() {
  * Rather than assert three hardcoded pairs, this drives the filter's OWN
  * options back through the column's OWN renderer: whatever either side is
  * changed to, they have to agree.
+ *
+ * It compares against `orderColumnDisplay`, not `column.value` — the stored
+ * value is what the CSV writes, and a filter is part of the view.
  */
 describe("a header filter's options read exactly like the column it filters", () => {
 	const CASES: {
@@ -81,12 +85,14 @@ describe("a header filter's options read exactly like the column it filters", ()
 					// method ("Unspecified") because an unlabelled row in a list is
 					// unpickable, while the column leaves the cell blank because a
 					// word there would read as a real payment rail.
-					expect(column.value(apply(option.value))).toBe(
+					expect(orderColumnDisplay(column, apply(option.value))).toBe(
 						METHOD_UNSPECIFIED_CELL,
 					);
 					continue;
 				}
-				expect(column.value(apply(option.value))).toBe(option.label);
+				expect(orderColumnDisplay(column, apply(option.value))).toBe(
+					option.label,
+				);
 			}
 		});
 	}

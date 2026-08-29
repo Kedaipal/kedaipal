@@ -564,3 +564,23 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 		).toBe(false);
 	});
 });
+
+describe("search matches both the stored value and the on-screen wording", () => {
+	// A seller typing "storefront" is reading the Order type column; one typing
+	// "received" may be reading an old export or a colleague's note. Neither
+	// guess should come back empty (86eyrtz74).
+	const o = order({ source: "storefront", paymentStatus: "received" });
+
+	test("finds an order by the word the column shows", () => {
+		expect(buildInboxPredicate({ searchText: "storefront" })(o)).toBe(true);
+		expect(buildInboxPredicate({ searchText: "paid" })(o)).toBe(true);
+	});
+
+	test("finds it by the value the CSV writes", () => {
+		expect(buildInboxPredicate({ searchText: "received" })(o)).toBe(true);
+	});
+
+	test("still misses what the order genuinely is not", () => {
+		expect(buildInboxPredicate({ searchText: "counter" })(o)).toBe(false);
+	});
+});

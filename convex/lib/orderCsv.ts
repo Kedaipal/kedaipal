@@ -50,6 +50,14 @@ function csvFlag(on: boolean | undefined): string {
  * attribution through `sourceLabel`. The raw enums were the inconsistency, not
  * this. Idempotent, so a value that is already prose passes through unchanged.
  */
+/** Which fulfilment key a row reads as — the collection DIRECTION wins over the
+ * method, since it is the opposite trip (86eyg0n8e). */
+function fulfilmentKey(o: CsvOrder): string {
+	return o.deliveryDirection === "collection"
+		? "collection"
+		: (o.deliveryMethod ?? "");
+}
+
 export function humanizeEnum(raw: string): string {
 	const spaced = raw.replace(/[_-]+/g, " ").trim();
 	if (spaced === "") return "";
@@ -67,7 +75,11 @@ export function humanizeEnum(raw: string): string {
  * than the symptom.
  */
 export const ORDER_SOURCE_LABELS: Record<string, string> = {
-	storefront: "Online",
+	// NOT "Online" — a claim-link order is online too, so the word names a
+	// category all three fit rather than telling the seller which one this is.
+	// "Storefront" names the actual surface: the buyer browsed the shop page and
+	// checked themselves out.
+	storefront: "Storefront",
 	counter: "Counter",
 	claim: "Claim link",
 };
@@ -99,8 +111,12 @@ export const PAYMENT_STATUS_KEYS = ["unpaid", "claimed", "received"] as const;
  * the app has always written it hyphenated, so it is spelled out here. */
 const FULFILMENT_LABELS: Record<string, string> = {
 	delivery: "Delivery",
+	// The buyer collects from the seller.
 	self_collect: "Self-collect",
-	collection: "Collection",
+	// The seller collects from the BUYER (86eyg0n8e) — the opposite trip. Named
+	// "We collect", the buyer-facing wording, because "Collection" sitting next
+	// to "Self-collect" in a column is two words for opposite directions.
+	collection: "We collect",
 };
 
 export type CsvOrder = {
@@ -294,6 +310,20 @@ export interface OrderColumn {
 	group: OrderColumnGroup;
 	/** Right-aligned + tabular in the table (amounts). */
 	numeric?: boolean;
+	/**
+	 * How the cell reads ON SCREEN, when that differs from the stored value
+	 * (86eyrtz74). Defaults to `value`, so a column only declares this when it
+	 * has something to say — there is no second list to fall out of step.
+	 *
+	 * The split exists because `value` feeds the **CSV**, which is data other
+	 * software reads: a seller's bookkeeping formula matching `="received"` must
+	 * keep working, and a stored enum is the stable thing to match on. The
+	 * table is a **view**, and a view can say "Paid". Formatting inside `value`
+	 * would have quietly rewritten the export to fix a rendering problem.
+	 *
+	 * Read it through `orderColumnDisplay`, never directly.
+	 */
+	display?: (o: CsvOrder) => string;
 	/** In the table's default column set. The rest are opt-in via the picker —
 	 * every column is available, but 36 at once is unreadable. */
 	defaultVisible?: boolean;
@@ -396,11 +426,9 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "fulfilment",
 		defaultVisible: true,
 		width: 116,
-		value: (o) => {
-			const key =
-				o.deliveryDirection === "collection"
-					? "collection"
-					: (o.deliveryMethod ?? "");
+		value: (o) => fulfilmentKey(o),
+		display: (o) => {
+			const key = fulfilmentKey(o);
 			return FULFILMENT_LABELS[key] ?? humanizeEnum(key);
 		},
 	},
@@ -484,12 +512,12 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// (StatusBadge), and a truncated status is a status you have to hover to
 		// read, so the column is sized to make that the exception.
 		width: 148,
-		// Capitalised, but NOT the retailer's custom stage name: resolving that
-		// needs their `orderStages` config, which this pure registry cannot
-		// reach. The TABLE renders `StatusBadge` with the resolved label instead,
-		// so a store that renamed "packed" to "Ready for Pickup" sees the custom
-		// word on screen and the anchor word in the CSV. Tracked separately.
-		value: (o) => humanizeEnum(o.status),
+		value: (o) => o.status,
+		// The table renders `StatusBadge` with the retailer's own stage name
+		// instead of this, so `display` only matters to free-text search and to
+		// any future consumer — it capitalises the anchor and cannot reach a
+		// custom stage name, which needs the retailer's `orderStages` config.
+		display: (o) => humanizeEnum(o.status),
 	},
 	{
 		key: "orderType",
@@ -498,9 +526,10 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		width: 110,
 		// Legacy orders carry no stamped source and read as "storefront" —
 		// the same default the inbox predicate applies.
-		// The label the seller sees everywhere else, not the stored key: the
-		// header filter offers "Online" and the column printed `storefront`.
-		value: (o) => {
+		value: (o) => o.source ?? "storefront",
+		// The header filter offers "Storefront"; the column used to print the raw
+		// key, so ticking a filter showed a word that matched nothing on screen.
+		display: (o) => {
 			const key = o.source ?? "storefront";
 			return ORDER_SOURCE_LABELS[key] ?? humanizeEnum(key);
 		},
@@ -519,9 +548,10 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "payment",
 		defaultVisible: true,
 		width: 110,
+		value: (o) => o.paymentStatus ?? "unpaid",
 		// `received` reads as "Paid" — the stored value and the seller's word for
 		// it were never the same, and only the filter knew that.
-		value: (o) => {
+		display: (o) => {
 			const key = o.paymentStatus ?? "unpaid";
 			return PAYMENT_STATUS_LABELS[key] ?? humanizeEnum(key);
 		},
@@ -531,11 +561,12 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Payment method",
 		group: "payment",
 		width: 140,
+		value: (o) => o.paymentMethod ?? "",
 		// The same rail names the settings screen and the filter use — `tng` and
 		// `bank_transfer` are storage, not language.
-		value: (o) => {
+		display: (o) => {
 			const key = o.paymentMethod;
-			if (!key) return "";
+			if (!key) return METHOD_UNSPECIFIED_CELL;
 			// `CsvOrder.paymentMethod` is a plain string (a legacy row can hold a
 			// rail no longer offered), so the lookup is widened rather than the
 			// type narrowed — an unknown rail humanizes instead of blanking.
@@ -656,7 +687,8 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Cancelled reason",
 		group: "order",
 		width: 180,
-		value: (o) => humanizeEnum(o.cancelledReason ?? ""),
+		value: (o) => o.cancelledReason ?? "",
+		display: (o) => humanizeEnum(o.cancelledReason ?? ""),
 	},
 	{
 		key: "pinned",
@@ -720,12 +752,23 @@ export function resolveOrderColumns(
  * Falls back to the lowercased display string, so a column that never declared
  * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
  */
+/**
+ * A cell as it reads on screen. The one way the table (and free-text search)
+ * should ask for text — going straight to `column.value` gets the stored value,
+ * which is what the CSV wants and not what a person should read.
+ */
+export function orderColumnDisplay(column: OrderColumn, o: CsvOrder): string {
+	return (column.display ?? column.value)(o);
+}
+
 export function orderColumnSortValue(
 	column: OrderColumn,
 	o: CsvOrder,
 ): number | string | undefined {
 	if (column.sortKey) return column.sortKey(o);
-	const text = column.value(o);
+	// Sorts what the seller can SEE. Sorting Order type by the stored key would
+	// order the rows by words that appear nowhere on screen.
+	const text = orderColumnDisplay(column, o);
 	return text === "" ? undefined : text.toLowerCase();
 }
 

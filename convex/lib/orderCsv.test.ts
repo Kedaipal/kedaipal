@@ -11,6 +11,7 @@ import {
 	ORDER_COLUMNS_BY_KEY,
 	humanizeEnum,
 	orderCategoryNames,
+	orderColumnDisplay,
 	orderToCsvRow,
 	ordersToCsv,
 } from "./orderCsv";
@@ -73,22 +74,20 @@ describe("orderToCsvRow", () => {
 			...base,
 			deliveryDirection: "collection",
 		});
-		expect(collection[CSV_COLUMNS.indexOf("Fulfilment")]).toBe("Collection");
+		expect(collection[CSV_COLUMNS.indexOf("Fulfilment")]).toBe("collection");
 		// The column set is fixed — one export can hold both directions, so a
 		// seller's bookkeeping template must keep matching on names.
 		expect(CSV_COLUMNS).toContain("Delivery fee");
 		expect(CSV_COLUMNS).not.toContain("Collection fee");
 		// Standard + pickup rows are untouched.
 		expect(orderToCsvRow(base)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
-			"Delivery",
+			"delivery",
 		);
-		// "Self-collect" hyphenated, the way the app has always written it —
-		// humanizing alone would give "Self collect" (86eyrtz74).
 		expect(
 			orderToCsvRow({ ...base, deliveryMethod: "self_collect" })[
 				CSV_COLUMNS.indexOf("Fulfilment")
 			],
-		).toBe("Self-collect");
+		).toBe("self_collect");
 	});
 
 	test("summarizes items as 'qty x name (variant)'", () => {
@@ -156,7 +155,7 @@ describe("orderToCsvRow", () => {
 			total: 0,
 			currency: "MYR",
 		});
-		expect(row[CSV_COLUMNS.indexOf("Payment")]).toBe("Unpaid");
+		expect(row[CSV_COLUMNS.indexOf("Payment")]).toBe("unpaid");
 		// No name and no phone = an anonymous walk-in (86ey8vqp6) → labelled, not blank.
 		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("Walk-in customer");
 		expect(row[CSV_COLUMNS.indexOf("Fulfilment date")]).toBe("");
@@ -360,11 +359,11 @@ describe("the rest of the missing fields", () => {
 			attributionSource: "tiktok",
 		};
 		expect(cell(o, "Fulfilment time")).toBe("3:30 PM");
-		expect(cell(o, "Order type")).toBe("Counter");
+		expect(cell(o, "Order type")).toBe("counter");
 		expect(cell(o, "Came from")).toBe("TikTok");
 	});
 	test("a legacy order with no stamped source reads as storefront", () => {
-		expect(cell(minimal, "Order type")).toBe("Online");
+		expect(cell(minimal, "Order type")).toBe("storefront");
 	});
 	test("flags read Yes / blank, never 'false'", () => {
 		expect(cell({ ...minimal, deliveryFeePending: true }, "Fee pending")).toBe("Yes");
@@ -472,7 +471,7 @@ describe("default column set", () => {
 	});
 });
 
-describe("every cell reads as language, not storage (86eyrtz74)", () => {
+describe("the CSV writes STORED values, the view reads them (86eyrtz74)", () => {
 	// The bug this closes: the Order type header filter offered "Online" while
 	// the column printed `storefront`, so a seller ticking a filter saw a value
 	// that matched nothing on screen. Money, dates, booleans and attribution
@@ -487,22 +486,65 @@ describe("every cell reads as language, not storage (86eyrtz74)", () => {
 		status: "packed",
 	};
 
-	test("no cell leaks a stored enum", () => {
-		expect(cell(raw, "Order type")).toBe("Claim link");
-		// `received` is the stored word; "Paid" is the seller's. Only the filter
-		// knew that before.
-		expect(cell(raw, "Payment")).toBe("Paid");
-		expect(cell(raw, "Payment method")).toBe("Bank transfer");
-		expect(cell(raw, "Fulfilment")).toBe("Self-collect");
-		expect(cell(raw, "Cancelled reason")).toBe("Payment window expired");
-		expect(cell(raw, "Status")).toBe("Packed");
+	const shown = (key: string) => {
+		const column = ORDER_COLUMNS_BY_KEY.get(key as never);
+		if (!column) throw new Error(`no column ${key}`);
+		return orderColumnDisplay(column, raw);
+	};
+
+	test("the CSV keeps the stored value, so a bookkeeping formula holds", () => {
+		// Formatting inside `value` would have quietly rewritten every seller's
+		// export to fix a rendering problem. `="received"` still matches.
+		expect(cell(raw, "Order type")).toBe("claim");
+		expect(cell(raw, "Payment")).toBe("received");
+		expect(cell(raw, "Payment method")).toBe("bank_transfer");
+		expect(cell(raw, "Fulfilment")).toBe("self_collect");
+		expect(cell(raw, "Cancelled reason")).toBe("payment_window_expired");
+		expect(cell(raw, "Status")).toBe("packed");
 	});
 
-	test("no visible cell still contains an underscore", () => {
-		// A sweep rather than a list, so a column added later that prints a raw
+	test("the VIEW reads as language", () => {
+		expect(shown("orderType")).toBe("Claim link");
+		// `received` is the stored word; "Paid" is the seller's.
+		expect(shown("paymentStatus")).toBe("Paid");
+		expect(shown("paymentMethod")).toBe("Bank transfer");
+		expect(shown("fulfilment")).toBe("Self-collect");
+		expect(shown("cancelledReason")).toBe("Payment window expired");
+		expect(shown("status")).toBe("Packed");
+	});
+
+	test("a storefront order says STOREFRONT, not the generic 'Online'", () => {
+		// A claim-link order is online too, so "Online" names a category all
+		// three fit rather than telling the seller which one this is.
+		const store = ORDER_COLUMNS_BY_KEY.get("orderType");
+		if (!store) throw new Error("no column");
+		expect(orderColumnDisplay(store, minimal)).toBe("Storefront");
+	});
+
+	test("the two collect directions are never the same word", () => {
+		// `self_collect` = buyer collects from the seller; `collection` = the
+		// seller collects from the BUYER. "Self-collect" beside "Collection" in
+		// one column is two words for opposite trips.
+		const column = ORDER_COLUMNS_BY_KEY.get("fulfilment");
+		if (!column) throw new Error("no column");
+		const selfCollect = orderColumnDisplay(column, {
+			...minimal,
+			deliveryMethod: "self_collect",
+		});
+		const weCollect = orderColumnDisplay(column, {
+			...minimal,
+			deliveryDirection: "collection",
+		});
+		expect(selfCollect).toBe("Self-collect");
+		expect(weCollect).toBe("We collect");
+		expect(weCollect).not.toBe(selfCollect);
+	});
+
+	test("no VISIBLE cell leaks an underscore", () => {
+		// A sweep rather than a list, so a column added later that renders a raw
 		// enum fails here instead of shipping.
 		for (const column of ORDER_COLUMNS) {
-			expect(column.value(raw)).not.toMatch(/_/);
+			expect(orderColumnDisplay(column, raw)).not.toMatch(/_/);
 		}
 	});
 
@@ -510,12 +552,25 @@ describe("every cell reads as language, not storage (86eyrtz74)", () => {
 		// A legacy row can hold a rail that is no longer offered; blanking the
 		// cell would hide a real payment.
 		const legacy: CsvOrder = { ...minimal, paymentMethod: "old_rail" };
-		expect(cell(legacy, "Payment method")).toBe("Old rail");
+		const column = ORDER_COLUMNS_BY_KEY.get("paymentMethod");
+		if (!column) throw new Error("no column");
+		expect(orderColumnDisplay(column, legacy)).toBe("Old rail");
 	});
 
-	test("blank stays blank — humanizing must not invent a value", () => {
-		expect(cell(minimal, "Cancelled reason")).toBe("");
-		expect(cell(minimal, "Payment method")).toBe("");
+	test("blank stays blank in both — neither may invent a value", () => {
+		for (const key of ["cancelledReason", "paymentMethod"]) {
+			const column = ORDER_COLUMNS_BY_KEY.get(key as never);
+			if (!column) throw new Error(`no column ${key}`);
+			expect(column.value(minimal)).toBe("");
+			expect(orderColumnDisplay(column, minimal)).toBe("");
+		}
+	});
+
+	test("a column with nothing to reword displays its stored value", () => {
+		// `display` defaults to `value`, so there is no second list to drift.
+		const column = ORDER_COLUMNS_BY_KEY.get("shortId");
+		if (!column) throw new Error("no column");
+		expect(orderColumnDisplay(column, raw)).toBe(column.value(raw));
 	});
 });
 
