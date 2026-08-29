@@ -86,8 +86,24 @@ text links in their own sections:
 **The nav lost two entries.** `Cost calculator` moved out because the
 money-math block is now a better front door for it, and five links plus the
 locale switcher and the CTA crowded the bar between `md` and `lg`. `Sign in`
-went too — one ask in the nav. Returning sellers still reach sign-in from the
-sign-up screen's own "already have an account?" link, so no path was closed.
+went too — one ask in the nav, on the reasoning that returning sellers still
+reach sign-in from the sign-up screen's own "already have an account?" link.
+
+> **Reversed (29 Aug, owner).** That second removal was wrong and is undone:
+> `Log in` is back in the nav and the mobile menu. §C bounds the number of
+> **primary buttons**, not the number of doors, and the reasoning above quietly
+> made a *paying* seller — the one visitor we least want to send through the
+> signup funnel — click "Start 14-day trial" and hunt for Clerk's own small
+> sign-in link. With `Sign in` gone from the nav, the footer, the hero and the
+> final CTA, the landing page had **no** direct route to `/sign-in` at all,
+> even though the route worked fine.
+>
+> It comes back as a **text link**, not a button — a rung below the outline
+> "Book a demo" in the hierarchy — so the mint trial pill is still the only
+> thing on the page that reads as the ask. Verified: no nav overflow at `md`
+> (where "Book a demo" drops out) or at full desktop width. In the mobile menu
+> it is the outline sibling **above** "Book a demo", because a returning seller
+> is a far more common intent than a sales conversation.
 
 On `/pricing` the three tier cards keep their buttons (a tier card without one
 is a dead end), but only Pro's is filled.

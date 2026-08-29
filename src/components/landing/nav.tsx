@@ -108,19 +108,32 @@ function NavAuthCta() {
 			</Button>
 		);
 	}
-	// One ask in the nav (86eye3p6z §C). Returning sellers still reach sign-in
-	// from the sign-up screen's own "already have an account?" link, so the path
-	// survives without a second button competing with the trial CTA.
+	// 86eye3p6z §C bounds the number of PRIMARY buttons, not the number of
+	// doors. Log-in used to be omitted entirely on that reading, which left a
+	// returning paying seller with no way into their own dashboard except to
+	// click "start a trial" and hunt for Clerk's own "already have an account?"
+	// link — the one visitor we least want to send through the signup door.
+	// A text link is a rung below the outline "Book a demo" in the hierarchy,
+	// so the mint trial pill is still the only thing that reads as the ask.
 	return (
-		<Button
-			asChild
-			size="lg"
-			className="hidden rounded-full px-5 md:inline-flex"
-		>
-			<Link to="/sign-up/$" params={{ _splat: "" }}>
-				{m.nav_start_free()}
+		<>
+			<Link
+				to="/sign-in/$"
+				params={{ _splat: "" }}
+				className="hidden min-h-11 items-center whitespace-nowrap rounded-full px-4 text-sm font-semibold text-foreground transition-colors hover:bg-muted md:inline-flex"
+			>
+				{m.nav_log_in()}
 			</Link>
-		</Button>
+			<Button
+				asChild
+				size="lg"
+				className="hidden rounded-full px-5 md:inline-flex"
+			>
+				<Link to="/sign-up/$" params={{ _splat: "" }}>
+					{m.nav_start_free()}
+				</Link>
+			</Button>
+		</>
 	);
 }
 
@@ -136,12 +149,27 @@ function MobileMenuAuthCta({ onClose }: { onClose: () => void }) {
 			</Button>
 		);
 	}
+	// Log-in sits ABOVE "Book a demo": a returning seller opening this menu is
+	// a far more common intent than a sales conversation, and on mobile the
+	// order in the stack IS the priority signal.
 	return (
-		<Button asChild size="lg" className="h-12 w-full rounded-full">
-			<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
-				{m.nav_start_free()}
-			</Link>
-		</Button>
+		<>
+			<Button asChild size="lg" className="h-12 w-full rounded-full">
+				<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
+					{m.nav_start_free()}
+				</Link>
+			</Button>
+			<Button
+				asChild
+				size="lg"
+				variant="outline"
+				className="h-12 w-full rounded-full"
+			>
+				<Link to="/sign-in/$" params={{ _splat: "" }} onClick={onClose}>
+					{m.nav_log_in()}
+				</Link>
+			</Button>
+		</>
 	);
 }
 
@@ -191,7 +219,11 @@ export function Nav() {
 				)}
 			>
 				<div className="flex h-14 items-center justify-between pl-4 pr-2 md:h-16 md:pl-6 md:pr-3">
-					<Link to="/" className="flex min-h-11 items-center" aria-label={m.nav_home()}>
+					<Link
+						to="/"
+						className="flex min-h-11 items-center"
+						aria-label={m.nav_home()}
+					>
 						<AppImage
 							src="/logo-3.svg"
 							alt="Kedaipal"
