@@ -2,11 +2,12 @@ import { useMutation } from "convex/react";
 import { Camera, Download, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { type FormEvent, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { PaymentMethod } from "../../../convex/lib/payment";
 import { qrFilenameBase, saveImageFromUrl } from "../../lib/download";
 import { convexErrorMessage } from "../../lib/format";
-import { toast } from "sonner";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
@@ -88,7 +89,21 @@ export function ManualPaymentDialog({
 		try {
 			let proofStorageId: string | undefined;
 			if (proofFile) {
-				if (proofFile.size > MAX_PROOF_BYTES) {
+				// A proof the seller can't open is worse here than anywhere else
+				// in the app: they're being asked to confirm a payment against an
+				// image that renders as a broken box, with nothing telling either
+				// side why. So the proof is decoded (and shrunk) before it is
+				// stored — see lib/image-upload.ts.
+				const prepared = await prepareImageUpload(proofFile);
+				if (!prepared.ok) {
+					setServerError(prepared.message);
+					setSubmitting(false);
+					return;
+				}
+				// Checked AFTER preparing, not before: the file is re-encoded on
+				// the way through, so a big phone photo now shrinks under the cap
+				// instead of being refused for a size it no longer has.
+				if (prepared.blob.size > MAX_PROOF_BYTES) {
 					setServerError("Screenshot must be smaller than 5 MB.");
 					setSubmitting(false);
 					return;
@@ -96,8 +111,8 @@ export function ManualPaymentDialog({
 				const uploadUrl = await generateUploadUrl({ token });
 				const uploadRes = await fetch(uploadUrl, {
 					method: "POST",
-					headers: { "Content-Type": proofFile.type },
-					body: proofFile,
+					headers: { "Content-Type": prepared.contentType },
+					body: prepared.blob,
 				});
 				if (!uploadRes.ok) {
 					throw new Error("Couldn't upload screenshot. Please try again.");
@@ -151,7 +166,10 @@ export function ManualPaymentDialog({
 						</Dialog.Close>
 					</div>
 
-					<form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+					<form
+						onSubmit={handleSubmit}
+						className="flex min-h-0 flex-1 flex-col"
+					>
 						<div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
 							{/* 1 · The store's payment methods (one-tap copy / QR save) */}
 							{methods.length > 0 ? (
@@ -170,13 +188,17 @@ export function ManualPaymentDialog({
 												<>
 													{m.bankName && m.bankName !== m.label ? (
 														<div className="flex items-baseline justify-between gap-3 text-sm">
-															<span className="text-muted-foreground">Bank</span>
+															<span className="text-muted-foreground">
+																Bank
+															</span>
 															<span className="font-medium">{m.bankName}</span>
 														</div>
 													) : null}
 													{m.bankAccountName ? (
 														<div className="flex items-baseline justify-between gap-3 text-sm">
-															<span className="text-muted-foreground">Name</span>
+															<span className="text-muted-foreground">
+																Name
+															</span>
 															<span className="text-right font-medium">
 																{m.bankAccountName}
 															</span>
@@ -258,8 +280,8 @@ export function ManualPaymentDialog({
 									: "Tell the store"}
 							</p>
 							<p className="text-sm text-muted-foreground">
-								Paid {shortId}? Send the details below so {storeName} can
-								verify your payment.
+								Paid {shortId}? Send the details below so {storeName} can verify
+								your payment.
 							</p>
 
 							<div className="flex flex-col gap-1.5">
@@ -309,7 +331,7 @@ export function ManualPaymentDialog({
 									id="payment-proof"
 									ref={fileInputRef}
 									type="file"
-									accept="image/*"
+									accept={IMAGE_ACCEPT}
 									onChange={(e) => setProofFile(e.target.files?.[0] ?? null)}
 									className="hidden"
 								/>

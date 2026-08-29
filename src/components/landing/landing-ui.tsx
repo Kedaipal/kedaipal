@@ -1,5 +1,7 @@
+import useEmblaCarousel from "embla-carousel-react";
 import { ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
+import { COUNTRIES, type Country } from "../../../convex/lib/country";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 
@@ -81,6 +83,56 @@ export function carouselTrackClass(desktop: string) {
  */
 export function carouselSlideClass(extra?: string) {
 	return cn("relative w-[85%] shrink-0 snap-start sm:w-[60%] md:w-auto", extra);
+}
+
+/**
+ * Mobile centered carousel (Embla — the engine under shadcn's Carousel),
+ * for rails whose CENTER slide is the centerpiece (the pricing tiers, owner
+ * call 29 Aug: Pro dead-center with neighbours peeking both sides). CSS
+ * scroll-snap can't truly center the first/last slide or park an initial
+ * index reliably, which is why this earns a library where the other rails
+ * keep the house snap classes.
+ *
+ * Desktop is untouched: the `(min-width: 768px)` breakpoint deactivates
+ * Embla entirely and `desktopClass` (usually `md:grid …`) takes over the
+ * same flex container. Wrap each slide in `centerSnapSlideClass()`.
+ */
+export function CenterSnapCarousel({
+	children,
+	desktopClass,
+	startIndex = 0,
+	className,
+}: {
+	children: ReactNode;
+	/** Layout classes for md+ where Embla is inactive (e.g. "md:grid …"). */
+	desktopClass?: string;
+	/** Slide index parked in the center on mount (mobile only). */
+	startIndex?: number;
+	className?: string;
+}) {
+	const [emblaRef] = useEmblaCarousel({
+		align: "center",
+		startIndex,
+		containScroll: false,
+		breakpoints: { "(min-width: 768px)": { active: false } },
+	});
+	return (
+		<div
+			ref={emblaRef}
+			className={cn("-mx-5 overflow-hidden md:mx-0 md:overflow-visible", className)}
+		>
+			<div className={cn("flex touch-pan-y", desktopClass)}>{children}</div>
+		</div>
+	);
+}
+
+/** A slide inside `CenterSnapCarousel` — 80% width with side peeks below
+ * `sm`, 60% to `md`, then whatever the desktop layout says. */
+export function centerSnapSlideClass(extra?: string) {
+	return cn(
+		"min-w-0 shrink-0 grow-0 basis-[80%] px-2 first:pl-4 last:pr-4 sm:basis-[60%] md:basis-auto md:px-0 md:first:pl-0 md:last:pr-0",
+		extra,
+	);
 }
 
 /** Decorative QR pattern — a grid of squares standing in for a real code. */
@@ -192,6 +244,50 @@ function MarqueeRow({
 				</span>
 			))}
 		</div>
+	);
+}
+
+interface RegionToggleProps {
+	region: Country;
+	onChange: (next: Country) => void;
+	className?: string;
+}
+
+/**
+ * MY/SG segmented toggle for the pricing teaser — overrides the time-zone
+ * guess in `useLandingRegion` and persists the pick. Short "MY"/"SG" labels
+ * keep the pill compact; the full country name rides `aria-label` per button
+ * so a screen-reader user hears "Malaysia" / "Singapore", not two letters.
+ */
+export function RegionToggle({ region, onChange, className }: RegionToggleProps) {
+	return (
+		<fieldset
+			aria-label={m.region_toggle_label()}
+			className={cn(
+				"m-0 inline-flex rounded-full border border-border bg-card p-1",
+				className,
+			)}
+		>
+			{COUNTRIES.map((c) => (
+				<button
+					key={c}
+					type="button"
+					aria-pressed={region === c}
+					aria-label={c === "MY" ? m.region_my() : m.region_sg()}
+					onClick={() => onChange(c)}
+					className={cn(
+						// tap-target: 44px is the touch-rule floor (design-system §mobile) —
+						// the first cut's min-h-9 (36px) failed the 29 Aug mobile audit.
+						"tap-target min-w-16 rounded-full px-4 text-sm font-semibold transition-colors",
+						region === c
+							? "bg-primary text-primary-foreground"
+							: "text-muted-foreground hover:text-foreground",
+					)}
+				>
+					{c}
+				</button>
+			))}
+		</fieldset>
 	);
 }
 

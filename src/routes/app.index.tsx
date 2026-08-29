@@ -36,6 +36,7 @@ import {
 	StatusBadge,
 } from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
+import { TaggedShareLinks } from "../components/dashboard/tagged-share-links";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { AppImage } from "../components/ui/app-image";
@@ -522,7 +523,7 @@ function DashboardHome() {
 					</Link>
 					<Link
 						to="/app/orders"
-						search={{ bucket: "new" as const }}
+						search={{ bucket: ["new" as const] }}
 						className="flex flex-col gap-0.5 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
 					>
 						{countsLoading ? (
@@ -596,6 +597,9 @@ function DashboardHome() {
 							</a>
 						</Button>
 					</div>
+					{/* Campaign-tagged variants of the same link (86eyq0eq9) — sits
+					    with the link actions, never on a QR surface. */}
+					<TaggedShareLinks storefrontUrl={storefrontUrl} onCopy={stampShare} />
 				</section>
 			) : null}
 
@@ -768,7 +772,7 @@ function DashboardHome() {
 					{newCount > 0 ? (
 						<AttentionRow
 							to="/app/orders"
-							search={{ bucket: "new" as const }}
+							search={{ bucket: ["new" as const] }}
 							icon={Bell}
 							tint="bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
 							title={`${newCount} new order${newCount === 1 ? "" : "s"} to confirm`}

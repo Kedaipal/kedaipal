@@ -96,6 +96,7 @@ function toApiProduct(p: GroupedProductImport) {
 	return {
 		name: p.name,
 		description: p.description,
+		active: p.active,
 		options: p.options,
 		variants: p.variants.map((vr) => ({
 			optionValues: vr.optionValues,
@@ -476,6 +477,29 @@ function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 					</span>
 				) : null}
 			</div>
+			{/* The export carries report-only columns (categories, storefront
+			    visibility, order rules…) that this import cannot write. Saying so
+			    up front beats a seller retyping a category here and watching
+			    nothing happen — the silent no-op this notice exists to prevent. */}
+			{parsed.summary.ignoredColumns.length > 0 ? (
+				<div className="flex gap-2.5 rounded-xl border border-border bg-muted/40 p-3 text-sm">
+					<Info
+						className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+						aria-hidden="true"
+					/>
+					<p className="text-muted-foreground">
+						This file came from an export, so it carries{" "}
+						{parsed.summary.ignoredColumns.length} extra column
+						{parsed.summary.ignoredColumns.length === 1 ? "" : "s"} for
+						reference. Import updates prices, names and weight —{" "}
+						<span className="font-medium text-foreground">
+							changes to {parsed.summary.ignoredColumns.join(", ")} won't be
+							applied.
+						</span>{" "}
+						Edit those on the product itself. Stock is its own choice below.
+					</p>
+				</div>
+			) : null}
 			{parsed.errorRows.length > 0 ? (
 				<ul className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3">
 					{parsed.errorRows.map((row) => (

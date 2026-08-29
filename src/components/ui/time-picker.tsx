@@ -61,10 +61,7 @@ export function TimePicker({
 	const options: number[] = [];
 	for (let m = 0; m < MINUTES_PER_DAY; m += stepMinutes) options.push(m);
 	if (includeEndOfDay) options.push(MINUTES_PER_DAY - 1);
-	if (
-		!Number.isNaN(selectedMinutes) &&
-		!options.includes(selectedMinutes)
-	) {
+	if (!Number.isNaN(selectedMinutes) && !options.includes(selectedMinutes)) {
 		options.push(selectedMinutes);
 		options.sort((a, b) => a - b);
 	}

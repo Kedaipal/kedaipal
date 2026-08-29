@@ -76,8 +76,35 @@
 	animation: kp-marquee 28s linear infinite;
 }
 
+/* Slower + reversed — the payment logo wall's alternating rows (Mobbin-style).
+   Same keyframes: reverse direction is a property of the animation, not a
+   second keyframe set to keep in sync. */
+@utility animate-kp-marquee-slow {
+	animation: kp-marquee 45s linear infinite;
+}
+
+@utility animate-kp-marquee-slow-reverse {
+	animation: kp-marquee 45s linear infinite reverse;
+}
+
+/* Slow push-in for photo backdrops (the how-it-works step collages) —
+   alternate direction so the loop breathes instead of snapping back. */
+@keyframes kp-kenburns {
+	to {
+		transform: scale(1.08);
+	}
+}
+
+@utility animate-kp-kenburns {
+	animation: kp-kenburns 14s ease-in-out infinite alternate;
+}
+
 @media (prefers-reduced-motion: reduce) {
-	.animate-kp-marquee {
+	.animate-kp-marquee,
+	.animate-kp-marquee-slow,
+	.animate-kp-marquee-slow-reverse,
+	.animate-kp-kenburns,
+	.animate-kp-highlight-sweep {
 		animation: none;
 	}
 }
@@ -92,6 +119,23 @@
 	);
 	box-decoration-break: clone;
 	-webkit-box-decoration-break: clone;
+}
+
+/* The highlighter DRAWS itself left→right on load (hero H1). `both` fill
+   means reduced-motion's `animation: none` falls back to the fully-painted
+   highlight — never a missing one. */
+@keyframes kp-highlight-sweep {
+	from {
+		background-size: 0% 100%;
+	}
+	to {
+		background-size: 100% 100%;
+	}
+}
+
+@utility animate-kp-highlight-sweep {
+	background-repeat: no-repeat;
+	animation: kp-highlight-sweep 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.55s both;
 }
 
 /* Dashed "ticket" border */

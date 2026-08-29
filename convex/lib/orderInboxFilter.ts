@@ -4,13 +4,121 @@
 // sees" and "what they export". No Convex imports; unit-tested directly. See
 // docs/order-inbox.md + docs/invoices-receipts.md.
 
+import { attributionBucket } from "./attribution";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
-import { orderBucket, type OrderStatus } from "./orderBuckets";
+import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
+import {
+	type CsvOrder,
+	ORDER_COLUMNS,
+	orderColumnDisplay,
+} from "./orderCsv";
+
+/**
+ * Every column's rendered text for one order, lowercased and joined — the
+ * haystack free-text search runs against (86eyrtz74).
+ *
+ * Built from the SAME registry the table renders and the CSV writes, so a
+ * seller can search anything they can see. Built lazily (only when there IS a
+ * term) because it allocates ~36 strings per order.
+ *
+ * Every column participates, categories included — they are frozen onto the
+ * order at checkout, so no lookup is needed. Sellers who want the precise
+ * version of a column question reach for that column's header filter instead;
+ * this is the "I half-remember something about this order" path.
+ */
+function searchHaystack(o: CsvOrder): string {
+	let out = "";
+	for (const column of ORDER_COLUMNS) {
+		// BOTH the stored value and the on-screen wording, where they differ
+		// (86eyrtz74). A seller typing "storefront" is reading the column; one
+		// typing "received" may be reading an old export or a colleague's note.
+		// Indexing both means neither guess comes back empty.
+		for (const text of new Set([column.value(o), orderColumnDisplay(column, o)])) {
+			if (text !== "") out += `${text.toLowerCase()}\n`;
+		}
+	}
+	return out;
+}
+
+/**
+ * Every arg that NARROWS the list, as a key set the compiler forces you to keep
+ * complete: adding a field to `InboxFilterArgs` fails this object to typecheck
+ * until it is listed here too.
+ *
+ * It exists because the Pro gate in `searchOrders` decides "is this seller using
+ * the paid inbox surfaces?" by asking whether any filter is set, and that was a
+ * hand-maintained list. It silently failed OPEN the moment three filters were
+ * added without touching it (86eyrtz74) — a gate that quietly stops guarding is
+ * worse than no gate, because nothing looks wrong.
+ *
+ * Excluded on purpose: `searchText` (blank is not a search) and `showPinned`,
+ * which WIDENS the result and is all-tier because pinning is.
+ */
+const NARROWING_FILTER_KEYS: Record<
+	Exclude<keyof InboxFilterArgs, "searchText" | "showPinned">,
+	true
+> = {
+	buckets: true,
+	paymentStatuses: true,
+	paymentMethods: true,
+	methodUnspecified: true,
+	dateFrom: true,
+	dateTo: true,
+	fulfilmentWindow: true,
+	mockupPending: true,
+	statuses: true,
+	categories: true,
+	categoriesUnspecified: true,
+	sources: true,
+	attributionSources: true,
+};
+
+/** True when these args ask for anything beyond "the newest orders, unfiltered"
+ * — i.e. when the seller is using a gated inbox surface. */
+export function narrowsTheInbox(args: InboxFilterArgs): boolean {
+	if ((args.searchText ?? "").trim().length > 0) return true;
+	return Object.keys(NARROWING_FILTER_KEYS).some((key) => {
+		const value = args[key as keyof InboxFilterArgs];
+		// An empty array narrows nothing (the predicate treats it as "no filter"),
+		// so it must not trip the Pro gate either — the two answer one question.
+		if (Array.isArray(value)) return value.length > 0;
+		return value !== undefined;
+	});
+}
+
+/** True when the order carries no frozen category names at all — either
+ * recorded as empty, or predating the field. Both read as blank on screen, so
+ * both are "uncategorized" to a seller. */
+function hasNoCategories(o: CsvOrder): boolean {
+	for (const item of o.items) {
+		if ((item.categoryNames ?? []).length > 0) return false;
+	}
+	return true;
+}
+
+/** True when any of the order's lines was sold under one of `wanted`. */
+function matchesAnyCategory(o: CsvOrder, wanted: ReadonlySet<string>): boolean {
+	for (const item of o.items) {
+		for (const name of item.categoryNames ?? []) {
+			if (wanted.has(name)) return true;
+		}
+	}
+	return false;
+}
 
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
 
 export type InboxFilterArgs = {
-	bucket: InboxBucket;
+	/**
+	 * Workflow buckets to keep — MULTI since 86eyrtz74 (was one `bucket` with an
+	 * "all" sentinel). "Completed or Cancelled" — everything closed — is a real
+	 * question the single value could not ask, and every other enumerable filter
+	 * on the inbox is already a multi-select, so a seller who has learnt "tap
+	 * several chips" everywhere else expects it here too. Empty or undefined =
+	 * every bucket, which retires the "all" sentinel from this shape entirely
+	 * (the wire still accepts the old singular; see `toInboxFilterArgs`).
+	 */
+	buckets?: OrderBucket[];
 	paymentStatuses?: Array<"unpaid" | "claimed" | "received">;
 	paymentMethods?: string[];
 	methodUnspecified?: boolean;
@@ -18,28 +126,85 @@ export type InboxFilterArgs = {
 	dateTo?: number;
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
 	mockupPending?: boolean;
-	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in).
-	// Legacy orders with no stamped source read as "storefront". Undefined = no
-	// source filtering. See orders.source in convex/schema.ts.
-	source?: "storefront" | "counter";
+	/**
+	 * Exact order status (86eyrtz74), multi-select — OR within itself, AND with
+	 * everything else.
+	 *
+	 * Deliberately a SEPARATE dimension from `bucket`, not a replacement for it.
+	 * A bucket is the coarse workflow stage a seller navigates by ("what's in
+	 * progress"); this is the precise state a seller *questions* ("what is packed
+	 * or shipped — out of my hands but not delivered"), which no single bucket
+	 * expresses. They compose: bucket narrows, statuses narrow further.
+	 */
+	statuses?: OrderStatus[];
+	/**
+	 * Category names frozen on the order's lines (86eyrtz74), multi-select. An
+	 * order matches when ANY of its lines carries ANY of these names — a mixed
+	 * order belongs to every category it contains, which is what "show me the
+	 * cake orders" means to a seller with a cake and a drink on one ticket.
+	 *
+	 * Only possible because categories are frozen at checkout: a live junction
+	 * lookup per order is not something a filter predicate can afford.
+	 */
+	categories?: string[];
+	/**
+	 * Keep orders whose lines carry NO frozen categories (86eyrtz74) — the exact
+	 * twin of `methodUnspecified`, and there for the same reason.
+	 *
+	 * Without it, "select every category" silently drops every uncategorized
+	 * order, because `matchesAnyCategory` can only ever match a name. Categories
+	 * are optional, so a partially-categorized catalogue is the COMMON case, not
+	 * an edge one — and the panel was telling the seller that selecting them all
+	 * changed nothing while their list quietly shrank.
+	 */
+	categoriesUnspecified?: boolean;
+	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in)
+	// vs "claim". Legacy orders with no stamped source read as "storefront".
+	// MULTI-select since 86eyrtz74 (was one value) — "online or claim link, but
+	// not counter" is a real question and a single value can't ask it. Empty or
+	// undefined = no source filtering. See orders.source in convex/schema.ts.
+	sources?: Array<"storefront" | "counter" | "claim">;
+	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
+	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
+	// OR within the filter, ANDed with the rest), because "how did my socials
+	// do" is a question about several channels at once. Deliberately a separate
+	// dimension from `source` above: that one is the checkout SURFACE
+	// (storefront vs counter vs claim link), this one is where the buyer came
+	// FROM. Empty or undefined = no attribution filtering.
+	attributionSources?: string[];
 	searchText?: string;
+	/**
+	 * Pin privilege (86eyrtz74). When true, a PINNED order is kept even if it
+	 * fails every other rule above; when false, pins are filtered like any other
+	 * order.
+	 *
+	 * This is deliberately not "filter to pinned only". Sellers pin an order so
+	 * they can then filter the inbox to something else and compare against it —
+	 * so the pin has to survive the filter, or the feature does nothing for its
+	 * main use. Turning the toggle off is how they get a filter that means
+	 * exactly what it says. Applied by `buildInboxPredicate` so the live inbox
+	 * and the export can't diverge (the invariant this module exists for).
+	 */
+	showPinned?: boolean;
 };
 
-/** The order fields the predicate reads. A structural subset of Doc<"orders">. */
-export type FilterableOrder = {
+/**
+ * The order fields the predicate reads. A structural subset of Doc<"orders">.
+ *
+ * Built on `CsvOrder` since 86eyrtz74, because **search now runs over every
+ * column the seller can see** — address, courier, tracking number, payment
+ * reference, note, order type, origin and the rest — not just order #, name,
+ * phone and item names. One shape means the thing you can search is exactly the
+ * thing the table shows and the CSV exports; a separate, narrower search shape
+ * is how "why can't I find that order by its tracking number?" happens.
+ */
+export type FilterableOrder = CsvOrder & {
 	status: OrderStatus;
 	/** Seen-state, for the "New" bucket on push-path orders (86eyf1rck). */
 	seenAt?: number;
 	confirmationPushStatus?: string;
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
-	paymentMethod?: string;
-	source?: "storefront" | "counter";
-	createdAt: number;
-	fulfilmentDate?: number;
-	shortId: string;
-	customer: { name?: string; waPhone?: string };
-	items: Array<{ name: string; variantLabel?: string }>;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -66,14 +231,52 @@ export function buildInboxPredicate(
 			? new Set(args.paymentMethods)
 			: null;
 	const wantUnspecified = args.methodUnspecified === true;
+	const attributionSet =
+		args.attributionSources && args.attributionSources.length > 0
+			? new Set(args.attributionSources)
+			: null;
+	const bucketSet =
+		args.buckets && args.buckets.length > 0 ? new Set(args.buckets) : null;
+	const statusSet =
+		args.statuses && args.statuses.length > 0 ? new Set(args.statuses) : null;
+	const categorySet =
+		args.categories && args.categories.length > 0
+			? new Set(args.categories)
+			: null;
+	const wantUncategorized = args.categoriesUnspecified === true;
+	// `Set<string>`, not `Set<OrderSource>`: `CsvOrder.source` is a plain string
+	// (the CSV shape predates the union) and a legacy row can hold anything.
+	const sourceSet =
+		args.sources && args.sources.length > 0
+			? new Set<string>(args.sources)
+			: null;
+	const pinPrivilege = args.showPinned === true;
 	return (o) => {
+		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
+		// InboxFilterArgs.showPinned for why a pin outranks the filter.
+		if (pinPrivilege && o.pinnedAt !== undefined) return true;
 		// Bucket membership goes through the same seen-aware resolver the counts
 		// use, so the chip count and the list can't disagree: an unseen push-path
 		// order shows under "New" and NOT under "In progress" (86eyf1rck).
-		if (args.bucket !== "all" && orderBucket(o) !== args.bucket) return false;
+		if (bucketSet && !bucketSet.has(orderBucket(o))) return false;
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
+		if (statusSet && !statusSet.has(o.status)) return false;
+		// Category filter — the same shape as the method filter below: the named
+		// set ORs with the "none recorded" arm, so selecting every category plus
+		// Uncategorized genuinely matches every order.
+		if (categorySet || wantUncategorized) {
+			const byCategory = categorySet
+				? matchesAnyCategory(o, categorySet)
+				: false;
+			const byUncategorized = wantUncategorized && hasNoCategories(o);
+			if (!byCategory && !byUncategorized) return false;
+		}
 		// Source filter — legacy/undefined source reads as "storefront".
-		if (args.source !== undefined && (o.source ?? "storefront") !== args.source)
+		if (sourceSet && !sourceSet.has(o.source ?? "storefront")) return false;
+		// Marketing-origin filter — bucketed through the SAME resolver Insights
+		// reports with (attribution.ts), so a row in the by-source breakdown and
+		// the inbox it drills into can never disagree about which orders count.
+		if (attributionSet && !attributionSet.has(attributionBucket(o)))
 			return false;
 		// Undefined paymentStatus reads as "unpaid".
 		if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
@@ -93,18 +296,13 @@ export function buildInboxPredicate(
 				return false;
 		}
 		if (term.length > 0) {
-			const name = (o.customer.name ?? "").toLowerCase();
+			// Phone keeps its own rule: match on TRAILING digits, so "123456789"
+			// finds "+60123456789" however the seller stored or typed it. Plain
+			// substring matching can't do that, which is why it survives the
+			// move to the column haystack.
 			const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
-			const idHit = o.shortId.toLowerCase().includes(term);
-			const nameHit = name.length > 0 && name.includes(term);
-			// Phone: match on trailing digits (handles +60 / 0 / local-part typing).
 			const phoneHit = digits.length >= 4 && phone.endsWith(digits);
-			const itemHit = o.items.some(
-				(it) =>
-					it.name.toLowerCase().includes(term) ||
-					(it.variantLabel ?? "").toLowerCase().includes(term),
-			);
-			if (!idHit && !nameHit && !phoneHit && !itemHit) return false;
+			if (!phoneHit && !searchHaystack(o).includes(term)) return false;
 		}
 		return true;
 	};
@@ -145,10 +343,32 @@ export function compareInboxOrder(
  * newest-created first (the `by_retailer` scan order) — `recent` returns that
  * order untouched, and `due` relies on it for the within-date tiebreaker (see
  * compareInboxOrder). Always returns a fresh array; never mutates the input.
+ *
+ * Pinned orders (86eyrtz74) are partitioned to the FRONT, with the chosen sort
+ * applied independently inside each partition. It is a partition, not a sort
+ * key: pinning is orthogonal to "newest" and "due", so it must not become a
+ * third sort option competing with them, and every bucket/filter/sort
+ * combination has to put pins on top or the feature is unreliable.
+ *
+ * Within the pinned group, most-recently-pinned leads under `recent` (the pin
+ * you just made jumps to the top, which is the confirmation that it worked);
+ * under `due` the fulfilment date wins and pinned-at is only the tiebreaker,
+ * because a pinned group that ignored the due sort would be a second list
+ * obeying different rules.
  */
-export function sortInboxOrders<T extends { fulfilmentDate?: number }>(
-	orders: readonly T[],
-	sort: InboxSort,
-): T[] {
-	return sort === "due" ? [...orders].sort(compareInboxOrder) : [...orders];
+export function sortInboxOrders<
+	T extends { fulfilmentDate?: number; pinnedAt?: number },
+>(orders: readonly T[], sort: InboxSort): T[] {
+	const pinned: T[] = [];
+	const rest: T[] = [];
+	for (const o of orders) (o.pinnedAt !== undefined ? pinned : rest).push(o);
+	if (pinned.length === 0) {
+		return sort === "due" ? [...rest].sort(compareInboxOrder) : rest;
+	}
+	pinned.sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
+	if (sort === "due") {
+		pinned.sort(compareInboxOrder);
+		rest.sort(compareInboxOrder);
+	}
+	return [...pinned, ...rest];
 }

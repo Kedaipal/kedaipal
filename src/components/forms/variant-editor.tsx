@@ -19,6 +19,7 @@ import {
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
 import {
 	cartesian,
@@ -949,11 +950,16 @@ export function VariantEditor({
 		const file = files[0];
 		setUploadingCustom(true);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const body = (await res.json()) as { storageId?: unknown };
@@ -963,7 +969,7 @@ export function VariantEditor({
 				URL.revokeObjectURL(customLine.imageUrl);
 				blobUrls.current.delete(customLine.imageUrl);
 			}
-			const previewUrl = URL.createObjectURL(file);
+			const previewUrl = URL.createObjectURL(prepared.blob);
 			blobUrls.current.add(previewUrl);
 			setCustomLine({
 				imageStorageIds: [body.storageId],
@@ -981,11 +987,16 @@ export function VariantEditor({
 		const file = files[0];
 		setUploadingRow(index);
 		try {
+			const prepared = await prepareImageUpload(file);
+			if (!prepared.ok) {
+				toast.error(prepared.message);
+				return;
+			}
 			const url = await generateUploadUrl();
 			const res = await fetch(url, {
 				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
+				headers: { "Content-Type": prepared.contentType },
+				body: prepared.blob,
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			// Validate the response shape before trusting it — an error body would
@@ -994,7 +1005,7 @@ export function VariantEditor({
 			if (typeof body.storageId !== "string")
 				throw new Error("Upload failed: unexpected response");
 			revokeRowBlob(index); // drop the previous preview before replacing
-			const previewUrl = URL.createObjectURL(file);
+			const previewUrl = URL.createObjectURL(prepared.blob);
 			blobUrls.current.add(previewUrl);
 			setRow(index, {
 				imageStorageIds: [body.storageId],
@@ -1037,7 +1048,7 @@ export function VariantEditor({
 				)}
 				<input
 					type="file"
-					accept="image/*"
+					accept={IMAGE_ACCEPT}
 					disabled={uploadingRow !== null}
 					onChange={(e) => void uploadRowImage(i, e.target.files)}
 					className="hidden"
@@ -1643,7 +1654,7 @@ export function VariantEditor({
 													)}
 													<input
 														type="file"
-														accept="image/*"
+														accept={IMAGE_ACCEPT}
 														disabled={uploadingCustom}
 														onChange={(e) =>
 															void uploadCustomImage(e.target.files)

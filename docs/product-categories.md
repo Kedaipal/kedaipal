@@ -14,7 +14,29 @@ Two tables (additive, dev-only widen — no migration) + one derived field on `p
 - **`productCategories`** (junction) — `productId, categoryId, retailerId` (denormalized for the account-deletion cascade), `sortOrder` (position **within** the category, independent of the product's global sortOrder), `createdAt`. Indexes `by_product`, `by_category_sort`, `by_product_category`, `by_retailer`.
 - **`products.hiddenByCategory?`** (new) — denormalized: true when every category the product is in is hidden, so it drops off the storefront (see [Hidden categories](#hidden-categories)). No change to `orders`.
 
-Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history. They are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
+Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history.
+
+> **⚠️ Superseded for ORDERS (86eyrtz74): categories ARE now frozen onto order lines.** The paragraph above still describes the *catalogue* — a product's categories stay live, and re-categorising changes the storefront immediately. But `orders.items[].categoryNames` is stamped at checkout from the categories in force at that moment, and never changes afterwards.
+>
+> The first pass did it as a live lookup (`attachOrderCategories`, batched per export page) with the column named "Categories (current)" to flag the drift. That was wrong on four counts, and freezing fixes all of them: the inbox table and the CSV stop paying a junction fan-out per row; **free-text search can cover categories at all** (a live lookup would need a per-product read on every keystroke across the scan window); a sales report stays historically true when the seller reorganises; and it matches how every other sale-time fact on the order behaves — `pickupSnapshot`, `deliverySnapshot`, `variantLabel`, `price`.
+>
+> Note that the original rationale for *not* freezing — "so re-categorizing later can't rewrite order history" — argued for the opposite of what it produced: a live lookup is precisely what lets re-categorising rewrite what a past order appears to be.
+>
+> **Per-line, not a deduped union on the order.** The union is all today's single column needs, but it cannot attribute revenue on an order spanning two categories, and "sales by category" is the obvious next question. The union derives for free via `orderCategoryNames()` in `convex/lib/orderCsv.ts`.
+>
+> **Present means recorded — `[]` included.** An uncategorised product stamps an empty list, because "filed under nothing" is a real answer. **Absent** is reserved for orders that predate the field, so the two are always distinguishable. Both render as an empty cell; the distinction is internal, and it is what lets the backfill below terminate. Archived categories ARE included at stamp time: they name a real grouping the seller was using.
+>
+> **The backfill is opt-in, manual, and approximate.** `migrations:backfillOrderCategoryNames` fills in orders that predate the field. It necessarily stamps **today's** categorisation — there is no record of what a product was filed under last March — which is the one thing freezing exists to avoid. The first pass shipped with no backfill for exactly that reason; the owner overrode it (28 Aug), and the override is right: a permanently blank column on a store's entire history is worse than an approximate one, and the approximation is bounded to orders placed before the feature existed. Everything from that moment on is exact. It is a `npx convex run`, never something the app does on its own, and it never re-dates a line that already carries a stamp.
+>
+> ```bash
+> npx convex run migrations:backfillOrderCategoryNames
+> ```
+>
+> **Run it as part of the release**, on each deployment, or the Categories column reads as broken on every existing order.
+>
+> `categories.namesByProduct` remains and is still a live lookup — it feeds the **product** export, where live catalogue state is the correct answer.
+>
+> Categories are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
 
 ## Hidden categories
 

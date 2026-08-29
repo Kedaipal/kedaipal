@@ -91,7 +91,8 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/app/orders"),
 		);
-		expect(router.state.location.search).toEqual({ bucket: "new" });
+		// A one-element list since buckets went multi-select (86eyrtz74).
+		expect(router.state.location.search).toEqual({ bucket: ["new"] });
 	});
 
 	it("with nothing new, Orders is plain navigation (no bucket filter)", async () => {

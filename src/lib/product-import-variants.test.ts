@@ -19,9 +19,11 @@ function row(over: Partial<VariantImportRow>): VariantImportRow {
 		optionNames: [],
 		optionValues: [],
 		sku: undefined,
+		productActive: true,
 		price: 1000,
 		onHand: 1,
 		parcelWeightG: 0,
+		active: true,
 		...over,
 	};
 }
@@ -144,6 +146,8 @@ describe("groupVariantRows — auto-fill", () => {
 			productCount: 1,
 			variantCount: 4,
 			autoFilledCount: 2,
+			// groupVariantRows has no headers — parseVariantImport fills this in.
+			ignoredColumns: [],
 		});
 	});
 
@@ -351,6 +355,8 @@ describe("parseVariantImport — end to end", () => {
 			productCount: 2,
 			variantCount: 2,
 			autoFilledCount: 0,
+			// A legacy hand-made sheet carries no export-only columns (86eyrtz74).
+			ignoredColumns: [],
 		});
 		expect(res.products.every((p) => p.options.length === 0)).toBe(true);
 	});

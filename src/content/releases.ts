@@ -71,7 +71,12 @@ export type ReleaseIconName =
 	| "wallet"
 	| "megaphone"
 	| "settings"
-	| "chart";
+	| "chart"
+	// Deliberately the SAME glyph as the Table half of the Cards/Table switch in
+	// the orders header, not a generic grid icon: an announcement whose tile
+	// matches the control the seller has to find is a shorter walk than one that
+	// merely decorates the row.
+	| "table";
 
 export interface ReleaseEntry {
 	/** One line, benefit-first. Shown as the entry heading. */
@@ -105,17 +110,125 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
-		// package.json still reads 2026.08.1 — the bump happens in the
-		// staging→main release PR, by hand (docs/ci.md). Until then these notes
-		// are simply hidden: `visibleReleases` drops anything newer than the
-		// running build, which is the case the "notes for a version newer than
-		// the running build are hidden" test pins.
+		// package.json reads 2026.08.2 — the bump happens in the staging→main
+		// release PR, by hand (docs/ci.md). Until then this note is simply
+		// hidden: `visibleReleases` drops anything newer than the running build.
+		version: "2026.08.3",
+		date: "2026-08-29",
+		// Earns the modal: a seller who doesn't read it goes looking for the stock
+		// box that left the product form, and never finds out why the number
+		// stopped being something they could type.
+		notable: true,
+		entries: [
+			{
+				title: {
+					en: "Stock has its own button now — and a save can't undo your sales",
+				},
+				body: {
+					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+				icon: "package",
+			},
+			{
+				title: {
+					en: "Importing a sheet won't overwrite your stock unless you say so",
+				},
+				body: {
+					en: "A sheet you exported this morning holds this morning's counts, so importing it in the afternoon used to undo everything sold in between. Now stock is left alone unless you tick \"Update stock too\" — and when you do, we tell you how many counts it replaces and how many would go up, so a stock take still works and a price change can't cost you sales.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+		],
+	},
+	{
 		version: "2026.08.2",
-		date: "2026-08-26",
-		// The one release this year that genuinely earns the modal: a seller who
-		// doesn't read it will keep marking orders shipped believing the buyer was
-		// told, will wait on an automatic payment chase that no longer runs, and
-		// will hunt for the stock box that left the product form.
+		date: "2026-08-28",
+		// Earns the modal: the orders page a seller opens every morning now has a
+		// second view, a pin, and an export that answers questions the old one
+		// could not. A seller who reads nothing keeps exporting to Excel out of
+		// habit — which is the exact behaviour this release exists to end.
+		//
+		// This is also the FIRST release that can actually open it. 2026.08.1
+		// shipped the feature itself, so every seller was silently caught up to
+		// it (see `resolveWhatsNew`); they now hold a stored version, and this one
+		// is newer.
+		notable: true,
+		entries: [
+			{
+				title: {
+					en: "Your orders as a table — the spreadsheet view, without leaving Kedaipal",
+				},
+				body: {
+					en: "Switch between Cards and Table at the top of your orders page. Table gives you one row per order and sorts on any heading you tap. Use Columns to choose what you see and drag them into the order you want — we remember your layout for next time. It scrolls sideways on a phone, so it's there when you're on the move. Unlike a spreadsheet, what you're looking at is live, and you can still act on every order in front of you.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "table",
+			},
+			{
+				title: {
+					en: "Pin the orders you need to keep an eye on",
+				},
+				body: {
+					en: "Tap the pin on any order — on a card, a table row, or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				title: {
+					en: "See a photo of every item while you pack",
+				},
+				body: {
+					en: "Open an order and each line now carries its product photo — the variant's own picture where you've set one. Less squinting at three near-identical names to work out which box to reach for.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "package",
+			},
+			{
+				title: {
+					en: "Your order export finally has the address — and the totals add up",
+				},
+				body: {
+					en: "The download was missing where the order was going: no delivery address, no pickup point, for any order. Both are in there now, along with your categories, the payment reference, the date it was paid, and the custom-work quote that used to sit inside the total with no column of its own — so Subtotal + Custom work + Pickup fee + Delivery fee now matches Total on every order, including made-to-order ones. In Table view, Export lets you take just the columns you're looking at, or every column we hold.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				title: {
+					en: "Your product export is a full catalogue report now",
+				},
+				body: {
+					en: "It used to be only the re-upload template. It now also shows each product's categories, whether it's on your storefront and its link, stock policy and reserved stock, minimum order rules, and how many photos it has. The first eleven columns haven't moved, so editing the file and uploading it back works exactly as before — and if you edit one of the new columns, the upload screen now tells you it won't be applied instead of quietly ignoring it.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+		],
+	},
+	{
+		// The FIRST versioned release. `package.json` is already `2026.08.1` and
+		// no `v*` tag exists yet, so this one number covers everything shipping
+		// in the staging→main merge — the in-app version display and this panel
+		// included. Deliberately not split into 2026.08.1 + 2026.08.2: one
+		// deploy is one version, and a changelog claiming two releases that
+		// never separately existed makes the tag history a lie.
+		version: "2026.08.1",
+		date: "2026-08-27",
+		// Earns the modal: a seller who doesn't read it will keep marking orders
+		// shipped believing the buyer was told, and will wait on an automatic
+		// payment chase that no longer runs.
+		//
+		// KNOWN, and deliberate: nobody is actually interrupted by THIS release.
+		// The feature ships in it, so every seller has no stored version, which
+		// `resolveWhatsNew` reads as "caught up" — they are stamped silently and
+		// shown nothing. The notes are still readable in the panel; the first
+		// release that can open the modal is the next notable one.
 		notable: true,
 		entries: [
 			{
@@ -134,7 +247,17 @@ export const RELEASES: Release[] = [
 				body: {
 					en: "It shows on their order page, but nothing is sent — so if someone is expecting their order, tell them yourself. The cancel screen now says so before you confirm.",
 				},
-				icon: "clock",
+			},
+			{
+				title: {
+					en: "Payment reminders are yours to send now",
+				},
+				body: {
+					en: 'We\'ve stopped chasing unpaid orders automatically. Instead, an unpaid order shows a "Send payment reminder" button from day 11 — once a day, up to day 14. You choose who gets nudged and when, and nothing goes out behind your back.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "megaphone",
 			},
 			{
 				title: {
@@ -149,40 +272,74 @@ export const RELEASES: Release[] = [
 			},
 			{
 				title: {
-					en: "Payment reminders are yours to send now",
+					en: "Send the rest of checkout to your buyer — built for live selling",
 				},
 				body: {
-					en: "We've stopped chasing unpaid orders automatically. Instead, an unpaid order shows a \"Send payment reminder\" button from day 11 — once a day, up to day 14. You choose who gets nudged and when, and nothing goes out behind your back.",
+					en: 'Key what they claimed at the counter — items, quantity, the price you called out — add their phone number, and tap "Send to buyer". They get a WhatsApp link to a ready-made checkout where all they fill in is address and date. The price you keyed is locked, and you choose how long they have, from 10 minutes to a day. Your stock only leaves the shelf when they finish, and if they never pay, the order cancels itself and the stock comes back. Works just as well for phone orders and DM quotes.',
+				},
+				href: "/app/checkout",
+				hrefLabel: { en: "Open counter checkout" },
+				icon: "clock",
+			},
+			{
+				title: {
+					en: "Change a price on the spot at the counter",
+				},
+				body: {
+					en: "Tap any price in the counter cart to key what you actually agreed — a discount, a top-up, a rounded-off cash price. Your usual price stays visible with a line through it, in the cart and again on the confirm screen, so a mis-typed figure is easy to spot before you submit. Reset puts it back.",
+				},
+				href: "/app/checkout",
+				hrefLabel: { en: "Open counter checkout" },
+			},
+			{
+				title: {
+					en: "See which orders came from TikTok, your bio link, or your poster",
+				},
+				body: {
+					en: "Your Home page now has ready-made links you can copy in one tap — one per place you post. Orders that arrive through them are labelled, so you can filter your orders by where they came from, and see the revenue behind each one. The labelling works on every plan, so your history is already building; the revenue breakdown in Insights is a Pro feature.",
+				},
+				href: "/app/insights",
+				hrefLabel: { en: "See where orders come from" },
+				icon: "chart",
+			},
+			{
+				title: {
+					en: "Your storefront loads much faster on a phone",
+				},
+				body: {
+					en: "Photos are now resized for the screen they're shown on instead of sending the full-size original, so a customer on mobile data sees your products in a fraction of the time — and far fewer of them give up on a page that won't load. Photos you upload from now on are shrunk automatically too, and if one can't be shown on the web at all (iPhone HEIC files are the usual culprit) we tell you at upload, instead of leaving a broken picture on your storefront.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Check your photos" },
+			},
+			{
+				title: {
+					en: "Moving your store to Singapore is guided, not blocked",
+				},
+				body: {
+					en: "Changing your store's country used to be refused outright, or quietly clear settings you'd spent time on. Now it goes through, and you get a short checklist of what still needs your attention — the currency your prices show in, your delivery setup, the address printed on parcel labels. Each item takes you straight to the card that fixes it.",
+				},
+				href: "/app/settings?tab=store",
+				hrefLabel: { en: "Open store settings" },
+				icon: "settings",
+			},
+			{
+				title: {
+					en: "Find your version — and this list — in the same place",
+				},
+				body: {
+					en: "Tap \"More\" on your phone, or look at the bottom of the sidebar on a computer. You'll find which version of Kedaipal you're running, with one-tap copy — send us that number when you ask for help and we'll know exactly what you're seeing. \"What's new\" sits right there too, and shows a dot when there's something you haven't read.",
+				},
+			},
+			{
+				title: {
+					en: "Your customers' payment screenshots stay in your dashboard",
+				},
+				body: {
+					en: "When a customer says they've paid, the email we send you now points you to your dashboard to view their receipt, instead of carrying the image itself — so forwarding that email no longer hands their screenshot to whoever receives it. Our privacy policy has been rewritten to match, spelling out exactly what's stored and who handles it. That's the policy your checkout links to, so it's worth a read.",
 				},
 				href: "/app/orders",
 				hrefLabel: { en: "Open orders" },
-				icon: "megaphone",
-			},
-			{
-				icon: "package",
-				title: {
-					en: "Stock has its own button now — and a save can't undo your sales",
-				},
-				body: {
-					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
-				},
-				href: "/app/products",
-				hrefLabel: { en: "Open products" },
-			},
-		],
-	},
-	{
-		version: "2026.08.1",
-		date: "2026-08-25",
-		notable: false,
-		entries: [
-			{
-				title: {
-					en: "See which version of Kedaipal you're running",
-				},
-				body: {
-					en: "Open the More menu (or the sidebar on a computer) and you'll find the version at the bottom, with a one-tap copy. If you ever message us for help, sending that number tells us exactly what you're seeing.",
-				},
 			},
 		],
 	},

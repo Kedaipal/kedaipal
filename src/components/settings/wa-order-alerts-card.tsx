@@ -96,9 +96,7 @@ export function WaOrderAlertsCard({
 	function normalizedPhone(): string | null {
 		const parsed = waPhoneCheckoutSchema[country].safeParse(phone);
 		if (!parsed.success) {
-			setPhoneError(
-				parsed.error.issues[0]?.message ?? MOBILE_MESSAGE[country],
-			);
+			setPhoneError(parsed.error.issues[0]?.message ?? MOBILE_MESSAGE[country]);
 			return null;
 		}
 		setPhoneError(null);
@@ -142,8 +140,8 @@ export function WaOrderAlertsCard({
 					Get a WhatsApp from Kedaipal the moment a{" "}
 					<span className="font-medium text-foreground">new order</span> lands,
 					when a buyer says{" "}
-					<span className="font-medium text-foreground">they&apos;ve paid</span>,
-					and when an{" "}
+					<span className="font-medium text-foreground">they&apos;ve paid</span>
+					, and when an{" "}
 					<span className="font-medium text-foreground">
 						online payment lands
 					</span>{" "}
@@ -179,9 +177,8 @@ export function WaOrderAlertsCard({
 						{optedOut ? (
 							<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								This number previously replied <b>STOP</b> to Kedaipal&apos;s
-								WhatsApp, so alerts to it are suppressed. Reply{" "}
-								<b>START</b> to Kedaipal&apos;s number from that phone to
-								receive them again.
+								WhatsApp, so alerts to it are suppressed. Reply <b>START</b> to
+								Kedaipal&apos;s number from that phone to receive them again.
 							</p>
 						) : null}
 					</div>
@@ -213,7 +210,12 @@ export function WaOrderAlertsCard({
 									className="h-11"
 									onClick={() => {
 										setEditingNumber(false);
-										setPhone(toNationalPhoneInput(currentPhone || fallbackPhone, country));
+										setPhone(
+											toNationalPhoneInput(
+												currentPhone || fallbackPhone,
+												country,
+											),
+										);
 										setPhoneError(null);
 									}}
 								>
@@ -241,7 +243,12 @@ export function WaOrderAlertsCard({
 									variant="outline"
 									className="h-11"
 									onClick={() => {
-										setPhone(toNationalPhoneInput(currentPhone || fallbackPhone, country));
+										setPhone(
+											toNationalPhoneInput(
+												currentPhone || fallbackPhone,
+												country,
+											),
+										);
 										setEditingNumber(true);
 									}}
 								>

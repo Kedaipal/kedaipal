@@ -19,6 +19,46 @@ export const PRODUCT_IMPORT_REQUIRED_COLUMNS = [
 
 export const PRODUCT_IMPORT_OPTIONAL_COLUMNS = ["sku", "description"] as const;
 
+/**
+ * Columns the product EXPORT adds for reporting that this parser does not read
+ * (86eyrtz74) — categories, storefront visibility, order rules, stock policy…
+ *
+ * Listed here, not imported from `product-export.ts`, on purpose: this module
+ * is the import contract and must not depend on the export's shape. Kept in
+ * sync by a test that asserts the two lists match.
+ *
+ * `bulkUpsert` never writes these fields, so re-importing an exported sheet
+ * cannot clobber them — but it cannot apply an edit to them either. The import
+ * screen names them rather than letting a seller retype a category and watch
+ * nothing happen.
+ */
+const EXPORT_ONLY_COLUMN_NAMES = [
+	"currency",
+	"categories",
+	// NOTE: `variant_status` and `product_status` are deliberately NOT here —
+	// they are the two report columns the import reads back, so a round-trip
+	// cannot resurrect a deactivated variant or an archived product. See
+	// VariantImportRow.active / .productActive.
+	"storefront",
+	"product_url",
+	"min_order_qty",
+	"min_notice_days",
+	"stock_policy",
+	"needs_mockup",
+	"custom_line",
+	"reserved",
+	"photos",
+] as const;
+
+/**
+ * Which report-only columns this sheet carries — i.e. which of the seller's
+ * edits will NOT be applied. Empty for a hand-made sheet or an older export.
+ */
+export function exportOnlyColumnsPresent(headers: string[]): string[] {
+	const present = new Set(headers.map((h) => h.trim().toLowerCase()));
+	return EXPORT_ONLY_COLUMN_NAMES.filter((c) => present.has(c));
+}
+
 export const PRODUCT_IMPORT_COLUMNS = [
 	"sku",
 	"name",
@@ -238,6 +278,30 @@ export interface VariantImportRow {
 	// undefined = the weight cell was blank → preserve the existing variant's
 	// weight on update (server falls back to 0 on insert). See validateVariantRow.
 	parcelWeightG: number | undefined;
+	/**
+	 * Read from the export's `variant_status` column (86eyrtz74). Absent column
+	 * or any value other than "inactive" → true, so every hand-made sheet and
+	 * every pre-existing export behaves exactly as before.
+	 *
+	 * This exists for ROUND-TRIP FIDELITY, not as an editable field. The export
+	 * now includes variants the seller built and switched off; without reading
+	 * this back, the create path (`insertVariants`: `active ?? true`) would
+	 * resurrect them live and purchasable at their old price — export a
+	 * catalogue, import it into a second store, and the switched-off variants
+	 * come back on. The update path never patches `active` at all, so an
+	 * existing product's variant state is untouched either way.
+	 */
+	active: boolean;
+	/**
+	 * Read from the export's `product_status` column (86eyrtz74) — the sibling
+	 * of `active` above, and there for exactly the same reason. Absent column or
+	 * any value other than "archived" → true.
+	 *
+	 * A product-level flag on a VARIANT row because that is the grain the sheet
+	 * has; the grouping takes it from the first row of each product, the same
+	 * way `name` and `description` are taken.
+	 */
+	productActive: boolean;
 }
 
 export interface GroupedVariant {
@@ -252,6 +316,10 @@ export interface GroupedVariant {
 export interface GroupedProductImport {
 	name: string;
 	description: string | undefined;
+	/** From the export's `product_status` (86eyrtz74). Consumed on the CREATE
+	 * path only — the update path never patches `active`, so an existing
+	 * product's archived state is untouched by an import either way. */
+	active: boolean;
 	options: { name: string; values: string[] }[];
 	variants: GroupedVariant[];
 	autoFilledCount: number;
@@ -265,6 +333,12 @@ export interface GroupedImportResult {
 		productCount: number;
 		variantCount: number;
 		autoFilledCount: number;
+		/**
+		 * Report-only columns this sheet carries (86eyrtz74) — present when the
+		 * seller is re-importing an export. Edits to these are NOT applied, so
+		 * the screen says so rather than letting the change vanish.
+		 */
+		ignoredColumns: string[];
 	};
 }
 
@@ -366,6 +440,14 @@ export function validateVariantRow(
 	if (errors.length > 0) return { rowNumber, raw, errors };
 
 	const groupingKey = (handle.length > 0 ? handle : name).toLowerCase();
+	// Only the exact word "inactive" switches a row off — anything else (blank,
+	// missing column, "active", junk) reads as active, so a malformed cell can
+	// never silently hide a variant the seller meant to sell.
+	const active = (raw.variant_status ?? "").trim().toLowerCase() !== "inactive";
+	// Same rule for the product's own status: only the exact word "archived"
+	// switches it off, so a malformed cell can never silently hide a product.
+	const productActive =
+		(raw.product_status ?? "").trim().toLowerCase() !== "archived";
 	return {
 		rowNumber,
 		groupingKey,
@@ -377,6 +459,8 @@ export function validateVariantRow(
 		price,
 		onHand,
 		parcelWeightG,
+		active,
+		productActive,
 	};
 }
 
@@ -511,7 +595,10 @@ export function buildVariantGrid(
 				price: r.price,
 				onHand: r.onHand,
 				parcelWeightG: r.parcelWeightG,
-				active: true,
+				// Was hardcoded `true`, which resurrected deactivated variants on
+				// the create path once the export started including them
+				// (86eyrtz74). See VariantImportRow.active.
+				active: r.active,
 			};
 		autoFilled++;
 		return {
@@ -595,6 +682,10 @@ export function groupVariantRows(
 		products.push({
 			name,
 			description,
+			// Product-level, so taken from the group's first row like name and
+			// description. A sheet that disagrees row-to-row is a sheet whose
+			// product-level cells disagree; first-row-wins is already the rule.
+			active: first.productActive,
 			options: axes.options,
 			variants: grid.variants,
 			autoFilledCount: grid.autoFilled,
@@ -609,6 +700,7 @@ export function groupVariantRows(
 			productCount: products.length,
 			variantCount,
 			autoFilledCount: autoFilledTotal,
+			ignoredColumns: [],
 		},
 	};
 }
@@ -638,7 +730,12 @@ export function parseVariantImport(
 					],
 				},
 			],
-			summary: { productCount: 0, variantCount: 0, autoFilledCount: 0 },
+			summary: {
+				productCount: 0,
+				variantCount: 0,
+				autoFilledCount: 0,
+				ignoredColumns: [],
+			},
 		};
 	}
 
@@ -664,6 +761,10 @@ export function parseVariantImport(
 	return {
 		products: grouped.products,
 		errorRows: [...errorRows, ...grouped.errorRows],
-		summary: grouped.summary,
+		// Headers are only known here, not inside groupVariantRows.
+		summary: {
+			...grouped.summary,
+			ignoredColumns: exportOnlyColumnsPresent(headers),
+		},
 	};
 }

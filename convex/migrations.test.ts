@@ -217,3 +217,200 @@ describe("backfillVariantFlags migration", () => {
 		expect(variant.requiresProof).toBe(false);
 	});
 });
+
+describe("backfillOrderCategoryNames", () => {
+	/** A store with one categorised product, plus a placed order whose lines have
+	 * been stripped of `categoryNames` — exactly the shape of an order that
+	 * predates the field. */
+	async function seedLegacyOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: "user_mig" });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kek Lapis",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 2500, onHand: 50 }],
+		});
+		const { categoryId: kuih } = await asUser.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Kuih",
+			slug: "kuih",
+		});
+		const { categoryId: best } = await asUser.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Bestseller",
+			slug: "bestseller",
+		});
+		await asUser.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [kuih, best],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		// Rewind to the pre-field shape: strip the stamp the create path just made.
+		const orderId = await t.run(async (ctx) => {
+			const order = await ctx.db
+				.query("orders")
+				.filter((q) => q.eq(q.field("shortId"), shortId))
+				.first();
+			if (!order) throw new Error("seed failed");
+			await ctx.db.patch(order._id, {
+				items: order.items.map(({ categoryNames: _drop, ...rest }) => rest),
+				updatedAt: 1000,
+			});
+			return order._id;
+		});
+		return { retailer, asUser, productId, orderId };
+	}
+
+	function readOrder(t: ReturnType<typeof setup>, orderId: Id<"orders">) {
+		return t.run((ctx) => ctx.db.get(orderId));
+	}
+
+	test("stamps today's categories onto an order that predates the field", async () => {
+		const t = setup();
+		const { orderId } = await seedLegacyOrder(t);
+
+		await t.mutation(internal.migrations.backfillOrderCategoryNames, {});
+
+		const after = await readOrder(t, orderId);
+		expect(after?.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
+	});
+
+	test("does NOT bump updatedAt — recording metadata isn't a change to the sale", async () => {
+		const t = setup();
+		const { orderId } = await seedLegacyOrder(t);
+
+		await t.mutation(internal.migrations.backfillOrderCategoryNames, {});
+
+		const after = await readOrder(t, orderId);
+		expect(after?.updatedAt).toBe(1000);
+	});
+
+	test("records an uncategorised product as an empty list, so it is never rescanned", async () => {
+		const t = setup();
+		const { orderId, productId, asUser } = await seedLegacyOrder(t);
+		// Strip the product's categories BEFORE the backfill runs.
+		await asUser.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+
+		await t.mutation(internal.migrations.backfillOrderCategoryNames, {});
+
+		const after = await readOrder(t, orderId);
+		// Present-and-empty, not absent: the next run skips this order entirely.
+		expect(after?.items[0].categoryNames).toEqual([]);
+	});
+
+	test("is idempotent — a second run never re-dates an order", async () => {
+		const t = setup();
+		const { orderId, productId, asUser } = await seedLegacyOrder(t);
+
+		await t.mutation(internal.migrations.backfillOrderCategoryNames, {});
+		// The seller reorganises the catalogue AFTER the catch-up. A second run
+		// must not overwrite what is now a frozen record.
+		await asUser.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+		const second = await t.mutation(
+			internal.migrations.backfillOrderCategoryNames,
+			{},
+		);
+
+		expect(second.patched).toBe(0);
+		const after = await readOrder(t, orderId);
+		expect(after?.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
+	});
+
+	test("fills the gaps in a half-stamped order without re-dating its stamped lines", async () => {
+		// The case `every` (rather than `some`) exists for: an order interrupted
+		// mid-run, or one whose lines were added at different times. Only the
+		// unstamped line may be written.
+		const t = setup();
+		const { retailer, productId, asUser, orderId } = await seedLegacyOrder(t);
+		const otherId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Karipap",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			variants: [{ optionValues: [], price: 500, onHand: 50 }],
+		});
+		// Put the FIRST line back to a frozen state, leave the second bare.
+		await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			if (!order) throw new Error("seed failed");
+			const line = order.items[0];
+			await ctx.db.patch(orderId, {
+				items: [
+					{ ...line, categoryNames: ["Raya 2024"] },
+					{ ...line, productId: otherId, name: "Karipap" },
+				],
+			});
+		});
+		// Today's catalogue disagrees with the frozen line.
+		await asUser.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+
+		await t.mutation(internal.migrations.backfillOrderCategoryNames, {});
+
+		const after = await readOrder(t, orderId);
+		expect(after?.items[0].categoryNames).toEqual(["Raya 2024"]);
+		expect(after?.items[1].categoryNames).toEqual([]);
+	});
+
+	test("touches only the legacy orders, not ones already frozen at checkout", async () => {
+		const t = setup();
+		const { retailer, productId, asUser } = await seedLegacyOrder(t);
+		// A second, modern order — stamped by the create path — placed after the
+		// catalogue changed. The catch-up must not drag it back to today's names.
+		await asUser.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Bala", waPhone: "60129998888" },
+			deliveryAddress: {
+				line1: "9 Jln Melur",
+				city: "Shah Alam",
+				state: "Selangor",
+				postcode: "40000",
+			},
+		});
+
+		const run = await t.mutation(
+			internal.migrations.backfillOrderCategoryNames,
+			{},
+		);
+
+		expect(run.patched).toBe(1); // the legacy order only
+		const modern = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.filter((q) => q.eq(q.field("shortId"), shortId))
+				.first(),
+		);
+		expect(modern?.items[0].categoryNames).toEqual([]);
+	});
+});

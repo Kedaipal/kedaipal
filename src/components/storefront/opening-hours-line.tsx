@@ -113,9 +113,7 @@ export function OpeningHoursLine({
 									{isToday ? " · Today" : ""}
 								</span>
 								<span
-									className={
-										day?.closed ? "text-muted-foreground" : undefined
-									}
+									className={day?.closed ? "text-muted-foreground" : undefined}
 								>
 									{!day || day.closed ? "Closed" : formatDayWindow(day)}
 								</span>
