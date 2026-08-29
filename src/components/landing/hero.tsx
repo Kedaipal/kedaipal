@@ -2,7 +2,10 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, BellOff, Check } from "lucide-react";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 import { m } from "../../paraglide/messages";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
 import { HeroDevice } from "./hero-device";
 import { ctaPillClass, GuaranteeLine, Marquee, Sticker } from "./landing-ui";
 
@@ -145,6 +148,7 @@ function PhoneStage() {
 export function Hero() {
 	const { isSignedIn } = useAuth();
 	const shouldReduceMotion = useReducedMotion();
+	const supportWa = useSupportWaNumber();
 
 	return (
 		<section id="top" className="relative overflow-hidden bg-hero-mesh">
@@ -210,11 +214,36 @@ export function Hero() {
 					{/* Exactly one primary button on the page (86eye3p6z §C). The old
 					    slug-claim form and the founding-spot pill are now text links in
 					    their own sections, so the visitor is never asked to choose
-					    between three different commitments. */}
+					    between three different commitments.
+
+					    "Book a demo" rides beside it as an OUTLINE pill — the same
+					    two-up the closing CTA uses, so the mint pill is still the only
+					    primary. It moved here when the nav's right cluster was cut back
+					    to three controls (owner, 29 Aug): a demo is a real intent for a
+					    seller who wants a person before a trial, and it should be
+					    answerable above the fold rather than only after scrolling the
+					    whole page. Signed-in sellers don't see it — they're already
+					    customers.
+
+					    The row/stack breakpoints zig-zag on purpose: the hero is one
+					    column until `md`, so two pills fit side by side at `sm`, but at
+					    `md` the grid splits and the text column narrows to roughly 370px
+					    — too tight for both, which wrapped EACH pill's label onto two
+					    lines. So it stacks again through `md` and only returns to a row
+					    at `lg`. No `whitespace-nowrap`: `final_cta` is 29 characters in
+					    Malay and would overflow a 320px screen.
+
+					    Both pills are `w-full` on a phone and `sm:w-fit` above it —
+					    the hero CTA is the page's main thumb target, so it takes the
+					    full column there, but a full-bleed pill on a desktop-width
+					    column would read as a banner, not a button. */}
 					<motion.div variants={revealUp} className="flex flex-col gap-3">
 						{isSignedIn ? (
 							<>
-								<Link to="/app" className={`${ctaPillClass("accent")} w-fit`}>
+								<Link
+									to="/app"
+									className={`${ctaPillClass("accent")} w-full sm:w-fit`}
+								>
 									{m.nav_go_to_dashboard()}
 									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
 								</Link>
@@ -225,14 +254,25 @@ export function Hero() {
 							</>
 						) : (
 							<>
-								<Link
-									to="/sign-up/$"
-									params={{ _splat: "" }}
-									className={`${ctaPillClass("accent")} w-fit`}
-								>
-									{m.final_cta()}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</Link>
+								<div className="flex flex-col gap-3 sm:flex-row sm:items-center md:flex-col md:items-start lg:flex-row lg:items-center">
+									<Link
+										to="/sign-up/$"
+										params={{ _splat: "" }}
+										className={`${ctaPillClass("accent")} w-full sm:w-fit`}
+									>
+										{m.final_cta()}
+										<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+									</Link>
+									<a
+										href={buildWaContactLink(m.demo_wa_message(), supportWa)}
+										target="_blank"
+										rel="noopener noreferrer"
+										className={`${ctaPillClass("outline")} w-full sm:w-fit`}
+									>
+										<WhatsAppIcon className="size-4" />
+										{m.book_demo_cta()}
+									</a>
+								</div>
 								<GuaranteeLine className="max-w-md text-[13px] leading-relaxed text-muted-foreground" />
 								<div className="flex flex-wrap gap-x-5 gap-y-2">
 									<Link
