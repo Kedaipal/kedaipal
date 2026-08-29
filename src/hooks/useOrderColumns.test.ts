@@ -179,6 +179,53 @@ describe("useOrderColumns — widths", () => {
 		}
 	});
 
+	it("flushes a pending width write on unmount (PR #233 review)", () => {
+		// 300ms is easily short enough to lose a resize to a click on the nav.
+		// The cleanup used to just clearTimeout, silently dropping the write the
+		// comment claimed it was saving.
+		vi.useFakeTimers();
+		try {
+			const { result, unmount } = renderHook(() => useOrderColumns(STORE));
+			act(() => result.current.setWidths({ total: 321 }));
+			expect(window.localStorage.getItem(WKEY)).toBeNull();
+			unmount();
+			expect(parseStoredWidths(window.localStorage.getItem(WKEY))).toEqual({
+				total: 321,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("the flush writes under the store it was resized for, not the loading key", () => {
+		// The cleanup effect has [] deps, so it only ever sees the FIRST
+		// retailerId — which is "" while the retailer query is in flight.
+		// Flushing from captured values would file the layout under the empty
+		// key and lose it just as thoroughly as dropping it.
+		vi.useFakeTimers();
+		try {
+			const { result, unmount, rerender } = renderHook(
+				({ id }) => useOrderColumns(id),
+				{ initialProps: { id: "" } },
+			);
+			rerender({ id: STORE });
+			act(() => result.current.setWidths({ total: 275 }));
+			unmount();
+			expect(parseStoredWidths(window.localStorage.getItem(WKEY))).toEqual({
+				total: 275,
+			});
+			expect(window.localStorage.getItem("kp:orders:colwidths:")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("unmounting with nothing pending writes nothing", () => {
+		const { unmount } = renderHook(() => useOrderColumns(STORE));
+		unmount();
+		expect(window.localStorage.getItem(WKEY)).toBeNull();
+	});
+
 	it("reset clears widths as well as the column set — a half-undo is worse than none", () => {
 		window.localStorage.setItem(KEY, JSON.stringify(["total"]));
 		window.localStorage.setItem(WKEY, JSON.stringify({ total: 240 }));

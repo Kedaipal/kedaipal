@@ -77,4 +77,23 @@ describe("resolveInboxView", () => {
 		expect(resolveInboxView("cards", "table")).toBe("cards");
 		expect(resolveInboxView("table", "cards")).toBe("table");
 	});
+
+	it("a seller without the inbox feature always gets cards (PR #233 review)", () => {
+		// The dead end this closes: a Pro seller whose plan lapses kept their
+		// remembered `view=table`, landed in a table whose header funnels wrote
+		// filters `searchOrders` refuses to honour for a Starter — and the
+		// cards/table toggle lives inside the gated header actions, so there was
+		// no way back to cards through the UI at all.
+		expect(resolveInboxView("table", "table", false)).toBe("cards");
+		expect(resolveInboxView(undefined, "table", false)).toBe("cards");
+		// Even an explicit, hand-typed URL loses to the gate.
+		expect(resolveInboxView("table", null, false)).toBe("cards");
+	});
+
+	it("gating hides the table without forgetting the choice", () => {
+		// Storage is untouched by the gate, so upgrading puts the seller straight
+		// back where they were rather than silently demoting them to cards.
+		expect(resolveInboxView(undefined, "table", false)).toBe("cards");
+		expect(resolveInboxView(undefined, "table", true)).toBe("table");
+	});
 });

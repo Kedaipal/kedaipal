@@ -158,6 +158,16 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 	]);
 	const [widths, setWidthsState] = useState<OrderColumnWidths>({});
 	const widthTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	/**
+	 * The debounced write, as a closure that already captured BOTH the widths and
+	 * the retailer they belong to. Held so unmount can run it early.
+	 *
+	 * A closure rather than the values: the cleanup effect has `[]` deps, so it
+	 * only ever sees the FIRST `retailerId` — which is `""` while the retailer
+	 * query is in flight. Flushing from captured values would write the seller's
+	 * layout under the empty-string key and lose it just as thoroughly.
+	 */
+	const pendingWidthWrite = useRef<(() => void) | null>(null);
 
 	// Hydrate after mount (never during render) so the server and the first
 	// client paint agree, matching useSidebarCollapsed.
@@ -166,11 +176,15 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		setWidthsState(readInitialWidths(retailerId));
 	}, [retailerId]);
 
-	// A drag that ends with the seller immediately navigating away must still be
-	// saved, so the pending write is flushed rather than cleared on unmount.
+	// A drag that ends with the seller navigating away inside the debounce window
+	// must still be saved, so unmount FLUSHES the pending write rather than
+	// dropping it — 300ms is easily short enough to lose a resize to a click on
+	// the nav, and a width that silently doesn't stick is worse than one that
+	// never persisted at all.
 	useEffect(
 		() => () => {
 			if (widthTimer.current) clearTimeout(widthTimer.current);
+			pendingWidthWrite.current?.();
 		},
 		[],
 	);
@@ -179,7 +193,11 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		(next: OrderColumnWidths) => {
 			setWidthsState(next);
 			if (widthTimer.current) clearTimeout(widthTimer.current);
-			widthTimer.current = setTimeout(() => {
+			const write = () => {
+				// Cleared first: the flush path and the timer path must not both run,
+				// and whichever gets there first has written the latest value.
+				pendingWidthWrite.current = null;
+				widthTimer.current = null;
 				try {
 					window.localStorage.setItem(
 						widthKey(retailerId),
@@ -188,7 +206,9 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 				} catch {
 					// localStorage unavailable (private mode, quota) — keep in-memory.
 				}
-			}, WIDTH_PERSIST_MS);
+			};
+			pendingWidthWrite.current = write;
+			widthTimer.current = setTimeout(write, WIDTH_PERSIST_MS);
 		},
 		[retailerId],
 	);

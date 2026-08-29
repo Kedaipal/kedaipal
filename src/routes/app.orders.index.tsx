@@ -407,7 +407,20 @@ function OrdersRoute() {
 	const { stored: storedView, remember: rememberView } = useInboxView(
 		retailer?._id ?? "",
 	);
-	const view = resolveInboxView(urlView, storedView);
+	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
+	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
+	// export are the gated inbox surfaces — hidden below, and any stale URL filters
+	// are ignored so the query only ever sends default args (the server enforces
+	// the same line in searchOrders). Admin act-as sees through it.
+	//
+	// Declared HERE, above the view resolution, because the table is one of those
+	// gated surfaces: see resolveInboxView for why a gated seller is put back in
+	// cards rather than left in a table whose filters do nothing.
+	const inboxEnabled =
+		!retailer ||
+		retailer.actingAsAdmin === true ||
+		hasFeature(retailer.subscription, "orderInbox");
+	const view = resolveInboxView(urlView, storedView, inboxEnabled);
 
 	const bucketKey = buckets.join(",");
 	const payKey = pay.join(",");
@@ -448,16 +461,6 @@ function OrdersRoute() {
 		// Toggling pin privilege changes which rows are in the set.
 		nopin,
 	]);
-
-	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
-	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
-	// export are the gated inbox surfaces — hidden below, and any stale URL filters
-	// are ignored so the query only ever sends default args (the server enforces
-	// the same line in searchOrders). Admin act-as sees through it.
-	const inboxEnabled =
-		!retailer ||
-		retailer.actingAsAdmin === true ||
-		hasFeature(retailer.subscription, "orderInbox");
 
 	// Permanent hard delete (single + bulk) is admin-only (Kedaipal support); a
 	// plain seller only ever cancels. Same shared gate as order detail — see

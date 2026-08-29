@@ -76,16 +76,31 @@ export function useInboxView(retailerId: string): InboxViewState {
 }
 
 /**
- * Which layout to render, given what the URL asked for and what this seller was
- * last in.
+ * Which layout to render, given what the URL asked for, what this seller was
+ * last in, and whether they can have the table at all.
  *
- * Precedence, in one place so it can't drift: a view NAMED in the URL always
- * wins (a shared or bookmarked link opens the layout it was sent in), otherwise
- * the remembered one, and cards only for a seller who has never chosen.
+ * Precedence, in one place so it can't drift: **a seller without the Order
+ * Inbox feature always gets cards**, then a view NAMED in the URL (a shared or
+ * bookmarked link opens the layout it was sent in), then the remembered one,
+ * and cards for a seller who has never chosen.
+ *
+ * The plan gate leads because the table IS a gated inbox surface, not a display
+ * mode of the all-tier list: its header filters write URL params that
+ * `searchOrders` refuses to honour for a Starter, and the cards/table toggle
+ * lives inside the gated header actions. Without this, a Pro seller whose plan
+ * lapses kept their remembered `view=table` and landed in a table whose funnels
+ * wrote filters that changed nothing — with the toggle hidden, so no way back
+ * to cards. Matches the posture the route already takes with stale URL filters:
+ * ignore them rather than half-honour them.
+ *
+ * The stored preference is deliberately NOT cleared when gated — it is still
+ * what they chose, and upgrading should put them back in the table.
  */
 export function resolveInboxView(
 	urlView: InboxView | undefined,
 	stored: InboxView | null,
+	inboxEnabled = true,
 ): InboxView {
+	if (!inboxEnabled) return "cards";
 	return urlView ?? stored ?? "cards";
 }

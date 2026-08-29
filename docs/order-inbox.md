@@ -118,6 +118,16 @@ WhatsApp.
 
 - **Two views, not three.** The existing card list *is* the list view; a third
   mode would be a menu with nothing behind it.
+- **The table is a GATED inbox surface, not a display mode of the all-tier
+  list.** `resolveInboxView` takes the plan gate first: a seller without the
+  Order Inbox feature gets cards whatever the URL or their remembered choice
+  says. Its header filters write URL params `searchOrders` refuses to honour
+  below Pro, and the cards/table toggle lives inside the gated header actions —
+  so without this a Pro seller whose plan lapsed kept `view=table`, landed in a
+  table whose funnels changed nothing, and had no way back to cards (PR #233
+  review). Same posture the route already takes with stale URL filters: ignore
+  them rather than half-honour them. The stored preference is **not** cleared by
+  the gate — upgrading puts the seller straight back in the table.
 - **The chosen view is remembered** per store on this device
   (`useInboxView`, `kp:orders:view:<retailerId>`), the same storage posture as
   the column layout beside it. The layout is how a seller reads their business,
@@ -239,6 +249,12 @@ WhatsApp.
     handle makes column width unreachable without a mouse, and the keyboard path
     is ~10 lines. It costs one tab stop per column, sitting immediately after
     that column's sort button, which reads as coherent rather than as noise.
+  - **Unmount flushes a pending width write**, it does not drop it: the 300ms
+    debounce is easily short enough to lose a resize to a click on the nav. The
+    flush runs a closure that captured both the widths and the retailer they
+    belong to — the cleanup effect has `[]` deps and would otherwise only ever
+    see the first `retailerId`, which is `""` while the retailer query is in
+    flight (PR #233 review).
   - `columnResizeMode: "onChange"`, so the column follows the pointer. `"onEnd"`
     is cheaper but means dragging a border does nothing visible until you let
     go — the opposite of what a spreadsheet does. The localStorage write is
