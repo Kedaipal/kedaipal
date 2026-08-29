@@ -125,6 +125,20 @@ describe("usePostHog", () => {
 		expect(captureMock).not.toHaveBeenCalled();
 	});
 
+	// /claim carries the STRONGER capability: orderClaims.commit writes a real
+	// order and decrements stock. It joined the predicate in PR #227 review.
+	it("does not boot on the buyer claim page either", async () => {
+		envState.key = "phc_abc123";
+		routerState.pathname = "/claim/8f3c09b1a7e24d5c9b0e";
+		const Harness = await loadHarness();
+
+		render(<Harness />);
+		await settle();
+
+		expect(initMock).not.toHaveBeenCalled();
+		expect(captureMock).not.toHaveBeenCalled();
+	});
+
 	it("boots once the visitor leaves the tracking page", async () => {
 		envState.key = "phc_abc123";
 		routerState.pathname = "/track/8f3c09b1a7e24d5c9b0e";

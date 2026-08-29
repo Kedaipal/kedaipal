@@ -63,7 +63,12 @@ export async function parseProductsXlsx(
 			errorRows: [
 				{ rowNumber: 0, raw: {}, errors: ["Workbook has no worksheets"] },
 			],
-			summary: { productCount: 0, variantCount: 0, autoFilledCount: 0 },
+			summary: {
+				productCount: 0,
+				variantCount: 0,
+				autoFilledCount: 0,
+				ignoredColumns: [],
+			},
 		};
 	}
 

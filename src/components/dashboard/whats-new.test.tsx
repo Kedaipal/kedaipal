@@ -18,7 +18,9 @@ vi.mock("convex/react", () => ({ useMutation: () => markSeen }));
 let pathname = "/app";
 vi.mock("@tanstack/react-router", () => ({
 	useLocation: () => ({ pathname }),
-	Link: ({ children }: { children: React.ReactNode }) => <a href="/">{children}</a>,
+	Link: ({ children }: { children: React.ReactNode }) => (
+		<a href="/">{children}</a>
+	),
 }));
 
 // The running version — the component reads APP_VERSION, which is "dev" under
@@ -46,10 +48,9 @@ const QUIET: Release = {
 };
 
 vi.mock("../../content/releases", async () => {
-	const actual =
-		await vi.importActual<typeof import("../../content/releases")>(
-			"../../content/releases",
-		);
+	const actual = await vi.importActual<typeof import("../../content/releases")>(
+		"../../content/releases",
+	);
 	return {
 		...actual,
 		get RELEASES() {
@@ -303,8 +304,10 @@ describe("WhatsNew — entry keys", () => {
 		const keyWarning = spy.mock.calls.find((args) =>
 			args.some((a) => typeof a === "string" && a.includes("same key")),
 		);
-		expect(keyWarning, `React warned about duplicate keys: ${keyWarning?.[0]}`)
-			.toBeUndefined();
+		expect(
+			keyWarning,
+			`React warned about duplicate keys: ${keyWarning?.[0]}`,
+		).toBeUndefined();
 		spy.mockRestore();
 
 		// Both entries still render, with their own bodies.

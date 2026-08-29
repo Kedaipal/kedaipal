@@ -1,6 +1,6 @@
 {
   "name": "kedaipal",
-  "version": "2026.08.1",
+  "version": "2026.08.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.0",
@@ -51,6 +51,7 @@
     "clsx": "^2.1.1",
     "convex": "^1.34.1",
     "date-fns": "^4.4.0",
+    "embla-carousel-react": "^8.6.0",
     "exceljs": "^4.4.0",
     "framer-motion": "^12.38.0",
     "lucide-react": "^0.545.0",

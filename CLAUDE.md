@@ -29,6 +29,44 @@ The product owner is the **CTO / sole dev**; decisions we make together should p
 - **Always ship code + tests + docs together** as the baseline (see existing memory). Tests prove the easement holds; docs keep the next person oriented.
 - **No lazy / convenient placement — own the structure.** Never park a feature wherever code already happens to exist, append a new option to the end of a list, or reuse the nearest tab/section just because it's less work. Decide _where_ something belongs (information architecture, tab/section, list position, naming) by **meaning and urgency**, and proactively restructure when the right home doesn't exist yet (e.g. a new settings tab). The CTO should not have to point out that an order-flow setting doesn't belong under "WhatsApp", or that an urgent filter shouldn't sit last — get it right the first time and state the reasoning. When you touch adjacent lazy patterns (hardcoded duplicates, stale copy), fix them in passing rather than matching them.
 
+## Ship grade-A UI the FIRST time — no "we'll polish it later"
+
+**Standing rule, every UI change, no exceptions.** A UI that merely works is not
+done. Shipping functional-but-unconsidered UI and waiting for the CTO to say
+"that's ugly" has happened repeatedly (the inbox toolbar, the filter dialog, the
+column picker) and each time cost a second round that should never have existed.
+**The design pass happens before it is called done, not after someone complains.**
+
+- **Look at it.** [`docs/design-system.md`](./docs/design-system.md) already says
+  Tailwind written blind is a guess — render it and *see* it. If a surface is
+  behind Clerk and can't be reached, build a harness or inject the real classes
+  into a running page. "I couldn't see it" is not a reason to ship it unseen.
+- **Design the states, not just the happy path.** Empty, loading, one item, too
+  many items, zero results, error, disabled-with-reason. A feature that only
+  looks right with three rows of ideal data is half-built.
+- **Bulk affordances are part of the design, not an enhancement.** Any list of
+  more than ~5 tickable things needs select-all / clear, and per-group controls
+  wherever the list has groups. Making someone click 22 checkboxes by hand is a
+  design failure, not a missing feature request.
+- **A parent that summarises children is TRI-STATE.** All / none / some — with a
+  real indeterminate mark and `aria-checked="mixed"`. A parent box that reads
+  unchecked while 3 of 7 children are on is telling the user something false.
+- **One idea, one control.** If two surfaces express the same concept, they use
+  the same component. Chips in one panel and checkbox rows in another for the
+  identical filter is how an app starts looking like two apps.
+- **Actions carry their consequence.** "Reset" doesn't say what it undoes;
+  "Clear all (3)" does. "Done" doesn't say what happens; "Show 6 orders" does.
+  Panels state what is currently on, at the top, removable in place.
+- **A constraint is surfaced, never enforced silently.** If the last column
+  can't be hidden, say so where the seller is clicking — don't just make the
+  click do nothing.
+- **Match the house.** Reach for `src/components/ui/` primitives before writing
+  markup; semantic tokens, never raw colors; ≥44px touch targets; the mobile
+  layout is designed, not inherited.
+
+If a change genuinely warrants mockups (a new surface, a redesign), produce them
+and ask — that is not slowing down, it is the cheaper half of the loop.
+
 ## Definition of Done — ship PR-ready, every time
 
 Every change must land in a state that would **pass PR review on the first read**, so review becomes a rubber-stamp, not a rework loop. Before calling anything done, it must clear this bar — no "I'll clean it up later":
@@ -37,6 +75,10 @@ Every change must land in a state that would **pass PR review on the first read*
 - **Code + tests + docs in the same change** (existing baseline). Tests cover the happy path _and_ the failure/edge states the change introduces; docs (`docs/*.md` + any CLAUDE.md status line) keep the next person oriented.
 - **Green gates:** typecheck, lint, and the full test suite pass locally before it's "done" (run `/ship` or the equivalent). No new warnings introduced. No `any`/`@ts-ignore`/dead code/commented-out blocks/stray `console.log` left behind.
 - **End-to-end human flow covered** (per "How we decide"): every new state has UI/copy/email/bot-reply on both sides, sensible defaults, disabled-with-reason over wrong-but-enabled, and the feature is discoverable where it's used.
+- **UI changes clear the grade-A bar above** before "done" — states designed,
+  bulk affordances present, controls consistent with the rest of the app, and
+  actually looked at. A UI round-trip because it shipped unconsidered is a
+  failed Definition of Done, not normal iteration.
 - **Self-review the diff** as a reviewer would: naming and structure match surrounding code, no scope creep, no unrelated churn, migrations are safe (widen→migrate→narrow), secrets/prod untouched. If something is a deliberate trade-off or a follow-up, **call it out in the summary** rather than leaving it for review to catch.
 - **Branch from `staging`, never `main`.** Every new branch/worktree bases on `origin/staging` (fetch it first — e.g. `git worktree add -b <branch> <path> origin/staging`). `main` is downstream of `staging`; branching off `main` also leaves the branch tracking `origin/main`, so a bare `git push` can land on main. After the first push, confirm the upstream tracks the **feature branch**, not `origin/main`/`origin/staging`. Never push directly to `main` or `staging`.
 - **Convex specifics:** new validators/indexes are correct and used; reads stay on indexes (no full scans on hot paths); schema changes follow the dev-only, migration-safe path.
@@ -74,6 +116,7 @@ Pricing, business model, and founder/entity details: see [`PROJECT_CONTEXT.md`](
 
 ## Recently Shipped (post-MVP)
 
+- **Order workspace depth — complete exports, a desktop table view, item thumbnails, pinned orders** ✅ (ClickUp `86eyrtz74`, dev) — four Hermoolah items shipped as one story: the inbox wasn't a place a seller could live in, so they exported to Excel. **`convex/lib/orderCsv.ts` is now a COLUMN REGISTRY** (36 entries: key, label, group, width, accessor) driving BOTH the CSV and the new table — two lists would drift on the first addition, and "the table replaces the export" is only true if they can't. Closed the reported gaps (the export had **no destination column at all**, delivery or self-collect) plus an arithmetic hole the file already admitted: the mockup quote folds into `total` with no column, so `Subtotal + Pickup fee + Delivery fee` silently failed to reconcile on every made-to-order order; the money run is now adjacent and a test pins it. `Categories (current)` is a deliberate **live lookup** (categories are never frozen onto an order line); `trackingToken` is excluded and a test enforces it. **Table view is desktop-only, gated in JS** (`useIsDesktop`) not just CSS, or a shared `?view=table` link hands a phone 36 columns; columns persist per store in localStorage; export becomes a two-item menu (visible / all columns), never a dialog. **Pinning** (`orders.pinnedAt`) has three owner rules: **never auto-unpin**, **a pin outranks the filter** while the Pinned chip is on (sellers pin to compare against a filtered view), and **pinned-first is a partition, not a sort option**. All-tier. The **product export** gained the same treatment — 13 report columns (categories, storefront state, stock policy, reserved, photos, order rules) after the 11 unchanged import-template ones; the import ignores them, so `exportOnlyColumnsPresent()` makes the import screen say which edits won't apply rather than no-op'ing silently. See [`docs/order-inbox.md`](./docs/order-inbox.md) + [`docs/bulk-product-upload-roadmap.md`](./docs/bulk-product-upload-roadmap.md).
 - **Storefront source attribution — `?src=` finally consumed, "orders from TikTok" in Insights** ✅ (ClickUp `86eyq0eq9`, dev) — the TikTok Live measurement layer: `?src=`/`utm_source` on any of the four buyer routes persists per-store in sessionStorage for the session (last-touch: a later tagged hit overwrites, untagged navigation never clears) and checkout stamps it as **`orders.attributionSource`** (optional string, no index — the `orders.source` posture; absence = direct, so nothing backfills). One pure shared module **`convex/lib/attribution.ts`** owns sanitize (lowercase, `[a-z0-9_-]`, cap 32; absent/blank → unset, **present-but-garbage → `"other"`** — a tampered tag must not masquerade as direct, and a bad tag never blocks checkout), labels, presets and `attributionBucket` (stamped tag → `counter` → `direct`). **Counter-checkout orders are never stamped** — their bucket derives from the existing `orders.source`, so the Counter row costs zero writes. **Free-form tags allowed** (`?src=raya-promo` renders verbatim; known tags get pretty labels — TikTok, Poster QR = `online`, Parcel label QR = `awb` (the despatch-label emitter the ticket missed, now counted for free), reserved `tiktok-live` for claim links `86eyq0epn`). Report = **`sources` on both insights queries** (bucketed over EARNED revenue so Σ rows === the earned KPI, riding the existing bounded scan + Pro gate; capture stays all-tier so a Starter's history is complete on upgrade day) → `SourceBreakdown` bar list beside the payment donut, whose all-direct state IS the discoverability surface (names the `?src=` mechanic, links the poster). Sellers **filter the inbox by origin** ("Came from" multi-select — a separate dimension from the existing Online/Counter "Order type"; chips come from `searchOrders.availableSources`, tallied over the FULL window so filtering one origin never shrinks the picker, ties broken alphabetically so it can't reshuffle; `?asrc=` in the URL; CSV export honours it via the shared predicate), and **every Insights source row drills into that filtered inbox** in one tap. Tagged links are built in **exactly one place — the Home store-link card** (`tagged-share-links.tsx`, a 4-up grid of brand-glyph tiles — CC0 Simple Icons marks inlined in `brand-icons.tsx` rather than adding a dep, decorative since each button already names itself, brand hex hardcoded because external identities must not drift with our theme; the pressed tile turns into a tick so confirmation lands under the thumb — one-tap copy of `?src=tiktok|instagram|facebook|whatsapp` from the shared `SHARE_TAG_PRESETS`, stamping the same `linkSharedAt` share signal, all-tier like capture). **Deliberately NOT on any QR surface** (owner call, Arif, 26 Aug): a campaign-tagged poster QR was built and reverted — a printed sheet outlives the campaign that produced it, so it would misattribute every later scan; the poster keeps its fixed `?src=counter`/`?src=online` and `StorefrontQrDialog` is untouched, both byte-identical to before. A QR scan is therefore always attributable to the SURFACE (poster / parcel label / counter), never a campaign. `storefront_badge` deliberately stays out (it tags kedaipal.com — Kedaipal's own CAC, `86eye3eyp`); GA/Clarity + the `/track/*` carve-out untouched. See [`docs/source-attribution.md`](./docs/source-attribution.md).
 The full chronological record — what shipped, why it was built that way, what was deliberately rejected, and which trap was found — lives in **[`docs/shipped-log.md`](./docs/shipped-log.md)** (62 entries, newest first). Feature-level reference detail lives in the `docs/*.md` each entry links; [`docs/README.md`](./docs/README.md) is the index.
 

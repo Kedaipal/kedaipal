@@ -164,6 +164,25 @@ describe("the shipped RELEASES content", () => {
 		}
 	});
 
+	test("the newest entry never claims a version this build isn't running", () => {
+		// The failure this guards is invisible at runtime by design: a release PR
+		// that adds notes but forgets the `package.json` bump ships notes for a
+		// version nobody is on, and `releasesInBuild` filters them out silently —
+		// so the release announces NOTHING and looks like it worked. `<=` rather
+		// than `===` because most releases earn no entry at all (see
+		// docs/whats-new.md), which legitimately leaves the newest note behind the
+		// running version.
+		const version = JSON.parse(
+			readFileSync(join(__dirname, "../../package.json"), "utf8"),
+		).version as string;
+		const newest = RELEASES[0];
+		if (newest === undefined) return;
+		expect(
+			compareCalendarVersions(newest.version, version),
+			`the newest release note is ${newest.version} but package.json is ${version} — bump package.json in this release PR`,
+		).toBeLessThanOrEqual(0);
+	});
+
 	test("has no duplicate versions", () => {
 		const seen = new Set(RELEASES.map((r) => r.version));
 		expect(seen.size).toBe(RELEASES.length);
@@ -188,9 +207,10 @@ describe("the shipped RELEASES content", () => {
 		for (const r of RELEASES) {
 			for (const e of r.entries) {
 				if (e.href === undefined) continue;
-				expect(e.href.startsWith("/app"), `${e.href} must start with /app`).toBe(
-					true,
-				);
+				expect(
+					e.href.startsWith("/app"),
+					`${e.href} must start with /app`,
+				).toBe(true);
 			}
 		}
 	});
@@ -205,10 +225,9 @@ describe("the shipped RELEASES content", () => {
 		// precedent) so a route rename breaks the note in CI rather than in a
 		// seller's face.
 		//
-		// NOTE what this deliberately cannot check: the query string. A link to
-		// `/app/settings` passes here even when the feature lives behind
-		// `?tab=fulfilment`, so pointing at the RIGHT part of a page stays an
-		// authoring judgement — see docs/whats-new.md.
+		// This checks the PATH only. `?tab=` is checked by the next test;
+		// whether that tab is the right one for the feature stays an authoring
+		// judgement — see docs/whats-new.md.
 		const routeTree = readFileSync(
 			join(__dirname, "../routeTree.gen.ts"),
 			"utf8",
@@ -220,6 +239,41 @@ describe("the shipped RELEASES content", () => {
 				expect(
 					routeTree.includes(`'${path}'`),
 					`${e.href} points at ${path}, which is not a route in routeTree.gen.ts`,
+				).toBe(true);
+			}
+		}
+	});
+
+	test("every `?tab=` deep link names a settings tab that exists", () => {
+		// `/app/settings` is the one destination where the path alone doesn't
+		// locate the feature — the page is six tabs, and an unrecognised `tab`
+		// silently falls back to Store. So a typo (`?tab=fulfillment`) or a tab
+		// renamed out from under a note reads as "the feature moved" to the
+		// seller, with nothing failing anywhere.
+		//
+		// Read as text, like the route tree above, rather than imported:
+		// `app.settings.tsx` is a route module and pulling it into a unit test
+		// drags the whole settings page with it.
+		const settingsSource = readFileSync(
+			join(__dirname, "../routes/app.settings.tsx"),
+			"utf8",
+		);
+		const declared = settingsSource.match(
+			/type SettingsTab =\s*([\s\S]*?);/,
+		)?.[1];
+		expect(declared, "could not find the SettingsTab union").toBeDefined();
+		const tabs = [...(declared as string).matchAll(/"([a-z-]+)"/g)].map(
+			(m) => m[1],
+		);
+		expect(tabs.length).toBeGreaterThan(1);
+
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				const tab = new URLSearchParams(e.href?.split("?")[1] ?? "").get("tab");
+				if (tab === null) continue;
+				expect(
+					tabs.includes(tab),
+					`${e.href} names tab "${tab}", which is not one of: ${tabs.join(", ")}`,
 				).toBe(true);
 			}
 		}

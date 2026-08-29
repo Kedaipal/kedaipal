@@ -31,7 +31,7 @@ import {
 	UNRENDERABLE_PROOF_MESSAGE,
 } from "./lib/imageContentType";
 import { requireCustomerName } from "./lib/customer";
-import { assertPlanFeature } from "./subscriptions";
+import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 import {
 	recordOrderCancelled,
 	recordOrderCreated,
@@ -59,17 +59,28 @@ import {
 	minQuantityMessage,
 } from "./lib/minOrderRules";
 import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
-import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
+import {
+	type CsvOrder,
+	orderCategoryNames,
+	ordersToCsv,
+} from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
 	manualReminderEligibility,
 } from "./lib/paymentReminder";
 import {
 	buildInboxPredicate,
-	compareInboxOrder,
+	narrowsTheInbox,
 	type InboxFilterArgs,
 	needsMockup,
+	sortInboxOrders,
 } from "./lib/orderInboxFilter";
+import {
+	extendedPaymentDue,
+	isPaymentWindowLocked,
+	PAYMENT_WINDOW_LOCK_REASON,
+	paymentDeadlineApplies,
+} from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
 	computeOrderTotals,
@@ -127,7 +138,9 @@ import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
-const addressValidator = v.object({
+// Shared with convex/orderClaims.ts (claim-link commit runs the same
+// storefront validation + delivery resolution — one author for both paths).
+export const addressValidator = v.object({
 	line1: v.string(),
 	line2: v.optional(v.string()),
 	city: v.string(),
@@ -213,7 +226,7 @@ function blockedDeliveryMessage(
  *    setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
-function resolveDeliveryForOrder(
+export function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
 	address:
@@ -297,7 +310,7 @@ function resolveDeliveryForOrder(
  * (a cheap-nearby-pin quote can't be replayed against a far delivery
  * address; ~11 m tolerance absorbs float noise, not geography).
  */
-async function loadCheckoutDeliveryQuote(
+export async function loadCheckoutDeliveryQuote(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
@@ -326,7 +339,9 @@ async function loadCheckoutDeliveryQuote(
 	};
 }
 
-function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
+export function buildPickupSnapshot(
+	location: Doc<"pickupLocations">,
+): PickupSnapshot {
 	return {
 		label: location.label,
 		address: location.address,
@@ -368,6 +383,8 @@ type OrderItemSnapshot = {
 	variantLabel?: string;
 	price: number;
 	quantity: number;
+	/** Categories the product was filed under at sale time (86eyrtz74). */
+	categoryNames?: string[];
 };
 
 /**
@@ -976,6 +993,8 @@ export const create = mutation({
 				variantLabel: label || undefined,
 				price: variant.price,
 				quantity: item.quantity,
+				// Filled in below, once per distinct product.
+				categoryNames: undefined as string[] | undefined,
 			});
 			ruleItems.push({
 				productId: variant.productId,
@@ -990,6 +1009,22 @@ export const create = mutation({
 				quantity: item.quantity,
 				isCustom: variant.isCustom === true,
 			});
+		}
+
+		// Freeze the categories each product was filed under at this moment
+		// (86eyrtz74). One junction read per DISTINCT product — paid once, here,
+		// instead of on every export row and every search keystroke forever.
+		const categoryNames = await resolveCategoryNames(
+			ctx,
+			snapshotItems.map((i) => i.productId),
+		);
+		for (const line of snapshotItems) {
+			// Always stamped, `[]` included: PRESENT means "we recorded what this
+			// product was filed under when it sold" — and "filed under nothing" is
+			// a real answer. Absent is reserved for orders that predate the field
+			// (and the backfill), so the two never look alike. Both render as an
+			// empty cell, so this is an internal distinction only.
+			line.categoryNames = categoryNames.get(line.productId) ?? [];
 		}
 
 		const itemSubtotal = snapshotItems.reduce(
@@ -1843,9 +1878,62 @@ const MAX_INBOX_SCAN = 1000;
 // Checkout-surface filter value, shared by the live inbox (`searchOrders`) and
 // the CSV export so the two can't drift. Matches orders.source; legacy orders
 // (no stamped source) read as "storefront" in the predicate.
+/**
+ * The filter args as the WIRE carries them — `InboxFilterArgs` plus the
+ * pre-widen singular `source` (86eyrtz74), still accepted so a bookmarked URL
+ * or a client that hasn't reloaded keeps filtering.
+ */
+type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
+	source?: "storefront" | "counter" | "claim";
+	sources?: Array<"storefront" | "counter" | "claim">;
+	/** Pre-multi singular bucket, "all" sentinel included (86eyrtz74). */
+	bucket?: "all" | "new" | "in_progress" | "completed" | "cancelled";
+	buckets?: Array<"new" | "in_progress" | "completed" | "cancelled">;
+};
+
+/**
+ * Fold the legacy singular `source` into `sources`, in ONE place.
+ *
+ * This exists because the export used to reach the predicate through a blanket
+ * `as InboxFilterArgs` cast, which would have silently dropped `source` the
+ * moment the field was widened — the export quietly returning more rows than
+ * the seller was looking at, which is precisely the divergence
+ * `lib/orderInboxFilter.ts` exists to prevent. A cast is not a conversion.
+ */
+function toInboxFilterArgs({
+	source,
+	bucket,
+	...rest
+}: InboxFilterInput): InboxFilterArgs {
+	return {
+		...rest,
+		sources: rest.sources ?? (source ? [source] : undefined),
+		// The old singular carried an "all" sentinel; the multi shape says the
+		// same thing by absence.
+		buckets:
+			rest.buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+	};
+}
+
+/** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
+ * worth a name. */
+function bump(tally: Map<string, number>, key: string): void {
+	tally.set(key, (tally.get(key) ?? 0) + 1);
+}
+
+// One workflow bucket, for the MULTI filter (86eyrtz74) — no "all" member:
+// "every bucket" is said by omitting the arg, not by a sentinel inside it.
+const orderBucketValidator = v.union(
+	v.literal("new"),
+	v.literal("in_progress"),
+	v.literal("completed"),
+	v.literal("cancelled"),
+);
+
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
+	v.literal("claim"),
 );
 
 /**
@@ -1858,13 +1946,15 @@ const orderSourceValidator = v.union(
 export const searchOrders = query({
 	args: {
 		retailerId: v.id("retailers"),
-		bucket: v.union(
-			v.literal("all"),
-			v.literal("new"),
-			v.literal("in_progress"),
-			v.literal("completed"),
-			v.literal("cancelled"),
+		// Pre-multi singular ("all" sentinel included), still accepted so a
+		// bookmarked URL or an in-flight client keeps working; the handler folds
+		// it into `buckets` via toInboxFilterArgs. Drop it a release on.
+		bucket: v.optional(
+			v.union(v.literal("all"), orderBucketValidator),
 		),
+		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
+		// real question one value couldn't ask. Empty/absent = every bucket.
+		buckets: v.optional(v.array(orderBucketValidator)),
 		paymentStatuses: v.optional(
 			v.array(
 				v.union(
@@ -1900,6 +1990,21 @@ export const searchOrders = query({
 		// Checkout surface: "storefront" (online) vs "counter" (walk-in). Legacy
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
+	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
+	// bucket is the coarse stage a seller navigates by; this is the precise one
+	// they question ("packed OR shipped"). Driven from the Status column header.
+	statuses: v.optional(v.array(statusValidator)),
+	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
+	// ANY line carries ANY of these. Free-form names (the seller's own
+	// catalogue), so v.string(); the picker is driven by `availableCategories`.
+	categories: v.optional(v.array(v.string())),
+	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
+	// without which "select every category" silently drops them (86eyrtz74).
+	categoriesUnspecified: v.optional(v.boolean()),
+	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
+	// accepted so a bookmarked URL or an in-flight client from before the widen
+	// keeps working; the handler folds it into `sources`. Drop it a release on.
+	sources: v.optional(v.array(orderSourceValidator)),
 		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
 		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
 		// ANDs with the rest. Free-form by design (sellers invent their own
@@ -1907,6 +2012,12 @@ export const searchOrders = query({
 		// driven by `availableSources` below. Distinct dimension from `source`.
 		attributionSources: v.optional(v.array(v.string())),
 		searchText: v.optional(v.string()),
+		// Pin privilege (86eyrtz74): keep PINNED orders in the result even when
+		// they fail the filters above. On by default in the UI — the seller pins
+		// an order so they can filter to something else and still compare against
+		// it. Not a plan-gated inbox feature (see the gate below): pinning is
+		// all-tier, so its visibility rule has to be too.
+		showPinned: v.optional(v.boolean()),
 		// Max rows to return. OMIT it for the inbox: the query then returns the
 		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
 		// subscription, and the client paginates by slicing that window — so
@@ -1919,6 +2030,7 @@ export const searchOrders = query({
 		{
 			retailerId,
 			bucket,
+			buckets,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -1927,8 +2039,13 @@ export const searchOrders = query({
 			fulfilmentWindow,
 			mockupPending,
 			source,
+			sources,
+			statuses,
+			categories,
+			categoriesUnspecified,
 			attributionSources,
 			searchText,
+			showPinned,
 			limit,
 		},
 	) => {
@@ -1940,19 +2057,31 @@ export const searchOrders = query({
 		// filters, search) require the feature. Admin act-as bypasses, same as
 		// the soft-lock. The Starter UI hides these controls; this is the
 		// defense-in-depth backstop.
-		const usesInboxFeatures =
-			bucket !== "all" ||
-			paymentStatuses !== undefined ||
-			paymentMethods !== undefined ||
-			methodUnspecified !== undefined ||
-			dateFrom !== undefined ||
-			dateTo !== undefined ||
-			fulfilmentWindow !== undefined ||
-			mockupPending !== undefined ||
-			source !== undefined ||
-			attributionSources !== undefined ||
-			(searchText !== undefined && searchText.trim().length > 0);
-		if (usesInboxFeatures && !access.actingAsAdmin)
+		//
+		// Built ONCE and used for both the gate and the predicate, so the thing
+		// being gated and the thing being applied cannot be different sets of
+		// filters. `narrowsTheInbox` is compiler-enforced complete — see
+		// NARROWING_FILTER_KEYS.
+		const filters = toInboxFilterArgs({
+			bucket,
+			buckets,
+			paymentStatuses,
+			paymentMethods,
+			methodUnspecified,
+			dateFrom,
+			dateTo,
+			fulfilmentWindow,
+			mockupPending,
+			source,
+			sources,
+			statuses,
+			categories,
+			categoriesUnspecified,
+			attributionSources,
+			searchText,
+			showPinned,
+		});
+		if (narrowsTheInbox(filters) && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
 
 		const all = await ctx.db
@@ -1985,6 +2114,13 @@ export const searchOrders = query({
 			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
 			 */
 			readyToShip: 0,
+			/**
+			 * Orders the seller has pinned (86eyrtz74). Counted over the FULL set
+			 * like every other count, so the Pinned chip states the real total and
+			 * doesn't shrink as the seller filters — the chip is the only standing
+			 * reminder that a pin set exists at all, given pins never auto-clear.
+			 */
+			pinned: 0,
 		};
 		// Which marketing origins actually appear in this seller's window
 		// (86eyq0eq9). Tallied over the FULL scan like `counts` — never over the
@@ -1992,6 +2128,18 @@ export const searchOrders = query({
 		// the picker. Free-form tags mean the filter UI cannot hardcode a list;
 		// this is that list, and it costs nothing (we already hold every row).
 		const sourceTally = new Map<string, number>();
+		// Per-option counts for the column header filters (86eyrtz74), tallied
+		// over the SAME full window and by the same rule: a picker that shrank as
+		// you used it would make the seller think orders had vanished. Showing the
+		// count next to each option is most of what makes a header filter usable —
+		// it answers "is there anything in there?" before you commit to the click.
+		const statusTally = new Map<string, number>();
+		const categoryTally = new Map<string, number>();
+		const checkoutSourceTally = new Map<string, number>();
+		const paymentStatusTally = new Map<string, number>();
+		// "" is the count of orders with no recorded method, which the picker
+		// offers as "Unspecified" — a real answer, not a gap.
+		const paymentMethodTally = new Map<string, number>();
 
 		for (const o of all) {
 			const b = orderBucket(o);
@@ -2016,30 +2164,37 @@ export const searchOrders = query({
 				counts.unpaidAmount += o.total;
 			}
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
+			if (o.pinnedAt !== undefined) counts.pinned++;
+			bump(statusTally, o.status);
+			bump(checkoutSourceTally, o.source ?? "storefront");
+			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
+			bump(paymentMethodTally, o.paymentMethod ?? "");
+			// An order counts ONCE per category it contains, never once per line —
+			// a two-cake order is one order in the "Cakes" filter, and the count
+			// beside the option has to be the number of rows it will show.
+			const names = orderCategoryNames(o);
+			// "" is the count of orders carrying NO categories, which the picker
+			// offers as "Uncategorized" — the paymentMethod tally's own convention.
+			// Categories are optional, so this is a real and often large answer,
+			// not a gap.
+			if (names.length === 0) bump(categoryTally, "");
+			for (const name of names) bump(categoryTally, name);
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
 		// exact same rules (see lib/orderInboxFilter.ts).
-		const filtered = all.filter(
-			buildInboxPredicate({
-				bucket,
-				paymentStatuses,
-				paymentMethods,
-				methodUnspecified,
-				dateFrom,
-				dateTo,
-				fulfilmentWindow,
-				mockupPending,
-				source,
-				attributionSources,
-				searchText,
-			}),
-		);
-		// Returned newest-created first (the scan order) — the inbox's default
+		const filtered = all.filter(buildInboxPredicate(filters));
+		// Pinned first, then newest-created (the scan order) — the inbox's default
 		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
-		// over this stable window (sortInboxOrders), so toggling never re-queries.
+		// over this stable window (the same `sortInboxOrders`), so toggling never
+		// re-queries; the non-pinned tail keeps its createdAt-desc order, which is
+		// what that client-side `due` sort uses as its tiebreaker.
 		// See docs/order-inbox.md ("Sort"). Export sorts independently.
-		const sorted = filtered;
+		//
+		// Partitioning HERE and not only on the client is what makes `limit`
+		// safe: a counts-only caller trims the payload, and a pin must never be
+		// the row that gets trimmed away.
+		const sorted = sortInboxOrders(filtered, "recent");
 
 		// No `limit` → return the full window (the inbox slices client-side, so
 		// its subscription args stay stable across "Load more"). A supplied limit
@@ -2058,6 +2213,27 @@ export const searchOrders = query({
 			availableSources: [...sourceTally.entries()]
 				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 				.map(([key]) => key),
+			// Category names present in this window, most-used first with an
+			// alphabetical tie-break — the `availableSources` rule, for the same
+			// reason: a picker that reshuffles under the seller is worse than one
+			// in a slightly arbitrary but stable order.
+			// Named categories only — the "" (uncategorized) tally lives in the
+			// facets, and the picker appends its option last rather than sorting
+			// an absence in among real names.
+			availableCategories: [...categoryTally.entries()]
+				.filter(([key]) => key !== "")
+				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+				.map(([key]) => key),
+			// Per-option row counts for the header filters. Plain objects rather
+			// than Maps so they cross the wire.
+			facets: {
+				status: Object.fromEntries(statusTally),
+				category: Object.fromEntries(categoryTally),
+				source: Object.fromEntries(checkoutSourceTally),
+				paymentStatus: Object.fromEntries(paymentStatusTally),
+				paymentMethod: Object.fromEntries(paymentMethodTally),
+				attribution: Object.fromEntries(sourceTally),
+			},
 			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
 			// 1,000 are outside the window, so the list AND counts under-report.
 			// The inbox surfaces this in a footer; export is the full-history path.
@@ -2079,13 +2255,9 @@ export const searchOrders = query({
 // Reusable validators for the inbox-filter args, shared by the export action and
 // its internal page query so the two can't drift.
 const exportFilterValidators = {
-	bucket: v.union(
-		v.literal("all"),
-		v.literal("new"),
-		v.literal("in_progress"),
-		v.literal("completed"),
-		v.literal("cancelled"),
-	),
+	// Same widen-with-legacy shape as searchOrders — see the note there.
+	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
+	buckets: v.optional(v.array(orderBucketValidator)),
 	paymentStatuses: v.optional(
 		v.array(
 			v.union(
@@ -2112,7 +2284,26 @@ const exportFilterValidators = {
 	),
 	mockupPending: v.optional(v.boolean()),
 	source: v.optional(orderSourceValidator),
+	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
+	// bucket is the coarse stage a seller navigates by; this is the precise one
+	// they question ("packed OR shipped"). Driven from the Status column header.
+	statuses: v.optional(v.array(statusValidator)),
+	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
+	// ANY line carries ANY of these. Free-form names (the seller's own
+	// catalogue), so v.string(); the picker is driven by `availableCategories`.
+	categories: v.optional(v.array(v.string())),
+	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
+	// without which "select every category" silently drops them (86eyrtz74).
+	categoriesUnspecified: v.optional(v.boolean()),
+	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
+	// accepted so a bookmarked URL or an in-flight client from before the widen
+	// keeps working; the handler folds it into `sources`. Drop it a release on.
+	sources: v.optional(v.array(orderSourceValidator)),
 	searchText: v.optional(v.string()),
+	// Pin privilege (86eyrtz74) — kept in the SHARED validator set so an export
+	// of a filtered view contains exactly the rows the seller was looking at,
+	// forced-in pins included. See InboxFilterArgs.showPinned.
+	showPinned: v.optional(v.boolean()),
 } as const;
 
 // Bookkeeping exports paginate the FULL result set in bounded pages — they must
@@ -2124,28 +2315,117 @@ const exportFilterValidators = {
 const EXPORT_PAGE_SIZE = 500;
 const EXPORT_SCAN_CAP = 20_000;
 
-/** Project an order to the lean shape the CSV needs (drops heavy fields). */
+/**
+ * Project an order to the shape the column registry reads (drops the heavy and
+ * the secret: storage ids, gateway/push plumbing, and above all `trackingToken`
+ * — the capability for the buyer's no-auth tracking page, which must never
+ * reach a spreadsheet). `categories` is filled in separately by the caller (see
+ * `attachOrderCategories`) because it needs extra reads.
+ */
 function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 	return {
 		shortId: o.shortId,
 		createdAt: o.createdAt,
 		fulfilmentDate: o.fulfilmentDate,
+		fulfilmentTimeMinutes: o.fulfilmentTimeMinutes,
 		status: o.status,
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
+		paymentReference: o.paymentReference,
+		paymentReceivedAt: o.paymentReceivedAt,
 		deliveryMethod: o.deliveryMethod,
 		deliveryDirection: o.deliveryDirection,
+		source: o.source,
+		attributionSource: o.attributionSource,
 		customer: o.customer,
+		// `items` already carries the frozen `categoryNames` per line — nothing
+		// to resolve, which is the whole point of freezing at create.
 		items: o.items,
 		subtotal: o.subtotal,
+		mockupQuotedAmount: o.mockupQuotedAmount,
 		pickupFee: o.pickupFee,
 		deliveryFee: o.deliveryFee,
+		deliveryFeePending: o.deliveryFeePending,
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
+		deliveryAddress: o.deliveryAddress
+			? {
+					line1: o.deliveryAddress.line1,
+					line2: o.deliveryAddress.line2,
+					city: o.deliveryAddress.city,
+					state: o.deliveryAddress.state,
+					postcode: o.deliveryAddress.postcode,
+					notes: o.deliveryAddress.notes,
+				}
+			: undefined,
+		pickupSnapshot: o.pickupSnapshot
+			? { label: o.pickupSnapshot.label, address: o.pickupSnapshot.address }
+			: undefined,
 		courierName: o.courierName,
 		trackingNo: o.trackingNo,
+		cancelledReason: o.cancelledReason,
+		pinnedAt: o.pinnedAt,
 	};
+}
+
+/**
+ * A cache that lets `resolveCategoryNames` be called repeatedly without
+ * re-reading the same products and categories. One order at checkout doesn't
+ * need it (a fresh map per call is the same thing); the backfill, which walks a
+ * whole store's orders over the same handful of products, very much does.
+ */
+export interface CategoryNameMemo {
+	/** productId → its sorted category names. */
+	byProduct: Map<string, string[]>;
+	/** categoryId → name, so a category shared by 40 products is read once. */
+	byCategory: Map<string, string>;
+}
+
+export function createCategoryNameMemo(): CategoryNameMemo {
+	return { byProduct: new Map(), byCategory: new Map() };
+}
+
+/**
+ * Category names for a set of products, resolved once per distinct id
+ * (86eyrtz74). Used at ORDER CREATE to freeze `items[].categoryNames`, so every
+ * later read — table, export, search — is free.
+ *
+ * Archived categories are included: they name a real grouping the seller was
+ * using at the time, and this is a record of that moment.
+ */
+export async function resolveCategoryNames(
+	ctx: MutationCtx,
+	productIds: Iterable<Id<"products">>,
+	memo: CategoryNameMemo = createCategoryNameMemo(),
+): Promise<Map<string, string[]>> {
+	const out = new Map<string, string[]>();
+	for (const productId of new Set(productIds)) {
+		const cached = memo.byProduct.get(productId);
+		if (cached) {
+			out.set(productId, cached);
+			continue;
+		}
+		const joins = await ctx.db
+			.query("productCategories")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.collect();
+		const names: string[] = [];
+		for (const j of joins) {
+			let name = memo.byCategory.get(j.categoryId);
+			if (name === undefined) {
+				const cat = await ctx.db.get(j.categoryId);
+				if (!cat) continue;
+				name = cat.name;
+				memo.byCategory.set(j.categoryId, name);
+			}
+			names.push(name);
+		}
+		names.sort((a, b) => a.localeCompare(b));
+		memo.byProduct.set(productId, names);
+		out.set(productId, names);
+	}
+	return out;
 }
 
 async function assertExportAccess(
@@ -2203,9 +2483,10 @@ export const exportPage = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
-		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
+		const predicate = buildInboxPredicate(toInboxFilterArgs(filters));
+		const matched = page.page.filter(predicate);
 		return {
-			rows: page.page.filter(predicate).map(orderToCsvSource),
+			rows: matched.map(orderToCsvSource),
 			scanned: page.page.length,
 			isDone: page.isDone,
 			cursor: page.continueCursor,
@@ -2220,9 +2501,10 @@ export const exportByIds = internalQuery({
 	handler: async (ctx, { retailerId, orderIds }): Promise<CsvOrder[]> => {
 		await assertExportAccess(ctx, retailerId);
 		const fetched = await Promise.all(orderIds.map((id) => ctx.db.get(id)));
-		return fetched
-			.filter((o): o is Doc<"orders"> => o?.retailerId === retailerId)
-			.map(orderToCsvSource);
+		const owned = fetched.filter(
+			(o): o is Doc<"orders"> => o?.retailerId === retailerId,
+		);
+		return owned.map(orderToCsvSource);
 	},
 });
 
@@ -2244,10 +2526,17 @@ export const exportOrders = action({
 		...exportFilterValidators,
 		// When set, export exactly these orders (the seller's ticked selection).
 		orderIds: v.optional(v.array(v.id("orders"))),
+		// Narrow the export to these columns — the table view's "export visible
+		// columns" path (86eyrtz74). Plain strings, not a literal union, because
+		// the keys are resolved leniently against the registry: a client running
+		// an older build must never fail an export over a column that has since
+		// been renamed. Omitted/empty = every column, which is what the cards
+		// view (no column picker) and any older client send.
+		columnKeys: v.optional(v.array(v.string())),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, orderIds, ...filters },
+		{ retailerId, orderIds, columnKeys, ...filters },
 	): Promise<{ csv: string; count: number; capped: boolean }> => {
 		let rows: CsvOrder[];
 		let capped = false;
@@ -2281,8 +2570,19 @@ export const exportOrders = action({
 			}
 		}
 
-		rows.sort(compareInboxOrder);
-		return { csv: ordersToCsv(rows), count: rows.length, capped };
+		// Pinned first, then fulfilment date. The pinned-first PARTITION is shared
+		// with the inbox (`sortInboxOrders` owns that rule for both surfaces, so a
+		// pin can never be trimmed away by a `limit`), but the sort inside each
+		// partition is deliberately fixed to "due" here rather than mirroring the
+		// inbox's "recent" default: a bookkeeping file wants the fulfilment queue,
+		// and the export has always sorted this way. The `Pinned` column keeps
+		// those rows identifiable once the file is open in Excel.
+		const sorted = sortInboxOrders(rows, "due");
+		return {
+			csv: ordersToCsv(sorted, columnKeys),
+			count: sorted.length,
+			capped,
+		};
 	},
 });
 
@@ -2443,7 +2743,19 @@ export async function applyStatusTransition(
 		trackingNo: string;
 		currentStageId: string | undefined;
 		confirmationPushStatus: undefined;
+		paymentDueAt: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
+	// A payment deadline dies whenever the clock stops meaning anything — every
+	// cancellation (seller, admin, or the auto-cancel sweep) AND every advance
+	// past `confirmed`, because a seller who packs an unpaid order has decided
+	// to fulfil it. Clearing on cancel alone (PR #227 review) stranded those
+	// rows in the by_payment_due range forever: the 1-minute sweep re-read a
+	// set that only grew, and the buyer's page threatened a cancellation the
+	// server would never carry out. Keeps the schema's stated invariant true —
+	// the index range only ever holds live clocks.
+	if (!paymentDeadlineApplies(status) && order.paymentDueAt !== undefined) {
+		patch.paymentDueAt = undefined;
+	}
 	// `sending` and `deferred` are PROMISES about a message ("your confirmation
 	// is on its way") — cancelling the order invalidates them, so clear the
 	// stamp or the buyer's page keeps promising a message that will never come:
@@ -2533,6 +2845,41 @@ export const markSeen = mutation({
 		// No updatedAt bump: "the seller looked at it" isn't an order change, and
 		// touching updatedAt would corrupt the time-in-status badge.
 		await ctx.db.patch(order._id, { seenAt: Date.now() });
+	},
+});
+
+/**
+ * Pin / unpin an order (86eyrtz74) — the seller's manual bookmark.
+ *
+ * Idempotent by design: the control is a one-tap toggle on a card, a table row
+ * AND the detail page, so a double-tap or a stale client must never flip the
+ * state back. `pinned` is the desired end state, not a toggle instruction.
+ *
+ * Un-gated by plan: a bookmark is a one-bit annotation on an order the seller
+ * can already see, not an inbox search feature, so gating it behind Pro would
+ * mean a Starter watching pinned rows sort to the top of a list they were never
+ * allowed to pin into. Only the soft-lock (`assertSubscriptionActive`) applies,
+ * matching every other "manage what you already have" write.
+ *
+ * Never bumps `updatedAt` — bookmarking is not progress on the order, and the
+ * time-in-status badge reads that field (the `markSeen` trap).
+ */
+export const setPinned = mutation({
+	args: { orderId: v.id("orders"), pinned: v.boolean() },
+	handler: async (ctx, { orderId, pinned }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
+		const isPinned = order.pinnedAt !== undefined;
+		if (isPinned === pinned) return;
+		await ctx.db.patch(order._id, {
+			pinnedAt: pinned ? Date.now() : undefined,
+		});
+		await logAdminAction(
+			ctx,
+			access,
+			pinned ? "orders.pin" : "orders.unpin",
+			orderId,
+		);
 	},
 });
 
@@ -2977,7 +3324,18 @@ export const advanceToStage = mutation({
 			statusChangedAt: number;
 			updatedAt: number;
 			collectedAt: number;
+			paymentDueAt: undefined;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Custom stages patch `status` here rather than through
+		// applyStatusTransition, so the payment-deadline cleanup has to be
+		// repeated — same rule, same reason (see that helper). Without this a
+		// store on custom stages leaks exactly the rows the other path fixed.
+		if (
+			!paymentDeadlineApplies(targetStatus) &&
+			order.paymentDueAt !== undefined
+		) {
+			patch.paymentDueAt = undefined;
+		}
 		// Set-if-unset, so a later manual advance can't move the arrival moment.
 		if (collectingFromBuyer && markCollected === true) {
 			patch.collectedAt = now;
@@ -3329,6 +3687,14 @@ export const setDeliveryFee = mutation({
 			deliveryFeePendingReason: undefined,
 			subtotal,
 			total,
+			// A fee-pending order was UNPAYABLE, so its payment deadline was
+			// suspended (the auto-cancel sweep skips fee-pending rows). The fee
+			// landing is the moment it becomes payable — guarantee the runway,
+			// or a deadline that lapsed during the seller's own pricing delay
+			// would cancel the order the instant it could finally be paid.
+			...(order.paymentDueAt !== undefined
+				? { paymentDueAt: extendedPaymentDue(order.paymentDueAt, now) }
+				: {}),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -3398,6 +3764,12 @@ export const rescheduleFulfilment = mutation({
 			throw new ConvexError(
 				"This order was already collected — the date can't change now",
 			);
+		// The buyer is inside a claim link's payment window (86eyq0epn): they
+		// hold a confirmed order with a live countdown and may be mid-payment.
+		// The dialog hides the trigger behind the same predicate; this is the
+		// backstop, so a stale tab can't move the date under a paying buyer.
+		if (isPaymentWindowLocked(order))
+			throw new ConvexError(PAYMENT_WINDOW_LOCK_REASON);
 		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
 		// will NOT follow the order — rescheduling under it would desync the
 		// buyer's promise from the trip actually booked. The dialog says so and
@@ -3666,6 +4038,11 @@ async function applyPaymentReceived(
 		...extraPatch,
 		paymentStatus: "received",
 		paymentReceivedAt: now,
+		// Real money retires the payment deadline (86eyq0epn) — the ONE receive
+		// core every path runs through, so the countdown stops on `received` and
+		// never on a mere claim. Unconditional: clearing an unset field is a
+		// no-op.
+		paymentDueAt: undefined,
 		// The single retirement point for an unresolved gateway payment (PR #178
 		// review, finding 1). Whatever route settles the order — the seller
 		// reconciling the odd payment in their HitPay dashboard and marking it
@@ -4529,6 +4906,67 @@ export const getMockupUrls = query({
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
 		return urls.filter((u): u is string => u !== null);
+	},
+});
+
+/**
+ * Thumbnails for an order's line items (86eyrtz74) — so a seller packing an
+ * order can recognise the product by sight instead of parsing
+ * "Kek Lapis Sarawak · 1 kg".
+ *
+ * Resolution per line: the VARIANT's first image, else the PRODUCT's first
+ * image, else nothing (the caller renders `AppImage`'s fallback).
+ *
+ * Keyed the same way as `getMockupUrls`: buyer `token` OR authenticated seller
+ * `shortId`, via `resolveSharedOrder`. Returns one entry per line item in line
+ * order — NOT a map keyed by product/variant id — because the same product can
+ * appear on two lines and the caller renders by position.
+ *
+ * The image is deliberately NOT frozen onto the order (unlike name/price): it
+ * is a packing aid, not a financial record, so a seller who replaces a product
+ * photo should see the new one everywhere. The cost is that a deleted photo
+ * leaves a line with no thumbnail, which degrades to the standard fallback box.
+ *
+ * Batched: one read per distinct variant + product across the order, not per
+ * line, and storage URLs resolve in parallel.
+ */
+export const getItemImageUrls = query({
+	args: {
+		shortId: v.optional(v.string()),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, { shortId, token }): Promise<(string | null)[]> => {
+		const order = await resolveSharedOrder(ctx, { token, shortId });
+		if (!order) return [];
+
+		const variantIds = new Set<Id<"productVariants">>();
+		const productIds = new Set<Id<"products">>();
+		for (const it of order.items) {
+			if (it.variantId) variantIds.add(it.variantId);
+			productIds.add(it.productId);
+		}
+		const variantFirst = new Map<string, string | undefined>();
+		const productFirst = new Map<string, string | undefined>();
+		await Promise.all([
+			...[...variantIds].map(async (id) => {
+				const v = await ctx.db.get(id);
+				variantFirst.set(id, v?.imageStorageIds[0]);
+			}),
+			...[...productIds].map(async (id) => {
+				const p = await ctx.db.get(id);
+				productFirst.set(id, p?.imageStorageIds[0]);
+			}),
+		]);
+
+		return Promise.all(
+			order.items.map(async (it) => {
+				const storageId =
+					(it.variantId ? variantFirst.get(it.variantId) : undefined) ??
+					productFirst.get(it.productId);
+				if (!storageId) return null;
+				return ctx.storage.getUrl(storageId);
+			}),
+		);
 	},
 });
 

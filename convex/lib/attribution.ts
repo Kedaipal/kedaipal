@@ -57,11 +57,21 @@ export const KNOWN_SOURCE_LABELS: Record<string, string> = {
 	[ATTRIBUTION_DIRECT]: "Direct / shared link",
 	[ATTRIBUTION_COUNTER]: "Counter",
 	tiktok: "TikTok",
-	// Reserved for claim-link orders minted from a live session (86eyq0epn).
-	"tiktok-live": "TikTok Live",
 	instagram: "Instagram",
 	facebook: "Facebook",
 	whatsapp: "WhatsApp",
+	// LIVE variants (86eyq0epn) — a claim link keyed during a live broadcast.
+	// Deliberately separate buckets from the bare tags above, which come from
+	// the dashboard's tagged SHARE LINKS (a bio link, a story link): a seller
+	// asking "how did my socials do" wants "my TikTok Lives made RM3,400" and
+	// "my TikTok bio link made RM800" as two answers, not one blended number —
+	// the acquisition mechanics, effort and conversion are nothing alike.
+	// WhatsApp has no live arm on purpose: a WhatsApp claim is a DM or a
+	// broadcast reply, never a broadcast in the streaming sense, so
+	// "WhatsApp Live" would be a phrase that means nothing.
+	"tiktok-live": "TikTok Live",
+	"instagram-live": "Instagram Live",
+	"facebook-live": "Facebook Live",
 	// The poster's online QR + despatch-label QR — Kedaipal's printed surfaces.
 	online: "Poster QR",
 	awb: "Parcel label QR",

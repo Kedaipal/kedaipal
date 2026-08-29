@@ -68,6 +68,14 @@ describe("stripTrackingReferrer", () => {
 		expect(out.$initial_referrer).toBe("$direct");
 	});
 
+	it("blanks a referrer pointing at the claim page", () => {
+		const out = stripTrackingReferrer({
+			$referrer: "https://kedaipal.com/claim/8f3c09b1a7e24d5c9b0e",
+		});
+
+		expect(out.$referrer).toBe("$direct");
+	});
+
 	it("leaves ordinary referrers alone", () => {
 		const out = stripTrackingReferrer({
 			$referrer: "https://www.google.com/search?q=kedai",

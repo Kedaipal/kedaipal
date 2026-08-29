@@ -19,6 +19,7 @@ import {
 	MessageCircle,
 	Package,
 	Phone,
+	Pin,
 	StickyNote,
 	Trash2,
 	Truck,
@@ -28,6 +29,7 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
 import {
@@ -36,19 +38,14 @@ import {
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
-import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
+import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
-import {
-	attributionBucket,
-	sourceLabel,
-} from "../../convex/lib/attribution";
 import { ProBadge } from "../components/app/pro-gate";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
@@ -101,6 +98,7 @@ import {
 	parsePriceInput,
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	anchorOrdinal,
 	displayStatusLabel,
@@ -303,6 +301,14 @@ function OrderDetailRoute() {
 	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
 	// stamp just means it stays flagged as new, which is the safe direction.
 	const markSeen = useMutation(api.orders.markSeen);
+	const setPinned = useMutation(api.orders.setPinned);
+	const [pinBusy, setPinBusy] = useState(false);
+	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
+	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
+	// server-side in one batched read rather than a lookup per row.
+	const itemImageUrls = useQuery(
+		convexQuery(api.orders.getItemImageUrls, { shortId }),
+	).data;
 	const orderId = order?._id;
 	const alreadySeen = order?.seenAt !== undefined;
 	useEffect(() => {
@@ -603,6 +609,51 @@ function OrderDetailRoute() {
 
 	const askForProofUrl = buildAskForProofWaUrl();
 
+	const isPinned = order.pinnedAt !== undefined;
+	const pinTargetId = order._id;
+	async function togglePin() {
+		setPinBusy(true);
+		try {
+			await setPinned({ orderId: pinTargetId, pinned: !isPinned });
+			toast.success(isPinned ? "Unpinned" : "Pinned to the top of your inbox");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPinBusy(false);
+		}
+	}
+
+	// One pin control, rendered in both the desktop header and the mobile header
+	// row — the same button, so the two can't drift.
+	const pinButton = (
+		<Button
+			type="button"
+			variant={isPinned ? "secondary" : "outline"}
+			size="icon"
+			className="size-10 shrink-0 rounded-xl lg:size-9"
+			aria-pressed={isPinned}
+			aria-label={isPinned ? "Unpin this order" : "Pin this order"}
+			// The tooltip is where the rule is stated — the feature is otherwise
+			// invisible until the seller has used it once.
+			title={
+				isPinned
+					? "Pinned — stays on top of your inbox until you unpin it"
+					: "Pin to the top of your inbox"
+			}
+			disabled={pinBusy}
+			onClick={() => void togglePin()}
+		>
+			<Pin
+				className={cn(
+					"size-4.5",
+					isPinned && "text-accent-emphasis dark:text-accent",
+				)}
+				fill={isPinned ? "currentColor" : "none"}
+				aria-hidden="true"
+			/>
+		</Button>
+	);
+
 	return (
 		<div className="flex flex-col gap-5 lg:max-w-3xl">
 			<PageHeader
@@ -614,6 +665,7 @@ function OrderDetailRoute() {
 				back={{ to: "/app/orders", label: "Orders" }}
 				actions={
 					<>
+						{pinButton}
 						{/* Label first: it's the operational step (the parcel is going
 						    out now); the receipt is bookkeeping, any time after. */}
 						{canPrintLabel(order) ? (
@@ -649,8 +701,14 @@ function OrderDetailRoute() {
 							timeStyle: "short",
 						})}
 						{order.channel === "whatsapp" ? " · via WhatsApp" : ""}
+						{/* Where the order came from, when that isn't the default. A claim link
+						    (86eyq0epn) was keyed by the seller at a locked price and completed by
+						    the buyer — worth saying on the one screen the seller opens to work the
+						    order, since the inbox Source filter is the only other place it shows. */}
+						{order.source === "claim" ? " · Claim link" : ""}
 					</p>
 				</div>
+				{pinButton}
 				<StatusBadge
 					status={order.status}
 					label={displayStatusLabel(
@@ -1170,20 +1228,23 @@ function OrderDetailRoute() {
 									return (
 										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
 											Kedaipal doesn't chase payment for you — how to pay is
-											always on the buyer's order page. If this is still
-											unpaid on day 11, a "Send payment reminder" button
-											unlocks here ({blocked.unlockAt ? formatUntil(blocked.unlockAt) : "later"}); until then, nudge them yourself with
-											the WhatsApp button below.
+											always on the buyer's order page. If this is still unpaid
+											on day 11, a "Send payment reminder" button unlocks here (
+											{blocked.unlockAt
+												? formatUntil(blocked.unlockAt)
+												: "later"}
+											); until then, nudge them yourself with the WhatsApp
+											button below.
 										</p>
 									);
 								}
 								if (blocked?.reason === "window_closed") {
 									return (
 										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
-											The reminder window has closed — this order is past day
-											14 unpaid, which is beyond a nudge. Settle it with the
-											buyer directly (the WhatsApp button below), then mark
-											payment received — or cancel the order.
+											The reminder window has closed — this order is past day 14
+											unpaid, which is beyond a nudge. Settle it with the buyer
+											directly (the WhatsApp button below), then mark payment
+											received — or cancel the order.
 										</p>
 									);
 								}
@@ -1352,9 +1413,7 @@ function OrderDetailRoute() {
 							{brand ? (
 								<brand.Icon className={cn("size-4", brand.colorClass)} />
 							) : null}
-							<span className="text-sm font-medium">
-								{sourceLabel(bucket)}
-							</span>
+							<span className="text-sm font-medium">{sourceLabel(bucket)}</span>
 						</>
 					);
 					return (
@@ -1469,6 +1528,18 @@ function OrderDetailRoute() {
 							key={item.variantId ?? `${item.productId}-${i}`}
 							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
 						>
+							{/* Thumbnail (86eyrtz74) — variant photo, else the product's.
+							    A packing aid, not a record: the image is deliberately not
+							    frozen onto the order, so a replaced photo shows the new one
+							    and a deleted one degrades to AppImage's fallback box rather
+							    than a broken image or a collapsed row. Fixed size so the
+							    name never gets squeezed to two characters on a phone. */}
+							<AppImage
+								src={itemImageUrls?.[i] ?? undefined}
+								alt={item.name}
+								sizes="44px"
+								className="size-11 shrink-0 rounded-xl border border-border object-cover"
+							/>
 							<div className="min-w-0 flex-1">
 								<p className="truncate text-sm font-medium">
 									{item.name}
@@ -1916,8 +1987,8 @@ function OrderDetailRoute() {
 				title={`Cancel order #${order.shortId}?`}
 				description={
 					hasActiveRiderBooking
-					? `Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-					: "Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."
+						? `Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
+						: "Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."
 				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
@@ -2106,8 +2177,8 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
 				{FEE_PENDING_REASON_COPY[order.deliveryFeePendingReason ?? "unknown"]}{" "}
 				Agree it with the buyer on WhatsApp, then set it here — the new total
-				shows on their order page, where their confirmation message already
-				sent them. No further WhatsApp goes out. Enter 0 to deliver free.
+				shows on their order page, where their confirmation message already sent
+				them. No further WhatsApp goes out. Enter 0 to deliver free.
 			</p>
 			<div className="flex items-end gap-2">
 				<div className="relative flex-1">

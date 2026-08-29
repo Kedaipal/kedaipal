@@ -9,7 +9,7 @@ export function Footer() {
 	const contactLinkClass =
 		"group inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-medium text-primary-foreground/85 transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:bg-accent/15 hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 	const legalLinkClass =
-		"transition-colors hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+		"inline-flex min-h-11 items-center transition-colors hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 	return (
 		<footer className="bg-primary pb-[max(2rem,env(safe-area-inset-bottom))] text-primary-foreground">

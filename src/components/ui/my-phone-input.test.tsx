@@ -2,7 +2,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
-import { MOBILE_PLACEHOLDER, MyPhoneInput, MyPhonePrefix } from "./my-phone-input";
+import {
+	MOBILE_PLACEHOLDER,
+	MyPhoneInput,
+	MyPhonePrefix,
+} from "./my-phone-input";
 
 /**
  * The one plated phone control (86eyknr2r; per-country since SG-lite
@@ -22,18 +26,18 @@ describe("MyPhoneInput", () => {
 
 	it("defaults to the MY plate — untouched call sites keep their behaviour", () => {
 		render(<MyPhoneInput value="" onChange={() => {}} />);
-		expect(
-			screen.getByRole("textbox").getAttribute("placeholder"),
-		).toBe(MOBILE_PLACEHOLDER.MY);
+		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
+			MOBILE_PLACEHOLDER.MY,
+		);
 	});
 
 	it("wears the SG plate when the store's country says so", () => {
 		render(<MyPhoneInput value="" onChange={() => {}} country="SG" />);
 		expect(screen.getByText("+65")).toBeDefined();
 		expect(screen.getByRole("img", { name: "Singapore" })).toBeDefined();
-		expect(
-			screen.getByRole("textbox").getAttribute("placeholder"),
-		).toBe(MOBILE_PLACEHOLDER.SG);
+		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
+			MOBILE_PLACEHOLDER.SG,
+		);
 	});
 
 	it("the plate is not editable — only one input exists in the control", () => {

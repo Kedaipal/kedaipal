@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Printer, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, PinOff, Printer, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -40,6 +40,14 @@ export type BulkAction = {
  * while there's a selection — the dialog it opens is where a selection with
  * nothing printable in it gets explained (the "blocked but tappable" pattern;
  * a disabled Button can't even show a reason on touch).
+ *
+ * `onUnpin` (optional, 86eyrtz74) adds a bulk **Unpin** item ABOVE the status
+ * transitions — it is the escape hatch for a pin set that has grown, and pins
+ * never auto-clear (a delivered order can still be worth keeping on top), so
+ * clearing several has to be cheap. It sits above "Mark N as" rather than
+ * inside it because unpinning is not a status change, and the caller passes it
+ * only when the selection actually contains a pinned order — an item that
+ * would no-op is worse than no item.
  */
 export function OrderBulkBar({
 	count,
@@ -48,6 +56,7 @@ export function OrderBulkBar({
 	onApply,
 	onDelete,
 	onPrint,
+	onUnpin,
 	onToggleSelectAll,
 	onExit,
 	busy = false,
@@ -64,6 +73,9 @@ export function OrderBulkBar({
 	onDelete?: () => void | Promise<void>;
 	// Open the despatch-label print dialog for the selection. Omit to hide.
 	onPrint?: () => void;
+	// Unpin every pinned order in the selection. Omit when the selection holds
+	// no pinned orders, which hides the item entirely.
+	onUnpin?: () => void | Promise<void>;
 	onToggleSelectAll: () => void;
 	onExit: () => void;
 	busy?: boolean;
@@ -135,6 +147,21 @@ export function OrderBulkBar({
 						</button>
 					</PopoverTrigger>
 					<PopoverContent align="end" side="top" className="w-56 p-1">
+						{onUnpin ? (
+							<div className="mb-1 flex flex-col border-b border-border pb-1">
+								<button
+									type="button"
+									onClick={() => {
+										setOpen(false);
+										void Promise.resolve(onUnpin()).catch(() => {});
+									}}
+									className="flex h-11 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted"
+								>
+									<PinOff className="size-4 shrink-0" aria-hidden="true" />
+									Unpin
+								</button>
+							</div>
+						) : null}
 						<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
 							Mark {count} {orderWord} as
 						</p>

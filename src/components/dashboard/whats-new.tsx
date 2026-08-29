@@ -11,6 +11,7 @@ import {
 	Megaphone,
 	Package,
 	Printer,
+	Rows3,
 	Settings,
 	Sparkles,
 	Truck,
@@ -198,6 +199,7 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	megaphone: Megaphone,
 	settings: Settings,
 	chart: ChartLine,
+	table: Rows3,
 };
 
 /** `2026-08-25` → `25 Aug`. */
@@ -248,10 +250,7 @@ function WhatsNewDialog({
 			    padding would inset it and leave white gutters beside the fill.
 			    Widened past the default `sm:max-w-sm` (384px): the entry cards are
 			    an icon column plus two lines of copy, which reads cramped there. */}
-			<DialogContent
-				className="gap-0 p-0 sm:max-w-lg"
-				showCloseButton={false}
-			>
+			<DialogContent className="gap-0 p-0 sm:max-w-lg" showCloseButton={false}>
 				<div className="flex items-center gap-3 bg-primary p-4">
 					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/20">
 						<Sparkles className="size-4.5 text-accent" strokeWidth={2} />
@@ -392,7 +391,10 @@ function WhatsNewDialog({
 						// wide bar. The confirmation line fills it and answers the
 						// question the seller opened the panel with.
 						<span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-							<Check className="size-3.5 text-accent-emphasis" strokeWidth={2.5} />
+							<Check
+								className="size-3.5 text-accent-emphasis"
+								strokeWidth={2.5}
+							/>
 							You've seen everything
 						</span>
 					) : (

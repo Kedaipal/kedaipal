@@ -1,6 +1,6 @@
 import type { PostHog, PostHogConfig } from "posthog-js";
 import { sanitizeDistinctId } from "../../convex/lib/posthog";
-import { isTrackingTokenPath } from "./analytics-privacy";
+import { isCapabilityTokenPath } from "./analytics-privacy";
 
 /**
  * PostHog client configuration + the checkout hand-off read (86eyrayux).
@@ -24,7 +24,7 @@ export const POSTHOG_DEFAULT_HOST = "https://us.i.posthog.com";
 /**
  * Blank any referrer property that points at a `/track/*` URL.
  *
- * The tracking URL is the buyer's capability token (see `isTrackingTokenPath`)
+ * The tracking URL is the buyer's capability token (see `isCapabilityTokenPath`)
  * and `document.referrer` is the one channel that can smuggle it onto a page
  * PostHog *is* allowed to observe: a full-document navigation from /track to
  * any other route would carry it.
@@ -54,7 +54,7 @@ export function stripTrackingReferrer(
 			// Not a URL ("$direct", a bare domain) — nothing to leak.
 			continue;
 		}
-		if (!isTrackingTokenPath(pathname)) continue;
+		if (!isCapabilityTokenPath(pathname)) continue;
 		// Copy-on-write: PostHog reuses the properties object across handlers.
 		if (sanitized === properties) sanitized = { ...properties };
 		sanitized[key] = "$direct";

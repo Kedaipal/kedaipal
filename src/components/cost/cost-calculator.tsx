@@ -4,6 +4,7 @@ import { AppImage } from "#/components/ui/app-image";
 import { Button } from "#/components/ui/button";
 import { Field, FieldLabel } from "#/components/ui/field";
 import { Slider } from "#/components/ui/slider";
+import { useSupportWaNumber } from "#/hooks/useSupportWaNumber";
 import {
 	BOUNDS,
 	type CostInputs,
@@ -11,7 +12,6 @@ import {
 	DEFAULT_INPUTS,
 	FOUNDING_PRICE_RM,
 } from "#/lib/calculator";
-import { useSupportWaNumber } from "#/hooks/useSupportWaNumber";
 import { buildWaContactLink } from "#/lib/contact";
 import { formatPrice } from "#/lib/format";
 import { cn } from "#/lib/utils";

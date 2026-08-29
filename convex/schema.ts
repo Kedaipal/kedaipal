@@ -567,6 +567,22 @@ export default defineSchema({
 		// alphabet), NEVER the slug; rotating replaces it and kills old posters.
 		// See docs/counter-checkout.md (store QR poster, 86ey5m35w).
 		counterQrToken: v.optional(v.string()),
+		// Claim links (86eyq0epn): the store's default payment window (minutes) for
+		// a "send to buyer" claim link — remembered from the seller's last send (the
+		// send controls say so), no separate Settings card. Unset falls back to
+		// DEFAULT_CLAIM_WINDOW_MINUTES in convex/lib/orderClaims.ts — read it
+		// there rather than restating the number here, which is how this comment
+		// came to claim 24h after the default moved to 15 minutes.
+		claimLinkWindowMinutes: v.optional(v.number()),
+		// Claim links (86eyq0epn): the marketing origin the seller last tagged a
+		// claim with — an `attributionBucket` key ("tiktok-live", "instagram",
+		// …). Remembered exactly like the window above, so a seller sets it once
+		// at the top of a live and every claim that session inherits it. Unset =
+		// untagged (the order then buckets "direct", the pre-attribution
+		// behaviour). Deliberately seller-chosen rather than derived: a claim
+		// link serves a TikTok Live, a phone order and a DM quote alike, and
+		// only the seller knows which.
+		claimLinkSource: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -870,6 +886,29 @@ export default defineSchema({
 				// Human label of the chosen option values ("1kg / Fillet"). Empty
 				// for single-variant products. Frozen at order-create time.
 				variantLabel: v.optional(v.string()),
+				// Names of the categories this product was filed under WHEN SOLD
+				// (86eyrtz74). Frozen like `name`/`variantLabel`/`price` rather
+				// than looked up live, for four reasons: the inbox table and the
+				// CSV export stop paying a junction fan-out per row; free-text
+				// SEARCH can cover categories at all (a live lookup can't, without
+				// a per-product read on every keystroke); a sales report stays
+				// historically true when the seller reorganises their catalogue;
+				// and it matches how every other sale-time fact on this document
+				// behaves (pickupSnapshot, deliverySnapshot, price).
+				//
+				// PER-LINE, not a deduped union on the order: the union is what
+				// today's single column needs, but it cannot attribute revenue on
+				// an order spanning two categories, and "sales by category" is the
+				// obvious next question. The union derives from these for free.
+				//
+				// ALWAYS stamped on new orders, `[]` included: present means "we
+				// recorded this", and "filed under nothing" is a real answer.
+				// Optional only for orders that predate the field — those are
+				// covered by the opt-in `migrations:backfillOrderCategoryNames`,
+				// which necessarily stamps TODAY's categorisation (there is no
+				// record of the old one) and is therefore a manual, one-time
+				// approximation rather than something the app does on its own.
+				categoryNames: v.optional(v.array(v.string())),
 				price: v.number(),
 				quantity: v.number(),
 			}),
@@ -902,9 +941,17 @@ export default defineSchema({
 		// defaulted (not buyer-chosen) fulfilment date, so their date badge is hidden
 		// and their "delivered" completion reads "Completed" (never "Delivered").
 		// Per-row read only — no index; the inbox source filter is an in-memory
-		// predicate in convex/lib/orderInboxFilter.ts.
+		// predicate in convex/lib/orderInboxFilter.ts. "claim" = a claim-link order
+		// (86eyq0epn): seller-keyed lines at LOCKED prices, completed by the buyer
+		// on /claim/<token> — buyer-chosen fulfilment like a storefront order, so
+		// every `source === "counter"` UI branch (hidden date badge, "Completed"
+		// wording) deliberately does NOT apply to it.
 		source: v.optional(
-			v.union(v.literal("storefront"), v.literal("counter")),
+			v.union(
+				v.literal("storefront"),
+				v.literal("counter"),
+				v.literal("claim"),
+			),
 		),
 		// Marketing source the BUYER arrived from (86eyq0eq9) — the `?src=` /
 		// `utm_source` tag on the storefront link ("tiktok", "instagram",
@@ -1196,6 +1243,29 @@ export default defineSchema({
 		// daily cron at schedule time so it never double-sends. Undefined = not
 		// sent (yet, or never became due). See docs/payment-reminder.md.
 		paymentReminderSentAt: v.optional(v.number()),
+		// Hard payment deadline (epoch-ms) — "field present = the clock is live".
+		// v1 stamper: a claim-link commit (86eyq0epn) carries the claim's window
+		// onto the order (floored to commit + CLAIM_PAYMENT_RUNWAY_MS so the
+		// buyer always has runway to actually pay), because stock decrements at
+		// commit and an unpaid order would otherwise hold inventory forever.
+		// The sweep cron (orderClaims.cancelUnpaidDueOrders) auto-cancels a due
+		// order ONLY while it is truly unpaid AND payable — never `claimed` (an
+		// "I've paid" is a human-verified promise, cancelling it would burn a
+		// buyer whose transfer landed), never while `deliveryFeePending` (the
+		// buyer CAN'T pay yet), never while a HitPay checkout session is live
+		// (gatewayRequestedAt within grace — mid-payment cancellation is how
+		// money lands on a cancelled order). Starting a payment session extends
+		// the deadline (visible clock jump, bounded — never an indefinite
+		// freeze, which would be exploitable). CLEARED on payment received and
+		// on any cancellation, so the by_payment_due index range only ever
+		// holds live clocks. See docs/claim-links.md.
+		paymentDueAt: v.optional(v.number()),
+		// Why this order was cancelled, when the cause wasn't a human tapping
+		// Cancel — lets the buyer's cancelled banner explain itself instead of a
+		// bare "Cancelled" (payment_window_expired = the paymentDueAt sweep).
+		// Undefined on every human cancellation, so absence means "the store
+		// cancelled it".
+		cancelledReason: v.optional(v.literal("payment_window_expired")),
 		// When the seller last MANUALLY re-sent the payment details to the buyer
 		// from the order page (distinct from the automatic paymentReminderSentAt
 		// so the two triggers never corrupt each other's once-only logic). Drives
@@ -1334,6 +1404,26 @@ export default defineSchema({
 		// read time (see orderBuckets.isUnseenOrder), so legacy and counter orders
 		// need no backfill and behave exactly as before.
 		seenAt: v.optional(v.number()),
+		// The seller's manual bookmark (86eyrtz74) — set when they pin an order,
+		// cleared when they unpin. Absent = not pinned, so nothing to backfill
+		// (the `seenAt` posture).
+		//
+		// Deliberately NEVER auto-cleared: a delivered or cancelled order is still
+		// worth keeping on top (a dispute to chase, a repeat order to copy), so the
+		// system does not get to decide the seller is finished with it. Pin and
+		// unpin are both manual, always.
+		//
+		// It is a SORT + VISIBILITY key, not a filter dimension: pinned orders
+		// sort first in every bucket/filter/sort combination, and while the
+		// inbox's "Pinned" toggle is on they are kept even when they DON'T match
+		// the active filter — sellers pin an order precisely so they can filter to
+		// something else and compare against it. No index: the inbox already holds
+		// its scan window in memory and partitions client-side.
+		//
+		// Writers MUST NOT bump `updatedAt` — that drives the time-in-status badge,
+		// and bookmarking an order is not progress on it (same trap `markSeen`
+		// documents above).
+		pinnedAt: v.optional(v.number()),
 		// Meta's message id (wamid) for the confirmation push. The statuses
 		// webhook identifies messages ONLY by this id, so it's the correlation key
 		// that lets a delivery failure find its order (see by_confirmation_wamid).
@@ -1354,6 +1444,9 @@ export default defineSchema({
 		// The previous-id twin keeps payments on a REPLACED (re-priced /
 		// double-minted) link correlatable instead of silently 200-acked.
 		.index("by_gateway_request", ["gatewayRequestId"])
+		// The payment-deadline sweep's range read (paymentDueAt < now). Kept tiny
+		// by the field's present-means-live contract above.
+		.index("by_payment_due", ["paymentDueAt"])
 		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
 
 	/**
@@ -1642,6 +1735,107 @@ export default defineSchema({
 		// Lets a hard-deleted order unlink the session that spawned it without a
 		// full-table scan (orderId is set only on completed sessions).
 		.index("by_order", ["orderId"]),
+
+	// --- Claim links (TikTok Live, 86eyq0epn — docs/claim-links.md) -----------
+	// A seller-keyed, price-LOCKED order handed to the buyer to complete: the
+	// seller builds the lines in Counter Checkout (incl. per-line price overrides,
+	// 86eyphh8r), sends the buyer a WhatsApp link, and the buyer finishes address,
+	// fulfilment date and payment on /claim/<token>. The order commits (and stock
+	// decrements) only at buyer completion — a claim is an OFFER, not an order.
+	// Lines are FROZEN here at send: the counter session draft is explicitly a
+	// non-authoritative scratchpad whose prices re-resolve at create, so "price
+	// locked" needs its own snapshot. Expiry is a FIXED deadline (Zaki's checkout
+	// timer — option (a): it gates buyer COMPLETION only; a committed order's
+	// payment then follows the normal flow). Resend never moves it.
+	orderClaims: defineTable({
+		retailerId: v.id("retailers"),
+		// The counter session the claim was sent from. One LIVE claim per session:
+		// sending again supersedes (cancels) the previous open claim — the old
+		// link must die when the cart or price changed.
+		sessionId: v.id("counterCheckoutSessions"),
+		sellerUserId: v.string(),
+		// Buyer identity frozen at send (from the session bind). `waPhone` is
+		// required — an anonymous session has nobody to send a link to.
+		customerId: v.optional(v.id("customers")),
+		waPhone: v.string(),
+		buyerName: v.optional(v.string()),
+		// Frozen, price-locked lines — the exact snapshot shape orders.items uses,
+		// resolved + validated server-side at send (seller price overrides applied,
+		// custom lines already priced). Commit copies these verbatim; it re-reads
+		// the variant rows ONLY for live stock / parcel weight, never for price.
+		lines: v.array(
+			v.object({
+				productId: v.id("products"),
+				variantId: v.id("productVariants"),
+				name: v.string(),
+				variantLabel: v.optional(v.string()),
+				price: v.number(), // sen — LOCKED at send
+				quantity: v.number(),
+			}),
+		),
+		currency: v.string(),
+		// Buyer capability for /claim/<token> — same generator + posture as
+		// orders.trackingToken (unguessable, never the shortId).
+		token: v.string(),
+		status: v.union(
+			v.literal("open"),
+			v.literal("completed"), // buyer committed → orderId set
+			v.literal("cancelled"), // seller released it (or superseded by a resend-with-changes)
+			v.literal("expired"), // fixed deadline passed (cron flips; reads judge live)
+		),
+		// FIXED deadline (epoch-ms) — never slides, resend never resets it.
+		expiresAt: v.number(),
+		windowMinutes: v.number(),
+		// Marketing origin frozen at send (86eyq0eq9 × 86eyq0epn) — carried onto
+		// the committed order's `attributionSource` so Insights counts a live
+		// drop's revenue against the channel that produced it. Sanitized with
+		// the shared `sanitizeAttributionSource`; unset = untagged.
+		attributionSource: v.optional(v.string()),
+		// Resend guard (Zaki): cooldown + hard cap live in convex/lib/orderClaims.ts;
+		// these two power both the server check and the disabled-with-reason button.
+		sentCount: v.number(),
+		lastSentAt: v.number(),
+		// Outcome of the LAST WhatsApp send attempt — "failed" surfaces the
+		// copy-the-link-yourself fallback on the claims list (WABA send can be
+		// blocked by caps/opt-out; the link itself still works).
+		// Outcome of the LAST WhatsApp send attempt. Five values, because the
+		// seller's NEXT MOVE differs in each case and a single "failed" hid the
+		// only one the buyer can actually fix:
+		//   sent        — nothing to do.
+		//   opted_out   — this buyer sent STOP to the shared WABA, so the
+		//                 gateway suppressed it. The ONLY remedy is the buyer
+		//                 replying START; the UI says so by name instead of
+		//                 blaming delivery. (This is the common one in practice:
+		//                 a tester's own number usually carries an old STOP.)
+		//   blocked     — the gateway refused for a reason that is OURS, not the
+		//                 buyer's (cap reached, quality throttle, kill switch).
+		//                 Waiting or copying the link is the move.
+		//   failed      — Meta rejected it or the network died. Copy the link.
+		//   unavailable — claim-link sending isn't configured on this deployment
+		//                 at all; retrying fails identically, so Copy link is the
+		//                 only offer.
+		// In every non-sent case the LINK ITSELF still works, deadline intact —
+		// which is why Copy link is always on the card.
+		lastSendOutcome: v.optional(
+			v.union(
+				v.literal("sent"),
+				v.literal("opted_out"),
+				v.literal("blocked"),
+				v.literal("failed"),
+				v.literal("unavailable"),
+			),
+		),
+		// Set at completion — lets a re-opened link show the order's track page.
+		orderId: v.optional(v.id("orders")),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_token", ["token"])
+		.index("by_retailer_status", ["retailerId", "status"])
+		// Drives the expiry + purge crons (same shape as counterCheckoutSessions).
+		.index("by_status_expiry", ["status", "expiresAt"])
+		// One-live-claim-per-session lookup at send + counter build-screen state.
+		.index("by_session", ["sessionId"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by

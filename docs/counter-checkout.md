@@ -1,5 +1,14 @@
 # Counter Checkout (in-person order spine)
 
+> **Claim links (`86eyq0epn`)** build on this surface: instead of finishing the
+> sale at the counter, the seller can **send the keyed cart to the buyer** as a
+> price-locked WhatsApp checkout link ("Send to buyer to complete" on the build
+> screen; "Waiting on buyers" panel on the landing). See
+> [`docs/claim-links.md`](./claim-links.md) — including the rule that a counter
+> sale or session dismissal cancels the session's open claim, and the payment
+> deadline that carries onto the committed order (an unpaid claim order
+> auto-cancels so the stock it held comes back).
+
 > ClickUp [`86ey0e82j`](https://app.clickup.com/t/86ey0e82j). Lands **Bearcamp**
 > (first paying customer — sells at a physical counter + online). The first brick
 > of the offline→online **order spine**: a seller-initiated, in-person order that
@@ -111,9 +120,12 @@ After a **paid-in-person** order is created, the success screen offers an
 optional **"Mark as completed"** button (one tap → `delivered`).
 
 **`orders.source` — the checkout surface** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)):
-a first-class field on `orders`, `v.union("storefront","counter")`, distinct from
-`channel` (the messaging transport, always WhatsApp). `createOrderFromSession`
-stamps `"counter"`; the storefront `orders.create` stamps `"storefront"`.
+a first-class field on `orders`, `v.union("storefront","counter","claim")`,
+distinct from `channel` (the messaging transport, always WhatsApp).
+`createOrderFromSession` stamps `"counter"`; the storefront `orders.create`
+stamps `"storefront"`; a claim-link commit stamps `"claim"` (86eyq0epn — a
+seller-keyed cart the BUYER completed, so it deliberately keeps the
+buyer-chosen fulfilment surfaces that `"counter"` hides).
 Optional/dev-only widen, no backfill — **undefined reads as `"storefront"`** (same
 posture as `pickupSnapshot.locationType`). It drives per-surface UI:
 
@@ -552,6 +564,56 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
 - **Uniform list header** — the "Start checkout" CTA moved *inside* the walk-in
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
+
+## A checkout is frozen while its claim link is out (2026-08-27)
+
+Sending a claim link (`86eyq0epn`) turns the cart into an **offer**, so the
+session stops being editable:
+
+- `listOpenSessions` **omits** it — it lives under "Waiting on buyers" instead.
+  One card per state, and no dismiss button beside a live offer.
+- `saveSessionDraft` and `createOrderFromSession` refuse
+  (`SESSION_CLAIM_LOCK_REASON`).
+- Opening it renders `WaitingOnBuyerScreen` (read-only), whose only way back to
+  editing is a confirmed **Cancel link**.
+- Dismissing the whole checkout still cancels the claim with it.
+
+Full rationale and the table of what each edit used to do:
+[`claim-links.md` § The CHECKOUT is frozen from the moment the link is sent](./claim-links.md).
+
+## Stock is stated in the catalog, not discovered at checkout (2026-08-27)
+
+Zaki, testing `86eyq0epn`: *"for items with 0 stock is not obvious, only at
+checkout then will get the 0 stock error. able to add to cart even."* The
+server rule never changed — `createOrderFromSession` has always refused a
+sold-out line. What was missing was saying it **before** the seller builds a
+cart in front of a waiting customer.
+
+The rules are pure and unit-tested in [`src/lib/counter-stock.ts`](../src/lib/counter-stock.ts),
+built on the existing `isSellable` so the counter and the storefront can't
+disagree about what "sold out" means:
+
+| State | Row says | Control |
+| --- | --- | --- |
+| tracked, `onHand <= 0` | **Sold out** (destructive red) | Add is disabled and relabelled "Sold out" |
+| tracked, `onHand <= 3` | **Only N left** (amber) | Stepper capped at N |
+| tracked, healthy | `N left` (muted) | Stepper capped at N |
+| made-to-order | **Made to order** (muted) | no ceiling |
+
+- **Made-to-order says so** instead of showing nothing. A blank where its
+  neighbours show a count reads as missing data, when in fact it *is* the
+  answer: no number because there is no ceiling.
+- **The stepper stops where the server would.** `maxAddableQty` mirrors the
+  stock check, so the seller finds the ceiling by feel (a dead `+` with a
+  reason) instead of by error message at create.
+- **Product level**: `productSoldOut` (every choice unsellable) puts a
+  **SOLD OUT** chip on the list row and a veil + chip on the grid tile, and
+  dims the thumbnail. The product stays **tappable** — the seller still needs
+  to open it to see *which* size ran out, or to sell a made-to-order sibling
+  that survives its sold-out neighbours.
+- A mixed product (fixed sizes + a made-to-order "Custom", see
+  [`custom-option.md`](./custom-option.md)) is never marked sold out: the
+  custom line is always orderable.
 
 ## Header — one "New order" dropdown (`86eyd67y1`)
 

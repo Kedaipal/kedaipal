@@ -23,6 +23,17 @@ ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
 ## Reconciliation with the existing codebase
 
+> **The CSV writes STORED values, deliberately (86eyrtz74).** `Order type`
+> exports `storefront`, `Payment` exports `received`, `Fulfilment` exports
+> `self_collect`. A CSV is read by other software as well as by people, so a
+> bookkeeping formula matching `="received"` keeps working — this export has
+> never changed an enum's spelling and should not start.
+>
+> The **table** shows the same columns worded for a person ("Storefront",
+> "Paid", "Self-collect") via the registry's `display`, which is a view concern
+> and stays out of `value`. If you want the pretty wording in a spreadsheet,
+> that is a formatting step there, not a change here.
+
 The ticket was drafted assuming nothing existed. In reality the **subscription
 billing spine already shipped** (`86expn2qg`, [`manual-subscription.md`](./manual-subscription.md)):
 the `invoices` / `subscriptions` / `billingConfig` tables, `issueInvoice`,
@@ -49,8 +60,44 @@ Pure, render-free (unit-tested):
 - `convex/lib/orderInboxFilter.ts` — the inbox filter predicate
   (`buildInboxPredicate`, `compareInboxOrder`), **extracted from `searchOrders`**
   so the export and the live inbox can't diverge.
-- `convex/lib/orderCsv.ts` — CSV row mapping, RFC-4180 escaping, and
-  **formula-injection defense** (a field starting `= + - @` is prefixed `'`).
+- `convex/lib/orderCsv.ts` — the **column registry** (see below), RFC-4180
+  escaping, and **formula-injection defense** (a field starting `= + - @` is
+  prefixed `'` — every address line is buyer-typed, so this matters more since
+  86eyrtz74 than it did).
+
+### The column registry (86eyrtz74)
+
+`ORDER_COLUMNS` is the single definition of "an order as a row": 36 entries,
+each with a `key`, a `label` (used as BOTH the CSV header and the table header),
+a `group` (sections the table's column picker), a `width`, and a `value(order)`
+accessor. **The CSV and the dashboard table render from the same array** — the
+table exists to stop sellers exporting out of habit, which only works if it
+shows what the export does, and two lists would drift on the first addition.
+
+Adding a column = one entry in that array. It appears in the CSV, in the table,
+and in the column picker with no other change.
+
+- `ordersToCsv(rows, columnKeys?)` narrows to a subset — the table's "export
+  visible columns". Key resolution is **lenient**: unknown keys are dropped (a
+  client on an older build must never fail an export over a renamed column) and
+  an empty/absent list means every column.
+- **The totals identity holds for every order shape**:
+  `Subtotal + Custom work + Pickup fee + Delivery fee = Total`. Before
+  86eyrtz74 there was no `Custom work` column while `computeOrderTotals` folded
+  the mockup quote into `total`, so a made-to-order row silently failed to
+  reconcile. The five columns are kept **adjacent** so a human can check it by
+  eye, and a test pins that adjacency.
+- **`Categories (current)` is a LIVE lookup**, not a snapshot — categories are
+  deliberately never frozen onto an order line (see
+  [`product-categories.md`](./product-categories.md)), so the cell is what those
+  products are filed under *today*. Deduped and sorted across all lines, comma-
+  separated. Resolved by `attachOrderCategories`, batched by distinct
+  `productId` per page.
+- **`orders.trackingToken` is deliberately absent**, along with internal ids,
+  storage ids and the `gateway*` / `confirmationPush*` plumbing. The token is
+  the capability that unlocks the buyer's no-auth tracking page and exports get
+  emailed to bookkeepers; a test fails loudly if a token-derived column is ever
+  added.
 
 Rendering (pdf-lib, runs in the default Convex runtime — no `"use node"`):
 - `convex/lib/pdf/render.ts` — `buildOrderReceiptPdf` / `buildSubscriptionInvoicePdf`.
@@ -122,6 +169,11 @@ Backend:
   ("Exported the latest N … narrow the date range") rather than returning
   silently-incomplete books. Returns `{ csv, count, capped }`. An action (not a
   query) because it's a one-shot file generation, not a subscription.
+  Takes an optional `columnKeys` (the table's visible set) and `showPinned`,
+  which is passed in lockstep with the inbox so the CSV holds exactly the rows
+  the seller was looking at — forced-in pins included. Rows come back
+  **pinned-first**, the same order the inbox shows, and the `Pinned` column
+  keeps those rows identifiable once the file is open in Excel.
 
 Frontend:
 - `src/components/order/receipt-download-button.tsx` — used by the seller order

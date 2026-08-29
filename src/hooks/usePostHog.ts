@@ -1,7 +1,7 @@
 import { useRouterState } from "@tanstack/react-router";
 import type { PostHog } from "posthog-js";
 import { useEffect } from "react";
-import { isTrackingTokenPath } from "../lib/analytics-privacy";
+import { isCapabilityTokenPath } from "../lib/analytics-privacy";
 import { clientEnv } from "../lib/env";
 import {
 	POSTHOG_DEFAULT_HOST,
@@ -74,8 +74,8 @@ export function usePostHog(): void {
 		// The tracking URL is the buyer's capability secret, so PostHog must not
 		// merely avoid *sending* the path — it must not load, because the SDK
 		// reads `window.location` itself. Same rule and same predicate as GA and
-		// Clarity; see `isTrackingTokenPath`.
-		if (isTrackingTokenPath(pathname)) return;
+		// Clarity; see `isCapabilityTokenPath`.
+		if (isCapabilityTokenPath(pathname)) return;
 
 		const host = clientEnv.VITE_POSTHOG_HOST ?? POSTHOG_DEFAULT_HOST;
 		void bootPostHog(key, host).then((posthog) => {

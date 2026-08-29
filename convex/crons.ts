@@ -55,6 +55,40 @@ crons.daily(
 	{},
 );
 
+// Claim links (86eyq0epn): auto-cancel orders whose payment deadline passed —
+// the carried timer's teeth (stock decremented at commit comes back). Every
+// minute so "time's up" on the buyer's page and the actual cancel stay close;
+// the by_payment_due index keeps each run a near-empty range read. The
+// predicate protects claimed / fee-pending / live-payment-session orders —
+// see convex/lib/orderClaims.ts isAutoCancelDue.
+crons.interval(
+	"cancel unpaid orders past their payment deadline",
+	{ minutes: 1 },
+	internal.orderClaims.cancelUnpaidDueOrders,
+	{},
+);
+
+// Claim links (86eyq0epn): flip open claims past their fixed deadline to
+// `expired`. Reads judge expiry live, so this keeps the status buckets true
+// (claims list, purge eligibility). Every 5 min like the session sweep — a
+// 15-minute live window reads expired instantly either way.
+crons.interval(
+	"expire stale claim links",
+	{ minutes: 5 },
+	internal.orderClaims.expireStaleClaims,
+	{},
+);
+
+// PDPA retention: DELETE dead claims (expired/cancelled) ~30 days after they
+// died — they hold buyer phone numbers + names. Completed claims are kept
+// (they link to an order; order retention is the Compliance Pack's job).
+crons.daily(
+	"purge stale claim links",
+	{ hourUTC: 3, minuteUTC: 45 },
+	internal.orderClaims.purgeStaleClaims,
+	{},
+);
+
 // Log retention (86eyetzt7) — windows live in convex/lib/retention.ts, policy
 // table in docs/data-retention.md. Three daily purges; orderEvents (tied to
 // order retention, 86eydwct5) and optOuts (a standing legal instruction) are

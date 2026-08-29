@@ -15,6 +15,8 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
+import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import type { Country } from "../../../convex/lib/country";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
@@ -25,6 +27,10 @@ import {
 	timeMinutesFromHhmm,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import {
+	collectMinQuantityShortfalls,
+	minOrderValueShortfall,
+} from "../../../convex/lib/minOrderRules";
 import {
 	assertWithinOpeningHours,
 	defaultTimeWithinHours,
@@ -37,15 +43,10 @@ import {
 	WEEKDAY_NAMES,
 	weekdayIndexMyt,
 } from "../../../convex/lib/openingHours";
-import { SG_STATE_LABEL } from "../../../convex/lib/address";
-import type { Country } from "../../../convex/lib/country";
-import {
-	collectMinQuantityShortfalls,
-	minOrderValueShortfall,
-} from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
+import { displayAddressState } from "../../lib/address-display";
 import { readAnalyticsDistinctId } from "../../lib/posthog";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
@@ -54,7 +55,6 @@ import {
 	formatMobile,
 	formatPrice,
 } from "../../lib/format";
-import { displayAddressState } from "../../lib/address-display";
 import { composeCustomerNote } from "../../lib/order-note";
 import { loadSavedAddress, saveAddress } from "../../lib/saved-address";
 import {
@@ -130,7 +130,9 @@ interface SanitizedDeliveryAddress {
 	placeId?: string;
 }
 
-function sanitizeAddress(
+// Exported for the claim-link checkout (86eyq0epn), which submits the same
+// address shape to orderClaims.commit — one sanitizer for both forms.
+export function sanitizeAddress(
 	raw: CheckoutAddressValues,
 	country: Country,
 ): SanitizedDeliveryAddress {
@@ -369,10 +371,8 @@ export function CheckoutPage({
 			// hours (86eyp5rav), so the required field never costs a tap unless
 			// the buyer cares.
 			fulfilmentTime: hhmmFromMinutes(
-				defaultTimeWithinHours(
-					openingHours,
-					mytMidnightFromYmd(defaultYmd),
-				) ?? defaultFulfilmentTimeMinutes(mytMidnightFromYmd(defaultYmd)),
+				defaultTimeWithinHours(openingHours, mytMidnightFromYmd(defaultYmd)) ??
+					defaultFulfilmentTimeMinutes(mytMidnightFromYmd(defaultYmd)),
 			),
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).

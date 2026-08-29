@@ -280,11 +280,11 @@ function GlobalOptOutPanel() {
 			<div>
 				<h3 className="font-semibold">Manual opt-out</h3>
 				<p className="text-sm text-muted-foreground">
-					For buyers who can't text STOP themselves — e.g. a counter buyer
-					whose number the cashier typed. Suppresses marketing/broadcast sends
-					from every store on the shared number; the confirmation for an order
-					they placed still delivers. The buyer can reply START (or be
-					re-activated here) to undo it.
+					For buyers who can't text STOP themselves — e.g. a counter buyer whose
+					number the cashier typed. Suppresses marketing/broadcast sends from
+					every store on the shared number; the confirmation for an order they
+					placed still delivers. The buyer can reply START (or be re-activated
+					here) to undo it.
 				</p>
 			</div>
 			<div className="flex flex-col gap-2 sm:flex-row">
@@ -384,7 +384,10 @@ function OptOutRegister() {
 	return (
 		// MASK_PII: every row carries a buyer's number. Masked already, but the
 		// attribute keeps the whole region out of replay if a field is ever added.
-		<div {...MASK_PII} className="flex flex-col gap-2 border-border border-t pt-3">
+		<div
+			{...MASK_PII}
+			className="flex flex-col gap-2 border-border border-t pt-3"
+		>
 			<div className="flex items-baseline justify-between gap-2">
 				<h4 className="font-medium text-sm">Currently opted out</h4>
 				{list ? (

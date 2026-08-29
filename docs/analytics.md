@@ -13,9 +13,10 @@ env var is set, so local dev and preview builds never pollute production data.
 
 All three hooks are called in `RootDocument`
 ([`src/routes/__root.tsx`](../src/routes/__root.tsx)), so analytics load on
-every route (storefront + `/app`) **except `/track/*`, which no provider ever
-observes** — see Privacy §1. ClickUp `86eyb7021` (Clarity), `86eyn25fk` (GA
-tracking-token exclusion), `86eyrayux` (PostHog).
+every route (storefront + `/app`) **except the capability-token routes
+`/track/*` and `/claim/*`, which no provider ever observes** — see Privacy §1.
+ClickUp `86eyb7021` (Clarity), `86eyn25fk` (GA tracking-token exclusion), PR
+#227 review (`/claim`), `86eyrayux` (PostHog).
 
 ## Why three providers is not redundancy
 
@@ -55,7 +56,7 @@ sessions by seller or plan.
 ```ts
 const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
 if (!projectId || clarityInitialized) return;
-if (isTrackingTokenPath(pathname)) return;
+if (isCapabilityTokenPath(pathname)) return;
 Clarity.init(projectId);
 ```
 
@@ -233,25 +234,37 @@ Session replay is materially more invasive than pageview analytics — it ships 
 reconstruction of the rendered page to a third party. Three controls, all in the
 repo rather than behind a dashboard toggle:
 
-### 1. `/track/*` never reaches any provider
+### 1. Capability-token routes never reach any provider
 
-[`isTrackingTokenPath`](../src/lib/analytics-privacy.ts) is the single
-predicate all three hooks share: `useClarity` and `usePostHog` refuse to boot on
-the buyer tracking page, and `useGoogleAnalytics` neither initializes nor sends
-a pageview there.
-Masking governs DOM content, not the **observed page address**, and
-`/track/<token>` carries the buyer's capability secret in the URL — that token
-grants reading the order, claiming payment, and editing the delivery
-address/phone with no auth (see CLAUDE.md). Recording it would export the
-secret to Microsoft/Google/PostHog and to anyone with those dashboards' access.
+[`isCapabilityTokenPath`](../src/lib/analytics-privacy.ts) is the single
+predicate all three hooks share: `useClarity` and `usePostHog` refuse to
+boot on them, and `useGoogleAnalytics` neither initializes nor sends a
+pageview there. Masking
+governs DOM content, not the **observed page address**, and these URLs *are*
+the secret:
+
+| Route | What the token in the URL grants, with no auth |
+| --- | --- |
+| `/track/<token>` | Read the order, claim payment, edit the delivery address/phone (see CLAUDE.md). |
+| `/claim/<token>` | Read the buyer's name/phone and the frozen lines, **and commit**: `orderClaims.commit` creates a real order and decrements the seller's stock. |
+
+Recording either would export the secret to Microsoft/Google/PostHog and to
+anyone with those dashboards' access — for Clarity, alongside a session replay
+of the buyer's checkout.
 
 PostHog is the strictest case of the three: with autocapture or replay on it
-would capture the token from the URL **and** from the DOM. It never loads there,
-and [`stripTrackingReferrer`](../src/lib/posthog.ts) additionally blanks any
-`$referrer` pointing at a `/track` path — defence in depth for the one channel
-that could still carry the token onto a page PostHog *is* allowed to see (every
+would capture the token from the URL **and** from the DOM. It never loads on
+these routes, and [`stripTrackingReferrer`](../src/lib/posthog.ts) additionally
+blanks any `$referrer` pointing at one — defence in depth for the one channel
+that could still carry a token onto a page PostHog *is* allowed to see (every
 anchor on the tracking page currently sets `rel="noreferrer"`, so this is not a
 live hole today, but it is one a single future `<a href>` would reopen).
+
+**Any new buyer route with a token in its path belongs in that predicate.**
+`/claim` shipped guarded against Clerk (`BUYER_ROUTE_IDS`) but not against
+analytics; the two lists cover the same class of route and are worth changing
+together.
+
 
 For GA specifically, full exclusion beats redacting the sent path: gtag
 auto-collects the real `page_location` from the browser on every hit once the
@@ -262,11 +275,12 @@ into the storefront boots GA on that first non-token pathname.
 **Ops note (GA property setting, not repo):** keep GA4 Enhanced Measurement's
 "Page changes based on browser history events" OFF — if enabled, gtag fires
 its own page_view with the full URL on SPA navigations, bypassing the hook.
-No client-side link navigates into `/track` today, so this is defence in
-depth, not a live hole.
+No client-side link navigates into `/track` or `/claim` today, so this is
+defence in depth, not a live hole.
 
-Nothing links to `/track` client-side (buyers arrive from a WhatsApp link, i.e.
-a fresh document load), so the exclusion is complete rather than best-effort.
+Nothing links to either route client-side (buyers arrive from a WhatsApp link,
+i.e. a fresh document load), so the exclusion is complete rather than
+best-effort.
 
 ### 2. PII regions are masked in markup
 
