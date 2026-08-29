@@ -164,6 +164,25 @@ describe("the shipped RELEASES content", () => {
 		}
 	});
 
+	test("the newest entry never claims a version this build isn't running", () => {
+		// The failure this guards is invisible at runtime by design: a release PR
+		// that adds notes but forgets the `package.json` bump ships notes for a
+		// version nobody is on, and `releasesInBuild` filters them out silently —
+		// so the release announces NOTHING and looks like it worked. `<=` rather
+		// than `===` because most releases earn no entry at all (see
+		// docs/whats-new.md), which legitimately leaves the newest note behind the
+		// running version.
+		const version = JSON.parse(
+			readFileSync(join(__dirname, "../../package.json"), "utf8"),
+		).version as string;
+		const newest = RELEASES[0];
+		if (newest === undefined) return;
+		expect(
+			compareCalendarVersions(newest.version, version),
+			`the newest release note is ${newest.version} but package.json is ${version} — bump package.json in this release PR`,
+		).toBeLessThanOrEqual(0);
+	});
+
 	test("has no duplicate versions", () => {
 		const seen = new Set(RELEASES.map((r) => r.version));
 		expect(seen.size).toBe(RELEASES.length);
