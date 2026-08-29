@@ -12,6 +12,7 @@ import {
 } from "../../../convex/lib/orderCsv";
 import {
 	COUNTRY_PAYMENT_METHODS,
+	ORDER_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
@@ -81,6 +82,10 @@ export interface OrderFilterValue {
 	statuses: string[];
 	/** Frozen line categories to keep (86eyrtz74). Same mirroring rule. */
 	categories: string[];
+	/** Keep orders with NO categories — the twin of `methodUnspecified`. Without
+	 * it "select every category" silently drops them, and categories are
+	 * optional so that is the common case (PR #235 review). */
+	categoriesUnspecified: boolean;
 	/**
 	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
 	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
@@ -105,6 +110,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		v.sources.length +
 		v.statuses.length +
 		v.categories.length +
+		(v.categoriesUnspecified ? 1 : 0) +
 		v.attributionSources.length
 	);
 }
@@ -195,6 +201,13 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, categories: x.categories.filter((y) => y !== c) }),
 		});
 	}
+	if (v.categoriesUnspecified) {
+		tokens.push({
+			key: "cat-none",
+			label: "Uncategorized",
+			clear: (x) => ({ ...x, categoriesUnspecified: false }),
+		});
+	}
 	for (const src of v.sources) {
 		tokens.push({
 			key: `source-${src}`,
@@ -272,6 +285,7 @@ export function clearedFilters(): OrderFilterValue {
 		sources: [],
 		statuses: [],
 		categories: [],
+		categoriesUnspecified: false,
 		attributionSources: [],
 	};
 }
@@ -286,9 +300,35 @@ export function clearedFilters(): OrderFilterValue {
 export function methodChoicesFor(
 	country: Country,
 	selected: readonly OrderPaymentMethod[],
+	/**
+	 * Rails that actually appear in the seller's orders (from
+	 * `searchOrders.facets.paymentMethod`). Folded in alongside the selected
+	 * ones because `paymentMethod.ts` says it plainly: never gate a label, a
+	 * filter MATCH or a stamp on the country list — only the pickers.
+	 *
+	 * Without this, an MY seller whose HitPay settled a GrabPay order could not
+	 * see a GrabPay option at all, and "select all" quietly excluded those
+	 * orders while the panel claimed nothing was filtered (PR #235 review).
+	 */
+	present: readonly OrderPaymentMethod[] = [],
 ): OrderPaymentMethod[] {
 	const offered = COUNTRY_PAYMENT_METHODS[country];
-	return [...offered, ...selected.filter((m) => !offered.includes(m))];
+	const extra: OrderPaymentMethod[] = [];
+	for (const m of [...selected, ...present]) {
+		if (!offered.includes(m) && !extra.includes(m)) extra.push(m);
+	}
+	return [...offered, ...extra];
+}
+
+/** The rails a facet tally actually saw, in registry order so the picker stays
+ * stable as counts move. `""` (unspecified) is not a rail. */
+export function methodsPresentIn(
+	facets: OrderFilterFacets | undefined,
+): OrderPaymentMethod[] {
+	if (!facets) return [];
+	return ORDER_PAYMENT_METHODS.filter(
+		(m) => (facets.paymentMethod[m] ?? 0) > 0,
+	);
 }
 
 /**
@@ -373,6 +413,16 @@ export function OrderFilters({
 				: [...value.attributionSources, src],
 		});
 	}
+
+	// ONE list drives the options, the total AND the select-all set. They were
+	// three separate expressions, and only the rendered options folded in a rail
+	// the country doesn't offer — so select-all excluded orders whose method the
+	// picker was happily showing (PR #235 review).
+	const methodChoices = methodChoicesFor(
+		country,
+		value.method,
+		methodsPresentIn(facets),
+	);
 
 	const showCustomDates =
 		customDates ||
@@ -568,18 +618,16 @@ export function OrderFilters({
 										selected={
 											value.method.length + (value.methodUnspecified ? 1 : 0)
 										}
-										total={methodChoicesFor(country, value.method).length + 1}
+										total={methodChoices.length + 1}
 										onToggleAll={(all) =>
 											onChange({
 												...value,
-												method: all
-													? methodChoicesFor(country, value.method)
-													: [],
+												method: all ? methodChoices : [],
 												methodUnspecified: all,
 											})
 										}
 									>
-										{methodChoicesFor(country, value.method).map((m) => (
+										{methodChoices.map((m) => (
 											<FilterOptionRow
 												key={m}
 												label={PAYMENT_METHOD_LABELS[m]}
@@ -610,14 +658,22 @@ export function OrderFilters({
 									{(availableCategories?.length ?? 0) > 1 ? (
 										<FilterSection
 											title="Categories"
-											selected={value.categories.length}
-											total={availableCategories?.length ?? 0}
+											// "Uncategorized" counts as one of the choices, so selecting
+											// the whole section genuinely matches every order — without it,
+											// select-all silently dropped every uncategorized order while
+											// the hint claimed nothing was filtered (PR #235 review).
+											selected={
+												value.categories.length +
+												(value.categoriesUnspecified ? 1 : 0)
+											}
+											total={(availableCategories?.length ?? 0) + 1}
 											onToggleAll={(all) =>
 												onChange({
 													...value,
 													categories: all
 														? [...(availableCategories ?? [])]
 														: [],
+													categoriesUnspecified: all,
 												})
 											}
 										>
@@ -637,6 +693,20 @@ export function OrderFilters({
 													}
 												/>
 											))}
+											{/* Last and muted, like "Unspecified" under Payment method: it
+											    names an absence, not one of the seller's own categories. */}
+											<FilterOptionRow
+												label="Uncategorized"
+												muted
+												count={facets?.category[""] ?? 0}
+												selected={value.categoriesUnspecified}
+												onToggle={() =>
+													onChange({
+														...value,
+														categoriesUnspecified: !value.categoriesUnspecified,
+													})
+												}
+											/>
 										</FilterSection>
 									) : null}
 

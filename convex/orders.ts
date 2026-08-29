@@ -1955,6 +1955,9 @@ export const searchOrders = query({
 	// ANY line carries ANY of these. Free-form names (the seller's own
 	// catalogue), so v.string(); the picker is driven by `availableCategories`.
 	categories: v.optional(v.array(v.string())),
+	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
+	// without which "select every category" silently drops them (86eyrtz74).
+	categoriesUnspecified: v.optional(v.boolean()),
 	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
@@ -1996,6 +1999,7 @@ export const searchOrders = query({
 			sources,
 			statuses,
 			categories,
+			categoriesUnspecified,
 			attributionSources,
 			searchText,
 			showPinned,
@@ -2029,6 +2033,7 @@ export const searchOrders = query({
 			sources,
 			statuses,
 			categories,
+			categoriesUnspecified,
 			attributionSources,
 			searchText,
 			showPinned,
@@ -2124,7 +2129,13 @@ export const searchOrders = query({
 			// An order counts ONCE per category it contains, never once per line —
 			// a two-cake order is one order in the "Cakes" filter, and the count
 			// beside the option has to be the number of rows it will show.
-			for (const name of orderCategoryNames(o)) bump(categoryTally, name);
+			const names = orderCategoryNames(o);
+			// "" is the count of orders carrying NO categories, which the picker
+			// offers as "Uncategorized" — the paymentMethod tally's own convention.
+			// Categories are optional, so this is a real and often large answer,
+			// not a gap.
+			if (names.length === 0) bump(categoryTally, "");
+			for (const name of names) bump(categoryTally, name);
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
@@ -2163,7 +2174,11 @@ export const searchOrders = query({
 			// alphabetical tie-break — the `availableSources` rule, for the same
 			// reason: a picker that reshuffles under the seller is worse than one
 			// in a slightly arbitrary but stable order.
+			// Named categories only — the "" (uncategorized) tally lives in the
+			// facets, and the picker appends its option last rather than sorting
+			// an absence in among real names.
 			availableCategories: [...categoryTally.entries()]
+				.filter(([key]) => key !== "")
 				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 				.map(([key]) => key),
 			// Per-option row counts for the header filters. Plain objects rather
@@ -2234,6 +2249,9 @@ const exportFilterValidators = {
 	// ANY line carries ANY of these. Free-form names (the seller's own
 	// catalogue), so v.string(); the picker is driven by `availableCategories`.
 	categories: v.optional(v.array(v.string())),
+	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
+	// without which "select every category" silently drops them (86eyrtz74).
+	categoriesUnspecified: v.optional(v.boolean()),
 	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.

@@ -32,6 +32,7 @@ const EMPTY: Pick<
 	| "sources"
 	| "statuses"
 	| "categories"
+	| "categoriesUnspecified"
 > = {
 	payment: [],
 	method: [],
@@ -40,6 +41,7 @@ const EMPTY: Pick<
 	sources: [],
 	statuses: [],
 	categories: [],
+	categoriesUnspecified: false,
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -81,6 +83,7 @@ describe("OrderFilters", () => {
 				attributionSources: ["tiktok", "direct"],
 				statuses: [],
 				categories: [],
+				categoriesUnspecified: false,
 			}),
 		).toBe(9);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
@@ -501,6 +504,104 @@ describe("OrderFilters — per-section select all / clear (86eyrtz74)", () => {
 		expect(screen.queryByRole("checkbox", { name: /^due date —/i })).toBeNull();
 		expect(
 			screen.queryByRole("checkbox", { name: /^order date —/i }),
+		).toBeNull();
+	});
+});
+
+describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
+	const section = (name: string) =>
+		screen.getByRole("checkbox", { name: new RegExp(`^${name} —`, "i") });
+
+	const FACETS = {
+		status: {},
+		category: { Cakes: 9, "": 4 },
+		source: {},
+		paymentStatus: {},
+		// An MY store whose HitPay settled a GrabPay order. GrabPay is not an MY
+		// rail, so nothing in the country list would ever offer it.
+		paymentMethod: { cash: 5, grabpay: 3 },
+		attribution: {},
+	};
+
+	it("selecting all categories INCLUDES the uncategorized ones", () => {
+		// The finding: uncategorized orders vanished while the panel claimed
+		// nothing had been filtered. Categories are optional, so a partly
+		// categorized catalogue is the common case, not an edge one.
+		const { onChange } = renderFilters({
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		fireEvent.click(section("Categories"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({
+				categories: ["Cakes", "Drinks"],
+				categoriesUnspecified: true,
+			}),
+		);
+	});
+
+	it("offers Uncategorized as a real, counted choice", () => {
+		renderFilters({
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "Uncategorized, 4 orders" }),
+		).toBeTruthy();
+	});
+
+	it("the category section only reads FULL once uncategorized is on too", () => {
+		const withNames = {
+			...EMPTY,
+			mockup: false,
+			categories: ["Cakes", "Drinks"],
+		};
+		renderFilters({
+			value: withNames,
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		expect((section("Categories") as HTMLInputElement).indeterminate).toBe(
+			true,
+		);
+		cleanup();
+		renderFilters({
+			value: { ...withNames, categoriesUnspecified: true },
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		expect((section("Categories") as HTMLInputElement).checked).toBe(true);
+	});
+
+	it("offers a rail the country doesn't sell but the orders actually used", () => {
+		// paymentMethod.ts: never gate a label or a filter MATCH on the country
+		// list — only the pickers. GrabPay had no option at all in an MY store.
+		renderFilters({ country: "MY", facets: FACETS });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: optionNamed("GrabPay") }),
+		).toBeTruthy();
+	});
+
+	it("selecting all payment methods includes that off-list rail", () => {
+		const { onChange } = renderFilters({ country: "MY", facets: FACETS });
+		openFilters();
+		fireEvent.click(section("Payment method"));
+		const [call] = onChange.mock.calls;
+		expect(call[0].method).toContain("grabpay");
+		expect(call[0].methodUnspecified).toBe(true);
+	});
+
+	it("a rail with no orders and no selection stays out of the picker", () => {
+		// The list is country + actually-present, not every rail that exists.
+		renderFilters({ country: "MY", facets: FACETS });
+		openFilters();
+		expect(
+			screen.queryByRole("button", { name: optionNamed("PayNow") }),
 		).toBeNull();
 	});
 });

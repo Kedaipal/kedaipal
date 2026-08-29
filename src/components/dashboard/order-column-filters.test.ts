@@ -26,6 +26,7 @@ function filters() {
 		state: {
 			statuses: [],
 			categories: [],
+			categoriesUnspecified: false,
 			sources: [],
 			paymentStatuses: [],
 			paymentMethods: [],

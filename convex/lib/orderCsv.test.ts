@@ -12,6 +12,7 @@ import {
 	humanizeEnum,
 	orderCategoryNames,
 	orderColumnDisplay,
+	orderColumnSortValue,
 	orderToCsvRow,
 	ordersToCsv,
 } from "./orderCsv";
@@ -591,5 +592,38 @@ describe("humanizeEnum", () => {
 	test("empty stays empty", () => {
 		expect(humanizeEnum("")).toBe("");
 		expect(humanizeEnum("__")).toBe("");
+	});
+});
+
+describe("Status sorts by lifecycle, not by spelling (PR #235 review)", () => {
+	// Alphabetical is the wrong answer on a status column whichever words you
+	// use — a seller clicking Status wants the pipeline grouped in order. It
+	// also sidesteps the mismatch a text sort would have: the cell renders the
+	// retailer's CUSTOM stage name, which `display` can never reach.
+	const column = ORDER_COLUMNS_BY_KEY.get("status");
+
+	const at = (status: string) => {
+		if (!column) throw new Error("no column");
+		return orderColumnSortValue(column, { ...minimal, status });
+	};
+
+	test("orders the pipeline, not the alphabet", () => {
+		const pipeline = [
+			"pending",
+			"confirmed",
+			"packed",
+			"shipped",
+			"delivered",
+			"cancelled",
+		];
+		const keys = pipeline.map(at);
+		expect(keys).toEqual([...keys].sort((a, b) => Number(a) - Number(b)));
+		// Alphabetically "cancelled" would lead and "shipped" would sit mid-list.
+		expect(Number(at("pending"))).toBeLessThan(Number(at("cancelled")));
+		expect(Number(at("packed"))).toBeLessThan(Number(at("shipped")));
+	});
+
+	test("an unknown status sinks rather than leading", () => {
+		expect(Number(at("who_knows"))).toBeGreaterThan(Number(at("cancelled")));
 	});
 });

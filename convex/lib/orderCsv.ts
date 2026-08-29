@@ -15,6 +15,7 @@
 import { sourceLabel } from "./attribution";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
+import { ORDER_STATUS_KEYS, type OrderStatus } from "./orderStatus";
 import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
@@ -518,6 +519,18 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// any future consumer — it capitalises the anchor and cannot reach a
 		// custom stage name, which needs the retailer's `orderStages` config.
 		display: (o) => humanizeEnum(o.status),
+		// Sorted by LIFECYCLE position, not by either spelling. Alphabetical on a
+		// status column is the wrong answer whichever words you use — a seller
+		// clicking Status wants the pipeline grouped in order, not "Cancelled,
+		// Confirmed, Delivered, Packed". It also sidesteps the mismatch a text
+		// sort would have (PR #235 review): the cell shows the retailer's custom
+		// stage name while `display` can only reach the anchor, so sorting on
+		// either would order rows by words that aren't on screen.
+		sortKey: (o) => {
+			const i = ORDER_STATUS_KEYS.indexOf(o.status as OrderStatus);
+			// An unknown status sinks rather than leading the list.
+			return i < 0 ? ORDER_STATUS_KEYS.length : i;
+		},
 	},
 	{
 		key: "orderType",

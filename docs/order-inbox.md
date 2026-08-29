@@ -314,6 +314,13 @@ WhatsApp.
     fixed width: with only two or three columns shown the table still spans its
     box and the browser stretches proportionally, which beats a strip of dead
     space.
+- **Status sorts by LIFECYCLE position**, not by either spelling (`sortKey` →
+  `ORDER_STATUS_KEYS.indexOf`). Alphabetical is wrong on a status column
+  whichever words you use — a seller clicking Status wants the pipeline grouped
+  in order, not "Cancelled, Confirmed, Delivered, Packed". It also sidesteps a
+  mismatch a text sort would have: the cell renders the retailer's CUSTOM stage
+  name, which `display` can never reach, so sorting on either spelling would
+  order rows by words that aren't on screen (PR #235 review).
 - **Per-column sorting**, client-side over the window the inbox already holds,
   so it costs no extra reads. Comparison is **typed, not lexical**: columns
   carry an optional `sortKey` (see `orderColumnSortValue`) returning the
