@@ -23,6 +23,16 @@ ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
 ## Reconciliation with the existing codebase
 
+> **Cell values are human-readable, not stored enums (86eyrtz74).** `Order
+> type` exports *Online / Counter / Claim link*, `Payment` exports *Paid* (not
+> `received`), `Payment method` uses the settings-screen rail names,
+> `Fulfilment` reads *Self-collect*, and `Cancelled reason` humanizes
+> `payment_window_expired` to *Payment window expired*. This matches what the
+> table shows — one registry, one truth. **A bookkeeping formula matching the
+> old raw values (`="received"`, `="storefront"`) needs updating.** `Status`
+> exports the capitalised anchor and does **not** carry a retailer's custom
+> stage name; see [`z8r3fdadkm`](https://app.clickup.com/t/z8r3fdadkm).
+
 The ticket was drafted assuming nothing existed. In reality the **subscription
 billing spine already shipped** (`86expn2qg`, [`manual-subscription.md`](./manual-subscription.md)):
 the `invoices` / `subscriptions` / `billingConfig` tables, `issueInvoice`,

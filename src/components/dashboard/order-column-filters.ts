@@ -1,7 +1,13 @@
 import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
-import type { OrderColumnKey } from "../../../convex/lib/orderCsv";
+import {
+	ORDER_SOURCE_KEYS,
+	ORDER_SOURCE_LABELS,
+	type OrderColumnKey,
+	PAYMENT_STATUS_KEYS,
+	PAYMENT_STATUS_LABELS,
+} from "../../../convex/lib/orderCsv";
 import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
@@ -72,18 +78,6 @@ export interface OrderColumnFilterBinding {
 
 /** The sentinel the payment-method picker uses for "no method recorded". */
 export const METHOD_UNSPECIFIED = "";
-
-const SOURCE_LABELS: Record<string, string> = {
-	storefront: "Online",
-	counter: "Counter",
-	claim: "Claim link",
-};
-
-const PAYMENT_STATUS_LABELS: Record<string, string> = {
-	unpaid: "Unpaid",
-	claimed: "Claimed",
-	received: "Paid",
-};
 
 const DUE_WINDOW_LABELS: Record<FulfilmentWindow, string> = {
 	today: "Due today",
@@ -158,8 +152,8 @@ export function buildOrderColumnFilters({
 
 	map.set("orderType", {
 		label: "Order type",
-		options: ["storefront", "counter", "claim"].map((v) =>
-			opt(v, SOURCE_LABELS[v] ?? v, facets?.source),
+		options: ORDER_SOURCE_KEYS.map((v) =>
+			opt(v, ORDER_SOURCE_LABELS[v] ?? v, facets?.source),
 		),
 		selected: state.sources,
 		onChange: (sources) => onApply({ sources }),
@@ -177,7 +171,7 @@ export function buildOrderColumnFilters({
 
 	map.set("paymentStatus", {
 		label: "Payment",
-		options: ["unpaid", "claimed", "received"].map((v) =>
+		options: PAYMENT_STATUS_KEYS.map((v) =>
 			opt(v, PAYMENT_STATUS_LABELS[v] ?? v, facets?.paymentStatus),
 		),
 		selected: state.paymentStatuses,

@@ -204,6 +204,34 @@ WhatsApp.
   real `<Link>`. A `<tr>` cannot be an anchor, so the link is what keeps
   middle-click, cmd-click and keyboard navigation working; the row click is the
   convenience on top. Same shape as `customer-list.tsx`.
+- **Every cell reads as language, not storage** (86eyrtz74). Money, dates,
+  booleans and attribution were always formatted for a human; the raw enums
+  were the inconsistency. `Order type` prints **Online / Counter / Claim link**,
+  `Payment` prints **Paid** (not the stored `received`), `Payment method` uses
+  the rail names the settings screen uses, `Fulfilment` reads **Self-collect**,
+  and `Cancelled reason` humanizes (`payment_window_expired` → *Payment window
+  expired*) via `humanizeEnum`, which is idempotent so prose passes through.
+  - **The labels live in the registry, not the filters.** `ORDER_SOURCE_LABELS`
+    and `PAYMENT_STATUS_LABELS` are exported from `orderCsv.ts` and imported by
+    both the header filters and the Filters panel. The drift Hermoolah hit —
+    the filter offering "Online" while the column printed `storefront` —
+    happened *because* the label lived in the filter and the raw value in the
+    column. `order-column-filters.test.ts` drives each filter's own options back
+    through its column's own renderer, so whichever side changes, they must
+    agree. The single deliberate exception is `METHOD_UNSPECIFIED_CELL`: the
+    picker names the absence of a method ("Unspecified") because an unlabelled
+    row is unpickable, while the cell stays blank because a word there would
+    read as a real rail.
+  - ⚠️ **This changed the CSV too** — one registry, one truth. A seller with a
+    formula matching `="received"` or `="storefront"` needs to update it. That
+    is the deliberate trade: the alternative is every seller reading
+    `self_collect` in their books forever.
+  - **`Status` is the one cell that can't be fully resolved here.** The registry
+    is pure, so it capitalises the anchor (`Packed`) but cannot reach a
+    retailer's custom stage names — the TABLE renders `StatusBadge` with the
+    resolved label, so a store that renamed "packed" to "Ready for Pickup" sees
+    the custom word on screen and the anchor word in the CSV. Tracked in
+    [`z8r3fdadkm`](https://app.clickup.com/t/z8r3fdadkm).
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same
   registry the CSV writes, so the table and the export can't disagree, **in
   which columns appear AND in what order**. Visibility, order **and width**

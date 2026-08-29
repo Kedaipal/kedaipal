@@ -5,6 +5,12 @@ import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
+	ORDER_SOURCE_KEYS,
+	ORDER_SOURCE_LABELS,
+	PAYMENT_STATUS_KEYS,
+	PAYMENT_STATUS_LABELS,
+} from "../../../convex/lib/orderCsv";
+import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
@@ -21,19 +27,22 @@ export type PaymentStatus = "unpaid" | "claimed" | "received";
 /** Checkout surface the order came through (mirrors orders.source). */
 export type OrderSource = "storefront" | "counter" | "claim";
 
-const SOURCE_OPTIONS: { value: OrderSource; label: string }[] = [
-	{ value: "storefront", label: "Online" },
-	{ value: "counter", label: "Counter" },
-	// Claim-link orders (86eyq0epn): seller-keyed at a locked price, completed
-	// by the buyer — the TikTok Live funnel.
-	{ value: "claim", label: "Claim link" },
-];
+// Both derived from the registry's maps rather than restated here: the Order
+// type column printed `storefront` while this panel said "Online" precisely
+// because the label lived in one place and the column in another (86eyrtz74).
+// Claim-link orders (86eyq0epn) are seller-keyed at a locked price and
+// completed by the buyer — the TikTok Live funnel.
+const SOURCE_OPTIONS: { value: OrderSource; label: string }[] =
+	ORDER_SOURCE_KEYS.map((value) => ({
+		value: value as OrderSource,
+		label: ORDER_SOURCE_LABELS[value],
+	}));
 
-const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [
-	{ value: "unpaid", label: "Unpaid" },
-	{ value: "claimed", label: "Claimed" },
-	{ value: "received", label: "Paid" },
-];
+const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] =
+	PAYMENT_STATUS_KEYS.map((value) => ({
+		value: value as PaymentStatus,
+		label: PAYMENT_STATUS_LABELS[value],
+	}));
 
 const DUE_WINDOWS: { value: FulfilmentWindow; label: string }[] = [
 	{ value: "today", label: "Today" },

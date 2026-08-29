@@ -15,6 +15,7 @@
 import { sourceLabel } from "./attribution";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
+import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -39,6 +40,68 @@ export function csvAmount(minorUnits: number): string {
 function csvFlag(on: boolean | undefined): string {
 	return on ? "Yes" : "";
 }
+
+/**
+ * A stored enum value as a person reads it: `payment_window_expired` →
+ * `Payment window expired` (86eyrtz74).
+ *
+ * Every other cell in this registry is already formatted for a human — money
+ * through `csvAmount`, dates through `csvDate`, booleans through `csvFlag`,
+ * attribution through `sourceLabel`. The raw enums were the inconsistency, not
+ * this. Idempotent, so a value that is already prose passes through unchanged.
+ */
+export function humanizeEnum(raw: string): string {
+	const spaced = raw.replace(/[_-]+/g, " ").trim();
+	if (spaced === "") return "";
+	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * How an order's checkout surface is NAMED — the single source for the Order
+ * type column, its header filter and the Filters panel.
+ *
+ * It lives here because the column and the filter drifting apart is exactly
+ * what went wrong: the panel said "Online" while the table printed
+ * `storefront`, so a seller ticking a filter saw a value that matched nothing
+ * on screen. One map, imported by all three, is the fix for the cause rather
+ * than the symptom.
+ */
+export const ORDER_SOURCE_LABELS: Record<string, string> = {
+	storefront: "Online",
+	counter: "Counter",
+	claim: "Claim link",
+};
+
+/**
+ * What the Payment method cell shows when no rail was recorded: nothing. The
+ * picker names that absence "Unspecified" because an unlabelled row in a list
+ * is unpickable — a word in the CELL would read as a real payment rail. Named
+ * so the test that holds filter labels and column text together can point at
+ * the one place they deliberately differ.
+ */
+export const METHOD_UNSPECIFIED_CELL = "";
+
+/** Checkout surfaces in the order they are offered, so every picker agrees. */
+export const ORDER_SOURCE_KEYS = ["storefront", "counter", "claim"] as const;
+
+/** Payment state as named everywhere. Note `received` reads as **Paid** — the
+ * stored value and the seller's word for it were never the same, which is the
+ * second place the column and its filter disagreed. */
+export const PAYMENT_STATUS_LABELS: Record<string, string> = {
+	unpaid: "Unpaid",
+	claimed: "Claimed",
+	received: "Paid",
+};
+
+export const PAYMENT_STATUS_KEYS = ["unpaid", "claimed", "received"] as const;
+
+/** How the order reaches the buyer. `self_collect` humanizes to "Self collect";
+ * the app has always written it hyphenated, so it is spelled out here. */
+const FULFILMENT_LABELS: Record<string, string> = {
+	delivery: "Delivery",
+	self_collect: "Self-collect",
+	collection: "Collection",
+};
 
 export type CsvOrder = {
 	shortId: string;
@@ -333,10 +396,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "fulfilment",
 		defaultVisible: true,
 		width: 116,
-		value: (o) =>
-			o.deliveryDirection === "collection"
-				? "collection"
-				: (o.deliveryMethod ?? ""),
+		value: (o) => {
+			const key =
+				o.deliveryDirection === "collection"
+					? "collection"
+					: (o.deliveryMethod ?? "");
+			return FULFILMENT_LABELS[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "addressLine1",
@@ -418,7 +484,12 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// (StatusBadge), and a truncated status is a status you have to hover to
 		// read, so the column is sized to make that the exception.
 		width: 148,
-		value: (o) => o.status,
+		// Capitalised, but NOT the retailer's custom stage name: resolving that
+		// needs their `orderStages` config, which this pure registry cannot
+		// reach. The TABLE renders `StatusBadge` with the resolved label instead,
+		// so a store that renamed "packed" to "Ready for Pickup" sees the custom
+		// word on screen and the anchor word in the CSV. Tracked separately.
+		value: (o) => humanizeEnum(o.status),
 	},
 	{
 		key: "orderType",
@@ -427,7 +498,12 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		width: 110,
 		// Legacy orders carry no stamped source and read as "storefront" —
 		// the same default the inbox predicate applies.
-		value: (o) => o.source ?? "storefront",
+		// The label the seller sees everywhere else, not the stored key: the
+		// header filter offers "Online" and the column printed `storefront`.
+		value: (o) => {
+			const key = o.source ?? "storefront";
+			return ORDER_SOURCE_LABELS[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "attribution",
@@ -443,14 +519,29 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "payment",
 		defaultVisible: true,
 		width: 110,
-		value: (o) => o.paymentStatus ?? "unpaid",
+		// `received` reads as "Paid" — the stored value and the seller's word for
+		// it were never the same, and only the filter knew that.
+		value: (o) => {
+			const key = o.paymentStatus ?? "unpaid";
+			return PAYMENT_STATUS_LABELS[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "paymentMethod",
 		label: "Payment method",
 		group: "payment",
 		width: 140,
-		value: (o) => o.paymentMethod ?? "",
+		// The same rail names the settings screen and the filter use — `tng` and
+		// `bank_transfer` are storage, not language.
+		value: (o) => {
+			const key = o.paymentMethod;
+			if (!key) return "";
+			// `CsvOrder.paymentMethod` is a plain string (a legacy row can hold a
+			// rail no longer offered), so the lookup is widened rather than the
+			// type narrowed — an unknown rail humanizes instead of blanking.
+			const known: Record<string, string> = PAYMENT_METHOD_LABELS;
+			return known[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "paymentReference",
@@ -565,7 +656,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Cancelled reason",
 		group: "order",
 		width: 180,
-		value: (o) => o.cancelledReason ?? "",
+		value: (o) => humanizeEnum(o.cancelledReason ?? ""),
 	},
 	{
 		key: "pinned",
