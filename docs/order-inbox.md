@@ -338,6 +338,23 @@ WhatsApp.
     column's values* and those values are enumerable. Date RANGES (two bounds,
     no option list), cross-cutting toggles like "needs mockup" that aren't any
     column, and the summary of everything applied stay in the panel.
+  - **Select-all per section**, on the same `ui/bulk-select-row.tsx` the column
+    picker uses: a tri-state heading that selects the whole dimension, or clears
+    it when already full. "Everything except Cancelled" becomes tick-once,
+    untick-once instead of ticking five times.
+    ⚠️ **A filter is not a column picker.** Selecting EVERY option in a
+    dimension narrows nothing — "Unpaid OR Claimed OR Paid" is every order. That
+    is a legitimate stop on the way to "all except X", so it is allowed, but the
+    section says *"Every option selected — same as no payment filter"* rather
+    than leaving the seller wondering why their list didn't move; clicking the
+    full heading again is the way back. **There is deliberately no GLOBAL
+    select-all** — selecting every option in every dimension is just "no
+    filter", which the footer's `Clear all (N)` already expresses. Sections that
+    are single-select (the overlapping due-date windows), a range (order date)
+    or a lone toggle (needs mockup) keep a plain heading: forcing the pattern
+    everywhere is how a good idea becomes clutter.
+    Payment method counts **Unspecified** as one of its choices, since it is a
+    real answer a seller filters on.
   - **One control, both surfaces.** `ui/filter-option-row.tsx` — a box, a label
     and a count — is rendered by the header menus *and* by the Filters dialog.
     They were two shapes for one idea (chips in the dialog, rows in the header),

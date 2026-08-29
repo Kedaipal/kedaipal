@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import {
 	activeFilterCount,
 	methodChoicesFor,
@@ -410,5 +411,96 @@ describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
 		expect(onChange).toHaveBeenCalledWith(
 			expect.objectContaining({ payment: [] }),
 		);
+	});
+});
+
+describe("OrderFilters — per-section select all / clear (86eyrtz74)", () => {
+	const section = (name: string) =>
+		screen.getByRole("checkbox", { name: new RegExp(`^${name} —`, "i") });
+
+	it("selects every option in a section in one click", () => {
+		// "Everything except Cancelled" is tick-once-untick-once, not tick five
+		// times — which is the whole reason this control exists.
+		const { onChange } = renderFilters();
+		openFilters();
+		fireEvent.click(section("Status"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [...ORDER_STATUS_KEYS] }),
+		);
+	});
+
+	it("clicking a FULL section clears it — the way back from select-all", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...ORDER_STATUS_KEYS] },
+		});
+		openFilters();
+		fireEvent.click(section("Status"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [] }),
+		);
+	});
+
+	it("a partly-filled section FILLS rather than clears", () => {
+		// Completing the set is the expected reading of a half-ticked box.
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+		});
+		openFilters();
+		fireEvent.click(section("Status"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [...ORDER_STATUS_KEYS] }),
+		);
+	});
+
+	it("the section box is tri-state over its own options", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+		});
+		openFilters();
+		const box = section("Status") as HTMLInputElement;
+		expect(box.checked).toBe(false);
+		expect(box.indeterminate).toBe(true);
+	});
+
+	it("says when a full section narrows nothing", () => {
+		// Selecting every option is a legitimate stop on the way to "all except
+		// X", but on its own it matches every order — so the panel says so
+		// rather than leaving the seller wondering why the list didn't move.
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...ORDER_STATUS_KEYS] },
+		});
+		openFilters();
+		expect(screen.getByText(/same as no status filter/i)).toBeTruthy();
+	});
+
+	it("stays quiet when the section is only partly selected", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+		});
+		openFilters();
+		expect(screen.queryByText(/same as no status filter/i)).toBeNull();
+	});
+
+	it("payment method counts Unspecified as one of its choices", () => {
+		// It is a real answer a seller can filter on, so a section reading "all
+		// selected" while it was off would be wrong.
+		const { onChange } = renderFilters();
+		openFilters();
+		fireEvent.click(section("Payment method"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ methodUnspecified: true }),
+		);
+	});
+
+	it("single-select and range sections get NO bulk control", () => {
+		// A select-all over overlapping due-date presets, or over a date range,
+		// is meaningless — forcing the pattern everywhere is how a good idea
+		// becomes clutter.
+		renderFilters();
+		openFilters();
+		expect(screen.queryByRole("checkbox", { name: /^due date —/i })).toBeNull();
+		expect(
+			screen.queryByRole("checkbox", { name: /^order date —/i }),
+		).toBeNull();
 	});
 });

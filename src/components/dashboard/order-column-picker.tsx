@@ -1,11 +1,11 @@
-import { Check, Columns3, Minus } from "lucide-react";
+import { Columns3 } from "lucide-react";
 import {
 	ORDER_COLUMN_GROUP_LABELS,
 	ORDER_COLUMNS,
 	type OrderColumnGroup,
 	type OrderColumnKey,
 } from "../../../convex/lib/orderCsv";
-import { cn } from "../../lib/utils";
+import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
 import { FilterOptionRow } from "../ui/filter-option-row";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -39,89 +39,6 @@ const GROUP_ORDER: OrderColumnGroup[] = [
 	"fulfilment",
 ];
 
-type TriState = "none" | "some" | "all";
-
-function triStateOf(total: number, shown: number): TriState {
-	if (shown === 0) return "none";
-	return shown === total ? "all" : "some";
-}
-
-/**
- * A parent checkbox over a set of columns. Deliberately the same silhouette as
- * the option rows beneath it — same box, same row height — but bolder and
- * tinted when active, so it reads as their heading rather than as a sibling.
- */
-function BulkRow({
-	label,
-	state,
-	shown,
-	total,
-	onToggle,
-	tone = "group",
-}: {
-	label: string;
-	state: TriState;
-	shown: number;
-	total: number;
-	onToggle: () => void;
-	tone?: "group" | "master";
-}) {
-	const on = state !== "none";
-	return (
-		// A REAL checkbox, visually replaced. `indeterminate` is a DOM property,
-		// not an attribute, so it is set through a ref — and it is what makes a
-		// screen reader announce "partially checked" natively, which is stronger
-		// than role="checkbox" + aria-checked="mixed" and is what the linter is
-		// right to push for.
-		<label
-			className={cn(
-				"flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-muted has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
-				tone === "master" && "bg-muted/50 hover:bg-muted",
-			)}
-		>
-			<input
-				type="checkbox"
-				className="sr-only"
-				checked={state === "all"}
-				aria-label={`${label} — ${shown} of ${total} columns shown`}
-				ref={(el) => {
-					if (el) el.indeterminate = state === "some";
-				}}
-				onChange={onToggle}
-			/>
-			<span
-				aria-hidden="true"
-				className={cn(
-					"flex size-[17px] shrink-0 items-center justify-center rounded-[5px] border transition-colors",
-					on
-						? "border-accent bg-accent text-accent-foreground"
-						: "border-border bg-background",
-				)}
-			>
-				{state === "all" ? (
-					<Check className="size-3" />
-				) : state === "some" ? (
-					// A dash, never a tick: "some" and "all" must not look alike.
-					<Minus className="size-3" />
-				) : null}
-			</span>
-			<span
-				className={cn(
-					"min-w-0 flex-1 truncate",
-					tone === "master"
-						? "text-[13px] font-semibold"
-						: "text-[11px] font-bold uppercase tracking-wider text-muted-foreground",
-				)}
-			>
-				{label}
-			</span>
-			<span className="shrink-0 tabular-nums text-[11.5px] text-muted-foreground">
-				{shown}/{total}
-			</span>
-		</label>
-	);
-}
-
 export function OrderColumnPicker({
 	isVisible,
 	onToggle,
@@ -138,7 +55,6 @@ export function OrderColumnPicker({
 	isCustomised: boolean;
 }) {
 	const allKeys = ORDER_COLUMNS.map((c) => c.key);
-	const masterState = triStateOf(ORDER_COLUMNS.length, visibleCount);
 
 	return (
 		<Popover>
@@ -185,13 +101,13 @@ export function OrderColumnPicker({
 				    column — instead of competing with Reset, which does a different
 				    job (defaults, including order and widths). */}
 				<div className="border-b border-border px-1.5 py-1">
-					<BulkRow
+					<BulkSelectRow
 						tone="master"
 						label="All columns"
-						state={masterState}
-						shown={visibleCount}
+						unit="columns"
+						selected={visibleCount}
 						total={ORDER_COLUMNS.length}
-						onToggle={() => onSetMany(allKeys, masterState !== "all")}
+						onToggle={(selectAll) => onSetMany(allKeys, selectAll)}
 					/>
 					{visibleCount === 1 ? (
 						// Says the constraint where the seller is clicking, rather than
@@ -208,15 +124,14 @@ export function OrderColumnPicker({
 						if (cols.length === 0) return null;
 						const keys = cols.map((c) => c.key);
 						const shown = keys.filter(isVisible).length;
-						const state = triStateOf(cols.length, shown);
 						return (
 							<div key={group} className="pb-1">
-								<BulkRow
+								<BulkSelectRow
 									label={ORDER_COLUMN_GROUP_LABELS[group]}
-									state={state}
-									shown={shown}
+									unit="columns"
+									selected={shown}
 									total={cols.length}
-									onToggle={() => onSetMany(keys, state !== "all")}
+									onToggle={(selectAll) => onSetMany(keys, selectAll)}
 								/>
 								{cols.map((c) => (
 									<div key={c.key} className="pl-4">
