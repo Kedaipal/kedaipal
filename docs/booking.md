@@ -252,6 +252,32 @@ never a generic error.
   Approve/Decline leads). A booking-worded template is a Meta-registration
   follow-up.
 
+### Cancelling: the reason is the buyer's only channel
+
+Decline always demanded a reason; **cancel used to capture nothing at all**, so
+a guest whose approved booking was cancelled — possibly after paying and
+planning around the dates — learned nothing. That is the worse of the two
+cases, and it was the silent one.
+
+One field, **`orders.cancellationNote`**, now serves every way an order ends:
+declining a request, cancelling a booking, and cancelling an ordinary order.
+It replaced `bookingDeclineReason` outright (free to rename — nothing had
+merged). **Required on both booking paths, optional elsewhere**, enforced
+server-side in `resolveCancellationNote` so neither `updateStatus` nor
+`bulkUpdateStatus` can skip it. Ordinary orders stay optional on purpose:
+cancel is high-frequency there (test rows, spam, the buyer changed their mind)
+and a forced reason is friction for no gain.
+
+**Always buyer-visible — there is deliberately no private twin.** A "private"
+reason field is one bug away from being leaked, and the seller's internal
+notes already live on the order timeline. The UI says so under the field.
+
+Bulk cancel **prompts once for the selection** and applies that reason to
+every order it cancels; the per-order booking rule still runs server-side, so
+a batch containing a booking is refused by name rather than silently skipping
+it. The shared `ConfirmDialog` grew an optional `reason` config for this, so
+the order page and the bulk bar ask the same way.
+
 ### Buyer tracking states (design §2)
 
 - **Awaiting**: amber "Request sent" card — "{store} usually confirms within

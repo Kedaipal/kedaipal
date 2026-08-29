@@ -37,6 +37,11 @@ export function generateTrackingToken(): string {
 	return token;
 }
 
+/** Longest buyer-visible cancellation/decline reason. Shared by every path
+ * that ends an order: declining a booking request, cancelling a booking, and
+ * an ordinary cancel. */
+export const CANCELLATION_NOTE_MAX = 200;
+
 export type OrderItemPricing = {
 	price: number;
 	quantity: number;

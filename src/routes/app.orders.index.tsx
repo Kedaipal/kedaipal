@@ -625,12 +625,19 @@ function OrdersRoute() {
 			{ status: "cancelled", label: "Cancel orders", destructive: true },
 		] as BulkAction[]);
 
-	async function applyBulk(status: BulkAction["status"]) {
+	async function applyBulk(
+		status: BulkAction["status"],
+		cancellationNote?: string,
+	) {
 		const ids = [...selected] as Id<"orders">[];
 		if (ids.length === 0) return;
 		setBulkBusy(true);
 		try {
-			const res = await bulkUpdateStatus({ orderIds: ids, status });
+			const res = await bulkUpdateStatus({
+				orderIds: ids,
+				status,
+				cancellationNote,
+			});
 			// Name the actionable skip reasons — a bare "skipped 2" leaves the
 			// seller guessing why their bulk action half-worked.
 			const skipReasons = [
