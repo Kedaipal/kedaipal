@@ -144,7 +144,10 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 
 	it("still reads as a quote when the bespoke line has no price", () => {
 		expect(
-			describeProduct({ options: [], rows: [], customLine: { price: "" } }, "RM"),
+			describeProduct(
+				{ options: [], rows: [], customLine: { price: "" } },
+				"RM",
+			),
 		).toBe("Made to order · Price on quote");
 	});
 

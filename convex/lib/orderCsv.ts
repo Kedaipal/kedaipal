@@ -73,14 +73,15 @@ export type CsvOrder = {
 	 * the export now carries it so the two can be reconciled. */
 	attributionSource?: string;
 	customer: { name?: string; waPhone?: string };
-	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
-	/** Names of every category the order's products belong to, deduped across
-	 * lines. Resolved LIVE at export time, not frozen on the order — categories
-	 * are a pure browse layer by design (docs/product-categories.md), so this is
-	 * "what these products are filed under today", which can differ from what
-	 * they were filed under when sold. Named "Categories (current)" for exactly
-	 * that reason. */
-	categories?: string[];
+	items: Array<{
+		name: string;
+		variantLabel?: string;
+		quantity: number;
+		/** Categories the product was filed under AT SALE TIME (86eyrtz74) —
+		 * frozen per line at order create, not looked up. See
+		 * `orders.items[].categoryNames` in convex/schema.ts. */
+		categoryNames?: string[];
+	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
 	 * `computeOrderTotals` ADDS it to `total` alongside the fees, so WITHOUT
@@ -126,6 +127,21 @@ export type CsvOrder = {
 	 * identifiable — and removable — once the CSV is open in Excel. */
 	pinnedAt?: number;
 };
+
+/**
+ * The categories an order touched — deduped and sorted across its lines.
+ *
+ * Deduped ACROSS lines because the column answers "what kinds of thing is this
+ * order", not "what is each line": a 12-line order of one category should read
+ * "Kuih", not "Kuih, Kuih, Kuih…". The per-line values stay per-line on the
+ * document so a future sales-by-category report can attribute revenue to a
+ * line rather than guessing from the union.
+ */
+export function orderCategoryNames(o: CsvOrder): string[] {
+	const names = new Set<string>();
+	for (const it of o.items) for (const n of it.categoryNames ?? []) names.add(n);
+	return [...names].sort((a, b) => a.localeCompare(b));
+}
 
 export type OrderColumnKey =
 	| "shortId"
@@ -183,6 +199,30 @@ export const ORDER_COLUMN_GROUP_LABELS: Record<OrderColumnGroup, string> = {
 	money: "Money",
 };
 
+/**
+ * Resize bounds for a table column, in px (86eyrtz74).
+ *
+ * The floor keeps a column readable — below ~80px a header truncates to two
+ * characters and a sort glyph, which is a column you can no longer identify,
+ * and a column dragged to nothing has no handle left to drag back. The ceiling
+ * stops one column (an address, a long item list) from being dragged so wide
+ * that everything else is pushed out of the viewport with no visible cue as to
+ * why. Both are deliberately generous: they exist to prevent dead ends, not to
+ * second-guess the seller's layout.
+ */
+export const ORDER_COLUMN_MIN_WIDTH = 80;
+export const ORDER_COLUMN_MAX_WIDTH = 640;
+
+/** Hold a width inside those bounds. Applied on every path that can set one —
+ * a keyboard nudge, and reading a stored layout back — so a width the bounds
+ * have since moved past can't survive a reload. */
+export function clampColumnWidth(width: number): number {
+	return Math.min(
+		ORDER_COLUMN_MAX_WIDTH,
+		Math.max(ORDER_COLUMN_MIN_WIDTH, Math.round(width)),
+	);
+}
+
 export interface OrderColumn {
 	key: OrderColumnKey;
 	/** CSV header AND table header — one label, so a seller reading the table
@@ -194,7 +234,9 @@ export interface OrderColumn {
 	/** In the table's default column set. The rest are opt-in via the picker —
 	 * every column is available, but 36 at once is unreadable. */
 	defaultVisible?: boolean;
-	/** Table column width in px. */
+	/** Table column width in px — the DEFAULT. The seller can drag it between
+	 * `ORDER_COLUMN_MIN_WIDTH` and `ORDER_COLUMN_MAX_WIDTH`, and double-clicking
+	 * the handle returns the column to this value. */
 	width: number;
 	value: (o: CsvOrder) => string;
 	/**
@@ -371,7 +413,11 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Status",
 		group: "order",
 		defaultVisible: true,
-		width: 116,
+		// Wide enough for the longest stock stage plus a two-word custom one
+		// ("Ready for Pickup") on one line — the pill truncates rather than wraps
+		// (StatusBadge), and a truncated status is a status you have to hover to
+		// read, so the column is sized to make that the exception.
+		width: 148,
 		value: (o) => o.status,
 	},
 	{
@@ -439,12 +485,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 	},
 	{
 		key: "categories",
-		label: "Categories (current)",
+		label: "Categories",
 		group: "items",
 		width: 180,
-		// Comma-separated flat list of every category across the order's
-		// products, deduped. See CsvOrder.categories for the drift caveat.
-		value: (o) => (o.categories ?? []).join(", "),
+		// Deduped, sorted union across the order's lines — the per-line values
+		// are frozen at sale time, so this needs no reads and no "(current)"
+		// hedge: it is what these products WERE filed under when sold.
+		value: (o) => orderCategoryNames(o).join(", "),
 	},
 	{
 		key: "subtotal",

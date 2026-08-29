@@ -44,7 +44,12 @@ function claim(overrides: Record<string, unknown> = {}) {
 				price: 10800,
 				quantity: 2,
 			},
-			{ name: "Garlic butter", variantLabel: undefined, price: 3000, quantity: 1 },
+			{
+				name: "Garlic butter",
+				variantLabel: undefined,
+				price: 3000,
+				quantity: 1,
+			},
 		],
 		sentCount: 1,
 		lastSentAt: NOW,

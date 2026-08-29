@@ -58,9 +58,7 @@ describe("StorefrontHeader — opening hours line (86eyp5rav)", () => {
 
 	it("renders the live status line when the store configured hours", () => {
 		render(
-			<StorefrontHeader
-				retailer={{ ...retailer, openingHours: allDayWeek }}
-			/>,
+			<StorefrontHeader retailer={{ ...retailer, openingHours: allDayWeek }} />,
 		);
 		expect(screen.getByText("Open 24 hours today")).toBeTruthy();
 	});

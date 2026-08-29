@@ -112,7 +112,7 @@ export function FeatureGrid() {
 											{m.handshake_card_badge()}
 										</span>
 									</div>
-								{/* flex-wrap: at carousel-slide width the two labels don't fit
+									{/* flex-wrap: at carousel-slide width the two labels don't fit
 									    one line, and a fixed-height pill clips wrapped text — let
 									    the row break to two full-width pills instead. */}
 									<div className="mt-2.5 flex flex-wrap gap-1.5">

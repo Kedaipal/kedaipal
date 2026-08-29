@@ -38,10 +38,10 @@ import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -637,9 +637,9 @@ function TrackingRoute() {
 				<div className="mt-6 flex items-start gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">
 					<Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
 					<p>
-						The payment window for this order ran out, so it was cancelled
-						and the items were released. Still want it? Message the store —
-						they can send you a fresh order link.
+						The payment window for this order ran out, so it was cancelled and
+						the items were released. Still want it? Message the store — they can
+						send you a fresh order link.
 					</p>
 				</div>
 			) : null}

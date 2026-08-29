@@ -185,7 +185,9 @@ describe("storefront variant helpers", () => {
 				expect(hasStartingPrice([{ price: 0, isCustom: true }])).toBe(false);
 			});
 			test("standard variants are fixed prices, however many", () => {
-				expect(hasStartingPrice([{ price: 5000 }, { price: 8000 }])).toBe(false);
+				expect(hasStartingPrice([{ price: 5000 }, { price: 8000 }])).toBe(
+					false,
+				);
 			});
 			test("a deactivated custom line doesn't qualify the price", () => {
 				// Buyers can't order it, so it can't be what the shown price is 'from'.

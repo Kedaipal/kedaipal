@@ -10,14 +10,35 @@ import {
 
 afterEach(cleanup);
 
+/**
+ * Filter options name themselves "<Label>, N orders" (86eyrtz74) so a screen
+ * reader hears the count — the label and count spans are adjacent, so the
+ * computed name would otherwise run together as "Unpaid7". Match the stem.
+ */
+function optionNamed(label: string): RegExp {
+	return new RegExp(
+		`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(,|$)`,
+		"i",
+	);
+}
+
 const EMPTY: Pick<
 	OrderFilterValue,
-	"payment" | "method" | "methodUnspecified" | "attributionSources"
+	| "payment"
+	| "method"
+	| "methodUnspecified"
+	| "attributionSources"
+	| "sources"
+	| "statuses"
+	| "categories"
 > = {
 	payment: [],
 	method: [],
 	methodUnspecified: false,
 	attributionSources: [],
+	sources: [],
+	statuses: [],
+	categories: [],
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -55,31 +76,59 @@ describe("OrderFilters", () => {
 				from: 1,
 				to: 2,
 				mockup: true,
-				source: "counter",
+				sources: ["counter"],
 				attributionSources: ["tiktok", "direct"],
+				statuses: [],
+				categories: [],
 			}),
 		).toBe(9);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
+		// Each selected surface counts on its own, like payment (86eyrtz74).
 		expect(
-			activeFilterCount({ ...EMPTY, mockup: false, source: "storefront" }),
-		).toBe(1);
+			activeFilterCount({
+				...EMPTY,
+				mockup: false,
+				sources: ["storefront", "claim"],
+			}),
+		).toBe(2);
 	});
 
-	it("toggling an order-type chip reports the source", () => {
+	it("toggling an order-type chip reports the surface", () => {
 		const { onChange } = renderFilters();
 		openFilters();
-		fireEvent.click(screen.getByRole("button", { name: "Counter" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("Counter") }),
+		);
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
 			mockup: false,
-			source: "counter",
+			sources: ["counter"],
+		});
+	});
+
+	it("order type is MULTI-select — surfaces add up rather than replace", () => {
+		// "Online or claim link, but not counter" is a real question; the
+		// single-value version could never ask it (86eyrtz74).
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, sources: ["storefront"] },
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("Claim link") }),
+		);
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			sources: ["storefront", "claim"],
 		});
 	});
 
 	it("toggling a payment chip reports the new selection", () => {
 		const { onChange } = renderFilters();
 		openFilters();
-		fireEvent.click(screen.getByRole("button", { name: "Unpaid" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("Unpaid") }),
+		);
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
 			payment: ["unpaid"],
@@ -90,7 +139,9 @@ describe("OrderFilters", () => {
 	it("toggling a method chip reports the new selection", () => {
 		const { onChange } = renderFilters();
 		openFilters();
-		fireEvent.click(screen.getByRole("button", { name: "DuitNow" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("DuitNow") }),
+		);
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
 			method: ["duitnow"],
@@ -101,7 +152,9 @@ describe("OrderFilters", () => {
 	it("toggling the Unspecified chip reports it (for online/legacy orders)", () => {
 		const { onChange } = renderFilters();
 		openFilters();
-		fireEvent.click(screen.getByRole("button", { name: "Unspecified" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("Unspecified") }),
+		);
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
 			methodUnspecified: true,
@@ -140,10 +193,14 @@ describe("OrderFilters — country-scoped method chips", () => {
 		renderFilters({ country: "MY" });
 		openFilters();
 		for (const label of ["DuitNow", "Touch 'n Go", "FPX"]) {
-			expect(screen.getByRole("button", { name: label })).toBeTruthy();
+			expect(
+				screen.getByRole("button", { name: optionNamed(label) }),
+			).toBeTruthy();
 		}
 		for (const label of ["PayNow", "PayLah!", "NETS", "GrabPay"]) {
-			expect(screen.queryByRole("button", { name: label })).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: optionNamed(label) }),
+			).toBeNull();
 		}
 	});
 
@@ -151,21 +208,29 @@ describe("OrderFilters — country-scoped method chips", () => {
 		renderFilters({ country: "SG" });
 		openFilters();
 		for (const label of ["PayNow", "PayLah!", "NETS", "GrabPay"]) {
-			expect(screen.getByRole("button", { name: label })).toBeTruthy();
+			expect(
+				screen.getByRole("button", { name: optionNamed(label) }),
+			).toBeTruthy();
 		}
 		for (const label of ["DuitNow", "Touch 'n Go", "FPX"]) {
-			expect(screen.queryByRole("button", { name: label })).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: optionNamed(label) }),
+			).toBeNull();
 		}
 		// Shared rails survive on both sides.
 		for (const label of ["Cash", "Bank transfer", "Card", "Other"]) {
-			expect(screen.getByRole("button", { name: label })).toBeTruthy();
+			expect(
+				screen.getByRole("button", { name: optionNamed(label) }),
+			).toBeTruthy();
 		}
 	});
 
 	it("toggling an SG rail reports it", () => {
 		const { onChange } = renderFilters({ country: "SG" });
 		openFilters();
-		fireEvent.click(screen.getByRole("button", { name: "PayNow" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("PayNow") }),
+		);
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
 			method: ["paynow"],
@@ -182,7 +247,9 @@ describe("OrderFilters — country-scoped method chips", () => {
 			value: { ...EMPTY, method: ["grabpay"], mockup: false },
 		});
 		openFilters();
-		const chips = screen.getAllByRole("button", { name: "GrabPay" });
+		const chips = screen.getAllByRole("button", {
+			name: optionNamed("GrabPay"),
+		});
 		expect(chips).toHaveLength(1);
 		fireEvent.click(chips[0]);
 		expect(onChange).toHaveBeenCalledWith({
@@ -201,5 +268,147 @@ describe("OrderFilters — country-scoped method chips", () => {
 			...methodChoicesFor("MY", []),
 			"paynow",
 		]);
+	});
+});
+
+describe("OrderFilters — status + categories mirror the header filters (86eyrtz74)", () => {
+	it("counts a status and a category like any other filter", () => {
+		expect(
+			activeFilterCount({
+				...EMPTY,
+				mockup: false,
+				statuses: ["packed", "shipped"],
+				categories: ["Cakes"],
+			}),
+		).toBe(3);
+	});
+
+	it("shows a header-set status as a removable token", () => {
+		// The gap this closes: filter by Status from the table, then hide the
+		// Status column or switch to cards — without a token the filter would be
+		// invisible AND unclearable.
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+			statusLabel: (st) => (st === "packed" ? "Ready for Pickup" : st),
+		});
+		fireEvent.click(
+			screen.getByRole("button", { name: /remove filter: ready for pickup/i }),
+		);
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			statuses: [],
+		});
+	});
+
+	it("lets a cards-view seller set a status, which has no table header to click", () => {
+		const { onChange } = renderFilters({
+			statusLabel: (st) => (st === "packed" ? "Ready for Pickup" : st),
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getByRole("button", { name: optionNamed("Ready for Pickup") }),
+		);
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			statuses: ["packed"],
+		});
+	});
+
+	it("hides the category section until there is a real choice to make", () => {
+		renderFilters({ availableCategories: ["Cakes"] });
+		openFilters();
+		expect(screen.queryByText("Categories")).toBeNull();
+		cleanup();
+		renderFilters({ availableCategories: ["Cakes", "Drinks"] });
+		openFilters();
+		expect(screen.getByText("Categories")).toBeTruthy();
+	});
+});
+
+describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
+	const FACETS = {
+		status: { packed: 6, delivered: 0 },
+		category: { Cakes: 9 },
+		source: { counter: 4 },
+		paymentStatus: { unpaid: 7 },
+		paymentMethod: { cash: 5, "": 4 },
+		attribution: { tiktok: 3 },
+	};
+
+	it("puts a row count on every option, ZERO included", () => {
+		// The count answers "is there anything in there?" before the seller
+		// commits, and a 0 answers "why did my list go empty?".
+		renderFilters({ facets: FACETS, statusLabel: (s) => s });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "packed, 6 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "delivered, 0 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Unpaid, 7 orders" }),
+		).toBeTruthy();
+		// "Unspecified" is the absence of a method, counted under the "" key.
+		expect(
+			screen.getByRole("button", { name: "Unspecified, 4 orders" }),
+		).toBeTruthy();
+	});
+
+	it("shows 0 rather than nothing while the counts are still loading", () => {
+		// A missing facet must not blank the panel — the options are still the
+		// seller's to pick, they just don't know the sizes yet.
+		renderFilters({ statusLabel: (s) => s });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "packed, 0 orders" }),
+		).toBeTruthy();
+	});
+
+	it("Clear all says how much it clears, and is absent with nothing to clear", () => {
+		renderFilters();
+		openFilters();
+		expect(screen.queryByRole("button", { name: /clear all/i })).toBeNull();
+		cleanup();
+		const { onChange } = renderFilters({
+			value: {
+				...EMPTY,
+				mockup: false,
+				statuses: ["packed"],
+				payment: ["unpaid"],
+			},
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (2)" }));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [], payment: [] }),
+		);
+	});
+
+	it("names the live result on the apply button", () => {
+		renderFilters({ resultCount: 6 });
+		openFilters();
+		expect(screen.getByRole("button", { name: "Show 6 orders" })).toBeTruthy();
+		cleanup();
+		renderFilters({ resultCount: 1 });
+		openFilters();
+		expect(screen.getByRole("button", { name: "Show 1 order" })).toBeTruthy();
+	});
+
+	it("keeps active selections removable at the top of the sheet", () => {
+		// A seller who opened the panel to undo ONE thing shouldn't have to hunt
+		// nine sections for the lit option.
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, payment: ["unpaid"] },
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getAllByRole("button", { name: /remove filter: unpaid/i })[0],
+		);
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ payment: [] }),
+		);
 	});
 });
