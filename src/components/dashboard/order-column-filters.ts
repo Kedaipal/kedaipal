@@ -1,9 +1,16 @@
 import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
-import type { OrderColumnKey } from "../../../convex/lib/orderCsv";
+import {
+	ORDER_SOURCE_KEYS,
+	ORDER_SOURCE_LABELS,
+	type OrderColumnKey,
+	PAYMENT_STATUS_KEYS,
+	PAYMENT_STATUS_LABELS,
+} from "../../../convex/lib/orderCsv";
 import {
 	COUNTRY_PAYMENT_METHODS,
+	ORDER_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
@@ -36,6 +43,10 @@ import type { ColumnFilterOption } from "../ui/column-filter-menu";
 export interface OrderColumnFilterState {
 	statuses: string[];
 	categories: string[];
+	/** Keep orders with NO categories. Folded into the picker as an
+	 * "Uncategorized" option via `CATEGORY_UNCATEGORIZED`, split back out on
+	 * apply — exactly how `paymentMethods` carries its own absence. */
+	categoriesUnspecified: boolean;
 	/** Checkout surface. */
 	sources: string[];
 	paymentStatuses: string[];
@@ -73,17 +84,9 @@ export interface OrderColumnFilterBinding {
 /** The sentinel the payment-method picker uses for "no method recorded". */
 export const METHOD_UNSPECIFIED = "";
 
-const SOURCE_LABELS: Record<string, string> = {
-	storefront: "Online",
-	counter: "Counter",
-	claim: "Claim link",
-};
-
-const PAYMENT_STATUS_LABELS: Record<string, string> = {
-	unpaid: "Unpaid",
-	claimed: "Claimed",
-	received: "Paid",
-};
+/** The picker sentinel for "no categories recorded". A seller's category can
+ * never be the empty string, so it cannot collide with a real name. */
+export const CATEGORY_UNCATEGORIZED = "";
 
 const DUE_WINDOW_LABELS: Record<FulfilmentWindow, string> = {
 	today: "Due today",
@@ -105,6 +108,19 @@ export interface BuildOrderColumnFiltersArgs {
 	statusLabel: (status: OrderStatus) => string;
 	/** Apply a partial change. The route turns this into a URL navigate. */
 	onApply: (patch: Partial<OrderColumnFilterState>) => void;
+}
+
+/** Rails to offer: what the country sells, plus whatever the window actually
+ * contains. Mirrors `methodChoicesFor` in the Filters panel. */
+function methodChoicesForPicker(
+	country: Country,
+	facets: OrderFilterFacets | undefined,
+): OrderPaymentMethod[] {
+	const offered = COUNTRY_PAYMENT_METHODS[country];
+	const extra = ORDER_PAYMENT_METHODS.filter(
+		(m) => !offered.includes(m) && (facets?.paymentMethod[m] ?? 0) > 0,
+	);
+	return [...offered, ...extra];
 }
 
 function opt(
@@ -148,18 +164,30 @@ export function buildOrderColumnFilters({
 	// checkout (86eyrtz74); a live junction lookup per row could never back a
 	// filter. Empty for a seller who has never made a category, which the hint
 	// has to explain rather than showing a blank panel.
+	// "Uncategorized" is one of the choices, last and named — without it,
+	// selecting every category silently drops every uncategorized order, and
+	// categories are optional so that is the common case (PR #235 review).
 	map.set("categories", {
 		label: "Categories",
-		options: availableCategories.map((c) => opt(c, c, facets?.category)),
-		selected: state.categories,
-		onChange: (categories) => onApply({ categories }),
+		options: [
+			...availableCategories.map((c) => opt(c, c, facets?.category)),
+			opt(CATEGORY_UNCATEGORIZED, "Uncategorized", facets?.category),
+		],
+		selected: state.categoriesUnspecified
+			? [...state.categories, CATEGORY_UNCATEGORIZED]
+			: state.categories,
+		onChange: (picked) =>
+			onApply({
+				categories: picked.filter((c) => c !== CATEGORY_UNCATEGORIZED),
+				categoriesUnspecified: picked.includes(CATEGORY_UNCATEGORIZED),
+			}),
 		emptyHint: "No categories on these orders yet",
 	});
 
 	map.set("orderType", {
 		label: "Order type",
-		options: ["storefront", "counter", "claim"].map((v) =>
-			opt(v, SOURCE_LABELS[v] ?? v, facets?.source),
+		options: ORDER_SOURCE_KEYS.map((v) =>
+			opt(v, ORDER_SOURCE_LABELS[v] ?? v, facets?.source),
 		),
 		selected: state.sources,
 		onChange: (sources) => onApply({ sources }),
@@ -177,7 +205,7 @@ export function buildOrderColumnFilters({
 
 	map.set("paymentStatus", {
 		label: "Payment",
-		options: ["unpaid", "claimed", "received"].map((v) =>
+		options: PAYMENT_STATUS_KEYS.map((v) =>
 			opt(v, PAYMENT_STATUS_LABELS[v] ?? v, facets?.paymentStatus),
 		),
 		selected: state.paymentStatuses,
@@ -189,8 +217,12 @@ export function buildOrderColumnFilters({
 	// rather than one of them.
 	map.set("paymentMethod", {
 		label: "Payment method",
+		// Country rails PLUS any rail the seller's orders actually used: a
+		// GrabPay-settled order in an MY store had no pickable option at all, so
+		// it could not be filtered to and select-all excluded it (PR #235 review).
+		// paymentMethod.ts: never gate a filter MATCH on the country list.
 		options: [
-			...COUNTRY_PAYMENT_METHODS[country].map((m: OrderPaymentMethod) =>
+			...methodChoicesForPicker(country, facets).map((m) =>
 				opt(m, PAYMENT_METHOD_LABELS[m], facets?.paymentMethod),
 			),
 			opt(METHOD_UNSPECIFIED, "Unspecified", facets?.paymentMethod),

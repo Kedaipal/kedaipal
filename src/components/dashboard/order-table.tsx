@@ -30,6 +30,7 @@ import {
 	ORDER_COLUMN_MAX_WIDTH,
 	ORDER_COLUMN_MIN_WIDTH,
 	type OrderColumn,
+	orderColumnDisplay,
 	orderColumnSortValue,
 } from "../../../convex/lib/orderCsv";
 import { MASK_PII } from "../../lib/analytics-privacy";
@@ -161,7 +162,9 @@ function Cell({
 			<StatusBadge status={order.status as OrderStatus} label={statusLabel} />
 		);
 	}
-	const text = column.value(order);
+	// `orderColumnDisplay`, never `column.value`: the latter is the stored value
+	// the CSV writes, not the wording a person should read (86eyrtz74).
+	const text = orderColumnDisplay(column, order);
 	if (text === "") {
 		// An em-dash reads as "nothing here"; an empty cell reads as a rendering
 		// bug — and it keeps the row's baseline intact.

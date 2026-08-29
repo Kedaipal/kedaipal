@@ -196,6 +196,40 @@ describe("buildInboxPredicate — categories (86eyrtz74)", () => {
 		expect(p(cake)).toBe(false);
 	});
 
+	test("selecting every category WITHOUT the uncategorized arm still drops them", () => {
+		// The bug (PR #235 review): `availableCategories` is tallied only from
+		// orders that HAVE categories, so "select all" could never reach an
+		// uncategorized order — while the panel claimed nothing was filtered.
+		const p = buildInboxPredicate({ categories: ["Cakes", "Drinks"] });
+		expect(p(mixed)).toBe(true);
+		expect(p(uncategorised)).toBe(false);
+		expect(p(legacy)).toBe(false);
+	});
+
+	test("categoriesUnspecified keeps the uncategorized ones", () => {
+		const p = buildInboxPredicate({ categoriesUnspecified: true });
+		expect(p(uncategorised)).toBe(true);
+		// Absent (predates the field) reads the same as recorded-empty — both are
+		// blank on screen, so both are "uncategorized" to a seller.
+		expect(p(legacy)).toBe(true);
+		expect(p(cake)).toBe(false);
+	});
+
+	test("every category PLUS uncategorized matches everything — the honest select-all", () => {
+		const p = buildInboxPredicate({
+			categories: ["Cakes", "Drinks"],
+			categoriesUnspecified: true,
+		});
+		for (const o of [cake, mixed, uncategorised, legacy]) {
+			expect(p(o)).toBe(true);
+		}
+	});
+
+	test("uncategorized alone is a filter, not a no-op", () => {
+		const p = buildInboxPredicate({ categoriesUnspecified: true });
+		expect(p(mixed)).toBe(false);
+	});
+
 	test("orders with no recorded categories never match a named one", () => {
 		const p = buildInboxPredicate({ categories: ["Cakes"] });
 		expect(p(uncategorised)).toBe(false);
@@ -562,5 +596,25 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 				searchText: "puchong",
 			})(rich),
 		).toBe(false);
+	});
+});
+
+describe("search matches both the stored value and the on-screen wording", () => {
+	// A seller typing "storefront" is reading the Order type column; one typing
+	// "received" may be reading an old export or a colleague's note. Neither
+	// guess should come back empty (86eyrtz74).
+	const o = order({ source: "storefront", paymentStatus: "received" });
+
+	test("finds an order by the word the column shows", () => {
+		expect(buildInboxPredicate({ searchText: "storefront" })(o)).toBe(true);
+		expect(buildInboxPredicate({ searchText: "paid" })(o)).toBe(true);
+	});
+
+	test("finds it by the value the CSV writes", () => {
+		expect(buildInboxPredicate({ searchText: "received" })(o)).toBe(true);
+	});
+
+	test("still misses what the order genuinely is not", () => {
+		expect(buildInboxPredicate({ searchText: "counter" })(o)).toBe(false);
 	});
 });

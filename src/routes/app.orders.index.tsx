@@ -151,6 +151,9 @@ type InboxSearch = {
 	st?: OrderStatus[];
 	/** Frozen line categories to keep (86eyrtz74). Free-form seller names. */
 	cat?: string[];
+	/** Keep orders with NO frozen categories (PR #235 review) — the twin of
+	 * `munspec`. Without it, selecting every category silently drops them. */
+	catunspec?: boolean;
 	/** Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys. Repeated
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
@@ -287,6 +290,10 @@ export const Route = createFileRoute("/app/orders/")({
 			sources: sources.length > 0 ? sources : undefined,
 			st: st.length > 0 ? st : undefined,
 			cat: cat.length > 0 ? cat : undefined,
+			catunspec:
+				search.catunspec === true || search.catunspec === "true"
+					? true
+					: undefined,
 			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
@@ -355,6 +362,7 @@ function OrdersRoute() {
 		sources = [],
 		st = [],
 		cat = [],
+		catunspec = false,
 		sort = "recent",
 		view: urlView,
 		nopin = false,
@@ -456,6 +464,7 @@ function OrdersRoute() {
 		sourcesKey,
 		stKey,
 		catKey,
+		catunspec,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
 		// Toggling pin privilege changes which rows are in the set.
@@ -501,6 +510,7 @@ function OrdersRoute() {
 							sources: sources.length > 0 ? sources : undefined,
 							statuses: st.length > 0 ? st : undefined,
 							categories: cat.length > 0 ? cat : undefined,
+							categoriesUnspecified: catunspec || undefined,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							searchText: debounced || undefined,
 							// Pins keep their privilege in the live inbox AND in the
@@ -601,6 +611,7 @@ function OrdersRoute() {
 		state: {
 			statuses: st,
 			categories: cat,
+			categoriesUnspecified: catunspec,
 			sources,
 			paymentStatuses: pay,
 			paymentMethods: munspec ? [...method, METHOD_UNSPECIFIED] : method,
@@ -640,6 +651,7 @@ function OrdersRoute() {
 		sources.length > 0 ||
 		st.length > 0 ||
 		cat.length > 0 ||
+		catunspec ||
 		asrc.length > 0;
 
 	function toggleBucket(next: InboxBucket) {
@@ -725,6 +737,8 @@ function OrdersRoute() {
 							: undefined;
 				if (patch.categories)
 					next.cat = patch.categories.length > 0 ? patch.categories : undefined;
+				if ("categoriesUnspecified" in patch)
+					next.catunspec = patch.categoriesUnspecified ? true : undefined;
 				if (patch.sources)
 					next.sources =
 						patch.sources.length > 0
@@ -776,6 +790,7 @@ function OrdersRoute() {
 				sources: undefined,
 				st: undefined,
 				cat: undefined,
+				catunspec: undefined,
 				asrc: undefined,
 			}),
 		});
@@ -806,6 +821,7 @@ function OrdersRoute() {
 						? (next.statuses as OrderStatus[])
 						: undefined,
 				cat: next.categories.length > 0 ? next.categories : undefined,
+				catunspec: next.categoriesUnspecified ? true : undefined,
 			}),
 		});
 	}
@@ -986,6 +1002,7 @@ function OrdersRoute() {
 					sources: sources.length > 0 ? sources : undefined,
 					statuses: st.length > 0 ? st : undefined,
 					categories: cat.length > 0 ? cat : undefined,
+					categoriesUnspecified: catunspec || undefined,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					searchText: debounced || undefined,
 					showPinned: showPinned || undefined,
@@ -1274,6 +1291,7 @@ function OrdersRoute() {
 								sources,
 								statuses: st,
 								categories: cat,
+								categoriesUnspecified: catunspec,
 								attributionSources: asrc,
 							}}
 							onChange={setFilters}
@@ -1353,6 +1371,7 @@ function OrdersRoute() {
 							<OrderColumnPicker
 								isVisible={columnState.isVisible}
 								onToggle={columnState.toggle}
+								onSetMany={columnState.setManyVisible}
 								onReset={columnState.reset}
 								visibleCount={columnState.visibleKeys.length}
 								isCustomised={columnState.isCustomised}

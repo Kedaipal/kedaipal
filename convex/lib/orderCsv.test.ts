@@ -9,7 +9,10 @@ import {
 	escapeCsvField,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
+	humanizeEnum,
 	orderCategoryNames,
+	orderColumnDisplay,
+	orderColumnSortValue,
 	orderToCsvRow,
 	ordersToCsv,
 } from "./orderCsv";
@@ -466,5 +469,161 @@ describe("default column set", () => {
 	});
 	test("column labels are unique — the CSV header must not repeat a name", () => {
 		expect(new Set(CSV_COLUMNS).size).toBe(CSV_COLUMNS.length);
+	});
+});
+
+describe("the CSV writes STORED values, the view reads them (86eyrtz74)", () => {
+	// The bug this closes: the Order type header filter offered "Online" while
+	// the column printed `storefront`, so a seller ticking a filter saw a value
+	// that matched nothing on screen. Money, dates, booleans and attribution
+	// were already formatted for a human — the raw enums were the odd ones out.
+	const raw: CsvOrder = {
+		...minimal,
+		source: "claim",
+		paymentStatus: "received",
+		paymentMethod: "bank_transfer",
+		deliveryMethod: "self_collect",
+		cancelledReason: "payment_window_expired",
+		status: "packed",
+	};
+
+	const shown = (key: string) => {
+		const column = ORDER_COLUMNS_BY_KEY.get(key as never);
+		if (!column) throw new Error(`no column ${key}`);
+		return orderColumnDisplay(column, raw);
+	};
+
+	test("the CSV keeps the stored value, so a bookkeeping formula holds", () => {
+		// Formatting inside `value` would have quietly rewritten every seller's
+		// export to fix a rendering problem. `="received"` still matches.
+		expect(cell(raw, "Order type")).toBe("claim");
+		expect(cell(raw, "Payment")).toBe("received");
+		expect(cell(raw, "Payment method")).toBe("bank_transfer");
+		expect(cell(raw, "Fulfilment")).toBe("self_collect");
+		expect(cell(raw, "Cancelled reason")).toBe("payment_window_expired");
+		expect(cell(raw, "Status")).toBe("packed");
+	});
+
+	test("the VIEW reads as language", () => {
+		expect(shown("orderType")).toBe("Claim link");
+		// `received` is the stored word; "Paid" is the seller's.
+		expect(shown("paymentStatus")).toBe("Paid");
+		expect(shown("paymentMethod")).toBe("Bank transfer");
+		expect(shown("fulfilment")).toBe("Self-collect");
+		expect(shown("cancelledReason")).toBe("Payment window expired");
+		expect(shown("status")).toBe("Packed");
+	});
+
+	test("a storefront order says STOREFRONT, not the generic 'Online'", () => {
+		// A claim-link order is online too, so "Online" names a category all
+		// three fit rather than telling the seller which one this is.
+		const store = ORDER_COLUMNS_BY_KEY.get("orderType");
+		if (!store) throw new Error("no column");
+		expect(orderColumnDisplay(store, minimal)).toBe("Storefront");
+	});
+
+	test("the two collect directions are never the same word", () => {
+		// `self_collect` = buyer collects from the seller; `collection` = the
+		// seller collects from the BUYER. "Self-collect" beside "Collection" in
+		// one column is two words for opposite trips.
+		const column = ORDER_COLUMNS_BY_KEY.get("fulfilment");
+		if (!column) throw new Error("no column");
+		const selfCollect = orderColumnDisplay(column, {
+			...minimal,
+			deliveryMethod: "self_collect",
+		});
+		const weCollect = orderColumnDisplay(column, {
+			...minimal,
+			deliveryDirection: "collection",
+		});
+		expect(selfCollect).toBe("Self-collect");
+		expect(weCollect).toBe("We collect");
+		expect(weCollect).not.toBe(selfCollect);
+	});
+
+	test("no VISIBLE cell leaks an underscore", () => {
+		// A sweep rather than a list, so a column added later that renders a raw
+		// enum fails here instead of shipping.
+		for (const column of ORDER_COLUMNS) {
+			expect(orderColumnDisplay(column, raw)).not.toMatch(/_/);
+		}
+	});
+
+	test("an unknown value humanizes instead of vanishing", () => {
+		// A legacy row can hold a rail that is no longer offered; blanking the
+		// cell would hide a real payment.
+		const legacy: CsvOrder = { ...minimal, paymentMethod: "old_rail" };
+		const column = ORDER_COLUMNS_BY_KEY.get("paymentMethod");
+		if (!column) throw new Error("no column");
+		expect(orderColumnDisplay(column, legacy)).toBe("Old rail");
+	});
+
+	test("blank stays blank in both — neither may invent a value", () => {
+		for (const key of ["cancelledReason", "paymentMethod"]) {
+			const column = ORDER_COLUMNS_BY_KEY.get(key as never);
+			if (!column) throw new Error(`no column ${key}`);
+			expect(column.value(minimal)).toBe("");
+			expect(orderColumnDisplay(column, minimal)).toBe("");
+		}
+	});
+
+	test("a column with nothing to reword displays its stored value", () => {
+		// `display` defaults to `value`, so there is no second list to drift.
+		const column = ORDER_COLUMNS_BY_KEY.get("shortId");
+		if (!column) throw new Error("no column");
+		expect(orderColumnDisplay(column, raw)).toBe(column.value(raw));
+	});
+});
+
+describe("humanizeEnum", () => {
+	test("underscores and dashes become spaces, first letter capitalised", () => {
+		expect(humanizeEnum("payment_window_expired")).toBe(
+			"Payment window expired",
+		);
+		expect(humanizeEnum("self-collect")).toBe("Self collect");
+	});
+
+	test("is idempotent, so prose passes through untouched", () => {
+		expect(humanizeEnum("Payment window expired")).toBe(
+			"Payment window expired",
+		);
+	});
+
+	test("empty stays empty", () => {
+		expect(humanizeEnum("")).toBe("");
+		expect(humanizeEnum("__")).toBe("");
+	});
+});
+
+describe("Status sorts by lifecycle, not by spelling (PR #235 review)", () => {
+	// Alphabetical is the wrong answer on a status column whichever words you
+	// use — a seller clicking Status wants the pipeline grouped in order. It
+	// also sidesteps the mismatch a text sort would have: the cell renders the
+	// retailer's CUSTOM stage name, which `display` can never reach.
+	const column = ORDER_COLUMNS_BY_KEY.get("status");
+
+	const at = (status: string) => {
+		if (!column) throw new Error("no column");
+		return orderColumnSortValue(column, { ...minimal, status });
+	};
+
+	test("orders the pipeline, not the alphabet", () => {
+		const pipeline = [
+			"pending",
+			"confirmed",
+			"packed",
+			"shipped",
+			"delivered",
+			"cancelled",
+		];
+		const keys = pipeline.map(at);
+		expect(keys).toEqual([...keys].sort((a, b) => Number(a) - Number(b)));
+		// Alphabetically "cancelled" would lead and "shipped" would sit mid-list.
+		expect(Number(at("pending"))).toBeLessThan(Number(at("cancelled")));
+		expect(Number(at("packed"))).toBeLessThan(Number(at("shipped")));
+	});
+
+	test("an unknown status sinks rather than leading", () => {
+		expect(Number(at("who_knows"))).toBeGreaterThan(Number(at("cancelled")));
 	});
 });

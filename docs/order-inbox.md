@@ -204,6 +204,38 @@ WhatsApp.
   real `<Link>`. A `<tr>` cannot be an anchor, so the link is what keeps
   middle-click, cmd-click and keyboard navigation working; the row click is the
   convenience on top. Same shape as `customer-list.tsx`.
+- **`value` is the data cell; `display` is the view cell** (86eyrtz74). One
+  column definition, two readers with different jobs:
+  - **`value(o)` → the CSV.** The STORED value, unchanged: `storefront`,
+    `received`, `self_collect`. A CSV is read by other software, and a seller's
+    bookkeeping formula matching `="received"` has to keep working. Formatting
+    here would have quietly rewritten every export to fix a rendering problem.
+  - **`display(o)` → the table, search and sorting.** The wording a person
+    reads: **Storefront**, **Paid**, **Self-collect**, and `humanizeEnum` for
+    the general case (`payment_window_expired` → *Payment window expired*,
+    idempotent so prose passes through). Optional, defaulting to `value`, so a
+    column only declares it when it has something to say — there is no second
+    list to fall out of step. Read it through **`orderColumnDisplay`**, never
+    `column.value`.
+  - **Labels are specific, not categorical.** `storefront` is **Storefront**,
+    not "Online" — a claim-link order is online too, so "Online" names a
+    category all three fit instead of telling the seller which one this is. And
+    `collection` (the seller collects from the BUYER, 86eyg0n8e) reads **We
+    collect**, because "Collection" sitting beside "Self-collect" in one column
+    is two words for opposite trips.
+  - **The labels live in the registry, not the filters.** `ORDER_SOURCE_LABELS`
+    and `PAYMENT_STATUS_LABELS` are exported from `orderCsv.ts` and imported by
+    both the header filters and the Filters panel. The drift Hermoolah hit — the
+    filter offering one word while the column printed the raw key — happened
+    *because* the label lived in the filter and the value in the column.
+    `order-column-filters.test.ts` drives each filter's own options back through
+    its column's own `display`, so whichever side changes, they must agree. The
+    single deliberate exception is `METHOD_UNSPECIFIED_CELL`: the picker names
+    the absence of a method ("Unspecified") because an unlabelled row is
+    unpickable, while the cell stays blank because a word there would read as a
+    real rail.
+  - **Search indexes both**, so a seller typing `storefront` (reading the
+    column) and one typing `received` (reading an old export) both get hits.
 - **Columns come from `ORDER_COLUMNS`** (`convex/lib/orderCsv.ts`) — the same
   registry the CSV writes, so the table and the export can't disagree, **in
   which columns appear AND in what order**. Visibility, order **and width**
@@ -220,7 +252,25 @@ WhatsApp.
   plain click still falls through to sorting. Reordering a table by dragging its
   headers is what every spreadsheet user already knows; the first build put a
   reorder list inside the Columns dropdown, which is nowhere anyone looks.
-  The Columns panel is now **show/hide only**, and turning a column on appends
+  **Bulk selection is part of the panel, not an extra** (86eyrtz74): with 36
+  columns, ticking them one at a time IS the interaction. Three levels of the
+  same control — all columns, one group, one column — and the top two are
+  **tri-state**, because a parent reading "unchecked" while three of its seven
+  children are on tells the seller something false. They are real
+  `<input type="checkbox">` with the `indeterminate` DOM property set via ref
+  (visually replaced), which a screen reader announces natively as "partially
+  checked" — stronger than `role="checkbox"` + `aria-checked="mixed"`, and the
+  reason the a11y lint pushed back on the first attempt. Every bulk row carries
+  its own `n/total`, so "some" says how many. Clicking a partly-filled parent
+  FILLS it rather than clearing — completing the set is the expected reading.
+  Clearing everything keeps the **first** column rather than refusing the click,
+  with the rule stated in words where the seller is clicking; an empty table is
+  a dead end whose only way back is the panel they just emptied.
+  Selected rows here are **not** tinted (`tintSelected={false}` on the shared
+  `FilterOptionRow`): the panel opens with most columns on, so a tint would
+  stripe two-thirds of the list without saying anything — unlike a filter, where
+  a selected option is exceptional.
+  The Columns panel is otherwise **show/hide only**, and turning a column on appends
   it to the right-hand end, where the seller can see what they added and drag it
   from there. `resolveOrderColumns` honours the caller's order, so the exported
   CSV comes out arranged exactly like the table.
@@ -264,6 +314,13 @@ WhatsApp.
     fixed width: with only two or three columns shown the table still spans its
     box and the browser stretches proportionally, which beats a strip of dead
     space.
+- **Status sorts by LIFECYCLE position**, not by either spelling (`sortKey` →
+  `ORDER_STATUS_KEYS.indexOf`). Alphabetical is wrong on a status column
+  whichever words you use — a seller clicking Status wants the pipeline grouped
+  in order, not "Cancelled, Confirmed, Delivered, Packed". It also sidesteps a
+  mismatch a text sort would have: the cell renders the retailer's CUSTOM stage
+  name, which `display` can never reach, so sorting on either spelling would
+  order rows by words that aren't on screen (PR #235 review).
 - **Per-column sorting**, client-side over the window the inbox already holds,
   so it costs no extra reads. Comparison is **typed, not lexical**: columns
   carry an optional `sortKey` (see `orderColumnSortValue`) returning the
@@ -288,6 +345,23 @@ WhatsApp.
     column's values* and those values are enumerable. Date RANGES (two bounds,
     no option list), cross-cutting toggles like "needs mockup" that aren't any
     column, and the summary of everything applied stay in the panel.
+  - **Select-all per section**, on the same `ui/bulk-select-row.tsx` the column
+    picker uses: a tri-state heading that selects the whole dimension, or clears
+    it when already full. "Everything except Cancelled" becomes tick-once,
+    untick-once instead of ticking five times.
+    ⚠️ **A filter is not a column picker.** Selecting EVERY option in a
+    dimension narrows nothing — "Unpaid OR Claimed OR Paid" is every order. That
+    is a legitimate stop on the way to "all except X", so it is allowed, but the
+    section says *"Every option selected — same as no payment filter"* rather
+    than leaving the seller wondering why their list didn't move; clicking the
+    full heading again is the way back. **There is deliberately no GLOBAL
+    select-all** — selecting every option in every dimension is just "no
+    filter", which the footer's `Clear all (N)` already expresses. Sections that
+    are single-select (the overlapping due-date windows), a range (order date)
+    or a lone toggle (needs mockup) keep a plain heading: forcing the pattern
+    everywhere is how a good idea becomes clutter.
+    Payment method counts **Unspecified** as one of its choices, since it is a
+    real answer a seller filters on.
   - **One control, both surfaces.** `ui/filter-option-row.tsx` — a box, a label
     and a count — is rendered by the header menus *and* by the Filters dialog.
     They were two shapes for one idea (chips in the dialog, rows in the header),

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import {
 	activeFilterCount,
 	methodChoicesFor,
@@ -31,6 +32,7 @@ const EMPTY: Pick<
 	| "sources"
 	| "statuses"
 	| "categories"
+	| "categoriesUnspecified"
 > = {
 	payment: [],
 	method: [],
@@ -39,6 +41,7 @@ const EMPTY: Pick<
 	sources: [],
 	statuses: [],
 	categories: [],
+	categoriesUnspecified: false,
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -80,6 +83,7 @@ describe("OrderFilters", () => {
 				attributionSources: ["tiktok", "direct"],
 				statuses: [],
 				categories: [],
+				categoriesUnspecified: false,
 			}),
 		).toBe(9);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
@@ -410,5 +414,194 @@ describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
 		expect(onChange).toHaveBeenCalledWith(
 			expect.objectContaining({ payment: [] }),
 		);
+	});
+});
+
+describe("OrderFilters — per-section select all / clear (86eyrtz74)", () => {
+	const section = (name: string) =>
+		screen.getByRole("checkbox", { name: new RegExp(`^${name} —`, "i") });
+
+	it("selects every option in a section in one click", () => {
+		// "Everything except Cancelled" is tick-once-untick-once, not tick five
+		// times — which is the whole reason this control exists.
+		const { onChange } = renderFilters();
+		openFilters();
+		fireEvent.click(section("Status"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [...ORDER_STATUS_KEYS] }),
+		);
+	});
+
+	it("clicking a FULL section clears it — the way back from select-all", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...ORDER_STATUS_KEYS] },
+		});
+		openFilters();
+		fireEvent.click(section("Status"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [] }),
+		);
+	});
+
+	it("a partly-filled section FILLS rather than clears", () => {
+		// Completing the set is the expected reading of a half-ticked box.
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+		});
+		openFilters();
+		fireEvent.click(section("Status"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [...ORDER_STATUS_KEYS] }),
+		);
+	});
+
+	it("the section box is tri-state over its own options", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+		});
+		openFilters();
+		const box = section("Status") as HTMLInputElement;
+		expect(box.checked).toBe(false);
+		expect(box.indeterminate).toBe(true);
+	});
+
+	it("says when a full section narrows nothing", () => {
+		// Selecting every option is a legitimate stop on the way to "all except
+		// X", but on its own it matches every order — so the panel says so
+		// rather than leaving the seller wondering why the list didn't move.
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...ORDER_STATUS_KEYS] },
+		});
+		openFilters();
+		expect(screen.getByText(/same as no status filter/i)).toBeTruthy();
+	});
+
+	it("stays quiet when the section is only partly selected", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed"] },
+		});
+		openFilters();
+		expect(screen.queryByText(/same as no status filter/i)).toBeNull();
+	});
+
+	it("payment method counts Unspecified as one of its choices", () => {
+		// It is a real answer a seller can filter on, so a section reading "all
+		// selected" while it was off would be wrong.
+		const { onChange } = renderFilters();
+		openFilters();
+		fireEvent.click(section("Payment method"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ methodUnspecified: true }),
+		);
+	});
+
+	it("single-select and range sections get NO bulk control", () => {
+		// A select-all over overlapping due-date presets, or over a date range,
+		// is meaningless — forcing the pattern everywhere is how a good idea
+		// becomes clutter.
+		renderFilters();
+		openFilters();
+		expect(screen.queryByRole("checkbox", { name: /^due date —/i })).toBeNull();
+		expect(
+			screen.queryByRole("checkbox", { name: /^order date —/i }),
+		).toBeNull();
+	});
+});
+
+describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
+	const section = (name: string) =>
+		screen.getByRole("checkbox", { name: new RegExp(`^${name} —`, "i") });
+
+	const FACETS = {
+		status: {},
+		category: { Cakes: 9, "": 4 },
+		source: {},
+		paymentStatus: {},
+		// An MY store whose HitPay settled a GrabPay order. GrabPay is not an MY
+		// rail, so nothing in the country list would ever offer it.
+		paymentMethod: { cash: 5, grabpay: 3 },
+		attribution: {},
+	};
+
+	it("selecting all categories INCLUDES the uncategorized ones", () => {
+		// The finding: uncategorized orders vanished while the panel claimed
+		// nothing had been filtered. Categories are optional, so a partly
+		// categorized catalogue is the common case, not an edge one.
+		const { onChange } = renderFilters({
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		fireEvent.click(section("Categories"));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({
+				categories: ["Cakes", "Drinks"],
+				categoriesUnspecified: true,
+			}),
+		);
+	});
+
+	it("offers Uncategorized as a real, counted choice", () => {
+		renderFilters({
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "Uncategorized, 4 orders" }),
+		).toBeTruthy();
+	});
+
+	it("the category section only reads FULL once uncategorized is on too", () => {
+		const withNames = {
+			...EMPTY,
+			mockup: false,
+			categories: ["Cakes", "Drinks"],
+		};
+		renderFilters({
+			value: withNames,
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		expect((section("Categories") as HTMLInputElement).indeterminate).toBe(
+			true,
+		);
+		cleanup();
+		renderFilters({
+			value: { ...withNames, categoriesUnspecified: true },
+			availableCategories: ["Cakes", "Drinks"],
+			facets: FACETS,
+		});
+		openFilters();
+		expect((section("Categories") as HTMLInputElement).checked).toBe(true);
+	});
+
+	it("offers a rail the country doesn't sell but the orders actually used", () => {
+		// paymentMethod.ts: never gate a label or a filter MATCH on the country
+		// list — only the pickers. GrabPay had no option at all in an MY store.
+		renderFilters({ country: "MY", facets: FACETS });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: optionNamed("GrabPay") }),
+		).toBeTruthy();
+	});
+
+	it("selecting all payment methods includes that off-list rail", () => {
+		const { onChange } = renderFilters({ country: "MY", facets: FACETS });
+		openFilters();
+		fireEvent.click(section("Payment method"));
+		const [call] = onChange.mock.calls;
+		expect(call[0].method).toContain("grabpay");
+		expect(call[0].methodUnspecified).toBe(true);
+	});
+
+	it("a rail with no orders and no selection stays out of the picker", () => {
+		// The list is country + actually-present, not every rail that exists.
+		renderFilters({ country: "MY", facets: FACETS });
+		openFilters();
+		expect(
+			screen.queryByRole("button", { name: optionNamed("PayNow") }),
+		).toBeNull();
 	});
 });

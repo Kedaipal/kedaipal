@@ -28,6 +28,16 @@ export interface FilterOptionRowProps {
 	shape?: "checkbox" | "radio";
 	/** Dimmed label for an option that names an absence ("Unspecified"). */
 	muted?: boolean;
+	/**
+	 * Tint the row when selected. On by default, because in a FILTER a selected
+	 * option is exceptional and worth shouting about.
+	 *
+	 * Turn it off where "selected" is the ordinary state — the column picker
+	 * opens with 22 of 36 ticked, and tinting two-thirds of the list stripes the
+	 * panel without saying anything. The box already carries the state; the
+	 * tint would only be noise.
+	 */
+	tintSelected?: boolean;
 }
 
 export function FilterOptionRow({
@@ -37,6 +47,7 @@ export function FilterOptionRow({
 	count,
 	shape = "checkbox",
 	muted,
+	tintSelected = true,
 }: FilterOptionRowProps) {
 	return (
 		<button
@@ -57,7 +68,7 @@ export function FilterOptionRow({
 				// min-h-9 rather than a fixed height: a long custom stage name wraps
 				// instead of being clipped, and the row grows with it.
 				"flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-				selected ? "bg-accent/10" : "hover:bg-muted",
+				selected && tintSelected ? "bg-accent/10" : "hover:bg-muted",
 			)}
 		>
 			<span
