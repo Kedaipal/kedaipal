@@ -12,6 +12,7 @@ import { PaymentMethods } from "../components/landing/payment-methods";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { RealSellers } from "../components/landing/real-sellers";
+import { VideoDemo } from "../components/landing/video-demo";
 
 /**
  * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
@@ -31,8 +32,18 @@ const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
 const SEO_DESC =
 	"Stop losing orders. Stop chasing payments. Every order, job and booking — and every payment — in one dashboard. 14-day free trial, no Meta setup.";
 const SITE_URL = "https://kedaipal.com";
+/**
+ * The landing demo. `uploadDate` is the date the clip was cut, NOT "today" —
+ * a VideoObject whose date moves on every deploy is exactly the signal Google
+ * treats as unreliable. Bump it only when the video is re-recorded, together
+ * with the files in `public/video/` (see `docs/landing-video-demo.md`).
+ */
+const DEMO_UPLOAD_DATE = "2026-08-29";
+const DEMO_DURATION_ISO = "PT30S";
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 const LOGO_URL = `${SITE_URL}/android-chrome-512x512.png`;
+const DEMO_VIDEO_URL = `${SITE_URL}/video/kedaipal-demo.mp4`;
+const DEMO_POSTER_URL = `${SITE_URL}/img/landing/demo-poster.webp`;
 
 /**
  * FAQPage entries MUST mirror the visible FAQ copy (messages/en.json,
@@ -121,6 +132,26 @@ const jsonLd = [
 			},
 		],
 	},
+	{
+		"@context": "https://schema.org",
+		"@type": "VideoObject",
+		name: "Kedaipal in 30 seconds — a WhatsApp order, start to finish",
+		description:
+			"A silent 30-second demo: a customer messages on WhatsApp, opens the seller's Kedaipal storefront, checks out, and the order lands confirmed in the seller's dashboard. No Meta setup, no app for the buyer.",
+		thumbnailUrl: DEMO_POSTER_URL,
+		contentUrl: DEMO_VIDEO_URL,
+		uploadDate: DEMO_UPLOAD_DATE,
+		duration: DEMO_DURATION_ISO,
+		/* Silent clip — captions are burned into the frames, so there is no
+		   audio track and no caption file to declare. */
+		inLanguage: "en",
+		isFamilyFriendly: true,
+		publisher: {
+			"@type": "Organization",
+			name: "Kedaipal",
+			logo: { "@type": "ImageObject", url: LOGO_URL },
+		},
+	},
 ];
 
 export const Route = createFileRoute("/")({
@@ -161,6 +192,9 @@ function Landing() {
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />
 			<Hero />
+			{/* The moving proof shot, in the Mobbin slot — directly under the
+			    hero's promise, ahead of every other section. */}
+			<VideoDemo />
 			<RealSellers />
 			<ProblemStrip />
 			<PaymentHandshake />
