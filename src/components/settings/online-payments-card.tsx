@@ -19,6 +19,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { Country } from "../../../convex/lib/country";
 import { convexErrorMessage } from "../../lib/format";
+import { TONE_CHIP } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
@@ -114,15 +115,15 @@ export function OnlinePaymentsCard({
 							</span>
 							<div className="flex items-center gap-2">
 								{hitpay?.mode === "sandbox" ? (
-									<span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+									<span
+										className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TONE_CHIP.warn}`}
+									>
 										Test mode
 									</span>
 								) : null}
 								<span
 									className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-										hitpay?.enabled
-											? "bg-emerald-100 text-emerald-800"
-											: "bg-muted text-muted-foreground"
+										hitpay?.enabled ? TONE_CHIP.success : TONE_CHIP.neutral
 									}`}
 								>
 									{hitpay?.enabled ? "On" : "Paused"}
@@ -148,7 +149,7 @@ export function OnlinePaymentsCard({
 								</p>
 							</div>
 						) : hitpay?.methodsCheckedAt ? (
-							<p className="text-xs font-medium text-amber-700">
+							<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
 								HitPay rejected this API key — double-check it (Replace keys
 								below), or buyers' payments will fail.
 							</p>
@@ -158,7 +159,7 @@ export function OnlinePaymentsCard({
 							</p>
 						)}
 						{hitpay?.mode === "sandbox" ? (
-							<p className="text-xs text-amber-700">
+							<p className="text-xs text-amber-700 dark:text-amber-400">
 								This is a HitPay <strong>sandbox</strong> key — payments are
 								simulated, no real money moves. Swap in your live key before
 								telling buyers.
@@ -488,9 +489,12 @@ function MethodLogos({ codes }: { codes: string[] }) {
 				const icons = METHOD_ICONS[code.toLowerCase()];
 				if (!icons) {
 					return (
+						// A WORDMARK chip, not a raster — nothing here needs a white
+						// ground, so it takes the themed surface (identical white in
+						// light) instead of stranding muted text on a fixed plate.
 						<span
 							key={code}
-							className="flex h-7 items-center rounded-md border border-border bg-white px-2 text-[10px] font-medium text-muted-foreground"
+							className="flex h-7 items-center rounded-md border border-border bg-card px-2 text-[10px] font-medium text-muted-foreground"
 						>
 							{METHOD_CHIP_LABELS[code.toLowerCase()] ??
 								code.replace(/_/g, " ")}
@@ -503,6 +507,10 @@ function MethodLogos({ codes }: { codes: string[] }) {
 					return (
 						<span
 							key={m.src}
+							// dark-ok: `bg-white` stays theme-INVARIANT. These are brand
+							// marks drawn for a white ground (Visa, FPX, Touch 'n Go), and a
+							// payment brand that shifts colour with our theme is off-brand
+							// at best and unrecognisable at worst.
 							className="flex h-7 w-11 items-center justify-center rounded-md border border-border bg-white px-1.5"
 						>
 							<AppImage

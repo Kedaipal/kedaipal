@@ -106,7 +106,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 		<div className="flex flex-col gap-6 pt-2">
 			{retailer.isFoundingMember ? (
 				<div className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
-					<Award className="size-6 shrink-0 text-amber-600" />
+					<Award className="size-6 shrink-0 text-amber-600 dark:text-amber-400" />
 					<div>
 						<p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
 							Founding Member #{retailer.foundingMemberRank} of 10
@@ -186,6 +186,9 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								</span>
 							</div>
 							<div className="h-1.5 overflow-hidden rounded-full bg-muted">
+								{/* The fill is a saturated mid-tone bar with no text on it —
+								    it carries meaning by hue against a `bg-muted` track that
+								    already flips, so it stays theme-invariant. */}
 								<div
 									className={`h-full rounded-full transition-all ${
 										capMeter.over
@@ -221,7 +224,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								)}
 								target="_blank"
 								rel="noopener noreferrer"
-								className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+								className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground"
 							>
 								<ExternalLink className="size-4" />
 								Upgrade to Pro
@@ -304,10 +307,16 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 									</div>
 								) : null}
 								{instructions?.qrUrl ? (
+									// The plate stays white in BOTH themes on purpose: a QR needs
+									// light quiet-zone around dark modules to scan, and the
+									// uploaded PNG may be transparent — a dark plate behind it
+									// inverts the code and phones stop reading it.
 									<ZoomableImage
 										src={instructions.qrUrl}
 										alt="DuitNow QR"
 										caption="Scan to pay (DuitNow)"
+										// dark-ok: a seller-uploaded payment QR / receipt image, which is
+										// routinely dark ink on white. A dark mat would swallow it.
 										wrapperClassName="w-40 overflow-hidden rounded-xl border border-border bg-white"
 										className="block aspect-square w-full object-contain"
 									/>
@@ -325,7 +334,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							)}
 							target="_blank"
 							rel="noopener noreferrer"
-							className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+							className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground"
 						>
 							<ExternalLink className="size-4" />
 							I've paid — notify us
@@ -362,7 +371,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 						)}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+						className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground"
 					>
 						<ExternalLink className="size-4" />
 						Message us
@@ -450,7 +459,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 						)}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+						className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground"
 					>
 						<MessageCircle className="size-4" />
 						Contact support on WhatsApp

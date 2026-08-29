@@ -56,7 +56,7 @@ export function CustomerDetail({
 			{/* Profile header — this page exists so the seller can recognise and
 			    reply: identity centred, WhatsApp as the hero action. */}
 			<section className="flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card p-5">
-				<div className="flex size-16 shrink-0 items-center justify-center rounded-full bg-foreground font-heading text-xl font-extrabold text-background">
+				<div className="flex size-16 shrink-0 items-center justify-center rounded-full bg-foreground dark:bg-accent/15 font-heading text-xl font-extrabold text-background dark:text-accent-emphasis">
 					{hasName ? initialsOf(displayName) : <User className="size-6" />}
 				</div>
 				<div className="flex min-w-0 flex-col items-center gap-0.5 text-center">

@@ -56,5 +56,6 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 | Doc | What it covers |
 |---|---|
 | [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
+| [dark-mode.md](./dark-mode.md) | Light/dark across the app + storefront: where the preference lives and why it isn't in Convex or a cookie, the pre-paint script, which routes are themed, and the gate that fails the build on a raw palette colour with no `dark:` pair. **Read before adding UI that uses a colour.** |
 
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

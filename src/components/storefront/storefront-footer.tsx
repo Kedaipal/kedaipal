@@ -1,4 +1,5 @@
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 
 /**
  * "Powered by Kedaipal" storefront footer badge (ticket 86ey8zh3r).
@@ -34,7 +35,11 @@ export function StorefrontFooter() {
 			// silently stops applying (that regression shipped once already).
 			className="mt-auto px-5 pb-6 pt-8 lg:px-8"
 		>
-			<div className="flex justify-center">
+			<div className="flex items-center justify-center gap-3">
+				{/* The buyer's only theme control, deliberately down here: the page
+				    already matched their phone on arrival, so this is an override, not
+				    a decision they owe us above the fold. */}
+				<ThemeToggle />
 				<a
 					href="https://kedaipal.com?src=storefront_badge"
 					target="_blank"
@@ -45,11 +50,24 @@ export function StorefrontFooter() {
 					<span className="rounded-full border border-[#B9D9CC] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#7BA394]">
 						Powered by
 					</span>
+					{/* Navy lockup in light, near-white in dark — swapped in CSS for the
+					    same SSR reason as the header mark. The dark asset is the same
+					    file with #0F172A → #F8FAFC; the mint emblem is untouched, so
+					    `dark:invert` was not an option (it would turn the mint
+					    magenta). */}
 					<AppImage
 						src="/poster/kedaipal-lockup.svg"
 						alt="Kedaipal"
 						aspect="h-5 w-auto"
 						fill={false}
+						className="dark:hidden"
+					/>
+					<AppImage
+						src="/poster/kedaipal-lockup-dark.svg"
+						alt=""
+						aspect="h-5 w-auto"
+						fill={false}
+						className="hidden dark:block"
 					/>
 				</a>
 			</div>

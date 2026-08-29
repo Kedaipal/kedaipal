@@ -10,6 +10,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
+import { TONE_CHIP } from "../lib/tone";
 
 export const Route = createFileRoute("/app/admin/sellers")({
 	component: AdminSellersRoute,
@@ -70,7 +71,7 @@ function AdminSellersContent() {
 				</p>
 			</section>
 
-			<div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+			<div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
 				<ShieldCheck className="mt-0.5 size-4 shrink-0" />
 				<p>
 					Opening a store enters <strong>act-as mode</strong>: you operate it as
@@ -115,10 +116,12 @@ function AdminSellersContent() {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-	active: "bg-emerald-100 text-emerald-800",
-	trialing: "bg-sky-100 text-sky-800",
-	past_due: "bg-red-100 text-red-800",
-	cancelled: "bg-muted text-muted-foreground",
+	active: TONE_CHIP.success,
+	// Sky, not the registry's `info`: sky-800 is a visibly different hue from
+	// blue-800, so routing this one through TONE_CHIP would restyle light mode.
+	trialing: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200",
+	past_due: TONE_CHIP.danger,
+	cancelled: TONE_CHIP.neutral,
 };
 
 function SellerCard({ seller }: { seller: AdminSellerRow }) {
@@ -148,7 +151,7 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 					<div className="flex items-center gap-2">
 						<span className="truncate font-semibold">{seller.storeName}</span>
 						{seller.foundingMemberRank !== undefined ? (
-							<span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+							<span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
 								<Award className="size-3" />#{seller.foundingMemberRank}
 							</span>
 						) : null}
@@ -170,7 +173,7 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 								{status ? (
 									<span
 										className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
-											STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"
+											STATUS_STYLES[status] ?? TONE_CHIP.neutral
 										}`}
 									>
 										{status.replace("_", " ")}

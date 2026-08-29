@@ -66,6 +66,8 @@ function StatusChip({ status }: { status: ProductStatus }) {
 				className={cn(
 					"inline-block size-2 rounded-full",
 					status.tone === "live" && "bg-accent",
+					// Saturated mid-tone dot carrying no text — reads against both the
+					// light and the dark page, so it stays theme-invariant.
 					status.tone === "warn" && "bg-amber-500",
 					status.tone === "muted" && "bg-muted-foreground/50",
 				)}

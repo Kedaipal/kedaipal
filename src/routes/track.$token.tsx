@@ -68,6 +68,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { ssrRead } from "../lib/ssr-read";
+import { TONE_PANEL, type Tone } from "../lib/tone";
 import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
@@ -76,7 +77,14 @@ type PaymentStatus = "unpaid" | "claimed" | "received";
 type PaymentCfg = {
 	label: string;
 	icon: ReactNode;
-	tone: string;
+	/**
+	 * A key into the shared registry, not classes. The panel's own colours used
+	 * to live here as a fourth hand-copy of `border-X-200 bg-X-50 text-X-700`,
+	 * which is how this card ended up a light plate on a dark page while the
+	 * seller's identical chip was fine. The meaning→tone call stays local; both
+	 * themes' values come from `lib/tone.ts`.
+	 */
+	tone: Tone;
 };
 
 function getPaymentConfig(status: PaymentStatus): PaymentCfg {
@@ -85,19 +93,19 @@ function getPaymentConfig(status: PaymentStatus): PaymentCfg {
 			return {
 				label: "Payment Confirmed",
 				icon: <BadgeCheck className="size-5" />,
-				tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+				tone: "success",
 			};
 		case "claimed":
 			return {
 				label: "Payment Submitted",
 				icon: <Hourglass className="size-5" />,
-				tone: "border-blue-200 bg-blue-50 text-blue-700",
+				tone: "info",
 			};
 		default:
 			return {
 				label: "Payment Unpaid",
 				icon: <HandCoins className="size-5" />,
-				tone: "border-amber-200 bg-amber-50 text-amber-800",
+				tone: "warn",
 			};
 	}
 }
@@ -157,7 +165,11 @@ function gatewayIssueCopy(
  * shows, so a buyer reads one number whether the payment landed or stalled. */
 function GatewayIssueReference({ paymentId }: { paymentId: string }) {
 	return (
-		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+		// The plate is a LIFT off whatever tinted card it sits on, not a white
+		// surface — so in dark it lifts the other way (white/10 over the dark
+		// panel). Left as `bg-white/60` it would be a bright slab carrying the
+		// panel's light text.
+		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5 dark:border-white/10 dark:bg-white/10">
 			<div className="flex items-center justify-between gap-2">
 				<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
 					Payment ref
@@ -227,6 +239,12 @@ type StatusCfg = { label: string; icon: ReactNode; color: string };
 // Icons + colors are fixed per canonical status; only the text is retailer-
 // customizable. Labels resolve at render time (override → method preset → base
 // default) so a relabel is retroactive across all in-flight orders.
+//
+// The marks stay at the 500 step in BOTH themes rather than moving to a
+// `TONE_ACCENT` pair: a mid-tone glyph reads on a white card and on a dark one,
+// which is why `dark-mode-coverage.test.ts` exempts 500-level marks outright.
+// Darkening them to 700 would repaint the buyer's most prominent glyph to fix
+// nothing.
 function getStatusConfig(
 	method: DeliveryMethod,
 	labels: StatusLabels | undefined,
@@ -682,7 +700,7 @@ function TrackingRoute() {
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled. */}
 			{!isCancelled ? (
 				<section
-					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
+					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${TONE_PANEL[paymentConfig.tone]}`}
 				>
 					<div className="flex items-center gap-3">
 						{paymentConfig.icon}
@@ -722,7 +740,8 @@ function TrackingRoute() {
 								</p>
 							) : null}
 							{order.gatewayPaymentId ? (
-								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+								// Same lift-not-white plate as `GatewayIssueReference`.
+								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5 dark:border-white/10 dark:bg-white/10">
 									{/* Copy sits beside the LABEL, not the value, so the id gets
 									    the chip's full width — a 36-char HitPay reference then
 									    renders complete at 375px instead of truncating, and a
@@ -890,11 +909,15 @@ function TrackingRoute() {
 							order.currency,
 						);
 						return (
-							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+							// Deliberately NOT `TONE_PANEL.warn`: this card carries a heavier
+							// border than the payment card's warn state because it interrupts
+							// rather than informs, so it keeps its own amber and only gains
+							// the dark pairs.
+							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
 								<div className="flex items-center gap-3">
-									<HandCoins className="size-5 shrink-0 text-amber-600" />
+									<HandCoins className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 									<div className="min-w-0 flex-1">
-										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
 											Payment
 										</p>
 										<p className="font-semibold">{copy.heading}</p>
@@ -1693,14 +1716,16 @@ function PushFailedCard({
 						    (judged by the store's country, which rides the order
 						    payload). Its own neutral chrome inside the amber card, so
 						    the control reads as a control and not as part of the
-						    warning. */}
+						    warning — which is why the plate is `bg-card` (white in
+						    light, exactly as before) and not an amber tint that would
+						    dissolve back into the panel in dark. */}
 						<MyPhoneInput
 							id="repair-wa-phone"
 							ref={phoneInputRef}
 							value={value}
 							onChange={setValue}
 							country={order.retailerCountry}
-							className="bg-white dark:bg-amber-950"
+							className="bg-card"
 						/>
 						<div className="flex gap-2">
 							<Button
@@ -2017,6 +2042,9 @@ function MockupReview({
 						src={mockupUrls[0]}
 						alt="Your mockup"
 						caption="Your mockup"
+						// dark-ok: the mat stays white in BOTH themes. A mockup is a
+						// user-supplied image — routinely dark ink on transparent — so a
+						// dark mat would swallow the artwork or frame it in a seam.
 						wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 						className="block max-h-72 w-full object-contain"
 						// Order-owned blob (orderBlobs.ts) — erased on hard delete.
@@ -2032,6 +2060,7 @@ function MockupReview({
 								caption={`Your mockup ${i + 1}`}
 								// Order-owned blob — erased on hard delete.
 								sensitive
+								// dark-ok: same theme-invariant mat as the single-mockup case.
 								wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 								className="block aspect-square w-full object-cover"
 							/>
@@ -2071,7 +2100,7 @@ function MockupReview({
 				</p>
 			) : null}
 			{status === "approved" ? (
-				<p className="text-sm text-emerald-700">
+				<p className="text-sm text-emerald-700 dark:text-emerald-300">
 					Approved — the seller will start making your order.
 				</p>
 			) : null}

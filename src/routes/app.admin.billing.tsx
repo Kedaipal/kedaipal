@@ -229,27 +229,33 @@ function AdminBillingOverview() {
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
+	// Not TONE_PANEL: these tiles read `text-X-800` where the registry's panels
+	// read `text-X-700`, so adopting it would repaint blue + emerald in light
+	// mode. The registry is only free to take a surface it already matches.
 	const stats = [
 		{
 			label: "Pending",
 			value: invoices === undefined ? "..." : String(invoices.length),
 			helper: "Invoices to settle",
 			icon: <ReceiptText className="size-4" />,
-			className: "border-blue-200 bg-blue-50 text-blue-800",
+			className:
+				"border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200",
 		},
 		{
 			label: "Due soon",
 			value: invoices === undefined ? "..." : String(dueSoon),
 			helper: "Within 7 days",
 			icon: <CalendarClock className="size-4" />,
-			className: "border-amber-200 bg-amber-50 text-amber-800",
+			className:
+				"border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200",
 		},
 		{
 			label: "Outstanding",
 			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
-			className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+			className:
+				"border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
 		},
 		{
 			label: "Founding",
@@ -267,7 +273,9 @@ function AdminBillingOverview() {
 					key={stat.label}
 					className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
 				>
-					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
+					{/* The disc is a lift off the tinted tile, not a plate — at 70% */}
+					{/* over a -950 ground it goes near-white and swallows the glyph. */}
+					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70 dark:bg-white/10">
 						{stat.icon}
 					</div>
 					<div className="min-w-0">
@@ -765,7 +773,7 @@ function IssueInvoiceForm() {
 						{formatPrice(total, currency)}
 					</p>
 					{founding ? (
-						<p className="text-xs text-emerald-700">
+						<p className="text-xs text-emerald-700 dark:text-emerald-300">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
@@ -781,7 +789,7 @@ function IssueInvoiceForm() {
 				</Button>
 			</div>
 			{blocked ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-300">
 					This retailer already has a pending invoice — settle it first.
 				</p>
 			) : null}
@@ -992,6 +1000,10 @@ function PendingInvoices() {
 	);
 }
 
+// Not TONE_CHIP: `past_due` and `active` read `text-X-700` here where the
+// registry's chips read `text-X-800`, so routing this map through it would
+// restyle light mode. Only the amber + muted rows would have matched, and a
+// half-migrated map is the drift the registry exists to prevent.
 function foundingStatus(m: { status?: string; paid: boolean }): {
 	label: string;
 	className: string;

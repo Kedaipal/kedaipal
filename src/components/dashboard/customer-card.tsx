@@ -19,9 +19,13 @@ function nameInitials(customer: Doc<"customers">): string | null {
 }
 
 // Rotating avatar tints (deterministic by name hash) so a list of customers
-// scans faster than uniform grey circles. Dark-mode pairs included.
+// scans faster than uniform grey circles. Dark-mode pairs included — and each
+// row's dark pair has to stay distinct from every other row's, or the rotation
+// quietly shrinks in one theme only. Row 1 resolves to mint in dark
+// (--accent-emphasis, hsl(158 64% 60%)), which is what rules the greens and
+// teals out for row 0 — they land on the same hue at the same lightness.
 const AVATAR_TINTS = [
-	"bg-foreground text-background",
+	"bg-foreground text-background dark:bg-rose-950 dark:text-rose-300",
 	"bg-accent/15 text-accent-emphasis",
 	"bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
 	"bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",

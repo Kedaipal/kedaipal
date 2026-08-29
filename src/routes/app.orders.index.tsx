@@ -1393,7 +1393,7 @@ function OrdersRoute() {
 					onClick={() =>
 						navigate({ search: (prev) => ({ ...prev, fwin: "today" }) })
 					}
-					className="flex items-center gap-2.5 rounded-2xl bg-foreground px-4 py-3 text-left text-background transition-opacity hover:opacity-95"
+					className="flex items-center gap-2.5 rounded-2xl bg-foreground dark:border dark:border-accent/30 dark:bg-accent/12 px-4 py-3 text-left text-background dark:text-foreground transition-opacity hover:opacity-95"
 				>
 					<CalendarDays
 						className="size-5 shrink-0 text-accent"

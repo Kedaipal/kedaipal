@@ -12,6 +12,7 @@ import {
 	Landmark,
 	MapPinned,
 	MessageCircle,
+	Moon,
 	Plus,
 	QrCode,
 	ReceiptText,
@@ -59,6 +60,7 @@ import {
 import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
+import { AppearanceTab } from "../components/settings/appearance-tab";
 import { BillingTab } from "../components/settings/billing-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
@@ -139,7 +141,8 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
-	| "order-status";
+	| "order-status"
+	| "appearance";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
 // only). Old bookmarks / checklist links carry `?tab=pickup` — normalise them so
@@ -192,6 +195,15 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Buyer-facing order stages",
 		icon: <ClipboardList className="size-4" />,
 	},
+	// Not a store setting: every tab above configures what BUYERS see, this one
+	// configures the app on THIS DEVICE. Hence its own group below rather than a
+	// seventh row under Selling.
+	{
+		id: "appearance",
+		label: "Appearance",
+		description: "Light, dark or match device",
+		icon: <Moon className="size-4" />,
+	},
 ];
 
 const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
@@ -209,6 +221,9 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 		label: "Selling",
 		tabs: ["whatsapp", "payments", "fulfilment", "order-status"],
 	},
+	// Last by urgency, not by laziness: you set your store up before you tune how
+	// it looks, and this is the only group that changes nothing a buyer sees.
+	{ label: "App", tabs: ["appearance"] },
 ];
 
 /**
@@ -474,8 +489,12 @@ function SettingsRoute() {
 						Settings
 					</h2>
 
-					{/* Store identity card — doubles as the deep link + tier badge. */}
-					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background">
+					{/* Store identity card — doubles as the deep link + tier badge.
+					    In dark it becomes a mint-tinted panel rather than flipping to a
+					    white plate: `bg-foreground` inverts to near-white on a dark page,
+					    which reads as a hole punched in the screen. Same recipe as the
+					    other emphasis panels (Home's due-today banner and hero stat). */}
+					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground">
 						<span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent font-heading text-base font-extrabold text-accent-foreground">
 							<AppImage
 								src={retailer.logoUrl}
@@ -748,6 +767,8 @@ function SettingsRoute() {
 				) : null}
 
 				{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
+
+				{activeTab === "appearance" ? <AppearanceTab /> : null}
 
 				{activeTab === "whatsapp" ? (
 					<div className="flex flex-col gap-6 pt-2">

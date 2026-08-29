@@ -65,7 +65,7 @@ export function TextareaField({
 							length >= maxLength
 								? "text-destructive"
 								: length >= maxLength * 0.9
-									? "text-amber-600"
+									? "text-amber-600 dark:text-amber-400"
 									: "text-muted-foreground",
 						)}
 					>

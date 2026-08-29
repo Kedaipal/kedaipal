@@ -33,7 +33,7 @@ export function FirstOrderCelebration({
 				aria-hidden="true"
 			/>
 			<div className="relative flex items-start gap-3">
-				<PartyPopper className="size-6 shrink-0 text-emerald-600" />
+				<PartyPopper className="size-6 shrink-0 text-emerald-600 dark:text-emerald-400" />
 				<div className="flex min-w-0 flex-col gap-3">
 					<div>
 						<p className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">

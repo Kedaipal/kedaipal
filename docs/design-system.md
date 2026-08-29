@@ -26,7 +26,20 @@ Defined as HSL CSS vars in `:root` + `.dark` and exposed as Tailwind colors (`bg
 | `border` / `input` / `ring` | hairlines, field borders, focus ring (ring = mint) |
 | `sidebar-*` | dashboard chrome |
 
-Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new surface must read correctly in both — use tokens and it's automatic.
+Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new surface must read correctly in both — use tokens and it's automatic. Full behaviour, scope and the toggle: [`dark-mode.md`](./dark-mode.md).
+
+### Writing UI that survives dark mode
+
+1. **Semantic token → nothing to do.** `bg-card`, `text-foreground`, `border-border` flip on their own. This is the whole reason the token layer exists; reach for it first.
+2. **Raw palette colour → it needs a `dark:` twin on the same element.** `bg-amber-50 dark:bg-amber-950`, `text-amber-800 dark:text-amber-200`. **This is machine-enforced** by `src/lib/dark-mode-coverage.test.ts` in the gate, so you get told at `pnpm test`, not in review — and only on surfaces that can actually render dark (the marketing site is exempt because it never does).
+3. **A coloured status pill or notice card → use [`src/lib/tone.ts`](../src/lib/tone.ts).** `TONE_CHIP`, `TONE_PANEL`, `TONE_ACCENT` keyed by a `Tone`. The same map used to be hand-copied into four files and three of the copies had no dark pairs at all, so a buyer's order-status pill was dark-on-dark while the seller's identical pill was fine. **Only adopt it when the registry's LIGHT values match what the surface already renders** — otherwise you are repainting light mode, which outranks tidiness. A couple of maps stay hand-rolled for exactly that reason, and say so at the call site.
+4. **Deliberately theme-invariant?** Write `dark-ok` in a comment on (or just above) the line, **with the reason**. Legitimate cases: a QR plate (a QR on a dark ground does not scan), a white mat under a user's transparent-background logo, an external brand hex, a print surface, a swatch that must show the theme you are *not* in.
+5. **Never flip a surface to a light plate in dark.** `bg-foreground text-background` is a navy panel in light and inverts to near-white in dark, which reads as a hole punched in the screen. Three replacements, by intent:
+   - **Primary action button** → `bg-primary text-primary-foreground`. Solid mint in dark, no `dark:` override needed. In light the fill is unchanged (`--primary` *is* `--foreground`); the label moves `#fff` → `hsl(210 40% 98%)`, which is imperceptible but worth knowing before you call it a no-op.
+   - **Emphasis panel** (the due-today banner, the Home hero stat, the settings identity card) → keep the light classes and add `dark:bg-accent/12 dark:border dark:border-accent/30 dark:text-foreground`. Check nested children too — a `text-background/75` label inside becomes invisible.
+   - **Avatar / identity chip** → add `dark:bg-accent/15 dark:text-accent-emphasis`.
+
+   The one sanctioned exception is `order-bulk-bar.tsx`: a transient floating toolbar that is *supposed* to invert against whatever is behind it, and it says so in a comment.
 
 ## Radius & spacing
 - Radius scales off `--radius: 0.75rem`: `rounded-sm/md/lg/xl/2xl…`. Cards/dialogs use `rounded-xl`; buttons `rounded-lg`; pills `rounded-full`.

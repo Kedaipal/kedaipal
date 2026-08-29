@@ -228,6 +228,8 @@ export function ManualPaymentDialog({
 														src={m.qrImageUrl}
 														alt={`${m.label} QR code`}
 														caption={m.label}
+														// dark-ok: the seller's payment QR. It must sit on
+														// white to scan, in either theme.
 														className="max-h-56 w-auto rounded-lg border border-border bg-white"
 													/>
 													<p className="text-xs text-muted-foreground">

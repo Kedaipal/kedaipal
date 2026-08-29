@@ -130,7 +130,7 @@ function InsightsRoute() {
 			/>
 
 			{view.capped ? (
-				<div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+				<div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
 					<AlertTriangle className="mt-0.5 size-4 shrink-0" />
 					<span>
 						This range has more orders than we can total in one pass, so the

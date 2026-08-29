@@ -9,6 +9,10 @@ import { AppImage } from "../ui/app-image";
  * Brand-adjacent gradient fallbacks for categories without a tile image.
  * Picked deterministically from the slug so a category keeps its colour across
  * visits and pages. Full literal class strings (Tailwind JIT scans source).
+ *
+ * dark-ok. Theme-invariant on purpose — these are saturated decorative fills standing in
+ * for photography, carrying white text under the same scrim a real photo gets,
+ * so they read identically in dark. No `dark:` pair belongs here.
  */
 const FALLBACK_GRADIENTS = [
 	"bg-gradient-to-br from-emerald-500 to-emerald-800",

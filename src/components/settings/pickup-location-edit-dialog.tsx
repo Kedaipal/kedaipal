@@ -447,7 +447,7 @@ export function PickupLocationEditDialog({
 								) : lockedWithExistingFee ? (
 									feePendingRemoval ? (
 										<div className="flex items-center justify-between gap-2">
-											<p className="text-xs font-medium text-amber-700 leading-relaxed">
+											<p className="text-xs font-medium text-amber-700 leading-relaxed dark:text-amber-400">
 												Pickup fee will be removed when you save.
 											</p>
 											<button

@@ -26,6 +26,7 @@ import { MOBILE_MESSAGE } from "../../../convex/lib/slug";
 import { convexErrorMessage, formatMobile } from "../../lib/format";
 import { toNationalPhoneInput } from "../../lib/phone";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
+import { TONE_CHIP } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { MyPhoneInput } from "../ui/my-phone-input";
@@ -170,7 +171,9 @@ export function WaOrderAlertsCard({
 									{formatMobile(currentPhone)}
 								</span>
 							</span>
-							<span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+							<span
+								className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TONE_CHIP.success}`}
+							>
 								On
 							</span>
 						</div>

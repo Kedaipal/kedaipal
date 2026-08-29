@@ -391,7 +391,7 @@ function PosterToggle({
 						aria-pressed={value === opt.value}
 						className={`min-h-11 rounded-lg px-3 text-sm font-semibold whitespace-nowrap transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:px-4 ${
 							value === opt.value
-								? "bg-foreground text-background"
+								? "bg-primary text-primary-foreground"
 								: "text-muted-foreground hover:bg-muted"
 						}`}
 					>

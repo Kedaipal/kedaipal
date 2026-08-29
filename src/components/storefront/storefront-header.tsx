@@ -42,6 +42,12 @@ export function StorefrontHeader({
 }) {
 	const hasCover = !!retailer.coverImageUrl;
 	const StoreName = asPageHeading ? "h1" : "p";
+	// dark-ok: white only ever lands over the cover photo's `from-black/80`
+	// scrim, so the axis here is "is there a picture behind me", not "which
+	// theme". Without a cover the name inherits the foreground token and follows
+	// the theme on its own. Hoisted out of the className so this reason can sit
+	// next to the colour rather than three lines above a template literal.
+	const storeNameTone = hasCover ? "text-white drop-shadow-md" : "";
 
 	return (
 		<header
@@ -71,12 +77,30 @@ export function StorefrontHeader({
 					/>
 				</>
 			) : null}
+			{/* Two instances swapped in CSS, NOT one `src` picked from `useTheme()`:
+			    buyer routes SSR, and a hook-driven src would render the navy mark on
+			    the server and only correct after hydration. The `.dark` class is
+			    already on <html> pre-paint, so `dark:hidden` is right on the first
+			    frame. (`/logo-3.svg` is a navy wordmark — 1.09:1 on the dark
+			    background, i.e. invisible — so this pair is not cosmetic.) Same
+			    pattern as founding-member-badge.tsx. */}
 			<AppImage
-				src={hasCover ? "/logo-dark.svg" : "/logo-3.svg"}
+				src="/logo-3.svg"
 				alt="Kedaipal"
 				aspect="h-5 w-auto"
 				fill={false}
-				className={hasCover ? "opacity-95 drop-shadow" : undefined}
+				className={hasCover ? "hidden" : "dark:hidden"}
+				priority
+			/>
+			{/* Both carry the same alt: exactly one is ever displayed, and
+			    `display: none` keeps the other out of the a11y tree — so an empty
+			    alt here would leave the brand mark unnamed in whichever theme wins. */}
+			<AppImage
+				src="/logo-dark.svg"
+				alt="Kedaipal"
+				aspect="h-5 w-auto"
+				fill={false}
+				className={hasCover ? "opacity-95 drop-shadow" : "hidden dark:block"}
 				priority
 			/>
 			<div
@@ -90,7 +114,13 @@ export function StorefrontHeader({
 						sizes="64px"
 						rounded="rounded-2xl"
 						objectFit="contain"
-						className={`border-2 bg-background ${
+						// dark-ok. `bg-white`, not `bg-background`: this is the one storefront
+						// image using object-contain, so the mat SHOWS. Seller logos are
+						// routinely dark ink on transparent, which would vanish into a
+						// dark mat. Matches the theme-invariant plate used for every
+						// other user-supplied contain image (track page, billing, order
+						// mockups).
+						className={`border-2 bg-white ${
 							hasCover
 								? "border-white/80 shadow-lg"
 								: "border-accent/20 shadow-sm"
@@ -99,9 +129,7 @@ export function StorefrontHeader({
 				) : null}
 				<div className="flex flex-col gap-1">
 					<StoreName
-						className={`text-2xl font-bold leading-tight tracking-tight ${
-							hasCover ? "text-white drop-shadow-md" : ""
-						}`}
+						className={`text-2xl font-bold leading-tight tracking-tight ${storeNameTone}`}
 					>
 						{retailer.storeName}
 					</StoreName>

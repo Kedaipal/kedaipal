@@ -508,16 +508,16 @@ function DashboardHome() {
 					<Link
 						to="/app/orders"
 						search={{ fwin: "today" as const }}
-						className="flex flex-col gap-0.5 rounded-2xl bg-foreground px-3.5 py-3 text-background transition-opacity hover:opacity-95"
+						className="flex flex-col gap-0.5 rounded-2xl bg-foreground dark:border dark:border-accent/30 dark:bg-accent/12 px-3.5 py-3 text-background dark:text-foreground transition-opacity hover:opacity-95"
 					>
 						{countsLoading ? (
-							<Skeleton className="h-7 w-8 bg-background/20" />
+							<Skeleton className="h-7 w-8 bg-background/20 dark:bg-foreground/20" />
 						) : (
 							<span className="font-heading text-[22px] font-extrabold leading-tight text-accent">
 								{dueTodayCount}
 							</span>
 						)}
-						<span className="text-[11px] font-semibold text-background/75">
+						<span className="text-[11px] font-semibold text-background/75 dark:text-foreground/75">
 							Due today
 						</span>
 					</Link>
@@ -1034,7 +1034,7 @@ function StoreAvatar({
 	return (
 		<span
 			className={cn(
-				"flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background",
+				"flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground dark:bg-accent/15 font-heading text-[15px] font-extrabold text-background dark:text-accent-emphasis",
 				className,
 			)}
 			aria-hidden="true"

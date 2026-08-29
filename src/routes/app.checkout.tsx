@@ -663,6 +663,8 @@ function CounterCheckoutActions({
 					</DialogHeader>
 					{storeQr?.waUrl ? (
 						<>
+							{/* dark-ok. bg-white is deliberately theme-invariant: the QR needs a light
+							    quiet zone to scan, and a dark plate breaks phone cameras. */}
 							<div className="mx-auto rounded-2xl border border-border bg-white p-4">
 								<QRCode value={storeQr.waUrl} size={220} />
 							</div>
@@ -799,7 +801,7 @@ function SessionRow({
 						</p>
 						{/* Buyer arrived via the printed store poster (walk-in scan). */}
 						{session.origin === "store_qr" ? (
-							<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+							<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-500">
 								Walk-in scan
 							</span>
 						) : null}
@@ -915,19 +917,21 @@ function DoneScreen({
 	}
 
 	return (
-		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
+		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm dark:border-emerald-900 dark:bg-emerald-950 sm:p-6">
 			<div className="flex items-start gap-4">
+				{/* The saturated emerald-600 plate + white glyph is theme-invariant —
+				    it reads as the "done" mark against either panel tint. */}
 				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
 					<CheckCircle2 className="size-7" />
 				</span>
 				<div className="min-w-0">
-					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">
+					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700 dark:text-emerald-300">
 						Checkout saved
 					</p>
-					<h2 className="mt-1 text-2xl font-bold text-emerald-950">
+					<h2 className="mt-1 text-2xl font-bold text-emerald-950 dark:text-emerald-100">
 						{completed ? "Order completed" : "Order created"}
 					</h2>
-					<p className="mt-1 text-sm text-emerald-800">
+					<p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
 						{shortId ? (
 							<>
 								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
@@ -945,9 +949,11 @@ function DoneScreen({
 					</p>
 				</div>
 			</div>
+			{/* The inner plate lifts off the panel tint — a white veil in light, a
+			    lighter emerald one in dark (white/70 would blow out against it). */}
 			{shortId ? (
-				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
-					<p className="text-sm font-semibold text-emerald-950">
+				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4 dark:border-emerald-900 dark:bg-emerald-900/40">
+					<p className="text-sm font-semibold text-emerald-950 dark:text-emerald-100">
 						{paidInPerson ? "Receipt" : "Invoice"}
 					</p>
 					<OrderDocumentActions
@@ -965,13 +971,15 @@ function DoneScreen({
 						onClick={markCompleted}
 						isLoading={completing}
 						disabled={completing}
+						// Saturated emerald + white label: the same solid button in both
+						// themes, so no dark: pair.
 						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700 sm:col-span-2"
 					>
 						{completing ? "Completing…" : "Mark as completed"}
 					</Button>
 				) : null}
 				{completed ? (
-					<p className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-sm font-medium text-emerald-700 sm:col-span-2">
+					<p className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-sm font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 sm:col-span-2">
 						<CheckCircle2 className="size-4" />
 						Marked completed
 					</p>

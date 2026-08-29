@@ -870,7 +870,7 @@ export function OrderFilters({
 										"flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors",
 										value.mockup
 											? "border-amber-500 bg-amber-50 dark:bg-amber-950"
-											: "border-amber-200 bg-amber-50/60 hover:bg-amber-50 dark:border-amber-800 dark:bg-amber-950/60",
+											: "border-amber-200 bg-amber-50/60 hover:bg-amber-50 dark:border-amber-800 dark:bg-amber-950/60 dark:hover:bg-amber-950",
 									)}
 								>
 									<span className="flex items-center gap-2.5 text-sm font-semibold text-amber-800 dark:text-amber-300">
@@ -889,7 +889,7 @@ export function OrderFilters({
 									>
 										<span
 											className={cn(
-												"absolute top-[3px] size-5 rounded-full bg-white shadow transition-all",
+												"absolute top-[3px] size-5 rounded-full bg-background shadow transition-all",
 												value.mockup ? "left-[21px]" : "left-[3px]",
 											)}
 										/>

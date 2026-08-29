@@ -13,9 +13,11 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
+import { useThemeScope } from "../hooks/useTheme";
 import { isBuyerRouteId } from "../lib/buyer-routes";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
+import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
 
@@ -129,14 +131,29 @@ function SetupNotice() {
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
 	useClarity();
+	// `themed` is false on the marketing site, which is deliberately always-light
+	// (see lib/theme.ts). `resolved` is handed to sonner, which renders its own
+	// surfaces outside our token tree and would otherwise be light-on-light.
+	const { themed, resolved } = useThemeScope();
 	return (
 		<html lang={getLocale()} suppressHydrationWarning>
 			<head>
+				{/* Sets the .dark class BEFORE first paint — without it every
+				    dark-mode visitor gets a white flash while React hydrates.
+				    Emitted only on themed routes, so the marketing pages can't be
+				    darkened by a stale preference. Sits above <HeadContent /> so it
+				    doesn't queue behind the stylesheet link. See lib/theme.ts. */}
+				{themed ? (
+					<script
+						// biome-ignore lint/security/noDangerouslySetInnerHtml: static build-time constant, no interpolated input
+						dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
+					/>
+				) : null}
 				<HeadContent />
 			</head>
 			<body className="min-h-dvh bg-background font-sans text-foreground antialiased">
 				<Providers>{children}</Providers>
-				<Toaster richColors position="top-right" />
+				<Toaster richColors position="top-right" theme={resolved} />
 				<TanStackDevtools
 					config={{ position: "bottom-right" }}
 					plugins={[

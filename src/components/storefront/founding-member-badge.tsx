@@ -31,6 +31,8 @@ export function FoundingMemberBadge({
 
 	if (onCover) {
 		return (
+			// dark-ok: renders over the cover photo's dark scrim, so white is right
+			// in both themes — the axis is the photo, not the theme.
 			<span className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-white drop-shadow">
 				{/* Mint emblem reads against the header scrim regardless of theme;
 				    the visible label carries the meaning so the artwork is
