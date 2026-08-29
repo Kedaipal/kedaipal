@@ -5,12 +5,20 @@ import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
+	ORDER_SOURCE_KEYS,
+	ORDER_SOURCE_LABELS,
+	PAYMENT_STATUS_KEYS,
+	PAYMENT_STATUS_LABELS,
+} from "../../../convex/lib/orderCsv";
+import {
 	COUNTRY_PAYMENT_METHODS,
+	ORDER_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
 import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import { cn } from "../../lib/utils";
+import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { FilterOptionRow } from "../ui/filter-option-row";
@@ -21,19 +29,22 @@ export type PaymentStatus = "unpaid" | "claimed" | "received";
 /** Checkout surface the order came through (mirrors orders.source). */
 export type OrderSource = "storefront" | "counter" | "claim";
 
-const SOURCE_OPTIONS: { value: OrderSource; label: string }[] = [
-	{ value: "storefront", label: "Online" },
-	{ value: "counter", label: "Counter" },
-	// Claim-link orders (86eyq0epn): seller-keyed at a locked price, completed
-	// by the buyer — the TikTok Live funnel.
-	{ value: "claim", label: "Claim link" },
-];
+// Both derived from the registry's maps rather than restated here: the Order
+// type column printed `storefront` while this panel said "Online" precisely
+// because the label lived in one place and the column in another (86eyrtz74).
+// Claim-link orders (86eyq0epn) are seller-keyed at a locked price and
+// completed by the buyer — the TikTok Live funnel.
+const SOURCE_OPTIONS: { value: OrderSource; label: string }[] =
+	ORDER_SOURCE_KEYS.map((value) => ({
+		value: value as OrderSource,
+		label: ORDER_SOURCE_LABELS[value],
+	}));
 
-const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [
-	{ value: "unpaid", label: "Unpaid" },
-	{ value: "claimed", label: "Claimed" },
-	{ value: "received", label: "Paid" },
-];
+const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] =
+	PAYMENT_STATUS_KEYS.map((value) => ({
+		value: value as PaymentStatus,
+		label: PAYMENT_STATUS_LABELS[value],
+	}));
 
 const DUE_WINDOWS: { value: FulfilmentWindow; label: string }[] = [
 	{ value: "today", label: "Today" },
@@ -71,6 +82,10 @@ export interface OrderFilterValue {
 	statuses: string[];
 	/** Frozen line categories to keep (86eyrtz74). Same mirroring rule. */
 	categories: string[];
+	/** Keep orders with NO categories — the twin of `methodUnspecified`. Without
+	 * it "select every category" silently drops them, and categories are
+	 * optional so that is the common case (PR #235 review). */
+	categoriesUnspecified: boolean;
 	/**
 	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
 	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
@@ -95,6 +110,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		v.sources.length +
 		v.statuses.length +
 		v.categories.length +
+		(v.categoriesUnspecified ? 1 : 0) +
 		v.attributionSources.length
 	);
 }
@@ -185,6 +201,13 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, categories: x.categories.filter((y) => y !== c) }),
 		});
 	}
+	if (v.categoriesUnspecified) {
+		tokens.push({
+			key: "cat-none",
+			label: "Uncategorized",
+			clear: (x) => ({ ...x, categoriesUnspecified: false }),
+		});
+	}
 	for (const src of v.sources) {
 		tokens.push({
 			key: `source-${src}`,
@@ -262,6 +285,7 @@ export function clearedFilters(): OrderFilterValue {
 		sources: [],
 		statuses: [],
 		categories: [],
+		categoriesUnspecified: false,
 		attributionSources: [],
 	};
 }
@@ -276,9 +300,35 @@ export function clearedFilters(): OrderFilterValue {
 export function methodChoicesFor(
 	country: Country,
 	selected: readonly OrderPaymentMethod[],
+	/**
+	 * Rails that actually appear in the seller's orders (from
+	 * `searchOrders.facets.paymentMethod`). Folded in alongside the selected
+	 * ones because `paymentMethod.ts` says it plainly: never gate a label, a
+	 * filter MATCH or a stamp on the country list — only the pickers.
+	 *
+	 * Without this, an MY seller whose HitPay settled a GrabPay order could not
+	 * see a GrabPay option at all, and "select all" quietly excluded those
+	 * orders while the panel claimed nothing was filtered (PR #235 review).
+	 */
+	present: readonly OrderPaymentMethod[] = [],
 ): OrderPaymentMethod[] {
 	const offered = COUNTRY_PAYMENT_METHODS[country];
-	return [...offered, ...selected.filter((m) => !offered.includes(m))];
+	const extra: OrderPaymentMethod[] = [];
+	for (const m of [...selected, ...present]) {
+		if (!offered.includes(m) && !extra.includes(m)) extra.push(m);
+	}
+	return [...offered, ...extra];
+}
+
+/** The rails a facet tally actually saw, in registry order so the picker stays
+ * stable as counts move. `""` (unspecified) is not a rail. */
+export function methodsPresentIn(
+	facets: OrderFilterFacets | undefined,
+): OrderPaymentMethod[] {
+	if (!facets) return [];
+	return ORDER_PAYMENT_METHODS.filter(
+		(m) => (facets.paymentMethod[m] ?? 0) > 0,
+	);
 }
 
 /**
@@ -363,6 +413,16 @@ export function OrderFilters({
 				: [...value.attributionSources, src],
 		});
 	}
+
+	// ONE list drives the options, the total AND the select-all set. They were
+	// three separate expressions, and only the rendered options folded in a rail
+	// the country doesn't offer — so select-all excluded orders whose method the
+	// picker was happily showing (PR #235 review).
+	const methodChoices = methodChoicesFor(
+		country,
+		value.method,
+		methodsPresentIn(facets),
+	);
 
 	const showCustomDates =
 		customDates ||
@@ -493,7 +553,17 @@ export function OrderFilters({
 						    up roughly level.                                      */}
 							<div className="grid gap-x-5 gap-y-4 sm:grid-cols-2">
 								<div className="flex flex-col gap-4">
-									<FilterSection title="Status">
+									<FilterSection
+										title="Status"
+										selected={value.statuses.length}
+										total={ORDER_STATUS_KEYS.length}
+										onToggleAll={(all) =>
+											onChange({
+												...value,
+												statuses: all ? [...ORDER_STATUS_KEYS] : [],
+											})
+										}
+									>
 										{ORDER_STATUS_KEYS.map((st) => (
 											<FilterOptionRow
 												key={st}
@@ -512,7 +582,17 @@ export function OrderFilters({
 										))}
 									</FilterSection>
 
-									<FilterSection title="Payment">
+									<FilterSection
+										title="Payment"
+										selected={value.payment.length}
+										total={PAYMENT_OPTIONS.length}
+										onToggleAll={(all) =>
+											onChange({
+												...value,
+												payment: all ? PAYMENT_OPTIONS.map((o) => o.value) : [],
+											})
+										}
+									>
 										{PAYMENT_OPTIONS.map((o) => (
 											<FilterOptionRow
 												key={o.value}
@@ -529,8 +609,25 @@ export function OrderFilters({
 									    (HitPay MY can settle a GrabPay order; a deep link can
 									    carry any value) still renders, or it is a filter they
 									    can neither see nor switch off. */}
-									<FilterSection title="Payment method" hint="how they settled">
-										{methodChoicesFor(country, value.method).map((m) => (
+									<FilterSection
+										title="Payment method"
+										hint="how they settled"
+										// "Unspecified" counts as one of the choices: it is a real answer a
+										// seller can filter on, so a section reading "all selected" while it
+										// was off would be wrong.
+										selected={
+											value.method.length + (value.methodUnspecified ? 1 : 0)
+										}
+										total={methodChoices.length + 1}
+										onToggleAll={(all) =>
+											onChange({
+												...value,
+												method: all ? methodChoices : [],
+												methodUnspecified: all,
+											})
+										}
+									>
+										{methodChoices.map((m) => (
 											<FilterOptionRow
 												key={m}
 												label={PAYMENT_METHOD_LABELS[m]}
@@ -559,7 +656,27 @@ export function OrderFilters({
 								    single-option filter can only narrow to what you already
 								    have. */}
 									{(availableCategories?.length ?? 0) > 1 ? (
-										<FilterSection title="Categories">
+										<FilterSection
+											title="Categories"
+											// "Uncategorized" counts as one of the choices, so selecting
+											// the whole section genuinely matches every order — without it,
+											// select-all silently dropped every uncategorized order while
+											// the hint claimed nothing was filtered (PR #235 review).
+											selected={
+												value.categories.length +
+												(value.categoriesUnspecified ? 1 : 0)
+											}
+											total={(availableCategories?.length ?? 0) + 1}
+											onToggleAll={(all) =>
+												onChange({
+													...value,
+													categories: all
+														? [...(availableCategories ?? [])]
+														: [],
+													categoriesUnspecified: all,
+												})
+											}
+										>
 											{availableCategories?.map((c) => (
 												<FilterOptionRow
 													key={c}
@@ -576,10 +693,34 @@ export function OrderFilters({
 													}
 												/>
 											))}
+											{/* Last and muted, like "Unspecified" under Payment method: it
+											    names an absence, not one of the seller's own categories. */}
+											<FilterOptionRow
+												label="Uncategorized"
+												muted
+												count={facets?.category[""] ?? 0}
+												selected={value.categoriesUnspecified}
+												onToggle={() =>
+													onChange({
+														...value,
+														categoriesUnspecified: !value.categoriesUnspecified,
+													})
+												}
+											/>
 										</FilterSection>
 									) : null}
 
-									<FilterSection title="Order type">
+									<FilterSection
+										title="Order type"
+										selected={value.sources.length}
+										total={SOURCE_OPTIONS.length}
+										onToggleAll={(all) =>
+											onChange({
+												...value,
+												sources: all ? SOURCE_OPTIONS.map((o) => o.value) : [],
+											})
+										}
+									>
 										{SOURCE_OPTIONS.map((o) => (
 											<FilterOptionRow
 												key={o.value}
@@ -602,6 +743,16 @@ export function OrderFilters({
 										<FilterSection
 											title="Came from"
 											hint="tag your links on Home"
+											selected={value.attributionSources.length}
+											total={availableSources?.length ?? 0}
+											onToggleAll={(all) =>
+												onChange({
+													...value,
+													attributionSources: all
+														? [...(availableSources ?? [])]
+														: [],
+												})
+											}
 										>
 											{availableSources?.map((src) => (
 												<FilterOptionRow
@@ -782,28 +933,77 @@ export function OrderFilters({
  * with nine dimensions on screen at once, the eye needs the group boundary more
  * than it needs another uppercase label to read.
  */
+/**
+ * One labelled group of options. A hairline card rather than a bare heading:
+ * with nine dimensions on screen at once, the eye needs the group boundary more
+ * than it needs another uppercase label to read.
+ *
+ * Where the group is a MULTI-select, its heading becomes the same tri-state
+ * `BulkSelectRow` the column picker uses — select-all and clear-this-group on
+ * one control, so a seller narrowing to "everything except Cancelled" ticks
+ * once and unticks once instead of ticking five times.
+ *
+ * ⚠️ **A filter is not a column picker**, and the difference matters here:
+ * selecting EVERY option in a dimension narrows nothing — "Unpaid OR Claimed OR
+ * Paid" is every order. That is a legitimate stop on the way to "all except X",
+ * so it is allowed, but the section says so plainly rather than leaving a
+ * seller wondering why their list didn't move. Clicking a full parent clears
+ * it, which is the honest way back.
+ *
+ * Sections with no `onToggleAll` (single-select due windows, the date range,
+ * the mockup toggle) keep a plain heading — a select-all there would be
+ * meaningless, and forcing the pattern everywhere is how a good idea becomes
+ * clutter.
+ */
 function FilterSection({
 	title,
 	hint,
+	selected,
+	total,
+	onToggleAll,
 	children,
 }: {
 	title: string;
 	hint?: string;
+	selected?: number;
+	total?: number;
+	onToggleAll?: (selectAll: boolean) => void;
 	children: React.ReactNode;
 }) {
+	const bulk =
+		onToggleAll !== undefined && selected !== undefined && total !== undefined;
 	return (
 		<section className="rounded-xl border border-border/70 p-2">
-			<div className="flex items-baseline justify-between gap-2 px-1.5 pb-1 pt-0.5">
-				<h3 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-					{title}
-				</h3>
-				{hint ? (
-					<span className="truncate text-[11px] text-muted-foreground/70">
-						{hint}
-					</span>
-				) : null}
-			</div>
+			{bulk ? (
+				<BulkSelectRow
+					label={title}
+					selected={selected}
+					total={total}
+					onToggle={onToggleAll}
+				/>
+			) : (
+				<div className="flex items-baseline justify-between gap-2 px-1.5 pb-1 pt-0.5">
+					<h3 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+						{title}
+					</h3>
+					{hint ? (
+						<span className="truncate text-[11px] text-muted-foreground/70">
+							{hint}
+						</span>
+					) : null}
+				</div>
+			)}
+			{bulk && hint ? (
+				<p className="px-2.5 pb-0.5 text-[11px] text-muted-foreground/70">
+					{hint}
+				</p>
+			) : null}
 			{children}
+			{bulk && total > 0 && selected === total ? (
+				<p className="px-2.5 pb-0.5 pt-1 text-[11px] text-muted-foreground">
+					Every option selected — same as no {title.toLowerCase()} filter.
+				</p>
+			) : null}
 		</section>
 	);
 }

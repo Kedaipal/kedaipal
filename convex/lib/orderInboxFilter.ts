@@ -7,7 +7,11 @@
 import { attributionBucket } from "./attribution";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
 import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
-import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
+import {
+	type CsvOrder,
+	ORDER_COLUMNS,
+	orderColumnDisplay,
+} from "./orderCsv";
 
 /**
  * Every column's rendered text for one order, lowercased and joined — the
@@ -25,8 +29,13 @@ import { type CsvOrder, ORDER_COLUMNS } from "./orderCsv";
 function searchHaystack(o: CsvOrder): string {
 	let out = "";
 	for (const column of ORDER_COLUMNS) {
-		const text = column.value(o);
-		if (text !== "") out += `${text.toLowerCase()}\n`;
+		// BOTH the stored value and the on-screen wording, where they differ
+		// (86eyrtz74). A seller typing "storefront" is reading the column; one
+		// typing "received" may be reading an old export or a colleague's note.
+		// Indexing both means neither guess comes back empty.
+		for (const text of new Set([column.value(o), orderColumnDisplay(column, o)])) {
+			if (text !== "") out += `${text.toLowerCase()}\n`;
+		}
 	}
 	return out;
 }
@@ -59,6 +68,7 @@ const NARROWING_FILTER_KEYS: Record<
 	mockupPending: true,
 	statuses: true,
 	categories: true,
+	categoriesUnspecified: true,
 	sources: true,
 	attributionSources: true,
 };
@@ -74,6 +84,16 @@ export function narrowsTheInbox(args: InboxFilterArgs): boolean {
 		if (Array.isArray(value)) return value.length > 0;
 		return value !== undefined;
 	});
+}
+
+/** True when the order carries no frozen category names at all — either
+ * recorded as empty, or predating the field. Both read as blank on screen, so
+ * both are "uncategorized" to a seller. */
+function hasNoCategories(o: CsvOrder): boolean {
+	for (const item of o.items) {
+		if ((item.categoryNames ?? []).length > 0) return false;
+	}
+	return true;
 }
 
 /** True when any of the order's lines was sold under one of `wanted`. */
@@ -127,6 +147,17 @@ export type InboxFilterArgs = {
 	 * lookup per order is not something a filter predicate can afford.
 	 */
 	categories?: string[];
+	/**
+	 * Keep orders whose lines carry NO frozen categories (86eyrtz74) — the exact
+	 * twin of `methodUnspecified`, and there for the same reason.
+	 *
+	 * Without it, "select every category" silently drops every uncategorized
+	 * order, because `matchesAnyCategory` can only ever match a name. Categories
+	 * are optional, so a partially-categorized catalogue is the COMMON case, not
+	 * an edge one — and the panel was telling the seller that selecting them all
+	 * changed nothing while their list quietly shrank.
+	 */
+	categoriesUnspecified?: boolean;
 	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in)
 	// vs "claim". Legacy orders with no stamped source read as "storefront".
 	// MULTI-select since 86eyrtz74 (was one value) — "online or claim link, but
@@ -212,6 +243,7 @@ export function buildInboxPredicate(
 		args.categories && args.categories.length > 0
 			? new Set(args.categories)
 			: null;
+	const wantUncategorized = args.categoriesUnspecified === true;
 	// `Set<string>`, not `Set<OrderSource>`: `CsvOrder.source` is a plain string
 	// (the CSV shape predates the union) and a legacy row can hold anything.
 	const sourceSet =
@@ -229,7 +261,16 @@ export function buildInboxPredicate(
 		if (bucketSet && !bucketSet.has(orderBucket(o))) return false;
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
 		if (statusSet && !statusSet.has(o.status)) return false;
-		if (categorySet && !matchesAnyCategory(o, categorySet)) return false;
+		// Category filter — the same shape as the method filter below: the named
+		// set ORs with the "none recorded" arm, so selecting every category plus
+		// Uncategorized genuinely matches every order.
+		if (categorySet || wantUncategorized) {
+			const byCategory = categorySet
+				? matchesAnyCategory(o, categorySet)
+				: false;
+			const byUncategorized = wantUncategorized && hasNoCategories(o);
+			if (!byCategory && !byUncategorized) return false;
+		}
 		// Source filter — legacy/undefined source reads as "storefront".
 		if (sourceSet && !sourceSet.has(o.source ?? "storefront")) return false;
 		// Marketing-origin filter — bucketed through the SAME resolver Insights

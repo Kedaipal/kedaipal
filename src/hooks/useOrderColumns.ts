@@ -133,6 +133,16 @@ export interface OrderColumnsState {
 	/** Rearrange the visible set. Takes the full new key order (the shape
 	 * `SortableList` hands back on drop). */
 	reorder: (keys: OrderColumnKey[]) => void;
+	/**
+	 * Show or hide a whole set at once — the picker's per-group and select-all
+	 * controls (86eyrtz74). Ticking 22 boxes by hand was the alternative.
+	 *
+	 * Showing APPENDS in registry order, so a group turned on arrives grouped
+	 * and in its canonical order rather than scattered by whatever order the
+	 * seller happened to tick things in. Hiding preserves the order of whatever
+	 * survives, so turning a group off and on again doesn't reshuffle the rest.
+	 */
+	setManyVisible: (keys: readonly OrderColumnKey[], visible: boolean) => void;
 	reset: () => void;
 	/** Column widths the seller has dragged to, keyed by column. A column absent
 	 * here is at its registry default. Shaped as TanStack's `ColumnSizingState`
@@ -251,6 +261,42 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		[retailerId],
 	);
 
+	const setManyVisible = useCallback(
+		(target: readonly OrderColumnKey[], show: boolean) => {
+			setKeys((prev) => {
+				const wanted = new Set(target);
+				let next: OrderColumnKey[];
+				if (show) {
+					const already = new Set(prev);
+					// Registry order for the newcomers, so a group arrives as a block.
+					const additions = ALL_ORDER_COLUMN_KEYS.filter(
+						(k) => wanted.has(k) && !already.has(k),
+					);
+					next = [...prev, ...additions];
+				} else {
+					next = prev.filter((k) => !wanted.has(k));
+					// An empty table is a dead end whose only way back is the panel the
+					// seller just emptied. Clearing everything therefore keeps the FIRST
+					// column — the one they arranged to lead — rather than refusing the
+					// click and doing nothing visible. The picker says so in words.
+					if (next.length === 0) next = prev.slice(0, 1);
+				}
+				if (next.length === prev.length && next.every((k, i) => k === prev[i]))
+					return prev;
+				try {
+					window.localStorage.setItem(
+						storageKey(retailerId),
+						JSON.stringify(next),
+					);
+				} catch {
+					// see persist
+				}
+				return next;
+			});
+		},
+		[retailerId],
+	);
+
 	const reorder = useCallback(
 		(next: OrderColumnKey[]) => {
 			// Trust only keys that are real columns and were already visible — the
@@ -294,6 +340,7 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		isVisible: (key) => visible.has(key),
 		toggle,
 		reorder,
+		setManyVisible,
 		reset,
 		widths,
 		setWidths,
