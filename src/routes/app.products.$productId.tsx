@@ -170,12 +170,28 @@ function EditProductRoute() {
 
 	function openPreview() {
 		const draft = formDraftRef.current?.();
-		if (!draft) return;
+		// Narrowed above at the render guards, but this closure is created before
+		// them, so TS can't see it.
+		if (!draft || !product) return;
 		// Identity fields (_id, retailerId, currency, _creationTime…) come from
 		// the saved row; everything the buyer SEES comes from the draft overlay.
 		// The cast covers the fabricated preview variant ids — the sheet only
 		// uses them as keys and through the stubbed onAdd.
-		setPreviewProduct({ ...product, ...draftPreviewOverlay(draft) });
+		// Live counts, not the form's seeded ones — stock is no longer editable
+		// here (86eypn8ye), so previewing the draft's copy would show the seller a
+		// buyer view that disagrees with their own storefront.
+		setPreviewProduct({
+			...product,
+			...draftPreviewOverlay(
+				draft,
+				product.variants.map((vr) => ({
+					variantId: vr._id,
+					optionValues: vr.optionValues,
+					isCustom: vr.isCustom,
+					onHand: vr.onHand,
+				})),
+			),
+		});
 	}
 
 	return (
@@ -284,6 +300,16 @@ function EditProductRoute() {
 				// a first-class field in the editor — a weightless item strands that
 				// store's checkout on "missing weights".
 				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				// Stock is no longer part of the product save (86eypn8ye): these
+				// saved variants render their count read-only, live, with an Adjust
+				// button. `product` is a reactive read, so the number ticks down as
+				// orders land instead of going stale behind an open form.
+				liveStock={product.variants.map((vr) => ({
+					variantId: vr._id,
+					optionValues: vr.optionValues,
+					isCustom: vr.isCustom,
+					onHand: vr.onHand,
+				}))}
 				submitLabel="Save changes"
 				stickyAction={
 					// Labelled, and NOT tinted red — an icon-only red button here read

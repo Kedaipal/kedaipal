@@ -110,6 +110,40 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		// package.json reads 2026.08.2 — the bump happens in the staging→main
+		// release PR, by hand (docs/ci.md). Until then this note is simply
+		// hidden: `visibleReleases` drops anything newer than the running build.
+		version: "2026.08.3",
+		date: "2026-08-29",
+		// Earns the modal: a seller who doesn't read it goes looking for the stock
+		// box that left the product form, and never finds out why the number
+		// stopped being something they could type.
+		notable: true,
+		entries: [
+			{
+				title: {
+					en: "Stock has its own button now — and a save can't undo your sales",
+				},
+				body: {
+					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+				icon: "package",
+			},
+			{
+				title: {
+					en: "Importing a sheet won't overwrite your stock unless you say so",
+				},
+				body: {
+					en: "A sheet you exported this morning holds this morning's counts, so importing it in the afternoon used to undo everything sold in between. Now stock is left alone unless you tick \"Update stock too\" — and when you do, we tell you how many counts it replaces and how many would go up, so a stock take still works and a price change can't cost you sales.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+		],
+	},
+	{
 		version: "2026.08.2",
 		date: "2026-08-28",
 		// Earns the modal: the orders page a seller opens every morning now has a

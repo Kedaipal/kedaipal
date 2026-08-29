@@ -40,6 +40,7 @@ import {
 	isValidCombination,
 	MAX_CUSTOM_LABEL_LENGTH,
 	MAX_CUSTOM_PROMPT_LENGTH,
+	MAX_VARIANTS_PER_PRODUCT,
 	type OptionAxis,
 	normalizeOptions,
 	sameOptionValues,
@@ -949,7 +950,14 @@ export const saveVariantGrid = mutation({
 				await ctx.db.patch(prior._id, {
 					sku: variant.sku,
 					price: variant.price,
-					onHand: variant.onHand,
+					// `onHand` is deliberately ABSENT (86eypn8ye). The form renders a
+					// count when it opens; by the time Save is tapped that number can
+					// be minutes stale, and writing it back resurrects everything sold
+					// in between — from a save the seller made to fix a typo. Stock
+					// moves only through `adjustStock`, where it is the thing being
+					// asked for. The client still sends `onHand` because the same
+					// validator serves the INSERT below, where it is correct: a
+					// brand-new combination has no stock of its own to protect.
 					parcelWeightG: variant.parcelWeightG ?? prior.parcelWeightG,
 					imageStorageIds: variant.imageStorageIds ?? prior.imageStorageIds,
 					active: variant.active ?? prior.active,
@@ -1019,13 +1027,18 @@ export const saveVariantGrid = mutation({
 	},
 });
 
-/** Per-row variant edit (price, stock, sku, weight, images, active). */
+/**
+ * Per-row variant edit (price, sku, weight, images, active).
+ *
+ * Stock is NOT here: it moves only through `adjustStock` (86eypn8ye). This
+ * mutation writes whatever it is handed, so an `onHand` argument would be a
+ * second absolute-write door onto the field the whole ticket exists to protect.
+ */
 export const updateVariant = mutation({
 	args: {
 		variantId: v.id("productVariants"),
 		sku: v.optional(v.union(v.string(), v.null())),
 		price: v.optional(v.number()),
-		onHand: v.optional(v.number()),
 		parcelWeightG: v.optional(v.number()),
 		imageStorageIds: v.optional(v.array(v.string())),
 		active: v.optional(v.boolean()),
@@ -1041,11 +1054,6 @@ export const updateVariant = mutation({
 		if (fields.price !== undefined && fields.price < 0)
 			throw new ConvexError("Price must be non-negative");
 		if (
-			fields.onHand !== undefined &&
-			(!Number.isInteger(fields.onHand) || fields.onHand < 0)
-		)
-			throw new ConvexError("Stock must be a non-negative integer");
-		if (
 			fields.parcelWeightG !== undefined &&
 			(!Number.isInteger(fields.parcelWeightG) || fields.parcelWeightG < 0)
 		)
@@ -1058,7 +1066,6 @@ export const updateVariant = mutation({
 
 		const updates: Record<string, unknown> = { updatedAt: Date.now() };
 		if (fields.price !== undefined) updates.price = fields.price;
-		if (fields.onHand !== undefined) updates.onHand = fields.onHand;
 		if (fields.parcelWeightG !== undefined)
 			updates.parcelWeightG = fields.parcelWeightG;
 		if (fields.imageStorageIds !== undefined)
@@ -1083,6 +1090,141 @@ export const updateVariant = mutation({
 
 		await ctx.db.patch(variantId, updates);
 		await logAdminAction(ctx, access, "products.updateVariant", variantId);
+	},
+});
+
+/**
+ * The ONLY way stock changes by hand (86eypn8ye).
+ *
+ * Every other write path used to set `onHand` to an absolute number rendered
+ * minutes earlier, so saving an unrelated field — a typo in the name — wrote
+ * back a count that sales had since moved, resurrecting units that were already
+ * out the door. Stock is now removed from the product save entirely and moved
+ * here, where changing it is something the seller *asked* to do.
+ *
+ * Two shapes per adjustment, and the difference is the whole point:
+ *
+ * - `delta` is a MOVEMENT ("I baked 20 more", "sold 3 at the stall"). It is
+ *   correct against any starting number, so a sale landing between the seller's
+ *   last look and this mutation cannot corrupt it. The read happens inside this
+ *   transaction, so two adjustments racing each other both land.
+ * - `setTo` is an OVERWRITE, for the one real job a delta can't express: a
+ *   physical stock count. It carries `expectedOnHand` — what the seller could
+ *   see when they confirmed — and is refused if reality has moved since, so the
+ *   seller re-confirms against a number they have actually seen rather than
+ *   silently writing a sale out of existence.
+ *
+ * Takes a LIST because the multi-variant stock sheet moves several counts at
+ * once ("after the market day"). One mutation is one transaction, so a sheet
+ * either applies whole or not at all — N separate calls would leave the seller
+ * with some rows moved and some not, and no way to tell which.
+ *
+ * Floored at zero rather than throwing, matching `decrementAggregatesForCancel`
+ * and the usage meter: an over-subtraction self-heals instead of dead-ending.
+ * Reserved units are not netted off here — that is the reservation ledger
+ * (86eybbxhf), still unbuilt.
+ */
+export const adjustStock = mutation({
+	args: {
+		adjustments: v.array(
+			v.object({
+				variantId: v.id("productVariants"),
+				/** Signed movement. Mutually exclusive with `setTo`. */
+				delta: v.optional(v.number()),
+				/** Absolute count from a stock take. Requires `expectedOnHand`. */
+				setTo: v.optional(v.number()),
+				/** The count the seller was looking at when they confirmed `setTo`. */
+				expectedOnHand: v.optional(v.number()),
+			}),
+		),
+	},
+	returns: v.array(
+		v.object({ variantId: v.id("productVariants"), onHand: v.number() }),
+	),
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ variantId: Id<"productVariants">; onHand: number }[]> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+
+		if (args.adjustments.length === 0)
+			throw new ConvexError("Nothing to adjust");
+		// Mirrors the per-product variant cap: the sheet that sends a batch can
+		// never hold more rows than one product's grid.
+		if (args.adjustments.length > MAX_VARIANTS_PER_PRODUCT)
+			throw new ConvexError(
+				`At most ${MAX_VARIANTS_PER_PRODUCT} stock changes at once`,
+			);
+		const seen = new Set<string>();
+		for (const a of args.adjustments) {
+			if (seen.has(a.variantId))
+				throw new ConvexError("Each variant may appear only once");
+			seen.add(a.variantId);
+		}
+
+		const now = Date.now();
+		const results: { variantId: Id<"productVariants">; onHand: number }[] = [];
+
+		for (const adjustment of args.adjustments) {
+			const { variant, access } = await requireVariantOwnership(
+				ctx,
+				adjustment.variantId,
+			);
+			if (!access.actingAsAdmin)
+				await assertSubscriptionActive(ctx, variant.retailerId);
+
+			// A bespoke line is priced on a quote and never counted — `onHand` is
+			// coerced to 0 on every write path. Offering to adjust it would invent a
+			// concept the product deliberately doesn't have.
+			if (variant.isCustom)
+				throw new ConvexError("A custom order line has no stock to count.");
+
+			const hasDelta = adjustment.delta !== undefined;
+			const hasSetTo = adjustment.setTo !== undefined;
+			if (hasDelta === hasSetTo)
+				throw new ConvexError("Send exactly one of delta or setTo");
+
+			let next: number;
+			if (hasDelta) {
+				const delta = adjustment.delta as number;
+				if (!Number.isInteger(delta))
+					throw new ConvexError("Stock movement must be a whole number");
+				next = Math.max(0, variant.onHand + delta);
+			} else {
+				const setTo = adjustment.setTo as number;
+				// No upper bound, matching every other stock write path — an invented
+				// ceiling here would be a rule nothing else enforces and nothing tells
+				// the seller about.
+				if (!Number.isInteger(setTo) || setTo < 0)
+					throw new ConvexError("Stock must be a whole number, 0 or more");
+				if (adjustment.expectedOnHand === undefined)
+					throw new ConvexError("Setting an exact count needs expectedOnHand");
+				// The stale-overwrite guard. Deliberately NOT a silent merge: only the
+				// seller knows whether they counted the shelf before or after those
+				// units left, so the answer has to come from them.
+				if (adjustment.expectedOnHand !== variant.onHand)
+					throw new ConvexError(
+						`Stock changed to ${variant.onHand} while you were counting — check the number and confirm again.`,
+					);
+				next = setTo;
+			}
+
+			if (next !== variant.onHand)
+				await ctx.db.patch(adjustment.variantId, {
+					onHand: next,
+					updatedAt: now,
+				});
+			await logAdminAction(
+				ctx,
+				access,
+				"products.adjustStock",
+				adjustment.variantId,
+			);
+			results.push({ variantId: adjustment.variantId, onHand: next });
+		}
+
+		return results;
 	},
 });
 
@@ -1257,11 +1399,34 @@ function assertNoDuplicateSkusInBatch(products: ImportProduct[]): void {
 	}
 }
 
+/**
+ * CSV import. Rows are matched to existing variants by SKU.
+ *
+ * ## Why `updateStock` exists and defaults to OFF (86eypn8ye)
+ *
+ * This is the same last-write-wins hazard as the product editor, with a far
+ * bigger window: the seller exports at 10am, edits the sheet over lunch, and
+ * imports at 3pm — and every unit sold in those five hours comes back. Unlike
+ * the editor, the fix cannot be "never write stock here": export → edit →
+ * re-import is a documented round-trip and `stock` is a required column, so a
+ * genuine stock take pasted into a spreadsheet has to keep working.
+ *
+ * So the side effect becomes a choice. Names, prices, descriptions and weights
+ * always update; the sheet's stock column is applied only when the seller ticks
+ * the box, having been told how many counts it replaces and how many of those
+ * would go UP (the resurrection direction — see `bulkUpsertPreview`).
+ *
+ * Products being CREATED always take the sheet's stock: they have no orders and
+ * therefore no sales to overwrite.
+ */
 export const bulkUpsert = mutation({
 	args: {
 		retailerId: v.id("retailers"),
 		currency: v.string(),
 		products: v.array(importProductValidator),
+		/** Apply the sheet's `stock` column to products that already exist.
+		 * Absent = off: stock is left exactly as the store holds it. */
+		updateStock: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args): Promise<{ created: number; updated: number }> => {
 		const userId = await requireUserId(ctx);
@@ -1360,7 +1525,10 @@ export const bulkUpsert = mutation({
 						);
 					await ctx.db.patch(existing._id, {
 						price: variant.price,
-						onHand: variant.onHand,
+						// Opt-in only — see the note on this mutation. Omitting the key
+						// (rather than writing `existing.onHand` back) means an untouched
+						// count is never rewritten at all.
+						...(args.updateStock ? { onHand: variant.onHand } : {}),
 						parcelWeightG: variant.parcelWeightG ?? existing.parcelWeightG,
 						updatedAt: now,
 					});
@@ -1383,7 +1551,21 @@ type PreviewEntry = {
 	skippedVariants: number; // update: provided variants with no matching existing variant
 	autoFilled: number; // inactive auto-filled combinations
 	warnings: string[];
+	/** Matched variants whose sheet stock differs from the stored count — what
+	 * `updateStock` would overwrite. 0 on a create (nothing to overwrite). */
+	stockChanges: number;
+	/** The subset of those that would go UP. This is the direction that invents
+	 * units, and the likeliest cause is a sale made after the sheet was exported,
+	 * so it is counted separately and named in the UI. */
+	stockIncreases: number;
+	/** The increases themselves, so the seller can look rather than trust a
+	 * number. Capped per product — the point is to make the risk concrete, not
+	 * to render a spreadsheet. */
+	stockIncreaseSamples: { sku: string; from: number; to: number }[];
 };
+
+/** Per-product cap on `stockIncreaseSamples`. */
+const MAX_STOCK_SAMPLES_PER_PRODUCT = 5;
 
 /**
  * Non-mutating dry-run for `bulkUpsert`. Classifies each product as create /
@@ -1428,6 +1610,9 @@ export const bulkUpsertPreview = query({
 					skippedVariants: 0,
 					autoFilled,
 					warnings: [(err as Error).message],
+					stockChanges: 0,
+					stockIncreases: 0,
+					stockIncreaseSamples: [],
 				});
 				continue;
 			}
@@ -1447,6 +1632,9 @@ export const bulkUpsertPreview = query({
 						skippedVariants: 0,
 						autoFilled,
 						warnings: [(err as Error).message],
+						stockChanges: 0,
+						stockIncreases: 0,
+						stockIncreaseSamples: [],
 					});
 					continue;
 				}
@@ -1460,11 +1648,19 @@ export const bulkUpsertPreview = query({
 					skippedVariants: 0,
 					autoFilled,
 					warnings: [],
+					// A new product has no stored count to overwrite — its stock comes
+					// from the sheet regardless of the `updateStock` choice.
+					stockChanges: 0,
+					stockIncreases: 0,
+					stockIncreaseSamples: [],
 				});
 			} else {
 				updates++;
 				let changed = 0;
 				let skipped = 0;
+				let stockChanges = 0;
+				let stockIncreases = 0;
+				const stockIncreaseSamples: PreviewEntry["stockIncreaseSamples"] = [];
 				const warnings: string[] = [];
 				for (const variant of product.variants) {
 					const sku = normalizeSku(variant.sku, "Variant");
@@ -1482,6 +1678,18 @@ export const bulkUpsertPreview = query({
 					}
 					if (existing.price !== variant.price || existing.onHand !== variant.onHand)
 						changed++;
+					if (existing.onHand !== variant.onHand) {
+						stockChanges++;
+						if (variant.onHand > existing.onHand) {
+							stockIncreases++;
+							if (stockIncreaseSamples.length < MAX_STOCK_SAMPLES_PER_PRODUCT)
+								stockIncreaseSamples.push({
+									sku,
+									from: existing.onHand,
+									to: variant.onHand,
+								});
+						}
+					}
 				}
 				plan.push({
 					name: product.name,
@@ -1492,6 +1700,9 @@ export const bulkUpsertPreview = query({
 					skippedVariants: skipped,
 					autoFilled,
 					warnings,
+					stockChanges,
+					stockIncreases,
+					stockIncreaseSamples,
 				});
 			}
 		}
@@ -1504,6 +1715,10 @@ export const bulkUpsertPreview = query({
 				updates,
 				variants: variantsTotal,
 				autoFilled: autoFilledTotal,
+				// Summed from the plan so the import screen can state the cost of
+				// ticking "Update stock too" without walking the entries itself.
+				stockChanges: plan.reduce((n, e) => n + e.stockChanges, 0),
+				stockIncreases: plan.reduce((n, e) => n + e.stockIncreases, 0),
 			},
 			// Cap state so the import screen can warn BEFORE the seller confirms —
 			// the sheet is chunked across several bulkUpsert calls, so without this

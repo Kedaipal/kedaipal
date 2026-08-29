@@ -381,6 +381,8 @@ type OrderItemSnapshot = {
 	variantLabel?: string;
 	price: number;
 	quantity: number;
+	/** Whether this line reserved stock at create — frozen (86eypn8ye). */
+	stockReserved: boolean;
 	/** Categories the product was filed under at sale time (86eyrtz74). */
 	categoryNames?: string[];
 };
@@ -980,6 +982,9 @@ export const create = mutation({
 				onHand: variant.onHand,
 			});
 			snapshotItems.push({
+				// Frozen so a later flag flip can't make the cancel-restore
+				// asymmetric (86eypn8ye) — see the schema comment.
+				stockReserved: block,
 				productId: variant.productId,
 				variantId,
 				name: product.name,
@@ -2572,6 +2577,35 @@ type TransitionStatus =
  * only those are restored; items without a variantId are legacy (pre-variant),
  * skipped.
  */
+/**
+ * Did this order line actually reserve stock at create?
+ *
+ * The answer is FROZEN onto the line as `stockReserved` (86eypn8ye), because
+ * `blockWhenOutOfStock` is a property of the product *today* while the reversal
+ * needs to know what was true when the order was placed. Re-resolving made
+ * cancel-restore asymmetric: a product switched to made-to-order after an order
+ * was placed never gave its units back, and one switched TO tracking invented
+ * units that were never reserved.
+ *
+ * Legacy orders (created before the field existed) have no frozen value, so
+ * they fall back to re-resolving — the old, imperfect behaviour. Deliberately
+ * not backfilled: writing today's flag onto historical lines would bake in
+ * exactly the wrong answer for any product whose flag has since changed, and
+ * the original value is unrecoverable.
+ */
+async function lineReservedStock(
+	ctx: MutationCtx,
+	item: Doc<"orders">["items"][number],
+): Promise<boolean> {
+	if (item.stockReserved !== undefined) return item.stockReserved;
+	if (!item.variantId) return false;
+	const fresh = await ctx.db.get(item.variantId);
+	if (!fresh) return false;
+	const product = await ctx.db.get(fresh.productId);
+	if (!product) return false;
+	return (fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
+}
+
 async function reverseCancellationEffects(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
@@ -2580,6 +2614,11 @@ async function reverseCancellationEffects(
 	const restoreByVariant = new Map<Id<"productVariants">, number>();
 	for (const item of order.items) {
 		if (!item.variantId) continue;
+		// Only lines that actually reserved stock are restored. Read from the
+		// FROZEN flag (86eypn8ye): re-resolving from today's docs made the
+		// reversal asymmetric whenever blockWhenOutOfStock was flipped between
+		// create and cancel — stranding units one way, inventing them the other.
+		if (!(await lineReservedStock(ctx, item))) continue;
 		restoreByVariant.set(
 			item.variantId,
 			(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
@@ -2588,12 +2627,6 @@ async function reverseCancellationEffects(
 	for (const [variantId, qty] of restoreByVariant) {
 		const fresh = await ctx.db.get(variantId);
 		if (!fresh) continue; // variant was deleted; nothing to restore
-		const product = await ctx.db.get(fresh.productId);
-		if (!product) continue;
-		// Mirror the create-time decrement: a variant was only reserved when
-		// its resolved flag hard-blocks (per-variant override ?? product default).
-		const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
-		if (block !== true) continue; // made-to-order — never decremented
 		await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
 	}
 
@@ -2869,6 +2902,21 @@ export const updateStatus = mutation({
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 
+		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
+		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
+		// no path re-decrements on the way back out, so reviving an order leaves
+		// its units counted as available while the goods are committed. Cancel it
+		// again and `reverseCancellationEffects` restores a SECOND time —
+		// `onHand` has no ceiling, so the cycle inflates stock without limit
+		// until a later checkout passes its gate against a lie and the store
+		// oversells for real. The order-detail stepper hides forward actions on a
+		// cancelled order, but the mutation is the boundary that has to hold.
+		if (order.status === "cancelled" && status !== "cancelled") {
+			throw new ConvexError(
+				"This order was cancelled and can't be reopened. Its stock has already been returned — create a new order instead.",
+			);
+		}
+
 		// Mockup gate: a proof-required order can't move into production (packed)
 		// until the buyer has approved the mockup or the seller has waived it.
 		// Gates only the forward production step — cancelling is always allowed.
@@ -2940,6 +2988,10 @@ export const bulkUpdateStatus = mutation({
 		 * named for the same reason: a silent skip is hidden behaviour, and the
 		 * fix (wait for the rider, or override from the order page) is per-order. */
 		skippedRiderManaged: number;
+		/** Of `skipped`, how many were already cancelled — a terminal state whose
+		 * stock has already been returned. Named for the same reason as the two
+		 * above: a silent skip is hidden behaviour (86eypn8ye). */
+		skippedCancelled: number;
 	}> => {
 		if (orderIds.length === 0)
 			return {
@@ -2947,6 +2999,7 @@ export const bulkUpdateStatus = mutation({
 				skipped: 0,
 				skippedAwaitingCollection: 0,
 				skippedRiderManaged: 0,
+				skippedCancelled: 0,
 			};
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
@@ -2955,6 +3008,7 @@ export const bulkUpdateStatus = mutation({
 		let skipped = 0;
 		let skippedAwaitingCollection = 0;
 		let skippedRiderManaged = 0;
+		let skippedCancelled = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -2974,6 +3028,17 @@ export const bulkUpdateStatus = mutation({
 			// whole batch on one ineligible order).
 			if (order.status === status) {
 				skipped++;
+				continue;
+			}
+			// Cancelled is TERMINAL (86eypn8ye). The inbox has a Cancelled bucket
+			// whose rows are selectable, and the bulk bar offers every forward
+			// status without filtering on the current one — so this was reachable
+			// in two taps. Skipped rather than thrown, matching the gates below:
+			// one ineligible order must not fail the whole batch. Counted and
+			// NAMED because a silent skip is hidden behaviour.
+			if (order.status === "cancelled") {
+				skipped++;
+				skippedCancelled++;
 				continue;
 			}
 			if (status === "packed" && isMockupGateClosed(order)) {
@@ -3009,7 +3074,13 @@ export const bulkUpdateStatus = mutation({
 		}
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
-		return { updated, skipped, skippedAwaitingCollection, skippedRiderManaged };
+		return {
+			updated,
+			skipped,
+			skippedAwaitingCollection,
+			skippedRiderManaged,
+			skippedCancelled,
+		};
 	},
 });
 
@@ -4755,6 +4826,8 @@ export const declineMockupItem = mutation({
 		const restoreByVariant = new Map<Id<"productVariants">, number>();
 		for (const item of dropped) {
 			if (!item.variantId) continue;
+			// Same frozen-flag rule as the cancel path (86eypn8ye).
+			if (!(await lineReservedStock(ctx, item))) continue;
 			restoreByVariant.set(
 				item.variantId,
 				(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
@@ -4763,10 +4836,6 @@ export const declineMockupItem = mutation({
 		for (const [variantId, qty] of restoreByVariant) {
 			const fresh = await ctx.db.get(variantId);
 			if (!fresh) continue;
-			const product = await ctx.db.get(fresh.productId);
-			if (!product) continue;
-			if ((fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) !== true)
-				continue;
 			await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
 		}
 

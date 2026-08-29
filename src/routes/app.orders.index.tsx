@@ -889,6 +889,12 @@ function OrdersRoute() {
 				res.skippedRiderManaged > 0
 					? `${res.skippedRiderManaged} with a rider on the way`
 					: null,
+				// Cancelled orders can't be reopened — their stock is already back
+				// (86eypn8ye). Named so the seller learns the rule rather than
+				// re-selecting the same rows and watching nothing happen.
+				res.skippedCancelled > 0
+					? `${res.skippedCancelled} already cancelled`
+					: null,
 			].filter(Boolean);
 			toast.success(
 				res.skipped > 0

@@ -512,3 +512,66 @@ describe("VariantEditor — inline submit issues", () => {
 		expect(nameInput.getAttribute("aria-invalid")).toBe("true");
 	});
 });
+
+describe("stock left the product save (86eypn8ye)", () => {
+	const live = [
+		{
+			variantId: "v1" as never,
+			optionValues: [],
+			onHand: 20,
+		},
+	];
+
+	it("a SAVED variant shows its live count read-only, with Adjust", () => {
+		// The bug this closes: a stock input rendered here holds a number that
+		// goes stale while the form is open, and Save wrote it back.
+		render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="RM"
+				liveStock={live}
+				productName="Keropok Lekor"
+			/>,
+		);
+		expect(screen.getByText("In stock")).toBeTruthy();
+		expect(screen.getByText("20")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Adjust" })).toBeTruthy();
+		// The editable stepper is gone — the seller cannot change stock as a side
+		// effect of saving something else.
+		expect(screen.queryByLabelText("Stock on hand")).toBe(null);
+		expect(screen.queryByText("In stock now")).toBe(null);
+	});
+
+	it("a NEW row keeps its stock input", () => {
+		// No liveStock entry means the grid is INSERTING this combination: it has
+		// no stock of its own to protect, so the typed number is the only truth.
+		render(
+			<VariantEditor value={singleVariant} onChange={() => {}} currency="RM" />,
+		);
+		expect(screen.getByText("In stock now")).toBeTruthy();
+		expect(screen.getByLabelText("Stock on hand")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Adjust" })).toBe(null);
+	});
+
+	it("the live count is matched to a row the way the SERVER matches it", () => {
+		// `(isCustom, optionValues)`, positionally — the same rule
+		// `saveVariantGrid` uses. If the two ever disagree, a row would show a
+		// read-only cell for a variant the server is about to insert instead.
+		render(
+			<VariantEditor
+				value={withOptions}
+				onChange={() => {}}
+				currency="RM"
+				liveStock={[
+					{ variantId: "vS" as never, optionValues: ["S"], onHand: 7 },
+				]}
+				productName="Tee"
+			/>,
+		);
+		// The S row resolved; the others did not and keep their inputs.
+		expect(screen.getByText("7")).toBeTruthy();
+		expect(screen.getAllByRole("button", { name: "Adjust" })).toHaveLength(1);
+		expect(screen.getAllByLabelText("Stock on hand").length).toBeGreaterThan(0);
+	});
+});

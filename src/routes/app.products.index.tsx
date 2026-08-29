@@ -23,6 +23,11 @@ import {
 } from "../../convex/lib/productCap";
 import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
+import {
+	StockAdjustDialog,
+	type StockLine,
+	StockSheet,
+} from "../components/product/stock-adjust";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -45,7 +50,8 @@ import {
 import { reorderByIds } from "../lib/reorder";
 import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
-import { hasStartingPrice } from "../lib/variant";
+import { cn } from "../lib/utils";
+import { hasStartingPrice, variantLabel } from "../lib/variant";
 
 type StatusFilter = "all" | "active" | "archived";
 
@@ -536,13 +542,33 @@ function ProductCard({
 	// and the reorder tail).
 	const dim = p.active ? "" : " opacity-55";
 
+	// The second door onto stock (86eypn8ye). Taking stock out of the product
+	// save is only an improvement if changing it got EASIER — buried behind
+	// Products → open → scroll to Pricing & choices → Adjust, a correctness fix
+	// would read as a regression. This list is the one screen that already shows
+	// stock, so it is where the daily "sold three at the stall" belongs.
+	const [stockOpen, setStockOpen] = useState(false);
+	const stockLines: StockLine[] = p.active
+		? p.variants
+				// Made-to-order and bespoke lines have no count to move; offering one
+				// would invent a concept the seller deliberately turned off. Same rule
+				// the editor uses to decide whether a stock field renders at all.
+				.filter((vr) => vr.active && !vr.isCustom && vr.blockWhenOutOfStock)
+				.map((vr) => ({
+					variantId: vr._id,
+					label:
+						vr.optionValues.length > 0 ? variantLabel(vr.optionValues) : p.name,
+					onHand: vr.onHand,
+				}))
+		: [];
+
 	const link = (
 		<Link
 			to="/app/products/$productId"
 			params={{ productId: p._id }}
 			className={
-				(dragHandle
-					? "flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-3"
+				(dragHandle || stockLines.length > 0
+					? "flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-2"
 					: "flex min-h-16 items-center gap-3 rounded-2xl border border-border bg-card p-3 transition-colors hover:border-ring hover:bg-accent/5") +
 				dim
 			}
@@ -603,11 +629,18 @@ function ProductCard({
 						{p.hidden ? "Hidden" : "Hidden · category"}
 					</span>
 				) : null}
+				{/* The chevron stands down for the Stock button (86eypn8ye): two
+				    right-hand affordances read as noise, and on a 375px row the 24px
+				    it costs comes straight out of the product name. The row is still
+				    a link — the button beside it is the stronger signal that this row
+				    has more than one thing to do. */}
 				{p.active ? (
-					<ChevronRight
-						className="size-4 text-muted-foreground/60"
-						aria-hidden="true"
-					/>
+					stockLines.length > 0 ? null : (
+						<ChevronRight
+							className="size-4 text-muted-foreground/60"
+							aria-hidden="true"
+						/>
+					)
 				) : (
 					<EyeOff className="size-4 text-muted-foreground/60" aria-hidden />
 				)}
@@ -615,11 +648,48 @@ function ProductCard({
 		</Link>
 	);
 
-	if (!dragHandle) return link;
+	const stock =
+		stockLines.length > 0 ? (
+			<>
+				<Button
+					variant="outline"
+					className="mr-2 h-9 shrink-0 bg-background px-3 text-xs"
+					onClick={() => setStockOpen(true)}
+					title={`Adjust stock for ${p.name}`}
+				>
+					Stock
+				</Button>
+				{/* One tracked choice needs no list; several open the sheet that moves
+				    them in one batched, all-or-nothing pass. */}
+				{stockLines.length === 1 ? (
+					<StockAdjustDialog
+						open={stockOpen}
+						onOpenChange={setStockOpen}
+						productName={p.name}
+						line={stockLines[0]}
+					/>
+				) : (
+					<StockSheet
+						open={stockOpen}
+						onOpenChange={setStockOpen}
+						productName={p.name}
+						lines={stockLines}
+					/>
+				)}
+			</>
+		) : null;
+
+	if (!dragHandle && !stock) return link;
 	return (
-		<div className="flex items-center gap-1 rounded-2xl border border-border bg-card pl-1 transition-colors hover:border-ring hover:bg-accent/5">
+		<div
+			className={cn(
+				"flex items-center gap-1 rounded-2xl border border-border bg-card transition-colors hover:border-ring hover:bg-accent/5",
+				dragHandle ? "pl-1" : "pl-3",
+			)}
+		>
 			{dragHandle}
 			{link}
+			{stock}
 		</div>
 	);
 }
