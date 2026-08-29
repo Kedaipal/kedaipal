@@ -1353,6 +1353,7 @@ function OrdersRoute() {
 							<OrderColumnPicker
 								isVisible={columnState.isVisible}
 								onToggle={columnState.toggle}
+								onSetMany={columnState.setManyVisible}
 								onReset={columnState.reset}
 								visibleCount={columnState.visibleKeys.length}
 								isCustomised={columnState.isCustomised}

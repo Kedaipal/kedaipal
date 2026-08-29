@@ -108,6 +108,56 @@ describe("useOrderColumns", () => {
 		expect(result.current.visibleKeys).toEqual([...DEFAULT_ORDER_COLUMN_KEYS]);
 	});
 
+	it("shows a whole group at once, in registry order (86eyrtz74)", () => {
+		// Ticking 22 boxes by hand was the alternative. Additions arrive as a
+		// block in canonical order, not scattered by tick order.
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		act(() =>
+			result.current.setManyVisible(["city", "state", "postcode"], true),
+		);
+		const keys = result.current.visibleKeys;
+		expect(keys).toContain("city");
+		expect(keys).toContain("state");
+		expect(keys).toContain("postcode");
+		const order = (["city", "state", "postcode"] as const).map((k) =>
+			keys.indexOf(k),
+		);
+		expect(order).toEqual([...order].sort((a, b) => a - b));
+	});
+
+	it("hides a whole group, leaving the rest in their existing order", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const before = [...result.current.visibleKeys];
+		const target = before.slice(0, 2);
+		act(() => result.current.setManyVisible(target, false));
+		expect(result.current.visibleKeys).toEqual(before.slice(2));
+	});
+
+	it("clearing everything keeps the FIRST column, never an empty table", () => {
+		// An empty table is a dead end whose only way back is the panel the
+		// seller just emptied — so the click does the thing they meant and keeps
+		// one column, rather than silently refusing.
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const first = result.current.visibleKeys[0];
+		act(() => result.current.setManyVisible([...ALL_ORDER_COLUMN_KEYS], false));
+		expect(result.current.visibleKeys).toEqual([first]);
+	});
+
+	it("showing a set that is already fully shown changes nothing", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const before = [...result.current.visibleKeys];
+		act(() => result.current.setManyVisible(before, true));
+		expect(result.current.visibleKeys).toEqual(before);
+	});
+
+	it("a bulk change persists like a single toggle", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		act(() => result.current.setManyVisible(["city"], true));
+		expect(parseStoredColumns(window.localStorage.getItem(KEY))).toContain(
+			"city",
+		);
+	});
+
 	it("every column in the registry can be turned on", () => {
 		const { result } = renderHook(() => useOrderColumns(STORE));
 		for (const key of ALL_ORDER_COLUMN_KEYS) {

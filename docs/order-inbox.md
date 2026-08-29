@@ -252,7 +252,25 @@ WhatsApp.
   plain click still falls through to sorting. Reordering a table by dragging its
   headers is what every spreadsheet user already knows; the first build put a
   reorder list inside the Columns dropdown, which is nowhere anyone looks.
-  The Columns panel is now **show/hide only**, and turning a column on appends
+  **Bulk selection is part of the panel, not an extra** (86eyrtz74): with 36
+  columns, ticking them one at a time IS the interaction. Three levels of the
+  same control — all columns, one group, one column — and the top two are
+  **tri-state**, because a parent reading "unchecked" while three of its seven
+  children are on tells the seller something false. They are real
+  `<input type="checkbox">` with the `indeterminate` DOM property set via ref
+  (visually replaced), which a screen reader announces natively as "partially
+  checked" — stronger than `role="checkbox"` + `aria-checked="mixed"`, and the
+  reason the a11y lint pushed back on the first attempt. Every bulk row carries
+  its own `n/total`, so "some" says how many. Clicking a partly-filled parent
+  FILLS it rather than clearing — completing the set is the expected reading.
+  Clearing everything keeps the **first** column rather than refusing the click,
+  with the rule stated in words where the seller is clicking; an empty table is
+  a dead end whose only way back is the panel they just emptied.
+  Selected rows here are **not** tinted (`tintSelected={false}` on the shared
+  `FilterOptionRow`): the panel opens with most columns on, so a tint would
+  stripe two-thirds of the list without saying anything — unlike a filter, where
+  a selected option is exceptional.
+  The Columns panel is otherwise **show/hide only**, and turning a column on appends
   it to the right-hand end, where the seller can see what they added and drag it
   from there. `resolveOrderColumns` honours the caller's order, so the exported
   CSV comes out arranged exactly like the table.
