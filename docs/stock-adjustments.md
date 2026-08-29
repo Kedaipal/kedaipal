@@ -160,6 +160,12 @@ stock take pasted into a spreadsheet has to keep working. Removing stock from
 import would solve our correctness problem by handing the seller the work of
 tapping through eighty dialogs.
 
+A **product-level twin of this exact bug** was fixed alongside it in
+`86eyrtz74`: `bulkUpsert`'s create path hardcoded `active: true`, so importing
+an export into a second store brought archived products back live on the
+storefront. Same family — a sheet's stale copy of state overwriting the store's
+own — and the same answer: round-trip the truth rather than assume it.
+
 So the side effect becomes a choice: **`updateStock`, default off**. Names,
 prices, descriptions and weights always update. Ticking the box is not a leap of
 faith — `bulkUpsertPreview` reports `stockChanges` (how many counts would be
@@ -173,6 +179,13 @@ overwrite.
 The rule is stated on the import screen *before* the sheet is prepared (the
 schema table and the intro block), not only at the confirm step.
 
+It also has to stay consistent with the neighbouring `ignoredColumns` notice
+(`86eyrtz74`), which lists the report-only columns the import cannot write.
+The two say different things and must not blur: those columns can **never** be
+applied, whereas stock **can** be and simply won't be unless asked. That notice
+originally read "Import updates prices, stock and weight", which stopped being
+true the moment this gate landed.
+
 ## Related: the frozen reservation flag
 
 `blockWhenOutOfStock` decides whether an order line took stock at all. Both
@@ -183,10 +196,33 @@ create, so flipping the flag made restore asymmetric:
 - ordered while untracked → flag on → cancel = phantom units appear.
 
 Now frozen onto `orders.items[].stockReserved` at create, the way `price` and
-`variantLabel` already are. Counter checkout builds its own snapshot with its
-own inline type and stamps it too — without that, every new counter order would
-silently have taken the legacy re-resolve path, a miss that only surfaces months
-later on one surface.
+`variantLabel` already are.
+
+**Three create paths need the stamp, and each builds its own snapshot:**
+
+| path | file |
+| --- | --- |
+| storefront checkout | `convex/orders.ts` |
+| counter checkout | `convex/counterCheckout.ts` |
+| claim links (`86eyq0epn`) | `convex/orderClaims.ts` |
+
+This is the trap worth remembering: none of them share a snapshot builder, so a
+new frozen order-item field is stamped in three places or it is silently wrong
+on the paths that were missed. Counter checkout was caught during the original
+fix; **claim links landed afterwards and reproduced the gap exactly** — the
+commit decrements `onHand` but the line went out unstamped, so a claim order
+was born with the very asymmetry this field exists to prevent. Caught on the
+merge, stamped, and pinned by a test that flips the flag after the sale and
+asserts the cancel still returns the units.
+
+On the claim path the flag is resolved at **commit**, not at send: the live
+re-read decides whether stock is reserved and the decrement acts on that same
+answer, so freezing it when the seller keyed the claim would record an
+intention rather than what happened.
+
+The same shape has already bitten a sibling field — `items[].categoryNames`
+(`86eyrtz74`) is frozen in `orders.create` but not in counter checkout, so
+counter orders export a blank Categories column. Tracked separately.
 
 **Deliberately not backfilled.** Writing today's flag onto historical lines
 would bake in the wrong answer for any product whose flag has since changed, and

@@ -856,7 +856,22 @@ export const commit = mutation({
 			retailerId: claim.retailerId,
 			shortId,
 			trackingToken,
-			items: claim.lines,
+			// `stockReserved` is stamped HERE, not carried on the claim line
+			// (86eypn8ye). Whether a line reserved stock is a fact about the
+			// COMMIT — the flag is resolved in the live re-read above, and the
+			// decrement below acts on that same answer — so freezing it at claim
+			// time would record an intention rather than what happened. Without
+			// this, cancelling a claim order re-resolves the flag from the current
+			// docs and restore goes asymmetric the moment a seller flips a product
+			// between "from stock" and made-to-order.
+			//
+			// This is the THIRD create path to need it (storefront, counter, claim)
+			// — each builds its own snapshot, so a new frozen field has to be
+			// stamped in three places. See docs/stock-adjustments.md.
+			items: claim.lines.map((line) => ({
+				...line,
+				stockReserved: requestedByVariant.get(line.variantId)?.block === true,
+			})),
 			subtotal,
 			total,
 			currency: claim.currency,
