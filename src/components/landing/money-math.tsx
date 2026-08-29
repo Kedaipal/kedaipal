@@ -1,6 +1,13 @@
 import { Link } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import { m } from "../../paraglide/messages";
+import {
+	FoodpandaIcon,
+	GrabIcon,
+	ShopeeIcon,
+	TikTokIcon,
+} from "../dashboard/brand-icons";
 import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
 
@@ -22,20 +29,55 @@ import { Eyebrow } from "./landing-ui";
  */
 
 /**
- * Published 2026 rates (verified on the ticket). `pct` is the TOP of each
- * published range and only drives bar width — the visible label is the honest
- * range. Shopee is "up to ~20%", never a flat "20%": its commission is
- * category-based and the 5.5% Free Shipping slice is opt-in.
+ * Published 2026 rates (Shopee/GrabFood/foodpanda verified on the ticket;
+ * TikTok Shop verified 29 Aug 2026 against the post-Feb-2026 MY rate card —
+ * ~10.3% top commission + ~4.9% opt-in Bonus Cashback + ~3.8% transaction
+ * fee ≈ 18.9% for a full-programme seller, hence "up to ~19%"). `pct` is the
+ * TOP of each published range and only drives bar width — the visible label
+ * is the honest range. Shopee and TikTok Shop are both "up to ~", never
+ * flat: commissions are category-based and their biggest slices (Free
+ * Shipping / Bonus Cashback) are opt-in, per `mm_note`.
  */
 const MARKETPLACE_RATES = [
-	{ id: "shopee", name: "Shopee", pct: 20, rate: () => m.mm_rate_shopee() },
-	{ id: "grabfood", name: "GrabFood", pct: 22, rate: () => "15–22%" },
-	{ id: "foodpanda", name: "foodpanda", pct: 20, rate: () => "12–20%" },
+	{
+		id: "shopee",
+		name: "Shopee",
+		Icon: ShopeeIcon,
+		iconClass: "text-[#EE4D2D]",
+		pct: 20,
+		rate: () => m.mm_rate_shopee(),
+	},
+	{
+		id: "tiktok-shop",
+		name: "TikTok Shop",
+		Icon: TikTokIcon,
+		iconClass: "text-foreground",
+		pct: 19,
+		rate: () => m.mm_rate_tiktok(),
+	},
+	{
+		id: "grabfood",
+		name: "GrabFood",
+		Icon: GrabIcon,
+		iconClass: "text-[#00B14F]",
+		pct: 22,
+		rate: () => "15–22%",
+	},
+	{
+		id: "foodpanda",
+		name: "foodpanda",
+		Icon: FoodpandaIcon,
+		iconClass: "text-[#D70F64]",
+		pct: 20,
+		rate: () => "12–20%",
+	},
 ] as const;
 
 const MAX_PCT = 22;
 
 export function MoneyMath() {
+	const shouldReduceMotion = useReducedMotion();
+
 	return (
 		<section
 			id="money-math"
@@ -72,7 +114,7 @@ export function MoneyMath() {
 								    primary CTA and it is "Start 14-day free trial". */}
 								<Link
 									to="/cost"
-									className="group inline-flex items-center gap-1.5 text-base font-semibold text-accent underline-offset-4 hover:underline"
+									className="group inline-flex min-h-11 items-center gap-1.5 text-base font-semibold text-accent underline-offset-4 hover:underline"
 								>
 									{m.mm_cta()}
 									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
@@ -90,32 +132,77 @@ export function MoneyMath() {
 								{m.mm_line1()}
 							</p>
 							<div className="mt-5 flex flex-col gap-3">
-								{MARKETPLACE_RATES.map((row) => (
+								{/* The bars GROW to their cut on scroll-into-view (once,
+								    staggered) — watching 20% extend is the argument; a static
+								    bar is just a table. Reduced motion renders final widths. */}
+								{MARKETPLACE_RATES.map((row, i) => (
 									<div
 										key={row.id}
-										className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 sm:grid-cols-[5.5rem_minmax(0,1fr)]"
+										className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-3 sm:grid-cols-[7.25rem_minmax(0,1fr)]"
 									>
-										<span className="text-[13px] font-semibold">
+										<span className="flex items-center gap-1.5 text-[13px] font-semibold">
+											<row.Icon className={`size-4 shrink-0 ${row.iconClass}`} />
 											{row.name}
 										</span>
 										<div className="relative h-9 overflow-hidden rounded-full bg-muted">
-											<span
-												className="absolute inset-y-0 left-0 flex items-center justify-end rounded-full bg-destructive/10 pr-3.5 text-[13px] font-bold text-red-700 dark:text-red-300"
-												style={{ width: `${(row.pct / MAX_PCT) * 100}%` }}
+											<motion.span
+												initial={
+													shouldReduceMotion
+														? false
+														: { width: "2.5rem", opacity: 0 }
+												}
+												whileInView={{
+													width: `${(row.pct / MAX_PCT) * 100}%`,
+													opacity: 1,
+												}}
+												viewport={{ once: true, margin: "-60px" }}
+												transition={{
+													duration: 0.9,
+													delay: i * 0.15,
+													ease: [0.22, 1, 0.36, 1],
+												}}
+												className="absolute inset-y-0 left-0 flex items-center justify-end whitespace-nowrap rounded-full bg-destructive/10 pr-3.5 text-[13px] font-bold text-red-700 dark:text-red-300"
 											>
 												{row.rate()}
-											</span>
+											</motion.span>
 										</div>
 									</div>
 								))}
-								<div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 sm:grid-cols-[5.5rem_minmax(0,1fr)]">
-									<span className="text-[13px] font-extrabold text-accent-emphasis">
+								<div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-3 sm:grid-cols-[7.25rem_minmax(0,1fr)]">
+									<span className="flex items-center gap-1.5 text-[13px] font-extrabold text-accent-emphasis">
+										{/* The icon-only mark (near-square /logo.svg, the same asset
+										    the notification icon uses) — the wordmark variants are
+										    unreadable at size-4 and the name is already the label. */}
+										<img
+											src="/logo.svg"
+											alt=""
+											width={78}
+											height={68}
+											loading="lazy"
+											className="size-4 shrink-0"
+										/>
 										Kedaipal
 									</span>
 									<div className="flex h-9 items-center gap-3 overflow-hidden rounded-full bg-muted">
-										<span className="flex h-9 min-w-16 items-center justify-center rounded-full bg-accent px-4 text-sm font-extrabold text-accent-foreground">
+										{/* The punchline pops AFTER the cuts finish growing. */}
+										<motion.span
+											initial={
+												shouldReduceMotion
+													? false
+													: { scale: 0.5, opacity: 0 }
+											}
+											whileInView={{ scale: 1, opacity: 1 }}
+											viewport={{ once: true, margin: "-60px" }}
+											transition={{
+												type: "spring",
+												stiffness: 320,
+												damping: 18,
+												delay: 0.7,
+											}}
+											className="flex h-9 min-w-16 items-center justify-center rounded-full bg-accent px-4 text-sm font-extrabold text-accent-foreground"
+										>
 											0%
-										</span>
+										</motion.span>
 										<span className="truncate text-xs font-semibold text-accent-emphasis">
 											{m.mm_bar_kedaipal_value()}
 										</span>
@@ -146,8 +233,9 @@ export function MoneyMathRow() {
 					{MARKETPLACE_RATES.map((row) => (
 						<span
 							key={row.id}
-							className="text-[13px] font-semibold text-muted-foreground"
+							className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground"
 						>
+							<row.Icon className={`size-4 shrink-0 ${row.iconClass}`} />
 							{row.name}{" "}
 							<strong className="font-bold text-red-700 dark:text-red-300">
 								{row.rate()}
@@ -159,6 +247,14 @@ export function MoneyMathRow() {
 						className="hidden h-5 w-px bg-border sm:inline-block"
 					/>
 					<span className="inline-flex items-center gap-2 text-[13px] font-bold">
+						<img
+							src="/logo.svg"
+							alt=""
+							width={78}
+							height={68}
+							loading="lazy"
+							className="size-4 shrink-0"
+						/>
 						Kedaipal
 						<span className="rounded-full bg-accent px-3 py-0.5 text-[13px] font-extrabold text-accent-foreground">
 							0%
@@ -169,7 +265,7 @@ export function MoneyMathRow() {
 					</span>
 					<Link
 						to="/cost"
-						className="text-[13px] font-semibold text-accent underline-offset-4 hover:underline"
+						className="inline-flex min-h-11 items-center text-[13px] font-semibold text-accent underline-offset-4 hover:underline"
 					>
 						{m.mm_cta()} →
 					</Link>

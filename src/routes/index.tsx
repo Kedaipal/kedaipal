@@ -3,7 +3,6 @@ import { Faq } from "../components/landing/faq";
 import { FeatureGrid } from "../components/landing/feature-grid";
 import { FinalCta } from "../components/landing/final-cta";
 import { Footer } from "../components/landing/footer";
-import { FoundingTen } from "../components/landing/founding-ten";
 import { Hero } from "../components/landing/hero";
 import { HowItWorks } from "../components/landing/how-it-works";
 import { MoneyMath } from "../components/landing/money-math";
@@ -167,7 +166,6 @@ function Landing() {
 			<PaymentHandshake />
 			<HowItWorks />
 			<FeatureGrid />
-			<FoundingTen />
 			{/* Cost context, then the rails, then the price — a visitor must know
 			    what a marketplace already takes and how their customers will
 			    actually pay BEFORE they meet RM79/149/299 (ClickUp 86eye3p6z). */}
