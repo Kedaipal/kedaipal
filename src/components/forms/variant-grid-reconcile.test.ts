@@ -148,6 +148,8 @@ function wizard(partial: Partial<WizardState>): WizardState {
 		images: [],
 		kindCard: "physical",
 		capacityPerNight: "1",
+		packageLength: "",
+		packageUnit: "month" as const,
 		shape: null,
 		editor: { options: [], rows: [row([])], customLine: null },
 		fulfilmentAnswered: true,

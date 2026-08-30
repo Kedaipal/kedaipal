@@ -115,7 +115,11 @@ export const availability = query({
 		maxNights: number;
 		/** Fixed-length package (S7): set = the buyer picks a start date only
 		 * and the calendar derives the end. Unset = free check-in/check-out. */
-		packageDays?: number;
+		packageLength?: number;
+		/** How that length counts — a calendar month's span depends on WHICH
+		 * month, so the calendar has to derive each candidate start's range
+		 * rather than adding a fixed number of days. */
+		packageUnit?: "day" | "month";
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -144,8 +148,12 @@ export const availability = query({
 				product.minNoticeDays ?? 0,
 			),
 			horizonDays: BOOKING_HORIZON_DAYS,
-			maxNights: product.booking?.packageDays ?? MAX_BOOKING_NIGHTS,
-			packageDays: product.booking?.packageDays,
+			// Free-range listings only: a package's length is the seller's, not a
+			// ceiling the buyer picks under. Quoting packageLength here would
+			// read as "max 1 night" for a one-MONTH package.
+			maxNights: MAX_BOOKING_NIGHTS,
+			packageLength: product.booking?.packageLength,
+			packageUnit: product.booking?.packageUnit,
 		};
 	},
 });
@@ -156,7 +164,7 @@ export const requestBooking = mutation({
 		productId: v.id("products"),
 		// MYT midnights; checkOut exclusive — the stay occupies [checkIn, checkOut).
 		// checkOut is OMITTED for a fixed-length package (S7): the server derives
-		// it from the listing's own `packageDays`, so a tampered client can't buy
+		// it from the listing's own `packageLength`, so a tampered client can't buy
 		// 90 days at the 30-day price.
 		checkIn: v.number(),
 		checkOut: v.optional(v.number()),
@@ -228,6 +236,7 @@ export const requestBooking = mutation({
 		// The listing's shape decides the range: a fixed-length package derives
 		// its end from the start (S7), a free range keeps the buyer's check-out.
 		// One resolver shared with the calendar, so they can't differ by a day.
+		const isPackageListing = (product.booking?.packageLength ?? 0) > 0;
 		let checkIn: number;
 		let checkOut: number;
 		try {
@@ -249,7 +258,12 @@ export const requestBooking = mutation({
 					retailer.minFulfilmentNoticeDays ?? 0,
 					product.minNoticeDays ?? 0,
 				),
-				maxNights: product.booking?.packageDays,
+				// A package's span is the seller's choice, already capped when they
+				// set it — so it is its own ceiling. Computed from the RESOLVED
+				// range because a calendar month is 28–31 nights, not a constant.
+				maxNights: isPackageListing
+					? nightsBetween(checkIn, checkOut)
+					: undefined,
 			});
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -271,7 +285,6 @@ export const requestBooking = mutation({
 		// "RM 5 × 30 nights". A free-range stay keeps per-night × nights. Both
 		// ride the standard quantity math, so every money surface (totals, CSV,
 		// insights, receipts, PDF) needs zero special-casing either way.
-		const isPackage = (product.booking?.packageDays ?? 0) > 0;
 		const items = [
 			{
 				productId: product._id,
@@ -279,7 +292,7 @@ export const requestBooking = mutation({
 				name: product.name,
 				variantLabel: undefined,
 				price: variant.price,
-				quantity: isPackage ? 1 : nights,
+				quantity: isPackageListing ? 1 : nights,
 			},
 		];
 		// The refundable security deposit rides the one payment (86eyn4kee):
@@ -333,7 +346,7 @@ export const requestBooking = mutation({
 			bookingProductId: product._id,
 			// Frozen shape (S7) — a later listing edit never re-describes this
 			// order, and every money/date surface reads the span correctly.
-			bookingPackageDays: isPackage ? product.booking?.packageDays : undefined,
+			bookingPackaged: isPackageListing ? true : undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for

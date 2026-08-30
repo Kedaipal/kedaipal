@@ -102,7 +102,7 @@ describe("checkout-only handling (the design's partial-range state)", () => {
 
 describe("fixed-length packages (S7)", () => {
 	const pkg = (partial: Partial<SelectionContext> = {}) =>
-		ctx({ packageDays: 30, ...partial });
+		ctx({ packageLength: 30, ...partial });
 
 	it("one tap picks the whole span — there is no check-out to choose", () => {
 		const sel = nextBookingSelection({}, day(3), pkg());

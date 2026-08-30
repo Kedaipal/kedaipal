@@ -752,11 +752,16 @@ export default defineSchema({
 				// UNSET = unlimited (S7, 86eyqxb14) — a gym selling month packages
 				// has no daily member cap. Never default a missing value to 1.
 				capacityPerNight: v.optional(v.number()),
-				// Fixed-length package in DAYS (S7): set = the buyer picks a START
-				// date only, the end derives (start + packageDays) and the price is
-				// FLAT per package rather than per night. Unset = the free
-				// check-in/check-out range the campsite sells.
-				packageDays: v.optional(v.number()),
+				// Fixed-length package (S7): set = the buyer picks a START date only,
+				// the end derives, and the price is FLAT per package rather than
+				// per night. Unset = the free check-in/check-out range a campsite
+				// sells. The UNIT matters — "monthly" to a gym means the calendar
+				// month ("join the 12th, renew the 12th"), which rolling days
+				// never gives; days remain right for a 3D2N stay or a day pass.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(v.literal("day"), v.literal("month")),
+				),
 				// "Instant book" (S7 — the spec's named follow-up): set = a request
 				// lands `confirmed` with the payment ask firing straight away,
 				// skipping `booking_requested`. Unset = request-to-book.
@@ -1069,13 +1074,13 @@ export default defineSchema({
 		// exist — the per-night capacity count asks "which bookings of THIS
 		// listing overlap these nights", and an array field can't be indexed.
 		bookingProductId: v.optional(v.id("products")),
-		// The listing's package length FROZEN at request (S7). Present = this
-		// order was sold as a fixed-length package at a flat price, so every
+		// Set when the order was sold as a fixed-length PACKAGE (S7), so every
 		// surface reads it as a validity window ("Valid 1 – 30 Sep") and the
-		// line is quantity 1. Absent = the free per-night range. Frozen because
-		// a later edit to the listing must never re-describe a placed booking
-		// (the securityDeposit / pickupSnapshot posture).
-		bookingPackageDays: v.optional(v.number()),
+		// line is quantity 1 at a flat price. Absent = the free per-night range.
+		// Frozen at request because a later edit to the listing must never
+		// re-describe a placed booking (the securityDeposit posture). The span
+		// itself lives in bookingCheckIn/Out; this only records the SHAPE.
+		bookingPackaged: v.optional(v.boolean()),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets

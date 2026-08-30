@@ -20,7 +20,12 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { DAY_MS, isMytMidnight, todayMytMidnight } from "./fulfilmentDate";
+import {
+	addMytCalendarMonths,
+	DAY_MS,
+	isMytMidnight,
+	todayMytMidnight,
+} from "./fulfilmentDate";
 import { MAX_PACKAGE_DAYS } from "./productKind";
 
 /** How far ahead a check-in may be requested (~6 months — the design's month
@@ -39,7 +44,7 @@ export const MAX_BOOKING_NIGHTS = 30;
  * (`MAX_BOOKING_NIGHTS`) or a fixed-length package (`MAX_PACKAGE_DAYS`, S7).
  * It must never be narrower than the longest span that could exist, or the
  * indexed scan silently misses an overlapping booking and the night reads as
- * free. Deliberately NOT per-product: a listing's `packageDays` can be edited
+ * free. Deliberately NOT per-product: a listing's `packageLength` can be edited
  * (or cleared) after long bookings were already placed against it, so only a
  * global ceiling is safe.
  */
@@ -261,13 +266,24 @@ export async function findFullNights(
  * checkout preview and the authoritative mutation can't disagree by a day.
  */
 export function resolveBookingRange(
-	booking: { packageDays?: number } | undefined,
+	booking:
+		| { packageLength?: number; packageUnit?: "day" | "month" }
+		| undefined,
 	checkIn: number,
 	checkOut?: number,
 ): { checkIn: number; checkOut: number } {
-	const days = booking?.packageDays;
-	if (days !== undefined && days > 0) {
-		return { checkIn, checkOut: checkIn + days * DAY_MS };
+	const length = booking?.packageLength;
+	if (length !== undefined && length > 0) {
+		// A MONTH package lands on the same day of the next month (clamped for
+		// short months) rather than after a fixed day count — see
+		// addMytCalendarMonths for why that is what "monthly" means.
+		return {
+			checkIn,
+			checkOut:
+				booking?.packageUnit === "month"
+					? addMytCalendarMonths(checkIn, length)
+					: checkIn + length * DAY_MS,
+		};
 	}
 	if (checkOut === undefined) {
 		throw new Error("Pick your check-out date");

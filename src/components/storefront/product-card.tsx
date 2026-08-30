@@ -196,7 +196,7 @@ export function ProductCard({
 							{formatPrice(product.priceFrom, product.currency)}
 							{isBooking ? (
 								<span className="text-xs font-medium text-muted-foreground">
-									{bookingPriceSuffix(product.booking?.packageDays)}
+									{bookingPriceSuffix(product.booking?.packageLength)}
 								</span>
 							) : null}
 						</>

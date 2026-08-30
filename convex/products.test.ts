@@ -2383,20 +2383,20 @@ describe("product kind + booking config", () => {
 			...baseProduct(retailer._id, { name: "Monthly Gym Pass" }),
 			kind: "booking" as const,
 			// No capacity at all — a gym has no daily member cap.
-			booking: { packageDays: 30, autoAccept: true },
+			booking: { packageLength: 30, autoAccept: true },
 		});
 		let listing = await asA.query(api.products.get, { productId: listingId });
 		expect(listing?.booking?.capacityPerNight).toBeUndefined();
-		expect(listing?.booking?.packageDays).toBe(30);
+		expect(listing?.booking?.packageLength).toBe(30);
 		expect(listing?.booking?.autoAccept).toBe(true);
 
 		// 0 clears the package back to a free-range stay; false clears instant book.
 		await asA.mutation(api.products.update, {
 			productId: listingId,
-			booking: { capacityPerNight: 5, packageDays: 0, autoAccept: false },
+			booking: { capacityPerNight: 5, packageLength: 0, autoAccept: false },
 		});
 		listing = await asA.query(api.products.get, { productId: listingId });
-		expect(listing?.booking?.packageDays).toBeUndefined();
+		expect(listing?.booking?.packageLength).toBeUndefined();
 		expect(listing?.booking?.autoAccept).toBeUndefined();
 		expect(listing?.booking?.capacityPerNight).toBe(5);
 
@@ -2404,7 +2404,7 @@ describe("product kind + booking config", () => {
 			await expect(
 				asA.mutation(api.products.update, {
 					productId: listingId,
-					booking: { packageDays: bad },
+					booking: { packageLength: bad },
 				}),
 			).rejects.toThrow(/Package length/);
 		}

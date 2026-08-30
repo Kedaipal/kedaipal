@@ -58,14 +58,29 @@ export function sanitizeCapacityPerNight(
 	return n;
 }
 
-/**
- * Longest fixed-length package a seller may sell (S7). A year covers the
- * annual-membership case; beyond that is a subscription, not a booking.
- */
+/** Longest fixed-length package a seller may sell (S7), per unit. A year
+ * covers the annual-membership case; beyond that is a subscription, not a
+ * booking. */
 export const MAX_PACKAGE_DAYS = 366;
+export const MAX_PACKAGE_MONTHS = 12;
 
 /**
- * Validate a booking listing's package length in DAYS.
+ * How a package's length is counted.
+ *
+ * **"month" means the CALENDAR month** — join the 12th, renew the 12th —
+ * which is what a gym means by "monthly" and what a rolling day count never
+ * gives: 30 days from 1 Jan ends on the 30th, from 1 Feb it spills into
+ * March, so the renewal date walks through the year. "day" stays right for a
+ * 3D2N stay or a day pass.
+ */
+export type PackageUnit = "day" | "month";
+
+export function packageUnitMax(unit: PackageUnit): number {
+	return unit === "month" ? MAX_PACKAGE_MONTHS : MAX_PACKAGE_DAYS;
+}
+
+/**
+ * Validate a booking listing's package length, in its own unit.
  *
  * Set = the listing sells a **fixed-length package**: the buyer picks a start
  * date only, the end derives, and the price is flat per package rather than
@@ -73,11 +88,15 @@ export const MAX_PACKAGE_DAYS = 366;
  * 0 normalizes to undefined so "no package" has one spelling (the
  * sanitizeFee/securityDeposit posture).
  */
-export function sanitizePackageDays(n: number | undefined): number | undefined {
+export function sanitizePackageLength(
+	n: number | undefined,
+	unit: PackageUnit = "day",
+): number | undefined {
 	if (n === undefined) return undefined;
-	if (!Number.isInteger(n) || n < 0 || n > MAX_PACKAGE_DAYS) {
+	const max = packageUnitMax(unit);
+	if (!Number.isInteger(n) || n < 0 || n > max) {
 		throw new Error(
-			`Package length must be a whole number of days between 1 and ${MAX_PACKAGE_DAYS}`,
+			`Package length must be a whole number of ${unit}s between 1 and ${max}`,
 		);
 	}
 	return n === 0 ? undefined : n;

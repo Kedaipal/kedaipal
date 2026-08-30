@@ -106,7 +106,7 @@ export function BookingCheckoutForm({
 			earliestCheckIn: today + availability.noticeDays * DAY_MS,
 			latestCheckIn: today + availability.horizonDays * DAY_MS,
 			maxNights: availability.maxNights,
-			packageDays: availability.packageDays,
+			packageLength: availability.packageLength,
 		};
 	}, [availability, today]);
 
@@ -146,8 +146,8 @@ export function BookingCheckoutForm({
 	const securityDeposit = product.booking?.securityDeposit ?? 0;
 	// A fixed-length package is ONE flat price for the whole span (S7); a free
 	// range multiplies by nights. Mirrors requestBooking's own line-building.
-	const packageDays = availability.packageDays;
-	const isPackage = packageDays !== undefined && packageDays > 0;
+	const packageLength = availability.packageLength;
+	const isPackage = packageLength !== undefined && packageLength > 0;
 	// Instant book (S7): no approval step, so nothing on this page may promise
 	// one. The buyer books and pays straight away.
 	const instantBook = product.booking?.autoAccept === true;

@@ -115,7 +115,7 @@ export function ProductPageView({
 								<PriceLabel value={pp.priceLabel} className="text-2xl" />
 								{isBooking ? (
 									<span className="text-sm font-medium text-muted-foreground">
-										{bookingPriceSuffix(product.booking?.packageDays)}
+										{bookingPriceSuffix(product.booking?.packageLength)}
 									</span>
 								) : null}
 							</span>

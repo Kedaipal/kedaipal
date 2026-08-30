@@ -21,8 +21,8 @@ import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_CAPACITY_PER_NIGHT,
-	MAX_PACKAGE_DAYS,
 	type ProductKind,
+	packageUnitMax,
 } from "../../../convex/lib/productKind";
 import {
 	convexErrorMessage,
@@ -123,9 +123,12 @@ export type WizardState = {
 	/** Booking kind only — per-night capacity, as typed. Prefilled "1";
 	 * blank = unlimited (S7). */
 	capacityPerNight: string;
-	/** Booking kind only — fixed-length package in days, as typed. Blank =
-	 * the free check-in/check-out range (S7). */
-	packageDays: string;
+	/** Booking kind only — fixed-length package, as typed. Blank = the free
+	 * check-in/check-out range (S7). */
+	packageLength: string;
+	/** How that length counts. Months is the default because it's what a
+	 * membership means; days suits a 3D2N stay. */
+	packageUnit: "day" | "month";
 	/** Booking kind only — skip the approval step (S7). */
 	autoAccept: boolean;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
@@ -161,7 +164,8 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		images: [],
 		kindCard,
 		capacityPerNight: "1",
-		packageDays: "",
+		packageLength: "",
+		packageUnit: "month",
 		autoAccept: false,
 		securityDeposit: "",
 		shape: null,
@@ -324,13 +328,14 @@ export function wizardStepIssues(
 				message: `Enter a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}, or leave blank for unlimited.`,
 			});
 		}
-		const pkgRaw = state.packageDays.trim();
+		const pkgRaw = state.packageLength.trim();
 		if (pkgRaw.length > 0) {
 			const pkg = Number(pkgRaw);
-			if (!Number.isInteger(pkg) || pkg < 1 || pkg > MAX_PACKAGE_DAYS) {
+			const pkgMax = packageUnitMax(state.packageUnit);
+			if (!Number.isInteger(pkg) || pkg < 1 || pkg > pkgMax) {
 				issues.push({
-					field: "packageDays",
-					message: `Enter a whole number of days between 1 and ${MAX_PACKAGE_DAYS}, or leave blank.`,
+					field: "packageLength",
+					message: `Enter a whole number of ${state.packageUnit}s between 1 and ${pkgMax}, or leave blank.`,
 				});
 			}
 		}
@@ -494,6 +499,11 @@ export function buildWizardSubmitValues(
 	const notice = Number(state.minNoticeDays.trim());
 	const kind = wizardKind(state);
 	const capacity = Number(state.capacityPerNight.trim());
+	const packageLengthValue = (() => {
+		if (kind !== "booking") return undefined;
+		const n = Number(state.packageLength?.trim() ?? "");
+		return Number.isInteger(n) && n > 0 ? n : undefined;
+	})();
 	return {
 		name: state.name.trim(),
 		description:
@@ -512,10 +522,13 @@ export function buildWizardSubmitValues(
 						// refused by the 1..100 validator.
 						capacityPerNight:
 							state.capacityPerNight.trim().length > 0 ? capacity : undefined,
-						packageDays: (() => {
-							const n = Number(state.packageDays.trim());
-							return Number.isInteger(n) && n > 0 ? n : undefined;
-						})(),
+						packageLength: packageLengthValue,
+						// No unit without a length — a bare unit on a free-range
+						// listing is config that describes nothing.
+						packageUnit:
+							packageLengthValue !== undefined
+								? state.packageUnit
+								: undefined,
 						autoAccept: state.autoAccept || undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
@@ -567,7 +580,8 @@ export function wizardHandoff(state: WizardState): {
 			hidden: state.hidden,
 			kind: wizardKind(state),
 			capacityPerNight: state.capacityPerNight,
-			packageDays: state.packageDays,
+			packageLength: state.packageLength,
+			packageUnit: state.packageUnit,
 			autoAccept: state.autoAccept,
 			securityDeposit: state.securityDeposit,
 			categoryIds: state.categoryIds,
@@ -596,7 +610,8 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		// affordance only; locked in 86eyj70z1).
 		kindCard: cardFromKind(draft.kind),
 		capacityPerNight: draft.capacityPerNight,
-		packageDays: draft.packageDays ?? "",
+		packageLength: draft.packageLength ?? "",
+		packageUnit: draft.packageUnit ?? "month",
 		autoAccept: draft.autoAccept === true,
 		securityDeposit: draft.securityDeposit ?? "",
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
@@ -1663,22 +1678,34 @@ export function ProductWizard({
 									type="number"
 									inputMode="numeric"
 									min={1}
-									max={MAX_PACKAGE_DAYS}
+									max={packageUnitMax(state.packageUnit)}
 									placeholder="e.g. 30"
-									value={state.packageDays}
-									onChange={(e) => patch({ packageDays: e.target.value })}
+									value={state.packageLength}
+									onChange={(e) => patch({ packageLength: e.target.value })}
 									variant="field"
-									isError={!!issueFor("packageDays")}
+									isError={!!issueFor("packageLength")}
 									className="w-32"
 								/>
-								<span className="text-sm font-normal text-muted-foreground">
-									days
-								</span>
+								<select
+									aria-label="Package length unit"
+									value={state.packageUnit}
+									onChange={(e) =>
+										patch({
+											packageUnit: e.target.value === "day" ? "day" : "month",
+										})
+									}
+									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
+								>
+									<option value="month">months</option>
+									<option value="day">days</option>
+								</select>
 							</span>
-							<IssueText message={issueFor("packageDays")} />
+							<IssueText message={issueFor("packageLength")} />
 							<span className="text-xs font-normal text-muted-foreground">
-								{state.packageDays.trim().length > 0
-									? `Buyers pick a start date only — the booking runs ${state.packageDays.trim()} days from there at the flat price above.`
+								{state.packageLength.trim().length > 0
+									? state.packageUnit === "month"
+										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${state.packageLength.trim()} month(s) later, at the flat price above.`
+										: `Buyers pick a start date only — the booking runs ${state.packageLength.trim()} days from there, at the flat price above.`
 									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 30) to sell a fixed-length package at one flat price."}
 							</span>
 						</label>
@@ -1739,9 +1766,19 @@ export function ProductWizard({
 									isError={!!issueFor("minNoticeDays")}
 									className="h-11 w-24 text-center"
 								/>
-								<span className="text-sm font-normal text-muted-foreground">
-									days
-								</span>
+								<select
+									aria-label="Package length unit"
+									value={state.packageUnit}
+									onChange={(e) =>
+										patch({
+											packageUnit: e.target.value === "day" ? "day" : "month",
+										})
+									}
+									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
+								>
+									<option value="month">months</option>
+									<option value="day">days</option>
+								</select>
 							</span>
 							<IssueText message={issueFor("minNoticeDays")} />
 							<span className="text-xs font-normal text-muted-foreground">
@@ -2140,11 +2177,11 @@ export function ProductWizard({
 														: "Unlimited",
 												step: 3,
 											},
-											...(state.packageDays.trim().length > 0
+											...(state.packageLength.trim().length > 0
 												? [
 														{
 															label: "Package",
-															value: `${state.packageDays.trim()} days, flat price`,
+															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}, flat price`,
 															step: 3,
 														},
 													]

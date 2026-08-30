@@ -10,7 +10,11 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
+import {
+	addMytCalendarMonths,
+	DAY_MS,
+	todayMytMidnight,
+} from "./lib/fulfilmentDate";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -30,7 +34,8 @@ async function seedBookingStore(
 	opts: {
 		capacity?: number | null;
 		securityDeposit?: number;
-		packageDays?: number;
+		packageLength?: number;
+		packageUnit?: "day" | "month";
 		autoAccept?: boolean;
 	} = {},
 ) {
@@ -52,7 +57,8 @@ async function seedBookingStore(
 			// null asks for UNLIMITED (the field left unset); undefined = default 1.
 			capacityPerNight: opts.capacity === null ? undefined : (opts.capacity ?? 1),
 			securityDeposit: opts.securityDeposit,
-			packageDays: opts.packageDays,
+			packageLength: opts.packageLength,
+			packageUnit: opts.packageUnit,
 			autoAccept: opts.autoAccept,
 		},
 		variants: [{ optionValues: [], price: 8000, onHand: 0 }],
@@ -646,7 +652,7 @@ describe("security deposit (S5)", () => {
 describe("fixed-length packages + instant book (S7)", () => {
 	test("a package derives its own end, prices flat, and freezes its shape", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
-			packageDays: 30,
+			packageLength: 30,
 			capacity: null,
 		});
 		// The client sends a START date only — no checkOut to tamper with.
@@ -660,7 +666,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 		if (!order) throw new Error("order missing");
 		expect(order.bookingCheckIn).toBe(day(3));
 		expect(order.bookingCheckOut).toBe(day(33)); // start + 30 days
-		expect(order.bookingPackageDays).toBe(30);
+		expect(order.bookingPackaged).toBe(true);
 		// ONE flat-priced line, not 30 × the nightly rate.
 		expect(order.items[0]?.quantity).toBe(1);
 		expect(order.total).toBe(8000);
@@ -668,16 +674,16 @@ describe("fixed-length packages + instant book (S7)", () => {
 		// A later edit to the listing never re-describes the placed order.
 		await asOwner.mutation(api.products.update, {
 			productId,
-			booking: { capacityPerNight: undefined, packageDays: 7 },
+			booking: { capacityPerNight: undefined, packageLength: 7 },
 		});
 		const after = await asOwner.query(api.orders.get, { shortId });
-		expect(after?.bookingPackageDays).toBe(30);
+		expect(after?.bookingPackaged).toBe(true);
 		expect(after?.bookingCheckOut).toBe(day(33));
 	});
 
 	test("a client-supplied checkOut cannot stretch a package", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
-			packageDays: 30,
+			packageLength: 30,
 			capacity: null,
 		});
 		const { shortId } = await t.mutation(api.bookings.requestBooking, {
@@ -695,7 +701,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 
 	test("a package longer than the free-range cap is accepted (the cap is the seller's own length)", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
-			packageDays: 90, // > MAX_BOOKING_NIGHTS (30)
+			packageLength: 90, // > MAX_BOOKING_NIGHTS (30)
 			capacity: null,
 		});
 		const { shortId } = await t.mutation(api.bookings.requestBooking, {
@@ -711,7 +717,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 	test("unlimited capacity never blocks, and never hides a seller's block", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
 			capacity: null,
-			packageDays: 30,
+			packageLength: 30,
 		});
 		// Ten members starting the same day — a capped listing would refuse the
 		// second one.
@@ -729,7 +735,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 			to: day(40),
 		});
 		expect(window?.unavailable).toEqual([]);
-		expect(window?.packageDays).toBe(30);
+		expect(window?.packageLength).toBe(30);
 
 		// A block still closes the day — unlimited means "no capacity ceiling",
 		// not "never unavailable".
@@ -761,7 +767,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 		// would be invisible to a window it genuinely overlaps — and the night
 		// would read as free.
 		const { t, retailer, productId } = await seedBookingStore(setup(), {
-			packageDays: 90,
+			packageLength: 90,
 			capacity: 1,
 		});
 		await t.mutation(api.bookings.requestBooking, {
@@ -784,7 +790,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 
 	test("instant book lands confirmed, skips the request state, and refuses approve/decline", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
-			packageDays: 30,
+			packageLength: 30,
 			capacity: null,
 			autoAccept: true,
 		});
@@ -818,7 +824,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 
 	test("without instant book a package still waits for approval", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
-			packageDays: 30,
+			packageLength: 30,
 			capacity: null,
 		});
 		const { shortId } = await t.mutation(api.bookings.requestBooking, {
@@ -843,7 +849,7 @@ describe("fixed-length packages + instant book (S7)", () => {
 		const order = await asOwner.query(api.orders.get, { shortId });
 		expect(order?.items[0]?.quantity).toBe(2);
 		expect(order?.total).toBe(16_000);
-		expect(order?.bookingPackageDays).toBeUndefined();
+		expect(order?.bookingPackaged).toBeUndefined();
 		expect(order?.status).toBe("booking_requested");
 	});
 
@@ -1012,5 +1018,92 @@ describe("cancellation reason (86eyn4kcn follow-up)", () => {
 			const o = await asOwner.query(api.orders.get, { shortId: m.shortId });
 			expect(o?.cancellationNote).toBe("Closed for maintenance that week");
 		}
+	});
+});
+
+describe("monthly packages run on CALENDAR months (S7)", () => {
+	test("a 1-month package ends the same day of the next month", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 1,
+			packageUnit: "month",
+			capacity: null,
+		});
+		// Pick a start far enough out to sit inside the horizon whatever today is.
+		const start = day(10);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: start,
+			customer: guest(30),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		// Exclusive check-out = the same date next month, so the last usable day
+		// is the day before — "join the 12th, runs to the 11th".
+		expect(order.bookingCheckOut).toBe(addMytCalendarMonths(start, 1));
+		expect(order.bookingPackaged).toBe(true);
+		// Still ONE flat-priced line, whatever the month's length.
+		expect(order.items[0]?.quantity).toBe(1);
+		expect(order.total).toBe(8000);
+	});
+
+	test("a month package is NOT 30 rolling days", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 1,
+			packageUnit: "month",
+			capacity: null,
+		});
+		const start = day(10);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			customer: guest(31),
+			checkIn: start,
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		const span = Math.round(
+			((order?.bookingCheckOut ?? 0) - start) / DAY_MS,
+		);
+		// 28, 29, 30 or 31 depending on which month it lands in — never a
+		// constant, which is the entire point.
+		expect(span).toBeGreaterThanOrEqual(28);
+		expect(span).toBeLessThanOrEqual(31);
+		expect(span).toBe(
+			Math.round((addMytCalendarMonths(start, 1) - start) / DAY_MS),
+		);
+	});
+
+	test("a month package longer than the free-range cap is still accepted", async () => {
+		// A 1-month span is ~30 nights, over MAX_BOOKING_NIGHTS for some months
+		// — the package is its own ceiling, so this must not bounce.
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 2,
+			packageUnit: "month",
+			capacity: null,
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(5),
+			customer: guest(32),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingCheckOut).toBe(addMytCalendarMonths(day(5), 2));
+	});
+
+	test("day packages are unchanged", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 3,
+			packageUnit: "day",
+			capacity: null,
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(4),
+			customer: guest(33),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingCheckOut).toBe(day(7));
 	});
 });

@@ -440,7 +440,7 @@ function TrackingRoute() {
 	const isBooking = deliveryMethod === "booking";
 	// Frozen at request (S7): a package reads as a validity window, a
 	// free-range stay as check-in → check-out.
-	const isBookingPackage = order.bookingPackageDays !== undefined;
+	const isBookingPackage = order.bookingPackaged === true;
 	const ms = order.retailerLocale === "ms";
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection

@@ -5,7 +5,11 @@
 // night being a valid LEAVING morning, conflict ceilings) are unit-tested
 // rather than eyeballed.
 
-import { DAY_MS, MYT_OFFSET_MS } from "../../convex/lib/fulfilmentDate";
+import {
+	addMytCalendarMonths,
+	DAY_MS,
+	MYT_OFFSET_MS,
+} from "../../convex/lib/fulfilmentDate";
 
 /** The MYT-midnight epoch for the calendar day a DayPicker `Date` names.
  * DayPicker deals in local-timezone dates; only the y/m/d matter. */
@@ -58,17 +62,40 @@ export type SelectionContext = {
 	/** Latest selectable check-in (horizon), MYT midnight, inclusive. */
 	latestCheckIn: number;
 	maxNights: number;
-	/** Fixed-length package in days (S7). Set = ONE tap picks the whole stay:
-	 * the buyer chooses a start date and the end derives. Unset = the two-tap
-	 * free range. Mirrors `products.booking.packageDays`. */
-	packageDays?: number;
+	/** Fixed-length package (S7). Set = ONE tap picks the whole stay: the
+	 * buyer chooses a start date and the end derives. Unset = the two-tap free
+	 * range. Mirrors `products.booking.packageLength`. */
+	packageLength?: number;
+	/** How that length counts. A CALENDAR month's span depends on which month
+	 * it starts in (28–31 days), so the nights a package occupies must be
+	 * derived per candidate start rather than assumed fixed. */
+	packageUnit?: "day" | "month";
 };
 
+/** The exclusive end of a package starting on `day` — the one place the
+ * client derives it, matching the server's `resolveBookingRange`. */
+export function packageEnd(
+	day: number,
+	length: number,
+	unit: "day" | "month" = "day",
+): number {
+	return unit === "month"
+		? addMytCalendarMonths(day, length)
+		: day + length * DAY_MS;
+}
+
 /** Every night a stay starting on `day` would occupy, for a fixed-length
- * package. */
-export function packageNights(day: number, packageDays: number): number[] {
+ * package. Derived from the real end, so a month package covers exactly the
+ * days that month has. */
+export function packageNights(
+	day: number,
+	length: number,
+	unit: "day" | "month" = "day",
+): number[] {
 	const nights: number[] = [];
-	for (let i = 0; i < packageDays; i++) nights.push(day + i * DAY_MS);
+	for (let n = day; n < packageEnd(day, length, unit); n += DAY_MS) {
+		nights.push(n);
+	}
 	return nights;
 }
 
@@ -79,9 +106,9 @@ export function canCheckIn(day: number, ctx: SelectionContext): boolean {
 	// A package is all-or-nothing: the buyer can't shorten it around a busy
 	// night, so EVERY night it would occupy has to be free before the start
 	// day is offered at all (the server re-checks the same span).
-	if (ctx.packageDays !== undefined && ctx.packageDays > 0) {
-		return !packageNights(day, ctx.packageDays).some((night) =>
-			ctx.unavailable.has(night),
+	if (ctx.packageLength !== undefined && ctx.packageLength > 0) {
+		return !packageNights(day, ctx.packageLength, ctx.packageUnit).some(
+			(night) => ctx.unavailable.has(night),
 		);
 	}
 	return !ctx.unavailable.has(day);
@@ -120,9 +147,12 @@ export function nextBookingSelection(
 ): BookingSelection {
 	// A fixed-length package is a ONE-tap pick: the start is the only choice,
 	// the end derives (S7). Never a partial selection to complete.
-	if (ctx.packageDays !== undefined && ctx.packageDays > 0) {
+	if (ctx.packageLength !== undefined && ctx.packageLength > 0) {
 		return canCheckIn(day, ctx)
-			? { checkIn: day, checkOut: day + ctx.packageDays * DAY_MS }
+			? {
+					checkIn: day,
+					checkOut: packageEnd(day, ctx.packageLength, ctx.packageUnit),
+				}
 			: current;
 	}
 	const pickingCheckOut =
@@ -163,8 +193,8 @@ export function conflictCeiling(
  * package is a flat price for the whole span (S7), a free-range stay is
  * per-night. ONE author so the card and the product page always agree.
  */
-export function bookingPriceSuffix(packageDays?: number): string {
-	return packageDays !== undefined && packageDays > 0
+export function bookingPriceSuffix(packageLength?: number): string {
+	return packageLength !== undefined && packageLength > 0
 		? " per package"
 		: "/night";
 }

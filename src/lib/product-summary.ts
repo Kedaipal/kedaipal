@@ -25,7 +25,7 @@ export type SummaryInput = {
 	 * package · RM 150 per package" for a fixed-length one (S7). */
 	booking?: {
 		capacityPerNight: string;
-		packageDays?: string;
+		packageLength?: string;
 		autoAccept?: boolean;
 	} | null;
 };
@@ -47,7 +47,7 @@ export function describeProduct(
 	if (booking) {
 		const price = parsePriceInput(rows[0]?.price.trim() ?? "");
 		const cap = booking.capacityPerNight.trim();
-		const days = Number(booking.packageDays?.trim() || "0");
+		const days = Number(booking.packageLength?.trim() || "0");
 		const isPackage = Number.isFinite(days) && days > 0;
 		const parts = ["Booking"];
 		if (isPackage) parts.push(`${days}-day package`);

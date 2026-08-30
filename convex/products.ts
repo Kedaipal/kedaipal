@@ -23,7 +23,7 @@ import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import {
 	effectiveKind,
 	sanitizeCapacityPerNight,
-	sanitizePackageDays,
+	sanitizePackageLength,
 	sanitizeSecurityDeposit,
 } from "./lib/productKind";
 import {
@@ -727,8 +727,12 @@ export const create = mutation({
 				// Unset = unlimited (S7) — a gym has no daily member cap.
 				capacityPerNight: v.optional(v.number()),
 				securityDeposit: v.optional(v.number()),
-				// Fixed-length package in days; unset = free check-in/check-out.
-				packageDays: v.optional(v.number()),
+				// Fixed-length package; unset = free check-in/check-out. The unit
+				// decides how the end derives — a calendar month, or N days.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(v.literal("day"), v.literal("month")),
+				),
 				// Instant book — skip the request-to-book approval step.
 				autoAccept: v.optional(v.boolean()),
 			}),
@@ -770,7 +774,8 @@ export const create = mutation({
 			| {
 					capacityPerNight?: number;
 					securityDeposit?: number;
-					packageDays?: number;
+					packageLength?: number;
+					packageUnit?: "day" | "month";
 					autoAccept?: boolean;
 			  }
 			| undefined;
@@ -786,7 +791,11 @@ export const create = mutation({
 					securityDeposit: sanitizeSecurityDeposit(
 						args.booking.securityDeposit,
 					),
-					packageDays: sanitizePackageDays(args.booking.packageDays),
+					packageLength: sanitizePackageLength(
+						args.booking.packageLength,
+						args.booking.packageUnit,
+					),
+					packageUnit: args.booking.packageUnit,
 					autoAccept: args.booking.autoAccept === true ? true : undefined,
 				};
 			} catch (err) {
@@ -897,8 +906,12 @@ export const update = mutation({
 				// Unset = unlimited (S7) — a gym has no daily member cap.
 				capacityPerNight: v.optional(v.number()),
 				securityDeposit: v.optional(v.number()),
-				// Fixed-length package in days; unset = free check-in/check-out.
-				packageDays: v.optional(v.number()),
+				// Fixed-length package; unset = free check-in/check-out. The unit
+				// decides how the end derives — a calendar month, or N days.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(v.literal("day"), v.literal("month")),
+				),
 				// Instant book — skip the request-to-book approval step.
 				autoAccept: v.optional(v.boolean()),
 			}),
@@ -955,7 +968,11 @@ export const update = mutation({
 					securityDeposit: sanitizeSecurityDeposit(
 						fields.booking.securityDeposit,
 					),
-					packageDays: sanitizePackageDays(fields.booking.packageDays),
+					packageLength: sanitizePackageLength(
+						fields.booking.packageLength,
+						fields.booking.packageUnit,
+					),
+					packageUnit: fields.booking.packageUnit,
 					autoAccept: fields.booking.autoAccept === true ? true : undefined,
 				};
 			} catch (err) {

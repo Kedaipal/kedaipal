@@ -140,7 +140,14 @@ describe("wizard — booking kind route", () => {
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 		const values = onSubmit.mock.calls[0][0];
 		expect(values.kind).toBe("booking");
-		expect(values.booking).toEqual({ capacityPerNight: 5 });
+		expect(values.booking).toEqual({
+			capacityPerNight: 5,
+			// Package + instant book are S7 knobs this listing doesn't use.
+			packageLength: undefined,
+			packageUnit: undefined,
+			autoAccept: undefined,
+			securityDeposit: undefined,
+		});
 		expect(values.minQuantity).toBeUndefined();
 		expect(values.options).toEqual([]);
 		expect(values.variants).toHaveLength(1);

@@ -23,8 +23,8 @@ import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_CAPACITY_PER_NIGHT,
-	MAX_PACKAGE_DAYS,
 	type ProductKind,
+	packageUnitMax,
 } from "../../../convex/lib/productKind";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
@@ -63,7 +63,8 @@ export interface ProductFormSubmitValues {
 	booking?: {
 		capacityPerNight?: number;
 		securityDeposit?: number;
-		packageDays?: number;
+		packageLength?: number;
+		packageUnit?: "day" | "month";
 		autoAccept?: boolean;
 	};
 	// Per-product fulfilment-notice override (days). undefined = no override —
@@ -123,7 +124,8 @@ export type ProductFormDraft = {
 	 * Blank = unlimited. */
 	capacityPerNight: string;
 	/** Package length in days, as typed; blank = free check-in/check-out. */
-	packageDays?: string;
+	packageLength?: string;
+	packageUnit?: "day" | "month";
 	/** Instant book — skip the approval step. */
 	autoAccept?: boolean;
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
@@ -154,7 +156,8 @@ interface ProductFormProps {
 		 * Blank = unlimited. */
 		capacityPerNight?: string;
 		/** Package length in days as a string draft ("30"); blank = free range. */
-		packageDays?: string;
+		packageLength?: string;
+		packageUnit?: "day" | "month";
 		autoAccept?: boolean;
 		/** Booking security deposit as an RM string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
@@ -534,7 +537,8 @@ function ProductSummaryStrip({
 	/** Booking kind + its capacity draft — flips the strip to booking words. */
 	booking?: {
 		capacityPerNight: string;
-		packageDays?: string;
+		packageLength?: string;
+		packageUnit?: "day" | "month";
 		autoAccept?: boolean;
 	} | null;
 }) {
@@ -657,7 +661,10 @@ export function ProductForm({
 		initialValues?.securityDeposit ?? "",
 	);
 	const [packageDraft, setPackageDraft] = useState(
-		initialValues?.packageDays ?? "",
+		initialValues?.packageLength ?? "",
+	);
+	const [packageUnit, setPackageUnit] = useState<"day" | "month">(
+		initialValues?.packageUnit ?? "month",
 	);
 	const [autoAccept, setAutoAccept] = useState(
 		initialValues?.autoAccept === true,
@@ -748,8 +755,9 @@ export function ProductForm({
 									capacityTrimmed.length > 0
 										? Number(capacityTrimmed)
 										: undefined,
-								packageDays:
+								packageLength:
 									packageTrimmed.length > 0 ? Number(packageTrimmed) : 0,
+								packageUnit,
 								autoAccept,
 								// Sen; 0 = clear (the server normalizes 0 → unset).
 								securityDeposit:
@@ -791,7 +799,8 @@ export function ProductForm({
 			kind,
 			capacityPerNight: capacityDraft,
 			securityDeposit: depositDraft,
-			packageDays: packageDraft,
+			packageLength: packageDraft,
+			packageUnit,
 			autoAccept,
 			categoryIds,
 			images,
@@ -829,7 +838,7 @@ export function ProductForm({
 		packageTrimmed.length === 0 ||
 		(Number.isInteger(packageParsed) &&
 			packageParsed >= 1 &&
-			packageParsed <= MAX_PACKAGE_DAYS);
+			packageParsed <= packageUnitMax(packageUnit));
 
 	// Booking security deposit — blank = none; else a price 0..RM10,000
 	// (mirrors the server's sanitizeSecurityDeposit ceiling).
@@ -881,7 +890,7 @@ export function ProductForm({
 								isBooking
 									? {
 											capacityPerNight: capacityDraft,
-											packageDays: packageDraft,
+											packageLength: packageDraft,
 											autoAccept,
 										}
 									: null
@@ -1053,7 +1062,7 @@ export function ProductForm({
 								type="number"
 								inputMode="numeric"
 								min={1}
-								max={MAX_PACKAGE_DAYS}
+								max={packageUnitMax(packageUnit)}
 								placeholder="e.g. 30"
 								value={packageDraft}
 								onChange={(e) => setPackageDraft(e.target.value)}
@@ -1061,18 +1070,30 @@ export function ProductForm({
 								isError={!packageValid}
 								className="w-32"
 							/>
-							<span className="text-sm text-muted-foreground">days</span>
+							<select
+								aria-label="Package length unit"
+								value={packageUnit}
+								onChange={(e) =>
+									setPackageUnit(e.target.value === "day" ? "day" : "month")
+								}
+								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
+							>
+								<option value="month">months</option>
+								<option value="day">days</option>
+							</select>
 						</div>
 						{!packageValid ? (
 							<p className="text-xs text-destructive">
-								Enter a whole number of days between 1 and {MAX_PACKAGE_DAYS},
-								or leave blank.
+								Enter a whole number of {packageUnit}s between 1 and{" "}
+								{packageUnitMax(packageUnit)}, or leave blank.
 							</p>
 						) : null}
 						<p className="text-xs leading-relaxed text-muted-foreground">
 							{packageTrimmed.length > 0
-								? `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there and costs the flat price above.`
-								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 30) to sell a fixed-length package at one flat price."}
+								? packageUnit === "month"
+									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${packageTrimmed} month${packageTrimmed === "1" ? "" : "s"} later, at the flat price above.`
+									: `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there, at the flat price above.`
+								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
 						</p>
 					</div>
 
@@ -1238,7 +1259,17 @@ export function ProductForm({
 								variant="field"
 								className="w-24 text-center"
 							/>
-							<span className="text-sm text-muted-foreground">days</span>
+							<select
+								aria-label="Package length unit"
+								value={packageUnit}
+								onChange={(e) =>
+									setPackageUnit(e.target.value === "day" ? "day" : "month")
+								}
+								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
+							>
+								<option value="month">months</option>
+								<option value="day">days</option>
+							</select>
 						</div>
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">

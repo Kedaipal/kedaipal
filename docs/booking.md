@@ -675,6 +675,34 @@ Unlimited spots · RM 150 per package · Instant book".
 `src/components/ui/toggle-switch.tsx` rather than copied — the booking form
 needed the same control, and a second copy is how two toggles drift apart.
 
+### "Monthly" means the calendar month
+
+The first cut counted **rolling days** — `start + 30 days`. That is fair (every
+member gets identical value) but it is not what anyone means by monthly: 30
+days from 1 Jan ends on the 30th, from 1 Feb it spills into 3 March, so the
+renewal date walks through the year and never lines up with a month.
+
+Settled 30 Aug (Arif confirmed FS Fitness needs monthly): a package carries a
+**unit**. `packageLength` + `packageUnit: "day" | "month"`, months defaulted in
+the UI because that is the membership case; days stay right for a 3D2N stay or
+a day pass. A month package runs **same-day-next-month** — join the 12th, run
+to the 11th — via `addMytCalendarMonths`, which **clamps into short months**
+(31 Jan + 1 month = 28 Feb, 29 in a leap year) rather than overflowing.
+
+Three consequences worth knowing:
+- **A package's span is no longer constant**, so the buyer calendar derives
+  each candidate start's own range before deciding whether it's bookable
+  (`packageEnd` / `packageNights` take the unit). A month package can't be
+  gated with a fixed night count.
+- **`maxNights` had to stop quoting `packageLength`** — for a one-MONTH
+  package that read as "max 1 night" and would have refused the booking's own
+  span. The public payload now quotes the free-range cap only, and the
+  authoritative gate uses the RESOLVED span as its own ceiling.
+- **`orders.bookingPackageDays` became `orders.bookingPackaged`** (a boolean):
+  the span already lives in `bookingCheckIn`/`Out`, so the order only needs to
+  record the SHAPE. Storing a day count would have been a second, drift-prone
+  answer to a question the range already answers.
+
 ### S7 tests
 
 `convex/bookings.test.ts` ("fixed-length packages + instant book"): derived
