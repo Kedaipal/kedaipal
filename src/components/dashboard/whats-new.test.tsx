@@ -38,13 +38,21 @@ const NOTABLE: Release = {
 	version: "2026.09.1",
 	date: "2026-09-01",
 	notable: true,
-	entries: [{ title: { en: "Big thing" }, body: { en: "It is big." } }],
+	entries: [
+		{ kind: "feature", title: { en: "Big thing" }, body: { en: "It is big." } },
+	],
 };
 const QUIET: Release = {
 	version: "2026.08.2",
 	date: "2026-08-02",
 	notable: false,
-	entries: [{ title: { en: "Small thing" }, body: { en: "It is small." } }],
+	entries: [
+		{
+			kind: "fix",
+			title: { en: "Small thing" },
+			body: { en: "It is small." },
+		},
+	],
 };
 
 vi.mock("../../content/releases", async () => {
@@ -210,6 +218,17 @@ describe("WhatsNew — panel structure", () => {
 		expect(screen.getAllByText("New")).toHaveLength(1);
 	});
 
+	it("labels every entry with its kind, seen releases included", () => {
+		// The kind chip is the first thing a seller scans — "is this new, or is
+		// this a fix?" — so it has to render on EVERY card, not only the unseen
+		// ones. NOTABLE is a feature and QUIET is a fix, so both labels appearing
+		// exactly once proves the chip reads the entry rather than the release.
+		mockSeen({ seenVersion: "2026.08.2" });
+		renderShell();
+		expect(screen.getAllByText("New feature")).toHaveLength(1);
+		expect(screen.getAllByText("Bug fix")).toHaveLength(1);
+	});
+
 	it("names the release and date in the header when something is unseen", () => {
 		mockSeen({ seenVersion: "2026.08.2" });
 		renderShell();
@@ -292,8 +311,16 @@ describe("WhatsNew — entry keys", () => {
 				date: "2026-09-01",
 				notable: true,
 				entries: [
-					{ title: { en: "Same title" }, body: { en: "First body." } },
-					{ title: { en: "Same title" }, body: { en: "Second body." } },
+					{
+						kind: "feature",
+						title: { en: "Same title" },
+						body: { en: "First body." },
+					},
+					{
+						kind: "feature",
+						title: { en: "Same title" },
+						body: { en: "Second body." },
+					},
 				],
 			},
 		];

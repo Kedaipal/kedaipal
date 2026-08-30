@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compareCalendarVersions } from "../../convex/lib/appVersion";
 import type { Release } from "../content/releases";
-import { RELEASES } from "../content/releases";
+import { RELEASE_KIND_LABELS, RELEASES } from "../content/releases";
 import { isCalendarVersion } from "./app-version";
 import { localized, resolveWhatsNew } from "./releases";
 
@@ -13,7 +13,13 @@ function release(version: string, notable = false): Release {
 		version,
 		date: "2026-08-01",
 		notable,
-		entries: [{ title: { en: `t ${version}` }, body: { en: `b ${version}` } }],
+		entries: [
+			{
+				kind: "feature",
+				title: { en: `t ${version}` },
+				body: { en: `b ${version}` },
+			},
+		],
 	};
 }
 
@@ -186,6 +192,32 @@ describe("the shipped RELEASES content", () => {
 	test("has no duplicate versions", () => {
 		const seen = new Set(RELEASES.map((r) => r.version));
 		expect(seen.size).toBe(RELEASES.length);
+	});
+
+	test("every entry declares a kind with a label to render", () => {
+		// `kind` is required by the type, so the compiler already catches a
+		// missing one. What it cannot catch is a kind added to the union with no
+		// entry in RELEASE_KIND_LABELS — the chip would render `undefined` at the
+		// top of every card carrying it, which is exactly the surface a seller
+		// reads first.
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				expect(
+					RELEASE_KIND_LABELS[e.kind],
+					`${r.version}: "${e.title.en}" has kind "${e.kind}" with no label`,
+				).toBeTruthy();
+			}
+		}
+	});
+
+	test("every kind in the union has a label", () => {
+		// The other direction: adding a kind and forgetting its copy.
+		expect(Object.values(RELEASE_KIND_LABELS).every((l) => l.trim())).toBe(
+			true,
+		);
+		expect(new Set(Object.values(RELEASE_KIND_LABELS)).size).toBe(
+			Object.keys(RELEASE_KIND_LABELS).length,
+		);
 	});
 
 	test("every entry has non-empty English copy", () => {
