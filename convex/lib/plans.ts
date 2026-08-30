@@ -3,6 +3,11 @@
 // CLAUDE.md; founding members get a 30% lifetime discount (manual in v1). All
 // money is in MINOR units (sen), consistent with orders. See
 // docs/manual-subscription.md.
+//
+// The `Country` import is type-only, so this stays a pure module with no
+// runtime dependency on `country.ts` (which does import `convex/values`).
+
+import type { Country } from "./country";
 
 export type Plan = "starter" | "pro" | "scale";
 export type BillingCycle = "monthly" | "annual";
@@ -147,6 +152,20 @@ export function featuresForPlan(plan: Plan): PlanFeatures {
 export type BillingCurrency = "MYR" | "SGD";
 export const BILLING_CURRENCIES: BillingCurrency[] = ["MYR", "SGD"];
 
+/**
+ * Which currency Kedaipal invoices a seller in, by the country they're in.
+ *
+ * Deliberately NOT `COUNTRY_CURRENCY` (lib/country.ts): that maps a country to
+ * the full storefront `SupportedCurrency` union, which is wider than the set we
+ * bill subscriptions in. One author here, because three public pricing surfaces
+ * (landing teaser, /pricing, /cost) each had their own
+ * `region === "SG" ? … : …` ternary.
+ */
+export const BILLING_CURRENCY_FOR_COUNTRY: Record<Country, BillingCurrency> = {
+	MY: "MYR",
+	SG: "SGD",
+};
+
 // Standard monthly price per billing currency (minor units — sen / cents).
 // SGD numbers come from the Aug 2026 SG pricing deck (S$29 / S$59 / S$119).
 export const PLAN_MONTHLY_PRICES: Record<
@@ -175,6 +194,48 @@ export const FOUNDING_MONTHLY_PRICES: Record<
 // MYR shorthand for the founding table above.
 export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
 	FOUNDING_MONTHLY_PRICES.MYR;
+
+/**
+ * Price of each outlet beyond the three Scale includes (minor units).
+ *
+ * Display copy only — Scale is still "Coming soon" and the billing lever ships
+ * with that build (docs/pricing.md). It lives here rather than inside the
+ * message catalogs because the catalogs used to spell "RM49" into the sentence,
+ * which quoted ringgit at a Singaporean reading S$ tier prices two lines above.
+ *
+ * SGD follows the tier ratio (SGD ≈ 0.4 × MYR across all three plans) and keeps
+ * the same just-under-a-round-number shape. UNCONFIRMED — swap in a decided
+ * number when Scale is priced for sale.
+ */
+export const OUTLET_ADDON_MONTHLY_PRICES: Record<BillingCurrency, number> = {
+	MYR: 4900,
+	SGD: 1900,
+};
+
+/**
+ * What the metered/per-message competitors charge per month (minor units) —
+ * the anchor the landing teaser prices Kedaipal against. A range, because it
+ * spans several tools.
+ *
+ * SGD is the same band at the tier ratio, not an FX conversion of the ringgit
+ * figures. UNCONFIRMED for Singapore in the way the MY band is not.
+ */
+export const COMPETITOR_MONTHLY_RANGE: Record<
+	BillingCurrency,
+	{ min: number; max: number }
+> = {
+	MYR: { min: 20000, max: 50000 },
+	SGD: { min: 8000, max: 20000 },
+};
+
+/**
+ * "Less than X a day" — the Starter price divided across a month and rounded
+ * UP, so the claim is always true (RM79/mo → RM3, S$29/mo → S$1). Derived, so
+ * it can never contradict the tier card beside it.
+ */
+export function starterPricePerDay(currency: BillingCurrency): number {
+	return Math.ceil(PLAN_MONTHLY_PRICES[currency].starter / 100 / 30);
+}
 
 // Annual billing = 10 months paid, 12 received (~17% off), per CLAUDE.md.
 export const ANNUAL_MONTHS_CHARGED = 10;

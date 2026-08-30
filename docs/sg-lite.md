@@ -483,6 +483,13 @@ an SG variant is a follow-up.
 - **Subscription billing currency** — per-invoice, chosen by the admin
   (PR #198); `86eyp7hn7` is parked until the SG prospect pays.
 - **Marketing/landing copy** (RM examples, MY JSON-LD) — not buyer-blocking.
+  *Partly superseded 31 Aug 2026:* the **subscription pricing** on the landing
+  teaser, `/pricing` and `/cost` now follows the visitor's country, detected
+  from `CF-IPCountry` at SSR, with a MY/SG toggle whose pick rides a cookie the
+  server reads — see [`pricing.md` § "MY vs SG"](./pricing.md).
+  The illustrative RM amounts in the hero chat and mockups still stay MY on
+  purpose: they depict a fictional Malaysian seller's storefront, not
+  Kedaipal's price.
 
 ## Adding a country later
 

@@ -12,10 +12,148 @@ numbers come from the caps ticket `86eye2ccu`.
   comparison table + FAQ.
 - **`src/components/landing/pricing-teaser.tsx`** — the landing-page teaser; same
   three tiers, links to the full page.
+- **`src/components/cost/cost-calculator.tsx`** (`/cost`) — not a tier surface,
+  but it anchors the seller's own leak against the **Founding price**, so it
+  prices Kedaipal too and follows the same region.
 - Copy lives in `messages/en.json` + `messages/ms.json` + `messages/zh.json`
-  (`pricing_*` for the teaser, `pricingpage_*` for the full page). All three
-  locales are kept in lockstep — the i18n parity test fails otherwise, and a card
-  must never fall back to English mid-render.
+  (`pricing_*` for the teaser, `pricingpage_*` for the full page, `cost_*` for
+  the calculator). All three locales are kept in lockstep — the i18n parity test
+  fails otherwise, and a card must never fall back to English mid-render.
+
+## MY vs SG — detected at the edge, overridable by the visitor
+
+Kedaipal invoices Malaysian sellers in MYR and Singaporean ones in SGD
+(`PLAN_MONTHLY_PRICES`, `FOUNDING_MONTHLY_PRICES`). Which one a visitor sees is
+detected from **Cloudflare's `CF-IPCountry`** and overridable via the
+**`RegionToggle`** on all three surfaces.
+
+**Precedence: stored pick → geo-IP → time zone → MY.**
+
+The override is not decoration. Geo-IP is a guess about a *person*, and it is
+wrong often enough to matter — VPNs, corporate proxies, carrier NAT that
+egresses in another country, roaming, and the JB commuter on a Singapore
+network. Without a switcher, a wrong guess is a dead end: the visitor sees the
+wrong price and has no recourse but to leave. Keeping one is also what nearly
+every comparable platform does.
+
+### How it is read
+
+`src/lib/geo-region.ts` owns it. `readVisitorRegion()` is a
+**`createIsomorphicFn`**: the server arm reads the cookie then the header, the
+client arm returns `null`, and each is compiled out of the other environment —
+so there is no server-function RPC on any navigation and no server-only import
+in the browser bundle. It is called from the **root route's loader**
+(`__root.tsx`), which is the right home for three reasons: three surfaces need
+it, the root loader does not re-run on client-side navigation (so a visitor
+resolves it once), and the value dehydrates into the HTML so the client's first
+render matches the server's — no RM→S$ flicker, and hydration cannot mismatch.
+
+`detectCountryFromGeoHeader` maps the header:
+
+| Header | Result | Why |
+| --- | --- | --- |
+| `SG` (any case) | `SG` | |
+| any other resolvable ISO-2 | `MY` | A real answer. The device's time zone does **not** get to overrule it. |
+| absent / blank | `null` | Not a Cloudflare origin — fall through. |
+| `XX`, `T1` | `null` | Cloudflare's "unplaceable IP" and Tor. Present but meaningless, so they must not read as a vote for Malaysia. |
+
+`useLandingRegion()` (`src/hooks/useLandingRegion.ts`) returns
+`[Country, setRegion]`. The time-zone heuristic survives **only** as the
+fallback where neither cookie nor header answered — `vite dev`, `wrangler dev`,
+any non-Cloudflare origin — which is also what keeps the SG path exercisable
+locally. It is not a co-signal: a time zone is a device setting, and the case
+that motivated this work is an SG visitor whose phone still reads
+`Asia/Kuala_Lumpur`.
+
+### The pick is a cookie, not `localStorage`
+
+`kp_landing_region`, `Path=/`, `SameSite=Lax`, one year, `Secure` only where the
+page already is (so `http://localhost` dev still persists).
+
+**A cookie because the server can read it.** With `localStorage` — which is what
+this started as — a returning visitor who had overridden the geo guess got an
+SSR render of the *geo* currency and a correction after mount: a visible price
+flicker on every single visit, which is exactly the defect the SSR read was
+added to remove. The cookie closes the loop, and the precedence chain is
+identical on both sides.
+
+It is a **functional preference the visitor asked for by clicking** —
+first-party, no PII, no tracking — so it needs no consent banner. Not
+`HttpOnly`: the toggle's `setRegion` is the only writer. A stale or hand-edited
+value degrades to detection (`parseRegionCookie`) rather than becoming a third
+state.
+
+Both parsers are pure and tested. Note the deliberate asymmetry: the **header**
+is normalized case-insensitively (Cloudflare's, not ours), the **cookie** is
+case-sensitive (we write it, so a lowercase value means something else did).
+
+### Copy may not name a currency
+
+Every amount in `pricing_*` / `pricingpage_*` arrives as a **placeholder** and
+the surface formats it from the resolved currency. This is enforced by
+`src/lib/pricing-copy.test.ts`, which fails on `RM 12` / `S$ 12` / `MYR` / `SGD`
+appearing in any of those keys, in any locale — the sibling of
+`currency-literals.test.ts` for source files.
+
+It is a test rather than a sweep because the sweep had already failed twice:
+the landing anchor read *"Starter from RM 79/mo"* directly above S$29 tier
+cards, and the Scale card read *"Additional outlets RM49/mo each"* beside S$119.
+
+Deliberately **out of scope**: the illustrative RM amounts in the hero chat, the
+how-it-works mockups and the bento cards (`hero_*`, `how_mockup_*`, `bento_*`).
+Those depict a fictional *Malaysian seller's* storefront — not Kedaipal's price
+and not the visitor's money — so converting them would misrepresent the
+screenshot. Same for the static SEO description, which names both currencies:
+Googlebot crawls from the US, so a per-request `<meta>` would make the indexed
+copy a coin toss.
+
+### `/cost` is currency-parametric
+
+`src/lib/calculator.ts` takes the currency as a **required** argument and keys
+every currency-shaped value off an exhaustive `Record<BillingCurrency, …>`, so a
+third billing currency is a compile error, never a silent Malaysian fallback.
+
+| | MYR | SGD |
+| --- | --- | --- |
+| Founding anchor | RM104 | S$41 |
+| Labour rate (`LABOR_RATE_PER_HR`) | 25/hr | 15/hr |
+| AOV slider | max 500, step 5, default 35 | max 200, step 2, default 15 |
+
+The MY column is byte-identical to pre-SG and a test pins it.
+
+**S$15/hr is not an FX conversion.** RM25 converts to about S$7, which reads as
+implausibly cheap labour to a Singaporean and would quietly undercut the
+chase-cost half of the argument.
+
+`FOUNDING_PRICE` is **derived** from `FOUNDING_MONTHLY_PRICES`, not restated —
+the file used to carry its own literal `104`, a second copy of the Pro founding
+price with nothing stopping it drifting. A test asserts the identity.
+
+The calculator holds only what the visitor **stated** (a shared link's params,
+then each slider they move) and derives the rest, because the region can resolve
+*after* a `/cost?aov=400` link is opened: untouched fields follow the new
+region's defaults, entered ones are `clampInputs`-fitted into the new slider's
+range. Pure derivation — no effect, no ref.
+
+The share params carry bare numbers with no currency, so a link built in
+Malaysia and opened in Singapore reinterprets `aov=35` as S$35. Deliberate: a
+region baked into the link would outlive the share, and the toggle sits directly
+above the sliders. On `/cost` the toggle carries a **visible label**, unlike the
+other two surfaces — here it reshapes the seller's *own* numbers (every slider's
+currency and the leak total), not just the price we quote.
+
+### Numbers still unconfirmed for SG
+
+Marked `UNCONFIRMED` in `convex/lib/plans.ts`, both following the tier ratio
+(SGD ≈ 0.4 × MYR across all three plans):
+
+- `OUTLET_ADDON_MONTHLY_PRICES.SGD` — S$19 (vs RM49). Display copy only; Scale
+  is not purchasable.
+- `COMPETITOR_MONTHLY_RANGE.SGD` — S$80–200 (vs RM200–500), the landing
+  anchor's comparison band.
+
+`starterPricePerDay()` rounds **up**, so "less than S$1 a day" can never
+contradict the tier card beside it.
 
 ## The three public tiers
 
