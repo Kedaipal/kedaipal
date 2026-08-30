@@ -10,11 +10,9 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Download,
-	LayoutGrid,
 	ListChecks,
 	Loader2,
 	Pin,
-	Rows3,
 	Search,
 	ShoppingBag,
 	X,
@@ -789,42 +787,20 @@ function OrdersRoute() {
 
 	const headerActions = (
 		<>
-			{/* View switch, leading the header cluster (86eyrtz74). It sits HERE and
-			    not in the search row because Cards/Table, Select and Export are one
-			    family — things you do TO the list — while search, sort and filters
-			    narrow it. Keeping the two families apart is also what stops the
-			    search row running out of width on a phone, which is how this
-			    started: five controls in one row squeezed the input to its own
-			    padding. A segmented control rather than a dropdown: two options,
-			    both worth showing, and the current one reads at a glance. */}
-			<div className="flex h-11 shrink-0 items-center rounded-xl border border-border bg-muted/60 p-0.5">
-				{(
-					[
-						{ value: "cards", label: "Cards", Icon: LayoutGrid },
-						{ value: "table", label: "Table", Icon: Rows3 },
-					] as const
-				).map(({ value, label, Icon }) => {
-					const active = view === value;
-					return (
-						<button
-							key={value}
-							type="button"
-							aria-pressed={active}
-							aria-label={`${label} view`}
-							title={`${label} view`}
-							onClick={() => setView(value)}
-							className={cn(
-								"flex size-10 items-center justify-center rounded-[10px] transition-colors",
-								active
-									? "bg-background text-foreground shadow-sm"
-									: "text-muted-foreground hover:text-foreground",
-							)}
-						>
-							<Icon className="size-4.5" aria-hidden="true" />
-						</button>
-					);
-				})}
-			</div>
+			{/* View switch, leading the header cluster (86eyrtz74 + booking S4). It
+			    sits HERE and not in the search row because Cards/Table/Calendar,
+			    Select and Export are one family — things you do TO the list —
+			    while search, sort and filters narrow it. Keeping the two families
+			    apart is also what stops the search row running out of width on a
+			    phone, which is how this started: five controls in one row
+			    squeezed the input to its own padding. Calendar joins the SAME
+			    control rather than sitting beside it as a second pill: the seller
+			    is answering one question, not two. */}
+			<OrdersViewToggle
+				active={view}
+				showCalendar={hasBookingListings === true}
+				onSelectView={setView}
+			/>
 			<Button
 				type="button"
 				variant={selectMode ? "secondary" : "outline"}
@@ -906,10 +882,7 @@ function OrdersRoute() {
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
 				actions={
-					<>
-						{hasBookingListings ? <OrdersViewToggle active="inbox" /> : null}
-						{inboxEnabled ? headerActions : null}
-					</>
+					inboxEnabled ? headerActions : undefined
 				}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
@@ -922,7 +895,6 @@ function OrdersRoute() {
 					</p>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
-					{hasBookingListings ? <OrdersViewToggle active="inbox" /> : null}
 					{inboxEnabled ? headerActions : null}
 				</div>
 			</div>

@@ -386,6 +386,23 @@ card manages those); overlapping block rows are tolerated and unioned at read
   listing) + that night's bookings (rows → order page) + a "Block this
   night" shortcut when unblocked.
 
+### One view control, not two
+
+Staging's inbox rebuild (`86eyrtz74`) shipped its own **Cards / Table** switch
+into the same header cluster this slice put **Inbox / Calendar** in — two
+identical-looking pills, side by side, doing different jobs. Collapsed into
+one **Cards · Table · Calendar** control (owner call, 30 Aug): the seller is
+answering a single question, "how do I want to look at my orders", and the
+fact that two segments change the current route's view while the third
+navigates is an implementation detail they never see.
+
+`OrdersViewToggle` is now the one component both routes render. Segments that
+navigate are real `<Link>`s (⌘-click and copy-link-address keep working); only
+the local-state ones are `<button>`s, which is why the component takes an
+optional `onSelectView` — present on the inbox, absent on the calendar page
+where picking Cards or Table goes back to the list. The Calendar segment
+renders only for stores that actually have booking listings.
+
 ### S4 tests
 
 `convex/bookingBlocks.test.ts`: validation sweep (alignment / order / length
