@@ -41,7 +41,7 @@ function OrdersCalendarPage() {
 			<PageHeader
 				title="Orders"
 				subtitle="Booking calendar"
-				actions={<OrdersViewToggle active="calendar" />}
+				actions={<OrdersViewToggle active="calendar" showCalendar />}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -50,7 +50,7 @@ function OrdersCalendarPage() {
 					</h2>
 					<p className="text-[13px] text-muted-foreground">Booking calendar</p>
 				</div>
-				<OrdersViewToggle active="calendar" />
+				<OrdersViewToggle active="calendar" showCalendar />
 			</div>
 
 			{hasBookings ? (

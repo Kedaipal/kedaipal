@@ -9,6 +9,7 @@ import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
 
@@ -208,6 +209,9 @@ describe("bookings.requestBooking", () => {
 		await asOwner.mutation(api.orders.updateStatus, {
 			orderId: order._id,
 			status: "cancelled",
+			// Cancelling a booking demands a buyer-visible reason, the same way
+			// declining one does — the guest planned around these dates.
+			cancellationNote: "Double-booked by mistake",
 		});
 		await t.mutation(api.bookings.requestBooking, {
 			retailerId: retailer._id,
@@ -402,7 +406,7 @@ describe("approve / decline (S3)", () => {
 		const declined = await asOwner.query(api.orders.get, { shortId });
 		expect(declined?.status).toBe("cancelled");
 		expect(declined?.bookingResolution).toBe("declined");
-		expect(declined?.bookingDeclineReason).toBe(
+		expect(declined?.cancellationNote).toBe(
 			"Closed for a private event that weekend",
 		);
 		// The hold is gone — the same nights book again.
@@ -628,5 +632,160 @@ describe("security deposit (S5)", () => {
 				keptAmount: 0,
 			}),
 		).rejects.toThrow(/no security deposit/i);
+	});
+});
+
+describe("cancellation reason (86eyn4kcn follow-up)", () => {
+	test("cancelling a BOOKING demands a reason, and the buyer gets it verbatim", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId, trackingToken } = await t.mutation(
+			api.bookings.requestBooking,
+			{
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				checkOut: day(5),
+				customer: guest(1),
+			},
+		);
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		await asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+
+		// A guest who planned around these dates is owed the same explanation a
+		// declined request gets — so a bare cancel is refused.
+		await expect(
+			asOwner.mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "cancelled",
+			}),
+		).rejects.toThrow(/short reason/i);
+		await expect(
+			asOwner.mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "cancelled",
+				cancellationNote: "   ",
+			}),
+		).rejects.toThrow(/short reason/i);
+		await expect(
+			asOwner.mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "cancelled",
+				cancellationNote: "x".repeat(201),
+			}),
+		).rejects.toThrow(/under 200/i);
+
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+			cancellationNote: "The site flooded after the storm",
+		});
+		// The BUYER's own read carries it — this is the surface that was silent.
+		const buyerRead = await t.query(api.orders.get, { token: trackingToken });
+		expect(buyerRead?.status).toBe("cancelled");
+		expect(buyerRead?.cancellationNote).toBe(
+			"The site flooded after the storm",
+		);
+	});
+
+	test("an ordinary order cancels without one, but keeps it when given", async () => {
+		const t = setup();
+		const asOwner = t.withIdentity({ subject: USER });
+		await asOwner.mutation(api.retailers.createRetailer, {
+			storeName: "Plain Goods",
+			slug: "plain-goods-cancel",
+		});
+		const retailer = await asOwner.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tote Bag",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 2500, onHand: 5 }],
+		});
+		const variants = await asOwner.query(api.products.get, { productId });
+		const variantId = variants?.variants[0]?._id;
+		if (!variantId) throw new Error("variant missing");
+
+		const retailerId = retailer._id;
+		async function place() {
+			return await t.mutation(api.orders.create, {
+				retailerId,
+				items: [{ productId, variantId, quantity: 1 }],
+				currency: "MYR",
+				customer: { name: "Aisha", waPhone: "0123456799" },
+				deliveryMethod: "self_collect",
+				channel: "whatsapp",
+			});
+		}
+
+		// No reason needed — cancel is high-frequency on ordinary orders.
+		const a = await place();
+		const orderA = await asOwner.query(api.orders.get, { shortId: a.shortId });
+		if (!orderA) throw new Error("missing");
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: orderA._id,
+			status: "cancelled",
+		});
+		expect(
+			(await asOwner.query(api.orders.get, { shortId: a.shortId }))
+				?.cancellationNote,
+		).toBeUndefined();
+
+		// ...but it's kept and shown when the seller does explain.
+		const b = await place();
+		const orderB = await asOwner.query(api.orders.get, { shortId: b.shortId });
+		if (!orderB) throw new Error("missing");
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: orderB._id,
+			status: "cancelled",
+			cancellationNote: "Out of stock — sorry!",
+		});
+		expect(
+			(await asOwner.query(api.orders.get, { shortId: b.shortId }))
+				?.cancellationNote,
+		).toBe("Out of stock — sorry!");
+	});
+
+	test("bulk cancel applies ONE reason, and a booking in the batch still demands it", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: 5,
+		});
+		const made: Array<{ id: Id<"orders">; shortId: string }> = [];
+		for (let i = 0; i < 2; i++) {
+			const { shortId } = await t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3 + i * 4),
+				checkOut: day(5 + i * 4),
+				customer: guest(20 + i),
+			});
+			const o = await asOwner.query(api.orders.get, { shortId });
+			if (!o) throw new Error("missing");
+			made.push({ id: o._id, shortId });
+		}
+		const ids = made.map((m) => m.id);
+		// The batch holds bookings, so the rule still applies — one prompt, but
+		// it can't be skipped.
+		await expect(
+			asOwner.mutation(api.orders.bulkUpdateStatus, {
+				orderIds: ids,
+				status: "cancelled",
+			}),
+		).rejects.toThrow(/short reason/i);
+
+		await asOwner.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: ids,
+			status: "cancelled",
+			cancellationNote: "Closed for maintenance that week",
+		});
+		for (const m of made) {
+			const o = await asOwner.query(api.orders.get, { shortId: m.shortId });
+			expect(o?.cancellationNote).toBe("Closed for maintenance that week");
+		}
 	});
 });

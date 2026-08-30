@@ -42,10 +42,10 @@ import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -683,10 +683,9 @@ function TrackingRoute() {
 								? "Permintaan tamat tempoh"
 								: "Request expired"}
 					</span>
-					{order.bookingResolution === "declined" &&
-					order.bookingDeclineReason ? (
+					{order.bookingResolution === "declined" && order.cancellationNote ? (
 						<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
-							“{order.bookingDeclineReason}”
+							“{order.cancellationNote}”
 						</blockquote>
 					) : order.bookingResolution === "expired" ? (
 						<p className="text-sm leading-relaxed text-muted-foreground">
@@ -718,9 +717,9 @@ function TrackingRoute() {
 				<div className="mt-6 flex items-start gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">
 					<Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
 					<p>
-						The payment window for this order ran out, so it was cancelled
-						and the items were released. Still want it? Message the store —
-						they can send you a fresh order link.
+						The payment window for this order ran out, so it was cancelled and
+						the items were released. Still want it? Message the store — they can
+						send you a fresh order link.
 					</p>
 				</div>
 			) : null}
@@ -1225,6 +1224,27 @@ function TrackingRoute() {
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>
+				</section>
+			) : null}
+
+			{/* Why the order was cancelled, in the seller's own words. Request-stage
+			    endings render in the resolution card above; this covers everything
+			    else — an approved booking the seller later cancelled, and ordinary
+			    cancelled orders where the seller chose to explain. Without it, a
+			    buyer whose booking was cancelled after approval learned nothing. */}
+			{isCancelled &&
+			order.bookingResolution === undefined &&
+			order.cancellationNote ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Sebab pembatalan" : "Why this was cancelled"}
+					</p>
+					<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+						“{order.cancellationNote}”
+					</blockquote>
+					<p className="text-xs text-muted-foreground">
+						{ms ? `Daripada ${order.storeName}.` : `From ${order.storeName}.`}
+					</p>
 				</section>
 			) : null}
 

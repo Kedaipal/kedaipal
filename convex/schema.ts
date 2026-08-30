@@ -1067,9 +1067,15 @@ export default defineSchema({
 		bookingResolution: v.optional(
 			v.union(v.literal("declined"), v.literal("expired")),
 		),
-		// The seller's decline reason, quoted VERBATIM to the guest (required at
-		// decline — a silent no is a dead end for someone planning a trip).
-		bookingDeclineReason: v.optional(v.string()),
+		// WHY this order isn't happening, in the seller's own words, quoted
+		// VERBATIM to the buyer on their order page. One field for every way an
+		// order ends: a declined booking request, a cancelled booking, or an
+		// ordinary cancelled order. REQUIRED on both booking paths (a silent no
+		// is a dead end for someone who planned around it), optional elsewhere.
+		// Always buyer-visible — there is deliberately no private twin, because
+		// a "private" reason field is one bug away from being leaked; the
+		// seller's internal notes live on the order timeline instead.
+		cancellationNote: v.optional(v.string()),
 		// Refundable security deposit (sen) FROZEN from the listing at request
 		// time (snapshot posture — a later policy edit never changes a placed
 		// booking). Part of `total` (one payment at approval) but NEVER revenue:
