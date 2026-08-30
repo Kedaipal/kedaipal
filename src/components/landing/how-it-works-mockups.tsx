@@ -178,35 +178,52 @@ export function BrowseMockup() {
 
 /** Step 3 — Close: WhatsApp order bubble + Kedaipal confirm reply on the chat wallpaper. */
 export function CloseMockup() {
+	// Current shipped flow (confirmation push, 86eyf1rck): the buyer completes
+	// checkout ON the page — name + phone, no account — the order is confirmed
+	// at create, and Kedaipal's WABA pushes the confirmation INTO their chat.
+	// The old buyer-sent "here's my order" wa.me bubble is the LEGACY fallback
+	// and no longer the story this step tells (owner-caught, 29 Aug).
 	return (
 		<div
 			aria-hidden="true"
-			className="mx-auto flex w-full max-w-[340px] rotate-1 flex-col gap-2.5 rounded-[20px] bg-[#ECE5DD] p-4 shadow-xl"
+			className="mx-auto flex w-full max-w-[340px] flex-col gap-3"
 		>
-			<div className="max-w-[85%] self-end rounded-xl rounded-tr-sm bg-[#DCF8C6] px-3 py-2 shadow-sm">
-				<p className="text-[12.5px] leading-relaxed text-slate-800">
-					{m.how_mockup_3_greeting()}
+			{/* The checkout card — Kedaipal UI, so theme tokens. */}
+			<div className="-rotate-1 rounded-2xl border border-border bg-card p-4 shadow-xl">
+				<p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+					{m.how_mockup_3_checkout_label()}
 				</p>
-				<p className="mt-1.5 text-[12.5px] font-bold leading-relaxed text-slate-800">
-					{m.how_mockup_3_order_id()}
-				</p>
-				<p className="text-[12.5px] leading-relaxed text-slate-800">
-					{m.how_mockup_3_item()}
-					<br />
-					{m.how_mockup_3_total()}
-					<br />
-					{m.how_mockup_3_payment()}
-				</p>
-				<p className="mt-1 text-right text-[9px] text-slate-500">10:02 AM ✓✓</p>
+				<div className="mt-2 flex items-center justify-between text-[12.5px]">
+					<span className="text-muted-foreground">
+						{m.how_mockup_3_item()}
+					</span>
+					<span className="font-bold">{m.how_mockup_3_total()}</span>
+				</div>
+				<div className="mt-2.5 flex flex-col gap-1.5">
+					<span className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-[12px] text-foreground/80">
+						Aisyah Rahim
+					</span>
+					<span className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-[12px] text-foreground/80">
+						+60 12-338 1122
+					</span>
+				</div>
+				<span className="mt-3 flex h-9 items-center justify-center rounded-full bg-accent text-[12.5px] font-bold text-accent-foreground">
+					{m.how_mockup_3_place_order()}
+				</span>
 			</div>
-			<div className="max-w-[85%] self-start rounded-xl rounded-tl-sm bg-white px-3 py-2 shadow-sm">
-				<p className="text-[12.5px] leading-relaxed text-slate-800">
-					{m.how_mockup_3_confirm_line1()}
-				</p>
-				<p className="mt-1.5 text-[12.5px] leading-relaxed text-sky-600">
-					{m.how_mockup_3_confirm_line2()}
-				</p>
-				<p className="mt-1 text-right text-[9px] text-slate-500">10:02 AM</p>
+
+			{/* …and the confirmation arriving in the buyer's WhatsApp — incoming,
+			    from Kedaipal, not something the buyer had to send. */}
+			<div className="rotate-1 rounded-[20px] bg-[#ECE5DD] p-3.5 shadow-xl">
+				<div className="max-w-[92%] self-start rounded-xl rounded-tl-sm bg-white px-3 py-2 shadow-sm">
+					<p className="text-[12.5px] leading-relaxed text-slate-800">
+						{m.how_mockup_3_confirm_line1()}
+					</p>
+					<p className="mt-1.5 text-[12.5px] leading-relaxed text-sky-600">
+						{m.how_mockup_3_confirm_line2()}
+					</p>
+					<p className="mt-1 text-right text-[9px] text-slate-500">10:02 AM</p>
+				</div>
 			</div>
 		</div>
 	);

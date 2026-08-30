@@ -29,6 +29,44 @@ The product owner is the **CTO / sole dev**; decisions we make together should p
 - **Always ship code + tests + docs together** as the baseline (see existing memory). Tests prove the easement holds; docs keep the next person oriented.
 - **No lazy / convenient placement — own the structure.** Never park a feature wherever code already happens to exist, append a new option to the end of a list, or reuse the nearest tab/section just because it's less work. Decide _where_ something belongs (information architecture, tab/section, list position, naming) by **meaning and urgency**, and proactively restructure when the right home doesn't exist yet (e.g. a new settings tab). The CTO should not have to point out that an order-flow setting doesn't belong under "WhatsApp", or that an urgent filter shouldn't sit last — get it right the first time and state the reasoning. When you touch adjacent lazy patterns (hardcoded duplicates, stale copy), fix them in passing rather than matching them.
 
+## Ship grade-A UI the FIRST time — no "we'll polish it later"
+
+**Standing rule, every UI change, no exceptions.** A UI that merely works is not
+done. Shipping functional-but-unconsidered UI and waiting for the CTO to say
+"that's ugly" has happened repeatedly (the inbox toolbar, the filter dialog, the
+column picker) and each time cost a second round that should never have existed.
+**The design pass happens before it is called done, not after someone complains.**
+
+- **Look at it.** [`docs/design-system.md`](./docs/design-system.md) already says
+  Tailwind written blind is a guess — render it and *see* it. If a surface is
+  behind Clerk and can't be reached, build a harness or inject the real classes
+  into a running page. "I couldn't see it" is not a reason to ship it unseen.
+- **Design the states, not just the happy path.** Empty, loading, one item, too
+  many items, zero results, error, disabled-with-reason. A feature that only
+  looks right with three rows of ideal data is half-built.
+- **Bulk affordances are part of the design, not an enhancement.** Any list of
+  more than ~5 tickable things needs select-all / clear, and per-group controls
+  wherever the list has groups. Making someone click 22 checkboxes by hand is a
+  design failure, not a missing feature request.
+- **A parent that summarises children is TRI-STATE.** All / none / some — with a
+  real indeterminate mark and `aria-checked="mixed"`. A parent box that reads
+  unchecked while 3 of 7 children are on is telling the user something false.
+- **One idea, one control.** If two surfaces express the same concept, they use
+  the same component. Chips in one panel and checkbox rows in another for the
+  identical filter is how an app starts looking like two apps.
+- **Actions carry their consequence.** "Reset" doesn't say what it undoes;
+  "Clear all (3)" does. "Done" doesn't say what happens; "Show 6 orders" does.
+  Panels state what is currently on, at the top, removable in place.
+- **A constraint is surfaced, never enforced silently.** If the last column
+  can't be hidden, say so where the seller is clicking — don't just make the
+  click do nothing.
+- **Match the house.** Reach for `src/components/ui/` primitives before writing
+  markup; semantic tokens, never raw colors; ≥44px touch targets; the mobile
+  layout is designed, not inherited.
+
+If a change genuinely warrants mockups (a new surface, a redesign), produce them
+and ask — that is not slowing down, it is the cheaper half of the loop.
+
 ## Definition of Done — ship PR-ready, every time
 
 Every change must land in a state that would **pass PR review on the first read**, so review becomes a rubber-stamp, not a rework loop. Before calling anything done, it must clear this bar — no "I'll clean it up later":
@@ -37,11 +75,41 @@ Every change must land in a state that would **pass PR review on the first read*
 - **Code + tests + docs in the same change** (existing baseline). Tests cover the happy path _and_ the failure/edge states the change introduces; docs (`docs/*.md` + any CLAUDE.md status line) keep the next person oriented.
 - **Green gates:** typecheck, lint, and the full test suite pass locally before it's "done" (run `/ship` or the equivalent). No new warnings introduced. No `any`/`@ts-ignore`/dead code/commented-out blocks/stray `console.log` left behind.
 - **End-to-end human flow covered** (per "How we decide"): every new state has UI/copy/email/bot-reply on both sides, sensible defaults, disabled-with-reason over wrong-but-enabled, and the feature is discoverable where it's used.
+- **UI changes clear the grade-A bar above** before "done" — states designed,
+  bulk affordances present, controls consistent with the rest of the app, and
+  actually looked at. A UI round-trip because it shipped unconsidered is a
+  failed Definition of Done, not normal iteration.
 - **Self-review the diff** as a reviewer would: naming and structure match surrounding code, no scope creep, no unrelated churn, migrations are safe (widen→migrate→narrow), secrets/prod untouched. If something is a deliberate trade-off or a follow-up, **call it out in the summary** rather than leaving it for review to catch.
 - **Branch from `staging`, never `main`.** Every new branch/worktree bases on `origin/staging` (fetch it first — e.g. `git worktree add -b <branch> <path> origin/staging`). `main` is downstream of `staging`; branching off `main` also leaves the branch tracking `origin/main`, so a bare `git push` can land on main. After the first push, confirm the upstream tracks the **feature branch**, not `origin/main`/`origin/staging`. Never push directly to `main` or `staging`.
 - **Convex specifics:** new validators/indexes are correct and used; reads stay on indexes (no full scans on hot paths); schema changes follow the dev-only, migration-safe path.
 
 The goal: when a change is handed over, the reviewer finds nothing to send back. If a gap is unavoidable, name it up front — don't make review discover it.
+
+## Releasing — touching `releases.ts` means running the release checklist
+
+**Standing rule. Never wait to be asked.** Seller-facing release notes are only
+ever written for a **staging→main merge**, so any request to "update the release
+notes" / "add what's new" IS a request to prepare a release — and a release has
+operator work attached to it. Treat the two as one task:
+
+1. **Write the notes** in [`src/content/releases.ts`](./src/content/releases.ts),
+   newest first, every entry declaring its `kind` (New feature / Enhancement /
+   Bug fix — required by the type, so it's a compile error, not a reminder).
+2. **Bump `package.json`** to the version the notes claim. A test enforces it,
+   because notes ahead of the running version are filtered out silently and the
+   release would announce nothing while looking like it worked.
+3. **Audit `git diff origin/main..origin/staging`** for everything a human must
+   do by hand — **env vars, backfills/migrations, schema and index changes,
+   crons, new HTTP routes, Meta template approvals, third-party account setup,
+   a `PRIVACY_VERSION` bump, plan-gating moves that take a capability away.**
+4. **Write the findings into the release PR body**, every category listed —
+   **including the ones that are empty.** "Env vars: none" is the information.
+   The person merging must never have to ask "is there anything for me to do?".
+
+The full table of checks, the exact grep for each, and the order of operations
+(env vars *before* the merge, backfills *after* the deploy, tag last) live in
+[`docs/release-checklist.md`](./docs/release-checklist.md). Read it before
+opening a release PR.
 
 ## WhatsApp Model — Shared WABA (permanent)
 

@@ -17,6 +17,7 @@ import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
 import { generateTrackingToken } from "./lib/order";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
+import { createCategoryNameMemo, resolveCategoryNames } from "./orders";
 
 const BATCH_SIZE = 50;
 
@@ -220,6 +221,75 @@ export const backfillCounterPaymentMethod = internalMutation({
 			await ctx.scheduler.runAfter(
 				0,
 				internal.migrations.backfillCounterPaymentMethod,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Stamp `orders.items[].categoryNames` on orders that predate the field
+ * (86eyrtz74).
+ *
+ * New orders freeze their categories at checkout, so the inbox table, the CSV
+ * export and free-text search all read them for free. Orders placed before that
+ * shipped have nothing to read, and would show a blank Categories cell forever.
+ *
+ * **This necessarily stamps TODAY's categorisation.** There is no record of
+ * what a product was filed under last March, so a historical order gets the
+ * catalogue as it stands the moment this runs — the one thing freezing exists
+ * to avoid. That is an accepted trade for a one-time, manually-invoked catch-up
+ * (a permanently empty column is worse than an approximate one), and it is why
+ * this is a `npx convex run` and not something the app ever does by itself.
+ * Everything from here on is exact.
+ *
+ * Idempotent: an order whose every line already carries the field is skipped,
+ * so a second run is a no-op and a re-run after a crash resumes cleanly. The
+ * order's `updatedAt` is deliberately NOT bumped — recording metadata about a
+ * sale is not a change to the sale, and bumping it would make every order in
+ * the store look freshly touched.
+ *
+ * Batched + self-scheduling, with one products/categories cache per batch so a
+ * store selling the same 40 products across 500 orders reads each of them once
+ * per batch rather than once per order.
+ *
+ * Run: `npx convex run migrations:backfillOrderCategoryNames`
+ */
+export const backfillOrderCategoryNames = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		const memo = createCategoryNameMemo();
+		let patched = 0;
+		for (const order of page.page) {
+			// Fully stamped already → nothing to do. `every`, not `some`: a
+			// partially stamped order (an interrupted run, an order whose lines were
+			// edited) still deserves finishing.
+			if (order.items.every((i) => i.categoryNames !== undefined)) continue;
+			const names = await resolveCategoryNames(
+				ctx,
+				order.items.map((i) => i.productId),
+				memo,
+			);
+			await ctx.db.patch(order._id, {
+				items: order.items.map((i) => ({
+					...i,
+					// Existing stamps win — this fills gaps, it never re-dates a line
+					// that already carries its own record.
+					categoryNames: i.categoryNames ?? names.get(i.productId) ?? [],
+				})),
+			});
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillOrderCategoryNames,
 				{ cursor: page.continueCursor },
 			);
 		}

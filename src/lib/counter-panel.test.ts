@@ -44,7 +44,11 @@ describe("counterPrimaryAction", () => {
 	});
 
 	test("an unpriced line blocks SEND only — a claim freezes prices at send", () => {
-		const send = counterPrimaryAction({ ...base, mode: "send", unpriced: true });
+		const send = counterPrimaryAction({
+			...base,
+			mode: "send",
+			unpriced: true,
+		});
 		expect(send.disabled).toBe(true);
 		expect(send.reason).toMatch(/price for every custom item/i);
 		// The counter path resolves price at create and reviews it in its own
@@ -75,6 +79,8 @@ describe("counterPrimaryAction", () => {
 	});
 
 	test("the counter path carries no helper line — it needs no explaining", () => {
-		expect(counterPrimaryAction({ ...base, mode: "counter" }).helper).toBeUndefined();
+		expect(
+			counterPrimaryAction({ ...base, mode: "counter" }).helper,
+		).toBeUndefined();
 	});
 });

@@ -159,7 +159,9 @@ export function WaitingOnBuyerScreen({
 				<div className="flex items-center justify-between text-sm">
 					{/* "Locked total", not "Total": the buyer adds delivery on their own
 					    page, so this figure is the commitment, not the final bill. */}
-					<span className="font-medium text-muted-foreground">Locked total</span>
+					<span className="font-medium text-muted-foreground">
+						Locked total
+					</span>
 					<span className="text-lg font-bold tabular-nums">
 						{formatPrice(claim.itemsTotal, claim.currency)}
 					</span>

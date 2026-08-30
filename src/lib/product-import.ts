@@ -35,10 +35,10 @@ export const PRODUCT_IMPORT_OPTIONAL_COLUMNS = ["sku", "description"] as const;
 const EXPORT_ONLY_COLUMN_NAMES = [
 	"currency",
 	"categories",
-	"product_status",
-	// NOTE: `variant_status` is deliberately NOT here — it is the one report
-	// column the import reads back, to keep a round-trip from resurrecting
-	// deactivated variants. See VariantImportRow.active.
+	// NOTE: `variant_status` and `product_status` are deliberately NOT here —
+	// they are the two report columns the import reads back, so a round-trip
+	// cannot resurrect a deactivated variant or an archived product. See
+	// VariantImportRow.active / .productActive.
 	"storefront",
 	"product_url",
 	"min_order_qty",
@@ -292,6 +292,16 @@ export interface VariantImportRow {
 	 * existing product's variant state is untouched either way.
 	 */
 	active: boolean;
+	/**
+	 * Read from the export's `product_status` column (86eyrtz74) — the sibling
+	 * of `active` above, and there for exactly the same reason. Absent column or
+	 * any value other than "archived" → true.
+	 *
+	 * A product-level flag on a VARIANT row because that is the grain the sheet
+	 * has; the grouping takes it from the first row of each product, the same
+	 * way `name` and `description` are taken.
+	 */
+	productActive: boolean;
 }
 
 export interface GroupedVariant {
@@ -306,6 +316,10 @@ export interface GroupedVariant {
 export interface GroupedProductImport {
 	name: string;
 	description: string | undefined;
+	/** From the export's `product_status` (86eyrtz74). Consumed on the CREATE
+	 * path only — the update path never patches `active`, so an existing
+	 * product's archived state is untouched by an import either way. */
+	active: boolean;
 	options: { name: string; values: string[] }[];
 	variants: GroupedVariant[];
 	autoFilledCount: number;
@@ -430,6 +444,10 @@ export function validateVariantRow(
 	// missing column, "active", junk) reads as active, so a malformed cell can
 	// never silently hide a variant the seller meant to sell.
 	const active = (raw.variant_status ?? "").trim().toLowerCase() !== "inactive";
+	// Same rule for the product's own status: only the exact word "archived"
+	// switches it off, so a malformed cell can never silently hide a product.
+	const productActive =
+		(raw.product_status ?? "").trim().toLowerCase() !== "archived";
 	return {
 		rowNumber,
 		groupingKey,
@@ -442,6 +460,7 @@ export function validateVariantRow(
 		onHand,
 		parcelWeightG,
 		active,
+		productActive,
 	};
 }
 
@@ -663,6 +682,10 @@ export function groupVariantRows(
 		products.push({
 			name,
 			description,
+			// Product-level, so taken from the group's first row like name and
+			// description. A sheet that disagrees row-to-row is a sheet whose
+			// product-level cells disagree; first-row-wins is already the rule.
+			active: first.productActive,
 			options: axes.options,
 			variants: grid.variants,
 			autoFilledCount: grid.autoFilled,

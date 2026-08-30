@@ -1,9 +1,5 @@
-import type { PaymentGroupId, PaymentMethod } from "../../lib/payment-methods";
-import {
-	compactMethods,
-	methodsInGroup,
-	PAYMENT_GROUP_ORDER,
-} from "../../lib/payment-methods";
+import type { PaymentMethod } from "../../lib/payment-methods";
+import { compactMethods, PAYMENT_METHODS } from "../../lib/payment-methods";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
@@ -11,36 +7,39 @@ import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
 
 /**
- * "Your customers pay the way they already do" — the payment-methods strip
- * (ClickUp 86eye3p6z §G). Sits directly under the money-math block so the
- * 0%-cut argument and the rails land in one eyeline, with a compact repeat in
- * the footer.
+ * "Your customers pay the way they already do" — the payment-methods wall
+ * (ClickUp 86eye3p6z §G, animated 29 Aug per Arif's Mobbin reference: the
+ * slow logo rows under "Your AI agents are guessing"). Sits directly under
+ * the money-math block so the 0%-cut argument and the rails land in one
+ * eyeline, with a compact repeat in the footer.
+ *
+ * Two auto-scrolling rows in opposite directions replace the old static
+ * grouped rows; hovering a row pauses it (the pause is on the row, not the
+ * pill, so a reader can chase a logo without it escaping). Reduced motion
+ * stops both rows via the shared `animate-kp-marquee*` utilities.
  *
  * Every mark rides a white pill in BOTH themes on purpose: official brand
  * marks may not be recoloured, and most carry their own colours, so a white
  * ground is the only treatment that stays legible and compliant when the page
  * flips to dark. Methods we hold no brand-approved SVG for render as neutral
  * wordmark chips — uniform weight beats a ransom-note row of mismatched logos,
- * and a plain-text name can't breach a brand guideline.
- *
- * The catalogue itself lives in `src/lib/payment-methods.ts`.
+ * and a plain-text name can't breach a brand guideline. The catalogue itself
+ * lives in `src/lib/payment-methods.ts`, and the ONLY sanctioned mark source
+ * stays the MIT `payment_icons` set — the wall animates what we may show, it
+ * never becomes a reason to pull stray logos off the web.
  */
 
-const GROUP_LABEL: Record<PaymentGroupId, () => string> = {
-	bank: m.pay_group_bank,
-	cards: m.pay_group_cards,
-	wallets: m.pay_group_wallets,
-	bnpl: m.pay_group_bnpl,
-	crossborder: m.pay_group_crossborder,
-};
-
-/** White pill shared by marks and wordmarks so every chip has one silhouette.
- * `shrink-0` because below `lg` each group's chips ride a one-line horizontal
- * scroller (see the row classes) — a shrinking pill squashes its mark. */
+/** White pill shared by marks and wordmarks so every chip has one silhouette. */
 const pillClass =
-	"inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-white shadow-sm";
+	"inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-white shadow-sm transition-transform duration-200 hover:-translate-y-0.5";
 
-function MethodChip({ method }: { method: PaymentMethod }) {
+function MethodChip({
+	method,
+	hidden = false,
+}: {
+	method: PaymentMethod;
+	hidden?: boolean;
+}) {
 	if (!method.src) {
 		return (
 			<span
@@ -54,7 +53,9 @@ function MethodChip({ method }: { method: PaymentMethod }) {
 		<span className={cn(pillClass, "h-11 px-4")}>
 			<AppImage
 				src={method.src}
-				alt={method.name}
+				// The duplicated marquee copy is aria-hidden at the row level; empty
+				// alt there keeps the names from being announced twice.
+				alt={hidden ? "" : method.name}
 				aspect={method.markClass ?? "h-5 w-auto"}
 				fill={false}
 			/>
@@ -67,11 +68,45 @@ function MethodChip({ method }: { method: PaymentMethod }) {
 	);
 }
 
+function WallRow({
+	methods,
+	reverse = false,
+}: {
+	methods: PaymentMethod[];
+	reverse?: boolean;
+}) {
+	const chips = (hidden: boolean) => (
+		<div
+			aria-hidden={hidden || undefined}
+			className="flex shrink-0 items-center gap-2.5 pr-2.5"
+		>
+			{methods.map((method) => (
+				<MethodChip key={method.id} method={method} hidden={hidden} />
+			))}
+		</div>
+	);
+	return (
+		<div className="flex overflow-hidden py-1">
+			<div
+				className={cn(
+					"flex hover:[animation-play-state:paused]",
+					reverse ? "animate-kp-marquee-slow-reverse" : "animate-kp-marquee-slow",
+				)}
+			>
+				{chips(false)}
+				{chips(true)}
+			</div>
+		</div>
+	);
+}
+
 export function PaymentMethods() {
-	const groups = PAYMENT_GROUP_ORDER.map((id) => ({
-		id,
-		methods: methodsInGroup(id),
-	})).filter((g) => g.methods.length > 0);
+	// Interleave the visible catalogue across the two rows so each row mixes
+	// banks, cards and wallets — a themed row would just be the old grouped
+	// layout wearing an animation.
+	const visible = PAYMENT_METHODS.filter((mth) => mth.visible);
+	const rowA = visible.filter((_, i) => i % 2 === 0);
+	const rowB = visible.filter((_, i) => i % 2 === 1);
 
 	return (
 		<section
@@ -97,28 +132,19 @@ export function PaymentMethods() {
 				</FadeIn>
 
 				<FadeIn delay={0.1}>
-					{/* Label above the row until lg, beside it after — the house rule
-					    for inner multi-column layouts, so 375px never cramps. */}
-					<div className="mx-auto mt-10 flex max-w-4xl flex-col gap-6 md:mt-12">
-						{groups.map((group) => (
-							<div
-								key={group.id}
-								className="flex flex-col gap-3 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-center lg:gap-5"
-							>
-								<p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground lg:text-right">
-									{GROUP_LABEL[group.id]()}
-								</p>
-								{/* Below lg each group is ONE swipeable line (full-bleed, the
-								    category-rail scroller mechanics) instead of wrapping to
-								    2–3 rows — the mobile page was far too tall. At lg the
-								    label sits beside the row and the chips wrap again. */}
-								<div className="-mx-5 flex gap-2.5 overflow-x-auto px-5 [scrollbar-width:none] md:-mx-8 md:px-8 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
-									{group.methods.map((method) => (
-										<MethodChip key={method.id} method={method} />
-									))}
-								</div>
-							</div>
-						))}
+					{/* The wall bleeds to the section edges with soft fade masks so the
+					    rows read as passing through the page, not clipped by it. */}
+					<div
+						className="mt-10 flex flex-col gap-3 md:mt-12"
+						style={{
+							maskImage:
+								"linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
+							WebkitMaskImage:
+								"linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
+						}}
+					>
+						<WallRow methods={rowA} />
+						<WallRow methods={rowB} reverse />
 					</div>
 				</FadeIn>
 

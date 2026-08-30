@@ -13,12 +13,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
@@ -1131,9 +1131,8 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("custom", 0, "price")} />
 						<span className="text-xs font-normal text-muted-foreground">
-							Buyers see “From {currency} …”, so they know the final price
-							comes with the mockup. Leave blank to show “Price on quote”
-							instead.
+							Buyers see “From {currency} …”, so they know the final price comes
+							with the mockup. Leave blank to show “Price on quote” instead.
 						</span>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
