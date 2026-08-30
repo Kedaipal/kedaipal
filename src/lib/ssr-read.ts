@@ -15,9 +15,7 @@
  * `null` a query returns for a bad token would 404 a valid order on a blip,
  * which is a worse confusion than the error page it replaces.
  */
-export type SsrRead<T> =
-	| { ok: true; value: T }
-	| { ok: false };
+export type SsrRead<T> = { ok: true; value: T } | { ok: false };
 
 export async function ssrRead<T>(run: () => Promise<T>): Promise<SsrRead<T>> {
 	try {

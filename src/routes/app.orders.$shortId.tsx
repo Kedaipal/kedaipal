@@ -19,8 +19,8 @@ import {
 	MapPin,
 	MessageCircle,
 	Package,
-	Pin,
 	Phone,
+	Pin,
 	StickyNote,
 	Trash2,
 	Truck,
@@ -30,6 +30,7 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	DAY_MS,
@@ -46,19 +47,14 @@ import {
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
-import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
+import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
-import {
-	attributionBucket,
-	sourceLabel,
-} from "../../convex/lib/attribution";
 import { ProBadge } from "../components/app/pro-gate";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
@@ -111,6 +107,7 @@ import {
 	parsePriceInput,
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	anchorOrdinal,
 	displayStatusLabel,
@@ -663,7 +660,10 @@ function OrderDetailRoute() {
 			onClick={() => void togglePin()}
 		>
 			<Pin
-				className={cn("size-4.5", isPinned && "text-accent-emphasis dark:text-accent")}
+				className={cn(
+					"size-4.5",
+					isPinned && "text-accent-emphasis dark:text-accent",
+				)}
 				fill={isPinned ? "currentColor" : "none"}
 				aria-hidden="true"
 			/>
@@ -1258,20 +1258,23 @@ function OrderDetailRoute() {
 									return (
 										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
 											Kedaipal doesn't chase payment for you — how to pay is
-											always on the buyer's order page. If this is still
-											unpaid on day 11, a "Send payment reminder" button
-											unlocks here ({blocked.unlockAt ? formatUntil(blocked.unlockAt) : "later"}); until then, nudge them yourself with
-											the WhatsApp button below.
+											always on the buyer's order page. If this is still unpaid
+											on day 11, a "Send payment reminder" button unlocks here (
+											{blocked.unlockAt
+												? formatUntil(blocked.unlockAt)
+												: "later"}
+											); until then, nudge them yourself with the WhatsApp
+											button below.
 										</p>
 									);
 								}
 								if (blocked?.reason === "window_closed") {
 									return (
 										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
-											The reminder window has closed — this order is past day
-											14 unpaid, which is beyond a nudge. Settle it with the
-											buyer directly (the WhatsApp button below), then mark
-											payment received — or cancel the order.
+											The reminder window has closed — this order is past day 14
+											unpaid, which is beyond a nudge. Settle it with the buyer
+											directly (the WhatsApp button below), then mark payment
+											received — or cancel the order.
 										</p>
 									);
 								}
@@ -1440,9 +1443,7 @@ function OrderDetailRoute() {
 							{brand ? (
 								<brand.Icon className={cn("size-4", brand.colorClass)} />
 							) : null}
-							<span className="text-sm font-medium">
-								{sourceLabel(bucket)}
-							</span>
+							<span className="text-sm font-medium">{sourceLabel(bucket)}</span>
 						</>
 					);
 					return (
@@ -2032,8 +2033,8 @@ function OrderDetailRoute() {
 				title={`Cancel order #${order.shortId}?`}
 				description={
 					hasActiveRiderBooking
-					? `Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-					: "Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page."
+						? `Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
+						: "Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page."
 				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
@@ -2234,8 +2235,8 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
 				{FEE_PENDING_REASON_COPY[order.deliveryFeePendingReason ?? "unknown"]}{" "}
 				Agree it with the buyer on WhatsApp, then set it here — the new total
-				shows on their order page, where their confirmation message already
-				sent them. No further WhatsApp goes out. Enter 0 to deliver free.
+				shows on their order page, where their confirmation message already sent
+				them. No further WhatsApp goes out. Enter 0 to deliver free.
 			</p>
 			<div className="flex items-end gap-2">
 				<div className="relative flex-1">

@@ -24,9 +24,9 @@ const signedIn = (subscription: SubscriptionView | null) => ({
 describe("resolveTierCta", () => {
 	it("Scale is always a Coming soon pill, whatever the auth/plan state", () => {
 		const scaleOpts = { isScale: true, isSignedIn: true };
-		expect(
-			resolveTierCta("scale", { ...scaleOpts, subscription: null }),
-		).toBe("coming_soon");
+		expect(resolveTierCta("scale", { ...scaleOpts, subscription: null })).toBe(
+			"coming_soon",
+		);
 		expect(
 			resolveTierCta("scale", {
 				isScale: true,
@@ -85,12 +85,12 @@ describe("resolveTierCta", () => {
 	it("comped accounts own their tier (Current), even if status isn't active", () => {
 		// Fail-open missing row resolves to plan:pro/active/comped; a real comp may
 		// carry any status. comped === full access → Current, not Subscribe.
-		expect(
-			resolveTierCta("pro", signedIn(sub("pro", "trialing", true))),
-		).toBe("current");
-		expect(resolveTierCta("starter", signedIn(sub("pro", "active", true)))).toBe(
-			"manage",
+		expect(resolveTierCta("pro", signedIn(sub("pro", "trialing", true)))).toBe(
+			"current",
 		);
+		expect(
+			resolveTierCta("starter", signedIn(sub("pro", "active", true))),
+		).toBe("manage");
 	});
 
 	it("an active seller sees Upgrade on a higher tier, Manage on a lower one", () => {

@@ -81,7 +81,10 @@ function importedNames(source: string): string[] {
 		for (const raw of match[1].split(",")) {
 			// Normalise `type useQuery` and `useQuery as useConvexQuery` — an alias
 			// still binds the banned hook, so the local name is irrelevant.
-			const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0];
+			const name = raw
+				.trim()
+				.replace(/^type\s+/, "")
+				.split(/\s+as\s+/)[0];
 			if (name) names.push(name);
 		}
 	}
@@ -115,7 +118,7 @@ describe("frontend Convex reads use the TanStack adapter", () => {
 				"Use the adapter instead:",
 				'  import { convexQuery } from "@convex-dev/react-query";',
 				'  import { useQuery } from "@tanstack/react-query";',
-				"  const thing = useQuery(convexQuery(api.x.y, cond ? args : \"skip\")).data;",
+				'  const thing = useQuery(convexQuery(api.x.y, cond ? args : "skip")).data;',
 				"",
 				'Keep "skip" verbatim inside convexQuery (never hoist it to `enabled:`),',
 				"and unwrap into a named `.data` variable so undefined-means-loading and",

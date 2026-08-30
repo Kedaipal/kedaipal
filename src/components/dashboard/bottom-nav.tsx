@@ -123,7 +123,7 @@ export function BottomNav({
 					// inbox would make the seller re-find it. Only when there IS
 					// something new: otherwise the tab would filter the inbox down to
 					// an empty "New" list every time it's used for plain navigation.
-					search: newOrdersCount > 0 ? { bucket: "new" as const } : undefined,
+					search: newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
 				},
 				{ to: "/app/checkout", label: "Counter", icon: QrCode },
 				{
@@ -323,11 +323,7 @@ function MoreTab({
 						{/* `close` so shutting the notes returns the seller to the page
 						    they were on, not to a still-open More sheet — every sibling
 						    row here already closes it. */}
-						<WhatsNewNavItem
-							variant="row"
-							className="flex-1"
-							onOpen={close}
-						/>
+						<WhatsNewNavItem variant="row" className="flex-1" onOpen={close} />
 						{/* No extra right padding: the pill's 44px touch target already
 						    insets it from the panel edge, and `pr-3` on top pushed it
 						    visually adrift of the rows above. */}

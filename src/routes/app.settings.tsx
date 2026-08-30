@@ -2,7 +2,6 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	ArrowLeft,
 	CalendarRange,
@@ -94,6 +93,7 @@ import {
 	scrollToAnchor,
 } from "../lib/country-setup-copy";
 import { convexErrorMessage } from "../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,

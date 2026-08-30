@@ -177,8 +177,8 @@ export function ClaimSendNotice({
 		);
 	return (
 		<p className={amber}>
-			The WhatsApp message couldn&apos;t be delivered — copy the link and send it
-			to them yourself. The link (and its deadline) still works.
+			The WhatsApp message couldn&apos;t be delivered — copy the link and send
+			it to them yourself. The link (and its deadline) still works.
 		</p>
 	);
 }

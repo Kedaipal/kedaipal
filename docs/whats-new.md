@@ -8,6 +8,12 @@ Sellers previously had **no way to know when we shipped something**. Features
 landed and nobody was told — which contradicts the standing rule in `CLAUDE.md`
 that a feature nobody is told about is a missing piece of UI, not a shipped one.
 
+> **Writing a note means a release is going out.** Editing
+> `src/content/releases.ts` is the signal that a staging→main merge is imminent,
+> which carries operator work — version bump, env vars, backfills, settings.
+> Run [`release-checklist.md`](./release-checklist.md) as part of the same
+> change.
+
 ## Two surfaces, one source
 
 | surface | when | why |
@@ -81,8 +87,46 @@ worse than no entry at all. Keep them apart.
    `search={{ tab: "store" }}` form used elsewhere in the app; the panel takes
    the string form because a release entry is data, not JSX.
 5. Set `notable: true` only if the change alters how the seller works.
-6. **Most releases earn no entry at all.** An empty release is simply absent
+6. **Declare the `kind`** — see below. Required, so this is a compile error.
+7. **Most releases earn no entry at all.** An empty release is simply absent
    from the array — nothing shown, nothing stamped.
+
+### Every entry declares its kind
+
+`kind: "feature" | "enhancement" | "fix"` renders as a chip above the title —
+**New feature**, **Enhancement**, **Bug fix**.
+
+It is **required**, not optional. A panel where some entries carry a label and
+some don't reads as a rendering bug, and the label is the first thing a seller
+scans for: *did something break and get fixed, or is there something new for me
+to learn?* Making it a compile error is the only thing that keeps that true for
+every future entry.
+
+**Three kinds, deliberately not more.** Performance / security / copy /
+accessibility is an engineering taxonomy. A seller sorts changes into exactly
+three buckets: something I can now do, something that got better, something
+that was wrong and no longer is.
+
+**Judge it from the seller's side, not the diff's.** A change that only stopped
+something being wrong is a `fix` however much code it took — the frozen-category
+work rewrote the schema and is still a `fix`, because what the seller gets is
+"my old orders stopped lying". A change that lets them do something they could
+not do before is a `feature` however small the diff.
+
+| kind | chip | reach for it when |
+| --- | --- | --- |
+| `feature` | mint | the seller can do something that was not possible before |
+| `enhancement` | navy | something they already did got faster, clearer or wider |
+| `fix` | grey | something was wrong, and now behaves as they always expected |
+
+A `fix` chip is deliberately **not** `destructive` red. Red reads as *"something
+is wrong here"* — the opposite of what a fix is telling them — and would make a
+release of good news look like an incident report.
+
+The chip sits on its **own line above the title**, not inline with it: a seller
+opening the panel is answering "is there anything new here?" before reading a
+single heading, and a column of labels down the left edge answers that in one
+pass. Inline, it would also push every long title into an extra wrap on a phone.
 
 ### When the version isn't known yet — author in the release PR
 

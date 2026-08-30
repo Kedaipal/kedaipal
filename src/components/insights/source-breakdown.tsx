@@ -23,8 +23,7 @@ export function SourceBreakdown({
 	currency: string;
 }) {
 	const ranked = sources.slice(0, DISPLAY_LIMIT);
-	const max =
-		ranked.length > 0 ? Math.max(...ranked.map((s) => s.revenue)) : 0;
+	const max = ranked.length > 0 ? Math.max(...ranked.map((s) => s.revenue)) : 0;
 	// Only "direct"/"counter" rows means no tagged link produced an order yet —
 	// surface the how-to instead of a one-row chart stating the obvious.
 	const hasTaggedOrders = sources.some(

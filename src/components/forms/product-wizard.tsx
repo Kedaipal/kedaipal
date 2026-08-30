@@ -45,9 +45,9 @@ import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
+	emptyCustomLine,
 	emptyRow,
 	FulfilmentToggle,
-	emptyCustomLine,
 	isMadeToOrderOnly,
 	PriceInput,
 	rebuildRows,
@@ -1634,9 +1634,8 @@ export function ProductWizard({
 								<p className="-mt-2 text-sm text-muted-foreground">
 									Optional. Leave it blank and buyers see &ldquo;Price on
 									quote&rdquo; — you set the real price when you send them a
-									mockup. Enter an amount and buyers see &ldquo;From{" "}
-									{currency} …&rdquo;, so nobody mistakes it for the final
-									price.
+									mockup. Enter an amount and buyers see &ldquo;From {currency}{" "}
+									…&rdquo;, so nobody mistakes it for the final price.
 								</p>
 								<label className="flex items-center gap-3 text-sm font-medium">
 									<span className="min-w-0 flex-1 truncate">
