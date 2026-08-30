@@ -56,6 +56,7 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 
 | Doc | What it covers |
 |---|---|
+| [release-checklist.md](./release-checklist.md) | **Run this whenever `src/content/releases.ts` is touched.** Editing the release notes means a staging→main deploy is imminent: bump the version, then audit the diff for env vars, backfills, schema/index changes, crons, Meta templates and plan-gating moves, and write the findings — including "none" — into the release PR. |
 | [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
 
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

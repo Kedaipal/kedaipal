@@ -85,6 +85,32 @@ Every change must land in a state that would **pass PR review on the first read*
 
 The goal: when a change is handed over, the reviewer finds nothing to send back. If a gap is unavoidable, name it up front — don't make review discover it.
 
+## Releasing — touching `releases.ts` means running the release checklist
+
+**Standing rule. Never wait to be asked.** Seller-facing release notes are only
+ever written for a **staging→main merge**, so any request to "update the release
+notes" / "add what's new" IS a request to prepare a release — and a release has
+operator work attached to it. Treat the two as one task:
+
+1. **Write the notes** in [`src/content/releases.ts`](./src/content/releases.ts),
+   newest first, every entry declaring its `kind` (New feature / Enhancement /
+   Bug fix — required by the type, so it's a compile error, not a reminder).
+2. **Bump `package.json`** to the version the notes claim. A test enforces it,
+   because notes ahead of the running version are filtered out silently and the
+   release would announce nothing while looking like it worked.
+3. **Audit `git diff origin/main..origin/staging`** for everything a human must
+   do by hand — **env vars, backfills/migrations, schema and index changes,
+   crons, new HTTP routes, Meta template approvals, third-party account setup,
+   a `PRIVACY_VERSION` bump, plan-gating moves that take a capability away.**
+4. **Write the findings into the release PR body**, every category listed —
+   **including the ones that are empty.** "Env vars: none" is the information.
+   The person merging must never have to ask "is there anything for me to do?".
+
+The full table of checks, the exact grep for each, and the order of operations
+(env vars *before* the merge, backfills *after* the deploy, tag last) live in
+[`docs/release-checklist.md`](./docs/release-checklist.md). Read it before
+opening a release PR.
+
 ## WhatsApp Model — Shared WABA (permanent)
 
 Kedaipal owns **one Meta-verified WhatsApp Business Account** that handles outbound messaging for every retailer. Retailers do NOT need their own WABA, business verification, or SSM registration. Retailer brand surfaces via `{store_name}` in message content; sender number is Kedaipal's.
