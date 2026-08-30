@@ -43,9 +43,7 @@ describe("ProductDescription", () => {
 	it("renders the seller's copy", () => {
 		stubOverflow(false);
 		render(<ProductDescription text="Kek batik, no nuts. 2 days notice." />);
-		expect(
-			screen.getByText("Kek batik, no nuts. 2 days notice."),
-		).toBeTruthy();
+		expect(screen.getByText("Kek batik, no nuts. 2 days notice.")).toBeTruthy();
 	});
 
 	it("shows no toggle when the copy already fits", () => {

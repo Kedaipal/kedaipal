@@ -277,9 +277,9 @@ describe("isCrmLocked", () => {
 	});
 
 	test("locks a loaded Starter payload (the order-detail crash guard)", () => {
-		expect(isCrmLocked({ actingAsAdmin: false, subscription: starterSub })).toBe(
-			true,
-		);
+		expect(
+			isCrmLocked({ actingAsAdmin: false, subscription: starterSub }),
+		).toBe(true);
 	});
 
 	test("never locks while the payload is still loading (no wall flash)", () => {

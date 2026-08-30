@@ -27,6 +27,7 @@ How the product actually works. Read in this order.
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
+| [landing-video-demo.md](./landing-video-demo.md) | The 30-second demo on `/`: why it sits directly under the hero, the 21.5 MB → 928 KB encode recipe, the `preload="none"` loading posture, and the player's autoplay/pause/reduced-motion rules. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 
 ## Architecture & security
@@ -55,6 +56,7 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 
 | Doc | What it covers |
 |---|---|
+| [release-checklist.md](./release-checklist.md) | **Run this whenever `src/content/releases.ts` is touched.** Editing the release notes means a staging→main deploy is imminent: bump the version, then audit the diff for env vars, backfills, schema/index changes, crons, Meta templates and plan-gating moves, and write the findings — including "none" — into the release PR. |
 | [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
 
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

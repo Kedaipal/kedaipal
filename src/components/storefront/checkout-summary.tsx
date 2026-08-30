@@ -372,7 +372,8 @@ export function pendingTotalParts({
 }): string[] {
 	const parts: string[] = [];
 	if (awaitingQuote) parts.push("your quote");
-	if (quotePending) parts.push(collectsFromCustomer ? "collection" : "delivery");
+	if (quotePending)
+		parts.push(collectsFromCustomer ? "collection" : "delivery");
 	return parts;
 }
 

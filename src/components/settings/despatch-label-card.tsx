@@ -45,7 +45,10 @@ const PAPER_OPTIONS: ReadonlyArray<{
 /** Each toggle names what it prints AND the reason a seller might not want it —
  * a switch with no consequence line is a switch nobody touches. */
 const TOGGLES: ReadonlyArray<{
-	key: keyof Pick<AwbConfig, "showLogo" | "showItems" | "showCod" | "showWeight" | "showNote">;
+	key: keyof Pick<
+		AwbConfig,
+		"showLogo" | "showItems" | "showCod" | "showWeight" | "showNote"
+	>;
 	label: string;
 	detail: string;
 }> = [
@@ -126,7 +129,10 @@ export function DespatchLabelCard({
 		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
 			<div className="flex flex-col gap-1">
 				<h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-					<Printer className="size-4 text-muted-foreground" aria-hidden="true" />
+					<Printer
+						className="size-4 text-muted-foreground"
+						aria-hidden="true"
+					/>
 					Despatch labels
 				</h3>
 				<p className="text-xs leading-relaxed text-muted-foreground">

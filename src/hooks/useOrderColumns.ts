@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ALL_ORDER_COLUMN_KEYS,
+	clampColumnWidth,
 	DEFAULT_ORDER_COLUMN_KEYS,
 	ORDER_COLUMNS_BY_KEY,
 	type OrderColumn,
@@ -24,10 +25,26 @@ import {
  * layout onto another.
  */
 const STORAGE_PREFIX = "kp:orders:columns:";
+/**
+ * Widths live under their OWN key rather than being folded into the key list.
+ * The two change at very different rates — the order list is rewritten on a
+ * drag or a toggle, widths on every frame of a resize — and a separate key
+ * means a stored layout written by an older build still loads intact instead of
+ * failing a shape check and dropping the seller's arrangement.
+ */
+const WIDTH_PREFIX = "kp:orders:colwidths:";
 
 function storageKey(retailerId: string): string {
 	return `${STORAGE_PREFIX}${retailerId}`;
 }
+
+function widthKey(retailerId: string): string {
+	return `${WIDTH_PREFIX}${retailerId}`;
+}
+
+/** Widths keyed by column, exactly the shape TanStack Table's
+ * `ColumnSizingState` uses, so it passes straight through. */
+export type OrderColumnWidths = Record<string, number>;
 
 const VALID_KEYS = new Set<string>(ALL_ORDER_COLUMN_KEYS);
 
@@ -50,6 +67,43 @@ export function parseStoredColumns(
 		return keys.length > 0 ? keys : null;
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * Parse stored widths. Every value is CLAMPED on read, not just on write: a
+ * layout stored before the bounds changed (or hand-edited in devtools) must not
+ * be able to resurrect a 4px column that has no handle left to drag back.
+ * Unknown keys are dropped, same rule as the key list.
+ */
+export function parseStoredWidths(
+	raw: string | null,
+): OrderColumnWidths | null {
+	if (!raw) return null;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+			return null;
+		const out: OrderColumnWidths = {};
+		for (const [key, value] of Object.entries(parsed)) {
+			if (!VALID_KEYS.has(key)) continue;
+			if (typeof value !== "number" || !Number.isFinite(value)) continue;
+			out[key] = clampColumnWidth(value);
+		}
+		return Object.keys(out).length > 0 ? out : null;
+	} catch {
+		return null;
+	}
+}
+
+function readInitialWidths(retailerId: string): OrderColumnWidths {
+	if (typeof window === "undefined") return {};
+	try {
+		return (
+			parseStoredWidths(window.localStorage.getItem(widthKey(retailerId))) ?? {}
+		);
+	} catch {
+		return {};
 	}
 }
 
@@ -79,23 +133,95 @@ export interface OrderColumnsState {
 	/** Rearrange the visible set. Takes the full new key order (the shape
 	 * `SortableList` hands back on drop). */
 	reorder: (keys: OrderColumnKey[]) => void;
+	/**
+	 * Show or hide a whole set at once — the picker's per-group and select-all
+	 * controls (86eyrtz74). Ticking 22 boxes by hand was the alternative.
+	 *
+	 * Showing APPENDS in registry order, so a group turned on arrives grouped
+	 * and in its canonical order rather than scattered by whatever order the
+	 * seller happened to tick things in. Hiding preserves the order of whatever
+	 * survives, so turning a group off and on again doesn't reshuffle the rest.
+	 */
+	setManyVisible: (keys: readonly OrderColumnKey[], visible: boolean) => void;
 	reset: () => void;
-	/** True when the seller has moved away from the default set or its order —
-	 * drives the picker's "Reset" affordance, which otherwise has nothing to
-	 * undo. */
+	/** Column widths the seller has dragged to, keyed by column. A column absent
+	 * here is at its registry default. Shaped as TanStack's `ColumnSizingState`
+	 * so it passes straight into the table. */
+	widths: OrderColumnWidths;
+	/** Replace the whole width map (what TanStack's sizing updater hands back).
+	 * Persisted on a short debounce — `onChange` resize mode fires this on every
+	 * frame of a drag, and a localStorage write per frame is waste. */
+	setWidths: (next: OrderColumnWidths) => void;
+	/** True when the seller has moved away from the default set, its order, or
+	 * the default widths — drives the picker's "Reset" affordance, which
+	 * otherwise has nothing to undo. */
 	isCustomised: boolean;
 }
+
+/** Long enough to collapse a whole drag into one write, short enough that
+ * navigating away immediately after letting go still saves. */
+const WIDTH_PERSIST_MS = 300;
 
 export function useOrderColumns(retailerId: string): OrderColumnsState {
 	const [keys, setKeys] = useState<OrderColumnKey[]>(() => [
 		...DEFAULT_ORDER_COLUMN_KEYS,
 	]);
+	const [widths, setWidthsState] = useState<OrderColumnWidths>({});
+	const widthTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	/**
+	 * The debounced write, as a closure that already captured BOTH the widths and
+	 * the retailer they belong to. Held so unmount can run it early.
+	 *
+	 * A closure rather than the values: the cleanup effect has `[]` deps, so it
+	 * only ever sees the FIRST `retailerId` — which is `""` while the retailer
+	 * query is in flight. Flushing from captured values would write the seller's
+	 * layout under the empty-string key and lose it just as thoroughly.
+	 */
+	const pendingWidthWrite = useRef<(() => void) | null>(null);
 
 	// Hydrate after mount (never during render) so the server and the first
 	// client paint agree, matching useSidebarCollapsed.
 	useEffect(() => {
 		setKeys(readInitial(retailerId));
+		setWidthsState(readInitialWidths(retailerId));
 	}, [retailerId]);
+
+	// A drag that ends with the seller navigating away inside the debounce window
+	// must still be saved, so unmount FLUSHES the pending write rather than
+	// dropping it — 300ms is easily short enough to lose a resize to a click on
+	// the nav, and a width that silently doesn't stick is worse than one that
+	// never persisted at all.
+	useEffect(
+		() => () => {
+			if (widthTimer.current) clearTimeout(widthTimer.current);
+			pendingWidthWrite.current?.();
+		},
+		[],
+	);
+
+	const setWidths = useCallback(
+		(next: OrderColumnWidths) => {
+			setWidthsState(next);
+			if (widthTimer.current) clearTimeout(widthTimer.current);
+			const write = () => {
+				// Cleared first: the flush path and the timer path must not both run,
+				// and whichever gets there first has written the latest value.
+				pendingWidthWrite.current = null;
+				widthTimer.current = null;
+				try {
+					window.localStorage.setItem(
+						widthKey(retailerId),
+						JSON.stringify(next),
+					);
+				} catch {
+					// localStorage unavailable (private mode, quota) — keep in-memory.
+				}
+			};
+			pendingWidthWrite.current = write;
+			widthTimer.current = setTimeout(write, WIDTH_PERSIST_MS);
+		},
+		[retailerId],
+	);
 
 	const persist = useCallback(
 		(next: OrderColumnKey[]) => {
@@ -135,6 +261,42 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		[retailerId],
 	);
 
+	const setManyVisible = useCallback(
+		(target: readonly OrderColumnKey[], show: boolean) => {
+			setKeys((prev) => {
+				const wanted = new Set(target);
+				let next: OrderColumnKey[];
+				if (show) {
+					const already = new Set(prev);
+					// Registry order for the newcomers, so a group arrives as a block.
+					const additions = ALL_ORDER_COLUMN_KEYS.filter(
+						(k) => wanted.has(k) && !already.has(k),
+					);
+					next = [...prev, ...additions];
+				} else {
+					next = prev.filter((k) => !wanted.has(k));
+					// An empty table is a dead end whose only way back is the panel the
+					// seller just emptied. Clearing everything therefore keeps the FIRST
+					// column — the one they arranged to lead — rather than refusing the
+					// click and doing nothing visible. The picker says so in words.
+					if (next.length === 0) next = prev.slice(0, 1);
+				}
+				if (next.length === prev.length && next.every((k, i) => k === prev[i]))
+					return prev;
+				try {
+					window.localStorage.setItem(
+						storageKey(retailerId),
+						JSON.stringify(next),
+					);
+				} catch {
+					// see persist
+				}
+				return next;
+			});
+		},
+		[retailerId],
+	);
+
 	const reorder = useCallback(
 		(next: OrderColumnKey[]) => {
 			// Trust only keys that are real columns and were already visible — the
@@ -158,10 +320,13 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		[retailerId],
 	);
 
-	const reset = useCallback(
-		() => persist([...DEFAULT_ORDER_COLUMN_KEYS]),
-		[persist],
-	);
+	// Reset means the whole layout: which columns, in what order, at what width.
+	// Leaving dragged widths behind after a reset would be a half-undo, and the
+	// seller has no other way to clear them wholesale.
+	const reset = useCallback(() => {
+		persist([...DEFAULT_ORDER_COLUMN_KEYS]);
+		setWidths({});
+	}, [persist, setWidths]);
 
 	// The seller's own order, NOT the registry's — dragging a column left has to
 	// stick, in the table and in the export it feeds.
@@ -175,10 +340,14 @@ export function useOrderColumns(retailerId: string): OrderColumnsState {
 		isVisible: (key) => visible.has(key),
 		toggle,
 		reorder,
+		setManyVisible,
 		reset,
-		// Order counts as customisation: a seller who only dragged columns around
-		// still has something to reset.
+		widths,
+		setWidths,
+		// Order and width both count as customisation: a seller who only dragged
+		// columns around, or only widened one, still has something to reset.
 		isCustomised:
+			Object.keys(widths).length > 0 ||
 			keys.length !== DEFAULT_ORDER_COLUMN_KEYS.length ||
 			!DEFAULT_ORDER_COLUMN_KEYS.every((k, i) => keys[i] === k),
 	};

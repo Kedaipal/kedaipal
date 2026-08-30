@@ -34,7 +34,11 @@ import {
 	describeAwbSkips,
 } from "../../lib/awb-labels";
 import { downloadPdfBytes } from "../../lib/download";
-import { convexErrorMessage, formatPrice, formatRelativeTime } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatRelativeTime,
+} from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -290,7 +294,9 @@ export function PrintLabelsDialog(props: PrintLabelsDialogProps) {
 }
 
 /** Derived from the server's return type so the row shape can't drift. */
-type QueueData = FunctionReturnType<typeof api.awb.readyToShipQueue> | undefined;
+type QueueData =
+	| FunctionReturnType<typeof api.awb.readyToShipQueue>
+	| undefined;
 
 /** The queue rows with their checkboxes — the inbox's select-mode checkbox
  * look, so ticking here feels like ticking there. */

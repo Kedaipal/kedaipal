@@ -1274,7 +1274,6 @@ export function BookDeliveryCard({
 	);
 }
 
-
 /** "4 Aug 2026 · 3:30 PM" from an epoch moment — the card's one spelling for
  * a scheduled pickup (86eyg0n8e follow-up). */
 function formatScheduledMoment(moment: number): string {

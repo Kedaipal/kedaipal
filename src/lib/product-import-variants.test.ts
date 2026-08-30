@@ -19,6 +19,7 @@ function row(over: Partial<VariantImportRow>): VariantImportRow {
 		optionNames: [],
 		optionValues: [],
 		sku: undefined,
+		productActive: true,
 		price: 1000,
 		onHand: 1,
 		parcelWeightG: 0,
