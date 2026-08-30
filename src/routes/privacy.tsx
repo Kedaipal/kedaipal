@@ -90,10 +90,10 @@ function PrivacyPage() {
 					third-party analytics that record how our pages are used — page views,
 					clicks and taps, scrolling, and a replay of on-screen activity —
 					alongside the page address, browser, and device. Recordings mask what
-					you type into forms, and we additionally mask the areas of the retailer
-					dashboard that display customer names, phone numbers, addresses, and
-					notes. We do not record the buyer order-tracking pages at all, and
-					our analytics tools never receive those pages' addresses.
+					you type into forms, and we additionally mask the areas of the
+					retailer dashboard that display customer names, phone numbers,
+					addresses, and notes. We do not record the buyer order-tracking pages
+					at all, and our analytics tools never receive those pages' addresses.
 				</p>
 			</section>
 
@@ -153,15 +153,14 @@ function PrivacyPage() {
 					</li>
 					<li>
 						<strong>Lalamove</strong> — rider delivery, booked through the
-						retailer's own Lalamove account. For orders dispatched with a
-						rider, Lalamove receives the delivery contact's name, phone number,
-						and address.
+						retailer's own Lalamove account. For orders dispatched with a rider,
+						Lalamove receives the delivery contact's name, phone number, and
+						address.
 					</li>
 					<li>
-						<strong>Google</strong> — address search at checkout (Google
-						Places, which processes the address text a shopper types in order
-						to suggest and pin it) and Google Analytics (aggregate usage
-						measurement).
+						<strong>Google</strong> — address search at checkout (Google Places,
+						which processes the address text a shopper types in order to suggest
+						and pin it) and Google Analytics (aggregate usage measurement).
 					</li>
 					<li>
 						<strong>Resend</strong> — transactional email (e.g. order and
@@ -190,10 +189,10 @@ function PrivacyPage() {
 				<p>
 					We also use analytics cookies set by Google Analytics and Microsoft
 					Clarity. These recognise a returning browser so we can measure usage
-					and replay sessions to diagnose usability problems; Microsoft Clarity's
-					identifiers persist for up to one year. They are not strictly
-					necessary, and we do not use advertising or cross-site tracking
-					cookies.
+					and replay sessions to diagnose usability problems; Microsoft
+					Clarity's identifiers persist for up to one year. They are not
+					strictly necessary, and we do not use advertising or cross-site
+					tracking cookies.
 				</p>
 				<p>
 					Your browser also stores some data locally on your device, which is

@@ -192,7 +192,12 @@ export const PAYMENT_METHODS: readonly PaymentMethod[] = [
 	// Still a chip: the only MayBank QRPay vector published upstream is another
 	// base64 PNG in an SVG shell (verified 2026-08-14), so it fails the same rule
 	// ShopeePay used to fail.
-	{ id: "maybank-qrpay", name: "MayBank QRPay", group: "wallets", visible: true },
+	{
+		id: "maybank-qrpay",
+		name: "MayBank QRPay",
+		group: "wallets",
+		visible: true,
+	},
 	{
 		id: "atome",
 		name: "Atome",
@@ -205,7 +210,12 @@ export const PAYMENT_METHODS: readonly PaymentMethod[] = [
 	// lender brands rather than rails, and neither publishes a redistributable
 	// vector. Chips until one does.
 	{ id: "spaylater", name: "SPayLater", group: "bnpl", visible: true },
-	{ id: "grabpay-paylater", name: "GrabPay PayLater", group: "bnpl", visible: true },
+	{
+		id: "grabpay-paylater",
+		name: "GrabPay PayLater",
+		group: "bnpl",
+		visible: true,
+	},
 	// Cross-border (tourist) rails — HitPay supports them, we don't advertise
 	// them yet. Flip `visible` when a seller needs them; the group renders
 	// itself the moment one becomes visible.
@@ -236,7 +246,12 @@ export const PAYMENT_METHODS: readonly PaymentMethod[] = [
 		visible: false,
 	},
 	// PromptPay's upstream vector is a base64 PNG in a shell, same as MayBank's.
-	{ id: "promptpay", name: "PromptPay (TH)", group: "crossborder", visible: false },
+	{
+		id: "promptpay",
+		name: "PromptPay (TH)",
+		group: "crossborder",
+		visible: false,
+	},
 ];
 
 /** Display order of the groups on the landing strip. */

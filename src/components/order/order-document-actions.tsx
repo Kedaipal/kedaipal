@@ -15,12 +15,12 @@ import { Download, Share2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	canSharePdf,
 	downloadPdfBytes,
 	sharePdfBytes,
 } from "../../lib/download";
-import { MASK_PII } from "../../lib/analytics-privacy";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { LOCALES, type Locale } from "../../convex/lib/locale";
 import en from "../../messages/en.json";
 import ms from "../../messages/ms.json";
 import zh from "../../messages/zh.json";
 import projectSettings from "../../project.inlang/settings.json";
-import { LOCALES, type Locale } from "../../convex/lib/locale";
 
 /**
  * Guards the Paraglide message catalogs (`messages/{locale}.json`) against the
@@ -69,9 +69,10 @@ describe("i18n message catalogs", () => {
 		it(`${locale} has no keys that ${baseLocale} lacks (no orphan translations)`, () => {
 			const baseSet = new Set(baseKeys);
 			const extra = keys.filter((k) => !baseSet.has(k));
-			expect(extra, `orphan keys in ${locale}.json: ${extra.join(", ")}`).toEqual(
-				[],
-			);
+			expect(
+				extra,
+				`orphan keys in ${locale}.json: ${extra.join(", ")}`,
+			).toEqual([]);
 		});
 
 		it(`each ${locale} key uses the same placeholders as its ${baseLocale} source`, () => {

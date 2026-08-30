@@ -61,21 +61,23 @@ describe("TaggedShareLinks", () => {
 	it("copies the store link with that preset's ?src= tag", async () => {
 		render(<TaggedShareLinks storefrontUrl={STORE_URL} />);
 		fireEvent.click(screen.getByRole("button", { name: "Copy TikTok link" }));
-		await waitFor(() =>
-			expect(written).toEqual([`${STORE_URL}?src=tiktok`]),
-		);
+		await waitFor(() => expect(written).toEqual([`${STORE_URL}?src=tiktok`]));
 		expect(toastSuccess).toHaveBeenCalledWith("TikTok link copied");
 	});
 
 	it("fires onCopy so the copy counts as sharing the link", async () => {
 		const onCopy = vi.fn();
 		render(<TaggedShareLinks storefrontUrl={STORE_URL} onCopy={onCopy} />);
-		fireEvent.click(screen.getByRole("button", { name: "Copy Instagram link" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Copy Instagram link" }),
+		);
 		await waitFor(() => expect(onCopy).toHaveBeenCalledTimes(1));
 	});
 
 	it("each preset shows its own brand glyph, decoratively", () => {
-		const { container } = render(<TaggedShareLinks storefrontUrl={STORE_URL} />);
+		const { container } = render(
+			<TaggedShareLinks storefrontUrl={STORE_URL} />,
+		);
 		// The glyph is what a seller actually scans for, so assert the marks are
 		// present and distinct rather than trusting the text label alone.
 		for (const p of SHARE_TAG_PRESETS) {

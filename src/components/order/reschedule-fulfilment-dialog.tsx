@@ -7,9 +7,9 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import {
-	MAX_NOTICE_DAYS,
 	formatFulfilmentDateTime,
 	hhmmFromMinutes,
+	MAX_NOTICE_DAYS,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
 	todayMytMidnight,
@@ -48,7 +48,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * (86eyq0epn): the buyer holds a receipt with a running countdown and may be
  * mid-payment, so the date can't move under them.
  */
-export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) {
+export function RescheduleFulfilmentDialog({
+	order,
+}: {
+	order: Doc<"orders">;
+}) {
 	const [open, setOpen] = useState(false);
 	const [dateValue, setDateValue] = useState("");
 	const [timeValue, setTimeValue] = useState("");
@@ -112,7 +116,11 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 		// Don't price a moment the dialog itself refuses (past, or beyond the
 		// 30-day window) — a quote there would legitimise an invalid pick.
 		const today = todayMytMidnight();
-		if (moment < Date.now() || date < today || date > today + MAX_NOTICE_DAYS * DAY_MS) {
+		if (
+			moment < Date.now() ||
+			date < today ||
+			date > today + MAX_NOTICE_DAYS * DAY_MS
+		) {
 			setFeePreview({ state: "idle" });
 			return;
 		}
@@ -312,9 +320,9 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								This buyer is paying against this date right now — their order
 								page is counting down to a deadline. Moving it mid-payment would
-								change the deal under them, so it&apos;s locked until the payment
-								lands. If the date really has to move, cancel the order (that
-								restocks it and releases the buyer) and send a fresh link.
+								change the deal under them, so it&apos;s locked until the
+								payment lands. If the date really has to move, cancel the order
+								(that restocks it and releases the buyer) and send a fresh link.
 							</p>
 							<DialogFooter>
 								<Button
@@ -416,8 +424,8 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 									) : null}
 									{feePreview.state === "ready" && feePreview.immediate ? (
 										<p className="text-xs text-muted-foreground">
-											This time is close — booking would send the rider
-											straight away.
+											This time is close — booking would send the rider straight
+											away.
 										</p>
 									) : null}
 									{feePreview.state === "ready" ? (
@@ -444,7 +452,9 @@ export function RescheduleFulfilmentDialog({ order }: { order: Doc<"orders"> }) 
 									type="button"
 									onClick={handleSave}
 									isLoading={saving}
-									disabled={saving || dateValue === "" || scheduleIssue !== null}
+									disabled={
+										saving || dateValue === "" || scheduleIssue !== null
+									}
 								>
 									Save new date
 								</Button>

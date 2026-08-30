@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type Country, COUNTRIES } from "../../convex/lib/country";
+import { COUNTRIES, type Country } from "../../convex/lib/country";
 import {
 	MOBILE_MESSAGE,
 	normalizeMobileDigits,
@@ -37,9 +37,7 @@ function buildWaPhoneCheckoutSchema(country: Country) {
 		.string()
 		.transform((s) => normalizeMobileDigits(s, country))
 		.pipe(
-			z
-				.string()
-				.regex(STORED_MOBILE_PATTERN[country], MOBILE_MESSAGE[country]),
+			z.string().regex(STORED_MOBILE_PATTERN[country], MOBILE_MESSAGE[country]),
 		);
 }
 

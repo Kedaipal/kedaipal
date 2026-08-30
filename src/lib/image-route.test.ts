@@ -116,7 +116,9 @@ describe("handleImageRequest — transformation options", () => {
 
 	it("tells Cloudflare WebP is welcome — without it the transform silently returns PNG", async () => {
 		const { fetchImpl } = await get(`https://kedaipal.com/img/${UUID}?w=320`);
-		const init = fetchImpl.mock.calls[0][1] as { headers: Record<string, string> };
+		const init = fetchImpl.mock.calls[0][1] as {
+			headers: Record<string, string>;
+		};
 		// Verified against the live zone: the identical `format=webp` transform
 		// returns image/png under `Accept: */*` and image/webp under
 		// `Accept: image/webp`. A subrequest carries no Accept of its own.
@@ -130,7 +132,9 @@ describe("handleImageRequest — transformation options", () => {
 		const a = await get(`https://kedaipal.com/img/${UUID}?w=320`);
 		const b = await get(`https://kedaipal.com/img/${UUID}?w=320`);
 		const accepts = [a, b].map(
-			(r) => (r.fetchImpl.mock.calls[0][1] as { headers: Record<string, string> }).headers.accept,
+			(r) =>
+				(r.fetchImpl.mock.calls[0][1] as { headers: Record<string, string> })
+					.headers.accept,
 		);
 		expect(accepts[0]).toBe(accepts[1]);
 	});

@@ -105,10 +105,7 @@ export function ProductDetailSheet({
 							<h2 className="text-xl font-bold leading-tight">
 								{product.name}
 							</h2>
-							<PriceLabel
-								value={pp.priceLabel}
-								className="shrink-0 text-2xl"
-							/>
+							<PriceLabel value={pp.priceLabel} className="shrink-0 text-2xl" />
 						</div>
 
 						<OptionPills pp={pp} />

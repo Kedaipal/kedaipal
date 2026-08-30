@@ -27,9 +27,9 @@ import {
 } from "../../../convex/lib/productKind";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
-import { cartesian } from "../../lib/variant";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
+import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
@@ -378,9 +378,8 @@ export function buildSubmitVariants(
 			active: row.active,
 			blockWhenOutOfStock: row.blockWhenOutOfStock,
 			requiresProof: row.requiresProof,
-			parcelWeightG: weightOk && weightStr.length > 0
-				? Number.parseInt(weightStr, 10)
-				: 0,
+			parcelWeightG:
+				weightOk && weightStr.length > 0 ? Number.parseInt(weightStr, 10) : 0,
 			imageStorageIds: row.imageStorageIds,
 		});
 	});
