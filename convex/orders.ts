@@ -364,8 +364,15 @@ export function buildPickupSnapshot(
 	};
 }
 
+/** Every status an order can BE — the read side: filters, the status column's
+ * picker, exports. Includes `booking_requested`, which is a real state a
+ * seller filters for (it's what the New bucket surfaces on a booking store);
+ * omitting it would make the status filter unable to express the one state
+ * unique to bookings. Writes use `transitionStatusValidator` below, which
+ * deliberately excludes it — nothing may transition INTO a request. */
 const statusValidator = v.union(
 	v.literal("pending"),
+	v.literal("booking_requested"),
 	v.literal("confirmed"),
 	v.literal("packed"),
 	v.literal("shipped"),
