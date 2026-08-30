@@ -3,6 +3,7 @@ import type { PostHog } from "posthog-js";
 import { useEffect } from "react";
 import { isCapabilityTokenPath } from "../lib/analytics-privacy";
 import { clientEnv } from "../lib/env";
+import { posthogEnvironment } from "../../convex/lib/posthog";
 import {
 	POSTHOG_DEFAULT_HOST,
 	posthogInitOptions,
@@ -53,6 +54,13 @@ export function bootPostHog(
 	bootPromise ??= import("posthog-js")
 		.then(({ default: posthog }) => {
 			posthog.init(key, posthogInitOptions(host));
+			// Super property: rides on every event this browser sends, so the
+			// single free-plan project can still tell local testing apart from
+			// real buyers. Registered immediately after init so even the first
+			// $pageview carries it.
+			posthog.register({
+				environment: posthogEnvironment(window.location.hostname),
+			});
 			setPostHogClient(posthog);
 			return posthog;
 		})

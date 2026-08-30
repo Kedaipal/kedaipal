@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
 	ANALYTICS_EVENTS,
 	POSTHOG_MAX_DISTINCT_ID,
+	posthogEnvironment,
+	posthogEnvironmentFromUrl,
 	sanitizeDistinctId,
 } from "./posthog";
 
@@ -78,5 +80,58 @@ describe("ANALYTICS_EVENTS", () => {
 	// silently orphans every saved funnel and insight built on it.
 	test("pins the wire names", () => {
 		expect(ANALYTICS_EVENTS.orderCreated).toBe("order_created");
+	});
+});
+
+
+describe("posthogEnvironment", () => {
+	test("classifies the production host and its subdomains", () => {
+		expect(posthogEnvironment("kedaipal.com")).toBe("production");
+		expect(posthogEnvironment("www.kedaipal.com")).toBe("production");
+		expect(posthogEnvironment("KEDAIPAL.COM")).toBe("production");
+		// Trailing dot is a legal FQDN form.
+		expect(posthogEnvironment("kedaipal.com.")).toBe("production");
+	});
+
+	test("everything else is development", () => {
+		expect(posthogEnvironment("localhost")).toBe("development");
+		expect(posthogEnvironment("127.0.0.1")).toBe("development");
+		expect(posthogEnvironment("abc-123.trycloudflare.com")).toBe("development");
+		expect(posthogEnvironment("kedaipal.workers.dev")).toBe("development");
+	});
+
+	// A look-alike domain must never be read as production — that is the one
+	// direction that silently corrupts the numbers a decision gets made on.
+	test("does not match look-alike domains", () => {
+		expect(posthogEnvironment("notkedaipal.com")).toBe("development");
+		expect(posthogEnvironment("kedaipal.com.evil.test")).toBe("development");
+		expect(posthogEnvironment("fake-kedaipal.com")).toBe("development");
+	});
+
+	test("unknown input fails to development, never production", () => {
+		expect(posthogEnvironment(undefined)).toBe("development");
+		expect(posthogEnvironment(null)).toBe("development");
+		expect(posthogEnvironment("")).toBe("development");
+		expect(posthogEnvironment("   ")).toBe("development");
+	});
+});
+
+describe("posthogEnvironmentFromUrl", () => {
+	test("reads the hostname out of SITE_URL", () => {
+		expect(posthogEnvironmentFromUrl("https://kedaipal.com")).toBe("production");
+		expect(posthogEnvironmentFromUrl("https://kedaipal.com/app/orders")).toBe(
+			"production",
+		);
+		expect(posthogEnvironmentFromUrl("http://localhost:3000")).toBe(
+			"development",
+		);
+	});
+
+	// An unset or malformed SITE_URL must not inherit the "https://kedaipal.com"
+	// fallback the email helpers use — that would tag dev events as production.
+	test("unset or unparseable reads as development", () => {
+		expect(posthogEnvironmentFromUrl(undefined)).toBe("development");
+		expect(posthogEnvironmentFromUrl("")).toBe("development");
+		expect(posthogEnvironmentFromUrl("not a url")).toBe("development");
 	});
 });

@@ -15,29 +15,71 @@ All three hooks are called in `RootDocument`
 ([`src/routes/__root.tsx`](../src/routes/__root.tsx)), so analytics load on
 every route (storefront + `/app`) **except the capability-token routes
 `/track/*` and `/claim/*`, which no provider ever observes** — see Privacy §1.
-ClickUp `86eyb7021` (Clarity), `86eyn25fk` (GA tracking-token exclusion), PR
-#227 review (`/claim`), `86eyrayux` (PostHog).
+ClickUp `86eyb7021` (Clarity), `86eyn25fk` (GA tracking-token exclusion),
+PR #227 review (`/claim`), `86eyrayux` (PostHog).
 
-## Why three providers is not redundancy
+## Why three tools — and when to collapse to one
 
-Each tool has one job, and the overlaps are switched **off** rather than left to
-duplicate each other:
+**The honest version: this is free-tier arbitrage, not a capability gap.** It is
+tempting to justify three providers with "no single tool does all of it", and
+that would be wrong — PostHog alone *can* do all three jobs. It ships product
+analytics, session replay, **and** a web-analytics product that is a direct GA4
+replacement. One tool could cover this whole surface today.
 
-- **GA4 → acquisition.** Where traffic came from, and the Google Ads / Search
-  Console attribution nothing else gives us. Earns its place once S6 turns
-  targeted ads on.
-- **Clarity → session replay.** Free and **uncapped**. This is the
-  counterintuitive one: PostHog also does replay, but its free tier stops at
-  **5,000 recordings/mo** — roughly 1.6 recordings per retailer per day at 100
-  retailers, i.e. we would blow through it and start sampling. Replacing Clarity
-  with PostHog replay would cost us coverage, so PostHog's replay is disabled.
-- **PostHog → events, funnels, cohorts.** The questions GA4 answers badly for
-  this shape: how many storefront visitors reach checkout, how many of those
-  orders get confirmed, how many get paid. That is the funnel
-  `86eye3mxf` exists to measure, and it is the reason PostHog is here at all.
+We run three anyway, for two reasons and one inheritance:
 
-The rejected alternative was "PostHog replaces both". The free-tier numbers
-above are what killed it.
+1. **Free-tier capacity is the real driver.** Three free tiers hold more than
+   one. PostHog free stops at **1M events + 5k session recordings/mo**; Clarity
+   is free with **no traffic or recording cap**; GA4 is free for pageviews at
+   our volume. Consolidating onto PostHog's free tier would mean sampling
+   replays at ~100 retailers (5k/mo is roughly 1.6 recordings per retailer per
+   day) — paying in *coverage* for a tidiness we don't need yet.
+2. **GA4 has one thing genuinely nothing else has**: native Google Ads and
+   Search Console attribution. PostHog cannot push conversions back into Google
+   Ads bidding. The moment S6 turns targeted ads on, that stops being
+   substitutable — and until then it is the weakest of the three.
+3. **GA4 and Clarity were already shipped and disclosed** before PostHog was
+   considered. Removing them is work plus a privacy-policy revision, not a
+   saving.
+
+### What three tools actually costs
+
+Worth stating plainly, because it is not free:
+
+- **Three data processors to disclose.** Under PDPA every one of them is a
+  third party receiving buyer data, and each must appear in the privacy policy
+  (see Privacy §3). This is the heaviest cost, and it grew right after the
+  August privacy truth-pass (`86eyn25fu`).
+- **Three scripts on buyer routes.** Mitigated — PostHog is a lazy chunk and
+  its replay recorder never loads — but not zero, on a storefront whose payload
+  budget is already a live concern (`86eypxght`).
+- **Three dashboards, no single view.** A question spanning acquisition →
+  behaviour → conversion is answered by hand across three tools.
+
+### The decision rule
+
+Keep the split **while all three are free**. Collapse when either of these
+happens:
+
+- **You start paying PostHog.** At that point replay and web analytics are
+  included in what you already bought, and Clarity is pure duplicated
+  disclosure — drop it.
+- **You stop running Google Ads (or never start).** GA4's only irreplaceable
+  capability is ad attribution. Without ads it is a redundant processor, and
+  dropping it removes a disclosure obligation for free.
+
+The end state is almost certainly **PostHog alone**. This is a deliberate
+"not yet", not an architecture we intend to keep.
+
+### Who answers what
+
+| Question | Tool |
+| --- | --- |
+| Where did this traffic come from? Which ad worked? | GA4 |
+| What did this buyer struggle with on the checkout page? | Clarity |
+| How many storefront visitors become paid orders? | PostHog |
+| Which stores are activating? Which features get used? | PostHog |
+| Is this page slow / is the layout broken on their phone? | Clarity |
 
 ## Clarity — why the npm package, not a `<script>` snippet
 
@@ -213,6 +255,95 @@ already a live concern (`86eypxght`). If it ever becomes an issue,
 
 The project key is not a secret — it ships in the client bundle on every page —
 so it lives in a plaintext repo variable, not a secret.
+
+### PostHog dashboard setup
+
+Kedaipal's PostHog org: project **584039**, **US Cloud**. The rest of this
+section is what to configure there, and why each item is not just a default.
+
+#### The one-project constraint (read this first)
+
+**PostHog's free plan allows exactly one project.** There is no sandbox project
+and no free dev/prod split — everything lands in the same silo, and free
+retention is **1 year** (session replay 3 months, though we don't use PostHog's).
+A polluted funnel therefore stays polluted for a year.
+
+So every event carries an **`environment`** property, stamped automatically on
+both sides so no call site can forget it:
+
+| Side | Source | Where |
+| --- | --- | --- |
+| Browser | `window.location.hostname` | super property registered at init, before the first `$pageview` |
+| Convex | `SITE_URL` | stamped inside the capture action |
+
+`kedaipal.com` and its subdomains are `production`; **everything else, including
+anything unset or unparseable, is `development`** — see `posthogEnvironment` in
+[`convex/lib/posthog.ts`](../convex/lib/posthog.ts). The failure direction is
+deliberate: mislabelling dev traffic as production silently corrupts the numbers
+a decision gets made on, while the reverse under-counts visibly and is fixable.
+
+**Every production insight, funnel and dashboard must filter
+`environment = production`.** Build that filter into the saved insight, not into
+a habit. If PostHog ever moves to a paid plan, separate projects replace this and
+the property becomes redundant rather than wrong.
+
+#### Project settings to check
+
+Client config already sets the important ones ([`posthogInitOptions`](../src/lib/posthog.ts)),
+but several have a **project-side** switch too, and the project side wins for
+anything PostHog decides server-side. Set both — belt and braces, and the
+project side is what protects you if some future page boots PostHog without our
+config.
+
+| Setting | Set to | Why |
+| --- | --- | --- |
+| Autocapture | **Off** | It records clicked-element text: buyer names, addresses, `wa.me` hrefs with phone numbers. `MASK_PII` is a *Clarity* attribute PostHog does not honour, so autocapture bypasses all masked surfaces. Also the fastest way to burn 1M events. |
+| Session replay | **Off** | Clarity's job, free and uncapped there. Leaving it on burns the 5k/mo cap for a duplicate. |
+| Heatmaps | **Off** | Clarity's job. |
+| Web vitals / performance capture | **Off** | Pure event volume against the 1M cap; not a question we're asking. |
+| Exception autocapture / error tracking | **Off** | Not our error tool, and exceptions can carry PII in messages. |
+| Surveys | **Off** | Would render UI to buyers. Nothing should appear on a storefront that the seller didn't put there. |
+| IP data capture | **Consider off** — *Settings → Project → Privacy* | The one path PostHog documents explicitly. An IP is personal data under PDPA; we don't use geo, so collecting it adds disclosure burden for nothing. Turning it off also disables GeoIP. |
+| Bot filtering | **On** (default) | Keeps crawlers and the WhatsApp link unfurler out of buyer counts. |
+| Toolbar authorized URLs | `https://kedaipal.com` | Limits where the PostHog toolbar can be injected. |
+
+Anything not in this table: leave at its default. The menu paths move between
+PostHog releases — only the IP one is documented above, so search settings by
+the **setting name** rather than trusting a path from memory.
+
+#### Billing
+
+Do **not** add a card. With no payment method PostHog hard-stops at the free
+tier rather than billing on overage, which is exactly the behaviour we want
+while this is a spike. Adding a card silently converts the 1M-event ceiling from
+a stop into a bill.
+
+#### Turning it on in production
+
+Two halves, two stores — **setting only the first gives pageviews with no server
+events, which reads as a broken funnel rather than missing config.**
+
+1. **Client (build-time):** add `VITE_POSTHOG_KEY` to the GitHub Actions **`prod`
+   environment variables**, beside `VITE_GA_MEASUREMENT_ID` and
+   `VITE_CLARITY_PROJECT_ID`. `VITE_` vars are baked at build, so this only
+   takes effect on the next deploy.
+2. **Server (Convex prod runtime):** `POSTHOG_PROJECT_KEY`, set on the
+   production deployment.
+
+The project token is **not a secret** — it ships in the client bundle on every
+page, exactly like the Clarity project ID and the Clerk publishable key — so it
+belongs in a plaintext repo/environment variable, never a secret store. (The
+key that *is* secret is a PostHog **personal API key**; we don't use one.)
+
+#### Before production rollout: the privacy policy
+
+PostHog is a third data processor receiving buyer data. Turning it on in prod
+means [`src/routes/privacy.tsx`](../src/routes/privacy.tsx) must name it in the
+processor list and the cookie section — and **that means bumping
+`PRIVACY_VERSION` in both [`src/lib/legal.ts`](../src/lib/legal.ts) and
+[`convex/lib/legal.ts`](../convex/lib/legal.ts)**, which drives `consentIsStale()`
+and re-prompts every seller. Do it in the same change that sets the prod env
+vars, not after. See Privacy §3.
 
 ### Deliberately deferred
 

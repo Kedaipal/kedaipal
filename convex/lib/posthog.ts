@@ -88,3 +88,57 @@ export function sanitizeDistinctId(
 	if (INVALID_DISTINCT_IDS.has(cleaned.toLowerCase())) return undefined;
 	return cleaned;
 }
+
+/**
+ * Which deployment an event came from.
+ *
+ * PostHog's **free plan allows exactly one project**, so dev and production
+ * events land in the same silo with no way to separate them after the fact —
+ * and free retention is a year, so a polluted funnel stays polluted. Every
+ * event therefore carries this property (client-side as a super property,
+ * server-side stamped in the capture action), and production dashboards filter
+ * on it. If Kedaipal ever moves to a paid plan, separate projects replace this
+ * and the property becomes redundant rather than wrong.
+ */
+export const POSTHOG_ENVIRONMENTS = ["production", "development"] as const;
+export type PostHogEnvironment = (typeof POSTHOG_ENVIRONMENTS)[number];
+
+/** The one host that counts as production. Everything else is development. */
+const PRODUCTION_HOST = "kedaipal.com";
+
+/**
+ * Classify a hostname.
+ *
+ * **Unknown fails to `development` on purpose.** The two error directions are
+ * not symmetric: mislabelling dev traffic as production silently corrupts the
+ * numbers a decision gets made on, while mislabelling production as dev
+ * under-counts visibly and is fixable. There is exactly one deployed
+ * environment today (`kedaipal.com`, deployed from `main`); staging is a branch
+ * tested locally, so it reads as development, which is what it is.
+ */
+export function posthogEnvironment(
+	hostname: string | null | undefined,
+): PostHogEnvironment {
+	if (!hostname) return "development";
+	// Trailing dot is a legal FQDN form ("kedaipal.com.") and would otherwise
+	// miss the match.
+	const host = hostname.trim().toLowerCase().replace(/\.$/, "");
+	// The leading dot matters: it keeps a look-alike domain such as
+	// "notkedaipal.com" from being read as production.
+	if (host === PRODUCTION_HOST || host.endsWith(`.${PRODUCTION_HOST}`)) {
+		return "production";
+	}
+	return "development";
+}
+
+/** {@link posthogEnvironment} for a full URL — the server reads `SITE_URL`. */
+export function posthogEnvironmentFromUrl(
+	url: string | null | undefined,
+): PostHogEnvironment {
+	if (!url) return "development";
+	try {
+		return posthogEnvironment(new URL(url).hostname);
+	} catch {
+		return "development";
+	}
+}

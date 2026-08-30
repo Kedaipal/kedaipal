@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
+import { posthogEnvironmentFromUrl } from "./lib/posthog";
 
 /**
  * Server-side PostHog capture (86eyrayux).
@@ -99,6 +100,12 @@ export const capture = internalAction({
 					timestamp: new Date(args.timestamp).toISOString(),
 					properties: {
 						...args.properties,
+						// Stamped here rather than at each call site so no future event
+						// can forget it. PostHog free = one project, so this property is
+						// the only thing separating dev traffic from real numbers.
+						// SITE_URL is the existing signal (dev has localhost:3000); unset
+						// reads as development, never production.
+						environment: posthogEnvironmentFromUrl(process.env.SITE_URL),
 						$process_person_profile: args.withPersonProfile === true,
 					},
 				}),

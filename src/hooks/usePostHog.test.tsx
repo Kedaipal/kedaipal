@@ -3,18 +3,21 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted so the vi.mock factories below can reference them safely.
-const { initMock, captureMock, envState, routerState } = vi.hoisted(() => ({
-	initMock: vi.fn(),
-	captureMock: vi.fn(),
+const { initMock, captureMock, registerMock, envState, routerState } = vi.hoisted(
+	() => ({
+		initMock: vi.fn(),
+		captureMock: vi.fn(),
+		registerMock: vi.fn(),
 	envState: {
 		key: undefined as string | undefined,
 		host: undefined as string | undefined,
 	},
-	routerState: { pathname: "/" },
-}));
+		routerState: { pathname: "/" },
+	}),
+);
 
 vi.mock("posthog-js", () => ({
-	default: { init: initMock, capture: captureMock },
+	default: { init: initMock, capture: captureMock, register: registerMock },
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -64,6 +67,7 @@ beforeEach(() => {
 	vi.resetModules();
 	initMock.mockClear();
 	captureMock.mockClear();
+	registerMock.mockClear();
 	envState.key = undefined;
 	envState.host = undefined;
 	routerState.pathname = "/";
@@ -199,6 +203,22 @@ describe("usePostHog", () => {
 		expect(first).toBeDefined();
 		expect(second).toBe(first);
 		expect(initMock).toHaveBeenCalledTimes(1);
+	});
+
+	// PostHog free = ONE project, so dev and prod events share a silo. The super
+	// property is the only thing that separates them — and it must be registered
+	// before the first $pageview, or that event lands untagged.
+	it("tags every event with the environment, before the first pageview", async () => {
+		envState.key = "phc_abc123";
+		const Harness = await loadHarness();
+
+		render(<Harness />);
+		await settle();
+
+		expect(registerMock).toHaveBeenCalledWith({ environment: "development" });
+		expect(registerMock.mock.invocationCallOrder[0]).toBeLessThan(
+			captureMock.mock.invocationCallOrder[0],
+		);
 	});
 
 	it("fires a pageview per resolved route", async () => {

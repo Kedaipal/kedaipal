@@ -77,6 +77,41 @@ describe("posthog.capture", () => {
 	// shopper never mints a profile. A server event that quietly created one for
 	// the same distinct id would defeat that — and put a durable person record
 	// behind an id we joined to an order.
+	// PostHog free = ONE project, so this property is the only thing keeping
+	// local testing out of the real numbers. Stamped in the action, so no future
+	// call site can forget it.
+	test("stamps the environment from SITE_URL", async () => {
+		vi.stubEnv("SITE_URL", "https://kedaipal.com");
+		const t = convexTest(schema, modules);
+		const fetchMock = okFetch();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await t.action(internal.posthog.capture, {
+			event: "order_created",
+			distinctId: DISTINCT_ID,
+			properties: {},
+			timestamp: AT,
+		});
+
+		expect(bodyOf(fetchMock).properties.environment).toBe("production");
+	});
+
+	test("an unset SITE_URL is development, never production", async () => {
+		vi.stubEnv("SITE_URL", "");
+		const t = convexTest(schema, modules);
+		const fetchMock = okFetch();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await t.action(internal.posthog.capture, {
+			event: "order_created",
+			distinctId: DISTINCT_ID,
+			properties: {},
+			timestamp: AT,
+		});
+
+		expect(bodyOf(fetchMock).properties.environment).toBe("development");
+	});
+
 	test("keeps buyers person-less unless the caller opts in", async () => {
 		const t = convexTest(schema, modules);
 		const fetchMock = okFetch();
@@ -279,6 +314,14 @@ async function storedDistinctId(
 	});
 }
 
+/**
+ * These seed a retailer + product + order through the real mutations, so they
+ * are seconds-scale by nature and sit close to vitest's 5s default. The explicit
+ * timeout is about honesty, not patience: at the default they go red on a busy
+ * machine while the code is fine, and a suite that cries wolf stops being read.
+ */
+const E2E_TIMEOUT_MS = 30_000;
+
 describe("orders.create → PostHog", () => {
 	test("schedules order_created with the distinct id and PII-free properties", async () => {
 		const t = storeSetup();
@@ -309,7 +352,7 @@ describe("orders.create → PostHog", () => {
 		expect(serialized).not.toContain(BUYER);
 		expect(serialized).not.toContain("Ali");
 		expect(serialized).not.toContain("Jln Mawar");
-	});
+	}, E2E_TIMEOUT_MS);
 
 	// An unattributed event would land on a synthetic person and skew the funnel,
 	// so it is dropped rather than sent — and the order still commits normally.
@@ -321,7 +364,7 @@ describe("orders.create → PostHog", () => {
 
 		expect(await storedDistinctId(t, shortId)).toBeNull();
 		expect(await captureJobs(t)).toHaveLength(0);
-	});
+	}, E2E_TIMEOUT_MS);
 
 	// A public mutation never trusts a client string: the same junk the client
 	// sanitizer drops must also be dropped server-side.
@@ -333,5 +376,5 @@ describe("orders.create → PostHog", () => {
 
 		expect(await storedDistinctId(t, shortId)).toBeNull();
 		expect(await captureJobs(t)).toHaveLength(0);
-	});
+	}, E2E_TIMEOUT_MS);
 });
