@@ -560,6 +560,33 @@ day; your Kedaipal calendar is always live"), and the rotate link behind a
 confirm dialog that names the consequence (old URL dies, GCal shows the feed
 unreachable until re-subscribed).
 
+### The feed carries EVERY order, not just bookings
+
+Widened on 30 Aug (owner call). The feed was booking-only, which meant a cake
+seller with twelve Saturday deliveries saw nothing — even though every order
+already carries a fulfilment date. Three passes now: approved stays across
+their whole range, **every other order due in the window** (all-day on its
+fulfilment date, or **timed** when the order carries a `fulfilmentTimeMinutes`
+— twelve deliveries on one Saturday are only useful with their times), and
+the seller's blocks.
+
+Rides a new **`by_retailer_fulfilment`** index — a range read on the DUE date,
+not creation, because a cake ordered in July for September belongs on
+September's calendar. Bounded at 2000 events with a log rather than a silent
+truncation. **Only `cancelled` is excluded**: `pending` deliberately stays,
+because on the legacy path — and on any deployment without the confirmation
+template configured — every storefront order lands pending, so dropping it
+would empty the calendar of real work; the inbox draws the same line, keeping
+pending in the New bucket. Booking orders are skipped in that pass because the
+first one already drew them across the full stay, and a second all-day event
+on the check-in day would double them up.
+
+This is also the answer to "can we use the Google Calendar API since we
+already use Maps?" — Maps is an API key with no user involved; Calendar is
+OAuth per vendor with a sensitive scope, Google verification, token refresh
+and a 100-user cap until verified. The subscribe link needs none of that, and
+widening it serves all ten payers rather than the two booking ones.
+
 ### S6 tests
 
 `convex/lib/icsFeed.test.ts` (escaping, MYT date mapping, folding round-trip,

@@ -1557,7 +1557,11 @@ export default defineSchema({
 		// Expiry cron (booking kind): un-actioned requests older than the
 		// approval window. Equality on status + the implicit _creationTime range
 		// = a scan bounded to exactly the stale rows.
-		.index("by_status", ["status"]),
+		.index("by_status", ["status"])
+		// The calendar feed's window read: this store's orders due inside
+		// [from, to). Range on the DUE date, not creation — a cake ordered in
+		// July for September belongs on September's calendar.
+		.index("by_retailer_fulfilment", ["retailerId", "fulfilmentDate"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto
