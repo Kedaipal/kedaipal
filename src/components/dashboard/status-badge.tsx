@@ -33,15 +33,24 @@ export function StatusBadge({
 	 */
 	label?: string;
 }) {
+	const text = label ?? status;
 	return (
 		<span
 			className={cn(
-				"rounded-full px-2.5 py-1 text-[11px] font-semibold",
+				// A pill is ONE box or it is nothing. As a plain inline span, a label
+				// too long for its container ("Ready for Pickup" in a table cell, any
+				// long custom stage name on a narrow card) wraps mid-phrase and the
+				// rounded background breaks into two ragged fragments. `inline-block`
+				// + `truncate` keeps it a single rounded box that ellipsises instead,
+				// capped by `max-w-full` so it only ever gives way when it genuinely
+				// cannot fit — with the full text on hover.
+				"inline-block max-w-full truncate rounded-full px-2.5 py-1 align-middle text-[11px] font-semibold",
 				label ? "" : "capitalize",
 				STATUS_STYLES[status],
 			)}
+			title={text}
 		>
-			{label ?? status}
+			{text}
 		</span>
 	);
 }

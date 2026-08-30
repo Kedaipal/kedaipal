@@ -24,7 +24,10 @@ import { DespatchLabelCard } from "./despatch-label-card";
 function renderCard(config: Partial<AwbConfig> = {}) {
 	const onSave = vi.fn().mockResolvedValue(undefined);
 	render(
-		<DespatchLabelCard config={{ ...AWB_DEFAULTS, ...config }} onSave={onSave} />,
+		<DespatchLabelCard
+			config={{ ...AWB_DEFAULTS, ...config }}
+			onSave={onSave}
+		/>,
 	);
 	return onSave;
 }
@@ -54,7 +57,9 @@ describe("DespatchLabelCard", () => {
 
 	it("Save is disabled until something actually changes", () => {
 		renderCard();
-		const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+		const save = screen.getByRole("button", {
+			name: "Save",
+		}) as HTMLButtonElement;
 		expect(save.disabled).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: /A6 label roll/i }));
 		expect(save.disabled).toBe(false);
@@ -118,7 +123,9 @@ describe("DespatchLabelCard", () => {
 
 	it("discards edits back to the saved template", () => {
 		renderCard({ paperSize: "a6" });
-		fireEvent.click(screen.getByRole("button", { name: /A4 sheet, 4 labels/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /A4 sheet, 4 labels/i }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: /Discard changes/i }));
 		expect(
 			screen.getByRole("button", { name: /A6 label roll/i }),

@@ -30,8 +30,12 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Locale } from "../../../convex/lib/locale";
-import type { Release, ReleaseIconName } from "../../content/releases";
-import { RELEASES } from "../../content/releases";
+import type {
+	Release,
+	ReleaseIconName,
+	ReleaseKind,
+} from "../../content/releases";
+import { RELEASE_KIND_LABELS, RELEASES } from "../../content/releases";
 import { APP_VERSION, isCalendarVersion } from "../../lib/app-version";
 import { localized, resolveWhatsNew } from "../../lib/releases";
 import { cn } from "../../lib/utils";
@@ -202,6 +206,48 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	table: Rows3,
 };
 
+/**
+ * Chip styling per kind — palette scales with explicit dark variants, the same
+ * idiom `StatusBadge` uses for order statuses. That is the house pattern for a
+ * CATEGORICAL set, and the reason semantic tokens are wrong here:
+ * `--primary` is navy in light and **mint in dark**, so `bg-primary` for
+ * "enhancement" would have been a distinct navy beside the mint "feature" chip
+ * in light mode and the same hue as it in dark. Three categories need three
+ * hues that survive both themes.
+ *
+ * Emerald keeps `feature` in the brand's mint family — the thing you can now
+ * DO. Blue is `enhancement`. Amber is `fix`: deliberately NOT red, because red
+ * reads as "something is wrong here", which is the opposite of what a fix is
+ * telling the seller, and would make a release of good news look like an
+ * incident report.
+ */
+const KIND_CHIP: Record<ReleaseKind, string> = {
+	feature:
+		"bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
+	enhancement: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+	fix: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+};
+
+/**
+ * The kind chip. Sits on its own line ABOVE the title rather than inline with
+ * it: a seller scanning a release is answering "is there anything new here?"
+ * before they read a single heading, and a column of labels down the left edge
+ * answers that in one pass. Inline, it would also push every long title into an
+ * extra wrap on a phone.
+ */
+function KindChip({ kind }: { kind: ReleaseKind }) {
+	return (
+		<span
+			className={cn(
+				"w-fit rounded-full px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase",
+				KIND_CHIP[kind],
+			)}
+		>
+			{RELEASE_KIND_LABELS[kind]}
+		</span>
+	);
+}
+
 /** `2026-08-25` → `25 Aug`. */
 const MONTHS = [
 	"Jan",
@@ -250,10 +296,7 @@ function WhatsNewDialog({
 			    padding would inset it and leave white gutters beside the fill.
 			    Widened past the default `sm:max-w-sm` (384px): the entry cards are
 			    an icon column plus two lines of copy, which reads cramped there. */}
-			<DialogContent
-				className="gap-0 p-0 sm:max-w-lg"
-				showCloseButton={false}
-			>
+			<DialogContent className="gap-0 p-0 sm:max-w-lg" showCloseButton={false}>
 				<div className="flex items-center gap-3 bg-primary p-4">
 					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/20">
 						<Sparkles className="size-4.5 text-accent" strokeWidth={2} />
@@ -357,6 +400,7 @@ function WhatsNewDialog({
 													/>
 												</span>
 												<div className="flex min-w-0 flex-1 flex-col gap-1">
+													<KindChip kind={entry.kind} />
 													<h3 className="font-heading text-sm leading-snug font-semibold">
 														{localized(entry.title, locale)}
 													</h3>
@@ -394,7 +438,10 @@ function WhatsNewDialog({
 						// wide bar. The confirmation line fills it and answers the
 						// question the seller opened the panel with.
 						<span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-							<Check className="size-3.5 text-accent-emphasis" strokeWidth={2.5} />
+							<Check
+								className="size-3.5 text-accent-emphasis"
+								strokeWidth={2.5}
+							/>
 							You've seen everything
 						</span>
 					) : (

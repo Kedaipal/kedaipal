@@ -1,5 +1,5 @@
 import { convexQuery } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import type { SortingState } from "@tanstack/react-table";
 import { useConvex, useMutation } from "convex/react";
@@ -19,7 +19,7 @@ import {
 	ShoppingBag,
 	X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -31,7 +31,7 @@ import {
 	INBOX_BUCKETS,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
-import { ORDER_COLUMNS } from "../../convex/lib/orderCsv";
+import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	sortInboxOrders,
@@ -49,6 +49,11 @@ import {
 	type BulkAction,
 	OrderBulkBar,
 } from "../components/dashboard/order-bulk-bar";
+import {
+	buildOrderColumnFilters,
+	METHOD_UNSPECIFIED,
+	type OrderColumnFilterState,
+} from "../components/dashboard/order-column-filters";
 import { OrderColumnPicker } from "../components/dashboard/order-column-picker";
 import {
 	OrderFilters,
@@ -60,10 +65,7 @@ import { OrderTable } from "../components/dashboard/order-table";
 import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
-import {
-	type OrderStatus,
-	StatusBadge,
-} from "../components/dashboard/status-badge";
+import { StatusBadge } from "../components/dashboard/status-badge";
 import { Button } from "../components/ui/button";
 import {
 	DropdownMenu,
@@ -81,6 +83,11 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import {
+	type InboxView,
+	resolveInboxView,
+	useInboxView,
+} from "../hooks/useInboxView";
 import { useOrderColumns } from "../hooks/useOrderColumns";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
@@ -96,6 +103,8 @@ import { summarizeOrderCardItems } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
+	ORDER_STATUS_KEYS,
+	type OrderStatus,
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
@@ -106,8 +115,6 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
-/** Card list vs table (86eyrtz74). Both are available at every width. */
-type InboxView = "cards" | "table";
 const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
 
 function isPaymentStatus(x: unknown): x is PaymentStatus {
@@ -117,7 +124,11 @@ function isPaymentStatus(x: unknown): x is PaymentStatus {
 // All optional (defaults applied in the component) so links elsewhere can target
 // `/app/orders` without specifying search, and defaults stay out of the URL.
 type InboxSearch = {
-	bucket?: InboxBucket;
+	/** Workflow buckets to keep — MULTI since 86eyrtz74, repeated in the URL
+	 * like `pay`/`st`. Absent = every bucket ("All"). A single value still
+	 * parses (`?bucket=new` — every deep link and old bookmark), it just lands
+	 * in a one-element list. */
+	bucket?: OrderBucket[];
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
@@ -129,16 +140,34 @@ type InboxSearch = {
 	mockup?: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
-	/** Checkout surface (online vs counter). */
-	source?: OrderSource;
+	/** Checkout surfaces to keep (online / counter / claim link). MULTI since
+	 * 86eyrtz74 — "everything that isn't a walk-in" is a real question that one
+	 * value can't ask. A legacy singular `?source=` is still read and folded in,
+	 * so old bookmarks keep working. */
+	sources?: OrderSource[];
+	/** Exact order statuses to keep (86eyrtz74) — repeated in the URL like
+	 * `pay`/`method`. A separate, finer dimension from `bucket`: the bucket is
+	 * the coarse stage you navigate by, this is the precise one you question. */
+	st?: OrderStatus[];
+	/** Frozen line categories to keep (86eyrtz74). Free-form seller names. */
+	cat?: string[];
+	/** Keep orders with NO frozen categories (PR #235 review) — the twin of
+	 * `munspec`. Without it, selecting every category silently drops them. */
+	catunspec?: boolean;
 	/** Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys. Repeated
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
 	asrc?: string[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
-	/** Card list (default) vs the desktop table (86eyrtz74). Only "table" is
-	 * stored, so a shared link opens the view the sender was actually in. */
+	/** Card list vs table (86eyrtz74), both available at every width.
+	 *
+	 * The one search param that does NOT follow the "defaults stay out of the
+	 * URL" convention: BOTH values are written, because absent now means "use the
+	 * view I was last in" (`useInboxView`), not "cards". Writing only "table"
+	 * would leave a seller who prefers the table with no way to send — or to
+	 * pin — a cards link. A named view always wins over the remembered one, so a
+	 * shared link opens the layout it was sent in. */
 	view?: InboxView;
 	/** Table view's per-column sort: the column key, and `tdesc` for direction
 	 * (86eyrtz74). In the URL — unlike column layout, which is a 36-toggle
@@ -161,15 +190,31 @@ function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
 }
 
+function isOrderStatusKey(x: unknown): x is OrderStatus {
+	return ORDER_STATUS_KEYS.includes(x as OrderStatus);
+}
+
+/** A repeated search param arrives as a value, an array, or nothing. */
+function toList(raw: unknown): unknown[] {
+	return Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+}
+
 export const Route = createFileRoute("/app/orders/")({
-	// URL is the source of truth for the view (refresh + share preserve it).
+	// URL is the source of truth for what the seller is LOOKING AT — bucket,
+	// filters, search, sort — so refresh and share both preserve it. The one
+	// exception is `view`, the layout: that falls back to a remembered
+	// preference when the URL doesn't name one (see InboxSearch.view).
 	validateSearch: (search: Record<string, unknown>): InboxSearch => {
-		const rawBucket = search.bucket as InboxBucket;
-		// undefined ≡ "all" — keeps the default out of the URL.
-		const bucket =
-			BUCKET_KEYS.includes(rawBucket) && rawBucket !== "all"
-				? rawBucket
-				: undefined;
+		// undefined ≡ "All" — keeps the default out of the URL. The legacy "all"
+		// sentinel is simply dropped from the list rather than special-cased.
+		const bucket = [
+			...new Set(
+				toList(search.bucket).filter(
+					(x): x is OrderBucket =>
+						BUCKET_KEYS.includes(x as InboxBucket) && x !== "all",
+				),
+			),
+		];
 		const payRaw = search.pay;
 		const payArr = Array.isArray(payRaw)
 			? payRaw
@@ -205,12 +250,31 @@ export const Route = createFileRoute("/app/orders/")({
 				}),
 			),
 		];
+		const sources = [
+			...new Set(
+				[...toList(search.sources), ...toList(search.source)].filter(
+					isOrderSource,
+				),
+			),
+		];
+		const st = [...new Set(toList(search.st).filter(isOrderStatusKey))];
+		// Category names are the seller's own words — no allowlist to validate
+		// against, so they are only de-duplicated and length-capped. An unknown
+		// name simply matches nothing, which is the honest outcome for a stale
+		// link to a category that has since been renamed.
+		const cat = [
+			...new Set(
+				toList(search.cat).flatMap((x) =>
+					typeof x === "string" && x.length > 0 && x.length <= 120 ? [x] : [],
+				),
+			),
+		];
 		const q =
 			typeof search.q === "string" && search.q.length > 0
 				? search.q
 				: undefined;
 		return {
-			bucket,
+			bucket: bucket.length > 0 ? bucket : undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -221,11 +285,24 @@ export const Route = createFileRoute("/app/orders/")({
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
-			source: isOrderSource(search.source) ? search.source : undefined,
+			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
+			// link shared before this shipped still filters (86eyrtz74).
+			sources: sources.length > 0 ? sources : undefined,
+			st: st.length > 0 ? st : undefined,
+			cat: cat.length > 0 ? cat : undefined,
+			catunspec:
+				search.catunspec === true || search.catunspec === "true"
+					? true
+					: undefined,
 			asrc: asrc.length > 0 ? asrc : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
-			view: search.view === "table" ? "table" : undefined,
+			// Both values survive (see InboxSearch.view) — absent means "the view
+			// this seller last used", which is a different thing from "cards".
+			view:
+				search.view === "table" || search.view === "cards"
+					? search.view
+					: undefined,
 			// Validated against the registry so a hand-edited or stale key can
 			// never put the table into an unsortable state.
 			tsort:
@@ -272,7 +349,7 @@ const INBOX_SORTS: {
 
 function OrdersRoute() {
 	const {
-		bucket = "all",
+		bucket: buckets = [],
 		q = "",
 		pay = [],
 		method = [],
@@ -282,9 +359,12 @@ function OrdersRoute() {
 		to,
 		mockup = false,
 		fwin,
-		source,
+		sources = [],
+		st = [],
+		cat = [],
+		catunspec = false,
 		sort = "recent",
-		view = "cards",
+		view: urlView,
 		nopin = false,
 		tsort,
 		tdesc = false,
@@ -329,10 +409,34 @@ function OrdersRoute() {
 	// Keyed on "" while the retailer is still loading so the hook order is stable
 	// across the early return below.
 	const columnState = useOrderColumns(retailer?._id ?? "");
+	// The remembered layout, same storage posture as the columns above. A view
+	// named in the URL wins; otherwise the seller resumes where they left off,
+	// and cards is only the fallback for someone who has never chosen.
+	const { stored: storedView, remember: rememberView } = useInboxView(
+		retailer?._id ?? "",
+	);
+	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
+	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
+	// export are the gated inbox surfaces — hidden below, and any stale URL filters
+	// are ignored so the query only ever sends default args (the server enforces
+	// the same line in searchOrders). Admin act-as sees through it.
+	//
+	// Declared HERE, above the view resolution, because the table is one of those
+	// gated surfaces: see resolveInboxView for why a gated seller is put back in
+	// cards rather than left in a table whose filters do nothing.
+	const inboxEnabled =
+		!retailer ||
+		retailer.actingAsAdmin === true ||
+		hasFeature(retailer.subscription, "orderInbox");
+	const view = resolveInboxView(urlView, storedView, inboxEnabled);
 
+	const bucketKey = buckets.join(",");
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
+	const sourcesKey = sources.join(",");
+	const stKey = st.join(",");
+	const catKey = cat.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
 	useEffect(() => {
 		navigate({
@@ -347,7 +451,7 @@ function OrdersRoute() {
 		setVisibleCount(PAGE_SIZE);
 		setSelected(new Set());
 	}, [
-		bucket,
+		bucketKey,
 		debounced,
 		payKey,
 		methodKey,
@@ -357,22 +461,15 @@ function OrdersRoute() {
 		to,
 		mockup,
 		fwin,
-		source,
+		sourcesKey,
+		stKey,
+		catKey,
+		catunspec,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
 		// Toggling pin privilege changes which rows are in the set.
 		nopin,
 	]);
-
-	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
-	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
-	// export are the gated inbox surfaces — hidden below, and any stale URL filters
-	// are ignored so the query only ever sends default args (the server enforces
-	// the same line in searchOrders). Admin act-as sees through it.
-	const inboxEnabled =
-		!retailer ||
-		retailer.actingAsAdmin === true ||
-		hasFeature(retailer.subscription, "orderInbox");
 
 	// Permanent hard delete (single + bulk) is admin-only (Kedaipal support); a
 	// plain seller only ever cancels. Same shared gate as order detail — see
@@ -383,14 +480,26 @@ function OrdersRoute() {
 		amIAdmin,
 	});
 
-	const result = useQuery(
-		convexQuery(
+	// `placeholderData: keepPreviousData` is load-bearing, not an optimisation.
+	//
+	// Every filter, search or bucket change rewrites the query ARGS, which makes
+	// a new TanStack Query key, which means `data` is `undefined` until the new
+	// Convex subscription resolves. Without this the whole list unmounts into a
+	// skeleton and remounts on every single click — the seller sees the page
+	// "refresh", loses their scroll position, and an open header-filter dropdown
+	// is torn down mid-selection, which makes picking a second value impossible.
+	//
+	// Keeping the previous page means the rows stay put and only their contents
+	// change. The trade is one beat of stale rows under an already-active filter
+	// chip, which `refreshing` below owns up to.
+	const ordersQuery = useQuery({
+		...convexQuery(
 			api.orders.searchOrders,
 			retailer
 				? inboxEnabled
 					? {
 							retailerId: retailer._id,
-							bucket,
+							buckets: buckets.length > 0 ? buckets : undefined,
 							paymentStatuses: pay.length > 0 ? pay : undefined,
 							paymentMethods: method.length > 0 ? method : undefined,
 							methodUnspecified: munspec || undefined,
@@ -398,7 +507,10 @@ function OrdersRoute() {
 							dateTo: to,
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
-							source,
+							sources: sources.length > 0 ? sources : undefined,
+							statuses: st.length > 0 ? st : undefined,
+							categories: cat.length > 0 ? cat : undefined,
+							categoriesUnspecified: catunspec || undefined,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							searchText: debounced || undefined,
 							// Pins keep their privilege in the live inbox AND in the
@@ -408,11 +520,16 @@ function OrdersRoute() {
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
-					: { retailerId: retailer._id, bucket: "all" as const }
+					: { retailerId: retailer._id }
 				: "skip",
 		),
-	).data;
-	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
+		placeholderData: keepPreviousData,
+	});
+	const result = ordersQuery.data;
+	/** Showing the PREVIOUS result while a new one loads. Drives the quiet
+	 * pending state on the list — a spinner or skeleton here would reintroduce
+	 * exactly the flash this is here to remove. */
+	const refreshing = ordersQuery.isPlaceholderData;
 
 	if (!retailer) return <OrdersInboxSkeleton />;
 
@@ -437,11 +554,13 @@ function OrdersRoute() {
 	// The scan hit its ceiling — orders older than the newest 1,000 aren't in the
 	// window, so the list and the counts under-report. Surfaced in the footer.
 	const capped = result?.capped ?? false;
-	// Bucket counts are independent of the active filters, so retain the last
-	// known set across refetches — otherwise the chips + due-today banner would
-	// flicker out every time a filter changes (the query reloads).
-	if (result?.counts) countsRef.current = result.counts;
-	const counts = result?.counts ?? countsRef.current ?? undefined;
+	// Bucket counts are independent of the active filters. They used to be held
+	// in a ref across refetches, because the chips and the due-today banner
+	// flickered out every time a filter changed — a hand-rolled fix for one
+	// symptom of the query reloading. `keepPreviousData` above cures the cause
+	// for the whole page, so the ref is gone rather than left as a second
+	// mechanism doing the same job less well.
+	const counts = result?.counts;
 	const total = result?.total ?? 0;
 	const pinnedCount = counts?.pinned ?? 0;
 	const selectionHasPinned = visibleOrders.some(
@@ -479,6 +598,36 @@ function OrdersRoute() {
 			resolved,
 		);
 	}
+	// Header filters (86eyrtz74) — built here because this is where the URL state,
+	// the server's facet counts and the retailer's own stage wording all meet;
+	// the table itself stays presentational.
+	// Header filters (86eyrtz74) — built here because this is where the URL state,
+	// the server's facet counts and the retailer's own stage wording all meet;
+	// the table itself stays presentational. Deliberately NOT memoised: it would
+	// have to sit above the `!retailer` early return to be a legal hook, and
+	// rebuilding six short option arrays per render is not worth restructuring
+	// the component for.
+	const headerFilters = buildOrderColumnFilters({
+		state: {
+			statuses: st,
+			categories: cat,
+			categoriesUnspecified: catunspec,
+			sources,
+			paymentStatuses: pay,
+			paymentMethods: munspec ? [...method, METHOD_UNSPECIFIED] : method,
+			attributionSources: asrc,
+			fulfilmentWindow: fwin,
+		},
+		facets: result?.facets,
+		availableSources: result?.availableSources ?? [],
+		availableCategories: result?.availableCategories ?? [],
+		country: retailer.country,
+		// The same resolver the Status column renders with, so the filter offers
+		// the seller's own stage words rather than our internal keys.
+		statusLabel: (status) => statusLabelFor({ status }),
+		onApply: applyColumnFilter,
+	});
+
 	// Table view is available at EVERY width (owner call, 28 Aug). The first
 	// build gated it to `lg` and up on the grounds that a wide table can't fit a
 	// phone — but a seller away from their desk still wants the scan-many-orders
@@ -499,14 +648,28 @@ function OrdersRoute() {
 		to != null ||
 		mockup ||
 		fwin != null ||
-		source != null;
+		sources.length > 0 ||
+		st.length > 0 ||
+		cat.length > 0 ||
+		catunspec ||
+		asrc.length > 0;
 
-	function setBucket(next: InboxBucket) {
+	function toggleBucket(next: InboxBucket) {
 		navigate({
-			search: (prev) => ({
-				...prev,
-				bucket: next === "all" ? undefined : next,
-			}),
+			// `replace`, like every other multi-select: a set is built one tap at a
+			// time, and each push was a history entry plus (via scrollRestoration) a
+			// scroll-to-top. The chips stopped being single-shot navigation when
+			// they stopped being single-select.
+			replace: true,
+			search: (prev) => {
+				// "All" is the escape hatch, not a member: it clears the set.
+				if (next === "all") return { ...prev, bucket: undefined };
+				const has = buckets.includes(next);
+				const list = has
+					? buckets.filter((b) => b !== next)
+					: [...buckets, next];
+				return { ...prev, bucket: list.length > 0 ? list : undefined };
+			},
 		});
 	}
 
@@ -531,12 +694,11 @@ function OrdersRoute() {
 	}
 
 	function setView(next: InboxView) {
-		navigate({
-			search: (prev) => ({
-				...prev,
-				view: next === "table" ? "table" : undefined,
-			}),
-		});
+		// Remembered AND written to the URL: the memory is what survives leaving
+		// the page, the URL is what survives sharing it. Both values go in — see
+		// InboxSearch.view for why this param breaks the defaults-stay-out rule.
+		rememberView(next);
+		navigate({ search: (prev) => ({ ...prev, view: next }) });
 	}
 
 	function setSort(next: InboxSort) {
@@ -546,8 +708,100 @@ function OrdersRoute() {
 		});
 	}
 
+	/**
+	 * Apply a header-filter change. Every dimension lands in the URL exactly
+	 * where the filter panel already puts it, so the two surfaces are one state
+	 * rather than two that must be kept in step — and the CSV export, which
+	 * re-reads these same params, can't come back with different rows than the
+	 * screen it was launched from.
+	 */
+	function applyColumnFilter(patch: Partial<OrderColumnFilterState>) {
+		navigate({
+			// REPLACE, not push. Two reasons, both about how filters are actually
+			// used: a multi-select is built one tick at a time, so pushing would
+			// leave six history entries behind a single act of filtering; and the
+			// router has `scrollRestoration`, which has no cached position for a new
+			// entry and therefore scrolls to the top on every tick — the list
+			// jumping under the seller while a dropdown is open reads as the page
+			// reloading. `replace` keeps the entry, so the scroll stays put. Matches
+			// the debounced search box, which has always replaced for the same
+			// reason — and the bucket chips, which joined it when they went
+			// multi-select (86eyrtz74).
+			replace: true,
+			search: (prev) => {
+				const next = { ...prev };
+				if (patch.statuses)
+					next.st =
+						patch.statuses.length > 0
+							? (patch.statuses as OrderStatus[])
+							: undefined;
+				if (patch.categories)
+					next.cat = patch.categories.length > 0 ? patch.categories : undefined;
+				if ("categoriesUnspecified" in patch)
+					next.catunspec = patch.categoriesUnspecified ? true : undefined;
+				if (patch.sources)
+					next.sources =
+						patch.sources.length > 0
+							? (patch.sources as OrderSource[])
+							: undefined;
+				if (patch.paymentStatuses)
+					next.pay =
+						patch.paymentStatuses.length > 0
+							? (patch.paymentStatuses as PaymentStatus[])
+							: undefined;
+				if (patch.paymentMethods) {
+					// Split the picker's "" sentinel back into the boolean the URL and
+					// the predicate have always used for "no method recorded".
+					const concrete = patch.paymentMethods.filter(
+						(m): m is OrderPaymentMethod =>
+							m !== METHOD_UNSPECIFIED && isOrderPaymentMethod(m),
+					);
+					next.method = concrete.length > 0 ? concrete : undefined;
+					next.munspec = patch.paymentMethods.includes(METHOD_UNSPECIFIED)
+						? true
+						: undefined;
+				}
+				if (patch.attributionSources)
+					next.asrc =
+						patch.attributionSources.length > 0
+							? patch.attributionSources
+							: undefined;
+				if ("fulfilmentWindow" in patch) next.fwin = patch.fulfilmentWindow;
+				return next;
+			},
+		});
+	}
+
+	/** Drop every filter, keeping the bucket, the search term and the view — a
+	 * seller who lands on "nothing matches" wants their filters gone, not their
+	 * place in the app. */
+	function clearAllFilters() {
+		navigate({
+			replace: true,
+			search: (prev) => ({
+				...prev,
+				pay: undefined,
+				method: undefined,
+				munspec: undefined,
+				from: undefined,
+				to: undefined,
+				mockup: undefined,
+				fwin: undefined,
+				sources: undefined,
+				st: undefined,
+				cat: undefined,
+				catunspec: undefined,
+				asrc: undefined,
+			}),
+		});
+	}
+
 	function setFilters(next: OrderFilterValue) {
 		navigate({
+			// Same reasoning as applyColumnFilter: the panel is ticked several times
+			// per visit, and each tick was its own history entry and its own scroll
+			// jump.
+			replace: true,
 			search: (prev) => ({
 				...prev,
 				pay: next.payment.length > 0 ? next.payment : undefined,
@@ -561,7 +815,13 @@ function OrdersRoute() {
 					next.attributionSources.length > 0
 						? next.attributionSources
 						: undefined,
-				source: next.source,
+				sources: next.sources.length > 0 ? next.sources : undefined,
+				st:
+					next.statuses.length > 0
+						? (next.statuses as OrderStatus[])
+						: undefined,
+				cat: next.categories.length > 0 ? next.categories : undefined,
+				catunspec: next.categoriesUnspecified ? true : undefined,
 			}),
 		});
 	}
@@ -731,7 +991,7 @@ function OrdersRoute() {
 				api.orders.exportOrders,
 				{
 					retailerId: retailer._id,
-					bucket,
+					buckets: buckets.length > 0 ? buckets : undefined,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
 					paymentMethods: method.length > 0 ? method : undefined,
 					methodUnspecified: munspec || undefined,
@@ -739,7 +999,10 @@ function OrdersRoute() {
 					dateTo: to,
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
-					source,
+					sources: sources.length > 0 ? sources : undefined,
+					statuses: st.length > 0 ? st : undefined,
+					categories: cat.length > 0 ? cat : undefined,
+					categoriesUnspecified: catunspec || undefined,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					searchText: debounced || undefined,
 					showPinned: showPinned || undefined,
@@ -885,7 +1148,11 @@ function OrdersRoute() {
 			<PageHeader
 				title="Orders"
 				subtitle={
-					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
+					loading
+						? "Loading…"
+						: refreshing
+							? "Updating…"
+							: `${total} order${total === 1 ? "" : "s"}`
 				}
 				actions={inboxEnabled ? headerActions : undefined}
 			/>
@@ -1021,12 +1288,20 @@ function OrdersRoute() {
 								to,
 								mockup,
 								fwin,
-								source,
+								sources,
+								statuses: st,
+								categories: cat,
+								categoriesUnspecified: catunspec,
 								attributionSources: asrc,
 							}}
 							onChange={setFilters}
 							country={retailer.country}
 							availableSources={result?.availableSources}
+							availableCategories={result?.availableCategories}
+							facets={result?.facets}
+							// One resolver for both surfaces, so the panel and the Status
+							// column can never call the same state two different things.
+							statusLabel={(status) => statusLabelFor({ status })}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
 						/>
@@ -1075,8 +1350,15 @@ function OrdersRoute() {
 								return (
 									<FilterChip
 										key={key}
-										selected={bucket === key}
-										onClick={() => setBucket(key)}
+										// Multi-select (86eyrtz74): each bucket chip toggles
+										// membership; "All" is lit only while the set is empty,
+										// and tapping it empties the set.
+										selected={
+											key === "all"
+												? buckets.length === 0
+												: buckets.includes(key)
+										}
+										onClick={() => toggleBucket(key)}
 										count={bucketCount(key)}
 										countTone={key === "new" ? "attention" : "muted"}
 									>
@@ -1087,10 +1369,9 @@ function OrdersRoute() {
 						</FilterChipRow>
 						{tableView ? (
 							<OrderColumnPicker
-								columns={columnState.columns}
 								isVisible={columnState.isVisible}
 								onToggle={columnState.toggle}
-								onReorder={columnState.reorder}
+								onSetMany={columnState.setManyVisible}
 								onReset={columnState.reset}
 								visibleCount={columnState.visibleKeys.length}
 								isCustomised={columnState.isCustomised}
@@ -1156,15 +1437,25 @@ function OrdersRoute() {
 
 			{loading ? (
 				<OrderList.Skeleton />
-			) : orders.length === 0 ? (
+			) : orders.length === 0 && !tableView ? (
+				// Table view keeps its table (and so its header filters) when nothing
+				// matches — the empty state renders as a row inside it instead.
 				<EmptyOrders
-					bucket={bucket}
+					// The per-bucket copy ("No new orders…") only makes sense for ONE
+					// bucket; a multi-set or empty set falls back to the generic line.
+					bucket={buckets.length === 1 ? buckets[0] : "all"}
 					searching={searching}
 					filtersActive={filtersActive}
 					mockup={mockup}
 				/>
 			) : (
-				<>
+				// `aria-busy` while a filter change is in flight: the rows on screen
+				// are the previous answer for a beat, and a screen reader should not
+				// be told they are the new one. Deliberately NO visual dimming —
+				// flashing 50 rows on every click is the problem this whole change
+				// exists to remove; the count in the header carries the visible cue
+				// instead, because the count is the part that's actually stale.
+				<div className="contents" aria-busy={refreshing}>
 					{tableView ? (
 						<OrderTable
 							orders={visibleOrders}
@@ -1172,6 +1463,13 @@ function OrdersRoute() {
 							statusLabelFor={statusLabelFor}
 							sorting={tableSorting}
 							onSortingChange={setTableSorting}
+							onReorderColumns={(keys) =>
+								columnState.reorder(keys as OrderColumnKey[])
+							}
+							columnWidths={columnState.widths}
+							onColumnWidthsChange={columnState.setWidths}
+							columnFilters={headerFilters}
+							onClearFilters={filtersActive ? clearAllFilters : undefined}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}
@@ -1335,7 +1633,14 @@ function OrdersRoute() {
 					    takes newest-by-date THEN filters), so filters/search can't reach
 					    past it — export is the full-history path. The "1,000" mirrors
 					    MAX_INBOX_SCAN in convex/orders.ts. */}
-					<p className="text-center text-xs text-muted-foreground">
+					<p
+						className={cn(
+							"text-center text-xs text-muted-foreground",
+							// "Showing 0 of 0 orders" under a row that already says
+							// "No orders match" is the same fact twice.
+							orders.length === 0 && "hidden",
+						)}
+					>
 						{`Showing ${visibleOrders.length} of ${total} ${total === 1 ? "order" : "orders"}`}
 						{capped ? (
 							<>
@@ -1348,7 +1653,7 @@ function OrdersRoute() {
 						) : null}
 					</p>
 					{selectMode ? <div className="h-24" aria-hidden="true" /> : null}
-				</>
+				</div>
 			)}
 
 			{/* Mounted for the whole of select mode (not gated on a selection) so

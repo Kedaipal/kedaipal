@@ -1,5 +1,12 @@
+import { useInView, useReducedMotion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import {
+	FacebookIcon,
+	InstagramIcon,
+	TikTokIcon,
+} from "../dashboard/brand-icons";
 import { FadeIn } from "./fade-in";
 import { carouselSlideClass, carouselTrackClass, Eyebrow } from "./landing-ui";
 
@@ -34,6 +41,43 @@ function MiniQr() {
 	);
 }
 
+/** Claim-window countdown seconds: loops 14:59 → 13:30 then resets — always
+ * mid-flight, like a link someone just dropped. */
+const COUNTDOWN_START = 14 * 60 + 59;
+const COUNTDOWN_FLOOR = 13 * 60 + 30;
+
+/**
+ * The live card's expiry pill actually counts down — the urgency IS the
+ * feature. Same guards as the buried-chats loop: ticks only on a visible
+ * tab with the card in view (a hidden tab must not accumulate work), and
+ * reduced motion pins it at the start value.
+ */
+function LiveCountdown() {
+	const shouldReduceMotion = useReducedMotion();
+	const ref = useRef<HTMLSpanElement>(null);
+	const inView = useInView(ref, { margin: "-10% 0px" });
+	const [seconds, setSeconds] = useState(COUNTDOWN_START);
+
+	useEffect(() => {
+		if (shouldReduceMotion || !inView) return;
+		const id = setInterval(() => {
+			if (document.visibilityState !== "visible") return;
+			setSeconds((s) => (s <= COUNTDOWN_FLOOR ? COUNTDOWN_START : s - 1));
+		}, 1000);
+		return () => clearInterval(id);
+	}, [shouldReduceMotion, inView]);
+
+	const t = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+	return (
+		<span
+			ref={ref}
+			className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-amber-700"
+		>
+			{m.bento_live_card_timer({ t })}
+		</span>
+	);
+}
+
 function CardShell({
 	children,
 	dark = false,
@@ -44,7 +88,7 @@ function CardShell({
 	span?: boolean;
 }) {
 	return (
-		<div className={carouselSlideClass(cn("h-full", span && "lg:col-span-2"))}>
+		<div className={carouselSlideClass(cn("md:h-full", span && "lg:col-span-2"))}>
 			<div
 				className={cn(
 					"flex h-full flex-col rounded-3xl border p-7 transition-all duration-200 motion-reduce:hover:translate-y-0",
@@ -112,7 +156,7 @@ export function FeatureGrid() {
 											{m.handshake_card_badge()}
 										</span>
 									</div>
-								{/* flex-wrap: at carousel-slide width the two labels don't fit
+									{/* flex-wrap: at carousel-slide width the two labels don't fit
 									    one line, and a fixed-height pill clips wrapped text — let
 									    the row break to two full-width pills instead. */}
 									<div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -199,6 +243,61 @@ export function FeatureGrid() {
 							</div>
 						</CardShell>
 
+						{/* Sell on live — claim links (86eyq0epn). The wide slot because
+						    it's the newest shipped differentiator: a price-locked,
+						    vendor-timed checkout link dropped mid-stream, with the order
+						    stamped as from the live in Insights. */}
+						<CardShell span>
+							<div className="grid h-full items-center gap-6 lg:grid-cols-[1.2fr_1fr]">
+								<div>
+									<h3 className="text-xl font-semibold">
+										{m.bento_live_title()}
+									</h3>
+									<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+										{m.bento_live_body()}
+									</p>
+									{/* Platform glyphs — nominative use, same CC0 marks as the
+									    tagged-share tiles (brand-icons.tsx): naming where a
+									    seller goes live, not implying endorsement. Proper nouns
+									    stay literals per house style. */}
+									<div className="mt-4 flex items-center gap-2">
+										{[
+											{ Icon: TikTokIcon, name: "TikTok", color: "text-foreground" },
+											{ Icon: InstagramIcon, name: "Instagram", color: "text-[#FF0069]" },
+											{ Icon: FacebookIcon, name: "Facebook", color: "text-[#0866FF]" },
+										].map(({ Icon, name, color }) => (
+											<span
+												key={name}
+												className={cn(
+													"flex size-8 items-center justify-center rounded-full border border-border bg-card",
+													color,
+												)}
+											>
+												<Icon className="size-4" />
+												<span className="sr-only">{name}</span>
+											</span>
+										))}
+									</div>
+								</div>
+								<div
+									aria-hidden="true"
+									className="rounded-2xl bg-white p-3.5 text-slate-900 shadow-xl"
+								>
+									<div className="flex items-center justify-between gap-2">
+										<p className="text-xs font-bold">
+											{m.bento_live_card_item()}
+										</p>
+										<LiveCountdown />
+									</div>
+									<div className="mt-2.5 flex">
+										<span className="flex h-8 flex-1 items-center justify-center whitespace-nowrap rounded-full bg-accent px-3 text-[11.5px] font-bold text-accent-foreground">
+											{m.bento_live_card_cta()}
+										</span>
+									</div>
+								</div>
+							</div>
+						</CardShell>
+
 						{/* Variants */}
 						<CardShell>
 							<h3 className="text-xl font-semibold">
@@ -244,32 +343,41 @@ export function FeatureGrid() {
 							</div>
 						</CardShell>
 
-						{/* Order inbox + customer memory */}
-						<CardShell>
-							<h3 className="text-xl font-semibold">{m.bento_inbox_title()}</h3>
-							<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-								{m.bento_inbox_body()}
-							</p>
-							<div
-								aria-hidden="true"
-								className="mt-auto rounded-2xl border border-border p-3.5 shadow-sm"
-							>
-								<div className="flex items-center gap-2.5">
-									<span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/10 font-heading text-xs font-extrabold text-accent-emphasis">
-										AR
-									</span>
-									<div className="min-w-0">
-										<p className="truncate text-[13px] font-bold">
-											Aisyah Rahim
-										</p>
-										<p className="truncate text-[11.5px] text-muted-foreground">
-											{m.bento_inbox_stats()}
-										</p>
-									</div>
+						{/* Order inbox + customer memory. span-2 since the live card landed:
+						    the lg bento tiles in 3-column rows, so total column units must
+						    stay divisible by 3 — live(2) alone would leave a hole, and this
+						    card's customer-profile mock breathes better wide anyway. */}
+						<CardShell span>
+							<div className="grid h-full items-center gap-6 lg:grid-cols-[1.2fr_1fr]">
+								<div>
+									<h3 className="text-xl font-semibold">
+										{m.bento_inbox_title()}
+									</h3>
+									<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+										{m.bento_inbox_body()}
+									</p>
 								</div>
-								<p className="mt-2.5 truncate rounded-lg bg-muted/70 px-2.5 py-1.5 text-[11.5px] text-muted-foreground">
-									{m.bento_inbox_note()}
-								</p>
+								<div
+									aria-hidden="true"
+									className="rounded-2xl border border-border p-3.5 shadow-sm"
+								>
+									<div className="flex items-center gap-2.5">
+										<span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/10 font-heading text-xs font-extrabold text-accent-emphasis">
+											AR
+										</span>
+										<div className="min-w-0">
+											<p className="truncate text-[13px] font-bold">
+												Aisyah Rahim
+											</p>
+											<p className="truncate text-[11.5px] text-muted-foreground">
+												{m.bento_inbox_stats()}
+											</p>
+										</div>
+									</div>
+									<p className="mt-2.5 truncate rounded-lg bg-muted/70 px-2.5 py-1.5 text-[11.5px] text-muted-foreground">
+										{m.bento_inbox_note()}
+									</p>
+								</div>
 							</div>
 						</CardShell>
 					</div>
@@ -278,7 +386,7 @@ export function FeatureGrid() {
 				<p className="mt-8 text-center">
 					<a
 						href="#pricing"
-						className="text-sm font-medium text-accent underline-offset-4 hover:underline"
+						className="inline-flex min-h-11 items-center text-sm font-medium text-accent underline-offset-4 hover:underline"
 					>
 						{m.features_full_list()}
 					</a>

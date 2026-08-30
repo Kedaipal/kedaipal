@@ -38,6 +38,21 @@ import type { Locale } from "../../convex/lib/locale";
  * - Add an `href` wherever the feature has a home. The deep link is what turns
  *   an announcement into adoption — without it a seller reads the note, nods,
  *   and never finds the setting.
+ * - **Every entry declares its `kind`** — New feature / Enhancement / Bug fix.
+ *   It is required, so this is a compile error rather than a convention. Judge
+ *   it from the seller's side, not the diff's: see `ReleaseKind`.
+ *
+ * ## Touching this file means a release is going out — run the checklist
+ *
+ * Notes are only ever written for a staging→main merge, so editing this file
+ * is the reliable signal that a **deploy** is imminent. Everything in
+ * [`docs/release-checklist.md`](../../docs/release-checklist.md) is therefore
+ * part of the same change, not a separate errand: bump `package.json` (a test
+ * enforces it), then audit the diff for **environment variables, backfills,
+ * schema/index changes, and anything an operator must switch on by hand** and
+ * write what you find into the release PR body. The point is that the person
+ * merging never has to ask "is there anything for me to do?" — the answer is
+ * already in front of them, including when it is "nothing".
  */
 
 /**
@@ -54,6 +69,32 @@ import type { Locale } from "../../convex/lib/locale";
 export type Localized = { en: string } & Partial<
 	Record<Exclude<Locale, "en">, string>
 >;
+
+/**
+ * What KIND of change an entry is, rendered as a labelled chip above its title.
+ *
+ * Required, not optional: a panel where some entries are labelled and some are
+ * not reads as a bug, and the label is the first thing a seller scans for —
+ * "did something break and get fixed, or is there something new to learn?".
+ * Making it a compile error is what keeps that true for every future entry.
+ *
+ * Three kinds, deliberately not more. A longer taxonomy (performance,
+ * security, copy…) is an engineering view of the work; a seller only sorts
+ * changes into "something I can now do", "something got better", and
+ * "something that was wrong is fixed".
+ */
+export type ReleaseKind = "feature" | "enhancement" | "fix";
+
+/**
+ * The words the seller reads. Kept beside the type rather than in the
+ * component so the copy and the union can never drift, and so a test can
+ * assert every kind has a label.
+ */
+export const RELEASE_KIND_LABELS: Record<ReleaseKind, string> = {
+	feature: "New feature",
+	enhancement: "Enhancement",
+	fix: "Bug fix",
+};
 
 /**
  * Icons an entry may carry, rendered as a tinted tile beside its title.
@@ -79,6 +120,15 @@ export type ReleaseIconName =
 	| "table";
 
 export interface ReleaseEntry {
+	/**
+	 * New feature / Enhancement / Bug fix. Required — see `ReleaseKind`.
+	 *
+	 * Judge it from the SELLER's side, not the diff's: a change that only
+	 * stopped something being wrong is a `fix` however much code it took, and a
+	 * change that lets them do something they could not do before is a
+	 * `feature` however small the diff.
+	 */
+	kind: ReleaseKind;
 	/** One line, benefit-first. Shown as the entry heading. */
 	title: Localized;
 	/** A sentence or two of plain-language detail. */
@@ -110,6 +160,105 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.08.3",
+		date: "2026-08-31",
+		// Earns the modal: the table shipped in 2026.08.2 is the surface a seller
+		// now works in daily, and this release changes how they FILTER it — the
+		// funnels moved onto the column headers, the chips went multi-select, and
+		// search reaches columns it never used to. A seller who reads nothing
+		// keeps using the one filter path they already found and never learns the
+		// table has become the faster one.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Filter straight from any column heading",
+				},
+				body: {
+					en: "In Table view, tap the funnel on a heading — Status, Payment, Order type, Categories, where the order came from — and tick as many values as you want. Filters stack across columns, the heading shows a dot while one is on, and the URL carries them, so the exact view you built is a link you can bookmark or send. Your export follows the same filters, so what you download is what you were looking at. Filtering and searching your orders is part of the Order Inbox, so the table and its funnels are on Pro.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Open the table" },
+				icon: "table",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Look at more than one status at a time",
+				},
+				body: {
+					en: 'The chips above your orders used to be one-at-a-time. Tap several now — "Completed" and "Cancelled" together to see everything closed, or "New" and "Paid" to see what needs packing. "All" is still there to clear them in one tap. Every count stays on its own chip so you can see the shape of your week before you tap anything — the counts are there on every plan, filtering by them is on Pro.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Search now looks in every column, not just four",
+				},
+				body: {
+					en: "Search used to read the order number, customer name, phone and item names, and nothing else — so a tracking number, a payment reference, a street name or a pickup outlet found nothing. It now reads every column the table can show, including the categories an order's items were filed under. Phone numbers still match on the last digits, so 123456789 finds +60123456789 however it was saved. Search is part of the Order Inbox, on Pro.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Try a search" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Make the table yours — drag, resize, and tick columns in bulk",
+				},
+				body: {
+					en: "Drag a heading sideways to move that column, or drag its edge to set the width — both are remembered per store on this device, so your layout is waiting for you next time. The Columns panel now has select-all for the whole list and for each group, so setting up a packing view is a couple of taps instead of thirty-six. On a computer the heading row stays put while the rows scroll under it.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Set up your columns" },
+				icon: "table",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Every cell reads like words, not like a database",
+				},
+				body: {
+					en: 'Your orders showed raw values in places — "self_collect", "received", "payment_window_expired". They now read as Self-collect, Paid and Payment window expired, and the filters offer exactly the same wording as the column beside them. Your CSV export is deliberately unchanged: it still carries the stored values, so any spreadsheet formula you have built on it keeps working.',
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Categories are recorded at the moment of sale",
+				},
+				body: {
+					en: "An order now remembers which categories its items were filed under when it was sold, instead of looking them up fresh every time. Reorganise your catalogue and last month's orders keep telling the truth about last month — and you can search and filter your orders by category, which was never possible before.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Long status labels no longer break in half",
+				},
+				body: {
+					en: '"Ready for Pickup" and longer custom stage names used to wrap mid-phrase in a narrow space, splitting the coloured pill into two ragged pieces on cards, in the table and on the order page. A status is one pill now — it shortens with a "…" when it has to, and the full wording is there when you hover.',
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Re-uploading your product export can't bring back an archived product",
+				},
+				body: {
+					en: "The export carries a product_status column. Uploading that file back used to ignore it, so an archived product quietly returned to your catalogue. The upload now reads it, the same way it already read variant_status — a round-trip leaves your catalogue exactly as it was.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open product upload" },
+			},
+		],
+	},
+	{
 		version: "2026.08.2",
 		date: "2026-08-28",
 		// Earns the modal: the orders page a seller opens every morning now has a
@@ -124,6 +273,7 @@ export const RELEASES: Release[] = [
 		notable: true,
 		entries: [
 			{
+				kind: "feature",
 				title: {
 					en: "Your orders as a table — the spreadsheet view, without leaving Kedaipal",
 				},
@@ -135,6 +285,7 @@ export const RELEASES: Release[] = [
 				icon: "table",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Pin the orders you need to keep an eye on",
 				},
@@ -145,6 +296,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Open orders" },
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "See a photo of every item while you pack",
 				},
@@ -156,6 +308,7 @@ export const RELEASES: Release[] = [
 				icon: "package",
 			},
 			{
+				kind: "fix",
 				title: {
 					en: "Your order export finally has the address — and the totals add up",
 				},
@@ -166,6 +319,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Open orders" },
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Your product export is a full catalogue report now",
 				},
@@ -198,6 +352,7 @@ export const RELEASES: Release[] = [
 		notable: true,
 		entries: [
 			{
+				kind: "enhancement",
 				title: {
 					en: "Your customer gets one WhatsApp — everything else is on their order page",
 				},
@@ -207,6 +362,7 @@ export const RELEASES: Release[] = [
 				icon: "package",
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Cancelling an order no longer messages the customer",
 				},
@@ -215,6 +371,7 @@ export const RELEASES: Release[] = [
 				},
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Payment reminders are yours to send now",
 				},
@@ -226,6 +383,7 @@ export const RELEASES: Release[] = [
 				icon: "megaphone",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Get a WhatsApp the moment an online payment lands",
 				},
@@ -237,6 +395,7 @@ export const RELEASES: Release[] = [
 				icon: "wallet",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Send the rest of checkout to your buyer — built for live selling",
 				},
@@ -248,6 +407,7 @@ export const RELEASES: Release[] = [
 				icon: "clock",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Change a price on the spot at the counter",
 				},
@@ -258,6 +418,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Open counter checkout" },
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "See which orders came from TikTok, your bio link, or your poster",
 				},
@@ -269,6 +430,7 @@ export const RELEASES: Release[] = [
 				icon: "chart",
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Your storefront loads much faster on a phone",
 				},
@@ -279,6 +441,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Check your photos" },
 			},
 			{
+				kind: "fix",
 				title: {
 					en: "Moving your store to Singapore is guided, not blocked",
 				},
@@ -290,6 +453,7 @@ export const RELEASES: Release[] = [
 				icon: "settings",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Find your version — and this list — in the same place",
 				},
@@ -298,6 +462,7 @@ export const RELEASES: Release[] = [
 				},
 			},
 			{
+				kind: "fix",
 				title: {
 					en: "Your customers' payment screenshots stay in your dashboard",
 				},

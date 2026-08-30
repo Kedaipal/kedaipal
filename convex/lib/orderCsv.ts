@@ -15,6 +15,8 @@
 import { sourceLabel } from "./attribution";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
+import { ORDER_STATUS_KEYS, type OrderStatus } from "./orderStatus";
+import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -39,6 +41,84 @@ export function csvAmount(minorUnits: number): string {
 function csvFlag(on: boolean | undefined): string {
 	return on ? "Yes" : "";
 }
+
+/**
+ * A stored enum value as a person reads it: `payment_window_expired` →
+ * `Payment window expired` (86eyrtz74).
+ *
+ * Every other cell in this registry is already formatted for a human — money
+ * through `csvAmount`, dates through `csvDate`, booleans through `csvFlag`,
+ * attribution through `sourceLabel`. The raw enums were the inconsistency, not
+ * this. Idempotent, so a value that is already prose passes through unchanged.
+ */
+/** Which fulfilment key a row reads as — the collection DIRECTION wins over the
+ * method, since it is the opposite trip (86eyg0n8e). */
+function fulfilmentKey(o: CsvOrder): string {
+	return o.deliveryDirection === "collection"
+		? "collection"
+		: (o.deliveryMethod ?? "");
+}
+
+export function humanizeEnum(raw: string): string {
+	const spaced = raw.replace(/[_-]+/g, " ").trim();
+	if (spaced === "") return "";
+	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * How an order's checkout surface is NAMED — the single source for the Order
+ * type column, its header filter and the Filters panel.
+ *
+ * It lives here because the column and the filter drifting apart is exactly
+ * what went wrong: the panel said "Online" while the table printed
+ * `storefront`, so a seller ticking a filter saw a value that matched nothing
+ * on screen. One map, imported by all three, is the fix for the cause rather
+ * than the symptom.
+ */
+export const ORDER_SOURCE_LABELS: Record<string, string> = {
+	// NOT "Online" — a claim-link order is online too, so the word names a
+	// category all three fit rather than telling the seller which one this is.
+	// "Storefront" names the actual surface: the buyer browsed the shop page and
+	// checked themselves out.
+	storefront: "Storefront",
+	counter: "Counter",
+	claim: "Claim link",
+};
+
+/**
+ * What the Payment method cell shows when no rail was recorded: nothing. The
+ * picker names that absence "Unspecified" because an unlabelled row in a list
+ * is unpickable — a word in the CELL would read as a real payment rail. Named
+ * so the test that holds filter labels and column text together can point at
+ * the one place they deliberately differ.
+ */
+export const METHOD_UNSPECIFIED_CELL = "";
+
+/** Checkout surfaces in the order they are offered, so every picker agrees. */
+export const ORDER_SOURCE_KEYS = ["storefront", "counter", "claim"] as const;
+
+/** Payment state as named everywhere. Note `received` reads as **Paid** — the
+ * stored value and the seller's word for it were never the same, which is the
+ * second place the column and its filter disagreed. */
+export const PAYMENT_STATUS_LABELS: Record<string, string> = {
+	unpaid: "Unpaid",
+	claimed: "Claimed",
+	received: "Paid",
+};
+
+export const PAYMENT_STATUS_KEYS = ["unpaid", "claimed", "received"] as const;
+
+/** How the order reaches the buyer. `self_collect` humanizes to "Self collect";
+ * the app has always written it hyphenated, so it is spelled out here. */
+const FULFILMENT_LABELS: Record<string, string> = {
+	delivery: "Delivery",
+	// The buyer collects from the seller.
+	self_collect: "Self-collect",
+	// The seller collects from the BUYER (86eyg0n8e) — the opposite trip. Named
+	// "We collect", the buyer-facing wording, because "Collection" sitting next
+	// to "Self-collect" in a column is two words for opposite directions.
+	collection: "We collect",
+};
 
 export type CsvOrder = {
 	shortId: string;
@@ -73,14 +153,15 @@ export type CsvOrder = {
 	 * the export now carries it so the two can be reconciled. */
 	attributionSource?: string;
 	customer: { name?: string; waPhone?: string };
-	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
-	/** Names of every category the order's products belong to, deduped across
-	 * lines. Resolved LIVE at export time, not frozen on the order — categories
-	 * are a pure browse layer by design (docs/product-categories.md), so this is
-	 * "what these products are filed under today", which can differ from what
-	 * they were filed under when sold. Named "Categories (current)" for exactly
-	 * that reason. */
-	categories?: string[];
+	items: Array<{
+		name: string;
+		variantLabel?: string;
+		quantity: number;
+		/** Categories the product was filed under AT SALE TIME (86eyrtz74) —
+		 * frozen per line at order create, not looked up. See
+		 * `orders.items[].categoryNames` in convex/schema.ts. */
+		categoryNames?: string[];
+	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
 	 * `computeOrderTotals` ADDS it to `total` alongside the fees, so WITHOUT
@@ -126,6 +207,21 @@ export type CsvOrder = {
 	 * identifiable — and removable — once the CSV is open in Excel. */
 	pinnedAt?: number;
 };
+
+/**
+ * The categories an order touched — deduped and sorted across its lines.
+ *
+ * Deduped ACROSS lines because the column answers "what kinds of thing is this
+ * order", not "what is each line": a 12-line order of one category should read
+ * "Kuih", not "Kuih, Kuih, Kuih…". The per-line values stay per-line on the
+ * document so a future sales-by-category report can attribute revenue to a
+ * line rather than guessing from the union.
+ */
+export function orderCategoryNames(o: CsvOrder): string[] {
+	const names = new Set<string>();
+	for (const it of o.items) for (const n of it.categoryNames ?? []) names.add(n);
+	return [...names].sort((a, b) => a.localeCompare(b));
+}
 
 export type OrderColumnKey =
 	| "shortId"
@@ -183,6 +279,30 @@ export const ORDER_COLUMN_GROUP_LABELS: Record<OrderColumnGroup, string> = {
 	money: "Money",
 };
 
+/**
+ * Resize bounds for a table column, in px (86eyrtz74).
+ *
+ * The floor keeps a column readable — below ~80px a header truncates to two
+ * characters and a sort glyph, which is a column you can no longer identify,
+ * and a column dragged to nothing has no handle left to drag back. The ceiling
+ * stops one column (an address, a long item list) from being dragged so wide
+ * that everything else is pushed out of the viewport with no visible cue as to
+ * why. Both are deliberately generous: they exist to prevent dead ends, not to
+ * second-guess the seller's layout.
+ */
+export const ORDER_COLUMN_MIN_WIDTH = 80;
+export const ORDER_COLUMN_MAX_WIDTH = 640;
+
+/** Hold a width inside those bounds. Applied on every path that can set one —
+ * a keyboard nudge, and reading a stored layout back — so a width the bounds
+ * have since moved past can't survive a reload. */
+export function clampColumnWidth(width: number): number {
+	return Math.min(
+		ORDER_COLUMN_MAX_WIDTH,
+		Math.max(ORDER_COLUMN_MIN_WIDTH, Math.round(width)),
+	);
+}
+
 export interface OrderColumn {
 	key: OrderColumnKey;
 	/** CSV header AND table header — one label, so a seller reading the table
@@ -191,10 +311,26 @@ export interface OrderColumn {
 	group: OrderColumnGroup;
 	/** Right-aligned + tabular in the table (amounts). */
 	numeric?: boolean;
+	/**
+	 * How the cell reads ON SCREEN, when that differs from the stored value
+	 * (86eyrtz74). Defaults to `value`, so a column only declares this when it
+	 * has something to say — there is no second list to fall out of step.
+	 *
+	 * The split exists because `value` feeds the **CSV**, which is data other
+	 * software reads: a seller's bookkeeping formula matching `="received"` must
+	 * keep working, and a stored enum is the stable thing to match on. The
+	 * table is a **view**, and a view can say "Paid". Formatting inside `value`
+	 * would have quietly rewritten the export to fix a rendering problem.
+	 *
+	 * Read it through `orderColumnDisplay`, never directly.
+	 */
+	display?: (o: CsvOrder) => string;
 	/** In the table's default column set. The rest are opt-in via the picker —
 	 * every column is available, but 36 at once is unreadable. */
 	defaultVisible?: boolean;
-	/** Table column width in px. */
+	/** Table column width in px — the DEFAULT. The seller can drag it between
+	 * `ORDER_COLUMN_MIN_WIDTH` and `ORDER_COLUMN_MAX_WIDTH`, and double-clicking
+	 * the handle returns the column to this value. */
 	width: number;
 	value: (o: CsvOrder) => string;
 	/**
@@ -291,10 +427,11 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "fulfilment",
 		defaultVisible: true,
 		width: 116,
-		value: (o) =>
-			o.deliveryDirection === "collection"
-				? "collection"
-				: (o.deliveryMethod ?? ""),
+		value: (o) => fulfilmentKey(o),
+		display: (o) => {
+			const key = fulfilmentKey(o);
+			return FULFILMENT_LABELS[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "addressLine1",
@@ -371,8 +508,29 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Status",
 		group: "order",
 		defaultVisible: true,
-		width: 116,
+		// Wide enough for the longest stock stage plus a two-word custom one
+		// ("Ready for Pickup") on one line — the pill truncates rather than wraps
+		// (StatusBadge), and a truncated status is a status you have to hover to
+		// read, so the column is sized to make that the exception.
+		width: 148,
 		value: (o) => o.status,
+		// The table renders `StatusBadge` with the retailer's own stage name
+		// instead of this, so `display` only matters to free-text search and to
+		// any future consumer — it capitalises the anchor and cannot reach a
+		// custom stage name, which needs the retailer's `orderStages` config.
+		display: (o) => humanizeEnum(o.status),
+		// Sorted by LIFECYCLE position, not by either spelling. Alphabetical on a
+		// status column is the wrong answer whichever words you use — a seller
+		// clicking Status wants the pipeline grouped in order, not "Cancelled,
+		// Confirmed, Delivered, Packed". It also sidesteps the mismatch a text
+		// sort would have (PR #235 review): the cell shows the retailer's custom
+		// stage name while `display` can only reach the anchor, so sorting on
+		// either would order rows by words that aren't on screen.
+		sortKey: (o) => {
+			const i = ORDER_STATUS_KEYS.indexOf(o.status as OrderStatus);
+			// An unknown status sinks rather than leading the list.
+			return i < 0 ? ORDER_STATUS_KEYS.length : i;
+		},
 	},
 	{
 		key: "orderType",
@@ -382,6 +540,12 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// Legacy orders carry no stamped source and read as "storefront" —
 		// the same default the inbox predicate applies.
 		value: (o) => o.source ?? "storefront",
+		// The header filter offers "Storefront"; the column used to print the raw
+		// key, so ticking a filter showed a word that matched nothing on screen.
+		display: (o) => {
+			const key = o.source ?? "storefront";
+			return ORDER_SOURCE_LABELS[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "attribution",
@@ -398,6 +562,12 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		defaultVisible: true,
 		width: 110,
 		value: (o) => o.paymentStatus ?? "unpaid",
+		// `received` reads as "Paid" — the stored value and the seller's word for
+		// it were never the same, and only the filter knew that.
+		display: (o) => {
+			const key = o.paymentStatus ?? "unpaid";
+			return PAYMENT_STATUS_LABELS[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "paymentMethod",
@@ -405,6 +575,17 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "payment",
 		width: 140,
 		value: (o) => o.paymentMethod ?? "",
+		// The same rail names the settings screen and the filter use — `tng` and
+		// `bank_transfer` are storage, not language.
+		display: (o) => {
+			const key = o.paymentMethod;
+			if (!key) return METHOD_UNSPECIFIED_CELL;
+			// `CsvOrder.paymentMethod` is a plain string (a legacy row can hold a
+			// rail no longer offered), so the lookup is widened rather than the
+			// type narrowed — an unknown rail humanizes instead of blanking.
+			const known: Record<string, string> = PAYMENT_METHOD_LABELS;
+			return known[key] ?? humanizeEnum(key);
+		},
 	},
 	{
 		key: "paymentReference",
@@ -439,12 +620,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 	},
 	{
 		key: "categories",
-		label: "Categories (current)",
+		label: "Categories",
 		group: "items",
 		width: 180,
-		// Comma-separated flat list of every category across the order's
-		// products, deduped. See CsvOrder.categories for the drift caveat.
-		value: (o) => (o.categories ?? []).join(", "),
+		// Deduped, sorted union across the order's lines — the per-line values
+		// are frozen at sale time, so this needs no reads and no "(current)"
+		// hedge: it is what these products WERE filed under when sold.
+		value: (o) => orderCategoryNames(o).join(", "),
 	},
 	{
 		key: "subtotal",
@@ -519,6 +701,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "order",
 		width: 180,
 		value: (o) => o.cancelledReason ?? "",
+		display: (o) => humanizeEnum(o.cancelledReason ?? ""),
 	},
 	{
 		key: "pinned",
@@ -582,12 +765,23 @@ export function resolveOrderColumns(
  * Falls back to the lowercased display string, so a column that never declared
  * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
  */
+/**
+ * A cell as it reads on screen. The one way the table (and free-text search)
+ * should ask for text — going straight to `column.value` gets the stored value,
+ * which is what the CSV wants and not what a person should read.
+ */
+export function orderColumnDisplay(column: OrderColumn, o: CsvOrder): string {
+	return (column.display ?? column.value)(o);
+}
+
 export function orderColumnSortValue(
 	column: OrderColumn,
 	o: CsvOrder,
 ): number | string | undefined {
 	if (column.sortKey) return column.sortKey(o);
-	const text = column.value(o);
+	// Sorts what the seller can SEE. Sorting Order type by the stored key would
+	// order the rows by words that appear nowhere on screen.
+	const text = orderColumnDisplay(column, o);
 	return text === "" ? undefined : text.toLowerCase();
 }
 

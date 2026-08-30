@@ -16,9 +16,13 @@ vi.mock("@convex-dev/react-query", () => ({
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 vi.mock("@tanstack/react-router", () => ({
-	Link: ({ children }: { children: React.ReactNode }) => <a href="/">{children}</a>,
+	Link: ({ children }: { children: React.ReactNode }) => (
+		<a href="/">{children}</a>
+	),
 }));
-vi.mock("../../hooks/useActAs", () => ({ useActAsRetailerId: () => undefined }));
+vi.mock("../../hooks/useActAs", () => ({
+	useActAsRetailerId: () => undefined,
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const NOW = 1_756_000_000_000;
@@ -73,9 +77,7 @@ describe("ClaimsPanel — resend guard", () => {
 	// "the buyer sees the same message twice". Deleting the claimResendVisible
 	// call in send-claim.tsx turns this test red.
 	test("a delivered link offers no resend at all — Copy link is the free fix", () => {
-		mockClaims([
-			claim({ lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000 }),
-		]);
+		mockClaims([claim({ lastSentAt: NOW - CLAIM_RESEND_COOLDOWN_MS - 1000 })]);
 		render(<ClaimsPanel onResume={vi.fn()} />);
 		expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
 		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();

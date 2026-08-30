@@ -15,9 +15,10 @@ describe("buyer route ids", () => {
 			"utf8",
 		);
 		for (const id of BUYER_ROUTE_IDS) {
-			expect(routeTree, `route id ${id} missing from routeTree.gen.ts`).toContain(
-				`'${id}'`,
-			);
+			expect(
+				routeTree,
+				`route id ${id} missing from routeTree.gen.ts`,
+			).toContain(`'${id}'`);
 		}
 	});
 

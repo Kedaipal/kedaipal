@@ -61,8 +61,8 @@ export function NotificationsCard() {
 					<p className="text-sm font-semibold">Order alerts on this device</p>
 					<p className="mt-1 text-xs text-muted-foreground leading-relaxed">
 						This browser doesn&apos;t support notifications. On iPhone, add
-						Kedaipal to your Home Screen (Share → Add to Home Screen) and
-						enable alerts from there, or use Chrome on a computer.
+						Kedaipal to your Home Screen (Share → Add to Home Screen) and enable
+						alerts from there, or use Chrome on a computer.
 					</p>
 				</div>
 			</div>
@@ -79,9 +79,7 @@ export function NotificationsCard() {
 						<Bell className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
 					)}
 					<div>
-						<p className="text-sm font-semibold">
-							Order alerts on this device
-						</p>
+						<p className="text-sm font-semibold">Order alerts on this device</p>
 						<p className="mt-1 text-xs text-muted-foreground leading-relaxed">
 							A sound + notification the moment a new order lands or a rider
 							booking fails — works while a Kedaipal tab is open, even in the
@@ -94,10 +92,10 @@ export function NotificationsCard() {
 
 			{permission === "denied" ? (
 				<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-					Notifications are <b>blocked</b> for kedaipal.com in this browser.
-					To unblock: tap the 🔒 (or ⓘ) icon beside the address bar → Site
-					settings → Notifications → <b>Allow</b>, then reload this page. On
-					Android Chrome: ⋮ → Settings → Site settings → Notifications.
+					Notifications are <b>blocked</b> for kedaipal.com in this browser. To
+					unblock: tap the 🔒 (or ⓘ) icon beside the address bar → Site settings
+					→ Notifications → <b>Allow</b>, then reload this page. On Android
+					Chrome: ⋮ → Settings → Site settings → Notifications.
 				</p>
 			) : permission === "default" || !prefs.enabled ? (
 				<Button type="button" onClick={enable} className="h-11 w-fit px-5">
@@ -139,8 +137,8 @@ export function NotificationsCard() {
 			)}
 			<p className="text-[11px] text-muted-foreground">
 				Alerts need a Kedaipal tab open somewhere (phone or computer).
-				Closed-browser push notifications come with the Kedaipal app
-				(coming later).
+				Closed-browser push notifications come with the Kedaipal app (coming
+				later).
 			</p>
 		</div>
 	);

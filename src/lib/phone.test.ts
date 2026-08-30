@@ -138,7 +138,10 @@ describe("waPhoneCheckoutSchema.SG — the validator behind the +65 plate", () =
 	});
 
 	test.each([
-		["a Malaysian mobile — the MY arm's accept is this arm's reject", "+60 12-345 6789"],
+		[
+			"a Malaysian mobile — the MY arm's accept is this arm's reject",
+			"+60 12-345 6789",
+		],
 		["a bare MY local number", "012-345 6789"],
 		["an 8-digit number starting 6 (not an SG mobile range)", "61234567"],
 		["too short", "9123"],

@@ -25,7 +25,6 @@ import {
 	timeMinutesFromHhmm,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
-import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import {
 	assertWithinOpeningHours,
 	defaultTimeWithinHours,
@@ -37,27 +36,28 @@ import {
 	WEEKDAY_NAMES,
 	weekdayIndexMyt,
 } from "../../../convex/lib/openingHours";
+import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { displayAddressState } from "../../lib/address-display";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
 import {
 	convexErrorMessage,
 	formatMobile,
 	formatPrice,
 } from "../../lib/format";
-import { displayAddressState } from "../../lib/address-display";
-import { MASK_PII } from "../../lib/analytics-privacy";
 import { claimFormSchemaFor } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { AddressFieldset } from "../storefront/address-fieldset";
+import { sanitizeAddress } from "../storefront/checkout-form";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
 	type PublicPickupLocation,
 	pickupFeeOf,
 } from "../storefront/pickup-location-options";
-import { sanitizeAddress } from "../storefront/checkout-form";
 import { Button } from "../ui/button";
 
 /**
@@ -652,8 +652,8 @@ export function ClaimCheckoutPage({
 								{formatMobile(open.waPhone)}
 							</div>
 							<p className="text-xs text-muted-foreground">
-								This order link was sent to your WhatsApp — updates land in
-								that same chat.
+								This order link was sent to your WhatsApp — updates land in that
+								same chat.
 							</p>
 						</div>
 					</ClaimSection>
@@ -709,8 +709,8 @@ export function ClaimCheckoutPage({
 
 						{neitherAvailable ? (
 							<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-								This store isn&apos;t accepting orders right now. Please
-								message the store owner.
+								This store isn&apos;t accepting orders right now. Please message
+								the store owner.
 							</p>
 						) : (
 							<form.Subscribe selector={(s) => s.values.deliveryMethod}>
@@ -720,8 +720,7 @@ export function ClaimCheckoutPage({
 											{collectsFromCustomer ? (
 												<p className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
 													{storeName} collects from you — a rider picks your
-													items up at this address and brings them to the
-													store.
+													items up at this address and brings them to the store.
 												</p>
 											) : null}
 											<AddressFieldset

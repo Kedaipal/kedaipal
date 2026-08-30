@@ -20,9 +20,7 @@ describe("RouteErrorCard", () => {
 	test("renders calm copy with a retry CTA — never a bare stack trace", () => {
 		render(<RouteErrorCard error={new Error("boom")} reset={() => {}} />);
 		expect(screen.getByText("Something went wrong")).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: /try again/i }),
-		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
 	});
 
 	test("try again clears the boundary, then re-runs loaders", () => {

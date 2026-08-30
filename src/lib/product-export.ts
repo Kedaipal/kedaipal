@@ -50,7 +50,8 @@ export const REPORT_COLUMNS = [
 /**
  * The report columns the import READS BACK, for round-trip fidelity only.
  *
- * Just `variant_status`. The export includes variants the seller built and then
+ * `variant_status` and `product_status`. The export includes variants the seller
+ * built and then
  * switched off (see `isExportableVariant`); the import's create path defaults a
  * provided row to active, so without reading this back, exporting a catalogue
  * and importing it into a second store — or re-importing after deleting a
@@ -58,7 +59,10 @@ export const REPORT_COLUMNS = [
  * price. It is NOT an editable field: on an existing product the import never
  * patches `active` at all, in either direction.
  */
-export const ROUNDTRIP_REPORT_COLUMNS = ["variant_status"] as const;
+export const ROUNDTRIP_REPORT_COLUMNS = [
+	"variant_status",
+	"product_status",
+] as const;
 
 /**
  * Report columns the import ignores entirely: editing them in a sheet and
@@ -174,7 +178,7 @@ function productToExportRows(p: ExportableProduct): ExportRow[] {
 		needs_mockup: yesBlank(vr.requiresProof),
 		// Label rather than "Yes": on a custom line the seller's own wording is
 		// the useful answer, and its presence already means isCustom.
-		custom_line: vr.isCustom ? (vr.customLabel?.trim() || "Custom") : "",
+		custom_line: vr.isCustom ? vr.customLabel?.trim() || "Custom" : "",
 		reserved: vr.reserved ? String(vr.reserved) : "0",
 		photos: String(vr.imageCount ?? p.imageCount ?? 0),
 	}));
