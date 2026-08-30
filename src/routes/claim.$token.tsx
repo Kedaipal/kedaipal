@@ -58,8 +58,8 @@ function ClaimNotFound() {
 				Order link not found
 			</h1>
 			<p className="text-sm text-muted-foreground">
-				This link doesn&apos;t match any order. Check the link in your
-				WhatsApp chat, or ask the store to send a fresh one.
+				This link doesn&apos;t match any order. Check the link in your WhatsApp
+				chat, or ask the store to send a fresh one.
 			</p>
 		</main>
 	);

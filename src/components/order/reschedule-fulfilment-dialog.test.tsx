@@ -104,11 +104,13 @@ describe("RescheduleFulfilmentDialog — form", () => {
 		render(<RescheduleFulfilmentDialog order={order} />);
 
 		fireEvent.click(screen.getByText("Reschedule"));
-		const dateInput = screen.getByLabelText(/Delivery date/) as HTMLInputElement;
-		const timeInput = screen.getByLabelText(/Delivery time/) as HTMLInputElement;
-		expect(dateInput.value).toBe(
-			ymdFromEpoch(order.fulfilmentDate as number),
-		);
+		const dateInput = screen.getByLabelText(
+			/Delivery date/,
+		) as HTMLInputElement;
+		const timeInput = screen.getByLabelText(
+			/Delivery time/,
+		) as HTMLInputElement;
+		expect(dateInput.value).toBe(ymdFromEpoch(order.fulfilmentDate as number));
 		expect(timeInput.value).toBe(hhmmFromMinutes(3 * 60));
 
 		fireEvent.change(timeInput, { target: { value: "10:00" } });
@@ -218,7 +220,9 @@ describe("RescheduleFulfilmentDialog — past moments are refused (86eyp63xn fol
 			/>,
 		);
 		fireEvent.click(screen.getByText("Reschedule"));
-		const dateInput = screen.getByLabelText(/Delivery date/) as HTMLInputElement;
+		const dateInput = screen.getByLabelText(
+			/Delivery date/,
+		) as HTMLInputElement;
 		expect(dateInput.value).toBe(ymdFromEpoch(todayMytMidnight()));
 	});
 

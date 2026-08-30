@@ -246,7 +246,11 @@ function bespokeService(): StorefrontProduct {
  */
 describe("headline price — starting vs fixed", () => {
 	function Price({ product }: { product: StorefrontProduct }) {
-		const pp = useProductPurchase({ product, retailerId: RID, cartQuantity: 0 });
+		const pp = useProductPurchase({
+			product,
+			retailerId: RID,
+			cartQuantity: 0,
+		});
 		return <PriceLabel value={pp.priceLabel} />;
 	}
 

@@ -32,9 +32,9 @@ describe("MASK_PII", () => {
 			</div>,
 		);
 
-		expect(
-			screen.getByTestId("region").getAttribute("data-clarity-mask"),
-		).toBe("true");
+		expect(screen.getByTestId("region").getAttribute("data-clarity-mask")).toBe(
+			"true",
+		);
 	});
 });
 
@@ -159,14 +159,13 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		"${customerName}",
 	];
 
-	it.each(TOAST_FILES)(
-		"%s keeps buyer names out of portal-rendered toast copy",
-		(file) => {
-			for (const call of toastCalls(readFileSync(file, "utf8"))) {
-				for (const token of BUYER_NAME_INTERPOLATIONS) {
-					expect(call).not.toContain(token);
-				}
+	it.each(
+		TOAST_FILES,
+	)("%s keeps buyer names out of portal-rendered toast copy", (file) => {
+		for (const call of toastCalls(readFileSync(file, "utf8"))) {
+			for (const token of BUYER_NAME_INTERPOLATIONS) {
+				expect(call).not.toContain(token);
 			}
-		},
-	);
+		}
+	});
 });

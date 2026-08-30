@@ -27,13 +27,13 @@
  * owns the border, focus ring and invalid styling for the composite control.
  */
 
+import { Input } from "#/components/ui/input";
+import { InputPrefixFrame } from "#/components/ui/input-prefix-frame";
 import {
 	COUNTRY_DIAL_CODE,
 	COUNTRY_LABELS,
 	type Country,
 } from "../../../convex/lib/country";
-import { Input } from "#/components/ui/input";
-import { InputPrefixFrame } from "#/components/ui/input-prefix-frame";
 
 /**
  * Jalur Gemilang at 2:1 — 14 stripes, navy canton, crescent + 14-point star.

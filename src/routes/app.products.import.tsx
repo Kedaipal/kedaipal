@@ -90,6 +90,7 @@ function toApiProduct(p: GroupedProductImport) {
 	return {
 		name: p.name,
 		description: p.description,
+		active: p.active,
 		options: p.options,
 		variants: p.variants.map((vr) => ({
 			optionValues: vr.optionValues,
@@ -374,10 +375,9 @@ function ImportProductsRoute() {
 					</p>
 					<p className="mt-1 text-[13px] leading-snug text-muted-foreground">
 						Your shop holds {preview?.cap.used} of {preview?.cap.cap} products
-						(archived ones count), so there's room for{" "}
-						{preview?.cap.remaining} more — but this sheet adds{" "}
-						{preview?.summary.creates}. Delete products you no longer sell, or
-						take rows out of the sheet.
+						(archived ones count), so there's room for {preview?.cap.remaining}{" "}
+						more — but this sheet adds {preview?.summary.creates}. Delete
+						products you no longer sell, or take rows out of the sheet.
 					</p>
 				</section>
 			) : preview && preview.summary.creates > 0 && preview.cap.showCounter ? (

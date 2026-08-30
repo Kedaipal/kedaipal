@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WaOrderAlertsCard } from "./wa-order-alerts-card";
 
@@ -59,9 +65,7 @@ describe("WaOrderAlertsCard", () => {
 		fireEvent.click(
 			screen.getByRole("button", { name: /turn on whatsapp alerts/i }),
 		);
-		expect(
-			await screen.findByText(/Malaysian mobile number/i),
-		).toBeDefined();
+		expect(await screen.findByText(/Malaysian mobile number/i)).toBeDefined();
 		expect(onSave).not.toHaveBeenCalled();
 	});
 

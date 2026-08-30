@@ -8,8 +8,8 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { formatClaimCountdown } from "../../lib/countdown";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import {
 	ClaimCopyLinkButton,
 	ClaimRetryButton,

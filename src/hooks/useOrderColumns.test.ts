@@ -1,14 +1,21 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	ALL_ORDER_COLUMN_KEYS,
 	DEFAULT_ORDER_COLUMN_KEYS,
+	ORDER_COLUMN_MAX_WIDTH,
+	ORDER_COLUMN_MIN_WIDTH,
 } from "../../convex/lib/orderCsv";
-import { parseStoredColumns, useOrderColumns } from "./useOrderColumns";
+import {
+	parseStoredColumns,
+	parseStoredWidths,
+	useOrderColumns,
+} from "./useOrderColumns";
 
 const STORE = "rt_test";
 const KEY = `kp:orders:columns:${STORE}`;
+const WKEY = `kp:orders:colwidths:${STORE}`;
 
 afterEach(() => {
 	window.localStorage.clear();
@@ -101,6 +108,56 @@ describe("useOrderColumns", () => {
 		expect(result.current.visibleKeys).toEqual([...DEFAULT_ORDER_COLUMN_KEYS]);
 	});
 
+	it("shows a whole group at once, in registry order (86eyrtz74)", () => {
+		// Ticking 22 boxes by hand was the alternative. Additions arrive as a
+		// block in canonical order, not scattered by tick order.
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		act(() =>
+			result.current.setManyVisible(["city", "state", "postcode"], true),
+		);
+		const keys = result.current.visibleKeys;
+		expect(keys).toContain("city");
+		expect(keys).toContain("state");
+		expect(keys).toContain("postcode");
+		const order = (["city", "state", "postcode"] as const).map((k) =>
+			keys.indexOf(k),
+		);
+		expect(order).toEqual([...order].sort((a, b) => a - b));
+	});
+
+	it("hides a whole group, leaving the rest in their existing order", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const before = [...result.current.visibleKeys];
+		const target = before.slice(0, 2);
+		act(() => result.current.setManyVisible(target, false));
+		expect(result.current.visibleKeys).toEqual(before.slice(2));
+	});
+
+	it("clearing everything keeps the FIRST column, never an empty table", () => {
+		// An empty table is a dead end whose only way back is the panel the
+		// seller just emptied — so the click does the thing they meant and keeps
+		// one column, rather than silently refusing.
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const first = result.current.visibleKeys[0];
+		act(() => result.current.setManyVisible([...ALL_ORDER_COLUMN_KEYS], false));
+		expect(result.current.visibleKeys).toEqual([first]);
+	});
+
+	it("showing a set that is already fully shown changes nothing", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		const before = [...result.current.visibleKeys];
+		act(() => result.current.setManyVisible(before, true));
+		expect(result.current.visibleKeys).toEqual(before);
+	});
+
+	it("a bulk change persists like a single toggle", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		act(() => result.current.setManyVisible(["city"], true));
+		expect(parseStoredColumns(window.localStorage.getItem(KEY))).toContain(
+			"city",
+		);
+	});
+
 	it("every column in the registry can be turned on", () => {
 		const { result } = renderHook(() => useOrderColumns(STORE));
 		for (const key of ALL_ORDER_COLUMN_KEYS) {
@@ -111,5 +168,127 @@ describe("useOrderColumns", () => {
 		expect(new Set(result.current.visibleKeys)).toEqual(
 			new Set(ALL_ORDER_COLUMN_KEYS),
 		);
+	});
+});
+
+describe("parseStoredWidths", () => {
+	it("returns null for junk rather than throwing", () => {
+		expect(parseStoredWidths(null)).toBeNull();
+		expect(parseStoredWidths("{not json")).toBeNull();
+		expect(parseStoredWidths("[1,2]")).toBeNull();
+	});
+
+	it("clamps on READ, not only on write", () => {
+		// A width stored before the bounds changed — or hand-edited — must not be
+		// able to resurrect a 4px column, which has no handle left to drag back.
+		expect(parseStoredWidths(JSON.stringify({ total: 4, city: 9999 }))).toEqual(
+			{ total: ORDER_COLUMN_MIN_WIDTH, city: ORDER_COLUMN_MAX_WIDTH },
+		);
+	});
+
+	it("drops keys that are no longer columns, and non-numbers", () => {
+		expect(
+			parseStoredWidths(
+				JSON.stringify({ total: 200, gone: 200, city: "wide" }),
+			),
+		).toEqual({ total: 200 });
+		expect(parseStoredWidths(JSON.stringify({ gone: 200 }))).toBeNull();
+	});
+});
+
+describe("useOrderColumns — widths", () => {
+	it("opens with no width overrides — every column at its registry default", () => {
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		expect(result.current.widths).toEqual({});
+		expect(result.current.isCustomised).toBe(false);
+	});
+
+	it("hydrates stored widths", () => {
+		window.localStorage.setItem(WKEY, JSON.stringify({ total: 240 }));
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		expect(result.current.widths).toEqual({ total: 240 });
+		// A dragged width alone is something to undo, so Reset must be offered.
+		expect(result.current.isCustomised).toBe(true);
+	});
+
+	it("persists a resize, on a debounce", async () => {
+		vi.useFakeTimers();
+		try {
+			const { result } = renderHook(() => useOrderColumns(STORE));
+			act(() => result.current.setWidths({ total: 300 }));
+			// State is immediate — the column must follow the pointer.
+			expect(result.current.widths).toEqual({ total: 300 });
+			// The write is not: `onChange` resize fires this every frame.
+			expect(window.localStorage.getItem(WKEY)).toBeNull();
+			act(() => vi.runAllTimers());
+			expect(parseStoredWidths(window.localStorage.getItem(WKEY))).toEqual({
+				total: 300,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("flushes a pending width write on unmount (PR #233 review)", () => {
+		// 300ms is easily short enough to lose a resize to a click on the nav.
+		// The cleanup used to just clearTimeout, silently dropping the write the
+		// comment claimed it was saving.
+		vi.useFakeTimers();
+		try {
+			const { result, unmount } = renderHook(() => useOrderColumns(STORE));
+			act(() => result.current.setWidths({ total: 321 }));
+			expect(window.localStorage.getItem(WKEY)).toBeNull();
+			unmount();
+			expect(parseStoredWidths(window.localStorage.getItem(WKEY))).toEqual({
+				total: 321,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("the flush writes under the store it was resized for, not the loading key", () => {
+		// The cleanup effect has [] deps, so it only ever sees the FIRST
+		// retailerId — which is "" while the retailer query is in flight.
+		// Flushing from captured values would file the layout under the empty
+		// key and lose it just as thoroughly as dropping it.
+		vi.useFakeTimers();
+		try {
+			const { result, unmount, rerender } = renderHook(
+				({ id }) => useOrderColumns(id),
+				{ initialProps: { id: "" } },
+			);
+			rerender({ id: STORE });
+			act(() => result.current.setWidths({ total: 275 }));
+			unmount();
+			expect(parseStoredWidths(window.localStorage.getItem(WKEY))).toEqual({
+				total: 275,
+			});
+			expect(window.localStorage.getItem("kp:orders:colwidths:")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("unmounting with nothing pending writes nothing", () => {
+		const { unmount } = renderHook(() => useOrderColumns(STORE));
+		unmount();
+		expect(window.localStorage.getItem(WKEY)).toBeNull();
+	});
+
+	it("reset clears widths as well as the column set — a half-undo is worse than none", () => {
+		window.localStorage.setItem(KEY, JSON.stringify(["total"]));
+		window.localStorage.setItem(WKEY, JSON.stringify({ total: 240 }));
+		const { result } = renderHook(() => useOrderColumns(STORE));
+		act(() => result.current.reset());
+		expect(result.current.widths).toEqual({});
+		expect(result.current.visibleKeys).toEqual([...DEFAULT_ORDER_COLUMN_KEYS]);
+		expect(result.current.isCustomised).toBe(false);
+	});
+
+	it("keeps stores apart", () => {
+		window.localStorage.setItem(WKEY, JSON.stringify({ total: 240 }));
+		const { result } = renderHook(() => useOrderColumns("rt_other"));
+		expect(result.current.widths).toEqual({});
 	});
 });

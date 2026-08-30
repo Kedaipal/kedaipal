@@ -93,9 +93,9 @@ describe("draftPreviewOverlay", () => {
 
 	it("carries a valid minimum order quantity, ignoring blanks and invalids", () => {
 		expect(draftPreviewOverlay(draft()).minQuantity).toBeUndefined();
-		expect(
-			draftPreviewOverlay(draft({ minQuantity: "20" })).minQuantity,
-		).toBe(20);
+		expect(draftPreviewOverlay(draft({ minQuantity: "20" })).minQuantity).toBe(
+			20,
+		);
 		expect(
 			draftPreviewOverlay(draft({ minQuantity: "1" })).minQuantity,
 		).toBeUndefined();

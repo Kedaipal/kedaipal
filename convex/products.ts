@@ -1304,6 +1304,10 @@ const importVariantValidator = v.object({
 const importProductValidator = v.object({
 	name: v.string(),
 	description: v.optional(v.string()),
+	// Round-tripped from the export's `product_status` (86eyrtz74). Optional so
+	// a client that predates the column, or any hand-made sheet, still imports —
+	// absent reads as active on the create path below.
+	active: v.optional(v.boolean()),
 	options: v.array(optionAxisValidator),
 	variants: v.array(importVariantValidator),
 });
@@ -1311,6 +1315,7 @@ const importProductValidator = v.object({
 type ImportProduct = {
 	name: string;
 	description?: string;
+	active?: boolean;
 	options: OptionAxis[];
 	variants: VariantInput[];
 };
@@ -1445,7 +1450,12 @@ export const bulkUpsert = mutation({
 					imageStorageIds: [],
 					options,
 					sortOrder: now + created,
-					active: true,
+					// Was hardcoded `true`, the product-level twin of the variant bug
+					// fixed alongside it: export a catalogue and import it into a
+					// SECOND store — where no SKU matches, so every row takes this
+					// path — and archived products came back live on the storefront.
+					// `?? true` keeps every hand-made sheet behaving as before.
+					active: product.active ?? true,
 					channel: "whatsapp",
 					createdAt: now,
 					updatedAt: now,

@@ -62,13 +62,18 @@ import {
 	minQuantityMessage,
 } from "./lib/minOrderRules";
 import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
-import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
+import {
+	type CsvOrder,
+	orderCategoryNames,
+	ordersToCsv,
+} from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
 	manualReminderEligibility,
 } from "./lib/paymentReminder";
 import {
 	buildInboxPredicate,
+	narrowsTheInbox,
 	type InboxFilterArgs,
 	needsMockup,
 	sortInboxOrders,
@@ -383,6 +388,8 @@ type OrderItemSnapshot = {
 	variantLabel?: string;
 	price: number;
 	quantity: number;
+	/** Categories the product was filed under at sale time (86eyrtz74). */
+	categoryNames?: string[];
 };
 
 /**
@@ -986,6 +993,8 @@ export const create = mutation({
 				variantLabel: label || undefined,
 				price: variant.price,
 				quantity: item.quantity,
+				// Filled in below, once per distinct product.
+				categoryNames: undefined as string[] | undefined,
 			});
 			ruleItems.push({
 				productId: variant.productId,
@@ -1000,6 +1009,22 @@ export const create = mutation({
 				quantity: item.quantity,
 				isCustom: variant.isCustom === true,
 			});
+		}
+
+		// Freeze the categories each product was filed under at this moment
+		// (86eyrtz74). One junction read per DISTINCT product — paid once, here,
+		// instead of on every export row and every search keystroke forever.
+		const categoryNames = await resolveCategoryNames(
+			ctx,
+			snapshotItems.map((i) => i.productId),
+		);
+		for (const line of snapshotItems) {
+			// Always stamped, `[]` included: PRESENT means "we recorded what this
+			// product was filed under when it sold" — and "filed under nothing" is
+			// a real answer. Absent is reserved for orders that predate the field
+			// (and the backfill), so the two never look alike. Both render as an
+			// empty cell, so this is an internal distinction only.
+			line.categoryNames = categoryNames.get(line.productId) ?? [];
 		}
 
 		const itemSubtotal = snapshotItems.reduce(
@@ -1871,6 +1896,58 @@ const MAX_INBOX_SCAN = 1000;
 // Checkout-surface filter value, shared by the live inbox (`searchOrders`) and
 // the CSV export so the two can't drift. Matches orders.source; legacy orders
 // (no stamped source) read as "storefront" in the predicate.
+/**
+ * The filter args as the WIRE carries them — `InboxFilterArgs` plus the
+ * pre-widen singular `source` (86eyrtz74), still accepted so a bookmarked URL
+ * or a client that hasn't reloaded keeps filtering.
+ */
+type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
+	source?: "storefront" | "counter" | "claim";
+	sources?: Array<"storefront" | "counter" | "claim">;
+	/** Pre-multi singular bucket, "all" sentinel included (86eyrtz74). */
+	bucket?: "all" | "new" | "in_progress" | "completed" | "cancelled";
+	buckets?: Array<"new" | "in_progress" | "completed" | "cancelled">;
+};
+
+/**
+ * Fold the legacy singular `source` into `sources`, in ONE place.
+ *
+ * This exists because the export used to reach the predicate through a blanket
+ * `as InboxFilterArgs` cast, which would have silently dropped `source` the
+ * moment the field was widened — the export quietly returning more rows than
+ * the seller was looking at, which is precisely the divergence
+ * `lib/orderInboxFilter.ts` exists to prevent. A cast is not a conversion.
+ */
+function toInboxFilterArgs({
+	source,
+	bucket,
+	...rest
+}: InboxFilterInput): InboxFilterArgs {
+	return {
+		...rest,
+		sources: rest.sources ?? (source ? [source] : undefined),
+		// The old singular carried an "all" sentinel; the multi shape says the
+		// same thing by absence.
+		buckets:
+			rest.buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+	};
+}
+
+/** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
+ * worth a name. */
+function bump(tally: Map<string, number>, key: string): void {
+	tally.set(key, (tally.get(key) ?? 0) + 1);
+}
+
+// One workflow bucket, for the MULTI filter (86eyrtz74) — no "all" member:
+// "every bucket" is said by omitting the arg, not by a sentinel inside it.
+const orderBucketValidator = v.union(
+	v.literal("new"),
+	v.literal("in_progress"),
+	v.literal("completed"),
+	v.literal("cancelled"),
+);
+
 const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
@@ -1887,13 +1964,15 @@ const orderSourceValidator = v.union(
 export const searchOrders = query({
 	args: {
 		retailerId: v.id("retailers"),
-		bucket: v.union(
-			v.literal("all"),
-			v.literal("new"),
-			v.literal("in_progress"),
-			v.literal("completed"),
-			v.literal("cancelled"),
+		// Pre-multi singular ("all" sentinel included), still accepted so a
+		// bookmarked URL or an in-flight client keeps working; the handler folds
+		// it into `buckets` via toInboxFilterArgs. Drop it a release on.
+		bucket: v.optional(
+			v.union(v.literal("all"), orderBucketValidator),
 		),
+		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
+		// real question one value couldn't ask. Empty/absent = every bucket.
+		buckets: v.optional(v.array(orderBucketValidator)),
 		paymentStatuses: v.optional(
 			v.array(
 				v.union(
@@ -1929,6 +2008,21 @@ export const searchOrders = query({
 		// Checkout surface: "storefront" (online) vs "counter" (walk-in). Legacy
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
+	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
+	// bucket is the coarse stage a seller navigates by; this is the precise one
+	// they question ("packed OR shipped"). Driven from the Status column header.
+	statuses: v.optional(v.array(statusValidator)),
+	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
+	// ANY line carries ANY of these. Free-form names (the seller's own
+	// catalogue), so v.string(); the picker is driven by `availableCategories`.
+	categories: v.optional(v.array(v.string())),
+	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
+	// without which "select every category" silently drops them (86eyrtz74).
+	categoriesUnspecified: v.optional(v.boolean()),
+	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
+	// accepted so a bookmarked URL or an in-flight client from before the widen
+	// keeps working; the handler folds it into `sources`. Drop it a release on.
+	sources: v.optional(v.array(orderSourceValidator)),
 		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
 		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
 		// ANDs with the rest. Free-form by design (sellers invent their own
@@ -1954,6 +2048,7 @@ export const searchOrders = query({
 		{
 			retailerId,
 			bucket,
+			buckets,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -1962,6 +2057,10 @@ export const searchOrders = query({
 			fulfilmentWindow,
 			mockupPending,
 			source,
+			sources,
+			statuses,
+			categories,
+			categoriesUnspecified,
 			attributionSources,
 			searchText,
 			showPinned,
@@ -1976,19 +2075,31 @@ export const searchOrders = query({
 		// filters, search) require the feature. Admin act-as bypasses, same as
 		// the soft-lock. The Starter UI hides these controls; this is the
 		// defense-in-depth backstop.
-		const usesInboxFeatures =
-			bucket !== "all" ||
-			paymentStatuses !== undefined ||
-			paymentMethods !== undefined ||
-			methodUnspecified !== undefined ||
-			dateFrom !== undefined ||
-			dateTo !== undefined ||
-			fulfilmentWindow !== undefined ||
-			mockupPending !== undefined ||
-			source !== undefined ||
-			attributionSources !== undefined ||
-			(searchText !== undefined && searchText.trim().length > 0);
-		if (usesInboxFeatures && !access.actingAsAdmin)
+		//
+		// Built ONCE and used for both the gate and the predicate, so the thing
+		// being gated and the thing being applied cannot be different sets of
+		// filters. `narrowsTheInbox` is compiler-enforced complete — see
+		// NARROWING_FILTER_KEYS.
+		const filters = toInboxFilterArgs({
+			bucket,
+			buckets,
+			paymentStatuses,
+			paymentMethods,
+			methodUnspecified,
+			dateFrom,
+			dateTo,
+			fulfilmentWindow,
+			mockupPending,
+			source,
+			sources,
+			statuses,
+			categories,
+			categoriesUnspecified,
+			attributionSources,
+			searchText,
+			showPinned,
+		});
+		if (narrowsTheInbox(filters) && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
 
 		const all = await ctx.db
@@ -2035,6 +2146,18 @@ export const searchOrders = query({
 		// the picker. Free-form tags mean the filter UI cannot hardcode a list;
 		// this is that list, and it costs nothing (we already hold every row).
 		const sourceTally = new Map<string, number>();
+		// Per-option counts for the column header filters (86eyrtz74), tallied
+		// over the SAME full window and by the same rule: a picker that shrank as
+		// you used it would make the seller think orders had vanished. Showing the
+		// count next to each option is most of what makes a header filter usable —
+		// it answers "is there anything in there?" before you commit to the click.
+		const statusTally = new Map<string, number>();
+		const categoryTally = new Map<string, number>();
+		const checkoutSourceTally = new Map<string, number>();
+		const paymentStatusTally = new Map<string, number>();
+		// "" is the count of orders with no recorded method, which the picker
+		// offers as "Unspecified" — a real answer, not a gap.
+		const paymentMethodTally = new Map<string, number>();
 
 		for (const o of all) {
 			const b = orderBucket(o);
@@ -2060,26 +2183,25 @@ export const searchOrders = query({
 			}
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
+			bump(statusTally, o.status);
+			bump(checkoutSourceTally, o.source ?? "storefront");
+			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
+			bump(paymentMethodTally, o.paymentMethod ?? "");
+			// An order counts ONCE per category it contains, never once per line —
+			// a two-cake order is one order in the "Cakes" filter, and the count
+			// beside the option has to be the number of rows it will show.
+			const names = orderCategoryNames(o);
+			// "" is the count of orders carrying NO categories, which the picker
+			// offers as "Uncategorized" — the paymentMethod tally's own convention.
+			// Categories are optional, so this is a real and often large answer,
+			// not a gap.
+			if (names.length === 0) bump(categoryTally, "");
+			for (const name of names) bump(categoryTally, name);
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
 		// exact same rules (see lib/orderInboxFilter.ts).
-		const filtered = all.filter(
-			buildInboxPredicate({
-				bucket,
-				paymentStatuses,
-				paymentMethods,
-				methodUnspecified,
-				dateFrom,
-				dateTo,
-				fulfilmentWindow,
-				mockupPending,
-				source,
-				attributionSources,
-				searchText,
-				showPinned,
-			}),
-		);
+		const filtered = all.filter(buildInboxPredicate(filters));
 		// Pinned first, then newest-created (the scan order) — the inbox's default
 		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
 		// over this stable window (the same `sortInboxOrders`), so toggling never
@@ -2109,6 +2231,27 @@ export const searchOrders = query({
 			availableSources: [...sourceTally.entries()]
 				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 				.map(([key]) => key),
+			// Category names present in this window, most-used first with an
+			// alphabetical tie-break — the `availableSources` rule, for the same
+			// reason: a picker that reshuffles under the seller is worse than one
+			// in a slightly arbitrary but stable order.
+			// Named categories only — the "" (uncategorized) tally lives in the
+			// facets, and the picker appends its option last rather than sorting
+			// an absence in among real names.
+			availableCategories: [...categoryTally.entries()]
+				.filter(([key]) => key !== "")
+				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+				.map(([key]) => key),
+			// Per-option row counts for the header filters. Plain objects rather
+			// than Maps so they cross the wire.
+			facets: {
+				status: Object.fromEntries(statusTally),
+				category: Object.fromEntries(categoryTally),
+				source: Object.fromEntries(checkoutSourceTally),
+				paymentStatus: Object.fromEntries(paymentStatusTally),
+				paymentMethod: Object.fromEntries(paymentMethodTally),
+				attribution: Object.fromEntries(sourceTally),
+			},
 			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
 			// 1,000 are outside the window, so the list AND counts under-report.
 			// The inbox surfaces this in a footer; export is the full-history path.
@@ -2130,13 +2273,9 @@ export const searchOrders = query({
 // Reusable validators for the inbox-filter args, shared by the export action and
 // its internal page query so the two can't drift.
 const exportFilterValidators = {
-	bucket: v.union(
-		v.literal("all"),
-		v.literal("new"),
-		v.literal("in_progress"),
-		v.literal("completed"),
-		v.literal("cancelled"),
-	),
+	// Same widen-with-legacy shape as searchOrders — see the note there.
+	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
+	buckets: v.optional(v.array(orderBucketValidator)),
 	paymentStatuses: v.optional(
 		v.array(
 			v.union(
@@ -2163,6 +2302,21 @@ const exportFilterValidators = {
 	),
 	mockupPending: v.optional(v.boolean()),
 	source: v.optional(orderSourceValidator),
+	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
+	// bucket is the coarse stage a seller navigates by; this is the precise one
+	// they question ("packed OR shipped"). Driven from the Status column header.
+	statuses: v.optional(v.array(statusValidator)),
+	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
+	// ANY line carries ANY of these. Free-form names (the seller's own
+	// catalogue), so v.string(); the picker is driven by `availableCategories`.
+	categories: v.optional(v.array(v.string())),
+	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
+	// without which "select every category" silently drops them (86eyrtz74).
+	categoriesUnspecified: v.optional(v.boolean()),
+	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
+	// accepted so a bookmarked URL or an in-flight client from before the widen
+	// keeps working; the handler folds it into `sources`. Drop it a release on.
+	sources: v.optional(v.array(orderSourceValidator)),
 	searchText: v.optional(v.string()),
 	// Pin privilege (86eyrtz74) — kept in the SHARED validator set so an export
 	// of a filtered view contains exactly the rows the seller was looking at,
@@ -2202,6 +2356,8 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		source: o.source,
 		attributionSource: o.attributionSource,
 		customer: o.customer,
+		// `items` already carries the frozen `categoryNames` per line — nothing
+		// to resolve, which is the whole point of freezing at create.
 		items: o.items,
 		subtotal: o.subtotal,
 		mockupQuotedAmount: o.mockupQuotedAmount,
@@ -2233,53 +2389,62 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 }
 
 /**
- * Fill in `categories` for a page of export rows (86eyrtz74).
- *
- * Categories are a pure browse layer and are deliberately NEVER frozen onto an
- * order line (docs/product-categories.md), so this is a LIVE lookup — the
- * column is labelled "Categories (current)" for that reason.
- *
- * Batched by distinct `productId` across the whole page, with a memo shared
- * across pages by the caller: a 500-row page of a repeat-order store touches a
- * handful of products, and the naive per-line fan-out would be thousands of
- * index reads for the same answer. Category names are resolved once per
- * category id for the same reason.
+ * A cache that lets `resolveCategoryNames` be called repeatedly without
+ * re-reading the same products and categories. One order at checkout doesn't
+ * need it (a fresh map per call is the same thing); the backfill, which walks a
+ * whole store's orders over the same handful of products, very much does.
  */
-async function attachOrderCategories(
-	ctx: QueryCtx,
-	orders: Doc<"orders">[],
-	rows: CsvOrder[],
-	memo: Map<string, string[]>,
-): Promise<void> {
-	const unseen = new Set<Id<"products">>();
-	for (const o of orders) {
-		for (const it of o.items) if (!memo.has(it.productId)) unseen.add(it.productId);
-	}
-	for (const productId of unseen) {
+export interface CategoryNameMemo {
+	/** productId → its sorted category names. */
+	byProduct: Map<string, string[]>;
+	/** categoryId → name, so a category shared by 40 products is read once. */
+	byCategory: Map<string, string>;
+}
+
+export function createCategoryNameMemo(): CategoryNameMemo {
+	return { byProduct: new Map(), byCategory: new Map() };
+}
+
+/**
+ * Category names for a set of products, resolved once per distinct id
+ * (86eyrtz74). Used at ORDER CREATE to freeze `items[].categoryNames`, so every
+ * later read — table, export, search — is free.
+ *
+ * Archived categories are included: they name a real grouping the seller was
+ * using at the time, and this is a record of that moment.
+ */
+export async function resolveCategoryNames(
+	ctx: MutationCtx,
+	productIds: Iterable<Id<"products">>,
+	memo: CategoryNameMemo = createCategoryNameMemo(),
+): Promise<Map<string, string[]>> {
+	const out = new Map<string, string[]>();
+	for (const productId of new Set(productIds)) {
+		const cached = memo.byProduct.get(productId);
+		if (cached) {
+			out.set(productId, cached);
+			continue;
+		}
 		const joins = await ctx.db
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
 			.collect();
 		const names: string[] = [];
 		for (const j of joins) {
-			const cat = await ctx.db.get(j.categoryId);
-			// Archived categories still name a real grouping the seller used, so
-			// they stay in the export — dropping them would blank the column for
-			// a store mid-reorganisation.
-			if (cat) names.push(cat.name);
+			let name = memo.byCategory.get(j.categoryId);
+			if (name === undefined) {
+				const cat = await ctx.db.get(j.categoryId);
+				if (!cat) continue;
+				name = cat.name;
+				memo.byCategory.set(j.categoryId, name);
+			}
+			names.push(name);
 		}
-		memo.set(productId, names);
+		names.sort((a, b) => a.localeCompare(b));
+		memo.byProduct.set(productId, names);
+		out.set(productId, names);
 	}
-	for (const [i, o] of orders.entries()) {
-		const row = rows[i];
-		if (!row) continue;
-		// Deduped ACROSS lines: the column answers "what kinds of thing is this
-		// order", not "what is each line" — a 12-line order of one category
-		// should read "Kuih", not "Kuih, Kuih, Kuih…".
-		const names = new Set<string>();
-		for (const it of o.items) for (const n of memo.get(it.productId) ?? []) names.add(n);
-		row.categories = [...names].sort((a, b) => a.localeCompare(b));
-	}
+	return out;
 }
 
 async function assertExportAccess(
@@ -2337,15 +2502,10 @@ export const exportPage = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
-		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
+		const predicate = buildInboxPredicate(toInboxFilterArgs(filters));
 		const matched = page.page.filter(predicate);
-		const rows = matched.map(orderToCsvSource);
-		// Memo is per-page: each page is its own transaction, so it can't span
-		// them. Within a 500-row page it still collapses a repeat-order store's
-		// thousands of line lookups down to one read per distinct product.
-		await attachOrderCategories(ctx, matched, rows, new Map());
 		return {
-			rows,
+			rows: matched.map(orderToCsvSource),
 			scanned: page.page.length,
 			isDone: page.isDone,
 			cursor: page.continueCursor,
@@ -2363,9 +2523,7 @@ export const exportByIds = internalQuery({
 		const owned = fetched.filter(
 			(o): o is Doc<"orders"> => o?.retailerId === retailerId,
 		);
-		const rows = owned.map(orderToCsvSource);
-		await attachOrderCategories(ctx, owned, rows, new Map());
-		return rows;
+		return owned.map(orderToCsvSource);
 	},
 });
 
