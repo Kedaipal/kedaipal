@@ -73,10 +73,6 @@ describe("posthog.capture", () => {
 		});
 	});
 
-	// The client boots with person_profiles: "identified_only" so an anonymous
-	// shopper never mints a profile. A server event that quietly created one for
-	// the same distinct id would defeat that — and put a durable person record
-	// behind an id we joined to an order.
 	// PostHog free = ONE project, so this property is the only thing keeping
 	// local testing out of the real numbers. Stamped in the action, so no future
 	// call site can forget it.
@@ -112,6 +108,10 @@ describe("posthog.capture", () => {
 		expect(bodyOf(fetchMock).properties.environment).toBe("development");
 	});
 
+	// The client boots with person_profiles: "identified_only" so an anonymous
+	// shopper never mints a profile. A server event that quietly created one for
+	// the same distinct id would defeat that — and put a durable person record
+	// behind an id we joined to an order.
 	test("keeps buyers person-less unless the caller opts in", async () => {
 		const t = convexTest(schema, modules);
 		const fetchMock = okFetch();
