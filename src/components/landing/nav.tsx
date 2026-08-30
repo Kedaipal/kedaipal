@@ -3,9 +3,12 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check, Globe, Menu, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "../../../convex/lib/locale";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { getLocale, locales, setLocale } from "../../paraglide/runtime";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -67,6 +70,35 @@ function LanguageSwitcher() {
 	);
 }
 
+/**
+ * WhatsApp deep-link to Kedaipal's support number, prefilled with a demo
+ * request — never a filled/accent pill (86eye3p6z §C: exactly one primary
+ * button per page), so it rides the `outline` treatment.
+ *
+ * **Mobile menu only.** It used to sit in the desktop bar too, which put four
+ * controls in the right cluster (locale, demo, log-in, trial) and read as
+ * clutter (owner, 29 Aug), so the bar now keeps only the locale utility,
+ * `Log in` and the one mint pill — the same reasoning that moved the cost
+ * calculator out of it. The intent did not lose its home: it moved UP, to an
+ * outline pill beside the hero's primary CTA (`hero.tsx`), and still closes
+ * the page in `final-cta.tsx` and `/pricing`.
+ */
+function BookDemoLink({ className }: { className?: string }) {
+	const supportWa = useSupportWaNumber();
+	return (
+		<Button asChild variant="outline" size="lg" className={className}>
+			<a
+				href={buildWaContactLink(m.demo_wa_message(), supportWa)}
+				target="_blank"
+				rel="noopener noreferrer"
+			>
+				<WhatsAppIcon className="size-4" />
+				{m.book_demo_cta()}
+			</a>
+		</Button>
+	);
+}
+
 function NavAuthCta() {
 	const { isSignedIn } = useAuth();
 	if (isSignedIn) {
@@ -74,7 +106,7 @@ function NavAuthCta() {
 			<Button
 				asChild
 				size="lg"
-				className="hidden rounded-full px-5 md:inline-flex"
+				className="tap-target hidden rounded-full px-5 md:inline-flex"
 			>
 				<Link to="/app">
 					{m.nav_go_to_dashboard()}
@@ -83,19 +115,32 @@ function NavAuthCta() {
 			</Button>
 		);
 	}
-	// One ask in the nav (86eye3p6z §C). Returning sellers still reach sign-in
-	// from the sign-up screen's own "already have an account?" link, so the path
-	// survives without a second button competing with the trial CTA.
+	// 86eye3p6z §C bounds the number of PRIMARY buttons, not the number of
+	// doors. Log-in used to be omitted entirely on that reading, which left a
+	// returning paying seller with no way into their own dashboard except to
+	// click "start a trial" and hunt for Clerk's own "already have an account?"
+	// link — the one visitor we least want to send through the signup door.
+	// A text link is a rung below the outline "Book a demo" in the hierarchy,
+	// so the mint trial pill is still the only thing that reads as the ask.
 	return (
-		<Button
-			asChild
-			size="lg"
-			className="hidden rounded-full px-5 md:inline-flex"
-		>
-			<Link to="/sign-up/$" params={{ _splat: "" }}>
-				{m.nav_start_free()}
+		<>
+			<Link
+				to="/sign-in/$"
+				params={{ _splat: "" }}
+				className="hidden min-h-11 items-center whitespace-nowrap rounded-full px-4 text-sm font-semibold text-foreground transition-colors hover:bg-muted md:inline-flex"
+			>
+				{m.nav_log_in()}
 			</Link>
-		</Button>
+			<Button
+				asChild
+				size="lg"
+				className="tap-target hidden rounded-full px-5 md:inline-flex"
+			>
+				<Link to="/sign-up/$" params={{ _splat: "" }}>
+					{m.nav_start_free()}
+				</Link>
+			</Button>
+		</>
 	);
 }
 
@@ -111,12 +156,27 @@ function MobileMenuAuthCta({ onClose }: { onClose: () => void }) {
 			</Button>
 		);
 	}
+	// Log-in sits ABOVE "Book a demo": a returning seller opening this menu is
+	// a far more common intent than a sales conversation, and on mobile the
+	// order in the stack IS the priority signal.
 	return (
-		<Button asChild size="lg" className="h-12 w-full rounded-full">
-			<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
-				{m.nav_start_free()}
-			</Link>
-		</Button>
+		<>
+			<Button asChild size="lg" className="h-12 w-full rounded-full">
+				<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
+					{m.nav_start_free()}
+				</Link>
+			</Button>
+			<Button
+				asChild
+				size="lg"
+				variant="outline"
+				className="h-12 w-full rounded-full"
+			>
+				<Link to="/sign-in/$" params={{ _splat: "" }} onClick={onClose}>
+					{m.nav_log_in()}
+				</Link>
+			</Button>
+		</>
 	);
 }
 
@@ -150,8 +210,11 @@ export function Nav() {
 		{ href: "/#faq", label: m.nav_faq() },
 	];
 
+	// `inline-flex` + `min-h-11`, not `py-2`: the bar mixes links, ghost buttons
+	// and pills, and only an explicit shared height keeps their hover pills from
+	// rendering at three different sizes in one row.
 	const linkClass =
-		"whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+		"inline-flex min-h-11 items-center whitespace-nowrap rounded-full px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 	const mobileLinkClass =
 		"rounded-xl px-3 py-3 text-base font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
@@ -166,7 +229,11 @@ export function Nav() {
 				)}
 			>
 				<div className="flex h-14 items-center justify-between pl-4 pr-2 md:h-16 md:pl-6 md:pr-3">
-					<Link to="/" className="flex items-center" aria-label={m.nav_home()}>
+					<Link
+						to="/"
+						className="flex min-h-11 items-center"
+						aria-label={m.nav_home()}
+					>
 						<AppImage
 							src="/logo-3.svg"
 							alt="Kedaipal"
@@ -189,7 +256,15 @@ export function Nav() {
 							{m.nav_pricing()}
 						</Link>
 					</div>
-					<div className="flex items-center gap-1.5">
+					<div className="flex items-center gap-1">
+						{/* Navigation ends, actions begin. Without this the 17px gap
+						    between "Pricing" and the locale switcher was barely wider
+						    than the ~6px gaps inside the cluster, so the bar read as one
+						    undifferentiated run of nine controls. */}
+						<span
+							aria-hidden
+							className="mx-2 hidden h-6 w-px bg-border md:block"
+						/>
 						<LanguageSwitcher />
 						<NavAuthCta />
 						<Button
@@ -226,8 +301,9 @@ export function Nav() {
 								{m.nav_pricing()}
 							</Link>
 						</div>
-						<div className="mt-3 border-t border-border/70 pt-3">
+						<div className="mt-3 flex flex-col gap-2 border-t border-border/70 pt-3">
 							<MobileMenuAuthCta onClose={closeMenu} />
+							<BookDemoLink className="h-12 w-full rounded-full" />
 						</div>
 					</div>
 				)}

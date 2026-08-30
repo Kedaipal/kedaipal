@@ -38,7 +38,9 @@ describe("landing funnel copy", () => {
 			expect(guarantee, locale).toBeTruthy();
 
 			const duplicates = Object.entries(catalog)
-				.filter(([key, value]) => key !== "guarantee_line" && value === guarantee)
+				.filter(
+					([key, value]) => key !== "guarantee_line" && value === guarantee,
+				)
 				.map(([key]) => `${locale}.${key}`);
 			expect(
 				duplicates,
@@ -91,7 +93,8 @@ describe("landing funnel copy", () => {
 		for (const [locale, catalog] of catalogs) {
 			for (const [key, value] of Object.entries(catalog)) {
 				if (!key.startsWith("mm_")) continue;
-				if (savingsWord.test(value)) offenders.push(`${locale}.${key} = ${value}`);
+				if (savingsWord.test(value))
+					offenders.push(`${locale}.${key} = ${value}`);
 			}
 		}
 		expect(offenders, offenders.join("\n")).toEqual([]);

@@ -852,6 +852,31 @@ describe("products", () => {
 		expect(headlamp?.variants[0]?.sku).toBe("HL-200");
 	});
 
+	test("bulkUpsert honours product_status — an archived product imports archived", async () => {
+		// The scenario: export a catalogue, import it into a SECOND store. No SKU
+		// matches there, so every row takes the create path — which hardcoded
+		// `active: true` and put archived products straight onto the storefront.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				{ ...importSingle("Archived Tent", { price: 49900, stock: 2 }), active: false },
+				{ ...importSingle("Live Tent", { price: 39900, stock: 2 }), active: true },
+				// A hand-made sheet has no such column at all: absence is ACTIVE,
+				// never archived — a seller's own spreadsheet is all things to sell.
+				importSingle("Plain Tent", { price: 29900, stock: 2 }),
+			],
+		});
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
+		const byName = new Map(all.map((p) => [p.name, p]));
+		expect(byName.get("Archived Tent")?.active).toBe(false);
+		expect(byName.get("Live Tent")?.active).toBe(true);
+		expect(byName.get("Plain Tent")?.active).toBe(true);
+	});
+
 	test("bulkUpsert creates a multi-variant product, keeping auto-filled combos inactive", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

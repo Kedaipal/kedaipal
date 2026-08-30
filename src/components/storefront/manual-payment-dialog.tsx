@@ -2,14 +2,14 @@ import { useMutation } from "convex/react";
 import { Camera, Download, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { type FormEvent, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { PaymentMethod } from "../../../convex/lib/payment";
 import { qrFilenameBase, saveImageFromUrl } from "../../lib/download";
 import { convexErrorMessage } from "../../lib/format";
-import { toast } from "sonner";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { Input } from "../ui/input";
 import { ZoomableImage } from "../ui/zoomable-image";
 
@@ -166,7 +166,10 @@ export function ManualPaymentDialog({
 						</Dialog.Close>
 					</div>
 
-					<form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+					<form
+						onSubmit={handleSubmit}
+						className="flex min-h-0 flex-1 flex-col"
+					>
 						<div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
 							{/* 1 · The store's payment methods (one-tap copy / QR save) */}
 							{methods.length > 0 ? (
@@ -185,13 +188,17 @@ export function ManualPaymentDialog({
 												<>
 													{m.bankName && m.bankName !== m.label ? (
 														<div className="flex items-baseline justify-between gap-3 text-sm">
-															<span className="text-muted-foreground">Bank</span>
+															<span className="text-muted-foreground">
+																Bank
+															</span>
 															<span className="font-medium">{m.bankName}</span>
 														</div>
 													) : null}
 													{m.bankAccountName ? (
 														<div className="flex items-baseline justify-between gap-3 text-sm">
-															<span className="text-muted-foreground">Name</span>
+															<span className="text-muted-foreground">
+																Name
+															</span>
 															<span className="text-right font-medium">
 																{m.bankAccountName}
 															</span>
@@ -273,8 +280,8 @@ export function ManualPaymentDialog({
 									: "Tell the store"}
 							</p>
 							<p className="text-sm text-muted-foreground">
-								Paid {shortId}? Send the details below so {storeName} can
-								verify your payment.
+								Paid {shortId}? Send the details below so {storeName} can verify
+								your payment.
 							</p>
 
 							<div className="flex flex-col gap-1.5">

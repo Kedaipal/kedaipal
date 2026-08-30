@@ -23,6 +23,17 @@ ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
 ## Reconciliation with the existing codebase
 
+> **The CSV writes STORED values, deliberately (86eyrtz74).** `Order type`
+> exports `storefront`, `Payment` exports `received`, `Fulfilment` exports
+> `self_collect`. A CSV is read by other software as well as by people, so a
+> bookkeeping formula matching `="received"` keeps working — this export has
+> never changed an enum's spelling and should not start.
+>
+> The **table** shows the same columns worded for a person ("Storefront",
+> "Paid", "Self-collect") via the registry's `display`, which is a view concern
+> and stays out of `value`. If you want the pretty wording in a spreadsheet,
+> that is a formatting step there, not a change here.
+
 The ticket was drafted assuming nothing existed. In reality the **subscription
 billing spine already shipped** (`86expn2qg`, [`manual-subscription.md`](./manual-subscription.md)):
 the `invoices` / `subscriptions` / `billingConfig` tables, `issueInvoice`,
