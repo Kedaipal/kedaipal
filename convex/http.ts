@@ -359,7 +359,6 @@ http.route({
 });
 
 /**
-<<<<<<< ours
  * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google
  * (or any calendar app) polls this URL on its own schedule. The token in the
  * path is the whole capability (/track posture); unknown tokens 404 with no
