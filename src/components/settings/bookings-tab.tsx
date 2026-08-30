@@ -138,7 +138,7 @@ export function BookingsTab({ retailerId }: { retailerId: Id<"retailers"> }) {
 				</li>
 				<li>
 					Tap <span className="font-medium text-foreground">Add calendar</span>{" "}
-					— your bookings appear as &ldquo;Bookings — your store&rdquo;
+					— your orders appear under your store&apos;s name
 				</li>
 			</ol>
 

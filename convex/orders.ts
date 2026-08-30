@@ -81,6 +81,7 @@ import {
 } from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
+	CANCELLATION_NOTE_MAX,
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
@@ -2743,11 +2744,46 @@ export const setPinned = mutation({
 	},
 });
 
+/**
+ * The buyer-visible cancellation reason (86eyn4kcn follow-up). REQUIRED when
+ * cancelling a BOOKING — declined and cancelled are the same event to a guest
+ * who has planned around the dates, and the decline path has always demanded
+ * one, so cancel demanding one is a consistency fix, not new friction.
+ * Optional on ordinary orders, where cancel is high-frequency (test rows,
+ * spam, the buyer changed their mind) and a forced reason would be friction
+ * for no gain. Returns the trimmed note to store, or undefined.
+ */
+function resolveCancellationNote(
+	order: Doc<"orders">,
+	note: string | undefined,
+): string | undefined {
+	const trimmed = note?.trim() ?? "";
+	if (trimmed.length > CANCELLATION_NOTE_MAX) {
+		throw new ConvexError(
+			`Keep the reason under ${CANCELLATION_NOTE_MAX} characters`,
+		);
+	}
+	if (trimmed.length === 0) {
+		if (order.deliveryMethod === "booking") {
+			throw new ConvexError(
+				"Add a short reason — the guest sees it with the cancellation",
+			);
+		}
+		return undefined;
+	}
+	return trimmed;
+}
+
 export const updateStatus = mutation({
 	args: {
 		orderId: v.id("orders"),
 		status: transitionStatusValidator,
 		note: v.optional(v.string()),
+		// Buyer-visible reason for a cancellation, in the seller's own words.
+		// Required when cancelling a booking (see resolveCancellationNote);
+		// ignored for every other transition. NOT the same as `note`, which is
+		// the internal timeline entry.
+		cancellationNote: v.optional(v.string()),
 		// Shipment tracking — only accepted when transitioning to "shipped".
 		// Ignored for other status transitions. A registry courier + number
 		// auto-derives carrierTrackingUrl (convex/lib/couriers.ts).
@@ -2764,6 +2800,7 @@ export const updateStatus = mutation({
 			orderId,
 			status,
 			note,
+			cancellationNote,
 			carrierTrackingUrl,
 			courierName,
 			trackingNo,
@@ -2817,6 +2854,15 @@ export const updateStatus = mutation({
 			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
+		// Stamped BEFORE the transition so the buyer's page never renders a
+		// cancelled order with the reason still missing (the bookingResolution
+		// ordering rule, same reason).
+		if (status === "cancelled") {
+			const resolved = resolveCancellationNote(order, cancellationNote);
+			if (resolved !== undefined) {
+				await ctx.db.patch(order._id, { cancellationNote: resolved });
+			}
+		}
 		await applyStatusTransition(ctx, order, status, {
 			note,
 			carrierTrackingUrl,
@@ -2838,10 +2884,14 @@ export const bulkUpdateStatus = mutation({
 	args: {
 		orderIds: v.array(v.id("orders")),
 		status: transitionStatusValidator,
+		// ONE reason for the whole selection (the inbox prompts once). Applied
+		// to every order the batch actually cancels; the same booking rule
+		// applies per order, so a batch containing a booking needs it.
+		cancellationNote: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ orderIds, status },
+		{ orderIds, status, cancellationNote },
 	): Promise<{
 		updated: number;
 		skipped: number;
@@ -2922,6 +2972,12 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				skippedRiderManaged++;
 				continue;
+			}
+			if (status === "cancelled") {
+				const resolved = resolveCancellationNote(order, cancellationNote);
+				if (resolved !== undefined) {
+					await ctx.db.patch(order._id, { cancellationNote: resolved });
+				}
 			}
 			await applyStatusTransition(ctx, order, status);
 			updated++;

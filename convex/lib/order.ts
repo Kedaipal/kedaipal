@@ -37,6 +37,12 @@ export function generateTrackingToken(): string {
 	return token;
 }
 
+/** Longest short, buyer-visible reason a seller writes about an order.
+ * Shared by every path that needs one so they can't drift: declining a
+ * booking request, cancelling a booking, an ordinary cancel, and keeping part
+ * of a security deposit. */
+export const CANCELLATION_NOTE_MAX = 200;
+
 export type OrderItemPricing = {
 	price: number;
 	quantity: number;

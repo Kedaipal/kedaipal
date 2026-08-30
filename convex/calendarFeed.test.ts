@@ -186,3 +186,135 @@ describe("calendarFeed content", () => {
 		).toBeNull();
 	});
 });
+
+describe("calendarFeed — every order, not just bookings", () => {
+	/** A plain (non-booking) store + product, the cake-seller shape. */
+	async function seedPlainStore(t: ReturnType<typeof convexTest>) {
+		const asOwner = t.withIdentity({ subject: "user_plain_feed" });
+		await asOwner.mutation(api.retailers.createRetailer, {
+			storeName: "Sue Chef Kitchen",
+			slug: "sue-chef-feed",
+		});
+		const retailer = await asOwner.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Chocolate Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 12_000, onHand: 20 }],
+		});
+		const withVariants = await asOwner.query(api.products.get, { productId });
+		const variantId = withVariants?.variants[0]?._id;
+		if (!variantId) throw new Error("variant missing");
+		return { t, asOwner, retailer, productId, variantId };
+	}
+
+	test("an ordinary order due in the window lands on the calendar", async () => {
+		const ctx = await seedPlainStore(setup());
+		await ctx.t.mutation(api.orders.create, {
+			retailerId: ctx.retailer._id,
+			items: [{ productId: ctx.productId, variantId: ctx.variantId, quantity: 2 }],
+			currency: "MYR",
+			customer: { name: "Aisha", waPhone: "0123456781" },
+			deliveryMethod: "self_collect",
+			channel: "whatsapp",
+			fulfilmentDate: day(4),
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, { token });
+		if (feed === null) throw new Error("feed missing");
+		// Named by customer + what they ordered, on the day it's due.
+		expect(feed).toContain("SUMMARY:Aisha — Chocolate Cake ×2");
+		expect(feed).toContain("DTSTART;VALUE=DATE:");
+		// The no-phone promise holds for ordinary orders too.
+		expect(feed).not.toMatch(/6?01\d{8}/);
+	});
+
+	test("an order with a time becomes a TIMED event, not all-day", async () => {
+		const ctx = await seedPlainStore(setup());
+		await ctx.t.mutation(api.orders.create, {
+			retailerId: ctx.retailer._id,
+			items: [{ productId: ctx.productId, variantId: ctx.variantId, quantity: 1 }],
+			currency: "MYR",
+			customer: { name: "Farah", waPhone: "0123456782" },
+			// A fulfilment TIME is delivery-only by design (a pickup point's
+			// hours live on its own schedule note), so this has to be a delivery.
+			deliveryMethod: "delivery",
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+			},
+			channel: "whatsapp",
+			fulfilmentDate: day(3),
+			// 15:30 MYT — which is 07:30 UTC, since MY is UTC+8 with no DST.
+			fulfilmentTimeMinutes: 15 * 60 + 30,
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, { token });
+		if (feed === null) throw new Error("feed missing");
+		expect(feed).toMatch(/DTSTART:\d{8}T073000Z/);
+		expect(feed).toContain("SUMMARY:Farah — Chocolate Cake");
+	});
+
+	test("cancelled orders are off the calendar", async () => {
+		const ctx = await seedPlainStore(setup());
+		const { shortId } = await ctx.t.mutation(api.orders.create, {
+			retailerId: ctx.retailer._id,
+			items: [{ productId: ctx.productId, variantId: ctx.variantId, quantity: 1 }],
+			currency: "MYR",
+			customer: { name: "Zara", waPhone: "0123456783" },
+			deliveryMethod: "self_collect",
+			channel: "whatsapp",
+			fulfilmentDate: day(6),
+		});
+		const order = await ctx.asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		await ctx.asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, { token });
+		expect(feed).not.toContain("Zara");
+	});
+
+	test("a booking is drawn ONCE — across its stay, not again on its due date", async () => {
+		const ctx = await seedBookingStore(setup());
+		const { shortId } = await ctx.t.mutation(api.bookings.requestBooking, {
+			retailerId: ctx.retailer._id,
+			productId: ctx.productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: { name: "Aisha", waPhone: "0123456784" },
+		});
+		const order = await ctx.asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		await ctx.asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, { token });
+		if (feed === null) throw new Error("feed missing");
+		// The booking pass owns it; the all-orders pass must skip it, or the
+		// stay would be shadowed by a stray all-day event on the check-in day.
+		expect(feed.split("BEGIN:VEVENT").length - 1).toBe(1);
+		expect(feed).toContain(`UID:booking-${shortId}@kedaipal.com`);
+		expect(feed).not.toContain(`UID:order-${shortId}@kedaipal.com`);
+	});
+});

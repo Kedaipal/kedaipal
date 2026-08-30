@@ -44,6 +44,7 @@ import {
 	isMytMidnight,
 } from "./lib/fulfilmentDate";
 import {
+	CANCELLATION_NOTE_MAX,
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
@@ -65,7 +66,7 @@ import { recordOrderCreated } from "./subscriptionUsage";
 
 /** Decline reasons are quoted verbatim in the guest's page (and, once the
  * dedicated template is registered, their WhatsApp) — bounded like a note. */
-export const BOOKING_DECLINE_REASON_MAX = 200;
+
 
 const SHORT_ID_RETRIES = 3;
 
@@ -479,9 +480,9 @@ export const declineBookingRequest = mutation({
 				"Add a short reason — the guest sees it with the decline",
 			);
 		}
-		if (trimmed.length > BOOKING_DECLINE_REASON_MAX) {
+		if (trimmed.length > CANCELLATION_NOTE_MAX) {
 			throw new ConvexError(
-				`Keep the reason under ${BOOKING_DECLINE_REASON_MAX} characters`,
+				`Keep the reason under ${CANCELLATION_NOTE_MAX} characters`,
 			);
 		}
 
@@ -492,7 +493,7 @@ export const declineBookingRequest = mutation({
 		// the buyer's page and the seller's resolution note.)
 		await ctx.db.patch(order._id, {
 			bookingResolution: "declined",
-			bookingDeclineReason: trimmed,
+			cancellationNote: trimmed,
 		});
 		await applyStatusTransition(
 			ctx,
@@ -548,9 +549,9 @@ export const settleSecurityDeposit = mutation({
 			throw new ConvexError(
 				"Add a short reason — the guest sees it with the deduction",
 			);
-		if (trimmed.length > BOOKING_DECLINE_REASON_MAX)
+		if (trimmed.length > CANCELLATION_NOTE_MAX)
 			throw new ConvexError(
-				`Keep the reason under ${BOOKING_DECLINE_REASON_MAX} characters`,
+				`Keep the reason under ${CANCELLATION_NOTE_MAX} characters`,
 			);
 
 		await ctx.db.patch(order._id, {

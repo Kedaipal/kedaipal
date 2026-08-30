@@ -68,6 +68,13 @@ export type IcsEvent = {
 	/** Row creation time — the stable DTSTAMP, so an unchanged feed byte-
 	 * compares equal across fetches and Google never sees phantom updates. */
 	createdAt: number;
+	/** Minutes past MYT midnight when this is a TIMED event rather than an
+	 * all-day one (a delivery due at 3:30 PM). Absent = all-day. A calendar
+	 * showing twelve Saturday deliveries is far more useful with the times on
+	 * them, and MYT is UTC+8 with no DST, so the UTC form is exact. */
+	startMinutes?: number;
+	/** How long a timed event runs. Defaults to 60 minutes. */
+	durationMinutes?: number;
 };
 
 /** Assemble the complete VCALENDAR document (CRLF line endings). */
@@ -89,8 +96,20 @@ export function buildIcsCalendar(args: {
 			"BEGIN:VEVENT",
 			foldIcsLine(`UID:${event.uid}@kedaipal.com`),
 			`DTSTAMP:${icsUtcStamp(event.createdAt)}`,
-			`DTSTART;VALUE=DATE:${icsDate(event.start)}`,
-			`DTEND;VALUE=DATE:${icsDate(event.endExclusive)}`,
+			...(event.startMinutes === undefined
+				? [
+						`DTSTART;VALUE=DATE:${icsDate(event.start)}`,
+						`DTEND;VALUE=DATE:${icsDate(event.endExclusive)}`,
+					]
+				: (() => {
+						const startMs = event.start + event.startMinutes * 60_000;
+						const endMs =
+							startMs + (event.durationMinutes ?? 60) * 60_000;
+						return [
+							`DTSTART:${icsUtcStamp(startMs)}`,
+							`DTEND:${icsUtcStamp(endMs)}`,
+						];
+					})()),
 			foldIcsLine(`SUMMARY:${escapeIcsText(event.summary)}`),
 			"TRANSP:OPAQUE",
 			"END:VEVENT",

@@ -586,11 +586,15 @@ function OrderDetailRoute() {
 		}
 	}
 
-	async function handleCancel() {
+	async function handleCancel(cancellationNote?: string) {
 		if (!order) return;
 		setPending("cancel");
 		try {
-			await updateStatus({ orderId: order._id, status: "cancelled" });
+			await updateStatus({
+				orderId: order._id,
+				status: "cancelled",
+				cancellationNote,
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the confirm dialog stays open for a retry; the toast above
@@ -767,7 +771,7 @@ function OrderDetailRoute() {
 			) : order.bookingResolution !== undefined ? (
 				<BookingResolutionNote
 					resolution={order.bookingResolution}
-					reason={order.bookingDeclineReason}
+					reason={order.cancellationNote}
 				/>
 			) : null}
 
@@ -2069,11 +2073,23 @@ function OrderDetailRoute() {
 				description={
 					hasActiveRiderBooking
 					? `Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-					: "Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."
+					: "Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page."
 				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
 				destructive
+				reason={{
+					label: "Why are you cancelling?",
+					placeholder: isBooking
+						? "e.g. The site flooded after last night's storm"
+						: "e.g. Out of stock — sorry!",
+					// A guest planned around these dates, so a cancelled booking owes
+					// them the same explanation a declined request gives. The server
+					// enforces this too.
+					required: isBooking,
+					maxLength: 200,
+					helper: "The customer sees this on their order page.",
+				}}
 				onConfirm={handleCancel}
 			/>
 

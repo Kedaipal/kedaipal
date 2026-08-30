@@ -686,10 +686,9 @@ function TrackingRoute() {
 								? "Permintaan tamat tempoh"
 								: "Request expired"}
 					</span>
-					{order.bookingResolution === "declined" &&
-					order.bookingDeclineReason ? (
+					{order.bookingResolution === "declined" && order.cancellationNote ? (
 						<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
-							“{order.bookingDeclineReason}”
+							“{order.cancellationNote}”
 						</blockquote>
 					) : order.bookingResolution === "expired" ? (
 						<p className="text-sm leading-relaxed text-muted-foreground">
@@ -1259,6 +1258,27 @@ function TrackingRoute() {
 							· {order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>
+				</section>
+			) : null}
+
+			{/* Why the order was cancelled, in the seller's own words. Request-stage
+			    endings render in the resolution card above; this covers everything
+			    else — an approved booking the seller later cancelled, and ordinary
+			    cancelled orders where the seller chose to explain. Without it, a
+			    buyer whose booking was cancelled after approval learned nothing. */}
+			{isCancelled &&
+			order.bookingResolution === undefined &&
+			order.cancellationNote ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Sebab pembatalan" : "Why this was cancelled"}
+					</p>
+					<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+						“{order.cancellationNote}”
+					</blockquote>
+					<p className="text-xs text-muted-foreground">
+						{ms ? `Daripada ${order.storeName}.` : `From ${order.storeName}.`}
+					</p>
 				</section>
 			) : null}
 
