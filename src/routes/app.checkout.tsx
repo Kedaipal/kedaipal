@@ -33,6 +33,7 @@ import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { sourceLabel } from "../../convex/lib/attribution";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
@@ -42,6 +43,12 @@ import {
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
 import {
+	CLAIM_SOURCE_CHOICES,
+	CLAIM_WINDOW_CHOICES_MINUTES,
+	DEFAULT_CLAIM_WINDOW_MINUTES,
+	describeClaimWindow,
+} from "../../convex/lib/orderClaims";
+import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
@@ -49,23 +56,6 @@ import {
 import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
-import {
-	counterPrimaryAction,
-	showsSellerPaymentControls,
-} from "../lib/counter-panel";
-import {
-	canAddToCounterCart,
-	maxAddableQty,
-	productSoldOut,
-	variantStockNote,
-} from "../lib/counter-stock";
-import { sourceLabel } from "../../convex/lib/attribution";
-import {
-	CLAIM_SOURCE_CHOICES,
-	CLAIM_WINDOW_CHOICES_MINUTES,
-	DEFAULT_CLAIM_WINDOW_MINUTES,
-	describeClaimWindow,
-} from "../../convex/lib/orderClaims";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -92,7 +82,17 @@ import {
 } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { MASK_PII } from "../lib/analytics-privacy";
+import {
+	counterPrimaryAction,
+	showsSellerPaymentControls,
+} from "../lib/counter-panel";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
+import {
+	canAddToCounterCart,
+	maxAddableQty,
+	productSoldOut,
+	variantStockNote,
+} from "../lib/counter-stock";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
 import { cn } from "../lib/utils";
@@ -2100,199 +2100,201 @@ function BuildOrderScreen({
 						</div>
 
 						{showsSellerPaymentControls(payMode) ? (
-						<>
-						<div className="rounded-xl border border-border bg-muted/20 p-3">
-							<button
-								type="button"
-								onClick={() => setDateOpen((open) => !open)}
-								className="flex w-full items-center justify-between gap-3 text-left"
-							>
-								<span>
-									<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-										Collection
-									</span>
-									<span className="block text-sm font-medium">
-										{collectionLabel}
-									</span>
-									<span className="block text-xs text-muted-foreground">
-										Optional: open this only for preorder or later collection.
-									</span>
-								</span>
-								<ChevronDown
-									className={cn(
-										"size-4 shrink-0 text-muted-foreground transition-transform",
-										dateOpen && "rotate-180",
-									)}
-								/>
-							</button>
-							{dateOpen ? (
-								<div className="mt-3 border-t border-border pt-3">
-									<label
-										htmlFor="counter-fulfilment-date"
-										className="text-xs font-medium text-muted-foreground"
+							<>
+								<div className="rounded-xl border border-border bg-muted/20 p-3">
+									<button
+										type="button"
+										onClick={() => setDateOpen((open) => !open)}
+										className="flex w-full items-center justify-between gap-3 text-left"
 									>
-										Change collection date
-									</label>
-									<input
-										id="counter-fulfilment-date"
-										type="date"
-										value={fulfilmentDate}
-										min={minYmd}
-										max={maxYmd}
-										onChange={(e) => setFulfilmentDate(e.target.value)}
-										className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-									/>
+										<span>
+											<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+												Collection
+											</span>
+											<span className="block text-sm font-medium">
+												{collectionLabel}
+											</span>
+											<span className="block text-xs text-muted-foreground">
+												Optional: open this only for preorder or later
+												collection.
+											</span>
+										</span>
+										<ChevronDown
+											className={cn(
+												"size-4 shrink-0 text-muted-foreground transition-transform",
+												dateOpen && "rotate-180",
+											)}
+										/>
+									</button>
+									{dateOpen ? (
+										<div className="mt-3 border-t border-border pt-3">
+											<label
+												htmlFor="counter-fulfilment-date"
+												className="text-xs font-medium text-muted-foreground"
+											>
+												Change collection date
+											</label>
+											<input
+												id="counter-fulfilment-date"
+												type="date"
+												value={fulfilmentDate}
+												min={minYmd}
+												max={maxYmd}
+												onChange={(e) => setFulfilmentDate(e.target.value)}
+												className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+											/>
+										</div>
+									) : null}
 								</div>
-							) : null}
-						</div>
 
-						<div className="rounded-xl border border-border bg-muted/20 p-3">
-							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-								Payment
-							</p>
-							<div className="mt-3 grid gap-2">
-								<ChoiceCard
-									active={paid}
-									onSelect={() => setPaidInPerson(true)}
-									icon={Banknote}
-									title="Paid now"
-									subtitle="Settled at counter"
-								/>
-								<ChoiceCard
-									active={!paid}
-									disabled={anonymous}
-									reason="A cash sale has no buyer to send a payment link to."
-									onSelect={() => setPaidInPerson(false)}
-									icon={Clock}
-									title="Pay later"
-									subtitle="Send payment link"
-								/>
-							</div>
+								<div className="rounded-xl border border-border bg-muted/20 p-3">
+									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+										Payment
+									</p>
+									<div className="mt-3 grid gap-2">
+										<ChoiceCard
+											active={paid}
+											onSelect={() => setPaidInPerson(true)}
+											icon={Banknote}
+											title="Paid now"
+											subtitle="Settled at counter"
+										/>
+										<ChoiceCard
+											active={!paid}
+											disabled={anonymous}
+											reason="A cash sale has no buyer to send a payment link to."
+											onSelect={() => setPaidInPerson(false)}
+											icon={Clock}
+											title="Pay later"
+											subtitle="Send payment link"
+										/>
+									</div>
 
-							{anonymous ? (
-								<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-									Cash sale — no contact on file, so it's settled in person and
-									no WhatsApp is sent.
-								</p>
-							) : null}
+									{anonymous ? (
+										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+											Cash sale — no contact on file, so it's settled in person
+											and no WhatsApp is sent.
+										</p>
+									) : null}
 
-							{paid ? (
-								<label className="mt-3 block">
-									<span className="text-xs font-medium text-muted-foreground">
-										Payment method
-									</span>
-									<select
-										value={method}
-										onChange={(e) =>
-											setMethod(e.target.value as OrderPaymentMethod)
-										}
-										className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-									>
-										{methodChoices.map((m) => (
-											<option key={m} value={m}>
-												{PAYMENT_METHOD_LABELS[m]}
-											</option>
-										))}
-									</select>
-								</label>
-							) : (
-								<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-									We'll send one WhatsApp with how to pay and a link to track
-									the order.
-								</p>
-							)}
-						</div>
-						</>
+									{paid ? (
+										<label className="mt-3 block">
+											<span className="text-xs font-medium text-muted-foreground">
+												Payment method
+											</span>
+											<select
+												value={method}
+												onChange={(e) =>
+													setMethod(e.target.value as OrderPaymentMethod)
+												}
+												className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+											>
+												{methodChoices.map((m) => (
+													<option key={m} value={m}>
+														{PAYMENT_METHOD_LABELS[m]}
+													</option>
+												))}
+											</select>
+										</label>
+									) : (
+										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+											We'll send one WhatsApp with how to pay and a link to
+											track the order.
+										</p>
+									)}
+								</div>
+							</>
 						) : (
-						/* SEND MODE — collection + payment are deliberately absent, and
+							/* SEND MODE — collection + payment are deliberately absent, and
 						   said out loud: an absence the seller can't explain reads as a
 						   bug, and this is the exact confusion the redesign fixes. */
-						<>
-						<p className="rounded-xl border border-border bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
-							<span className="font-medium text-foreground">
-								{buyer.displayName ?? "The buyer"} fills in the rest
-							</span>{" "}
-							— delivery or pickup, date &amp; time, and payment. Nothing you
-							key here would reach them, so collection and payment are hidden.
-						</p>
+							<>
+								<p className="rounded-xl border border-border bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
+									<span className="font-medium text-foreground">
+										{buyer.displayName ?? "The buyer"} fills in the rest
+									</span>{" "}
+									— delivery or pickup, date &amp; time, and payment. Nothing
+									you key here would reach them, so collection and payment are
+									hidden.
+								</p>
 
-						<div className="rounded-xl border border-border bg-muted/20 p-3">
-							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-								How long do they get?
-							</p>
-							<div className="mt-3 flex gap-2">
-								{CLAIM_WINDOW_CHOICES_MINUTES.map((minutes) => {
-									const active = windowMinutes === minutes;
-									return (
-										<button
-											key={minutes}
-											type="button"
-											aria-pressed={active}
-											onClick={() => setWindowMinutes(minutes)}
-											className={cn(
-												"tap-target box-border flex-1 rounded-xl border-2 px-2 text-sm font-semibold transition-colors",
-												active
-													? "border-accent bg-accent/10 text-accent-emphasis"
-													: "border-border bg-background text-muted-foreground hover:border-accent/40",
-											)}
-										>
-											{describeClaimWindow(minutes)
-												.replace(" minutes", " min")
-												.replace(" hours", "h")}
-										</button>
-									);
-								})}
-							</div>
-							<p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-								Time to <em>complete</em> the order — then at least 15 minutes
-								to pay. Still unpaid when it&apos;s up and the order cancels
-								itself, so your stock comes back.
-							</p>
-						</div>
-
-						<div className="rounded-xl border border-border bg-muted/20 p-3">
-							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-								Where&apos;s this order from?
-							</p>
-							<div className="mt-3 flex flex-wrap gap-2">
-								{CLAIM_SOURCE_CHOICES.map((tag) => {
-									const active = claimSource === tag;
-									const brand = BRAND_GLYPHS[tag];
-									return (
-										<button
-											key={tag}
-											type="button"
-											aria-pressed={active}
-											onClick={() =>
-												setClaimSource(active ? undefined : tag)
-											}
-											className={cn(
-												"tap-target box-border flex items-center gap-1.5 rounded-full border-2 px-3 text-xs font-semibold transition-colors",
-												active
-													? "border-accent bg-accent/10 text-accent-emphasis"
-													: "border-border bg-background text-muted-foreground hover:border-accent/40",
-											)}
-										>
-											{brand ? (
-												<brand.Icon
+								<div className="rounded-xl border border-border bg-muted/20 p-3">
+									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+										How long do they get?
+									</p>
+									<div className="mt-3 flex gap-2">
+										{CLAIM_WINDOW_CHOICES_MINUTES.map((minutes) => {
+											const active = windowMinutes === minutes;
+											return (
+												<button
+													key={minutes}
+													type="button"
+													aria-pressed={active}
+													onClick={() => setWindowMinutes(minutes)}
 													className={cn(
-														"size-3.5 shrink-0",
-														active && brand.colorClass,
+														"tap-target box-border flex-1 rounded-xl border-2 px-2 text-sm font-semibold transition-colors",
+														active
+															? "border-accent bg-accent/10 text-accent-emphasis"
+															: "border-border bg-background text-muted-foreground hover:border-accent/40",
 													)}
-												/>
-											) : null}
-											{sourceLabel(tag)}
-										</button>
-									);
-								})}
-							</div>
-							<p className="mt-2 text-xs text-muted-foreground">
-								Optional — tags the sale so Insights can tell you what a Live
-								is actually worth. Tap again to clear. We remember both
-								choices for your next send.
-							</p>
-						</div>
-						</>
+												>
+													{describeClaimWindow(minutes)
+														.replace(" minutes", " min")
+														.replace(" hours", "h")}
+												</button>
+											);
+										})}
+									</div>
+									<p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+										Time to <em>complete</em> the order — then at least 15
+										minutes to pay. Still unpaid when it&apos;s up and the order
+										cancels itself, so your stock comes back.
+									</p>
+								</div>
+
+								<div className="rounded-xl border border-border bg-muted/20 p-3">
+									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+										Where&apos;s this order from?
+									</p>
+									<div className="mt-3 flex flex-wrap gap-2">
+										{CLAIM_SOURCE_CHOICES.map((tag) => {
+											const active = claimSource === tag;
+											const brand = BRAND_GLYPHS[tag];
+											return (
+												<button
+													key={tag}
+													type="button"
+													aria-pressed={active}
+													onClick={() =>
+														setClaimSource(active ? undefined : tag)
+													}
+													className={cn(
+														"tap-target box-border flex items-center gap-1.5 rounded-full border-2 px-3 text-xs font-semibold transition-colors",
+														active
+															? "border-accent bg-accent/10 text-accent-emphasis"
+															: "border-border bg-background text-muted-foreground hover:border-accent/40",
+													)}
+												>
+													{brand ? (
+														<brand.Icon
+															className={cn(
+																"size-3.5 shrink-0",
+																active && brand.colorClass,
+															)}
+														/>
+													) : null}
+													{sourceLabel(tag)}
+												</button>
+											);
+										})}
+									</div>
+									<p className="mt-2 text-xs text-muted-foreground">
+										Optional — tags the sale so Insights can tell you what a
+										Live is actually worth. Tap again to clear. We remember both
+										choices for your next send.
+									</p>
+								</div>
+							</>
 						)}
 					</div>
 
@@ -2338,9 +2340,7 @@ function BuildOrderScreen({
 										{payMode === "send" ? (
 											<Send className="size-4" aria-hidden />
 										) : null}
-										{payMode === "send" && sending
-											? "Sending…"
-											: action.label}
+										{payMode === "send" && sending ? "Sending…" : action.label}
 									</Button>
 									{action.helper ? (
 										<p className="mt-1.5 text-center text-xs text-muted-foreground">
@@ -2372,8 +2372,8 @@ function BuildOrderScreen({
 				description={
 					<>
 						<span {...MASK_PII}>{buyer.displayName ?? "This buyer"}</span>
-						's checkout and any items added to it will be removed. This can't
-						be undone.
+						's checkout and any items added to it will be removed. This can't be
+						undone.
 					</>
 				}
 				confirmLabel="Cancel checkout"

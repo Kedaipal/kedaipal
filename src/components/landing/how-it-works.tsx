@@ -1,3 +1,4 @@
+import { motion, useReducedMotion } from "framer-motion";
 import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
@@ -17,6 +18,8 @@ interface HowStep {
 	body: string;
 	tags: string[];
 	mockup: ReactNode;
+	/** Photo backdrop (how-* asset) the mockup floats over. */
+	image: string;
 }
 
 function getHowSteps(): HowStep[] {
@@ -27,6 +30,7 @@ function getHowSteps(): HowStep[] {
 			body: m.how_step_1_body(),
 			tags: [m.how_step_1_tag_1(), m.how_step_1_tag_2(), m.how_step_1_tag_3()],
 			mockup: <ShareMockup />,
+			image: "how-share",
 		},
 		{
 			label: m.how_step_2_label(),
@@ -39,6 +43,7 @@ function getHowSteps(): HowStep[] {
 				m.how_step_2_tag_4(),
 			],
 			mockup: <BrowseMockup />,
+			image: "how-browse",
 		},
 		{
 			label: m.how_step_3_label(),
@@ -46,6 +51,7 @@ function getHowSteps(): HowStep[] {
 			body: m.how_step_3_body(),
 			tags: [],
 			mockup: <CloseMockup />,
+			image: "how-close",
 		},
 		{
 			label: m.how_step_4_label(),
@@ -53,6 +59,7 @@ function getHowSteps(): HowStep[] {
 			body: m.how_step_4_body(),
 			tags: [],
 			mockup: <RunMockup />,
+			image: "how-run",
 		},
 	];
 }
@@ -72,6 +79,7 @@ function getHowSteps(): HowStep[] {
  */
 export function HowItWorks() {
 	const steps = getHowSteps();
+	const shouldReduceMotion = useReducedMotion();
 
 	return (
 		<section
@@ -121,8 +129,18 @@ export function HowItWorks() {
 											)}
 										</div>
 										{!isLast && (
-											<div
+											/* The connector DRAWS itself as the step scrolls into
+											   view — md-only, so it never touches the mobile
+											   carousel's peeking-slide constraint. */
+											<motion.div
 												aria-hidden
+												initial={
+													shouldReduceMotion ? false : { scaleY: 0 }
+												}
+												whileInView={{ scaleY: 1 }}
+												viewport={{ once: true, margin: "-80px" }}
+												transition={{ duration: 0.8, ease: "easeOut" }}
+												style={{ originY: 0 }}
 												className="mt-2 hidden w-0 flex-1 border-l-2 border-dashed border-border md:block"
 											/>
 										)}
@@ -159,7 +177,33 @@ export function HowItWorks() {
 													</div>
 												)}
 											</div>
-											<div className="min-w-0 px-1 py-2">{step.mockup}</div>
+											{/* Layered collage: photo backdrop (slow Ken Burns
+											    push-in inside its own clip) with the CSS mockup
+											    floating over its lower edge. */}
+											<div className="min-w-0 px-1 py-2">
+												<div
+													aria-hidden
+													className="-rotate-1 overflow-hidden rounded-3xl shadow-lg"
+												>
+													<picture>
+														<source
+															srcSet={`/img/landing/${step.image}-640.avif`}
+															type="image/avif"
+														/>
+														<img
+															src={`/img/landing/${step.image}-640.webp`}
+															alt=""
+															width={640}
+															height={478}
+															loading="lazy"
+															className="h-36 w-full animate-kp-kenburns object-cover md:h-44"
+														/>
+													</picture>
+												</div>
+												<div className="relative z-10 -mt-12 md:-mt-14">
+													{step.mockup}
+												</div>
+											</div>
 										</div>
 									</div>
 								</div>

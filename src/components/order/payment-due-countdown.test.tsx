@@ -26,7 +26,9 @@ describe("PaymentDueCountdown", () => {
 
 	test("a long deadline reads in hours, not a sea of minutes", () => {
 		vi.useFakeTimers();
-		render(<PaymentDueCountdown dueAt={Date.now() + 23 * 3600_000 + 59 * 60_000} />);
+		render(
+			<PaymentDueCountdown dueAt={Date.now() + 23 * 3600_000 + 59 * 60_000} />,
+		);
 		expect(screen.getByText(/23h 5[89]m/)).toBeTruthy();
 	});
 

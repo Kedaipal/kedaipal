@@ -80,7 +80,11 @@ export const AWB_SORT_OPTIONS: ReadonlyArray<{
 		label: "Delivery date",
 		hint: "Soonest first, like your Orders list",
 	},
-	{ value: "status", label: "Order status", hint: "New orders through to sent" },
+	{
+		value: "status",
+		label: "Order status",
+		hint: "New orders through to sent",
+	},
 	{
 		value: "courier",
 		label: "Courier",

@@ -2945,9 +2945,20 @@ describe("orders — inbox search", () => {
 		const byName = await asA.query(api.orders.searchOrders, {
 			retailerId: retailer._id,
 			bucket: "all",
-			searchText: "ali",
+			searchText: "alice",
 		});
 		expect(byName.orders.map((o) => o._id)).toEqual([o1._id]);
+
+		// Since 86eyrtz74 search spans EVERY column, so a term that appears in a
+		// shared field legitimately matches every order carrying it — here the
+		// city, "Pet(ali)ng Jaya", which all four fixtures share. That breadth is
+		// the feature: the address is searchable now.
+		const byCity = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: "petaling",
+		});
+		expect(byCity.orders.length).toBe(4);
 
 		// Phone trailing digits.
 		const byPhone = await asA.query(api.orders.searchOrders, {
@@ -8756,8 +8767,8 @@ describe("orders — export gaps (86eyrtz74)", () => {
 		expect(at("Address line 1")).toBe(validAddress.line1);
 		expect(at("City")).toBe(validAddress.city);
 		expect(at("Postcode")).toBe(validAddress.postcode);
-		// Deduped + sorted union across the order's products.
-		expect(at("Categories (current)")).toBe("Bestseller, Kuih");
+		// Deduped + sorted union across the order's lines, frozen at checkout.
+		expect(at("Categories")).toBe("Bestseller, Kuih");
 		// The identity that was broken before this ticket.
 		const sum =
 			Number(at("Subtotal")) +
@@ -8839,5 +8850,313 @@ describe("orders — item thumbnails (86eyrtz74)", () => {
 			.withIdentity({ subject: USER_A })
 			.query(api.orders.getItemImageUrls, { shortId: "ORD-NOPE" });
 		expect(urls).toEqual([]);
+	});
+});
+
+describe("orders — categories frozen at checkout (86eyrtz74)", () => {
+	async function seedCategorised(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 100,
+			name: "Kek Lapis",
+		});
+		const { categoryId: kuih } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Kuih",
+			slug: "kuih",
+		});
+		const { categoryId: best } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Bestseller",
+			slug: "bestseller",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [kuih, best],
+		});
+		return { retailer, asA, productId, kuih, best };
+	}
+
+	async function place(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		return (await t.query(api.orders.get, { token: await tk(t, shortId) }))!;
+	}
+
+	test("stamps the category names onto every line, sorted", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedCategorised(t);
+		const order = await place(t, retailer._id, productId);
+		expect(order.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
+	});
+
+	test("re-categorising later does NOT rewrite the sold order", async () => {
+		// The whole reason for freezing: a sales report must stay true when the
+		// seller reorganises their catalogue.
+		const t = setup();
+		const { retailer, asA, productId, best } = await seedCategorised(t);
+		const order = await place(t, retailer._id, productId);
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [best],
+		});
+		const after = await t.query(api.orders.get, {
+			token: await tk(t, order.shortId),
+		});
+		expect(after?.items[0].categoryNames).toEqual(["Bestseller", "Kuih"]);
+	});
+
+	test("an uncategorised product records an EMPTY list, not nothing", async () => {
+		// "filed under nothing" is a real answer and gets recorded as one. Absence
+		// is reserved for orders that predate the field, so the backfill can tell
+		// the two apart (see migrations:backfillOrderCategoryNames).
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const order = await place(t, retailer._id, productId);
+		expect(order.items[0].categoryNames).toEqual([]);
+	});
+
+	test("the export reads the frozen names — no lookup, no drift", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedCategorised(t);
+		await place(t, retailer._id, productId);
+		// Re-categorise AFTER the sale; the export must still show the old truth.
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "categories"],
+		});
+		const [header, row] = csv.split("\r\n");
+		expect(header).toBe("Order ID,Categories");
+		expect(row).toContain('"Bestseller, Kuih"');
+	});
+
+	test("SEARCH can now find an order by its category", async () => {
+		// The one thing a live lookup could never do: matching it would have meant
+		// a per-product read on every keystroke across the whole scan window.
+		const t = setup();
+		const { retailer, asA, productId } = await seedCategorised(t);
+		const order = await place(t, retailer._id, productId);
+		const hit = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: "bestseller",
+		});
+		expect(hit.orders.map((o) => o._id)).toEqual([order._id]);
+	});
+});
+
+describe("orders — column header filters (86eyrtz74)", () => {
+	/** A store with two categories and four orders across them, at three
+	 * different statuses. */
+	async function seedForFilters(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const cakeId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Kek Lapis",
+			stock: 100,
+		});
+		const drinkId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Teh Ais",
+			stock: 100,
+		});
+		const { categoryId: cakes } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Cakes",
+			slug: "cakes",
+		});
+		const { categoryId: drinks } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Drinks",
+			slug: "drinks",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: cakeId,
+			categoryIds: [cakes],
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: drinkId,
+			categoryIds: [drinks],
+		});
+		const place = async (productIds: Id<"products">[]) => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: productIds.map((productId) => ({ productId, quantity: 1 })),
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const doc = await t.run(async (ctx) =>
+				ctx.db
+					.query("orders")
+					.filter((q) => q.eq(q.field("shortId"), shortId))
+					.first(),
+			);
+			if (!doc) throw new Error("seed failed");
+			return doc;
+		};
+		const a = await place([cakeId]);
+		const b = await place([drinkId]);
+		const mixed = await place([cakeId, drinkId]);
+		const d = await place([cakeId]);
+		// Spread them across statuses so the status filter has something to say.
+		for (const [orderId, status] of [
+			[a._id, "confirmed"],
+			[b._id, "packed"],
+			[mixed._id, "packed"],
+		] as const) {
+			await asA.mutation(api.orders.updateStatus, { orderId, status });
+		}
+		return { retailer, asA, a, b, mixed, d };
+	}
+
+	test("filters by exact status, several at once", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			statuses: ["confirmed", "packed"],
+		});
+		expect(res.total).toBe(3);
+		expect(
+			res.orders.every((o) => ["confirmed", "packed"].includes(o.status)),
+		).toBe(true);
+	});
+
+	test("filters by frozen category — a mixed order counts for BOTH", async () => {
+		const t = setup();
+		const { retailer, asA, mixed } = await seedForFilters(t);
+		const cakes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Cakes"],
+		});
+		expect(cakes.total).toBe(3); // a, mixed, d
+		const drinks = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Drinks"],
+		});
+		expect(drinks.total).toBe(2); // b, mixed
+		// The one ticket carrying a cake AND a drink is in both answers.
+		for (const res of [cakes, drinks]) {
+			expect(res.orders.some((o) => o.shortId === mixed.shortId)).toBe(true);
+		}
+	});
+
+	test("facet counts are tallied over the UNFILTERED window", async () => {
+		// The picker must not shrink as it is used: an option that vanished once
+		// selected reads as orders disappearing, and strands the seller with no
+		// way back to the option they just left.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			statuses: ["packed"],
+		});
+		expect(res.total).toBe(2);
+		expect(res.facets.status).toEqual({
+			pending: 1,
+			confirmed: 1,
+			packed: 2,
+		});
+		expect(res.facets.category).toEqual({ Cakes: 3, Drinks: 2 });
+		expect(res.availableCategories).toEqual(["Cakes", "Drinks"]);
+	});
+
+	test("an order counts ONCE per category, never once per line", async () => {
+		// The number beside an option has to be the number of rows it will show.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Cakes"],
+		});
+		expect(res.facets.category.Cakes).toBe(res.total);
+	});
+
+	test("buckets are multi-select — 'everything closed' in one view", async () => {
+		const t = setup();
+		const { retailer, asA, b, mixed } = await seedForFilters(t);
+		// Close two of the four: one delivered, one cancelled.
+		const close = async (shortId: string, status: "delivered" | "cancelled") => {
+			const doc = await t.run(async (ctx) =>
+				ctx.db
+					.query("orders")
+					.filter((q) => q.eq(q.field("shortId"), shortId))
+					.first(),
+			);
+			if (!doc) throw new Error("missing");
+			await asA.mutation(api.orders.updateStatus, {
+				orderId: doc._id,
+				status,
+			});
+		};
+		await close(b.shortId, "delivered");
+		await close(mixed.shortId, "cancelled");
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["completed", "cancelled"],
+		});
+		expect(res.total).toBe(2);
+		// The legacy singular (old bookmarks, in-flight clients) still narrows.
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "completed",
+		});
+		expect(legacy.total).toBe(1);
+	});
+
+	test("checkout surface is multi-select, and the legacy singular still works", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			sources: ["storefront", "counter"],
+		});
+		expect(both.total).toBe(4);
+		// A URL bookmarked before the widen must keep filtering (86eyrtz74).
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			source: "counter",
+		});
+		expect(legacy.total).toBe(0);
+	});
+
+	test("the CSV export honours the header filters, or it isn't the same list", async () => {
+		// The invariant orderInboxFilter.ts exists for: export what's on screen.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const { csv, count } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			categories: ["Drinks"],
+			statuses: ["packed"],
+		});
+		expect(count).toBe(2); // b + mixed
+		expect(csv).toContain("Drinks");
 	});
 });
