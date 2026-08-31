@@ -9,6 +9,7 @@ import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
 import { AppImage } from "../components/ui/app-image";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
@@ -293,6 +294,14 @@ function ClaimRoute() {
 					open={open}
 					pickupLocations={pickupLocations ?? []}
 				/>
+			</div>
+			{/* Bottom of the page, under the checkout and above the sticky bar's
+				  reserved space — the same low-prominence slot the storefront and
+				  /track use, so a buyer who found it once finds it everywhere. Only
+				  on this OPEN state: the expired and already-claimed screens are
+				  dead ends a buyer reads and leaves. */}
+			<div className="mt-8 flex justify-center">
+				<ThemeToggle />
 			</div>
 		</div>
 	);

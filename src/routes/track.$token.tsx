@@ -48,6 +48,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
@@ -1426,11 +1427,21 @@ function TrackingRoute() {
 				</a>
 			) : null}
 
+			{/* Page-bottom utility row. The theme control belongs here for the same
+			    reason the privacy link does: it is about the PAGE, not the order, so
+			    it must not compete with the status card above. And it has to exist on
+			    this page specifically — a buyer who ordered over WhatsApp may never
+			    see a storefront, so /track is their only chance to override the
+			    theme their phone picked. */}
+			<div className="mt-8 flex justify-center">
+				<ThemeToggle />
+			</div>
+
 			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
 			    only web surface after checkout — and the ONLY one for counter
 			    buyers, whose consent notice arrives on WhatsApp. Link the policy
 			    that notice names. */}
-			<p className="mt-8 text-center text-xs text-muted-foreground">
+			<p className="mt-4 text-center text-xs text-muted-foreground">
 				<a
 					href="/privacy"
 					target="_blank"

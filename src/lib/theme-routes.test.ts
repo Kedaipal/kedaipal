@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { BUYER_ROUTE_IDS } from "./buyer-routes";
 import { isThemedRouteId } from "./theme";
 
 /**
@@ -65,6 +66,43 @@ describe("themed route ids", () => {
 		expect(isThemedRouteId("/appeal/$id")).toBe(false);
 		// And confirm no such route exists today, so the guard above is honest.
 		expect(routeTree).not.toMatch(/id: '\/app(?!\/|')/);
+	});
+
+	test("every buyer page offers a theme control", () => {
+		// The seller reaches Appearance through Settings. A buyer has no settings
+		// screen, so the control has to be ON the page — and it cannot be only on
+		// the storefront: someone who ordered over WhatsApp may never see one, and
+		// /track would then be a page they cannot re-theme at all.
+		//
+		// Indirect is fine (the storefront family renders it inside
+		// StorefrontFooter); the assertion below proves that indirection is real
+		// rather than assumed.
+		const footer = readFileSync(
+			join(__dirname, "../components/storefront/storefront-footer.tsx"),
+			"utf8",
+		);
+		expect(footer).toContain("ThemeToggle");
+
+		const missing: string[] = [];
+		for (const id of BUYER_ROUTE_IDS) {
+			// Route ids map to flat route filenames: "/track/$token" →
+			// "track.$token.tsx".
+			const file = `${id.slice(1).replace(/\//g, ".")}.tsx`;
+			const source = readFileSync(join(__dirname, "../routes", file), "utf8");
+			if (!/ThemeToggle|StorefrontFooter/.test(source)) missing.push(file);
+		}
+
+		expect(
+			missing.sort(),
+			[
+				"These buyer routes render no theme control, so a shopper who lands",
+				"there has no way to override the theme their device picked.",
+				"",
+				"Add `<ThemeToggle />` low on the page (the storefront and /track put it",
+				"in the bottom utility row — keep the slot consistent so someone who",
+				"finds it once finds it everywhere), or render StorefrontFooter.",
+			].join("\n"),
+		).toEqual([]);
 	});
 
 	test("every themed app route id in the tree is classified", () => {

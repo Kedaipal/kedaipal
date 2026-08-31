@@ -8,7 +8,11 @@ The palette was not invented for this ticket. `src/styles.css` has carried a com
 
 **Sellers** — Settings → **App → Appearance**: Light, Dark, or Match device, each with a preview swatch. Default is Match device.
 
-**Buyers** — a sun/moon button in the storefront footer. Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". Deliberately below the fold — a theme switch must never compete with the buy button.
+**Buyers** — a sun/moon button low on **every** buyer page: the storefront family (in the footer, beside the powered-by badge), `/track`, and the open `/claim` checkout. Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". Deliberately below the fold — a theme switch must never compete with the buy button.
+
+It has to be on all of them, not just the storefront. A buyer who ordered over WhatsApp may never see a storefront at all: they get a tracking link and nothing else, so `/track` is their only chance to override what their phone picked. And keeping the slot consistent (bottom utility row, next to the privacy link or the powered-by badge) means someone who finds it once finds it everywhere. `theme-routes.test.ts` fails if a buyer route ships without one.
+
+The expired / already-claimed / not-found screens are the deliberate exception: they are dead ends a buyer reads and leaves, and a theme control there is chrome on a page nobody dwells on.
 
 Both write the same key, because they are the same browser on the same device. The Appearance screen says so in as many words ("Applies to this device only"), along with the fact that a seller's choice does not reach their buyers.
 
@@ -54,7 +58,7 @@ Two decisions worth knowing:
 | --- | --- |
 | Seller app (`/app/*`) | Yes |
 | Storefront (`/$slug`, product, category, checkout) | Yes |
-| Order tracking (`/track/$token`), claim links (`/claim/$token`) | Yes — no toggle of their own; they follow whatever the browser already holds |
+| Order tracking (`/track/$token`), claim links (`/claim/$token`) | Yes, with their own toggle |
 | Marketing site (`/`, `/pricing`, `/cost`, legal) | **No** |
 | Sign-in / sign-up / onboarding | **No** |
 | Store poster, QR codes (preview and exported PNG) | **No** — theme-immune by construction, and a QR on a dark ground does not scan |
@@ -87,4 +91,4 @@ KP_WRITE_DARK_BUDGET=1 pnpm vitest run src/lib/dark-mode-coverage.test.ts
 
 - The marketing site, sign-in and onboarding stay light (above).
 - `theme-color` meta and `site.webmanifest` stay pinned to `#0F172A`. It is a dark navy that reads correctly against both themes; splitting it per theme is churn for a 2%-lightness seam in the browser chrome.
-- `/track` and `/claim` follow the stored preference but expose no toggle. A buyer who only ever sees a tracking page gets their phone's setting and no way to override it — correct by default, and adding chrome to that page has not earned its place.
+- The `/claim` dead-end screens (expired, already claimed, not found) carry no toggle — see the reasoning above. If a buyer ever needs one there, the same three lines drop in.
