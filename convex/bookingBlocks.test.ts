@@ -339,6 +339,156 @@ describe("bookingBlocks calendar reads", () => {
 		).toBe(true);
 	});
 
+	test("dayBookings sees a long package whose check-in is months behind the tapped day", async () => {
+		// The gym case (S7): a 6-month membership started today still occupies a
+		// night 100 days from now. The scan used to look back a flat 30 days —
+		// the free-range night cap — so the member vanished from the day sheet
+		// while `countBookedPerNight` kept counting them in the grid pill. The
+		// calendar contradicted itself: pill said 1, tapping said none.
+		const { t, asOwner, retailer } = await seedBookingStore(setup());
+		const packageId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "6-Month Membership",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			// No capacity — a gym has no daily member cap (unlimited).
+			booking: { packageLength: 6, packageUnit: "month" as const },
+			variants: [{ optionValues: [], price: 45000, onHand: 0 }],
+		});
+		const member = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId: packageId,
+			checkIn: today(),
+			// Omitted: the server derives the end from the listing's own length.
+			customer: guest(9),
+		});
+
+		const deepInside = day(100);
+		const rows = await asOwner.query(api.bookingBlocks.dayBookings, {
+			retailerId: retailer._id,
+			date: deepInside,
+			productId: packageId,
+		});
+		expect(rows.map((r) => r.shortId)).toEqual([member.shortId]);
+
+		// …and the grid agrees, which is the whole point: the two reads are
+		// looking at the same night through the same bound.
+		const calendar = await asOwner.query(api.bookingBlocks.sellerCalendar, {
+			retailerId: retailer._id,
+			from: deepInside,
+			to: day(101),
+			productId: packageId,
+		});
+		expect(calendar.days).toHaveLength(1);
+		expect(calendar.days[0].booked).toBe(1);
+	});
+
+	test("blockImpact counts what a pending block would land on, scoped like the write", async () => {
+		// Blocking never cancels — so the sheet STATES the consequence instead of
+		// refusing the action. The count has to be scope-matched to the row that
+		// would actually be written, or the seller reads one number and gets
+		// another block.
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: 4,
+		});
+		const other = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Hilltop Plot",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking: { capacityPerNight: 2 },
+			variants: [{ optionValues: [], price: 9000, onHand: 0 }],
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(4),
+			checkOut: day(7),
+			customer: { name: "Aisyah", waPhone: "0123456701" },
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId: other,
+			checkIn: day(5),
+			checkOut: day(6),
+			customer: { name: "Farah", waPhone: "0123456702" },
+		});
+
+		// Whole store — both listings.
+		const store = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId: retailer._id,
+			startDate: day(5),
+			endDate: day(5),
+		});
+		expect(store.count).toBe(2);
+		expect(store.samples.map((s) => s.customerName).sort()).toEqual([
+			"Aisyah",
+			"Farah",
+		]);
+
+		// Scoped to one listing — only its own booking.
+		const scoped = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId: retailer._id,
+			productId: other,
+			startDate: day(5),
+			endDate: day(5),
+		});
+		expect(scoped.count).toBe(1);
+		expect(scoped.samples[0].customerName).toBe("Farah");
+
+		// The block's endDate is INCLUSIVE, a stay's checkOut EXCLUSIVE. Aisyah
+		// leaves on day 7, so a block ON day 7 touches nobody from her stay.
+		const leavingMorning = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId: retailer._id,
+			productId,
+			startDate: day(7),
+			endDate: day(7),
+		});
+		expect(leavingMorning.count).toBe(0);
+
+		// A free range with nothing in it is the quiet case — no warning shown.
+		const empty = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId: retailer._id,
+			startDate: day(20),
+			endDate: day(22),
+		});
+		expect(empty).toEqual({ count: 0, samples: [] });
+	});
+
+	test("blockImpact sees a long package that started before the block", async () => {
+		// Same span-aware bound as every other booking scan: a 6-month member
+		// whose check-in was months ago still occupies the day being blocked.
+		const { t, asOwner, retailer } = await seedBookingStore(setup());
+		const packageId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "6-Month Membership",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking: { packageLength: 6, packageUnit: "month" as const },
+			variants: [{ optionValues: [], price: 45000, onHand: 0 }],
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId: packageId,
+			checkIn: today(),
+			customer: { name: "Hafiz", waPhone: "0123456703" },
+		});
+		const impact = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId: retailer._id,
+			productId: packageId,
+			startDate: day(100),
+			endDate: day(100),
+		});
+		expect(impact.count).toBe(1);
+		expect(impact.samples[0].customerName).toBe("Hafiz");
+	});
+
 	test("hasBookingListings is false for a store with only physical products", async () => {
 		const t = setup();
 		const asOwner = t.withIdentity({ subject: "user_plain_seller" });

@@ -8,6 +8,7 @@ import {
 	mytEpochFromCalendarDate,
 	mytMonthStart,
 	bookingPriceSuffix,
+	bookingSpanNoun,
 	describeBookingSpan,
 	nextBookingSelection,
 	packageNights,
@@ -148,10 +149,26 @@ describe("fixed-length packages (S7)", () => {
 });
 
 describe("booking copy helpers (S7)", () => {
-	it("a package prices per package, a free range per night", () => {
-		expect(bookingPriceSuffix(30)).toBe(" per package");
+	it("names the span it prices, rather than saying 'per package'", () => {
+		// A gym's RM100 is "/month" — "per package" made the buyer open the
+		// listing to find out what span they were buying, and made the seller's
+		// own price field read "per night" while they typed a monthly fee.
+		expect(bookingPriceSuffix(1, "month")).toBe("/month");
+		expect(bookingPriceSuffix(3, "month")).toBe("/3 months");
+		expect(bookingPriceSuffix(30, "day")).toBe("/30 days");
+		expect(bookingPriceSuffix(1, "day")).toBe("/day");
+		// A free-range stay is still per-night, and stays the default when no
+		// unit is supplied.
 		expect(bookingPriceSuffix(undefined)).toBe("/night");
 		expect(bookingPriceSuffix(0)).toBe("/night");
+		expect(bookingPriceSuffix(0, "month")).toBe("/night");
+	});
+
+	it("offers the bare span noun for prose that brings its own preposition", () => {
+		expect(bookingSpanNoun(1, "month")).toBe("month");
+		expect(bookingSpanNoun(2, "month")).toBe("2 months");
+		expect(bookingSpanNoun(30, "day")).toBe("30 days");
+		expect(bookingSpanNoun(undefined)).toBe("night");
 	});
 
 	it("a package reads as a validity window ending on its LAST usable day", () => {

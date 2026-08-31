@@ -125,8 +125,11 @@ describe("wizard — booking kind route", () => {
 		const price = document.querySelector('input[inputmode="decimal"]');
 		if (!price) throw new Error("price input missing");
 		fireEvent.change(price, { target: { value: "80" } });
-		const capacity = document.querySelector('input[inputmode="numeric"]');
-		if (!capacity) throw new Error("capacity input missing");
+		// By NAME, not by ordinal: the step holds several numeric inputs
+		// (package length, capacity, notice) and `querySelector` picked whichever
+		// happened to come first, so reordering the fields silently retargeted
+		// the test.
+		const capacity = screen.getByLabelText("Spots available");
 		fireEvent.change(capacity, { target: { value: "5" } });
 		fireEvent.click(continueBtn());
 
@@ -169,8 +172,11 @@ describe("wizard — booking kind route", () => {
 		const price = document.querySelector('input[inputmode="decimal"]');
 		if (!price) throw new Error("price input missing");
 		fireEvent.change(price, { target: { value: "80" } });
-		const capacity = document.querySelector('input[inputmode="numeric"]');
-		if (!capacity) throw new Error("capacity input missing");
+		// By NAME, not by ordinal: the step holds several numeric inputs
+		// (package length, capacity, notice) and `querySelector` picked whichever
+		// happened to come first, so reordering the fields silently retargeted
+		// the test.
+		const capacity = screen.getByLabelText("Spots available");
 		fireEvent.change(capacity, { target: { value: "0" } });
 		fireEvent.click(continueBtn());
 		expect(

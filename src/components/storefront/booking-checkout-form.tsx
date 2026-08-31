@@ -9,9 +9,10 @@
 // the 24-hour promise is stated where the buyer commits.
 
 import { convexQuery } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
+import { Minus, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -26,9 +27,13 @@ import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import {
 	addMytMonths,
 	type BookingSelection,
+	bookingPriceSuffix,
+	bookingSpanNoun,
+	canCheckIn,
 	conflictCeiling,
 	mytMonthStart,
 	nextBookingSelection,
+	packageEnd,
 	type SelectionContext,
 } from "../../lib/booking-dates";
 import {
@@ -81,16 +86,33 @@ export function BookingCheckoutForm({
 	const [month, setMonth] = useState(todayMonth);
 	const windowFrom = month;
 	const windowTo = addMytMonths(month, 2);
-	const availability = useQuery(
-		convexQuery(
+	// `placeholderData: keepPreviousData` is load-bearing here, exactly as it is
+	// on the seller's inbox. Paging the month rewrites the query ARGS, which
+	// makes a new TanStack Query key, which makes `data` undefined until the new
+	// subscription resolves — and the guard below turns the ENTIRE checkout into
+	// two skeletons while that happens. Tapping "next month" mid-form flashed
+	// the buyer's name, phone and note off the screen and back.
+	//
+	// Keeping the previous window means the page holds still and only the grid's
+	// contents change. The trade is one beat of the OLD month's availability, so
+	// day taps are refused while `isPlaceholderData` is true — a buyer must
+	// never pick a night off a stale answer.
+	const availabilityQuery = useQuery({
+		...convexQuery(
 			api.bookings.availability,
 			product
 				? { productId: product._id, from: windowFrom, to: windowTo }
 				: "skip",
 		),
-	).data;
+		placeholderData: keepPreviousData,
+	});
+	const availability = availabilityQuery.data;
+	const availabilityStale = availabilityQuery.isPlaceholderData;
 
 	const [selection, setSelection] = useState<BookingSelection>({});
+	// How many packages ("3 months up front"). Free-range stays ignore it — the
+	// range they pick IS the quantity.
+	const [packages, setPackages] = useState(1);
 	const [name, setName] = useState("");
 	const [phone, setPhone] = useState("");
 	const [note, setNote] = useState("");
@@ -107,8 +129,13 @@ export function BookingCheckoutForm({
 			latestCheckIn: today + availability.horizonDays * DAY_MS,
 			maxNights: availability.maxNights,
 			packageLength: availability.packageLength,
+			packageUnit: availability.packageUnit,
+			// The count is part of the SELECTION context, not just the price:
+			// three months needs three months of free nights, so raising it can
+			// legitimately close start dates that a single package could use.
+			packageQuantity: packages,
 		};
-	}, [availability, today]);
+	}, [availability, today, packages]);
 
 	// A vanished/unbookable listing (archived, hidden, kind changed) — send the
 	// buyer back to the store rather than a dead form. `undefined` = loading.
@@ -148,42 +175,66 @@ export function BookingCheckoutForm({
 	// range multiplies by nights. Mirrors requestBooking's own line-building.
 	const packageLength = availability.packageLength;
 	const isPackage = packageLength !== undefined && packageLength > 0;
+	const packageUnit = availability.packageUnit;
+	// Server-computed, so the stepper's ceiling is exactly the mutation's clamp.
+	const maxPackages = availability.maxPackageQuantity;
 	// Instant book (S7): no approval step, so nothing on this page may promise
 	// one. The buyer books and pays straight away.
 	const instantBook = product.booking?.autoAccept === true;
+
+	// For a package the check-OUT is never stored, only derived — otherwise
+	// bumping the count from 1 to 3 would leave a stale end date sitting next to
+	// a tripled price. One source of truth: the start the buyer tapped.
+	const checkOut =
+		isPackage && selection.checkIn !== undefined
+			? packageEnd(selection.checkIn, packageLength, packageUnit, packages)
+			: selection.checkOut;
+	const effectiveSelection: BookingSelection =
+		isPackage && selection.checkIn !== undefined
+			? { checkIn: selection.checkIn, checkOut }
+			: selection;
+	// Raising the count can legitimately close a start that a single package
+	// could use — three months needs three months of free nights. Say so rather
+	// than silently dropping their date.
+	const packageOutgrewStart =
+		isPackage &&
+		selection.checkIn !== undefined &&
+		!canCheckIn(selection.checkIn, ctx);
+
 	const nights =
-		selection.checkIn !== undefined && selection.checkOut !== undefined
-			? Math.round((selection.checkOut - selection.checkIn) / DAY_MS)
+		selection.checkIn !== undefined && checkOut !== undefined
+			? Math.round((checkOut - selection.checkIn) / DAY_MS)
 			: 0;
 	const stayTotal = isPackage
 		? nights > 0
-			? unitPrice
+			? unitPrice * packages
 			: 0
 		: nights * unitPrice;
 	const conflict =
-		selection.checkIn !== undefined && selection.checkOut === undefined
+		!isPackage && selection.checkIn !== undefined && checkOut === undefined
 			? conflictCeiling(selection.checkIn, ctx)
 			: null;
 
 	const parsedPhone = waPhoneCheckoutSchema[country].safeParse(phone);
 	const nameOk = name.trim().length >= 3;
-	const rangeOk = nights >= 1;
-	const blockedReason = !rangeOk
-		? isPackage
-			? "Pick your start date"
-			: selection.checkIn === undefined
-				? "Pick your check-in and check-out dates"
-				: "Pick your check-out date"
-		: !nameOk
-			? "Enter your name"
-			: !parsedPhone.success
-				? "Enter your WhatsApp number"
-				: null;
+	const rangeOk = nights >= 1 && !packageOutgrewStart;
+	const blockedReason = packageOutgrewStart
+		? `Not all of those ${bookingSpanNoun(packageLength, packageUnit)}${packages > 1 ? "s" : ""} are free — pick another start date`
+		: !rangeOk
+			? isPackage
+				? "Pick your start date"
+				: selection.checkIn === undefined
+					? "Pick your check-in and check-out dates"
+					: "Pick your check-out date"
+			: !nameOk
+				? "Enter your name"
+				: !parsedPhone.success
+					? "Enter your WhatsApp number"
+					: null;
 
 	async function submit() {
 		if (blockedReason || !product) return;
-		if (selection.checkIn === undefined || selection.checkOut === undefined)
-			return;
+		if (selection.checkIn === undefined || checkOut === undefined) return;
 		setSubmitting(true);
 		setServerError(null);
 		try {
@@ -193,8 +244,9 @@ export function BookingCheckoutForm({
 				checkIn: selection.checkIn,
 				// Omitted for a package: the server derives the end from the
 				// listing's own length, so a tampered client can't buy 90 days at
-				// the 30-day price.
-				checkOut: isPackage ? undefined : selection.checkOut,
+				// the 30-day price. The COUNT it derives from is clamped there too.
+				checkOut: isPackage ? undefined : checkOut,
+				packageQuantity: isPackage ? packages : undefined,
 				customer: { name: name.trim(), waPhone: phone },
 				customerNote: note.trim().length > 0 ? note.trim() : undefined,
 			});
@@ -227,18 +279,32 @@ export function BookingCheckoutForm({
 					<span className="flex-1 border-b-2 border-dotted border-border" />
 					<span className="font-medium">
 						{formatPrice(unitPrice, product.currency)}
-						{isPackage ? "" : "/night"}
+						{bookingPriceSuffix(packageLength, packageUnit)}
 					</span>
 				</div>
 				{nights > 0 &&
 				selection.checkIn !== undefined &&
-				selection.checkOut !== undefined ? (
+				checkOut !== undefined ? (
 					<>
+						{/* A package states WHAT WAS BOUGHT — "3 × 1 month" — above the
+						    window it produces. The nights count is arithmetic; the
+						    package count is the thing the buyer chose. */}
+						{isPackage && packages > 1 ? (
+							<div className="flex items-baseline gap-1.5">
+								<span>
+									{packages} × {bookingSpanNoun(packageLength, packageUnit)}
+								</span>
+								<span className="flex-1 border-b-2 border-dotted border-border" />
+								<span className="font-medium">
+									{formatPrice(unitPrice * packages, product.currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="flex items-baseline gap-1.5">
 							<span>
 								{isPackage
-									? `${ms ? "Sah" : "Valid"} ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(selection.checkOut - DAY_MS)}`
-									: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(selection.checkOut)}`}
+									? `${ms ? "Sah" : "Valid"} ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}`
+									: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(checkOut)}`}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
 							<span className="font-medium">
@@ -383,12 +449,18 @@ export function BookingCheckoutForm({
 				</p>
 			</CheckoutSection>
 
-			<CheckoutSection step={2} title="When is your stay?">
+			<CheckoutSection
+				step={2}
+				title={isPackage ? "When does it start?" : "When is your stay?"}
+			>
 				<BookingCalendar
-					selection={selection}
+					selection={effectiveSelection}
 					onSelect={(day) =>
 						setSelection((current) => nextBookingSelection(current, day, ctx))
 					}
+					// A tap on a stale month would be answered from the previous
+					// window's availability — refused rather than risked.
+					disabled={availabilityStale}
 					ctx={ctx}
 					month={month}
 					onMonthChange={(next) =>
@@ -403,6 +475,63 @@ export function BookingCheckoutForm({
 					maxMonth={mytMonthStart(ctx.latestCheckIn)}
 				/>
 				<BookingCalendarLegend />
+				{/* How many packages. A stepper, not a calendar drag: dragging
+				    across a package boundary is ambiguous (what does 3 days mean on
+				    a 2-day package?) and drag fights scroll on mobile — the reason
+				    the whole calendar is two-tap. The stepper is explicit, and the
+				    span it produces is highlighted on the grid above, so the two
+				    always agree. Hidden when the listing sells only one length. */}
+				{isPackage && maxPackages > 1 ? (
+					<div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-3">
+						<div className="flex items-center justify-between gap-3">
+							<span className="text-sm font-medium">
+								How many {bookingSpanNoun(packageLength, packageUnit)}
+								{packages === 1 ? "" : "s"}?
+							</span>
+							<div className="flex items-center gap-1 rounded-xl border border-input">
+								<button
+									type="button"
+									aria-label={`Fewer ${bookingSpanNoun(packageLength, packageUnit)}s`}
+									disabled={packages <= 1}
+									onClick={() => setPackages((n) => Math.max(1, n - 1))}
+									className="tap-target flex size-11 items-center justify-center rounded-l-xl text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+								>
+									<Minus className="size-4" aria-hidden />
+								</button>
+								<span className="min-w-8 text-center text-base font-semibold tabular-nums">
+									{packages}
+								</span>
+								<button
+									type="button"
+									aria-label={`More ${bookingSpanNoun(packageLength, packageUnit)}s`}
+									disabled={packages >= maxPackages}
+									onClick={() =>
+										setPackages((n) => Math.min(maxPackages, n + 1))
+									}
+									className="tap-target flex size-11 items-center justify-center rounded-r-xl text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+								>
+									<Plus className="size-4" aria-hidden />
+								</button>
+							</div>
+						</div>
+						<p className="text-xs text-muted-foreground">
+							{selection.checkIn !== undefined && checkOut !== undefined
+								? `Runs ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}, paid as one booking.`
+								: `Take up to ${maxPackages} at once and pay as one booking.`}
+						</p>
+					</div>
+				) : null}
+				{packageOutgrewStart ? (
+					<p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+						{formatFulfilmentDate(selection.checkIn ?? today)} can&apos;t cover{" "}
+						<span className="font-semibold">
+							{packages} {bookingSpanNoun(packageLength, packageUnit)}
+							{packages === 1 ? "" : "s"}
+						</span>{" "}
+						— some of those nights are already taken. Pick another start date,
+						or take fewer.
+					</p>
+				) : null}
 				{conflict ? (
 					<p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-foreground">
 						{formatFulfilmentDate(conflict.latestCheckOut)} onwards is booked

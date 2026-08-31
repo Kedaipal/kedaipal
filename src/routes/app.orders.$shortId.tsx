@@ -42,6 +42,10 @@ import {
 	BookingRequestCard,
 	BookingResolutionNote,
 } from "../components/order/booking-request-card";
+import {
+	OrderItemLine,
+	type OrderBookingSpan,
+} from "../components/order/order-item-line";
 import { SecurityDepositCard } from "../components/order/security-deposit-card";
 import {
 	isActiveJobStatus,
@@ -346,6 +350,16 @@ function OrderDetailRoute() {
 	const itemImageUrls = useQuery(
 		convexQuery(api.orders.getItemImageUrls, { shortId }),
 	).data;
+	// A booking's item line reads as a span, not a quantity (see OrderItemLine).
+	// Only whole-order bookings carry one — a booking is always its own order.
+	const itemBookingSpan: OrderBookingSpan | undefined =
+		order?.bookingCheckIn !== undefined && order?.bookingCheckOut !== undefined
+			? {
+					checkIn: order.bookingCheckIn,
+					checkOut: order.bookingCheckOut,
+					packaged: order.bookingPackaged === true,
+				}
+			: undefined;
 	const orderId = order?._id;
 	const alreadySeen = order?.seenAt !== undefined;
 	useEffect(() => {
@@ -525,6 +539,7 @@ function OrderDetailRoute() {
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		deliveryMethod,
+		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
 		{ status: order.status, currentStageId: order.currentStageId },
@@ -1600,39 +1615,17 @@ function OrderDetailRoute() {
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
 					{order.items.map((item, i) => (
-						<li
+						<OrderItemLine
 							key={item.variantId ?? `${item.productId}-${i}`}
-							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-						>
-							{/* Thumbnail (86eyrtz74) — variant photo, else the product's.
-							    A packing aid, not a record: the image is deliberately not
-							    frozen onto the order, so a replaced photo shows the new one
-							    and a deleted one degrades to AppImage's fallback box rather
-							    than a broken image or a collapsed row. Fixed size so the
-							    name never gets squeezed to two characters on a phone. */}
-							<AppImage
-								src={itemImageUrls?.[i] ?? undefined}
-								alt={item.name}
-								sizes="44px"
-								className="size-11 shrink-0 rounded-xl border border-border object-cover"
-							/>
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium">
-									{item.name}
-									{item.variantLabel ? (
-										<span className="ml-1.5 font-normal text-muted-foreground">
-											{item.variantLabel}
-										</span>
-									) : null}
-								</p>
-								<p className="text-xs text-muted-foreground">
-									{item.quantity} × {formatPrice(item.price, order.currency)}
-								</p>
-							</div>
-							<p className="shrink-0 text-sm font-semibold tabular-nums">
-								{formatPrice(item.price * item.quantity, order.currency)}
-							</p>
-						</li>
+							name={item.name}
+							variantLabel={item.variantLabel}
+							quantity={item.quantity}
+							unitPrice={item.price}
+							lineTotal={item.price * item.quantity}
+							currency={order.currency}
+							imageUrl={itemImageUrls?.[i] ?? undefined}
+							booking={itemBookingSpan}
+						/>
 					))}
 				</ul>
 				{order.mockupQuotedAmount != null && order.mockupQuotedAmount > 0 ? (

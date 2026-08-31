@@ -42,6 +42,10 @@ import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import {
+	OrderItemLine,
+	type OrderBookingSpan,
+} from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -359,6 +363,14 @@ function TrackingRoute() {
 	} = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const order = useQuery(convexQuery(api.orders.get, { token })).data;
+	// Line-item thumbnails. The seller's order page has had these since
+	// 86eyrtz74; the BUYER — the side that has to recognise what they ordered,
+	// often days later from a WhatsApp link — had a bare list of names. Same
+	// token-keyed query the seller's shortId path uses (`resolveSharedOrder`
+	// already accepts either), so this costs no new endpoint.
+	const itemImageUrls = useQuery(
+		convexQuery(api.orders.getItemImageUrls, { token }),
+	).data;
 	// Only subscribe to payment methods when the "How to pay" section can actually
 	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
 	// second order+retailer read+subscription on this hot public path. (Kept a
@@ -441,6 +453,15 @@ function TrackingRoute() {
 	// Frozen at request (S7): a package reads as a validity window, a
 	// free-range stay as check-in → check-out.
 	const isBookingPackage = order.bookingPackaged === true;
+	// A booking's item line reads as a span, not a quantity (see OrderItemLine).
+	const itemBookingSpan: OrderBookingSpan | undefined =
+		order.bookingCheckIn !== undefined && order.bookingCheckOut !== undefined
+			? {
+					checkIn: order.bookingCheckIn,
+					checkOut: order.bookingCheckOut,
+					packaged: isBookingPackage,
+				}
+			: undefined;
 	const ms = order.retailerLocale === "ms";
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
@@ -520,6 +541,7 @@ function TrackingRoute() {
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		deliveryMethod,
+		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
 		{ status: order.status, currentStageId: order.currentStageId },
@@ -1508,27 +1530,17 @@ function TrackingRoute() {
 							? customQuote / item.quantity
 							: item.price;
 						return (
-							<li
+							<OrderItemLine
 								key={item.variantId ?? `${item.productId}-${i}`}
-								className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-							>
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm font-medium">
-										{item.name}
-										{item.variantLabel ? (
-											<span className="ml-1.5 font-normal text-muted-foreground">
-												{item.variantLabel}
-											</span>
-										) : null}
-									</p>
-									<p className="text-xs text-muted-foreground">
-										{item.quantity} × {formatPrice(unitPrice, order.currency)}
-									</p>
-								</div>
-								<p className="shrink-0 text-sm font-semibold tabular-nums">
-									{formatPrice(lineTotal, order.currency)}
-								</p>
-							</li>
+								name={item.name}
+								variantLabel={item.variantLabel}
+								quantity={item.quantity}
+								unitPrice={unitPrice}
+								lineTotal={lineTotal}
+								currency={order.currency}
+								imageUrl={itemImageUrls?.[i] ?? undefined}
+								booking={itemBookingSpan}
+							/>
 						);
 					})}
 				</ul>

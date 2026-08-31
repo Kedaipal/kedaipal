@@ -29,10 +29,15 @@ export function BookingCalendar({
 	onMonthChange,
 	minMonth,
 	maxMonth,
+	disabled = false,
 }: {
 	selection: BookingSelection;
 	onSelect: (day: number) => void;
 	ctx: SelectionContext;
+	/** The window on screen is the PREVIOUS month's answer, still arriving.
+	 * The grid stays put (the alternative flashes the whole form away) but
+	 * refuses taps, so nobody picks a night off a stale availability set. */
+	disabled?: boolean;
 	/** MYT month-start epoch of the visible month (parent-owned so the
 	 * availability window follows navigation). */
 	month: number;
@@ -79,6 +84,12 @@ export function BookingCalendar({
 	}, [ctx.unavailable, selection.checkIn, selection.checkOut, checkoutCeiling]);
 
 	return (
+		<div
+			className={
+				disabled ? "pointer-events-none opacity-55 transition-opacity" : undefined
+			}
+			aria-busy={disabled || undefined}
+		>
 		<Calendar
 			// Monday start: Sat+Sun sit adjacent for weekend-led booking.
 			weekStartsOn={1}
@@ -128,6 +139,7 @@ export function BookingCalendar({
 			// ≥44px touch targets).
 			styles={{ day_button: { width: "100%", minHeight: "2.75rem" } }}
 		/>
+		</div>
 	);
 }
 

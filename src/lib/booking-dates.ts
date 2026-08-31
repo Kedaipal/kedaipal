@@ -10,6 +10,7 @@ import {
 	DAY_MS,
 	MYT_OFFSET_MS,
 } from "../../convex/lib/fulfilmentDate";
+import type { PackageUnit } from "../../convex/lib/productKind";
 
 /** The MYT-midnight epoch for the calendar day a DayPicker `Date` names.
  * DayPicker deals in local-timezone dates; only the y/m/d matter. */
@@ -70,6 +71,10 @@ export type SelectionContext = {
 	 * it starts in (28–31 days), so the nights a package occupies must be
 	 * derived per candidate start rather than assumed fixed. */
 	packageUnit?: "day" | "month";
+	/** How many packages the buyer is taking ("3 months up front"). Defaults
+	 * to 1. It belongs in the SELECTION context because it changes which start
+	 * days are offerable at all — a longer term has more nights to clear. */
+	packageQuantity?: number;
 };
 
 /** The exclusive end of a package starting on `day` — the one place the
@@ -78,10 +83,15 @@ export function packageEnd(
 	day: number,
 	length: number,
 	unit: "day" | "month" = "day",
+	quantity = 1,
 ): number {
+	// One step over the WHOLE term, never one package at a time — month
+	// clamping compounds (31 Jan stepped 3× lands 28 Apr, one 3-month term
+	// lands 30 Apr). Mirrors resolveBookingRange exactly.
+	const total = length * Math.max(1, quantity);
 	return unit === "month"
-		? addMytCalendarMonths(day, length)
-		: day + length * DAY_MS;
+		? addMytCalendarMonths(day, total)
+		: day + total * DAY_MS;
 }
 
 /** Every night a stay starting on `day` would occupy, for a fixed-length
@@ -91,9 +101,10 @@ export function packageNights(
 	day: number,
 	length: number,
 	unit: "day" | "month" = "day",
+	quantity = 1,
 ): number[] {
 	const nights: number[] = [];
-	for (let n = day; n < packageEnd(day, length, unit); n += DAY_MS) {
+	for (let n = day; n < packageEnd(day, length, unit, quantity); n += DAY_MS) {
 		nights.push(n);
 	}
 	return nights;
@@ -107,9 +118,12 @@ export function canCheckIn(day: number, ctx: SelectionContext): boolean {
 	// night, so EVERY night it would occupy has to be free before the start
 	// day is offered at all (the server re-checks the same span).
 	if (ctx.packageLength !== undefined && ctx.packageLength > 0) {
-		return !packageNights(day, ctx.packageLength, ctx.packageUnit).some(
-			(night) => ctx.unavailable.has(night),
-		);
+		return !packageNights(
+			day,
+			ctx.packageLength,
+			ctx.packageUnit,
+			ctx.packageQuantity,
+		).some((night) => ctx.unavailable.has(night));
 	}
 	return !ctx.unavailable.has(day);
 }
@@ -151,7 +165,12 @@ export function nextBookingSelection(
 		return canCheckIn(day, ctx)
 			? {
 					checkIn: day,
-					checkOut: packageEnd(day, ctx.packageLength, ctx.packageUnit),
+					checkOut: packageEnd(
+						day,
+						ctx.packageLength,
+						ctx.packageUnit,
+						ctx.packageQuantity,
+					),
 				}
 			: current;
 	}
@@ -189,14 +208,38 @@ export function conflictCeiling(
 }
 
 /**
- * What follows a booking listing's price on the storefront: a fixed-length
- * package is a flat price for the whole span (S7), a free-range stay is
- * per-night. ONE author so the card and the product page always agree.
+ * What follows a booking listing's price: a fixed-length package is a flat
+ * price for the whole span (S7), a free-range stay is per-night. ONE author so
+ * the storefront card, the product page and the seller's own price field can't
+ * disagree.
+ *
+ * The span is NAMED rather than called "per package" — a gym's RM100 is "/mo"
+ * and a 3D2N deal is "/3 days". "Per package" made the buyer open the listing
+ * to find out what they were buying, and made the seller's field read "Price
+ * per night" while they typed a monthly membership fee.
  */
-export function bookingPriceSuffix(packageLength?: number): string {
-	return packageLength !== undefined && packageLength > 0
-		? " per package"
-		: "/night";
+export function bookingPriceSuffix(
+	packageLength?: number,
+	packageUnit: PackageUnit = "day",
+): string {
+	if (packageLength === undefined || packageLength <= 0) return "/night";
+	const noun = packageUnit === "month" ? "month" : "day";
+	return packageLength === 1
+		? `/${noun}`
+		: `/${packageLength} ${noun}s`;
+}
+
+/**
+ * The same span as a bare noun phrase ("month", "3 days") — for prose that
+ * already supplies its own preposition ("one flat price per month").
+ */
+export function bookingSpanNoun(
+	packageLength?: number,
+	packageUnit: PackageUnit = "day",
+): string {
+	if (packageLength === undefined || packageLength <= 0) return "night";
+	const noun = packageUnit === "month" ? "month" : "day";
+	return packageLength === 1 ? noun : `${packageLength} ${noun}s`;
 }
 
 /**

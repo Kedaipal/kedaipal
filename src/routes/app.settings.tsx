@@ -935,6 +935,23 @@ function SettingsRoute() {
 							</p>
 						</InfoBanner>
 
+						{/* The booking carve-out, stated where the seller configures the
+						    thing it carves out of. Custom steps describe how an order is
+						    PREPARED; a stay or a membership isn't prepared, so bookings
+						    keep their own three milestones. Without this line the rule
+						    would be invisible until a seller wondered why their campsite
+						    order ignored the flow they'd just built. */}
+						{hasBookingListings ? (
+							<p className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+								<span className="font-semibold text-foreground">
+									Bookings don&apos;t use these steps.
+								</span>{" "}
+								A stay always runs Confirmed → Checked in → Checked out, and a
+								fixed-length package Confirmed → Active → Ended. What you set
+								here applies to your product orders.
+							</p>
+						) : null}
+
 						<Card>
 							<StageEditor
 								seed={resolveStages({

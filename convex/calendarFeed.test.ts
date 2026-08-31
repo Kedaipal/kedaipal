@@ -175,6 +175,22 @@ describe("calendarFeed content", () => {
 		expect(feed).not.toContain("Declined Guest");
 		// The no-phone promise — no buyer number anywhere in the document.
 		expect(feed).not.toMatch(/6?01\d{8}/);
+
+		// Every order event carries a deep link back to the dashboard, as BOTH
+		// URL and DESCRIPTION — Google renders `URL` inconsistently (mobile
+		// often drops it), and the point is one tap from the calendar to the
+		// order. The target is Clerk-gated, so a forwarded feed still can't open
+		// it and the link leaks nothing beyond a shortId.
+		expect(feed).toContain(`URL:https://kedaipal.com/app/orders/${approved.shortId}`);
+		expect(feed).toContain(
+			`DESCRIPTION:Open in Kedaipal: https://kedaipal.com/app/orders/${approved.shortId}`,
+		);
+		// A BLOCK is not an order — it has nothing to open, so it gets no link.
+		const blockEvent = feed
+			.split("BEGIN:VEVENT")
+			.find((chunk) => chunk.includes("SUMMARY:Blocked"));
+		expect(blockEvent).toBeDefined();
+		expect(blockEvent).not.toContain("URL:");
 	});
 
 	test("unknown token answers null (the route 404s with no detail)", async () => {

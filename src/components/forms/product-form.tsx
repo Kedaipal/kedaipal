@@ -26,6 +26,7 @@ import {
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
+import { bookingSpanNoun } from "../../lib/booking-dates";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import { describeProduct } from "../../lib/product-summary";
@@ -839,6 +840,12 @@ export function ProductForm({
 		(Number.isInteger(packageParsed) &&
 			packageParsed >= 1 &&
 			packageParsed <= packageUnitMax(packageUnit));
+	// Names the span in the price label ("Price per month") while the seller is
+	// still typing it. Only a VALID length renames anything — a half-typed or
+	// out-of-range value leaves the label on "night" rather than flickering
+	// through nonsense like "per 0 months".
+	const packageLengthNum =
+		packageValid && packageTrimmed.length > 0 ? packageParsed : undefined;
 
 	// Booking security deposit — blank = none; else a price 0..RM10,000
 	// (mirrors the server's sanitizeSecurityDeposit ceiling).
@@ -983,73 +990,16 @@ export function ProductForm({
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & capacity"
-					description="Guests request dates on a calendar — set the per-night price and how many bookings a night can hold."
+					description={
+						packageTrimmed.length > 0
+							? `Guests pick a start date on a calendar — set the flat price per ${bookingSpanNoun(packageLengthNum, packageUnit)} and how many bookings can run at once.`
+							: "Guests request dates on a calendar — set the per-night price and how many bookings a night can hold."
+					}
 				>
+					{/* Package length leads: it decides what the price MEANS, so asking
+					    for the price first left a monthly membership fee sitting under a
+					    "Price per night" label. Same order as the create wizard. */}
 					<div className="flex flex-col gap-1.5">
-						<label htmlFor="booking-price" className="text-sm font-medium">
-							Price per night ({currency})
-						</label>
-						<Input
-							id="booking-price"
-							inputMode="decimal"
-							placeholder="0.00"
-							value={editor.rows[0]?.price ?? ""}
-							onChange={(e) =>
-								setEditor({
-									...editor,
-									rows: editor.rows.map((r, i) =>
-										i === 0 ? { ...r, price: e.target.value } : r,
-									),
-								})
-							}
-							variant="field"
-							isError={editorIssues.some(
-								(i) => i.where === "row" && i.field === "price",
-							)}
-							className="w-40"
-						/>
-						{editorIssues
-							.filter((i) => i.where === "row" && i.field === "price")
-							.map((i) => (
-								<p key={i.message} className="text-xs text-destructive">
-									{i.message}
-								</p>
-							))}
-					</div>
-					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
-						<label htmlFor="booking-capacity" className="text-sm font-medium">
-							Spots available each night{" "}
-							<span className="font-normal text-muted-foreground">
-								(leave blank for unlimited)
-							</span>
-						</label>
-						<Input
-							id="booking-capacity"
-							type="number"
-							inputMode="numeric"
-							min={1}
-							max={MAX_CAPACITY_PER_NIGHT}
-							value={capacityDraft}
-							onChange={(e) => setCapacityDraft(e.target.value)}
-							variant="field"
-							isError={!capacityValid}
-							className="w-32"
-						/>
-						{!capacityValid ? (
-							<p className="text-xs text-destructive">
-								Enter a whole number between 1 and {MAX_CAPACITY_PER_NIGHT}, or
-								leave blank for unlimited.
-							</p>
-						) : null}
-						<p className="text-xs leading-relaxed text-muted-foreground">
-							{capacityTrimmed.length === 0
-								? "Anyone can book any date — nothing ever sells out. Right for a gym or class where there's no daily limit."
-								: "How many bookings can share the same night — e.g. 5 identical plots = 5. Requests stop once a night is full. Lowering it never cancels bookings you've already accepted."}
-						</p>
-					</div>
-
-					{/* Fixed-length package (S7) — the gym/membership shape. */}
-					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-package" className="text-sm font-medium">
 							Package length{" "}
 							<span className="font-normal text-muted-foreground">
@@ -1091,9 +1041,76 @@ export function ProductForm({
 						<p className="text-xs leading-relaxed text-muted-foreground">
 							{packageTrimmed.length > 0
 								? packageUnit === "month"
-									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${packageTrimmed} month${packageTrimmed === "1" ? "" : "s"} later, at the flat price above.`
-									: `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there, at the flat price above.`
+									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${packageTrimmed} month${packageTrimmed === "1" ? "" : "s"} later, at one flat price.`
+									: `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there, at one flat price.`
 								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
+						</p>
+					</div>
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-price" className="text-sm font-medium">
+							Price per {bookingSpanNoun(packageLengthNum, packageUnit)} (
+							{currency})
+						</label>
+						<Input
+							id="booking-price"
+							inputMode="decimal"
+							placeholder="0.00"
+							value={editor.rows[0]?.price ?? ""}
+							onChange={(e) =>
+								setEditor({
+									...editor,
+									rows: editor.rows.map((r, i) =>
+										i === 0 ? { ...r, price: e.target.value } : r,
+									),
+								})
+							}
+							variant="field"
+							isError={editorIssues.some(
+								(i) => i.where === "row" && i.field === "price",
+							)}
+							className="w-40"
+						/>
+						{editorIssues
+							.filter((i) => i.where === "row" && i.field === "price")
+							.map((i) => (
+								<p key={i.message} className="text-xs text-destructive">
+									{i.message}
+								</p>
+							))}
+					</div>
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-capacity" className="text-sm font-medium">
+							{packageTrimmed.length > 0
+								? "Spots available at a time"
+								: "Spots available each night"}{" "}
+							<span className="font-normal text-muted-foreground">
+								(leave blank for unlimited)
+							</span>
+						</label>
+						<Input
+							id="booking-capacity"
+							type="number"
+							inputMode="numeric"
+							min={1}
+							max={MAX_CAPACITY_PER_NIGHT}
+							value={capacityDraft}
+							onChange={(e) => setCapacityDraft(e.target.value)}
+							variant="field"
+							isError={!capacityValid}
+							className="w-32"
+						/>
+						{!capacityValid ? (
+							<p className="text-xs text-destructive">
+								Enter a whole number between 1 and {MAX_CAPACITY_PER_NIGHT}, or
+								leave blank for unlimited.
+							</p>
+						) : null}
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{capacityTrimmed.length === 0
+								? "Anyone can book any date — nothing ever sells out. Right for a gym or class where there's no daily limit."
+								: packageTrimmed.length > 0
+									? "How many bookings can run at the same time — e.g. 20 members on a package at once. Bookings stop once they're all taken. Lowering it never cancels bookings you've already accepted."
+									: "How many bookings can share the same night — e.g. 5 identical plots = 5. Requests stop once a night is full. Lowering it never cancels bookings you've already accepted."}
 						</p>
 					</div>
 

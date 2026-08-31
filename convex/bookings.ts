@@ -34,6 +34,8 @@ import {
 	findFullNights,
 	MAX_AVAILABILITY_WINDOW_DAYS,
 	MAX_BOOKING_NIGHTS,
+	maxPackageQuantity,
+	normalizePackageQuantity,
 	resolveBookingRange,
 	nightsBetween,
 } from "./lib/bookingAvailability";
@@ -120,6 +122,10 @@ export const availability = query({
 		 * month, so the calendar has to derive each candidate start's range
 		 * rather than adding a fixed number of days. */
 		packageUnit?: "day" | "month";
+		/** How many packages one booking may hold. Computed HERE rather than in
+		 * the client so the stepper's ceiling and the mutation's clamp are the
+		 * same number — that ceiling protects the capacity scans' span bound. */
+		maxPackageQuantity: number;
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -154,6 +160,7 @@ export const availability = query({
 			maxNights: MAX_BOOKING_NIGHTS,
 			packageLength: product.booking?.packageLength,
 			packageUnit: product.booking?.packageUnit,
+			maxPackageQuantity: maxPackageQuantity(product.booking),
 		};
 	},
 });
@@ -168,6 +175,11 @@ export const requestBooking = mutation({
 		// 90 days at the 30-day price.
 		checkIn: v.number(),
 		checkOut: v.optional(v.number()),
+		// How many packages, for a fixed-length listing ("3 months up front").
+		// Ignored on a free-range stay, where the range IS the quantity. Clamped
+		// server-side rather than trusted: `maxPackageQuantity` protects the
+		// capacity scans' span bound, so a tampered value must not get through.
+		packageQuantity: v.optional(v.number()),
 		customer: v.object({
 			name: v.optional(v.string()),
 			// REQUIRED here (validated below), unlike the storefront path's
@@ -237,6 +249,11 @@ export const requestBooking = mutation({
 		// its end from the start (S7), a free range keeps the buyer's check-out.
 		// One resolver shared with the calendar, so they can't differ by a day.
 		const isPackageListing = (product.booking?.packageLength ?? 0) > 0;
+		// Clamped, never trusted: the term this produces has to stay inside
+		// MAX_PACKAGE_DAYS or the capacity scans stop seeing the booking.
+		const packageQuantity = isPackageListing
+			? normalizePackageQuantity(args.packageQuantity ?? 1, product.booking)
+			: 1;
 		let checkIn: number;
 		let checkOut: number;
 		try {
@@ -244,6 +261,7 @@ export const requestBooking = mutation({
 				product.booking,
 				args.checkIn,
 				args.checkOut,
+				packageQuantity,
 			));
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -281,10 +299,12 @@ export const requestBooking = mutation({
 		}
 
 		const nights = nightsBetween(checkIn, checkOut);
-		// A PACKAGE is one flat-priced line (S7) — "RM 150 per package", not
-		// "RM 5 × 30 nights". A free-range stay keeps per-night × nights. Both
-		// ride the standard quantity math, so every money surface (totals, CSV,
-		// insights, receipts, PDF) needs zero special-casing either way.
+		// A PACKAGE is priced per package (S7) — "2 × RM 150 per month", not
+		// "RM 5 × 61 nights". A free-range stay is per-night × nights. Both ride
+		// the standard quantity math, so every money surface (totals, CSV,
+		// insights, receipts, PDF) needs zero special-casing either way — and on
+		// a package `quantity` now carries its natural meaning, the number of
+		// packages bought.
 		const items = [
 			{
 				productId: product._id,
@@ -292,7 +312,7 @@ export const requestBooking = mutation({
 				name: product.name,
 				variantLabel: undefined,
 				price: variant.price,
-				quantity: isPackageListing ? 1 : nights,
+				quantity: isPackageListing ? packageQuantity : nights,
 			},
 		];
 		// The refundable security deposit rides the one payment (86eyn4kee):

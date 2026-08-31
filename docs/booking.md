@@ -771,3 +771,232 @@ note, the walked booking route, publish payload (`kind` + `booking`, no
 `minQuantity`, one `blockWhenOutOfStock: false` variant), junk-capacity
 inline error, leaving-booking re-asks. `product-summary.test.ts`: booking
 strip wording.
+
+---
+
+## Test-round fixes — 31 Aug 2026
+
+The first end-to-end run of the whole bundle (campsite + gym, Zaki). Fourteen
+reported items plus two bugs the sweep turned up. Grouped by what they teach,
+not by the order they were reported in.
+
+### Two correctness bugs, both about a bound
+
+**The shared `Calendar` had no containing block.** `react-day-picker` v10 ships
+a stylesheet whose load-bearing rule is `.rdp-root { position: relative }`. We
+never import it — the component is themed from scratch — so our
+`absolute inset-x-0` nav resolved against the nearest *positioned* ancestor,
+which on the booking checkout was `BODY`. Measured on a running page: nav
+`x=0 w=1280` against a `510px` calendar, chevrons at x=4 and x=1244, out in the
+page margins. The buttons were never disabled; they were simply somewhere else,
+so the month could not be changed and every date past the current month was
+unreachable. One class in `src/components/ui/calendar.tsx`. **The Insights
+date-range picker had the same defect** and only looked right because a popover
+happens to be positioned. `calendar.test.tsx` asserts the nav is a descendant
+of the element carrying `relative` — a bare class check would pass if someone
+moved the class to an inner wrapper.
+
+**`dayBookings` scanned back a flat 30 days.** This is the bug S7 fixed in
+`countBookedPerNight`, left uncorrected in the second copy. `MAX_BOOKING_NIGHTS`
+(30) is the free-range cap; a package runs to `MAX_PACKAGE_DAYS` (366), so a
+member on a 3-month package was invisible to the day sheet from day 31 while
+the grid pill — reading through the fixed scan — kept counting them. **The
+calendar contradicted itself**: pill said 40, tapping said "No bookings on this
+night." Both scans now use `MAX_BOOKING_SPAN_DAYS`, and so does the new
+`blockImpact`. The lesson is the one from the S7 note: when a bound is derived
+from a constant, every scan that shares the assumption has to be found.
+
+### Custom stages never apply to a booking
+
+`resolveStages` short-circuited on configured `orderStages` *before* any
+booking check, so the moment a seller customised their flow for cakes, every
+campsite booking inherited it — "Mark as Packed" on a stay — and the
+booking-aware branch inside `synthesizeDefaultStages` became unreachable for
+exactly the sellers who had touched the setting.
+
+Custom stages describe how an order is **prepared** ("Baking → Decorating →
+Ready"), which is why made-to-order keeps them. A stay or a membership isn't
+prepared; it is booked, occupied and finished. So `deliveryMethod === "booking"`
+now always synthesizes, physical and made-to-order are untouched, and the
+Order-stages settings card says so in a line — the rule is surfaced where it is
+configured, not discovered by a seller wondering why their flow was ignored.
+
+**No migration.** A booking placed before the gate can hold a `currentStageId`
+that is no longer in the list; `resolveCurrentStage` already falls through to
+the stage matching the canonical status, so it degrades to the right synthesized
+stage. Pinned by a test.
+
+**A package starts and ends; a stay checks in and out.** `BOOKING_DEFAULTS` gave
+every booking "Checked In / Checked Out" — wrong for a gym, where nobody checks
+out of a monthly membership on day 30. `BOOKING_PACKAGE_DEFAULTS` reads
+**Confirmed → Active → Ended**, selected by `orders.bookingPackaged`. "Active"
+is also S8's word for the inbox bucket these land in, so the two line up.
+
+### Wording follows the shape, and the shape is asked first
+
+`bookingPriceSuffix` returned a flat `" per package"`, which made the buyer open
+a listing to find out what span they were buying. It now **names the span** —
+`/month`, `/3 months`, `/30 days`, `/night` — and `bookingSpanNoun` gives the
+bare form for prose. One author, so the storefront card, the product page, the
+wizard review and the seller's own price field can't disagree.
+
+The seller-side ordering was the deeper problem: **Package length now comes
+before Price**, in both the wizard and the edit form. It decides what the price
+*means*, and asking for the price first is how a gym owner ended up typing a
+monthly fee under a field labelled "Price per night". Capacity follows the same
+rule — "Spots available **at a time**" on a package, "each night" on a stay.
+
+Two smaller things in the same screens: the capacity stepper's placeholder read
+`0` directly under a "(blank = unlimited)" label, saying the opposite of the
+label (now `Unlimited`, via a new `StockInput` `placeholder` prop); and the
+**Minimum notice** row carried a copy-pasted `<select>` bound to
+`state.packageUnit`, so a seller adjusting their notice period silently flipped
+a 1-month membership into a 1-day pass. Notice is measured in days, full stop.
+
+### Blocking states its consequence; it does not refuse
+
+Blocking never cancels anything — locked at S4, it stops NEW requests only. The
+temptation on seeing "can I block a day that already has bookings?" is to
+refuse, and that is backwards: a seller closing for a flood must not be told to
+cancel their guests first. So the confirm sheet **counts what it lands on**
+(`bookingBlocks.blockImpact`, scope-matched to the row that will be written, up
+to four guests named then "+N more") and says the guests stay confirmed and are
+told nothing. The action stays available; the seller stops guessing whether
+"bookings already on these nights stay" means nobody or forty.
+
+**Scope, with one listing.** The old sheet auto-selected a lone listing, hid the
+chip row (`listings.length > 1`), then offered "Whole store / This listing only"
+— a toggle naming a listing that appeared nowhere on screen, whose two options
+did the same thing today but wrote different rows that diverge the day a second
+listing exists. Now: one listing → no toggle, just "Blocks Campsite — your only
+booking listing", written **listing-scoped**, because a store block whose reach
+silently widens later is the surprising one. `blockScopeProductId` is the single
+author for both the impact count and the write.
+
+### Display fixes
+
+- **`OrderItemLine`** (new, shared) — the seller's page and the buyer's tracking
+  page rendered the same list separately and had drifted: the seller's grew
+  thumbnails (`86eyrtz74`), the buyer's kept a bare name. Both also printed a
+  booking as `2 × RM 80.00`, which reads as two campsites. A booking's
+  `quantity` **is** its night count (deliberate — bookings ride the standard
+  money math), so the display carries the span instead:
+  `2 nights × RM 80.00 · 31 Aug → 2 Sep`, and a package states its validity
+  window with no invented nightly rate. Buyer thumbnails cost no new endpoint —
+  `getItemImageUrls` already accepts a token through `resolveSharedOrder`.
+- **The seller's product preview** (`ProductDetailSheet`) rendered a quantity
+  stepper and Add-to-cart for booking listings. Its whole promise is "what you
+  preview is what the buyer gets"; it now mirrors `product-page.tsx`'s booking
+  branch (disabled Request-to-book / Book now, deposit line, approval promise).
+- **The product page ignored `autoAccept`** — an instant-book listing still
+  advertised "Seller confirms within 24 hours". The checkout form had always
+  read it; the product page hadn't.
+- **The wizard review's photo box is a button** back to the details step. Every
+  other line on that screen has an Edit affordance, and the photo is the thing a
+  seller most wants to fix from a preview.
+
+### Google Calendar events link back
+
+`buildIcsCalendar` emitted `SUMMARY` only. Order events now carry the dashboard
+deep link as **both `URL` and `DESCRIPTION`** — Google renders `URL`
+inconsistently (mobile often drops it), and the point is one tap from the
+calendar to the order. Blocks get no link: there is nothing to open. Reuses
+`SITE_URL`, no new env var. The link is safe to carry — the target is
+Clerk-gated, so a forwarded feed still cannot open it and it exposes only a
+`shortId`.
+
+### Deliberately NOT done
+
+**Variants on booking listings** (plot sizes under one "Campsite A"). The pills
+are the cheap tenth; the expensive nine-tenths is that **capacity becomes
+per-variant** — `by_booking_product` is keyed on `productId`, so the availability
+authority, the atomic `requestBooking` gate, the buyer calendar and blocks all
+gain a dimension. That is a slice the size of S2. Separate listings give
+per-variant capacity, price and calendar today, at the cost of storefront
+clutter, and neither payer needs more (Sengloh sells spots, FS Fitness sells
+months). Ticket it when a seller's actual clutter complaint pulls it forward.
+
+**Buyer-initiated check-in.** Status is the seller's ledger; a no-show who taps
+"I've arrived" corrupts the day view. The `"I've paid"` claim/confirm pattern
+earns its keep because payment is **off-platform and asynchronous** — the claim
+carries information the seller doesn't have. Check-in is synchronous and
+co-located: the seller is at the gate looking at the guest, so a claim tells
+them nothing and costs an extra tap plus a notification we deliberately don't
+send. The real gap is the buyer knowing *when* ("Check in from 2pm"), not a
+button. Unattended arrival (door code, after-dark gate) is a separate feature
+with its own design, not a tweak to who taps.
+
+### Second round — calendar redesign + multi-package terms (31 Aug)
+
+**The seller calendar rebuilt.** The old page was functional and unconsidered:
+listing **pills** carrying nothing but a name (with "All listings" appended
+*last* — the overview, sitting after the things it summarises), 56px cells
+stretched across a 1400px desktop grid so the surface that exists to show *who
+is booked* showed a wall of empty boxes, a block affordance that was a thin
+dashed strip below the fold, and no empty state at all.
+
+- `booking-listing-cards.tsx` — photo, price and capacity per listing, "All
+  listings" leading. Hidden entirely at one listing (it is already the answer).
+- `booking-day-cell.tsx` — desktop shows **guest name chips** (3, then "+N
+  more"); the phone shows an **occupancy bar**, because 44px of width has no
+  room for names and a bar reads full/half/empty faster than "3/5" does. Full
+  (the listing sold out) and blocked (the seller's own doing) are different
+  states and now look different, with the seller's own note rendered in the
+  blocked cell rather than left behind a tap.
+- Block becomes a **mode**: a bar that owns the flow, names the live range, and
+  always offers the way out — fixed on the phone, in flow on desktop where a
+  toolbar button sits beside **Today** and the month nav.
+- Empty month, empty day, and loading are designed (row skeletons, not one grey
+  slab where the calendar was).
+
+**A rendering bug the harness caught.** The blocked cell's hatch used
+`bg-[repeating-linear-gradient(...,hsl(var(--muted))...)]`. This project's
+tokens are already complete `hsl(...)` values, so that double-wraps into
+`hsl(hsl(210 40% 96%))` — invalid, which drops the **whole gradient** and
+computes to `background-image: none`. Measured on the running stylesheet:
+`"none"` before, a real gradient after dropping the wrapper. **The S4 cell
+carried the same double-wrap** with a flat `bg-muted/60` beside it, so the
+stripes never rendered once and the flat fill hid it. The dashboard is
+Clerk-gated, so this was found by injecting the real classes into a running
+storefront page — the house rule's own escape hatch, and it paid for itself.
+
+**`bookingsOverlapping` is now THE bounded scan.** The look-back bound had been
+got wrong in two separate copies of this query (S7 in the capacity count; the
+day sheet still on a flat 30 days months later). Rather than fix a third copy,
+every caller — `countBookedPerNight`, `dayBookings`, `blockImpact`, the
+calendar's own guest gathering — reads through one function, so there is one
+`MAX_BOOKING_SPAN_DAYS` to get right. The seller calendar gets names and counts
+from a single scan.
+
+**Several packages in one booking.** A gym that can only sell one month at a
+time is a broken gym product — three bookings would mean three payments and
+three renewal dates for what a member experiences as one membership. A
+**stepper**, not a calendar drag: dragging across a package boundary is
+ambiguous (what is 3 days on a 2-day package?) and drag fights scroll, which is
+why the whole calendar is two-tap. The span it produces is highlighted on the
+grid, so the two always agree.
+
+- `quantity` on a package line now carries its natural meaning — the number of
+  packages — and the money rides the standard line math untouched. The order
+  needs no new field: `3 × RM 450.00` beside the validity window says
+  everything, because `price` is the price of one package.
+- The term is computed **in one step** (`length × quantity`), never one package
+  at a time: calendar-month clamping compounds, so 31 Jan stepped three times
+  lands 28 Apr while one 3-month term lands 30 Apr. A member who paid three
+  months up front bought one term.
+- `maxPackageQuantity()` is the ceiling, and it is **structural, not taste** —
+  the whole term must stay inside `MAX_PACKAGE_DAYS`, because that is what
+  bounds `MAX_BOOKING_SPAN_DAYS`. Stack five annual packages and the scans stop
+  finding them: the exact bug class above. Served from the `availability` query
+  so the stepper's ceiling and the mutation's clamp are one number.
+- Raising the count can legitimately close a start date a single package could
+  use. The buyer is told which and why, rather than having their date silently
+  dropped.
+
+**The month no longer reloads the checkout.** Paging the buyer's calendar
+rewrote the query args, which made a new TanStack Query key, which made `data`
+undefined — and the loading guard replaced the ENTIRE form with two skeletons,
+flashing away the name, phone and note already typed. `placeholderData:
+keepPreviousData`, the same fix the seller's inbox already carries. The trade is
+one beat of the previous month's availability, so day taps are refused while
+`isPlaceholderData` — a buyer must never pick a night off a stale answer.

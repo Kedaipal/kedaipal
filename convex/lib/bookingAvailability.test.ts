@@ -1,14 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import {
 	assertValidBookingRange,
 	BOOKING_HORIZON_DAYS,
 	eachNight,
 	holdsCapacity,
 	MAX_BOOKING_NIGHTS,
+	MAX_BOOKING_SPAN_DAYS,
+	MAX_PACKAGE_QUANTITY,
+	maxPackageQuantity,
 	nightsBetween,
+	normalizePackageQuantity,
+	resolveBookingRange,
 	staysOverlap,
 } from "./bookingAvailability";
-import { DAY_MS, todayMytMidnight } from "./fulfilmentDate";
+import {
+	addMytCalendarMonths,
+	DAY_MS,
+	MYT_OFFSET_MS,
+	todayMytMidnight,
+} from "./fulfilmentDate";
 
 const NOW = Date.UTC(2026, 7, 17, 4, 0, 0); // 17 Aug 2026 12:00 MYT
 const today = todayMytMidnight(NOW);
@@ -88,5 +98,66 @@ describe("holdsCapacity", () => {
 		expect(holdsCapacity("confirmed")).toBe(true);
 		expect(holdsCapacity("delivered")).toBe(true);
 		expect(holdsCapacity("cancelled")).toBe(false);
+	});
+});
+
+describe("multi-package terms (buying N packages in one booking)", () => {
+	const monthly = { packageLength: 1, packageUnit: "month" as const };
+	const twoDay = { packageLength: 2, packageUnit: "day" as const };
+
+	test("the whole term is one step, never one package at a time", () => {
+		// 31 Jan is the case that separates them. Stepping +1 month three times
+		// clamps at each hop (28 Feb → 28 Mar → 28 Apr); one 3-month term clamps
+		// once and lands 30 Apr. A member who paid for three months up front
+		// bought ONE term, so the single step is the honest reading — and it
+		// can't quietly lose a day per package.
+		const jan31 = Date.UTC(2027, 0, 31) - MYT_OFFSET_MS;
+		const oneStep = resolveBookingRange(monthly, jan31, undefined, 3);
+		expect(oneStep.checkOut).toBe(addMytCalendarMonths(jan31, 3));
+
+		let chained = jan31;
+		for (let i = 0; i < 3; i++) chained = addMytCalendarMonths(chained, 1);
+		expect(oneStep.checkOut).not.toBe(chained);
+	});
+
+	test("a day package multiplies cleanly", () => {
+		const start = Date.UTC(2026, 8, 1) - MYT_OFFSET_MS;
+		expect(resolveBookingRange(twoDay, start, undefined, 3).checkOut).toBe(
+			start + 6 * DAY_MS,
+		);
+		// Absent or 1 keeps the single-package behaviour untouched.
+		expect(resolveBookingRange(twoDay, start).checkOut).toBe(
+			start + 2 * DAY_MS,
+		);
+	});
+
+	test("the ceiling protects the scan bound, not just taste", () => {
+		// MAX_BOOKING_SPAN_DAYS is derived from MAX_PACKAGE_DAYS, and every scan
+		// that has to see a booking whose check-in is far behind the night being
+		// read is bounded by it. Let a buyer stack packages past that and those
+		// scans silently stop finding them.
+		expect(maxPackageQuantity(monthly)).toBeLessThanOrEqual(
+			MAX_PACKAGE_QUANTITY,
+		);
+		const worstCaseDays = maxPackageQuantity(monthly) * 31;
+		expect(worstCaseDays).toBeLessThanOrEqual(MAX_BOOKING_SPAN_DAYS);
+
+		// A 6-month package can only be taken twice before it would outrun a year.
+		expect(maxPackageQuantity({ packageLength: 6, packageUnit: "month" })).toBe(
+			1,
+		);
+		// A 2-day deal is capped by the plain quantity ceiling, not the span.
+		expect(maxPackageQuantity(twoDay)).toBe(MAX_PACKAGE_QUANTITY);
+		// A free-range listing has no packages at all.
+		expect(maxPackageQuantity(undefined)).toBe(1);
+	});
+
+	test("a tampered quantity is clamped, never trusted", () => {
+		expect(normalizePackageQuantity(999, monthly)).toBe(
+			maxPackageQuantity(monthly),
+		);
+		expect(normalizePackageQuantity(0, monthly)).toBe(1);
+		expect(normalizePackageQuantity(-3, monthly)).toBe(1);
+		expect(normalizePackageQuantity(2.5, monthly)).toBe(1);
 	});
 });

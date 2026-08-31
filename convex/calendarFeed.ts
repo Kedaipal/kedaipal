@@ -33,6 +33,14 @@ import { effectiveKind } from "./lib/productKind";
 const FEED_PAST_DAYS = 90;
 const FEED_FUTURE_DAYS = 210;
 
+/**
+ * Deep link to an order in the seller's dashboard. Same `SITE_URL` fallback the
+ * transactional emails use — no new env var.
+ */
+function orderUrl(shortId: string): string {
+	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${shortId}`;
+}
+
 /** Safety bound on one feed render. A store doing 20 orders/week fills roughly
  * 850 of these across the window, so this is a runaway guard, not a limit
  * anyone should meet; hitting it logs rather than truncating quietly. */
@@ -204,6 +212,7 @@ export const feedByToken = internalQuery({
 					start: order.bookingCheckIn,
 					endExclusive: order.bookingCheckOut,
 					createdAt: order.createdAt,
+					url: orderUrl(order.shortId),
 				});
 			}
 		}
@@ -252,6 +261,7 @@ export const feedByToken = internalQuery({
 				// Saturday are only useful with their times attached.
 				startMinutes: order.fulfilmentTimeMinutes,
 				createdAt: order.createdAt,
+				url: orderUrl(order.shortId),
 			});
 		}
 

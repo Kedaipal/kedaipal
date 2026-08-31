@@ -71,6 +71,13 @@ export function ProductPageView({
 	// the next step, so the whole cart machinery below (options, stepper,
 	// quick-add, go-to-checkout) is replaced by ONE door — "Request to book".
 	const isBooking = product.kind === "booking";
+	// Instant book (S7): there is no approval step, so nothing on this page may
+	// promise one — the buyer books and pays straight away. Mirrors
+	// `booking-checkout-form.tsx`, which has always read this; the product page
+	// hadn't, so an auto-accept listing still advertised a 24-hour wait.
+	const instantBook = product.booking?.autoAccept === true;
+	// A fixed-length package is a single start-date pick, not a range.
+	const isPackage = (product.booking?.packageLength ?? 0) > 0;
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment below.
 	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
@@ -115,7 +122,10 @@ export function ProductPageView({
 								<PriceLabel value={pp.priceLabel} className="text-2xl" />
 								{isBooking ? (
 									<span className="text-sm font-medium text-muted-foreground">
-										{bookingPriceSuffix(product.booking?.packageLength)}
+										{bookingPriceSuffix(
+											product.booking?.packageLength,
+											product.booking?.packageUnit,
+										)}
 									</span>
 								) : null}
 							</span>
@@ -153,9 +163,12 @@ export function ProductPageView({
 								</p>
 							) : null}
 							<p className="rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
-								Pick your dates on the next step — you&apos;ll see live
-								availability on a calendar, and nothing is paid until the seller
-								approves your request.
+								{isPackage
+									? "Pick your start date on the next step — you'll see live availability on a calendar"
+									: "Pick your dates on the next step — you'll see live availability on a calendar"}
+								{instantBook
+									? ", and your booking is confirmed straight away."
+									: ", and nothing is paid until the seller approves your request."}
 							</p>
 						</div>
 					) : (
@@ -198,11 +211,13 @@ export function ProductPageView({
 											search={{ booking: product.slug }}
 										>
 											<CalendarRange className="size-4" aria-hidden />
-											Request to book
+											{instantBook ? "Book now" : "Request to book"}
 										</Link>
 									</Button>
 									<p className="text-center text-xs text-muted-foreground">
-										Seller confirms within 24 hours — nothing is paid yet.
+										{instantBook
+											? "Confirmed instantly — payment details follow."
+											: "Seller confirms within 24 hours — nothing is paid yet."}
 									</p>
 								</div>
 							) : (

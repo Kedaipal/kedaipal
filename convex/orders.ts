@@ -3374,6 +3374,9 @@ export const advanceToStage = mutation({
 					| "self_collect"
 					| "booking"
 					| undefined) ?? "delivery",
+			// A fixed-length package's milestones are Active/Ended, not
+			// Checked In/Checked Out — the stepper's button copy comes from here.
+			bookingPackaged: order.bookingPackaged,
 		});
 		const stage = stages.find((s) => s.id === stageId);
 		if (!stage) throw new ConvexError("Unknown stage for this order.");

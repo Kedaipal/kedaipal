@@ -22,14 +22,23 @@ vi.mock("@tanstack/react-query", () => ({
 	useQuery: () => ({ data: undefined, isPending: true }),
 }));
 
-import { ProductWizard, type WizardState } from "./product-wizard";
+import {
+	emptyWizardState,
+	ProductWizard,
+	type WizardState,
+} from "./product-wizard";
 import { emptyRow } from "./variant-editor";
 
 afterEach(cleanup);
 
-/** A named draft sitting on the unanswered type question (step 2). */
+/** A named draft sitting on the unanswered type question (step 2).
+ *
+ * Built ON `emptyWizardState()` — the old `as WizardState` cast hid the
+ * booking fields it omitted, so a derived value the component reads on every
+ * render crashed at runtime rather than failing to compile. */
 function atTypeStep(overrides: Partial<WizardState> = {}): WizardState {
 	return {
+		...emptyWizardState(),
 		name: "Custom cake",
 		description: "",
 		images: [],
@@ -43,7 +52,7 @@ function atTypeStep(overrides: Partial<WizardState> = {}): WizardState {
 		minQuantity: "",
 		minNoticeDays: "",
 		...overrides,
-	} as WizardState;
+	};
 }
 
 function renderWizard(state: WizardState) {

@@ -75,6 +75,13 @@ export type IcsEvent = {
 	startMinutes?: number;
 	/** How long a timed event runs. Defaults to 60 minutes. */
 	durationMinutes?: number;
+	/** Deep link to the order in the dashboard. Emitted as both `URL` and the
+	 * tail of `DESCRIPTION`: Google Calendar renders `URL` inconsistently
+	 * (mobile often ignores it), and a seller looking at "Aisyah — Campsite" on
+	 * their phone should be one tap from the order rather than hunting for it
+	 * in the inbox. Safe to carry — the target is Clerk-gated, so the link
+	 * exposes only a shortId, and a forwarded feed still can't open it. */
+	url?: string;
 };
 
 /** Assemble the complete VCALENDAR document (CRLF line endings). */
@@ -111,6 +118,14 @@ export function buildIcsCalendar(args: {
 						];
 					})()),
 			foldIcsLine(`SUMMARY:${escapeIcsText(event.summary)}`),
+			...(event.url
+				? [
+						foldIcsLine(`URL:${escapeIcsText(event.url)}`),
+						foldIcsLine(
+							`DESCRIPTION:${escapeIcsText(`Open in Kedaipal: ${event.url}`)}`,
+						),
+					]
+				: []),
 			"TRANSP:OPAQUE",
 			"END:VEVENT",
 		);

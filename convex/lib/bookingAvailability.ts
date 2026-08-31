@@ -37,6 +37,19 @@ export const BOOKING_HORIZON_DAYS = 180;
 export const MAX_BOOKING_NIGHTS = 30;
 
 /**
+ * How many packages one booking may hold — "3 months up front", "two 2-day
+ * deals back to back". A gym that can only sell one term at a time is a broken
+ * gym product; separate bookings would mean separate payments and separate
+ * renewal dates for what the member experiences as one membership.
+ *
+ * 12 matches `MAX_PACKAGE_MONTHS`, so a monthly listing reaches a full year.
+ * `maxPackageQuantity()` narrows it further whenever the resulting TERM would
+ * outrun `MAX_PACKAGE_DAYS` — that bound is load-bearing for the capacity
+ * scans, not a preference.
+ */
+export const MAX_PACKAGE_QUANTITY = 12;
+
+/**
  * The capacity scan's look-back bound: a booking whose check-in is more than
  * this before a window cannot overlap it.
  *
@@ -145,6 +158,41 @@ export async function countBookedPerNight(
 	to: number,
 ): Promise<Map<number, number>> {
 	const counts = new Map<number, number>();
+	for (const order of await bookingsOverlapping(ctx, productId, from, to)) {
+		const checkIn = order.bookingCheckIn as number;
+		const checkOut = order.bookingCheckOut as number;
+		for (
+			let night = Math.max(checkIn, from);
+			night < Math.min(checkOut, to);
+			night += DAY_MS
+		) {
+			counts.set(night, (counts.get(night) ?? 0) + 1);
+		}
+	}
+	return counts;
+}
+
+/**
+ * Every capacity-holding booking on `productId` that overlaps [from, to).
+ *
+ * THE one bounded scan. It exists because the look-back bound has now been got
+ * wrong twice in two separate copies of this query — S7 found it in the
+ * capacity count, and the seller day-sheet was still on a flat 30 days months
+ * later, so a 3-month member showed in the grid's pill and vanished when the
+ * seller tapped the day. Every caller reads through here, so there is one
+ * `MAX_BOOKING_SPAN_DAYS` to get right.
+ *
+ * Returns whole orders: callers that need only counts discard the rest, and
+ * the ones that need names (the seller's calendar) don't pay for a second scan.
+ * `bookingCheckIn`/`bookingCheckOut` are guaranteed defined on every row
+ * returned.
+ */
+export async function bookingsOverlapping(
+	ctx: QueryCtx | MutationCtx,
+	productId: Id<"products">,
+	from: number,
+	to: number,
+): Promise<Doc<"orders">[]> {
 	const scanFrom = from - MAX_BOOKING_SPAN_DAYS * DAY_MS;
 	const holders = await ctx.db
 		.query("orders")
@@ -155,21 +203,13 @@ export async function countBookedPerNight(
 				.lt("bookingCheckIn", to),
 		)
 		.collect();
-	for (const order of holders) {
-		if (!holdsCapacity(order.status)) continue;
+	return holders.filter((order) => {
+		if (!holdsCapacity(order.status)) return false;
 		const checkIn = order.bookingCheckIn;
 		const checkOut = order.bookingCheckOut;
-		if (checkIn === undefined || checkOut === undefined) continue;
-		if (!staysOverlap(checkIn, checkOut, from, to)) continue;
-		for (
-			let night = Math.max(checkIn, from);
-			night < Math.min(checkOut, to);
-			night += DAY_MS
-		) {
-			counts.set(night, (counts.get(night) ?? 0) + 1);
-		}
-	}
-	return counts;
+		if (checkIn === undefined || checkOut === undefined) return false;
+		return staysOverlap(checkIn, checkOut, from, to);
+	});
 }
 
 /** Longest single block (a season-long renovation) — also the block scan's
@@ -271,22 +311,65 @@ export function resolveBookingRange(
 		| undefined,
 	checkIn: number,
 	checkOut?: number,
+	packageQuantity = 1,
 ): { checkIn: number; checkOut: number } {
 	const length = booking?.packageLength;
 	if (length !== undefined && length > 0) {
-		// A MONTH package lands on the same day of the next month (clamped for
-		// short months) rather than after a fixed day count — see
-		// addMytCalendarMonths for why that is what "monthly" means.
+		const quantity = normalizePackageQuantity(packageQuantity, booking);
+		// The whole term is computed IN ONE STEP — `length * quantity` — never by
+		// adding one package at a time. Calendar-month clamping is lossy and
+		// compounds: 31 Jan stepped three times is 28 Feb → 28 Mar → 28 Apr,
+		// while a single 3-month term from 31 Jan is 30 Apr. A member buying
+		// three months up front bought one term, not three chained ones, so the
+		// single step is the honest reading (and it can't drift a day per
+		// package).
 		return {
 			checkIn,
 			checkOut:
 				booking?.packageUnit === "month"
-					? addMytCalendarMonths(checkIn, length)
-					: checkIn + length * DAY_MS,
+					? addMytCalendarMonths(checkIn, length * quantity)
+					: checkIn + length * quantity * DAY_MS,
 		};
 	}
 	if (checkOut === undefined) {
 		throw new Error("Pick your check-out date");
 	}
 	return { checkIn, checkOut };
+}
+
+/**
+ * How many packages one booking may hold, for THIS listing.
+ *
+ * Two ceilings, and the tighter one wins. `MAX_PACKAGE_QUANTITY` is the plain
+ * cap; the second is structural — the whole term has to stay inside
+ * `MAX_PACKAGE_DAYS`, because that is what bounds `MAX_BOOKING_SPAN_DAYS` and
+ * therefore every scan that has to see a booking whose check-in is far behind
+ * the night being read. Let a buyer stack five annual packages and those scans
+ * silently stop finding them — the exact bug class S7 and the `dayBookings`
+ * fix both closed.
+ */
+export function maxPackageQuantity(
+	booking:
+		| { packageLength?: number; packageUnit?: "day" | "month" }
+		| undefined,
+): number {
+	const length = booking?.packageLength;
+	if (length === undefined || length <= 0) return 1;
+	// A month is at most 31 days, so bound the term by the worst case rather
+	// than by a specific start date — the cap must not depend on when the
+	// buyer happens to start.
+	const daysPerPackage = booking?.packageUnit === "month" ? length * 31 : length;
+	const bySpan = Math.floor(MAX_PACKAGE_DAYS / daysPerPackage);
+	return Math.max(1, Math.min(MAX_PACKAGE_QUANTITY, bySpan));
+}
+
+/** Clamp an as-supplied quantity into what this listing actually allows. */
+export function normalizePackageQuantity(
+	quantity: number,
+	booking:
+		| { packageLength?: number; packageUnit?: "day" | "month" }
+		| undefined,
+): number {
+	if (!Number.isInteger(quantity) || quantity < 1) return 1;
+	return Math.min(quantity, maxPackageQuantity(booking));
 }

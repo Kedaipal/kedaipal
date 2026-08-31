@@ -12,7 +12,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { requireRetailerAccess, logAdminAction } from "./lib/auth";
 import {
-	countBookedPerNight,
+	bookingsOverlapping,
 	eachNight,
 	isNightBlocked,
 	loadBlocksForWindow,
@@ -25,6 +25,10 @@ import { assertSubscriptionActive } from "./subscriptions";
 const BLOCK_NOTE_MAX = 200;
 /** Calendar reads are month-window scans — same bound as availability. */
 const MAX_CALENDAR_WINDOW_DAYS = 92;
+
+/** Names carried per night before the cell falls back to "+N more". Three
+ * fits the desktop cell; the count stays exact either way. */
+const GUESTS_PER_NIGHT = 3;
 
 /**
  * Does this store sell any booking listings? The Orders header shows the
@@ -143,8 +147,16 @@ export const sellerCalendar = query({
 			date: number;
 			booked: number;
 			blocked: boolean;
+			/** Who is on this night, in check-in order, capped at
+			 * `GUESTS_PER_NIGHT` with the rest carried in `booked`. The desktop
+			 * grid's whole job is seeing WHO is booked at a glance; a bare count
+			 * makes the seller tap every cell to find out. */
+			guests: Array<{ shortId: string; name: string }>;
 		}>;
 		capacityPerNight?: number;
+		/** The store's currency, so the listing cards can print a price without
+		 * a second read. */
+		currency: string;
 		blocks: Array<{
 			_id: Id<"bookingBlocks">;
 			productId?: Id<"products">;
@@ -152,7 +164,18 @@ export const sellerCalendar = query({
 			endDate: number;
 			note?: string;
 		}>;
-		listings: Array<{ _id: Id<"products">; name: string }>;
+		listings: Array<{
+			_id: Id<"products">;
+			name: string;
+			/** Cover photo for the listing card. Resolved live, never frozen —
+			 * a replaced photo shows the new one, a deleted one degrades to
+			 * AppImage's fallback. */
+			imageUrl: string | null;
+			price?: number;
+			capacityPerNight?: number;
+			packageLength?: number;
+			packageUnit?: "day" | "month";
+		}>;
 	}> => {
 		const access = await requireRetailerAccess(ctx, args.retailerId);
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
@@ -181,16 +204,35 @@ export const sellerCalendar = query({
 		// Booked counts per night, summed across the scoped listings (each
 		// listing's counts come off the same indexed scan the buyer calendar
 		// uses — one authority).
+		// ONE scan per listing serves both the count and the names — the seller
+		// grid needs who, not just how many, and a second pass for the names
+		// would be a second look-back bound to get wrong.
 		const totals = new Map<number, number>();
+		const guestsByNight = new Map<number, Array<{ shortId: string; name: string }>>();
 		for (const listing of scoped) {
-			const counts = await countBookedPerNight(
+			for (const order of await bookingsOverlapping(
 				ctx,
 				listing._id,
 				args.from,
 				args.to,
-			);
-			for (const [night, count] of counts) {
-				totals.set(night, (totals.get(night) ?? 0) + count);
+			)) {
+				const checkIn = order.bookingCheckIn as number;
+				const checkOut = order.bookingCheckOut as number;
+				for (
+					let night = Math.max(checkIn, args.from);
+					night < Math.min(checkOut, args.to);
+					night += DAY_MS
+				) {
+					totals.set(night, (totals.get(night) ?? 0) + 1);
+					const named = guestsByNight.get(night) ?? [];
+					if (named.length < GUESTS_PER_NIGHT) {
+						named.push({
+							shortId: order.shortId,
+							name: order.customer.name?.trim() || "Guest",
+						});
+						guestsByNight.set(night, named);
+					}
+				}
 			}
 		}
 
@@ -210,6 +252,7 @@ export const sellerCalendar = query({
 		const days = eachNight(args.from, args.to).map((date) => ({
 			date,
 			booked: totals.get(date) ?? 0,
+			guests: guestsByNight.get(date) ?? [],
 			blocked:
 				args.productId !== undefined
 					? isNightBlocked(visibleBlocks, date, args.productId)
@@ -227,6 +270,7 @@ export const sellerCalendar = query({
 				args.productId !== undefined
 					? scoped[0]?.booking?.capacityPerNight
 					: undefined,
+			currency: access.retailer.currency ?? "MYR",
 			blocks: visibleBlocks.map((b) => ({
 				_id: b._id,
 				productId: b.productId,
@@ -234,8 +278,107 @@ export const sellerCalendar = query({
 				endDate: b.endDate,
 				note: b.note,
 			})),
-			listings: bookingListings.map((p) => ({ _id: p._id, name: p.name })),
+			listings: await Promise.all(
+				bookingListings.map(async (p) => ({
+					_id: p._id,
+					name: p.name,
+					imageUrl: p.imageStorageIds[0]
+						? await ctx.storage.getUrl(p.imageStorageIds[0])
+						: null,
+					price: (
+						await ctx.db
+							.query("productVariants")
+							.withIndex("by_product", (q) => q.eq("productId", p._id))
+							.first()
+					)?.price,
+					capacityPerNight: p.booking?.capacityPerNight,
+					packageLength: p.booking?.packageLength,
+					packageUnit: p.booking?.packageUnit,
+				})),
+			),
 		};
+	},
+});
+
+/** Named guests shown before a block is confirmed; the rest become "+N more". */
+const BLOCK_IMPACT_SAMPLES = 4;
+
+/**
+ * What a block the seller is ABOUT to place would land on top of.
+ *
+ * Blocking never cancels anything (locked: it stops NEW requests only), so the
+ * honest design is to state the consequence rather than refuse the action — a
+ * seller closing for a flood must not be told to cancel their existing guests
+ * first. The confirm sheet used to say only a generic "bookings already on
+ * these nights stay", which is true but leaves the seller guessing whether that
+ * means nobody or forty people.
+ *
+ * Scope mirrors `blockDays`: `productId` unset = the whole store, so the count
+ * spans every booking listing exactly as the block itself would.
+ */
+export const blockImpact = query({
+	args: {
+		retailerId: v.id("retailers"),
+		productId: v.optional(v.id("products")),
+		startDate: v.number(),
+		endDate: v.number(),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<{
+		count: number;
+		samples: Array<{ shortId: string; customerName?: string }>;
+	}> => {
+		const access = await requireRetailerAccess(ctx, args.retailerId);
+		if (!isMytMidnight(args.startDate) || !isMytMidnight(args.endDate)) {
+			throw new ConvexError("Blocked days must be calendar days");
+		}
+		if (args.endDate < args.startDate) return { count: 0, samples: [] };
+		const days = Math.round((args.endDate - args.startDate) / DAY_MS) + 1;
+		if (days > MAX_BLOCK_DAYS) {
+			throw new ConvexError("That range is longer than a block can cover");
+		}
+		// endDate is INCLUSIVE for a block (no leaving morning); a stay occupies
+		// [checkIn, checkOut). They overlap when the stay starts on or before the
+		// block's last day and ends after its first.
+		const blockEndExclusive = args.endDate + DAY_MS;
+
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", access.retailer._id).eq("active", true),
+			)
+			.collect();
+		const scoped = products.filter(
+			(p) =>
+				effectiveKind(p.kind) === "booking" &&
+				(args.productId === undefined || p._id === args.productId),
+		);
+
+		const seen = new Set<string>();
+		const samples: Array<{ shortId: string; customerName?: string }> = [];
+		for (const listing of scoped) {
+			// THE shared bounded scan, so a long package that started months ago
+			// still counts against a block placed over it.
+			const holders = await bookingsOverlapping(
+				ctx,
+				listing._id,
+				args.startDate,
+				blockEndExclusive,
+			);
+			for (const order of holders) {
+				if (seen.has(order.shortId)) continue;
+				seen.add(order.shortId);
+				if (samples.length < BLOCK_IMPACT_SAMPLES) {
+					samples.push({
+						shortId: order.shortId,
+						customerName: order.customer.name,
+					});
+				}
+			}
+		}
+		return { count: seen.size, samples };
 	},
 });
 
@@ -259,6 +402,15 @@ export const dayBookings = query({
 			checkIn: number;
 			checkOut: number;
 			status: Doc<"orders">["status"];
+			/** Paid or not — the sheet exists to help the seller decide WHICH
+			 * order to open, and "has this one paid" is the question they open it
+			 * for most often. */
+			paymentStatus?: Doc<"orders">["paymentStatus"];
+			/** Which listing, for the all-listings view where two campsites'
+			 * guests share a night and the name alone doesn't say whose. */
+			listingName: string;
+			/** A package reads as a validity window, a stay as check-in → out. */
+			packaged: boolean;
 		}>
 	> => {
 		const access = await requireRetailerAccess(ctx, args.retailerId);
@@ -282,36 +434,28 @@ export const dayBookings = query({
 			checkIn: number;
 			checkOut: number;
 			status: Doc<"orders">["status"];
+			paymentStatus?: Doc<"orders">["paymentStatus"];
+			listingName: string;
+			packaged: boolean;
 		}> = [];
 		for (const listing of scoped) {
-			// Same bounded overlap scan as the availability counts.
-			const holders = await ctx.db
-				.query("orders")
-				.withIndex("by_booking_product", (q) =>
-					q
-						.eq("bookingProductId", listing._id)
-						.gte("bookingCheckIn", args.date - 30 * DAY_MS)
-						.lte("bookingCheckIn", args.date),
-				)
-				.collect();
+			// THE shared bounded scan — never a hand-rolled look-back here again.
+			const holders = await bookingsOverlapping(
+				ctx,
+				listing._id,
+				args.date,
+				args.date + DAY_MS,
+			);
 			for (const order of holders) {
-				if (order.status === "cancelled") continue;
-				if (
-					order.bookingCheckIn === undefined ||
-					order.bookingCheckOut === undefined
-				)
-					continue;
-				if (
-					order.bookingCheckIn > args.date ||
-					order.bookingCheckOut <= args.date
-				)
-					continue;
 				rows.push({
 					shortId: order.shortId,
 					customerName: order.customer.name,
-					checkIn: order.bookingCheckIn,
-					checkOut: order.bookingCheckOut,
+					checkIn: order.bookingCheckIn as number,
+					checkOut: order.bookingCheckOut as number,
 					status: order.status,
+					paymentStatus: order.paymentStatus,
+					listingName: listing.name,
+					packaged: order.bookingPackaged === true,
 				});
 			}
 		}

@@ -5,6 +5,7 @@ import {
 	ChefHat,
 	ChevronLeft,
 	EyeOff,
+	ImagePlus,
 	Package,
 	PackageCheck,
 	Plus,
@@ -24,6 +25,7 @@ import {
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
+import { bookingPriceSuffix, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -649,12 +651,18 @@ export function wizardInitialStep(state: WizardState): number {
 
 /** Compact "RM 12" / "RM 12–28" label for the review preview. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
-	// A booking listing prices per night — one implicit row, "/night" suffix so
-	// the preview says exactly what the storefront will (S2).
+	// A booking listing has one implicit row; the suffix names its span through
+	// the SAME author the storefront card and product page use, so the preview
+	// says exactly what the buyer will see — "/night" for a free range, "/month"
+	// for a package (S2, S7).
 	if (wizardKind(state) === "booking") {
 		const p = parsePriceInput(state.editor.rows[0]?.price.trim() ?? "");
 		if (p === null) return "";
-		return `${currency} ${p % 1 === 0 ? String(p) : p.toFixed(2)}/night`;
+		const length = /^\d+$/.test(state.packageLength.trim())
+			? Number.parseInt(state.packageLength.trim(), 10)
+			: undefined;
+		const suffix = bookingPriceSuffix(length, state.packageUnit);
+		return `${currency} ${p % 1 === 0 ? String(p) : p.toFixed(2)}${suffix}`;
 	}
 	// Made to order has no matrix — its price lives on the bespoke line, and is
 	// a STARTING price the mockup quote lands on top of, so the preview says
@@ -859,6 +867,13 @@ export function ProductWizard({
 	const shape = effectiveShape(state);
 	const kind = wizardKind(state);
 	const isBooking = kind === "booking";
+	// A booking listing's package length, as a number — drives the price label
+	// and the capacity wording live, while the seller is still typing it.
+	const packageLengthNum = /^\d+$/.test(state.packageLength.trim())
+		? Number.parseInt(state.packageLength.trim(), 10)
+		: undefined;
+	const isPackageListing =
+		packageLengthNum !== undefined && packageLengthNum > 0;
 	const showAxes = shape === "choices";
 	const madeToOrder = shape === "made_to_order";
 	const variantCount = cartesian(options).length;
@@ -1633,39 +1648,12 @@ export function ProductWizard({
 						<h3 className="text-xl font-bold leading-tight">
 							Price and capacity
 						</h3>
-						<label className="flex items-center gap-3 text-sm font-medium">
-							<span className="min-w-0 flex-1">Price per night</span>
-							<span className="text-sm text-muted-foreground">{currency}</span>
-							<PriceInput
-								value={rows[0]?.price ?? ""}
-								onChange={(v) => setRow(0, { price: v })}
-								className="h-11 w-28 text-right"
-								invalid={!!issueFor("price:")}
-							/>
-						</label>
-						<IssueText message={issueFor("price:")} />
-						<label className="flex flex-col gap-1.5 text-sm font-medium">
-							<span>
-								Spots available each night{" "}
-								<span className="font-normal text-muted-foreground">
-									(blank = unlimited)
-								</span>
-							</span>
-							<StockInput
-								value={state.capacityPerNight}
-								onChange={(v) => patch({ capacityPerNight: v })}
-								stepper
-								className="w-40"
-								invalid={!!issueFor("capacityPerNight")}
-							/>
-							<IssueText message={issueFor("capacityPerNight")} />
-							<span className="text-xs font-normal text-muted-foreground">
-								{state.capacityPerNight.trim().length === 0
-									? "Anyone can book any date — nothing sells out. Right for a gym or class with no daily limit."
-									: "How many bookings can share the same night — e.g. 5 identical plots = 5. We stop taking requests for a night once they're all booked."}
-							</span>
-						</label>
-						{/* Fixed-length package (S7) — the membership/package shape. */}
+						{/* Fixed-length package (S7) — the membership/package shape.
+						    FIRST on the step, ahead of the price, because it decides what
+						    the price MEANS. It used to sit below, so a gym owner read
+						    "Price per night", typed their monthly fee into it, and only
+						    then scrolled down to say "1 month" — the field above still
+						    claiming per-night while holding a monthly number. */}
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							<span>
 								Package length{" "}
@@ -1704,9 +1692,55 @@ export function ProductWizard({
 							<span className="text-xs font-normal text-muted-foreground">
 								{state.packageLength.trim().length > 0
 									? state.packageUnit === "month"
-										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${state.packageLength.trim()} month(s) later, at the flat price above.`
-										: `Buyers pick a start date only — the booking runs ${state.packageLength.trim()} days from there, at the flat price above.`
-									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 30) to sell a fixed-length package at one flat price."}
+										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${state.packageLength.trim()} month(s) later, at one flat price.`
+										: `Buyers pick a start date only — the booking runs ${state.packageLength.trim()} days from there, at one flat price.`
+									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
+							</span>
+						</label>
+						<label className="flex items-center gap-3 text-sm font-medium">
+							{/* The label names the SPAN the seller just chose, so the number
+							    they type is unambiguous: "Price per month", not "per night"
+							    on a monthly membership. */}
+							<span className="min-w-0 flex-1">
+								Price per {bookingSpanNoun(packageLengthNum, state.packageUnit)}
+							</span>
+							<span className="text-sm text-muted-foreground">{currency}</span>
+							<PriceInput
+								value={rows[0]?.price ?? ""}
+								onChange={(v) => setRow(0, { price: v })}
+								className="h-11 w-28 text-right"
+								invalid={!!issueFor("price:")}
+							/>
+						</label>
+						<IssueText message={issueFor("price:")} />
+						<label className="flex flex-col gap-1.5 text-sm font-medium">
+							<span>
+								{isPackageListing
+									? "Spots available at a time"
+									: "Spots available each night"}{" "}
+								<span className="font-normal text-muted-foreground">
+									(blank = unlimited)
+								</span>
+							</span>
+							<StockInput
+								value={state.capacityPerNight}
+								onChange={(v) => patch({ capacityPerNight: v })}
+								stepper
+								// "Unlimited", not "0" — the field's own placeholder used to
+								// read 0, contradicting the "blank = unlimited" label right
+								// above it and looking like a hard zero-spots setting.
+								placeholder="Unlimited"
+								ariaLabel="Spots available"
+								className="w-48"
+								invalid={!!issueFor("capacityPerNight")}
+							/>
+							<IssueText message={issueFor("capacityPerNight")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								{state.capacityPerNight.trim().length === 0
+									? "Anyone can book any date — nothing sells out. Right for a gym or class with no daily limit."
+									: isPackageListing
+										? "How many bookings can run at the same time — e.g. 20 members on a package at once. We stop taking bookings once they're all taken."
+										: "How many bookings can share the same night — e.g. 5 identical plots = 5. We stop taking requests for a night once they're all booked."}
 							</span>
 						</label>
 						{/* Instant book (S7) — the spec's named follow-up. */}
@@ -1754,6 +1788,11 @@ export function ProductWizard({
 							<span className="font-normal text-muted-foreground">
 								(optional)
 							</span>
+							{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
+							    `MAX_NOTICE_DAYS`). A copy-paste had left the PACKAGE LENGTH's
+							    unit dropdown sitting in this row — bound to `state.packageUnit`,
+							    so a seller adjusting their notice period silently flipped a
+							    1-month membership into a 1-day pass. */}
 							<span className="flex items-center gap-1.5">
 								<Input
 									type="number"
@@ -1766,19 +1805,9 @@ export function ProductWizard({
 									isError={!!issueFor("minNoticeDays")}
 									className="h-11 w-24 text-center"
 								/>
-								<select
-									aria-label="Package length unit"
-									value={state.packageUnit}
-									onChange={(e) =>
-										patch({
-											packageUnit: e.target.value === "day" ? "day" : "month",
-										})
-									}
-									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
-								>
-									<option value="month">months</option>
-									<option value="day">days</option>
-								</select>
+								<span className="text-sm font-normal text-muted-foreground">
+									days
+								</span>
 							</span>
 							<IssueText message={issueFor("minNoticeDays")} />
 							<span className="text-xs font-normal text-muted-foreground">
@@ -2096,19 +2125,43 @@ export function ProductWizard({
 						<p className="-mt-2 text-sm text-muted-foreground">
 							This is what buyers will see on your store.
 						</p>
-						{/* Buyer-eye preview card. */}
+						{/* Buyer-eye preview card. The photo area is a BUTTON back to the
+						    details step (where the uploader lives) — every other line on
+						    this screen has an Edit affordance, and the one thing a seller
+						    most wants to fix from a preview is the picture. Reaching it
+						    used to mean tapping Back through the whole wizard. */}
 						<div className="overflow-hidden rounded-2xl border border-border">
-							{state.images[0]?.url ? (
-								<img
-									src={state.images[0].url}
-									alt=""
-									className="h-36 w-full object-cover"
-								/>
-							) : (
-								<div className="flex h-24 w-full items-center justify-center bg-muted text-xs text-muted-foreground">
-									No photo yet — you can add one later
-								</div>
-							)}
+							<button
+								type="button"
+								onClick={() => setStep(1)}
+								className="group relative block w-full text-left"
+								aria-label={
+									state.images[0]?.url
+										? "Change product photos"
+										: "Add a product photo"
+								}
+							>
+								{state.images[0]?.url ? (
+									<>
+										<img
+											src={state.images[0].url}
+											alt=""
+											className="h-36 w-full object-cover"
+										/>
+										<span className="absolute right-2 top-2 rounded-full bg-background/90 px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur">
+											Change photo
+										</span>
+									</>
+								) : (
+									<span className="flex h-24 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground transition-colors group-hover:bg-muted/70">
+										<ImagePlus className="size-5" aria-hidden />
+										<span>
+											No photo yet —{" "}
+											<span className="font-semibold underline">add one</span>
+										</span>
+									</span>
+								)}
+							</button>
 							<div className="flex flex-col gap-1.5 p-3">
 								<span className="text-sm font-bold">
 									{state.name.trim() || "Your product"}
@@ -2173,7 +2226,7 @@ export function ProductWizard({
 												label: "Capacity",
 												value:
 													state.capacityPerNight.trim().length > 0
-														? `${state.capacityPerNight.trim()} per night`
+														? `${state.capacityPerNight.trim()} ${isPackageListing ? "at a time" : "per night"}`
 														: "Unlimited",
 												step: 3,
 											},

@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
+	MAX_BOOKING_SPAN_DAYS,
+	maxPackageQuantity,
+} from "./lib/bookingAvailability";
+import {
 	addMytCalendarMonths,
 	DAY_MS,
 	todayMytMidnight,
@@ -1105,5 +1109,115 @@ describe("monthly packages run on CALENDAR months (S7)", () => {
 		});
 		const order = await asOwner.query(api.orders.get, { shortId });
 		expect(order?.bookingCheckOut).toBe(day(7));
+	});
+});
+
+describe("buying several packages in one booking", () => {
+	test("prices per package, spans the whole term, and reads as one order", async () => {
+		// A gym that can only sell one month at a time is a broken gym product:
+		// three bookings would mean three payments and three renewal dates for
+		// what the member experiences as one membership.
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 1,
+			packageUnit: "month",
+			capacity: null,
+		});
+		const start = day(10);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: start,
+			packageQuantity: 3,
+			customer: guest(60),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+
+		// ONE step over the whole term — not three chained hops, which would
+		// clamp at each one and drift.
+		expect(order.bookingCheckOut).toBe(addMytCalendarMonths(start, 3));
+		expect(order.bookingPackaged).toBe(true);
+		// `quantity` on a package now carries its natural meaning: how many
+		// packages. The money follows the standard line math with no special case.
+		expect(order.items[0]?.quantity).toBe(3);
+		expect(order.items[0]?.price).toBe(8000);
+		expect(order.total).toBe(24000);
+	});
+
+	test("a tampered quantity is clamped to what the listing allows", async () => {
+		// The ceiling is structural: the term has to stay inside the span bound
+		// every capacity scan relies on. A client asking for 99 years must not
+		// create a booking those scans can no longer see.
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 1,
+			packageUnit: "month",
+			capacity: null,
+		});
+		const start = day(10);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: start,
+			packageQuantity: 999,
+			customer: guest(61),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		const allowed = maxPackageQuantity({
+			packageLength: 1,
+			packageUnit: "month",
+		});
+		expect(order.items[0]?.quantity).toBe(allowed);
+		expect(order.bookingCheckOut).toBe(addMytCalendarMonths(start, allowed));
+		expect(
+			(order.bookingCheckOut ?? 0) - (order.bookingCheckIn ?? 0),
+		).toBeLessThanOrEqual(MAX_BOOKING_SPAN_DAYS * DAY_MS);
+	});
+
+	test("the extra months have to be free, not just the first", async () => {
+		// A package is all-or-nothing, and that has to hold across the WHOLE
+		// term — otherwise a 3-month member lands on top of a night that was
+		// already sold in month three.
+		const { t, retailer, productId } = await seedBookingStore(setup(), {
+			packageLength: 1,
+			packageUnit: "month",
+			capacity: 1,
+		});
+		const start = day(10);
+		// Someone already holds a night inside what month two would cover.
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: addMytCalendarMonths(start, 1),
+			packageQuantity: 1,
+			customer: guest(62),
+		});
+		// One month from `start` is still fine…
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: start,
+				packageQuantity: 3,
+				customer: guest(63),
+			}),
+		).rejects.toThrow(/no longer available/i);
+	});
+
+	test("the count is ignored on a free-range stay", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			packageQuantity: 4,
+			customer: guest(64),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		// The range IS the quantity on a free-range listing: 2 nights, untouched.
+		expect(order.items[0]?.quantity).toBe(2);
+		expect(order.bookingCheckOut).toBe(day(5));
 	});
 });

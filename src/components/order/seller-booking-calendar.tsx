@@ -9,7 +9,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Ban, ChevronLeft, ChevronRight } from "lucide-react";
+import { Ban, CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -23,17 +23,72 @@ import {
 import {
 	addMytMonths,
 	calendarDateFromMytEpoch,
+	describeBookingSpan,
 	mytMonthStart,
 } from "../../lib/booking-dates";
 import { convexErrorMessage } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { StatusBadge } from "../dashboard/status-badge";
 import { Button } from "../ui/button";
-import { FilterChip, FilterChipRow } from "../ui/filter-chip";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Skeleton } from "../ui/skeleton";
+import { BookingDayCell, type DayCellInfo } from "./booking-day-cell";
+import { BookingListingCards } from "./booking-listing-cards";
 
 const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
+
+/**
+ * Which listing a block is written against — the ONE author, so the impact
+ * count the seller reads and the row `blockDays` writes can never disagree.
+ * `undefined` = the whole store.
+ *
+ * A single-listing store is deliberately scoped to that listing rather than
+ * store-wide: it's the literal truth of what the seller can see on the
+ * calendar, and a store block whose reach silently widens the day they add a
+ * second listing is the surprising one.
+ */
+function blockScopeProductId(
+	onlyListingId: Id<"products"> | undefined,
+	scope: "store" | "listing",
+	listingId: Id<"products"> | "all",
+): Id<"products"> | undefined {
+	if (onlyListingId !== undefined) return onlyListingId;
+	return scope === "listing" && listingId !== "all" ? listingId : undefined;
+}
+
+/** Two-letter avatar for a day-sheet row. */
+function guestInitials(name?: string): string {
+	const parts = (name ?? "Guest").trim().split(/\s+/).filter(Boolean);
+	if (parts.length === 0) return "G";
+	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+	return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+/**
+ * Where THIS night sits in the stay — "arrives today", "night 3 of 7",
+ * "leaves tomorrow". The seller is looking at one date; a bare range makes
+ * them do the arithmetic themselves.
+ */
+function nightPosition(
+	row: { checkIn: number; checkOut: number },
+	date: number,
+): string {
+	if (row.checkIn === date) return "arrives today";
+	const total = Math.round((row.checkOut - row.checkIn) / DAY_MS);
+	const nth = Math.round((date - row.checkIn) / DAY_MS) + 1;
+	if (date + DAY_MS >= row.checkOut) return "leaves tomorrow";
+	return `night ${nth} of ${total}`;
+}
+
+/** The named guests on a pending block, with the overflow counted. */
+function guestSummary(impact: {
+	count: number;
+	samples: Array<{ customerName?: string }>;
+}): string {
+	const names = impact.samples.map((s) => s.customerName?.trim() || "Guest");
+	const extra = impact.count - names.length;
+	return extra > 0 ? `${names.join(", ")}, +${extra} more` : names.join(", ");
+}
 
 /** MYT month title ("September 2026") off the month-start epoch. */
 function monthTitle(monthStart: number): string {
@@ -99,10 +154,40 @@ export function SellerBookingCalendar({
 		setListingId(listings[0]._id);
 	}
 
+	// A single-listing store gets no scope toggle (see the confirm sheet) — the
+	// block is written against that listing, and the sheet names it.
+	const onlyListing = listings.length === 1 ? listings[0] : undefined;
+	const selectedListing =
+		listingId === "all" ? undefined : listings.find((l) => l._id === listingId);
+	// What the pending block would land on. Asked only once a range is complete
+	// and the sheet is up — a bounded scan, not a per-tap read. Sits ABOVE the
+	// loading early-return: every hook has to run on every render.
+	const impact = useQuery(
+		convexQuery(
+			api.bookingBlocks.blockImpact,
+			blockSel?.end !== undefined && blockSel.start !== null
+				? {
+						retailerId,
+						productId: blockScopeProductId(
+							onlyListing?._id,
+							blockScope,
+							listingId,
+						),
+						startDate: blockSel.start,
+						endDate: blockSel.end,
+					}
+				: "skip",
+		),
+	).data;
+
 	const byDate = useMemo(() => {
-		const map = new Map<number, { booked: number; blocked: boolean }>();
+		const map = new Map<number, DayCellInfo>();
 		for (const d of calendar?.days ?? []) {
-			map.set(d.date, { booked: d.booked, blocked: d.blocked });
+			map.set(d.date, {
+				booked: d.booked,
+				blocked: d.blocked,
+				guests: d.guests,
+			});
 		}
 		return map;
 	}, [calendar?.days]);
@@ -111,6 +196,19 @@ export function SellerBookingCalendar({
 		return <Skeleton className="h-96 w-full rounded-2xl" />;
 	}
 	const capacity = calendar.capacityPerNight;
+	const currency = calendar.currency;
+	// Nothing booked and nothing blocked all month — an empty grid on its own
+	// looks like a failure to load.
+	const monthIsEmpty = calendar.days.every(
+		(d) => d.booked === 0 && !d.blocked,
+	);
+	/** The seller's own note on whichever block covers this day — shown IN the
+	 * cell, because a bare ✗ makes them tap to remember why they closed it. */
+	function noteForDay(date: number): string | undefined {
+		return calendar?.blocks.find(
+			(b) => date >= b.startDate && date <= b.endDate && b.note,
+		)?.note;
+	}
 
 	// Month grid, Monday-start (weekend-led business, same as the buyer side).
 	const firstDate = calendarDateFromMytEpoch(month);
@@ -147,10 +245,14 @@ export function SellerBookingCalendar({
 		try {
 			await blockDays({
 				retailerId,
-				productId:
-					blockScope === "listing" && listingId !== "all"
-						? listingId
-						: undefined,
+				// Same author as the impact count above — the seller must never be
+				// shown "3 bookings on these dates" for one scope and have another
+				// written.
+				productId: blockScopeProductId(
+					listings.length === 1 ? listings[0]._id : undefined,
+					blockScope,
+					listingId,
+				),
 				startDate: blockSel.start,
 				endDate: blockSel.end,
 				note: blockNote.trim().length > 0 ? blockNote.trim() : undefined,
@@ -189,49 +291,66 @@ export function SellerBookingCalendar({
 
 	return (
 		<div className="flex flex-col gap-3">
-			{listings.length > 1 ? (
-				<FilterChipRow>
-					{listings.map((listing) => (
-						<FilterChip
-							key={listing._id}
-							selected={listingId === listing._id}
-							onClick={() => setListingId(listing._id)}
-						>
-							{listing.name}
-						</FilterChip>
-					))}
-					<FilterChip
-						selected={listingId === "all"}
-						onClick={() => setListingId("all")}
-					>
-						All listings
-					</FilterChip>
-				</FilterChipRow>
-			) : null}
+			<BookingListingCards
+				listings={listings}
+				selected={listingId}
+				onSelect={setListingId}
+				currency={currency}
+			/>
 
 			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
-				<div className="flex items-center justify-between">
-					<button
-						type="button"
-						aria-label="Previous month"
-						onClick={() => setMonth(addMytMonths(month, -1))}
-						disabled={month <= addMytMonths(todayMonth, -12)}
-						className="tap-target flex items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-					>
-						<ChevronLeft className="size-4" />
-					</button>
-					<span className="font-heading text-sm font-bold">
+				{/* Nav left, month centred, the ONE write action right — the block
+				    button used to sit alone at the bottom of the card, below the
+				    legend, where it read as a footnote rather than the thing the
+				    calendar is for. */}
+				<div className="flex items-center gap-2">
+					<div className="flex items-center gap-1.5">
+						<button
+							type="button"
+							aria-label="Previous month"
+							onClick={() => setMonth(addMytMonths(month, -1))}
+							disabled={month <= addMytMonths(todayMonth, -12)}
+							className="tap-target flex items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+						>
+							<ChevronLeft className="size-4" />
+						</button>
+						<button
+							type="button"
+							aria-label="Next month"
+							onClick={() => setMonth(addMytMonths(month, 1))}
+							disabled={month >= addMytMonths(todayMonth, 6)}
+							className="tap-target flex items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+						>
+							<ChevronRight className="size-4" />
+						</button>
+						{/* Paging six months out and back is four taps without this. */}
+						<Button
+							variant="outline"
+							size="sm"
+							className="tap-target hidden lg:inline-flex"
+							disabled={month === todayMonth}
+							onClick={() => setMonth(todayMonth)}
+						>
+							Today
+						</Button>
+					</div>
+					<span className="flex-1 text-center font-heading text-base font-bold lg:text-lg">
 						{monthTitle(month)}
 					</span>
-					<button
-						type="button"
-						aria-label="Next month"
-						onClick={() => setMonth(addMytMonths(month, 1))}
-						disabled={month >= addMytMonths(todayMonth, 6)}
-						className="tap-target flex items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-					>
-						<ChevronRight className="size-4" />
-					</button>
+					<div className="flex items-center gap-1.5">
+						<Button
+							variant="outline"
+							size="sm"
+							className="tap-target hidden lg:inline-flex"
+							onClick={() => setBlockSel({ start: null })}
+							disabled={blockSel !== null}
+						>
+							<Ban className="size-4" aria-hidden />
+							Block dates
+						</Button>
+						{/* The phone keeps its own bottom-anchored button below. */}
+						<span className="tap-target lg:hidden" aria-hidden />
+					</div>
 				</div>
 
 				<div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -241,114 +360,120 @@ export function SellerBookingCalendar({
 						<span key={`${d}-${i}`}>{d}</span>
 					))}
 				</div>
-				<div className="grid grid-cols-7 gap-1">
+				<div className="grid grid-cols-7 gap-1 lg:gap-2">
 					{cells.map((date, i) =>
 						date === null ? (
 							// biome-ignore lint/suspicious/noArrayIndexKey: filler cells
 							<span key={`pad-${i}`} />
 						) : (
-							(() => {
-								const info = byDate.get(date);
-								const inBlockSel =
+							<BookingDayCell
+								key={date}
+								date={date}
+								info={byDate.get(date)}
+								capacity={capacity}
+								isToday={date === today}
+								isPast={date < today}
+								inBlockSelection={
 									blockSel !== null &&
 									blockSel.start !== null &&
 									date >= blockSel.start &&
 									(blockSel.end === undefined
 										? date <= blockSel.start
-										: date <= blockSel.end);
-								const full =
-									capacity !== undefined &&
-									info !== undefined &&
-									info.booked >= capacity;
-								return (
-									<button
-										key={date}
-										type="button"
-										onClick={() => tapDay(date)}
-										className={cn(
-											"relative flex min-h-14 flex-col rounded-lg border p-1 text-left transition-colors",
-											info?.blocked
-												? "border-border bg-[repeating-linear-gradient(135deg,hsl(var(--muted))_0_5px,transparent_5px_10px)] bg-muted/60"
-												: full
-													? "border-primary/30 bg-primary/5"
-													: "border-border bg-background hover:border-accent/60",
-											date < today && "opacity-50",
-											date === today && "ring-1 ring-accent",
-											inBlockSel && "!border-primary ring-1 ring-primary",
-										)}
-									>
-										<span className="text-[10px] font-semibold text-muted-foreground tabular-nums">
-											{calendarDateFromMytEpoch(date).getDate()}
-										</span>
-										{info?.blocked ? (
-											<Ban
-												className="absolute right-1 top-1 size-3 text-muted-foreground"
-												aria-hidden
-											/>
-										) : null}
-										{info !== undefined && info.booked > 0 ? (
-											<span
-												className={cn(
-													"mt-auto rounded-md px-1 py-0.5 text-center text-[10px] font-bold tabular-nums",
-													full
-														? "bg-primary text-primary-foreground"
-														: "bg-accent/10 text-accent-emphasis",
-												)}
-											>
-												{capacity !== undefined
-													? `${info.booked}/${capacity}`
-													: info.booked}
-											</span>
-										) : null}
-									</button>
-								);
-							})()
+										: date <= blockSel.end)
+								}
+								blockNote={noteForDay(date)}
+								onClick={() => tapDay(date)}
+							/>
 						),
 					)}
 				</div>
 
-				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-					<span>
-						{capacity !== undefined
-							? "Pill = booked / capacity"
-							: "Pill = bookings that night (pick a listing for capacity)"}
+				{/* Legend — states, named. "Pill = booked / capacity" described a
+				    control, not the calendar. */}
+				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-3 text-[11px] text-muted-foreground">
+					<span className="flex items-center gap-1.5">
+						<i
+							className="size-3 rounded-full border border-accent/40 bg-accent/10"
+							aria-hidden
+						/>
+						Has room
+					</span>
+					<span className="flex items-center gap-1.5">
+						<i className="size-3 rounded-full bg-primary" aria-hidden />
+						Full
 					</span>
 					<span className="flex items-center gap-1.5">
 						<Ban className="size-3" aria-hidden />
 						Blocked by you
 					</span>
+					{capacity === undefined && listings.length > 1 ? (
+						<span>Pick a listing above to see how full each night is.</span>
+					) : null}
+					<span className="hidden flex-1 text-right lg:block">
+						Buyers only ever see a date as unavailable — never
+						&ldquo;blocked&rdquo;.
+					</span>
 				</div>
+			</div>
 
-				{blockSel === null ? (
-					<Button
-						variant="outline"
-						className="tap-target w-full"
-						onClick={() => setBlockSel({ start: null })}
-					>
-						<Ban className="size-4" aria-hidden />
-						Block days…
-					</Button>
-				) : blockSel.end === undefined ? (
-					<div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-xs">
-						<span>
+			{/* The month is empty — say so, and say what fills it. A bare grid of
+			    empty boxes reads as broken rather than as "no bookings yet". */}
+			{monthIsEmpty ? (
+				<div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-card px-5 py-7 text-center">
+					<CalendarRange className="size-5 text-muted-foreground" aria-hidden />
+					<p className="text-sm font-semibold">
+						Nothing booked in {monthTitle(month)}
+					</p>
+					<p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+						Requests land here as buyers pick their dates. Dates you block show
+						up straight away.
+					</p>
+				</div>
+			) : null}
+
+			{/* Block MODE. The old affordance was a thin dashed strip under the
+			    grid, easy to miss and easy to forget you were in. This is a real
+			    mode: a bar that owns the flow, shows the live range, and always
+			    offers the way out. Fixed on the phone (house rule 4), in flow on
+			    desktop where the toolbar button sits instead. */}
+			{blockSel === null ? (
+				<Button
+					variant="outline"
+					className="tap-target w-full lg:hidden"
+					onClick={() => setBlockSel({ start: null })}
+				>
+					<Ban className="size-4" aria-hidden />
+					Block dates
+				</Button>
+			) : blockSel.end === undefined ? (
+				<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-primary px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 text-primary-foreground lg:static lg:rounded-2xl lg:border lg:border-primary lg:pb-3">
+					<div className="mx-auto flex max-w-3xl items-center gap-3">
+						<Ban className="size-4 shrink-0" aria-hidden />
+						<span className="min-w-0 flex-1 text-xs leading-relaxed">
 							{blockSel.start === null ? (
-								"Tap the first day to block."
+								<span className="font-semibold">
+									Tap the first day to block.
+								</span>
 							) : (
 								<>
-									Blocking from{" "}
 									<span className="font-semibold">
-										{formatFulfilmentDate(blockSel.start)}
+										From {formatFulfilmentDate(blockSel.start)}
 									</span>{" "}
-									— tap the last day (tap it again for just one day).
+									— tap the last day, or the same day again for just one.
 								</>
 							)}
 						</span>
-						<Button variant="ghost" size="sm" onClick={() => setBlockSel(null)}>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="shrink-0 text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground"
+							onClick={() => setBlockSel(null)}
+						>
 							Cancel
 						</Button>
 					</div>
-				) : null}
-			</div>
+				</div>
+			) : null}
 
 			{/* Block confirm sheet */}
 			<Sheet
@@ -373,7 +498,21 @@ export function SellerBookingCalendar({
 							bookings already on these nights stay, and buyers just see the
 							dates as unavailable (never &ldquo;blocked&rdquo;).
 						</p>
-						{listingId !== "all" ? (
+						{/* Scope. With a SINGLE booking listing the toggle was noise
+						    pretending to be a choice: both options do the same thing today,
+						    yet they write different rows that diverge the moment a second
+						    listing exists — and "This listing only" never named the listing,
+						    because the chip row that would have named it is hidden below two.
+						    So: one listing → no toggle, just the name. */}
+						{onlyListing ? (
+							<p className="text-xs text-muted-foreground">
+								Blocks{" "}
+								<span className="font-semibold text-foreground">
+									{onlyListing.name}
+								</span>
+								 — your only booking listing.
+							</p>
+						) : listingId !== "all" ? (
 							<div className="flex gap-1 rounded-xl bg-muted p-1">
 								<button
 									type="button"
@@ -397,15 +536,30 @@ export function SellerBookingCalendar({
 											: "text-muted-foreground",
 									)}
 								>
-									This listing only
+									{selectedListing?.name ?? "This listing only"}
 								</button>
 							</div>
 						) : (
 							<p className="text-xs text-muted-foreground">
-								Applies to the whole store (pick a listing chip first to block
-								just one).
+								Applies to <span className="font-semibold">all</span>{" "}
+								{listings.length} booking listings (pick a listing above to
+								block just one).
 							</p>
 						)}
+						{/* What this lands on top of. Stated, never used to refuse: a
+						    seller closing for a flood must not be told to cancel their
+						    guests first. "Bookings already on these nights stay" is true
+						    but leaves them guessing whether that means nobody or forty. */}
+						{impact && impact.count > 0 ? (
+							<p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+								<span className="font-semibold">
+									{impact.count} booking{impact.count === 1 ? "" : "s"} already
+									on these dates
+								</span>{" "}
+								({guestSummary(impact)}) — they stay confirmed and the guests
+								are told nothing. Cancel any you need to from the order itself.
+							</p>
+						) : null}
 						<input
 							value={blockNote}
 							onChange={(e) => setBlockNote(e.target.value.slice(0, 200))}
@@ -466,11 +620,23 @@ export function SellerBookingCalendar({
 							</div>
 						))}
 						{dayRows === undefined ? (
-							<Skeleton className="h-16 w-full rounded-xl" />
+							// Row skeletons, not one slab where the whole list was.
+							<div className="flex flex-col gap-3">
+								<Skeleton className="h-12 w-full rounded-xl" />
+								<Skeleton className="h-12 w-full rounded-xl" />
+							</div>
 						) : dayRows.length === 0 ? (
-							<p className="py-2 text-center text-sm text-muted-foreground">
-								No bookings on this night.
-							</p>
+							<div className="flex flex-col items-center gap-1.5 py-4 text-center">
+								<CalendarRange
+									className="size-5 text-muted-foreground"
+									aria-hidden
+								/>
+								<p className="text-sm font-semibold">Nobody booked in yet</p>
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									This night is open to requests. Block it if you&apos;re not
+									taking guests.
+								</p>
+							</div>
 						) : (
 							<div className="flex flex-col divide-y divide-border">
 								{dayRows.map((row) => (
@@ -480,16 +646,39 @@ export function SellerBookingCalendar({
 										params={{ shortId: row.shortId }}
 										className="flex items-center gap-3 py-2.5"
 									>
+										<span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
+											{guestInitials(row.customerName)}
+										</span>
 										<div className="min-w-0 flex-1">
 											<p className="truncate text-sm font-medium">
 												{row.customerName ?? "Guest"}
 											</p>
-											<p className="text-xs text-muted-foreground tabular-nums">
-												{formatFulfilmentDate(row.checkIn)} →{" "}
-												{formatFulfilmentDate(row.checkOut)}
+											{/* Enough to decide WHICH order to open without
+											     opening them all: where in the stay tonight is,
+											     and — on an all-listings view — whose plot. */}
+											<p className="truncate text-xs text-muted-foreground tabular-nums">
+												{describeBookingSpan(row.checkIn, row.checkOut, {
+													isPackage: row.packaged,
+													format: formatFulfilmentDate,
+												})}
+												{sheetDate !== null
+													? ` · ${nightPosition(row, sheetDate)}`
+													: ""}
+												{listingId === "all" ? ` · ${row.listingName}` : ""}
 											</p>
 										</div>
-										<StatusBadge status={row.status} />
+										<div className="flex shrink-0 items-center gap-2">
+											{row.paymentStatus !== "received" ? (
+												<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400">
+													Unpaid
+												</span>
+											) : null}
+											<StatusBadge status={row.status} />
+											<ChevronRight
+												className="size-4 text-muted-foreground"
+												aria-hidden
+											/>
+										</div>
 									</Link>
 								))}
 							</div>
