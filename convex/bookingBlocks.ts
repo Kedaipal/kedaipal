@@ -19,7 +19,7 @@ import {
 	MAX_BLOCK_DAYS,
 } from "./lib/bookingAvailability";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
-import { effectiveKind } from "./lib/productKind";
+import { effectiveKind, type PackageUnit } from "./lib/productKind";
 import { assertSubscriptionActive } from "./subscriptions";
 
 const BLOCK_NOTE_MAX = 200;
@@ -174,7 +174,7 @@ export const sellerCalendar = query({
 			price?: number;
 			capacityPerNight?: number;
 			packageLength?: number;
-			packageUnit?: "day" | "month";
+			packageUnit?: PackageUnit;
 		}>;
 	}> => {
 		const access = await requireRetailerAccess(ctx, args.retailerId);

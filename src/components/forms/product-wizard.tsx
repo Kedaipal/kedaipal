@@ -24,8 +24,10 @@ import {
 	MAX_CAPACITY_PER_NIGHT,
 	type ProductKind,
 	packageUnitMax,
+	type PackageUnit,
 } from "../../../convex/lib/productKind";
 import { bookingPriceSuffix, bookingSpanNoun } from "../../lib/booking-dates";
+import { asPackageUnit } from "../../lib/package-unit";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -130,7 +132,7 @@ export type WizardState = {
 	packageLength: string;
 	/** How that length counts. Months is the default because it's what a
 	 * membership means; days suits a 3D2N stay. */
-	packageUnit: "day" | "month";
+	packageUnit: PackageUnit;
 	/** Booking kind only — skip the approval step (S7). */
 	autoAccept: boolean;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
@@ -1678,13 +1680,16 @@ export function ProductWizard({
 									aria-label="Package length unit"
 									value={state.packageUnit}
 									onChange={(e) =>
-										patch({
-											packageUnit: e.target.value === "day" ? "day" : "month",
-										})
+										patch({ packageUnit: asPackageUnit(e.target.value) })
 									}
 									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
 								>
 									<option value="month">months</option>
+									{/* "nights" and "days" are the SAME span — a 2-night stay and
+									    a 2-day pass both run two days. The seller picks the word
+									    their buyers use: accommodation sells by the night (a
+									    3D2N deal is two nights), a gym or class by the day. */}
+									<option value="night">nights</option>
 									<option value="day">days</option>
 								</select>
 							</span>
@@ -1693,8 +1698,8 @@ export function ProductWizard({
 								{state.packageLength.trim().length > 0
 									? state.packageUnit === "month"
 										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${state.packageLength.trim()} month(s) later, at one flat price.`
-										: `Buyers pick a start date only — the booking runs ${state.packageLength.trim()} days from there, at one flat price.`
-									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
+										: `Buyers pick a start date only — the booking runs ${state.packageLength.trim()} ${state.packageUnit}s from there, at one flat price.`
+									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month, or 2 nights) to sell a fixed-length package at one flat price."}
 							</span>
 						</label>
 						<label className="flex items-center gap-3 text-sm font-medium">

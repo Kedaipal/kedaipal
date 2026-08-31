@@ -8,6 +8,7 @@
 
 import { LayoutGrid } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { PackageUnit } from "../../../convex/lib/productKind";
 import { bookingPriceSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -20,7 +21,7 @@ export type CalendarListing = {
 	price?: number;
 	capacityPerNight?: number;
 	packageLength?: number;
-	packageUnit?: "day" | "month";
+	packageUnit?: PackageUnit;
 };
 
 export function BookingListingCards({
@@ -47,7 +48,7 @@ export function BookingListingCards({
 				title="All listings"
 				subtitle={`${listings.length} listings · counts only`}
 				thumb={
-					<span className="flex size-10 items-center justify-center rounded-[10px] bg-muted text-muted-foreground">
+					<span className="flex size-9 items-center justify-center rounded-[10px] bg-muted text-muted-foreground lg:size-10">
 						<LayoutGrid className="size-[18px]" aria-hidden />
 					</span>
 				}
@@ -64,7 +65,7 @@ export function BookingListingCards({
 							src={listing.imageUrl ?? undefined}
 							alt={listing.name}
 							sizes="40px"
-							className="size-10 shrink-0 rounded-[10px] border border-border object-cover"
+							className="size-9 shrink-0 rounded-[10px] border border-border object-cover lg:size-10"
 						/>
 					}
 				/>
@@ -108,7 +109,7 @@ function ListingCard({
 			aria-pressed={selected}
 			onClick={onClick}
 			className={cn(
-				"flex shrink-0 snap-start items-center gap-2.5 rounded-2xl border p-2.5 pr-4 text-left transition-colors",
+				"flex shrink-0 snap-start items-center gap-2.5 rounded-2xl border p-2 pr-3.5 text-left transition-colors lg:p-2.5 lg:pr-4",
 				selected
 					? "border-accent bg-accent/8 ring-3 ring-accent/15"
 					: "border-border bg-card hover:border-accent/50",

@@ -33,6 +33,7 @@ import {
 	conflictCeiling,
 	mytMonthStart,
 	nextBookingSelection,
+	packageCountLabel,
 	packageEnd,
 	type SelectionContext,
 } from "../../lib/booking-dates";
@@ -219,7 +220,7 @@ export function BookingCheckoutForm({
 	const nameOk = name.trim().length >= 3;
 	const rangeOk = nights >= 1 && !packageOutgrewStart;
 	const blockedReason = packageOutgrewStart
-		? `Not all of those ${bookingSpanNoun(packageLength, packageUnit)}${packages > 1 ? "s" : ""} are free — pick another start date`
+		? `Not all of those ${packageCountLabel(packageLength, packageUnit)} are free — pick another start date`
 		: !rangeOk
 			? isPackage
 				? "Pick your start date"
@@ -485,13 +486,12 @@ export function BookingCheckoutForm({
 					<div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-3">
 						<div className="flex items-center justify-between gap-3">
 							<span className="text-sm font-medium">
-								How many {bookingSpanNoun(packageLength, packageUnit)}
-								{packages === 1 ? "" : "s"}?
+								How many {packageCountLabel(packageLength, packageUnit)}?
 							</span>
 							<div className="flex items-center gap-1 rounded-xl border border-input">
 								<button
 									type="button"
-									aria-label={`Fewer ${bookingSpanNoun(packageLength, packageUnit)}s`}
+									aria-label={`Fewer ${packageCountLabel(packageLength, packageUnit)}`}
 									disabled={packages <= 1}
 									onClick={() => setPackages((n) => Math.max(1, n - 1))}
 									className="tap-target flex size-11 items-center justify-center rounded-l-xl text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
@@ -503,7 +503,7 @@ export function BookingCheckoutForm({
 								</span>
 								<button
 									type="button"
-									aria-label={`More ${bookingSpanNoun(packageLength, packageUnit)}s`}
+									aria-label={`More ${packageCountLabel(packageLength, packageUnit)}`}
 									disabled={packages >= maxPackages}
 									onClick={() =>
 										setPackages((n) => Math.min(maxPackages, n + 1))
@@ -525,8 +525,7 @@ export function BookingCheckoutForm({
 					<p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-foreground">
 						{formatFulfilmentDate(selection.checkIn ?? today)} can&apos;t cover{" "}
 						<span className="font-semibold">
-							{packages} {bookingSpanNoun(packageLength, packageUnit)}
-							{packages === 1 ? "" : "s"}
+							{packages} × {bookingSpanNoun(packageLength, packageUnit)}
 						</span>{" "}
 						— some of those nights are already taken. Pick another start date,
 						or take fewer.

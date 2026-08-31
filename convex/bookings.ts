@@ -52,7 +52,7 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import { logAdminAction } from "./lib/auth";
-import { effectiveKind } from "./lib/productKind";
+import { effectiveKind, type PackageUnit } from "./lib/productKind";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
 import { DEFAULT_COUNTRY } from "./lib/country";
@@ -121,7 +121,7 @@ export const availability = query({
 		/** How that length counts — a calendar month's span depends on WHICH
 		 * month, so the calendar has to derive each candidate start's range
 		 * rather than adding a fixed number of days. */
-		packageUnit?: "day" | "month";
+		packageUnit?: PackageUnit;
 		/** How many packages one booking may hold. Computed HERE rather than in
 		 * the client so the stepper's ceiling and the mutation's clamp are the
 		 * same number — that ceiling protects the capacity scans' span bound. */

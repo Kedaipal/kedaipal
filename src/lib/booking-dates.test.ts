@@ -11,6 +11,8 @@ import {
 	bookingSpanNoun,
 	describeBookingSpan,
 	nextBookingSelection,
+	packageCountLabel,
+	packageEnd,
 	packageNights,
 	type SelectionContext,
 } from "./booking-dates";
@@ -181,5 +183,30 @@ describe("booking copy helpers (S7)", () => {
 		expect(
 			describeBookingSpan(day(0), day(2), { isPackage: false, format: fmt }),
 		).toBe("1 → 3");
+	});
+});
+
+describe("package count label (the 'How many 2 dayss?' bug)", () => {
+	it("never double-pluralises: the noun carries LENGTH, the caller carries COUNT", () => {
+		// The reported string came from "How many " + bookingSpanNoun() + "s":
+		// bookingSpanNoun already pluralises on the package's length, and the
+		// caller pluralised again on the buyer's count.
+		expect(packageCountLabel(2, "day")).toBe("2-day packages");
+		expect(packageCountLabel(2, "day")).not.toContain("dayss");
+		expect(packageCountLabel(2, "night")).toBe("2-night packages");
+		// A length of one is just its unit — "How many months?" beats "How many
+		// 1-month packages?".
+		expect(packageCountLabel(1, "month")).toBe("months");
+		expect(packageCountLabel(1, "night")).toBe("nights");
+		expect(packageCountLabel(3, "month")).toBe("3-month packages");
+	});
+
+	it("carries the seller's word through the price suffix and span noun", () => {
+		// "night" and "day" are the same arithmetic; only the word differs.
+		expect(bookingPriceSuffix(2, "night")).toBe("/2 nights");
+		expect(bookingPriceSuffix(1, "night")).toBe("/night");
+		expect(bookingSpanNoun(2, "night")).toBe("2 nights");
+		expect(packageEnd(0, 2, "night")).toBe(packageEnd(0, 2, "day"));
+		expect(packageEnd(0, 2, "night", 3)).toBe(packageEnd(0, 2, "day", 3));
 	});
 });

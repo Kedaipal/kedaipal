@@ -1000,3 +1000,51 @@ flashing away the name, phone and note already typed. `placeholderData:
 keepPreviousData`, the same fix the seller's inbox already carries. The trade is
 one beat of the previous month's availability, so day taps are refused while
 `isPlaceholderData` — a buyer must never pick a night off a stale answer.
+
+### Third round — density, the seller month reload, and the night/day word (31 Aug)
+
+**The calendar didn't fit a 13" laptop.** Two things made the first tuning pass
+useless, both worth knowing before anyone retunes it:
+
+1. **`min-h` was not the binding constraint — the chips were.** The cell grew to
+   fit three guest rows regardless of the minimum, so shrinking the box meant
+   shrinking them.
+2. **A 13" laptop is ~1280px wide, i.e. `xl`.** An `lg:`-only tightening does
+   nothing for the machine it was meant to help. There is now ONE compact
+   desktop treatment; large monitors get whitespace, not a second layout.
+
+And a third, subtler one: a CSS grid row stretches every cell to its tallest
+sibling, so a single busy day rendering three names AND a "+N more" line pushed
+the whole **week** from 81px to 94px. The cell is now **always three lines** —
+three names, or two names and a "+N more" — which makes the height
+deterministic. Nothing is hidden that wasn't already: the count pill carries the
+true total either way. Measured: **132px → 80px a cell**, ~250px off the grid.
+
+**The seller's month nav had the same reload bug as the buyer's, and I only
+fixed the buyer's.** Same cause — new args, new query key, `data` undefined, the
+loading guard swallowing the card — but worse here, because the **listing cards
+are read off that same query**, so the selector vanished and reappeared too and
+the whole page appeared to refresh. Stepping *back* was already smooth, which is
+the tell: that month was in the TanStack cache. `placeholderData:
+keepPreviousData`, plus a dimmed month caption so a slow fetch isn't silent. No
+stale-tap risk here, unlike the buyer's calendar: this view is read-only until
+the seller taps, and a tap opens a sheet that fetches its own rows.
+
+**"How many 2 dayss?"** — `bookingSpanNoun` already pluralises on the package's
+LENGTH, and the caller was pluralising again on the buyer's COUNT. Two different
+axes; only one belongs in the noun. `packageCountLabel()` now owns the question
+and has two shapes, because one doesn't read in both cases: a length of ONE is
+just its unit ("How many months?"), anything longer is a hyphenated adjective on
+"packages" ("How many 2-night packages?").
+
+**Nights vs days is the seller's word, picked in a dropdown they already fill
+in.** Accommodation sells by the night — a "3D2N" package is two nights — while
+a gym or class sells by the day, and free-range stays on this same storefront
+already say "nights". Rather than add a settings knob for a wording nuance,
+`PackageUnit` gains **`"night"`**: identical arithmetic to `"day"` (a 2-night
+stay and a 2-day pass both run two days), differing only in the word the buyer
+reads. A widening, so every existing row stays valid; `isMonthlyUnit()` is the
+one place the day/night equivalence is asserted, so no caller has to remember
+it, and `asPackageUnit()` narrows the `<select>` value in one place — the old
+inline `=== "day" ? "day" : "month"` ternary would have silently collapsed any
+third option back to "month" in whichever dropdown someone forgot to update.

@@ -25,6 +25,7 @@ import {
 	sanitizeCapacityPerNight,
 	sanitizePackageLength,
 	sanitizeSecurityDeposit,
+	type PackageUnit,
 } from "./lib/productKind";
 import {
 	assertProductCap,
@@ -731,7 +732,11 @@ export const create = mutation({
 				// decides how the end derives — a calendar month, or N days.
 				packageLength: v.optional(v.number()),
 				packageUnit: v.optional(
-					v.union(v.literal("day"), v.literal("month")),
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
 				),
 				// Instant book — skip the request-to-book approval step.
 				autoAccept: v.optional(v.boolean()),
@@ -775,7 +780,7 @@ export const create = mutation({
 					capacityPerNight?: number;
 					securityDeposit?: number;
 					packageLength?: number;
-					packageUnit?: "day" | "month";
+					packageUnit?: PackageUnit;
 					autoAccept?: boolean;
 			  }
 			| undefined;
@@ -910,7 +915,11 @@ export const update = mutation({
 				// decides how the end derives — a calendar month, or N days.
 				packageLength: v.optional(v.number()),
 				packageUnit: v.optional(
-					v.union(v.literal("day"), v.literal("month")),
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
 				),
 				// Instant book — skip the request-to-book approval step.
 				autoAccept: v.optional(v.boolean()),

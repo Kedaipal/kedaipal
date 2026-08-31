@@ -26,7 +26,11 @@ import {
 	isMytMidnight,
 	todayMytMidnight,
 } from "./fulfilmentDate";
-import { MAX_PACKAGE_DAYS } from "./productKind";
+import {
+	isMonthlyUnit,
+	MAX_PACKAGE_DAYS,
+	type PackageUnit,
+} from "./productKind";
 
 /** How far ahead a check-in may be requested (~6 months — the design's month
  * nav cap; mirrors the 30-day fulfilment-date posture at booking scale). */
@@ -307,7 +311,7 @@ export async function findFullNights(
  */
 export function resolveBookingRange(
 	booking:
-		| { packageLength?: number; packageUnit?: "day" | "month" }
+		| { packageLength?: number; packageUnit?: PackageUnit }
 		| undefined,
 	checkIn: number,
 	checkOut?: number,
@@ -326,7 +330,7 @@ export function resolveBookingRange(
 		return {
 			checkIn,
 			checkOut:
-				booking?.packageUnit === "month"
+				isMonthlyUnit(booking?.packageUnit)
 					? addMytCalendarMonths(checkIn, length * quantity)
 					: checkIn + length * quantity * DAY_MS,
 		};
@@ -350,7 +354,7 @@ export function resolveBookingRange(
  */
 export function maxPackageQuantity(
 	booking:
-		| { packageLength?: number; packageUnit?: "day" | "month" }
+		| { packageLength?: number; packageUnit?: PackageUnit }
 		| undefined,
 ): number {
 	const length = booking?.packageLength;
@@ -358,7 +362,9 @@ export function maxPackageQuantity(
 	// A month is at most 31 days, so bound the term by the worst case rather
 	// than by a specific start date — the cap must not depend on when the
 	// buyer happens to start.
-	const daysPerPackage = booking?.packageUnit === "month" ? length * 31 : length;
+	const daysPerPackage = isMonthlyUnit(booking?.packageUnit)
+		? length * 31
+		: length;
 	const bySpan = Math.floor(MAX_PACKAGE_DAYS / daysPerPackage);
 	return Math.max(1, Math.min(MAX_PACKAGE_QUANTITY, bySpan));
 }
@@ -367,7 +373,7 @@ export function maxPackageQuantity(
 export function normalizePackageQuantity(
 	quantity: number,
 	booking:
-		| { packageLength?: number; packageUnit?: "day" | "month" }
+		| { packageLength?: number; packageUnit?: PackageUnit }
 		| undefined,
 ): number {
 	if (!Number.isInteger(quantity) || quantity < 1) return 1;

@@ -19,6 +19,7 @@ import {
 	DAY_MS,
 	todayMytMidnight,
 } from "./lib/fulfilmentDate";
+import type { PackageUnit } from "./lib/productKind";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -39,7 +40,7 @@ async function seedBookingStore(
 		capacity?: number | null;
 		securityDeposit?: number;
 		packageLength?: number;
-		packageUnit?: "day" | "month";
+		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 	} = {},
 ) {

@@ -760,7 +760,13 @@ export default defineSchema({
 				// never gives; days remain right for a 3D2N stay or a day pass.
 				packageLength: v.optional(v.number()),
 				packageUnit: v.optional(
-					v.union(v.literal("day"), v.literal("month")),
+					// `night` is `day` arithmetic with the accommodation word — a
+					// widening, so every existing row stays valid.
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
 				),
 				// "Instant book" (S7 — the spec's named follow-up): set = a request
 				// lands `confirmed` with the payment ask firing straight away,

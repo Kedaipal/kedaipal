@@ -10,7 +10,10 @@ import {
 	DAY_MS,
 	MYT_OFFSET_MS,
 } from "../../convex/lib/fulfilmentDate";
-import type { PackageUnit } from "../../convex/lib/productKind";
+import {
+	isMonthlyUnit,
+	type PackageUnit,
+} from "../../convex/lib/productKind";
 
 /** The MYT-midnight epoch for the calendar day a DayPicker `Date` names.
  * DayPicker deals in local-timezone dates; only the y/m/d matter. */
@@ -70,7 +73,7 @@ export type SelectionContext = {
 	/** How that length counts. A CALENDAR month's span depends on which month
 	 * it starts in (28–31 days), so the nights a package occupies must be
 	 * derived per candidate start rather than assumed fixed. */
-	packageUnit?: "day" | "month";
+	packageUnit?: PackageUnit;
 	/** How many packages the buyer is taking ("3 months up front"). Defaults
 	 * to 1. It belongs in the SELECTION context because it changes which start
 	 * days are offerable at all — a longer term has more nights to clear. */
@@ -82,14 +85,14 @@ export type SelectionContext = {
 export function packageEnd(
 	day: number,
 	length: number,
-	unit: "day" | "month" = "day",
+	unit: PackageUnit = "day",
 	quantity = 1,
 ): number {
 	// One step over the WHOLE term, never one package at a time — month
 	// clamping compounds (31 Jan stepped 3× lands 28 Apr, one 3-month term
 	// lands 30 Apr). Mirrors resolveBookingRange exactly.
 	const total = length * Math.max(1, quantity);
-	return unit === "month"
+	return isMonthlyUnit(unit)
 		? addMytCalendarMonths(day, total)
 		: day + total * DAY_MS;
 }
@@ -100,7 +103,7 @@ export function packageEnd(
 export function packageNights(
 	day: number,
 	length: number,
-	unit: "day" | "month" = "day",
+	unit: PackageUnit = "day",
 	quantity = 1,
 ): number[] {
 	const nights: number[] = [];
@@ -223,10 +226,9 @@ export function bookingPriceSuffix(
 	packageUnit: PackageUnit = "day",
 ): string {
 	if (packageLength === undefined || packageLength <= 0) return "/night";
-	const noun = packageUnit === "month" ? "month" : "day";
 	return packageLength === 1
-		? `/${noun}`
-		: `/${packageLength} ${noun}s`;
+		? `/${packageUnit}`
+		: `/${packageLength} ${packageUnit}s`;
 }
 
 /**
@@ -238,8 +240,28 @@ export function bookingSpanNoun(
 	packageUnit: PackageUnit = "day",
 ): string {
 	if (packageLength === undefined || packageLength <= 0) return "night";
-	const noun = packageUnit === "month" ? "month" : "day";
-	return packageLength === 1 ? noun : `${packageLength} ${noun}s`;
+	return packageLength === 1
+		? packageUnit
+		: `${packageLength} ${packageUnit}s`;
+}
+
+/**
+ * What the stepper asks. Two shapes, because one doesn't read in both cases:
+ * a length of ONE is just its unit ("How many months?"), anything longer is a
+ * hyphenated adjective on "packages" ("How many 2-night packages?").
+ *
+ * The naive version — "How many " + bookingSpanNoun() + "s" — produced the
+ * reported **"How many 2 dayss?"**: `bookingSpanNoun` already pluralises on
+ * the package's LENGTH, and the caller was pluralising again on the buyer's
+ * COUNT. Two different axes; only one of them belongs in the noun.
+ */
+export function packageCountLabel(
+	packageLength: number,
+	packageUnit: PackageUnit = "day",
+): string {
+	return packageLength === 1
+		? `${packageUnit}s`
+		: `${packageLength}-${packageUnit} packages`;
 }
 
 /**

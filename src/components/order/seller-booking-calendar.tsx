@@ -6,7 +6,7 @@
 // the buyer calendar uses; drag fights scroll on mobile.
 
 import { convexQuery } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { Ban, CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
@@ -126,14 +126,28 @@ export function SellerBookingCalendar({
 
 	const windowFrom = month;
 	const windowTo = addMytMonths(month, 1);
-	const calendar = useQuery(
-		convexQuery(api.bookingBlocks.sellerCalendar, {
+	// `placeholderData: keepPreviousData` is load-bearing, same as the inbox and
+	// the buyer's calendar. Paging the month rewrites the query ARGS, which makes
+	// a new TanStack Query key, which makes `data` undefined — and the loading
+	// guard below replaces the whole card with a skeleton. Worse, the LISTING
+	// CARDS are read off this same query, so the selector above vanished and
+	// reappeared too: the seller saw the entire page flash on every month step.
+	// (Stepping BACK was already smooth — that month was in the cache.)
+	//
+	// A stale month costs nothing here, unlike the buyer's calendar: this view
+	// is read-only until the seller taps, and a tap opens a day sheet that
+	// fetches its own rows.
+	const calendarQuery = useQuery({
+		...convexQuery(api.bookingBlocks.sellerCalendar, {
 			retailerId,
 			from: windowFrom,
 			to: windowTo,
 			productId: listingId === "all" ? undefined : listingId,
 		}),
-	).data;
+		placeholderData: keepPreviousData,
+	});
+	const calendar = calendarQuery.data;
+	const monthLoading = calendarQuery.isPlaceholderData;
 	const dayRows = useQuery(
 		convexQuery(
 			api.bookingBlocks.dayBookings,
@@ -298,7 +312,7 @@ export function SellerBookingCalendar({
 				currency={currency}
 			/>
 
-			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex flex-col gap-2.5 rounded-2xl border border-border bg-card p-3 lg:p-4">
 				{/* Nav left, month centred, the ONE write action right — the block
 				    button used to sit alone at the bottom of the card, below the
 				    legend, where it read as a footnote rather than the thing the
@@ -334,7 +348,13 @@ export function SellerBookingCalendar({
 							Today
 						</Button>
 					</div>
-					<span className="flex-1 text-center font-heading text-base font-bold lg:text-lg">
+					<span
+						className={cn(
+							"flex-1 text-center font-heading text-base font-bold transition-opacity lg:text-lg",
+							monthLoading && "opacity-60",
+						)}
+						aria-busy={monthLoading || undefined}
+					>
 						{monthTitle(month)}
 					</span>
 					<div className="flex items-center gap-1.5">
@@ -360,7 +380,7 @@ export function SellerBookingCalendar({
 						<span key={`${d}-${i}`}>{d}</span>
 					))}
 				</div>
-				<div className="grid grid-cols-7 gap-1 lg:gap-2">
+				<div className="grid grid-cols-7 gap-1 lg:gap-1.5">
 					{cells.map((date, i) =>
 						date === null ? (
 							// biome-ignore lint/suspicious/noArrayIndexKey: filler cells
@@ -390,7 +410,7 @@ export function SellerBookingCalendar({
 
 				{/* Legend — states, named. "Pill = booked / capacity" described a
 				    control, not the calendar. */}
-				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-3 text-[11px] text-muted-foreground">
+				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-2.5 text-[11px] text-muted-foreground lg:gap-x-5">
 					<span className="flex items-center gap-1.5">
 						<i
 							className="size-3 rounded-full border border-accent/40 bg-accent/10"
@@ -409,7 +429,7 @@ export function SellerBookingCalendar({
 					{capacity === undefined && listings.length > 1 ? (
 						<span>Pick a listing above to see how full each night is.</span>
 					) : null}
-					<span className="hidden flex-1 text-right lg:block">
+					<span className="hidden flex-1 text-right 2xl:block">
 						Buyers only ever see a date as unavailable — never
 						&ldquo;blocked&rdquo;.
 					</span>

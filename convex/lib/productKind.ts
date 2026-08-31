@@ -65,18 +65,33 @@ export const MAX_PACKAGE_DAYS = 366;
 export const MAX_PACKAGE_MONTHS = 12;
 
 /**
- * How a package's length is counted.
+ * How a package's length is counted — and, for `day` vs `night`, what the
+ * seller's trade CALLS it.
  *
  * **"month" means the CALENDAR month** — join the 12th, renew the 12th —
  * which is what a gym means by "monthly" and what a rolling day count never
  * gives: 30 days from 1 Jan ends on the 30th, from 1 Feb it spills into
- * March, so the renewal date walks through the year. "day" stays right for a
- * 3D2N stay or a day pass.
+ * March, so the renewal date walks through the year.
+ *
+ * **"night" and "day" are the SAME arithmetic** — a 2-night stay and a 2-day
+ * pass both run `checkIn + 2 days` — and differ only in the word the buyer
+ * reads. That difference is real: accommodation is sold by the night (a "3D2N"
+ * package is two nights), a gym or class by the day, and free-range stays on
+ * this same storefront already say "nights". Rather than add a settings knob
+ * for a wording nuance, the seller picks it in the unit dropdown they already
+ * fill in — no new concept, one extra option.
  */
-export type PackageUnit = "day" | "month";
+export type PackageUnit = "day" | "night" | "month";
 
 export function packageUnitMax(unit: PackageUnit): number {
 	return unit === "month" ? MAX_PACKAGE_MONTHS : MAX_PACKAGE_DAYS;
+}
+
+/** Does this unit count whole calendar months rather than 24-hour days? The
+ * ONE place the day/night equivalence is asserted, so no caller has to
+ * remember that `night` is day arithmetic wearing a different word. */
+export function isMonthlyUnit(unit: PackageUnit | undefined): boolean {
+	return unit === "month";
 }
 
 /**

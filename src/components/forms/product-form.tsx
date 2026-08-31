@@ -23,10 +23,12 @@ import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_CAPACITY_PER_NIGHT,
+	type PackageUnit,
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
 import { bookingSpanNoun } from "../../lib/booking-dates";
+import { asPackageUnit } from "../../lib/package-unit";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import { describeProduct } from "../../lib/product-summary";
@@ -65,7 +67,7 @@ export interface ProductFormSubmitValues {
 		capacityPerNight?: number;
 		securityDeposit?: number;
 		packageLength?: number;
-		packageUnit?: "day" | "month";
+		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 	};
 	// Per-product fulfilment-notice override (days). undefined = no override —
@@ -126,7 +128,7 @@ export type ProductFormDraft = {
 	capacityPerNight: string;
 	/** Package length in days, as typed; blank = free check-in/check-out. */
 	packageLength?: string;
-	packageUnit?: "day" | "month";
+	packageUnit?: PackageUnit;
 	/** Instant book — skip the approval step. */
 	autoAccept?: boolean;
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
@@ -158,7 +160,7 @@ interface ProductFormProps {
 		capacityPerNight?: string;
 		/** Package length in days as a string draft ("30"); blank = free range. */
 		packageLength?: string;
-		packageUnit?: "day" | "month";
+		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 		/** Booking security deposit as an RM string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
@@ -539,7 +541,7 @@ function ProductSummaryStrip({
 	booking?: {
 		capacityPerNight: string;
 		packageLength?: string;
-		packageUnit?: "day" | "month";
+		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 	} | null;
 }) {
@@ -664,7 +666,7 @@ export function ProductForm({
 	const [packageDraft, setPackageDraft] = useState(
 		initialValues?.packageLength ?? "",
 	);
-	const [packageUnit, setPackageUnit] = useState<"day" | "month">(
+	const [packageUnit, setPackageUnit] = useState<PackageUnit>(
 		initialValues?.packageUnit ?? "month",
 	);
 	const [autoAccept, setAutoAccept] = useState(
@@ -1023,12 +1025,12 @@ export function ProductForm({
 							<select
 								aria-label="Package length unit"
 								value={packageUnit}
-								onChange={(e) =>
-									setPackageUnit(e.target.value === "day" ? "day" : "month")
-								}
+								onChange={(e) => setPackageUnit(asPackageUnit(e.target.value))}
 								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
 							>
 								<option value="month">months</option>
+								{/* Same span as days; the word is the seller's trade. */}
+								<option value="night">nights</option>
 								<option value="day">days</option>
 							</select>
 						</div>
