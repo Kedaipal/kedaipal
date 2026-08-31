@@ -963,6 +963,20 @@ export default defineSchema({
 		// Per-row read only — no index; the insights by-source breakdown reads
 		// it inside the existing bounded `by_retailer` range scan.
 		attributionSource: v.optional(v.string()),
+		// The buyer browser’s PostHog `distinct_id` (86eyrayux). Kedaipal’s
+		// funnel crosses the device boundary — the buyer browses here, hands off
+		// to WhatsApp, and the order is confirmed and paid SERVER-side with no
+		// browser session left to fire from — so the server events would otherwise
+		// land on a different PostHog person than the pageviews that preceded
+		// them, and no conversion funnel would compute. Carrying the id onto the
+		// order is the join.
+		//
+		// An opaque UUID minted by posthog-js: not PII, and PostHog only ever
+		// receives it beside non-PII order properties (never name/phone/address).
+		// Absent whenever PostHog is unconfigured or blocked, and on counter
+		// orders (no buyer browser at all) — so there is nothing to backfill.
+		// Per-row read only, no index. See convex/lib/posthog.ts.
+		analyticsDistinctId: v.optional(v.string()),
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),
