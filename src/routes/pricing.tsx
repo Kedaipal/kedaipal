@@ -8,6 +8,8 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import {
 	type BillingCurrency,
+	BILLING_CURRENCY_FOR_COUNTRY,
+	OUTLET_ADDON_MONTHLY_PRICES,
 	type Plan,
 	PLAN_MONTHLY_PRICES,
 } from "../../convex/lib/plans";
@@ -538,7 +540,9 @@ function TierCard({
 							</span>
 						</li>
 						<li className="pl-6 text-xs text-muted-foreground/80">
-							{m.pricingpage_scale_outlet_addon()}
+							{m.pricingpage_scale_outlet_addon({
+								price: `${symbol}${OUTLET_ADDON_MONTHLY_PRICES[currency] / 100}`,
+							})}
 						</li>
 					</>
 				)}
@@ -648,7 +652,7 @@ function PricingPage() {
 	// Same region model as the landing teaser: detected default, manual MY/SG
 	// override persisted. MY/SG are the only countries, both billable.
 	const [region, setRegion] = useLandingRegion();
-	const currency: BillingCurrency = region === "SG" ? "SGD" : "MYR";
+	const currency: BillingCurrency = BILLING_CURRENCY_FOR_COUNTRY[region];
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();

@@ -4,9 +4,12 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Sparkles } from "lucide-react";
 import {
 	type BillingCurrency,
+	BILLING_CURRENCY_FOR_COUNTRY,
+	COMPETITOR_MONTHLY_RANGE,
 	isPlanSelectable,
 	type Plan,
 	PLAN_MONTHLY_PRICES,
+	starterPricePerDay,
 } from "../../../convex/lib/plans";
 import { useLandingRegion } from "../../hooks/useLandingRegion";
 import { cn } from "../../lib/utils";
@@ -90,11 +93,10 @@ export function PricingTeaser() {
 	const tiers = getTiers();
 	const shouldReduceMotion = useReducedMotion();
 	const [region, setRegion] = useLandingRegion();
-	// Only MY/SG exist for `Country` today, and both bill in a currency this
-	// teaser supports — narrower than `COUNTRY_CURRENCY`'s full storefront
-	// `SupportedCurrency` union, which also covers currencies Kedaipal doesn't
-	// invoice subscriptions in.
-	const currency: BillingCurrency = region === "SG" ? "SGD" : "MYR";
+	// `BILLING_CURRENCY_FOR_COUNTRY`, not `COUNTRY_CURRENCY`: the latter maps a
+	// country to the full storefront `SupportedCurrency` union, which is wider
+	// than the set Kedaipal invoices subscriptions in.
+	const currency: BillingCurrency = BILLING_CURRENCY_FOR_COUNTRY[region];
 	const symbol = CURRENCY_SYMBOL[currency];
 
 	return (
@@ -121,7 +123,11 @@ export function PricingTeaser() {
 							{m.pricing_sub()}
 						</p>
 						<div className="mx-auto mt-5 max-w-xl rounded-2xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
-							{m.pricing_anchor()}
+							{m.pricing_anchor({
+								competitor: `${symbol} ${COMPETITOR_MONTHLY_RANGE[currency].min / 100}–${COMPETITOR_MONTHLY_RANGE[currency].max / 100}`,
+								starter: `${symbol} ${PLAN_MONTHLY_PRICES[currency].starter / 100}`,
+								perDay: `${symbol} ${starterPricePerDay(currency)}`,
+							})}
 						</div>
 						<div className="mt-6 flex justify-center">
 							<RegionToggle region={region} onChange={setRegion} />

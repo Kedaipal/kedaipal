@@ -74,18 +74,18 @@ Prices were hardcoded (`RM {tier.price}`) sourced from nowhere. They now read
 for display) for both `MYR` and `SGD`, and Scale's "Coming soon" state reads
 `isPlanSelectable("scale")` instead of a literal `true`.
 
-A new `RegionToggle` primitive (`landing-ui.tsx`) — a `<fieldset>` of two
-pill buttons, "MY" / "SG" — lets a visitor pick their currency; the pick
-persists in `localStorage` (`kp_landing_region`) via `useLandingRegion`
-(`src/hooks/useLandingRegion.ts`). First visit defaults to MY and corrects
-itself post-mount from either the stored override or a time-zone guess
-(`Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Singapore"`) —
-**not** Cloudflare's `request.cf.country`. That would need the Worker's raw
-`Request` plumbed into a TanStack Start loader
-(`src/server-entry.ts` → `src/router.tsx`), which this repo has no existing
-pattern for and this pass didn't want to originate untested; the time-zone
-heuristic is a same-render-shape, zero-infra stand-in a visitor can always
-override. Real geo-detection is a clean follow-up at that seam.
+> **Superseded (31 Aug 2026).** This pass shipped a `RegionToggle` primitive
+> (two "MY"/"SG" pill buttons) whose pick persisted in `localStorage`
+> (`kp_landing_region`), defaulting on first visit to a **time-zone guess**
+> (`Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Singapore"`)
+> because plumbing Cloudflare's country into a TanStack Start loader had no
+> existing pattern here and this pass didn't want to originate one untested.
+> That follow-up has since landed: the region is read from `CF-IPCountry` at
+> SSR (`src/lib/geo-region.ts`, called from the root loader). **The toggle
+> stays** — and gained a third home on `/cost` — but its pick moved from
+> `localStorage` to a **cookie**, so the server honours it on the first byte
+> instead of correcting after mount. Precedence is now stored pick → geo-IP →
+> time zone → MY. See [`pricing.md` § "MY vs SG"](./pricing.md).
 
 `Country` (not `BillingCurrency`) is the state this hook manages — Kedaipal
 bills in a narrower currency set than a storefront can trade in

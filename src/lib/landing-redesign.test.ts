@@ -55,6 +55,10 @@ const NEW_KEYS = [
 	"proof_customer_count_label",
 	"book_demo_cta",
 	"demo_wa_message",
+	// The MY/SG toggle. Detection moved from a time-zone guess to Cloudflare's
+	// CF-IPCountry (31 Aug 2026), but the toggle stays on all three pricing
+	// surfaces: geo-IP is a guess about a person, and the override is what
+	// stops a wrong guess being a dead end. See docs/pricing.md.
 	"region_toggle_label",
 	"region_my",
 	"region_sg",
@@ -64,9 +68,10 @@ describe("landing redesign — Founding 10 off the landing page", () => {
 	it("removes every landing-only founding key from every locale", () => {
 		for (const [locale, catalog] of catalogs) {
 			for (const key of REMOVED_KEYS) {
-				expect(key in catalog, `${locale}.${key} should have been removed`).toBe(
-					false,
-				);
+				expect(
+					key in catalog,
+					`${locale}.${key} should have been removed`,
+				).toBe(false);
 			}
 		}
 	});
@@ -106,7 +111,9 @@ describe("landing redesign — new copy present in every locale", () => {
 			const message = catalog.demo_wa_message;
 			expect(message, locale).toBeTruthy();
 			const duplicates = Object.entries(catalog)
-				.filter(([key, value]) => key !== "demo_wa_message" && value === message)
+				.filter(
+					([key, value]) => key !== "demo_wa_message" && value === message,
+				)
 				.map(([key]) => `${locale}.${key}`);
 			expect(duplicates, duplicates.join(", ")).toEqual([]);
 		}

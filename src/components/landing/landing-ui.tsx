@@ -254,10 +254,17 @@ interface RegionToggleProps {
 }
 
 /**
- * MY/SG segmented toggle for the pricing teaser — overrides the time-zone
- * guess in `useLandingRegion` and persists the pick. Short "MY"/"SG" labels
- * keep the pill compact; the full country name rides `aria-label` per button
- * so a screen-reader user hears "Malaysia" / "Singapore", not two letters.
+ * MY/SG segmented toggle, on all three public pricing surfaces (landing
+ * teaser, `/pricing`, `/cost`) — overrides the region detected from the
+ * visitor's IP and persists the pick in a cookie, which then outranks
+ * detection on every later visit, server-side included (`lib/geo-region.ts`).
+ *
+ * Geo-IP is a guess about a person, and it is wrong often enough to matter —
+ * VPNs, corporate proxies, carrier NAT egressing in another country, and the
+ * JB commuter on a Singapore network. This control is what stops a wrong guess
+ * from being a dead end. Short "MY"/"SG" labels keep the pill compact; the
+ * full country name rides `aria-label` per button so a screen-reader user
+ * hears "Malaysia" / "Singapore", not two letters.
  */
 export function RegionToggle({ region, onChange, className }: RegionToggleProps) {
 	return (
