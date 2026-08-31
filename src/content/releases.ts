@@ -117,7 +117,11 @@ export type ReleaseIconName =
 	// the orders header, not a generic grid icon: an announcement whose tile
 	// matches the control the seller has to find is a shorter walk than one that
 	// merely decorates the row.
-	| "table";
+	| "table"
+	// Same reasoning as "table": the glyph the Calendar segment of the orders
+	// view switch actually uses (CalendarRange), so the booking announcements
+	// point at the control they are announcing.
+	| "calendar";
 
 export interface ReleaseEntry {
 	/**
@@ -159,6 +163,83 @@ export interface Release {
  * entry would make "everything newer than X" return the wrong set.
  */
 export const RELEASES: Release[] = [
+	{
+		version: "2026.09.1",
+		date: "2026-09-01",
+		// Earns the modal: a whole new way of selling — date-range bookings with
+		// approval, deposits, packages and a calendar — plus one change that
+		// touches EVERY seller (a cancellation now carries a reason to the
+		// buyer). A booking-capable seller who reads nothing keeps turning stays
+		// away in chat by hand; that is the exact workflow this release replaces.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Take bookings — guests pick dates, you approve or decline",
+				},
+				body: {
+					en: "If you rent out plots, rooms, gear or your time, create a booking listing: guests pick check-in and check-out on a calendar that already hides full or closed nights, and send you a request — nothing is charged and no dates are promised until you approve. Approving sends the usual confirmation with the payment link; declining asks you for a reason, which the guest sees word for word. A request you don't answer releases its dates on its own after 24 hours, and the order page counts that clock down for you.",
+				},
+				href: "/app/products/new",
+				hrefLabel: { en: "Create a booking listing" },
+				icon: "calendar",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "A month calendar for your stays — and two taps to close dates",
+				},
+				body: {
+					en: "Once you have a booking listing, the top of your orders page gains a Calendar view: a month grid showing how many spots are taken each night, with a tap on any day listing that night's stays. Tap \"Block days…\" and then a start and an end to close a range — the whole store or one listing, with a note for yourself. Blocking only stops new requests; any stay already on those dates stays exactly where it is.",
+				},
+				href: "/app/orders/calendar",
+				hrefLabel: { en: "Open the calendar" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Collect a refundable security deposit in the same payment",
+				},
+				body: {
+					en: "Set a deposit on a booking listing and it is stated on the listing page before anyone requests, carried as its own line on every total and receipt, and collected together with the stay in the one payment at approval. After check-out, the order page reminds you to return it — mark it returned in full, or keep part of it with a reason the guest sees. Deposits are held money, so they never count towards your revenue in Insights or a customer's spend.",
+				},
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Fixed-length packages and instant book",
+				},
+				body: {
+					en: "Selling a one-month pass or a fixed 3-day package instead of an open-ended stay? Give a booking listing a package length and one flat price — the guest just picks a start date. Turn on Instant book and the approval step disappears: the booking confirms the moment it's placed, with the confirmation sent straight away. Capacity is now optional too — leave it empty and there's no daily limit at all.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open your listings" },
+				icon: "package",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "See it all in Google Calendar",
+				},
+				body: {
+					en: "Stores with a booking listing get a new Bookings section in Settings, holding a private calendar link. Paste it into Google Calendar (Other calendars → From URL) and your stays, your blocked dates — and every other order you have due, deliveries and pickups included, with their times — appear alongside the rest of your life. Google refreshes it on its own schedule, usually within a day; your Kedaipal calendar is always live. The link is a secret — you can replace it any time if it leaks.",
+				},
+				href: "/app/settings?tab=bookings",
+				hrefLabel: { en: "Connect Google Calendar" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Cancelling an order now tells the buyer why",
+				},
+				body: {
+					en: "The cancel dialog asks for a reason and shows it on the buyer's order page, so nobody is left staring at a bare \"cancelled\". It's optional for everyday orders and required when you decline or cancel a booking — someone planned a trip around those dates. Cancelling several orders at once asks once and applies your reason to all of them. The reason is always visible to the buyer, so write it for them.",
+				},
+			},
+		],
+	},
 	{
 		version: "2026.08.3",
 		date: "2026-08-31",
