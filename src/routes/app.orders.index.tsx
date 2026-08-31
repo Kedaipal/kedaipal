@@ -72,6 +72,14 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
+import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	BOOKING_PERIODS,
+	type BookingPeriod,
+	describeBookingPeriod,
+	ENDING_SOON_DAYS,
+} from "../../convex/lib/bookingPeriod";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import {
@@ -157,6 +165,10 @@ type InboxSearch = {
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
 	asrc?: string[];
+	/** Booking periods to keep (S8) — "active", "ending_soon", "upcoming".
+	 * Repeated in the URL like `asrc`, so "who's on site right now" is a link a
+	 * seller can pin or send. */
+	period?: BookingPeriod[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
 	/** Card list vs table (86eyrtz74), both available at every width.
@@ -197,6 +209,15 @@ function isOrderStatusKey(x: unknown): x is OrderStatus {
 function toList(raw: unknown): unknown[] {
 	return Array.isArray(raw) ? raw : raw != null ? [raw] : [];
 }
+
+/** Why a seller would tap each booking-period chip — new vocabulary, so the
+ * chips explain themselves rather than relying on the label alone. */
+const PERIOD_HINTS: Record<(typeof BOOKING_PERIOD_CHIPS)[number], string> = {
+	active:
+		"Stays and memberships running right now — checked in, not yet checked out.",
+	ending_soon: `Active bookings finishing within ${ENDING_SOON_DAYS} days — the renewal and check-out list.`,
+	upcoming: "Booked, but not started yet.",
+};
 
 export const Route = createFileRoute("/app/orders/")({
 	// URL is the source of truth for what the seller is LOOKING AT — bucket,
@@ -240,6 +261,21 @@ export const Route = createFileRoute("/app/orders/")({
 			: asrcRaw != null
 				? [asrcRaw]
 				: [];
+		const periodRaw = search.period;
+		const periodArr = Array.isArray(periodRaw)
+			? periodRaw
+			: periodRaw != null
+				? [periodRaw]
+				: [];
+		// Narrowed against the real union, so a hand-edited or stale URL can't
+		// push a value the server would reject.
+		const period = [
+			...new Set(
+				periodArr.filter((x): x is BookingPeriod =>
+					BOOKING_PERIODS.includes(x as BookingPeriod),
+				),
+			),
+		];
 		const asrc = [
 			...new Set(
 				asrcArr.flatMap((x) => {
@@ -294,6 +330,7 @@ export const Route = createFileRoute("/app/orders/")({
 					? true
 					: undefined,
 			asrc: asrc.length > 0 ? asrc : undefined,
+			period: period.length > 0 ? period : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
 			// Both values survive (see InboxSearch.view) — absent means "the view
@@ -354,6 +391,7 @@ function OrdersRoute() {
 		method = [],
 		munspec = false,
 		asrc = [],
+		period = [],
 		from,
 		to,
 		mockup = false,
@@ -433,6 +471,7 @@ function OrdersRoute() {
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
+	const periodKey = period.join(",");
 	const sourcesKey = sources.join(",");
 	const stKey = st.join(",");
 	const catKey = cat.join(",");
@@ -455,6 +494,7 @@ function OrdersRoute() {
 		payKey,
 		methodKey,
 		asrcKey,
+		periodKey,
 		munspec,
 		from,
 		to,
@@ -521,6 +561,7 @@ function OrdersRoute() {
 							categories: cat.length > 0 ? cat : undefined,
 							categoriesUnspecified: catunspec || undefined,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
+							bookingPeriods: period.length > 0 ? period : undefined,
 							searchText: debounced || undefined,
 							// Pins keep their privilege in the live inbox AND in the
 							// export below — the two must send the same value or the CSV
@@ -835,6 +876,42 @@ function OrdersRoute() {
 		});
 	}
 
+	/**
+	 * Booking-period chips (S8). Shown only where they mean something: a store
+	 * with no booking listings gets no new chrome, and the query that answers
+	 * that is the same one the Calendar view is gated on.
+	 */
+	const showPeriodChips = hasBookingListings === true;
+
+	const periodCount = (key: BookingPeriod): number | undefined => {
+		if (!counts) return undefined;
+		if (key === "active") return counts.bookingActive;
+		if (key === "ending_soon") return counts.bookingEndingSoon;
+		if (key === "upcoming") return counts.bookingUpcoming;
+		return undefined;
+	};
+
+	function togglePeriod(next: BookingPeriod) {
+		navigate({
+			// `replace`, like every other multi-select chip — see toggleBucket.
+			replace: true,
+			search: (prev) => {
+				const has = period.includes(next);
+				const list = has ? period.filter((x) => x !== next) : [...period, next];
+				return { ...prev, period: list.length > 0 ? list : undefined };
+			},
+		});
+	}
+
+	/** The period line for one inbox row — null for anything that isn't a live
+	 * booking, so a product store's cards are byte-identical to before. */
+	const bookingRowLine = (o: {
+		bookingCheckIn?: number;
+		bookingCheckOut?: number;
+		bookingPackaged?: boolean;
+		status: string;
+	}): string | null => describeBookingPeriod(o);
+
 	const bucketCount = (key: InboxBucket): number | undefined => {
 		if (!counts) return undefined;
 		if (key === "all") return allCount;
@@ -1020,6 +1097,10 @@ function OrdersRoute() {
 					categories: cat.length > 0 ? cat : undefined,
 					categoriesUnspecified: catunspec || undefined,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
+					// The export MUST send this too, or "what the seller sees" and
+					// "what they export" diverge — the one invariant
+					// lib/orderInboxFilter.ts exists to hold.
+					bookingPeriods: period.length > 0 ? period : undefined,
 					searchText: debounced || undefined,
 					showPinned: showPinned || undefined,
 					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
@@ -1320,7 +1401,6 @@ function OrdersRoute() {
 						    outranking the filter. */}
 							{pinnedCount > 0 ? (
 								<FilterChip
-									tone="accent"
 									selected={showPinned}
 									onClick={() => setShowPinned(!showPinned)}
 									count={pinnedCount}
@@ -1362,6 +1442,33 @@ function OrdersRoute() {
 									</FilterChip>
 								);
 							})}
+							{/* Booking periods (S8) — LAST, after every workflow bucket.
+							    Two reasons, and the second is the one that decides it:
+							    they are a different DIMENSION (an Active booking is also
+							    In progress), so they must not sit inside the partition;
+							    and most sellers don't sell bookings at all, so a
+							    minority feature must not displace the buckets every
+							    seller navigates by. A leading divider marks the change
+							    of axis. Owner call, 1 Sep. */}
+							{showPeriodChips ? (
+								<>
+									<span
+										className="mx-0.5 h-5 w-px shrink-0 self-center bg-border"
+										aria-hidden
+									/>
+									{BOOKING_PERIOD_CHIPS.map((key) => (
+										<FilterChip
+											key={key}
+											selected={period.includes(key)}
+											onClick={() => togglePeriod(key)}
+											count={periodCount(key)}
+											title={PERIOD_HINTS[key]}
+										>
+											{BOOKING_PERIOD_LABELS[key]}
+										</FilterChip>
+									))}
+								</>
+							) : null}
 						</FilterChipRow>
 						{tableView ? (
 							<OrderColumnPicker
@@ -1480,6 +1587,7 @@ function OrdersRoute() {
 								const placedAt = formatOrderTimestamp(o.createdAt, now);
 								const age = formatStatusAge(now - o.createdAt);
 								const itemSummary = summarizeOrderCardItems(o.items);
+								const periodLine = bookingRowLine(o);
 								const cardInner = (
 									<div className="flex min-w-0 flex-1 flex-col">
 										{/* Name + money get the hierarchy. */}
@@ -1497,6 +1605,21 @@ function OrdersRoute() {
 										</div>
 										<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
 											<span className="font-mono">#{o.shortId}</span>
+											{/* The period, on the ROW (S8). Filtering to "Active now"
+										    and then getting rows that read like any other order is
+										    half the feature: the seller's next question is always
+										    "how long have they got". Shown on every booking row,
+										    not just while the chip is on — the answer is useful
+										    whenever a stay is in the list, and a badge that
+										    appears only under a filter teaches nothing. */}
+											{periodLine ? (
+												<>
+													<span aria-hidden="true">·</span>
+													<span className="font-semibold text-accent-emphasis">
+														{periodLine}
+													</span>
+												</>
+											) : null}
 											<span aria-hidden="true">·</span>
 											{/* Absolute placed-at datetime + relative age, so the seller
 										    reads "when" AND "how long ago" without opening the

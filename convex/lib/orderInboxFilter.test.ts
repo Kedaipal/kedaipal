@@ -4,6 +4,7 @@ import {
 	buildInboxPredicate,
 	compareInboxOrder,
 	type FilterableOrder,
+	narrowsTheInbox,
 	sortInboxOrders,
 } from "./orderInboxFilter";
 
@@ -616,5 +617,71 @@ describe("search matches both the stored value and the on-screen wording", () =>
 
 	test("still misses what the order genuinely is not", () => {
 		expect(buildInboxPredicate({ searchText: "counter" })(o)).toBe(false);
+	});
+});
+
+describe("buildInboxPredicate — booking period (S8)", () => {
+	const NOW = Date.UTC(2026, 8, 15, 6, 30);
+	const today = todayMytMidnight(NOW);
+	const DAY = 86_400_000;
+	const booking = (from: number, to: number, extra: Partial<FilterableOrder> = {}) =>
+		order({
+			status: "confirmed",
+			deliveryMethod: "booking",
+			bookingCheckIn: today + from * DAY,
+			bookingCheckOut: today + to * DAY,
+			...extra,
+		});
+
+	test("keeps only active bookings, and never a plain product order", () => {
+		const p = buildInboxPredicate({ bookingPeriods: ["active"] }, NOW);
+		expect(p(booking(-2, 3))).toBe(true);
+		expect(p(booking(2, 5))).toBe(false); // upcoming
+		expect(p(booking(-9, -2))).toBe(false); // ended
+		// The trap: a product order has no span, so "Active" must exclude it —
+		// otherwise the chip would keep the whole product inbox.
+		expect(p(order({ status: "confirmed" }))).toBe(false);
+	});
+
+	test("ANDs with the other dimensions rather than replacing them", () => {
+		// The reason this is a chip and not a bucket: an active booking is also
+		// `in_progress`, so the two compose.
+		const p = buildInboxPredicate(
+			{ bookingPeriods: ["active"], paymentStatuses: ["unpaid"] },
+			NOW,
+		);
+		expect(p(booking(-1, 4, { paymentStatus: "unpaid" }))).toBe(true);
+		expect(p(booking(-1, 4, { paymentStatus: "received" }))).toBe(false);
+		const withBucket = buildInboxPredicate(
+			{ bookingPeriods: ["active"], buckets: ["in_progress"] },
+			NOW,
+		);
+		expect(withBucket(booking(-1, 4))).toBe(true);
+	});
+
+	test("an empty period list filters nothing", () => {
+		const p = buildInboxPredicate({ bookingPeriods: [] }, NOW);
+		expect(p(order({ status: "confirmed" }))).toBe(true);
+	});
+
+	test("a pinned order still outranks the period filter", () => {
+		// Pin privilege short-circuits every rule; a new one must not be the
+		// exception that quietly breaks it.
+		const p = buildInboxPredicate(
+			{ bookingPeriods: ["active"], showPinned: true },
+			NOW,
+		);
+		expect(p(order({ status: "confirmed", pinnedAt: 1 }))).toBe(true);
+	});
+});
+
+describe("narrowsTheInbox — the Pro gate", () => {
+	test("booking periods do NOT trip it; every other filter does", () => {
+		// Booking is all-tier (S4 put the seller calendar outside this same
+		// gate). A store with a free calendar that must pay to ask "who is here
+		// right now" would be incoherent.
+		expect(narrowsTheInbox({ bookingPeriods: ["active"] })).toBe(false);
+		expect(narrowsTheInbox({ paymentStatuses: ["unpaid"] })).toBe(true);
+		expect(narrowsTheInbox({})).toBe(false);
 	});
 });

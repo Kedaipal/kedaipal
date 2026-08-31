@@ -51,6 +51,7 @@ import {
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import { assertWithinOpeningHours } from "./lib/openingHours";
+import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
 	countBookedPerNight,
 	holdsCapacity,
@@ -1946,6 +1947,13 @@ function bump(tally: Map<string, number>, key: string): void {
 	tally.set(key, (tally.get(key) ?? 0) + 1);
 }
 
+const bookingPeriodValidator = v.union(
+	v.literal("upcoming"),
+	v.literal("active"),
+	v.literal("ending_soon"),
+	v.literal("ended"),
+);
+
 // One workflow bucket, for the MULTI filter (86eyrtz74) — no "all" member:
 // "every bucket" is said by omitting the arg, not by a sentinel inside it.
 const orderBucketValidator = v.union(
@@ -1980,6 +1988,10 @@ export const searchOrders = query({
 		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
 		// real question one value couldn't ask. Empty/absent = every bucket.
 		buckets: v.optional(v.array(orderBucketValidator)),
+		// Booking period (S8) — a chip, NOT a bucket. See
+		// `bookingPeriods` in lib/orderInboxFilter.ts for why it can't be one.
+		// Empty/absent = no period filtering.
+		bookingPeriods: v.optional(v.array(bookingPeriodValidator)),
 		paymentStatuses: v.optional(
 			v.array(
 				v.union(
@@ -2056,6 +2068,7 @@ export const searchOrders = query({
 			retailerId,
 			bucket,
 			buckets,
+			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -2090,6 +2103,7 @@ export const searchOrders = query({
 		const filters = toInboxFilterArgs({
 			bucket,
 			buckets,
+			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -2131,6 +2145,19 @@ export const searchOrders = query({
 			unpaid: 0,
 			/** Sum of `total` across those unpaid open orders (RM outstanding). */
 			unpaidAmount: 0,
+			/**
+			 * Booking periods (S8) — how many stays/memberships are running now,
+			 * ending within the week, or still to start.
+			 *
+			 * Tallied over the FULL window like every other count, never the
+			 * filtered set: a chip whose number changes as you use it tells the
+			 * seller their bookings vanished. `endingSoon` is a SUBSET of `active`,
+			 * so the two deliberately do not sum — the chips read as "12 active, 3
+			 * of them ending this week", which is the sentence a seller wants.
+			 */
+			bookingActive: 0,
+			bookingEndingSoon: 0,
+			bookingUpcoming: 0,
 			/**
 			 * Packed + paid parcel orders waiting to go out (86eyp63mp) — the
 			 * one-click "print all despatch labels" queue. Computed here, over the
@@ -2188,6 +2215,9 @@ export const searchOrders = query({
 				counts.unpaid++;
 				counts.unpaidAmount += o.total;
 			}
+			if (matchesBookingPeriod(o, "active", now)) counts.bookingActive++;
+			if (matchesBookingPeriod(o, "ending_soon", now)) counts.bookingEndingSoon++;
+			if (matchesBookingPeriod(o, "upcoming", now)) counts.bookingUpcoming++;
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
 			bump(statusTally, o.status);
@@ -2208,7 +2238,10 @@ export const searchOrders = query({
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
 		// exact same rules (see lib/orderInboxFilter.ts).
-		const filtered = all.filter(buildInboxPredicate(filters));
+		// The SAME `now` the counts were tallied against — otherwise a request
+		// that straddles midnight could count a booking as active and then filter
+		// it out, and the chip's number wouldn't match its own list.
+		const filtered = all.filter(buildInboxPredicate(filters, now));
 		// Pinned first, then newest-created (the scan order) — the inbox's default
 		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
 		// over this stable window (the same `sortInboxOrders`), so toggling never
@@ -2283,6 +2316,10 @@ const exportFilterValidators = {
 	// Same widen-with-legacy shape as searchOrders — see the note there.
 	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
 	buckets: v.optional(v.array(orderBucketValidator)),
+	// The export honours the period chip too — the whole point of the shared
+	// predicate is that "what the seller sees" and "what they export" can't
+	// diverge.
+	bookingPeriods: v.optional(v.array(bookingPeriodValidator)),
 	paymentStatuses: v.optional(
 		v.array(
 			v.union(

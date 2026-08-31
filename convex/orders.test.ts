@@ -2926,6 +2926,12 @@ describe("orders — inbox search", () => {
 			readyToShip: 0,
 			// Nothing pinned (86eyrtz74 — pinning is covered below).
 			pinned: 0,
+			// No booking orders in this fixture (S8). The assertion is
+			// deliberately exhaustive: a new count field has to be accounted for
+			// here consciously, not absorbed silently.
+			bookingActive: 0,
+			bookingEndingSoon: 0,
+			bookingUpcoming: 0,
 		});
 		expect(all.total).toBe(4);
 
@@ -2976,6 +2982,62 @@ describe("orders — inbox search", () => {
 		});
 		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
 	});
+
+	/**
+	 * This test exists because the first build DIDN'T have it.
+	 *
+	 * `searchOrders` assembles its filter set from an EXPLICIT field list, not a
+	 * rest spread — so a new arg can be declared in the validator, sent by the
+	 * client and carried in the URL while the server silently drops it. The chip
+	 * rendered, its count was right, and clicking it changed nothing. Unit tests
+	 * on `buildInboxPredicate` cannot see that: the break is in the wiring
+	 * between the query and the predicate, which only an end-to-end query test
+	 * crosses.
+	 */
+	test("the booking period chip actually filters (S8)", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const plain = await mkOrder(t, retailer._id, productId, { name: "Plain" });
+		const active = await mkOrder(t, retailer._id, productId, {
+			name: "Staying",
+		});
+		const future = await mkOrder(t, retailer._id, productId, { name: "Later" });
+
+		const DAY = 86_400_000;
+		const today = todayMytMidnight();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(active._id, {
+				deliveryMethod: "booking",
+				bookingCheckIn: today - 2 * DAY,
+				bookingCheckOut: today + 3 * DAY,
+			});
+			await ctx.db.patch(future._id, {
+				deliveryMethod: "booking",
+				bookingCheckIn: today + 2 * DAY,
+				bookingCheckOut: today + 5 * DAY,
+			});
+		});
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			bookingPeriods: ["active"],
+		});
+		const ids = res.orders.map((o) => o._id);
+		expect(ids).toEqual([active._id]);
+		// A plain order has no span at all — it must not survive the filter,
+		// or the chip would keep the whole product inbox.
+		expect(ids).not.toContain(plain._id);
+		expect(ids).not.toContain(future._id);
+
+		// Counts are tallied over the FULL window, so they do NOT move when the
+		// chip is on — that is what makes the chip's own number trustworthy.
+		expect(res.counts.bookingActive).toBe(1);
+		expect(res.counts.bookingUpcoming).toBe(1);
+	});
+
 
 	test("omitting limit returns the full window; limit trims rows but keeps total/counts (stable-window pagination)", async () => {
 		const t = setup();
@@ -9160,3 +9222,4 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		expect(csv).toContain("Drinks");
 	});
 });
+

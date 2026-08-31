@@ -1090,3 +1090,94 @@ the bug.
 send every field, so it is safe today; the validator now says so, because a
 future partial caller would silently wipe a seller's package length,
 instant-book and deposit settings.
+
+## S8 — the "Active" period lens (`86eyqxb2q`)
+
+FS Fitness's second ask: *"sit at the gym and see who has paid."* The inbox
+already answered "who has paid" — payment-status filters and customer search
+were shipped long ago. What it could not answer was **"who is current"**: a
+member whose month started three weeks ago is buried in a fulfilment-date-sorted
+list, because their fulfilment date is their START date and by week three that
+is ancient history.
+
+### It is a CHIP, not the bucket the ticket asked for
+
+The ticket specified a new inbox bucket. It cannot be one, and the reason
+matters beyond this feature: **buckets are a partition.** `new | in_progress |
+completed | cancelled` — every order sits in exactly one, which is what makes
+the counts sum to the total and "All" mean something. "Active" is a different
+AXIS: an active booking is simultaneously `in_progress`. Adding it to that list
+would have made the buckets overlap and quietly broken both properties, and the
+seller would have met it as counts that no longer add up.
+
+As a chip it composes instead — with the buckets, and with the payment filter
+that answers the other half of the same question ("Active now" + "Unpaid" is
+literally the reception-desk query). Owner call, 1 Sep, before any code.
+
+### Shape
+
+`convex/lib/bookingPeriod.ts` is the pure authority: `active`, `ending_soon`,
+`upcoming`, `ended`, with `now` injected exactly as `matchesFulfilmentWindow`
+takes it, so the boundaries are unit-tested without freezing clocks.
+
+- **`ending_soon` is a SUBSET of `active`**, not a sibling. Multi-selects here OR
+  within themselves, so picking both is simply `active`. The alternative — a
+  separate boolean refinement — would be a second control for one idea.
+- **Boundaries follow the exclusive-`checkOut` rule** the vertical runs on: a
+  stay checking in TODAY is active; one checking out today is NOT (they left this
+  morning, and tonight belongs to the next guest). Both pinned by test.
+- **Two exclusions live in the predicate**, not in composition: an order with no
+  span never matches (otherwise "Active" would keep a store's entire product
+  inbox), and a cancelled booking never matches (declined and expired both land
+  there; the Cancelled bucket is how you reach them).
+- **`ended` exists but is not offered as a chip.** History is what Insights and
+  the customer record are for; a fourth chip would need someone to ask for it.
+
+### All-tier, deliberately
+
+`bookingPeriods` is excluded from `NARROWING_FILTER_KEYS`, so it does not trip
+the `orderInbox` Pro gate — joining `searchText` and `showPinned` as the
+exceptions. S4 put the seller calendar outside this same gate because booking is
+all-tier, and a store that gets a free calendar but must pay to ask "who is here
+right now" would be incoherent. It cannot be used to dodge the gate: a period
+only ever matches an order carrying a booking span, so on a product inbox it
+returns nothing.
+
+### Counts and the midnight trap
+
+The three counts (`bookingActive`, `bookingEndingSoon`, `bookingUpcoming`) are
+tallied over the FULL window like every other count, never the filtered set — a
+chip whose number moves as you use it tells the seller their bookings vanished.
+`endingSoon` is a subset of `active`, so the two deliberately **do not sum**;
+the chips read as "12 active, 3 of them ending this week".
+
+`buildInboxPredicate` now takes `now` and `searchOrders` passes the SAME value it
+tallied the counts against. Without that, a request straddling midnight could
+count a booking as active and then filter it out — the chip's number
+disagreeing with its own list.
+
+### Where the seller meets it
+
+- **Inbox chips, LAST in the row** — after every workflow bucket, behind a
+  divider that marks the change of axis, and visible only for stores with
+  booking listings (the same `hasBookingListings` query the Calendar view is
+  gated on). Each carries a `title` explaining why you'd tap it, because this is
+  new vocabulary.
+
+  Placement is an owner call (1 Sep) and it overrides the ticket, which said the
+  bucket should sit "right after New (urgency)". Two reasons: they are a
+  different DIMENSION so they must not sit inside the partition, and — the one
+  that decides it — **most sellers don't sell bookings at all**, so a minority
+  feature must not displace the buckets every seller navigates by. The first
+  build wedged them between Pinned and All, which read as chaos on a real
+  inbox.
+- **`?period=` in the URL**, repeated like `?asrc=`, narrowed against the real
+  union so a hand-edited link can't push a value the server rejects — so "who's
+  on site right now" is a link a seller can pin or send.
+- **The customer card** carries one line under the name — "Active · 3 days
+  left", "Starts in 4 days", "Ended 2 days ago" — derived from the orders that
+  page already loads, so it costs no extra query. A customer with several
+  bookings shows the active one (soonest-ending, if more than one), else the
+  soonest upcoming, else the most recently ended: the renewal conversation.
+- **The CSV export honours it**, via the shared predicate — the invariant
+  `lib/orderInboxFilter.ts` exists for.

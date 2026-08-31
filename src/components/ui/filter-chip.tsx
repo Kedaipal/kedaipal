@@ -6,10 +6,16 @@ import { cn } from "../../lib/utils";
  * customer sort, filter-sheet values). Replaces the hand-rolled chips that had
  * drifted into three different active styles.
  *
- * Two tones, chosen by what the chip selects:
- * - `primary` (navy solid) — exclusive view selection: buckets, sort, tabs-as-chips.
- * - `accent` (soft mint) — applied value filters (payment status, due window),
- *   where the chip reads as "this constraint is on", not "this is the view".
+ * Two tones, chosen by WHERE the chip lives — not by what it means, which was
+ * the older rule and drifted:
+ * - `primary` (navy solid) — the inbox CHIP ROW, all of it: buckets, pins,
+ *   booking periods, sort, tabs-as-chips. One row, one language. Meaning is
+ *   carried by the label, the count and the dividers between groups, never by
+ *   a second colour — a row that mixes navy and mint reads as two apps.
+ * - `accent` (soft mint) — chips INSIDE a filter panel or a settings card
+ *   (payment status, due window, fulfilment options), where the chip reads as
+ *   "this constraint is on" against a plain background and there is no navy
+ *   row for it to clash with.
  *
  * Always `rounded-full` and ≥40px tall (h-10) with a 44px hit area via padding —
  * pass `className="h-11"` where the chip is the row's only control.

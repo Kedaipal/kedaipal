@@ -5,6 +5,10 @@
 // docs/order-inbox.md + docs/invoices-receipts.md.
 
 import { attributionBucket } from "./attribution";
+import {
+	type BookingPeriod,
+	matchesAnyBookingPeriod,
+} from "./bookingPeriod";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
 import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
 import {
@@ -51,11 +55,19 @@ function searchHaystack(o: CsvOrder): string {
  * added without touching it (86eyrtz74) — a gate that quietly stops guarding is
  * worse than no gate, because nothing looks wrong.
  *
- * Excluded on purpose: `searchText` (blank is not a search) and `showPinned`,
- * which WIDENS the result and is all-tier because pinning is.
+ * Excluded on purpose: `searchText` (blank is not a search); `showPinned`,
+ * which WIDENS the result and is all-tier because pinning is; and
+ * `bookingPeriods`, all-tier because BOOKING is — S4 put the seller calendar
+ * deliberately outside this same gate, and a store that gets a free calendar
+ * but must pay to ask "who is here right now" is incoherent. It cannot be used
+ * to dodge the gate either: a period only ever matches an order carrying a
+ * booking span, so on a product inbox it returns nothing.
  */
 const NARROWING_FILTER_KEYS: Record<
-	Exclude<keyof InboxFilterArgs, "searchText" | "showPinned">,
+	Exclude<
+		keyof InboxFilterArgs,
+		"searchText" | "showPinned" | "bookingPeriods"
+	>,
 	true
 > = {
 	buckets: true,
@@ -172,6 +184,22 @@ export type InboxFilterArgs = {
 	// (storefront vs counter vs claim link), this one is where the buyer came
 	// FROM. Empty or undefined = no attribution filtering.
 	attributionSources?: string[];
+	/**
+	 * Where a booking sits in TIME (S8) — active, ending soon, upcoming, ended.
+	 * MULTI-select, OR within itself and AND with the rest.
+	 *
+	 * A separate DIMENSION from `buckets`, and that separation is the reason
+	 * this is a chip rather than the inbox bucket the ticket asked for: buckets
+	 * partition the inbox (every order in exactly one, so counts sum and
+	 * "select all" is unambiguous) while an active booking is simultaneously
+	 * `in_progress`. Adding it there would have made buckets overlap and
+	 * quietly broken both properties.
+	 *
+	 * Non-bookings and cancelled bookings never match — see
+	 * `matchesBookingPeriod` for why those exclusions live in the predicate
+	 * rather than being left to compose.
+	 */
+	bookingPeriods?: BookingPeriod[];
 	searchText?: string;
 	/**
 	 * Pin privilege (86eyrtz74). When true, a PINNED order is kept even if it
@@ -205,6 +233,12 @@ export type FilterableOrder = CsvOrder & {
 	confirmationPushStatus?: string;
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
+	/** Booking span (S8) — the period filter's inputs. Deliberately NOT on
+	 * `CsvOrder`: the inbox filters on these, the table and the export don't
+	 * render them, and widening the column registry for a filter would put a
+	 * column on every seller's export to serve a chip. */
+	bookingCheckIn?: number;
+	bookingCheckOut?: number;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -219,6 +253,10 @@ export function needsMockup(mockupStatus: string | undefined): boolean {
  */
 export function buildInboxPredicate(
 	args: InboxFilterArgs,
+	/** Sampled ONCE per build, not per order: a list evaluated across midnight
+	 * must not classify its first rows against one day and its last against the
+	 * next. Injected for the same reason `matchesFulfilmentWindow` takes it. */
+	now: number = Date.now(),
 ): (o: FilterableOrder) => boolean {
 	const term = (args.searchText ?? "").trim().toLowerCase();
 	const digits = term.replace(/\D/g, "");
@@ -250,6 +288,10 @@ export function buildInboxPredicate(
 		args.sources && args.sources.length > 0
 			? new Set<string>(args.sources)
 			: null;
+	const periodList =
+		args.bookingPeriods && args.bookingPeriods.length > 0
+			? args.bookingPeriods
+			: null;
 	const pinPrivilege = args.showPinned === true;
 	return (o) => {
 		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
@@ -277,6 +319,11 @@ export function buildInboxPredicate(
 		// reports with (attribution.ts), so a row in the by-source breakdown and
 		// the inbox it drills into can never disagree about which orders count.
 		if (attributionSet && !attributionSet.has(attributionBucket(o)))
+			return false;
+		// Booking period (S8). Placed with the other membership tests rather
+		// than the date arms below: those ask about `createdAt`/`fulfilmentDate`
+		// on any order, this one only ever means something for a booking.
+		if (periodList && !matchesAnyBookingPeriod(o, periodList, now))
 			return false;
 		// Undefined paymentStatus reads as "unpaid".
 		if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
