@@ -229,12 +229,18 @@ export const COMPETITOR_MONTHLY_RANGE: Record<
 };
 
 /**
- * "Less than X a day" — the Starter price divided across a month and rounded
- * UP, so the claim is always true (RM79/mo → RM3, S$29/mo → S$1). Derived, so
- * it can never contradict the tier card beside it.
+ * "Less than X a day" — the Starter price spread across a month. Derived, so
+ * the claim can never contradict the tier card beside it (RM79/mo → RM3,
+ * S$29/mo → S$1).
+ *
+ * `floor + 1`, not `ceil`: at a price that divides evenly (RM90 → exactly 3)
+ * `ceil` returns the daily rate itself and "less than RM3 a day" becomes
+ * false. Strictly-true beats tightest-possible for a public claim — the cost
+ * is one unit of slack on prices that divide by 30, and neither of today's
+ * does.
  */
 export function starterPricePerDay(currency: BillingCurrency): number {
-	return Math.ceil(PLAN_MONTHLY_PRICES[currency].starter / 100 / 30);
+	return Math.floor(PLAN_MONTHLY_PRICES[currency].starter / 100 / 30) + 1;
 }
 
 // Annual billing = 10 months paid, 12 received (~17% off), per CLAUDE.md.

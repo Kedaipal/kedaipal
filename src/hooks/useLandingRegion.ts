@@ -1,5 +1,5 @@
 import { useRouterState } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Country, DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	parseRegionCookie,
@@ -34,12 +34,22 @@ function readTimeZoneCountry(): Country | null {
  * The stored pick as the CLIENT sees it. The server reads the same cookie in
  * the root loader, so this normally agrees with what was already rendered —
  * it matters on a client-side navigation, where the loader doesn't re-run.
+ *
+ * Never throws, matching `parseRegionCookie`'s contract: `decodeURIComponent`
+ * raises `URIError` on a malformed escape (`kp_landing_region=%`), and this
+ * runs inside an effect on every public page, so one hand-edited cookie would
+ * otherwise take the landing page down.
  */
 export function readStoredRegion(cookieHeader: string): Country | null {
 	for (const part of cookieHeader.split(";")) {
 		const [name, ...rest] = part.split("=");
 		if (name?.trim() !== REGION_COOKIE) continue;
-		return parseRegionCookie(decodeURIComponent(rest.join("=")));
+		const raw = rest.join("=");
+		try {
+			return parseRegionCookie(decodeURIComponent(raw));
+		} catch {
+			return null;
+		}
 	}
 	return null;
 }
@@ -101,13 +111,24 @@ export function useLandingRegion(): [Country, (next: Country) => void] {
 	const [region, setRegionState] = useState<Country>(
 		() => server ?? DEFAULT_COUNTRY,
 	);
+	/**
+	 * The server's answer is remembered, because it can be taken away.
+	 * `router.invalidate()` — the retry button in `route-error.tsx` — re-runs
+	 * the root loader on the CLIENT, where `readVisitorRegion` has no request
+	 * and answers `null`. Re-resolving from that would drop a header-detected
+	 * SG visitor with no cookie back to the time-zone guess, flipping the page
+	 * to RM on an error retry. A fact the server established doesn't stop
+	 * being true because we asked again in the wrong place.
+	 */
+	const lastServerAnswer = useRef<Country | null>(server);
 
 	useEffect(() => {
 		// Only reachable on the client, where `document` and `Intl` exist.
+		if (server) lastServerAnswer.current = server;
 		setRegionState(
 			resolveLandingRegion({
 				stored: readStoredRegion(document.cookie),
-				server,
+				server: lastServerAnswer.current,
 				timeZone: readTimeZoneCountry(),
 			}),
 		);

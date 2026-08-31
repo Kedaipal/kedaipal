@@ -58,7 +58,11 @@ render matches the server's — no RM→S$ flicker, and hydration cannot mismatc
 | `XX`, `T1` | `null` | Cloudflare's "unplaceable IP" and Tor. Present but meaningless, so they must not read as a vote for Malaysia. |
 
 `useLandingRegion()` (`src/hooks/useLandingRegion.ts`) returns
-`[Country, setRegion]`. The time-zone heuristic survives **only** as the
+`[Country, setRegion]`. It **remembers the server's answer rather than
+re-deriving it**, because `router.invalidate()` — the retry button in
+`route-error.tsx` — re-runs the root loader on the *client*, where
+`readVisitorRegion` has no request and answers `null`. Without that, a
+header-detected SG visitor with no cookie would flip to RM on an error retry. The time-zone heuristic survives **only** as the
 fallback where neither cookie nor header answered — `vite dev`, `wrangler dev`,
 any non-Cloudflare origin — which is also what keeps the SG path exercisable
 locally. It is not a co-signal: a time zone is a device setting, and the case
@@ -83,9 +87,12 @@ first-party, no PII, no tracking — so it needs no consent banner. Not
 value degrades to detection (`parseRegionCookie`) rather than becoming a third
 state.
 
-Both parsers are pure and tested. Note the deliberate asymmetry: the **header**
-is normalized case-insensitively (Cloudflare's, not ours), the **cookie** is
-case-sensitive (we write it, so a lowercase value means something else did).
+Both parsers are pure, total and tested — `readStoredRegion` catches
+`decodeURIComponent`'s `URIError` too, since it runs in an effect on every
+public page and a hand-edited `kp_landing_region=%` would otherwise take the
+landing page down. Note the deliberate asymmetry: the **header** is normalized
+case-insensitively (Cloudflare's, not ours), the **cookie** is case-sensitive
+(we write it, so a lowercase value means something else did).
 
 ### Copy may not name a currency
 
@@ -135,6 +142,15 @@ then each slider they move) and derives the rest, because the region can resolve
 region's defaults, entered ones are `clampInputs`-fitted into the new slider's
 range. Pure derivation — no effect, no ref.
 
+> The subtle part, and the one that broke in review of PR #238: `update` merges
+> the patch into the **entered** set, never into the derived one. Spreading the
+> derived `inputs` folds the current region's defaults in as if the visitor had
+> typed them, so one nudge of the orders slider freezes an untouched RM 35
+> basket and a switch to SG reads it as S$ 35 instead of re-seeding to S$ 15 —
+> inflating missed revenue ~2.3× on the SG framing. `onInputsChange` still
+> receives the full derived object, because the URL mirror wants every param.
+> Pinned by `cost-calculator.test.tsx`.
+
 The share params carry bare numbers with no currency, so a link built in
 Malaysia and opened in Singapore reinterprets `aov=35` as S$35. Deliberate: a
 region baked into the link would outlive the share, and the toggle sits directly
@@ -152,8 +168,11 @@ Marked `UNCONFIRMED` in `convex/lib/plans.ts`, both following the tier ratio
 - `COMPETITOR_MONTHLY_RANGE.SGD` — S$80–200 (vs RM200–500), the landing
   anchor's comparison band.
 
-`starterPricePerDay()` rounds **up**, so "less than S$1 a day" can never
-contradict the tier card beside it.
+`starterPricePerDay()` is `floor + 1`, not `ceil`: at a price that divides
+evenly (RM90 → exactly 3) `ceil` returns the daily rate itself and "less than
+RM3 a day" becomes false. Strictly-true beats tightest-possible for a public
+claim; the cost is one unit of slack on prices divisible by 30, and neither of
+today's is.
 
 ## The three public tiers
 

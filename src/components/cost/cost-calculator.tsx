@@ -126,9 +126,14 @@ export function CostCalculator({
 	);
 
 	const update = (patch: Partial<CostInputs>) => {
-		const next = { ...inputs, ...patch };
-		setEntered(next);
-		onInputsChange?.(next);
+		// Merge into the ENTERED set, never into the derived one. Spreading
+		// `inputs` here would fold this region's defaults in as if the visitor
+		// had typed them, so one nudge of the orders slider would freeze an
+		// untouched RM 35 basket in place and a switch to SG would read it as
+		// S$ 35 instead of re-seeding to the S$ 15 default.
+		setEntered((prev) => ({ ...prev, ...patch }));
+		// The URL mirror wants the full picture, defaults included.
+		onInputsChange?.({ ...inputs, ...patch });
 	};
 
 	const supportWa = useSupportWaNumber();

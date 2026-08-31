@@ -39,6 +39,17 @@ describe("readStoredRegion — the toggle's cookie, client side", () => {
 		expect(readStoredRegion("kp_landing_region=sg")).toBeNull();
 	});
 
+	it("survives a malformed percent-escape instead of throwing", () => {
+		// `decodeURIComponent("%")` raises URIError, and this runs inside an
+		// effect on every public page — one hand-edited cookie would otherwise
+		// take the landing page down.
+		expect(() => readStoredRegion("kp_landing_region=%")).not.toThrow();
+		expect(readStoredRegion("kp_landing_region=%")).toBeNull();
+		expect(readStoredRegion("kp_landing_region=%E0%A4%A")).toBeNull();
+		// A correctly-escaped value still decodes.
+		expect(readStoredRegion("kp_landing_region=%53%47")).toBe("SG");
+	});
+
 	it("does not match a cookie whose name merely ends with ours", () => {
 		expect(readStoredRegion("x_kp_landing_region=SG")).toBeNull();
 	});
