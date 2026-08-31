@@ -45,11 +45,16 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
+	DAY_MS,
 	hhmmFromMinutes,
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import { assertWithinOpeningHours } from "./lib/openingHours";
+import {
+	countBookedPerNight,
+	holdsCapacity,
+} from "./lib/bookingAvailability";
 import {
 	collectMinQuantityShortfalls,
 	type MinRuleItem,
@@ -81,11 +86,13 @@ import {
 } from "./lib/orderClaims";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 import {
+	CANCELLATION_NOTE_MAX,
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
 	isCollectionGateClosed,
 	isMockupGateClosed,
+	revenueExcludingDeposit,
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
 import { normalizeTrackingToken } from "./lib/trackingToken";
@@ -155,7 +162,7 @@ export const addressValidator = v.object({
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
-const MAX_CUSTOMER_NOTE = 500;
+export const MAX_CUSTOMER_NOTE = 500;
 const SHORT_ID_RETRIES = 3;
 // Up to 5 mockup images per order (designs/angles, or one per item in a
 // multi-part custom order) — mirrors the product-image cap. See docs/proof-approval.md.
@@ -357,8 +364,15 @@ export function buildPickupSnapshot(
 	};
 }
 
+/** Every status an order can BE — the read side: filters, the status column's
+ * picker, exports. Includes `booking_requested`, which is a real state a
+ * seller filters for (it's what the New bucket surfaces on a booking store);
+ * omitting it would make the status filter unable to express the one state
+ * unique to bookings. Writes use `transitionStatusValidator` below, which
+ * deliberately excludes it — nothing may transition INTO a request. */
 const statusValidator = v.union(
 	v.literal("pending"),
+	v.literal("booking_requested"),
 	v.literal("confirmed"),
 	v.literal("packed"),
 	v.literal("shipped"),
@@ -1392,6 +1406,15 @@ export const countActionable = query({
 // `locale` so the client resolver (src/lib/orderStatus.ts) has everything to
 // render relabelled stages. See docs/order-status-customization.md.
 export type OrderWithStatusLabels = Doc<"orders"> & {
+	// Booking capacity context (S3) — SELLER path only, for the approve card's
+	// "N of M sites already booked those nights" line. Never on the buyer/token
+	// path: per-night counts don't cross the public wire (locked).
+	bookingContext?: {
+		/** Absent = unlimited capacity (S7) — no denominator to show. */
+		capacityPerNight?: number;
+		peakOtherBookings: number;
+		nights: number;
+	};
 	statusLabels?: StatusLabels;
 	// Phase 2: the retailer's configured stages (undefined => buyer/seller
 	// resolve the synthesized defaults from statusLabels). Drives the tracking
@@ -1407,6 +1430,9 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
+	// The storefront slug — the tracking page's way back to the store (the
+	// declined/expired booking cards link "Try different dates" there).
+	retailerSlug?: string;
 	retailerWaPhone?: string;
 	// The shared Kedaipal checkout number (same resolution as the storefront's
 	// getRetailerBySlug), included ONLY while the order is still `pending`: it
@@ -1528,10 +1554,51 @@ export const get = query({
 				};
 			}
 		}
+		// Booking capacity context (S3) — seller path only: "how full are those
+		// nights already?" is what makes an informed approve, and it's exactly
+		// the count the availability module keeps. Excludes THIS order's own
+		// hold (it occupies every night of its own stay), so the line reads
+		// "3 of 5 sites already booked", never a self-inflated 4. Never on the
+		// buyer path — per-night counts don't cross the public wire (locked).
+		let bookingContext:
+			| {
+					capacityPerNight?: number;
+					peakOtherBookings: number;
+					nights: number;
+			  }
+			| undefined;
+		if (
+			!isBuyerRead &&
+			order.deliveryMethod === "booking" &&
+			order.bookingProductId !== undefined &&
+			order.bookingCheckIn !== undefined &&
+			order.bookingCheckOut !== undefined
+		) {
+			const listing = await ctx.db.get(order.bookingProductId);
+			const counts = await countBookedPerNight(
+				ctx,
+				order.bookingProductId,
+				order.bookingCheckIn,
+				order.bookingCheckOut,
+			);
+			const ownHold = holdsCapacity(order.status) ? 1 : 0;
+			let peak = 0;
+			for (const count of counts.values()) {
+				peak = Math.max(peak, count - ownHold);
+			}
+			bookingContext = {
+				capacityPerNight: listing?.booking?.capacityPerNight,
+				peakOtherBookings: peak,
+				nights: Math.round(
+					(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+				),
+			};
+		}
 		return {
 			...order,
 			podImageUrls,
 			collectionRider,
+			bookingContext,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -1544,6 +1611,7 @@ export const get = query({
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
+			retailerSlug: retailer?.slug,
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the
 			// shared-number chat: pending = the legacy manual/auto Send card; a
@@ -2302,6 +2370,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		mockupQuotedAmount: o.mockupQuotedAmount,
 		pickupFee: o.pickupFee,
 		deliveryFee: o.deliveryFee,
+		securityDeposit: o.securityDeposit,
 		deliveryFeePending: o.deliveryFeePending,
 		total: o.total,
 		currency: o.currency,
@@ -2402,7 +2471,7 @@ async function assertExportAccess(
  * access descriptor so mutations can attribute admin-on-behalf writes. Throws
  * "Order not found" / "Forbidden" to match the pre-existing inline checks.
  */
-async function requireOrderAccess(
+export async function requireOrderAccess(
 	ctx: QueryCtx | MutationCtx,
 	orderId: Id<"orders">,
 ): Promise<{ order: Doc<"orders">; access: RetailerAccess }> {
@@ -2601,7 +2670,7 @@ async function reverseCancellationEffects(
 	if (order.customerId) {
 		await decrementAggregatesForCancel(ctx, {
 			customerId: order.customerId,
-			orderTotal: order.total,
+			orderTotal: revenueExcludingDeposit(order),
 		});
 	}
 
@@ -2840,11 +2909,51 @@ export const setPinned = mutation({
 	},
 });
 
+/**
+ * The buyer-visible cancellation reason (86eyn4kcn follow-up). REQUIRED when
+ * cancelling a BOOKING — declined and cancelled are the same event to a guest
+ * who has planned around the dates, and the decline path has always demanded
+ * one, so cancel demanding one is a consistency fix, not new friction.
+ * Optional on ordinary orders, where cancel is high-frequency (test rows,
+ * spam, the buyer changed their mind) and a forced reason would be friction
+ * for no gain. Returns the trimmed note to store, or undefined.
+ */
+function resolveCancellationNote(
+	order: Doc<"orders">,
+	note: string | undefined,
+): string | undefined {
+	const trimmed = note?.trim() ?? "";
+	if (trimmed.length > CANCELLATION_NOTE_MAX) {
+		throw new ConvexError(
+			`Keep the reason under ${CANCELLATION_NOTE_MAX} characters`,
+		);
+	}
+	if (trimmed.length === 0) {
+		if (order.deliveryMethod === "booking") {
+			// Names the order. On a BULK cancel the whole batch rolls back
+			// atomically (deliberate — a half-applied cancel is worse than none),
+			// so a seller who selected mostly ordinary orders needs to know which
+			// one in the selection demanded a reason. Without the id they'd be
+			// left re-picking rows to find the booking.
+			throw new ConvexError(
+				`${order.shortId} is a booking — add a short reason, which the guest sees with the cancellation`,
+			);
+		}
+		return undefined;
+	}
+	return trimmed;
+}
+
 export const updateStatus = mutation({
 	args: {
 		orderId: v.id("orders"),
 		status: transitionStatusValidator,
 		note: v.optional(v.string()),
+		// Buyer-visible reason for a cancellation, in the seller's own words.
+		// Required when cancelling a booking (see resolveCancellationNote);
+		// ignored for every other transition. NOT the same as `note`, which is
+		// the internal timeline entry.
+		cancellationNote: v.optional(v.string()),
 		// Shipment tracking — only accepted when transitioning to "shipped".
 		// Ignored for other status transitions. A registry courier + number
 		// auto-derives carrierTrackingUrl (convex/lib/couriers.ts).
@@ -2861,6 +2970,7 @@ export const updateStatus = mutation({
 			orderId,
 			status,
 			note,
+			cancellationNote,
 			carrierTrackingUrl,
 			courierName,
 			trackingNo,
@@ -2868,6 +2978,16 @@ export const updateStatus = mutation({
 		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+
+		// Booking-request gate (86eyj70z1): a request's only exits are the
+		// approve/decline mutations (which fire the one confirmation + payment
+		// ask) — or cancel. A raw forward transition would confirm the booking
+		// while sending the guest nothing, stranding the whole payment flow.
+		if (order.status === "booking_requested" && status !== "cancelled") {
+			throw new ConvexError(
+				"This is a booking request — approve or decline it from the order page instead",
+			);
+		}
 
 		// Mockup gate: a proof-required order can't move into production (packed)
 		// until the buyer has approved the mockup or the seller has waived it.
@@ -2904,6 +3024,15 @@ export const updateStatus = mutation({
 			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
+		// Stamped BEFORE the transition so the buyer's page never renders a
+		// cancelled order with the reason still missing (the bookingResolution
+		// ordering rule, same reason).
+		if (status === "cancelled") {
+			const resolved = resolveCancellationNote(order, cancellationNote);
+			if (resolved !== undefined) {
+				await ctx.db.patch(order._id, { cancellationNote: resolved });
+			}
+		}
 		await applyStatusTransition(ctx, order, status, {
 			note,
 			carrierTrackingUrl,
@@ -2925,10 +3054,14 @@ export const bulkUpdateStatus = mutation({
 	args: {
 		orderIds: v.array(v.id("orders")),
 		status: transitionStatusValidator,
+		// ONE reason for the whole selection (the inbox prompts once). Applied
+		// to every order the batch actually cancels; the same booking rule
+		// applies per order, so a batch containing a booking needs it.
+		cancellationNote: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ orderIds, status },
+		{ orderIds, status, cancellationNote },
 	): Promise<{
 		updated: number;
 		skipped: number;
@@ -2976,6 +3109,12 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
+			// A booking request only exits via approve/decline (or cancel) — bulk
+			// skips it rather than confirming a stay with no guest message.
+			if (order.status === "booking_requested" && status !== "cancelled") {
+				skipped++;
+				continue;
+			}
 			if (status === "packed" && isMockupGateClosed(order)) {
 				skipped++;
 				continue;
@@ -3003,6 +3142,12 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				skippedRiderManaged++;
 				continue;
+			}
+			if (status === "cancelled") {
+				const resolved = resolveCancellationNote(order, cancellationNote);
+				if (resolved !== undefined) {
+					await ctx.db.patch(order._id, { cancellationNote: resolved });
+				}
 			}
 			await applyStatusTransition(ctx, order, status);
 			updated++;
@@ -3216,13 +3361,27 @@ export const advanceToStage = mutation({
 		if (order.status === "cancelled") {
 			throw new ConvexError("A cancelled order can't be advanced.");
 		}
+		// Booking-request gate (86eyj70z1): the stepper never advances a request —
+		// approve/decline are its only doors, so the guest always gets the one
+		// confirmation + payment ask.
+		if (order.status === "booking_requested") {
+			throw new ConvexError(
+				"This is a booking request — approve or decline it from the order page instead",
+			);
+		}
 
 		const stages = resolveStages({
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
 			deliveryMethod:
-				(order.deliveryMethod as "delivery" | "self_collect" | undefined) ??
-				"delivery",
+				(order.deliveryMethod as
+					| "delivery"
+					| "self_collect"
+					| "booking"
+					| undefined) ?? "delivery",
+			// A fixed-length package's milestones are Active/Ended, not
+			// Checked In/Checked Out — the stepper's button copy comes from here.
+			bookingPackaged: order.bookingPackaged,
 		});
 		const stage = stages.find((s) => s.id === stageId);
 		if (!stage) throw new ConvexError("Unknown stage for this order.");
@@ -4779,7 +4938,7 @@ export const declineMockupItem = mutation({
 			if (order.status !== "cancelled" && order.customerId)
 				await decrementAggregatesForCancel(ctx, {
 					customerId: order.customerId,
-					orderTotal: order.total,
+					orderTotal: revenueExcludingDeposit(order),
 				});
 			// Un-meter on the first transition into cancelled (mirrors
 			// applyStatusTransition — this cancel path bypasses that helper).

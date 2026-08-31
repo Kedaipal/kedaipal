@@ -1693,7 +1693,7 @@ export function CheckoutPage({
 /** One numbered decision card — the antidote to the old unsectioned field
  *  wall. `step` is omitted for the optional note (it's not part of the
  *  sequence a buyer must complete). */
-function CheckoutSection({
+export function CheckoutSection({
 	step,
 	title,
 	children,
