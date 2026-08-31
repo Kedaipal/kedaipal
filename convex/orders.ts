@@ -2930,8 +2930,13 @@ function resolveCancellationNote(
 	}
 	if (trimmed.length === 0) {
 		if (order.deliveryMethod === "booking") {
+			// Names the order. On a BULK cancel the whole batch rolls back
+			// atomically (deliberate — a half-applied cancel is worse than none),
+			// so a seller who selected mostly ordinary orders needs to know which
+			// one in the selection demanded a reason. Without the id they'd be
+			// left re-picking rows to find the booking.
 			throw new ConvexError(
-				"Add a short reason — the guest sees it with the cancellation",
+				`${order.shortId} is a booking — add a short reason, which the guest sees with the cancellation`,
 			);
 		}
 		return undefined;

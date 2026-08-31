@@ -1048,3 +1048,45 @@ one place the day/night equivalence is asserted, so no caller has to remember
 it, and `asPackageUnit()` narrows the `<select>` value in one place — the old
 inline `=== "day" ? "day" : "month"` ternary would have silently collapsed any
 third option back to "month" in whichever dropdown someone forgot to update.
+
+### PR #242 review — the look-back bound, a third time (1 Sep)
+
+**The ICS feed had its own hand-rolled scan, and it was wrong.** Caught in
+review, and the same defect a third time: `feedByToken`'s booking pass looked
+back `MAX_BOOKING_NIGHTS` (30 — the *free-range* cap) while a fixed-length
+package runs to `MAX_PACKAGE_DAYS` (366). The feed window opens at today−90d,
+so a 6-month member **fell out of the seller's Google Calendar around month
+five**, still active and still paying. The comment beside it claimed "same
+bounded index scan as the availability module", which was false, and the
+`by_booking_product` comment in `schema.ts` still advertised the 30-night bound
+as though it were the rule.
+
+Routed through `bookingsOverlapping()` like every other caller. It also brings
+the overlap filter this copy never had, so stays that ended before the window
+stop being emitted at all. The schema comment now names
+`MAX_BOOKING_SPAN_DAYS` and says out loud that `bookingsOverlapping` is the only
+place allowed to spell the look-back.
+
+The lesson isn't "check the feed" — it's that extracting a shared function does
+nothing for callers you don't go and find. Three greps for
+`by_booking_product` would have found all three copies the first time.
+
+**The regression test had to be mutation-tested to be worth anything.** The
+first version backdated a stay to −100 days and passed *against the bug*: the
+look-back is measured from the WINDOW START (today−90d), not from today, so a
+30-day reach still covers today−120d. −150 is genuinely outside it. A test that
+cannot fail is worse than no test, because it reports safety.
+
+**`maxPackageQuantity` capped months with a 31-day worst case**, so 12 × 31 =
+372 > 366 and a 1-month listing capped at ELEVEN — a member could not buy a full
+year in one booking, contradicting the comment beside `MAX_PACKAGE_QUANTITY`.
+Twelve *calendar* months span at most 366 days, which is exactly
+`MAX_PACKAGE_DAYS`, so months are now bounded by `MAX_PACKAGE_MONTHS` and the
+span invariant still holds. The test now asserts the **real** span across every
+start date in a leap year rather than re-encoding the approximation that caused
+the bug.
+
+**`products.update` replaces the whole `booking` object.** Both callers always
+send every field, so it is safe today; the validator now says so, because a
+future partial caller would silently wipe a seller's package length,
+instant-book and deposit settings.

@@ -16,8 +16,8 @@ import { query } from "./_generated/server";
 import { internalQuery, mutation } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import {
+	bookingsOverlapping,
 	loadBlocksForWindow,
-	MAX_BOOKING_NIGHTS,
 } from "./lib/bookingAvailability";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import {
@@ -187,30 +187,28 @@ export const feedByToken = internalQuery({
 
 		const events: IcsEvent[] = [];
 		for (const listing of listings) {
-			// Same bounded index scan as the availability module: check-ins from
-			// `from − max stay` can still overlap the window.
-			const holders = await ctx.db
-				.query("orders")
-				.withIndex("by_booking_product", (q) =>
-					q
-						.eq("bookingProductId", listing._id)
-						.gte("bookingCheckIn", from - MAX_BOOKING_NIGHTS * DAY_MS)
-						.lt("bookingCheckIn", to),
-				)
-				.collect();
+			// THE shared bounded scan — never a hand-rolled look-back here.
+			//
+			// This copy was the THIRD instance of the same defect: it looked back
+			// `MAX_BOOKING_NIGHTS` (30, the free-range cap) while a fixed-length
+			// package runs to `MAX_PACKAGE_DAYS` (366). With the feed window
+			// opening at today−90d, a 6-month member simply fell out of the
+			// seller's Google Calendar around month five — still active, still
+			// paying, invisible. `bookingsOverlapping` also brings the overlap
+			// filter this copy never had, so stays that ended before the window
+			// stop being emitted at all.
+			const holders = await bookingsOverlapping(ctx, listing._id, from, to);
 			for (const order of holders) {
-				if (order.status === "cancelled") continue;
+				// `holdsCapacity` already dropped cancelled, and every row it
+				// returns has both dates defined. A still-pending REQUEST is the
+				// one extra exclusion: it self-destructs on a 24h clock, and
+				// Google refreshes about daily, so it would mostly be dead noise.
 				if (order.status === "booking_requested") continue;
-				if (
-					order.bookingCheckIn === undefined ||
-					order.bookingCheckOut === undefined
-				)
-					continue;
 				events.push({
 					uid: `booking-${order.shortId}`,
 					summary: `${order.customer.name?.trim() || "Guest"} — ${listing.name}`,
-					start: order.bookingCheckIn,
-					endExclusive: order.bookingCheckOut,
+					start: order.bookingCheckIn as number,
+					endExclusive: order.bookingCheckOut as number,
 					createdAt: order.createdAt,
 					url: orderUrl(order.shortId),
 				});

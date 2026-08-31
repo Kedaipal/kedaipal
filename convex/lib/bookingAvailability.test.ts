@@ -139,12 +139,25 @@ describe("multi-package terms (buying N packages in one booking)", () => {
 		expect(maxPackageQuantity(monthly)).toBeLessThanOrEqual(
 			MAX_PACKAGE_QUANTITY,
 		);
-		const worstCaseDays = maxPackageQuantity(monthly) * 31;
-		expect(worstCaseDays).toBeLessThanOrEqual(MAX_BOOKING_SPAN_DAYS);
+		// The invariant is the REAL calendar span, not a 31-day approximation of
+		// it — that approximation is what wrongly capped a monthly listing at 11
+		// and stopped a member buying a full year. Twelve calendar months are at
+		// most 366 days (leap), which is exactly the bound, so check the actual
+		// worst case: every start date across a leap year.
+		const maxMonths = maxPackageQuantity(monthly);
+		expect(maxMonths).toBe(12);
+		let worstSpanDays = 0;
+		for (let d = 0; d < 366; d++) {
+			const start = Date.UTC(2027, 0, 1) - MYT_OFFSET_MS + d * DAY_MS;
+			const end = addMytCalendarMonths(start, maxMonths);
+			worstSpanDays = Math.max(worstSpanDays, Math.round((end - start) / DAY_MS));
+		}
+		expect(worstSpanDays).toBeLessThanOrEqual(MAX_BOOKING_SPAN_DAYS);
 
-		// A 6-month package can only be taken twice before it would outrun a year.
+		// A 6-month package can be taken twice — that is a full year, and a year
+		// is the documented ceiling.
 		expect(maxPackageQuantity({ packageLength: 6, packageUnit: "month" })).toBe(
-			1,
+			2,
 		);
 		// A 2-day deal is capped by the plain quantity ceiling, not the span.
 		expect(maxPackageQuantity(twoDay)).toBe(MAX_PACKAGE_QUANTITY);

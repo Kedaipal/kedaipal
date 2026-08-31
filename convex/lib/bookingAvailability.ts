@@ -29,6 +29,7 @@ import {
 import {
 	isMonthlyUnit,
 	MAX_PACKAGE_DAYS,
+	MAX_PACKAGE_MONTHS,
 	type PackageUnit,
 } from "./productKind";
 
@@ -359,13 +360,18 @@ export function maxPackageQuantity(
 ): number {
 	const length = booking?.packageLength;
 	if (length === undefined || length <= 0) return 1;
-	// A month is at most 31 days, so bound the term by the worst case rather
-	// than by a specific start date — the cap must not depend on when the
-	// buyer happens to start.
-	const daysPerPackage = isMonthlyUnit(booking?.packageUnit)
-		? length * 31
-		: length;
-	const bySpan = Math.floor(MAX_PACKAGE_DAYS / daysPerPackage);
+	// Months are capped in MONTHS, not by a 31-day worst case.
+	//
+	// The 31-day approximation was over-conservative in a way that broke the
+	// stated promise: 12 × 31 = 372 > MAX_PACKAGE_DAYS, so a 1-month listing
+	// capped at ELEVEN and a member couldn't buy a full year in one booking —
+	// contradicting the comment on MAX_PACKAGE_QUANTITY right above. Twelve
+	// CALENDAR months span at most 366 days (a leap year), which is exactly
+	// MAX_PACKAGE_DAYS, so bounding months by MAX_PACKAGE_MONTHS keeps the
+	// span invariant intact and lets the annual membership through.
+	const bySpan = isMonthlyUnit(booking?.packageUnit)
+		? Math.floor(MAX_PACKAGE_MONTHS / length)
+		: Math.floor(MAX_PACKAGE_DAYS / length);
 	return Math.max(1, Math.min(MAX_PACKAGE_QUANTITY, bySpan));
 }
 

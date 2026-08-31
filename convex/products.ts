@@ -901,11 +901,18 @@ export const update = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
-		// Per-night capacity edit for a BOOKING listing. The kind itself is
-		// immutable (no kind arg here, by design); capacity is the one booking
-		// knob a seller re-tunes. Rejected on non-booking products. A lowered
-		// capacity never cancels existing bookings (86eyj70z1 edge case) — the
-		// availability module simply stops taking new requests past it.
+		// Booking config edit. The kind itself is immutable (no kind arg here,
+		// by design); capacity, package length, instant-book and the deposit are
+		// the knobs a seller re-tunes. Rejected on non-booking products. A
+		// lowered capacity never cancels existing bookings (86eyj70z1 edge case)
+		// — the availability module simply stops taking new requests past it.
+		//
+		// WHOLE-OBJECT REPLACE, not a merge: sending `{ capacityPerNight: 5 }`
+		// clears `packageLength`, `packageUnit`, `autoAccept` and
+		// `securityDeposit`. Both callers (the full form and the wizard) always
+		// send every field, so this is safe today — but a future partial caller
+		// would silently wipe a seller's package and instant-book settings.
+		// Send the complete object, or change this to merge first.
 		booking: v.optional(
 			v.object({
 				// Unset = unlimited (S7) — a gym has no daily member cap.

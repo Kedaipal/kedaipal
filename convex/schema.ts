@@ -1601,10 +1601,14 @@ export default defineSchema({
 		// by the field's present-means-live contract above.
 		.index("by_payment_due", ["paymentDueAt"])
 		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"])
-		// Capacity scan (booking kind): bookings of one listing whose stay
+		// Booking scan (booking kind): bookings of one listing whose stay
 		// overlaps a window. checkIn is the range key — the scan reads
-		// [windowStart − MAX_BOOKING_NIGHTS, windowEnd) and filters the overlap
-		// in memory, so it's bounded by the max stay length, never the table.
+		// [windowStart − MAX_BOOKING_SPAN_DAYS, windowEnd) and filters the
+		// overlap in memory, so it's bounded by the longest span any booking can
+		// have, never the table. That bound is the MAX over every shape (a
+		// free-range stay AND a fixed-length package), not the 30-night stay cap
+		// — read it through `bookingsOverlapping()`, which is the only caller
+		// allowed to spell the look-back out.
 		.index("by_booking_product", ["bookingProductId", "bookingCheckIn"])
 		// Expiry cron (booking kind): un-actioned requests older than the
 		// approval window. Equality on status + the implicit _creationTime range

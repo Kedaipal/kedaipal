@@ -334,3 +334,99 @@ describe("calendarFeed — every order, not just bookings", () => {
 		expect(feed).not.toContain(`UID:order-${shortId}@kedaipal.com`);
 	});
 });
+
+describe("calendarFeed look-back bound", () => {
+	/**
+	 * Place an existing booking's stay in the PAST. `requestBooking` rightly
+	 * refuses a past check-in, but the look-back bound is a property of the READ
+	 * path, so the row is moved directly — that's the state the feed has to cope
+	 * with the day after any long stay starts.
+	 */
+	async function backdate(
+		t: ReturnType<typeof convexTest>,
+		shortId: string,
+		checkIn: number,
+		checkOut: number,
+	) {
+		await t.run(async (ctx) => {
+			// `t.run`'s ctx is untyped against the app schema, so this reads the
+			// table plainly rather than through `by_shortId`. One row either way
+			// in a test store.
+			const rows = await ctx.db.query("orders").collect();
+			const order = rows.find((r) => r.shortId === shortId);
+			if (!order) throw new Error("order missing");
+			await ctx.db.patch(order._id, {
+				bookingCheckIn: checkIn,
+				bookingCheckOut: checkOut,
+				fulfilmentDate: checkIn,
+			});
+		});
+	}
+
+	test("a long package still in progress stays in the feed", async () => {
+		// The PR-review catch, and the THIRD instance of one defect: this scan
+		// looked back MAX_BOOKING_NIGHTS (30 — the free-range cap) while a
+		// fixed-length package runs to MAX_PACKAGE_DAYS (366). The feed window
+		// opens at today−90d, so an FS Fitness member on a 6-month package fell
+		// out of the seller's Google Calendar around month five, while still
+		// active and still paying.
+		const ctx = await seedBookingStore(setup());
+		const order = await requestAndGet(ctx, {
+			checkIn: day(3),
+			checkOut: day(5),
+			name: "Hafiz Long",
+			phone: "0123456799",
+		});
+		await ctx.asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		// The reviewer's literal example: a 6-month member, five months in.
+		//
+		// The number matters and −100 would NOT have caught this. The look-back
+		// is measured from the WINDOW START (today−90d), not from today, so a
+		// 30-day look-back still reaches today−120d. A stay starting −100 sits
+		// inside that and is found either way — the test would pass against the
+		// bug. −150 is genuinely outside it, and mutation-testing the guard is
+		// what surfaced the difference.
+		await backdate(ctx.t, order.shortId, day(-150), day(31));
+
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) throw new Error("feed missing");
+		expect(feed).toContain(`UID:booking-${order.shortId}@kedaipal.com`);
+		expect(feed).toContain("Hafiz Long");
+	});
+
+	test("a stay that ended before the window is not emitted", async () => {
+		// The hand-rolled copy had no overlap filter at all, so anything whose
+		// check-in landed in the scanned range was emitted even when the stay was
+		// long over. The shared scan brings that filter with it.
+		const ctx = await seedBookingStore(setup());
+		const order = await requestAndGet(ctx, {
+			checkIn: day(3),
+			checkOut: day(5),
+			name: "Long Gone",
+			phone: "0123456798",
+		});
+		await ctx.asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		// Two nights ending ~118 days ago — before the feed's past window opens.
+		await backdate(ctx.t, order.shortId, day(-120), day(-118));
+
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) throw new Error("feed missing");
+		expect(feed).not.toContain("Long Gone");
+	});
+});
