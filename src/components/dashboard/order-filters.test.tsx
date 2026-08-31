@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	INBOX_BUCKETS,
+	statusToBucket,
+} from "../../../convex/lib/orderBuckets";
 import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import {
 	activeFilterCount,
@@ -33,6 +37,7 @@ const EMPTY: Pick<
 	| "statuses"
 	| "categories"
 	| "categoriesUnspecified"
+	| "bookingPeriods"
 > = {
 	payment: [],
 	method: [],
@@ -42,6 +47,7 @@ const EMPTY: Pick<
 	statuses: [],
 	categories: [],
 	categoriesUnspecified: false,
+	bookingPeriods: [],
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -76,6 +82,7 @@ describe("OrderFilters", () => {
 				payment: ["unpaid", "received"],
 				method: ["cash"],
 				methodUnspecified: true,
+				bookingPeriods: [],
 				from: 1,
 				to: 2,
 				mockup: true,
@@ -603,5 +610,40 @@ describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
 		expect(
 			screen.queryByRole("button", { name: optionNamed("PayNow") }),
 		).toBeNull();
+	});
+});
+
+describe("STATUS is grouped by bucket, and nothing falls out", () => {
+	/**
+	 * The panel now renders the six statuses under their bucket headings, so the
+	 * chip row ("In progress") and the panel ("Ok go", "Packed", "Ready for
+	 * Pickup") visibly describe the same axis. Grouping introduces a way to LOSE
+	 * a row: any status whose bucket isn't in `INBOX_BUCKETS` renders nowhere,
+	 * silently. This pins the covering.
+	 */
+	it("every offered status lands in exactly one listed bucket", () => {
+		const bucketKeys = INBOX_BUCKETS.map((b) => b.key);
+		const seen = new Map<string, number>();
+		for (const st of ORDER_STATUS_KEYS) {
+			const bucket = statusToBucket(st);
+			expect(bucketKeys).toContain(bucket);
+			seen.set(st, (seen.get(st) ?? 0) + 1);
+		}
+		// Rendering walks buckets × statuses, so a status matching two buckets
+		// would appear twice. One each, no more.
+		expect([...seen.values()].every((n) => n === 1)).toBe(true);
+		expect(seen.size).toBe(ORDER_STATUS_KEYS.length);
+	});
+
+	it("reproduces the mapping the seller was confused by", () => {
+		// Three buckets are 1:1 with a status, which is why they look like they
+		// match; `in_progress` bundles three, which is why "Ok go" appeared to be
+		// missing from the pills. It is not — it is inside In progress.
+		expect(statusToBucket("pending")).toBe("new");
+		expect(statusToBucket("delivered")).toBe("completed");
+		expect(statusToBucket("cancelled")).toBe("cancelled");
+		expect(
+			(["confirmed", "packed", "shipped"] as const).map(statusToBucket),
+		).toEqual(["in_progress", "in_progress", "in_progress"]);
 	});
 });

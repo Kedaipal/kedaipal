@@ -1181,3 +1181,16 @@ disagreeing with its own list.
   soonest upcoming, else the most recently ended: the renewal conversation.
 - **The CSV export honours it**, via the shared predicate — the invariant
   `lib/orderInboxFilter.ts` exists for.
+- **The filter panel reflects it** — the active-filter badge counts it, it
+  appears as a removable token in the panel's summary, "Clear all" clears it,
+  and it has its own section (gated on `hasBookingListings` like the chips).
+  The chips stay the primary control; the panel exists so the count, the
+  summary and the clear all tell the truth. `bookingPeriods` is a REQUIRED
+  field on `OrderFilterValue` for exactly this reason — it made
+  `clearedFilters()` fail to compile until it was handled, where an optional
+  field would have shipped a "Clear all" that silently left the chips on.
+- **Chip tone: navy, like the buckets.** They were built mint (the component's
+  old rule said "accent = an applied constraint") and that read as two apps in
+  one row. `Pinned` stays the single mint chip — pinning is the seller's own
+  mark on an order rather than a category the app computed, so it is meant to
+  stand apart (owner call, 1 Sep). `filter-chip.tsx` now says so.

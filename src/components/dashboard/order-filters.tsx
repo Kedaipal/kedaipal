@@ -16,9 +16,18 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
+import {
+	INBOX_BUCKETS,
+	statusToBucket,
+} from "../../../convex/lib/orderBuckets";
 import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import { cn } from "../../lib/utils";
 import { BulkSelectRow } from "../ui/bulk-select-row";
+import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+} from "../../../convex/lib/bookingPeriod";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { FilterOptionRow } from "../ui/filter-option-row";
@@ -94,6 +103,13 @@ export interface OrderFilterValue {
 	 * SURFACE rather than where the buyer came from.
 	 */
 	attributionSources: string[];
+	/**
+	 * Booking periods (S8). The chips in the inbox row are the primary control,
+	 * but the panel has to KNOW about them: it owns the active-filter badge and
+	 * "Clear all (N)", so a filter the panel can't see is one it silently lies
+	 * about and refuses to clear.
+	 */
+	bookingPeriods: BookingPeriod[];
 }
 
 export function activeFilterCount(v: OrderFilterValue): number {
@@ -111,7 +127,8 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		v.statuses.length +
 		v.categories.length +
 		(v.categoriesUnspecified ? 1 : 0) +
-		v.attributionSources.length
+		v.attributionSources.length +
+		v.bookingPeriods.length
 	);
 }
 
@@ -208,6 +225,20 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, categoriesUnspecified: false }),
 		});
 	}
+	// Booking periods (S8) — removable in place, like every other active
+	// filter. The chips in the inbox row toggle the same value, so clearing a
+	// token here turns its chip off; without this the summary would claim the
+	// list was unfiltered while three chips were lit.
+	for (const period of v.bookingPeriods) {
+		tokens.push({
+			key: `period-${period}`,
+			label: BOOKING_PERIOD_LABELS[period],
+			clear: (x) => ({
+				...x,
+				bookingPeriods: x.bookingPeriods.filter((y) => y !== period),
+			}),
+		});
+	}
 	for (const src of v.sources) {
 		tokens.push({
 			key: `source-${src}`,
@@ -287,6 +318,7 @@ export function clearedFilters(): OrderFilterValue {
 		categories: [],
 		categoriesUnspecified: false,
 		attributionSources: [],
+		bookingPeriods: [],
 	};
 }
 
@@ -348,9 +380,19 @@ export function OrderFilters({
 	facets,
 	mockupCount,
 	resultCount,
+	showBookingPeriods = false,
+	bookingPeriodCounts,
 }: {
 	value: OrderFilterValue;
 	onChange: (next: OrderFilterValue) => void;
+	/** Does this store sell bookings? Gates the Booking-period section, the
+	 * same way `hasBookingListings` gates the chips and the Calendar view — a
+	 * product-only seller never sees a section that could only ever match
+	 * nothing. */
+	showBookingPeriods?: boolean;
+	/** Per-period totals over the full window, for the option rows — the same
+	 * numbers the chips carry, so the two surfaces can't disagree. */
+	bookingPeriodCounts?: Partial<Record<BookingPeriod, number>>;
 	/** The store's country — decides which settlement rails are offered
 	 * (SG has no DuitNow/TnG/FPX; MY has no PayNow). See lib/paymentMethod.ts. */
 	country: Country;
@@ -564,22 +606,46 @@ export function OrderFilters({
 											})
 										}
 									>
-										{ORDER_STATUS_KEYS.map((st) => (
-											<FilterOptionRow
-												key={st}
-												label={statusLabel?.(st) ?? st}
-												count={facets?.status[st] ?? 0}
-												selected={value.statuses.includes(st)}
-												onToggle={() =>
-													onChange({
-														...value,
-														statuses: value.statuses.includes(st)
-															? value.statuses.filter((x) => x !== st)
-															: [...value.statuses, st],
-													})
-												}
-											/>
-										))}
+										{/* GROUPED BY BUCKET, not a flat six.
+										    The chip row above shows the same axis at a coarser
+										    grain, in the SYSTEM's words ("In progress"), while
+										    these rows carry the SELLER's own renames ("Ok go").
+										    Flat, that made statuses look like a second, unrelated
+										    system — "why is Ok go nowhere in the pills?" — when
+										    Ok go simply lives inside In progress along with two
+										    others. The heading is the missing sentence, and it
+										    comes from `statusToBucket`, the same function the
+										    chips count through, so the grouping can never drift
+										    from the buckets it claims to explain. */}
+										{INBOX_BUCKETS.map((bucket) => {
+											const inBucket = ORDER_STATUS_KEYS.filter(
+												(st) => statusToBucket(st) === bucket.key,
+											);
+											if (inBucket.length === 0) return null;
+											return (
+												<div key={bucket.key} className="flex flex-col">
+													<span className="px-1 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+														{bucket.label}
+													</span>
+													{inBucket.map((st) => (
+														<FilterOptionRow
+															key={st}
+															label={statusLabel?.(st) ?? st}
+															count={facets?.status[st] ?? 0}
+															selected={value.statuses.includes(st)}
+															onToggle={() =>
+																onChange({
+																	...value,
+																	statuses: value.statuses.includes(st)
+																		? value.statuses.filter((x) => x !== st)
+																		: [...value.statuses, st],
+																})
+															}
+														/>
+													))}
+												</div>
+											);
+										})}
 									</FilterSection>
 
 									<FilterSection
@@ -707,6 +773,42 @@ export function OrderFilters({
 													})
 												}
 											/>
+										</FilterSection>
+									) : null}
+
+									{/* Booking period — rendered only for stores that sell
+								    bookings, matching the chips. The chips stay the primary
+								    control (they are one tap from the list); this section
+								    exists so the panel's count, its summary and "Clear all"
+								    tell the truth. */}
+									{showBookingPeriods ? (
+										<FilterSection
+											title="Booking period"
+											selected={value.bookingPeriods.length}
+											total={BOOKING_PERIOD_CHIPS.length}
+											onToggleAll={(all) =>
+												onChange({
+													...value,
+													bookingPeriods: all ? [...BOOKING_PERIOD_CHIPS] : [],
+												})
+											}
+										>
+											{BOOKING_PERIOD_CHIPS.map((key) => (
+												<FilterOptionRow
+													key={key}
+													label={BOOKING_PERIOD_LABELS[key]}
+													count={bookingPeriodCounts?.[key] ?? 0}
+													selected={value.bookingPeriods.includes(key)}
+													onToggle={() =>
+														onChange({
+															...value,
+															bookingPeriods: value.bookingPeriods.includes(key)
+																? value.bookingPeriods.filter((x) => x !== key)
+																: [...value.bookingPeriods, key],
+														})
+													}
+												/>
+											))}
 										</FilterSection>
 									) : null}
 

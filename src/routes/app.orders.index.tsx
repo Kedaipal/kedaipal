@@ -865,6 +865,11 @@ function OrdersRoute() {
 					next.attributionSources.length > 0
 						? next.attributionSources
 						: undefined,
+				// Without this, the panel's "Clear all" would spread `...prev` over a
+				// key it never sets and leave the period chips stuck on — a clear that
+				// doesn't clear.
+				period:
+					next.bookingPeriods.length > 0 ? next.bookingPeriods : undefined,
 				sources: next.sources.length > 0 ? next.sources : undefined,
 				st:
 					next.statuses.length > 0
@@ -1370,6 +1375,7 @@ function OrdersRoute() {
 								categories: cat,
 								categoriesUnspecified: catunspec,
 								attributionSources: asrc,
+								bookingPeriods: period,
 							}}
 							onChange={setFilters}
 							country={retailer.country}
@@ -1401,6 +1407,7 @@ function OrdersRoute() {
 						    outranking the filter. */}
 							{pinnedCount > 0 ? (
 								<FilterChip
+									tone="accent"
 									selected={showPinned}
 									onClick={() => setShowPinned(!showPinned)}
 									count={pinnedCount}
