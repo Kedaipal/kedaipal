@@ -17,7 +17,7 @@
 
 /** Malaysia is UTC+8 year-round (no daylight saving). */
 export const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Hard ceiling on how far ahead a buyer can schedule (v1, hardcoded). */
 export const MAX_NOTICE_DAYS = 30;
@@ -359,4 +359,29 @@ export function formatFulfilmentDateTime(
 	const date = formatFulfilmentDate(epoch, opts);
 	if (timeMinutes === undefined) return date;
 	return `${date} · ${formatFulfilmentTime(timeMinutes)}`;
+}
+
+/**
+ * Add whole CALENDAR months to an MYT-midnight date, clamping to the target
+ * month's length. "Join the 12th, renew the 12th" — what a monthly membership
+ * means to the person buying it, and what a rolling 30 days never gives
+ * (30 days from 1 Jan ends on the 30th; from 1 Feb it spills into March, so
+ * the renewal date walks through the year).
+ *
+ * Clamping is the whole subtlety: 31 Jan + 1 month is 28 Feb (29 in a leap
+ * year), not 3 March. `Date.UTC` handles the year rollover for month > 11.
+ */
+export function addMytCalendarMonths(epoch: number, months: number): number {
+	const d = new Date(epoch + MYT_OFFSET_MS);
+	const year = d.getUTCFullYear();
+	const month = d.getUTCMonth();
+	const day = d.getUTCDate();
+	// Day 0 of the following month = the last day of the target month.
+	const lastDayOfTarget = new Date(
+		Date.UTC(year, month + months + 1, 0),
+	).getUTCDate();
+	return (
+		Date.UTC(year, month + months, Math.min(day, lastDayOfTarget)) -
+		MYT_OFFSET_MS
+	);
 }

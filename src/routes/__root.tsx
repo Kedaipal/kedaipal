@@ -11,15 +11,28 @@ import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { ConvexProvider } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
+import type { Country } from "../../convex/lib/country";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
 import { isBuyerRouteId } from "../lib/buyer-routes";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
+import { readVisitorRegion } from "../lib/geo-region";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
+	/**
+	 * The visitor's region — their stored `RegionToggle` pick if they have one,
+	 * otherwise Cloudflare's `CF-IPCountry` — read once at SSR and dehydrated
+	 * into the HTML, so the public pricing surfaces paint the right currency on
+	 * the first byte and hydration cannot mismatch. It lives on the ROOT route because three surfaces need it
+	 * (`/`, `/pricing`, `/cost`) and the root loader does not re-run on
+	 * client-side navigation, so a visitor pays for this exactly once. The read
+	 * is a header lookup — no I/O — so authenticated `/app` renders that never
+	 * use it are not measurably slower for carrying it.
+	 */
+	loader: (): { region: Country | null } => ({ region: readVisitorRegion() }),
 	head: () => ({
 		meta: [
 			{ charSet: "utf-8" },

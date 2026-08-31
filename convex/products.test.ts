@@ -2334,3 +2334,186 @@ describe("orderedAt is seller-only", () => {
 		);
 	});
 });
+
+/**
+ * Product kind + booking config (booking bundle S1, ClickUp 86eyn4kap; spec
+ * 86eyj70z1). Kind is a vocabulary/question router stored minimally — and the
+ * kind ⟷ booking-config pairing is enforced both directions so a booking
+ * listing can never exist without availability semantics, nor capacity sit
+ * dead on a product that will never read it.
+ */
+describe("product kind + booking config", () => {
+	test("booking create stores kind + capacity; physical stays unset", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const bookingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		const listing = await asA.query(api.products.get, {
+			productId: bookingId,
+		});
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking).toEqual({ capacityPerNight: 5 });
+
+		// "physical" is the DEFAULT spelling — stored as unset so pre-kind and
+		// post-kind rows read identically (minQuantity's 0-normalizes posture).
+		const physicalId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Tent 2P plain" }),
+			kind: "physical" as const,
+		});
+		const physical = await asA.query(api.products.get, {
+			productId: physicalId,
+		});
+		expect(physical?.kind).toBeUndefined();
+		expect(physical?.booking).toBeUndefined();
+	});
+
+	test("security deposit: stored in sen, 0 normalizes to unset, bad values refused (S5)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Hilltop Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 2, securityDeposit: 10_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBe(10_000);
+		// 0 clears — "no deposit" has one spelling (sanitizeFee posture).
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 2, securityDeposit: 0 },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBeUndefined();
+		// Non-integer / negative / over the RM10k ceiling: refused.
+		for (const bad of [10.5, -1, 1_000_001]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { capacityPerNight: 2, securityDeposit: bad },
+				}),
+			).rejects.toThrow(/RM 0 and RM 10,000/);
+		}
+	});
+
+	test("package length + instant book + unlimited capacity round-trip (S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Monthly Gym Pass" }),
+			kind: "booking" as const,
+			// No capacity at all — a gym has no daily member cap.
+			booking: { packageLength: 30, autoAccept: true },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+		expect(listing?.booking?.packageLength).toBe(30);
+		expect(listing?.booking?.autoAccept).toBe(true);
+
+		// 0 clears the package back to a free-range stay; false clears instant book.
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 5, packageLength: 0, autoAccept: false },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.packageLength).toBeUndefined();
+		expect(listing?.booking?.autoAccept).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+
+		for (const bad of [10.5, -1, 400]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { packageLength: bad },
+				}),
+			).rejects.toThrow(/Package length/);
+		}
+	});
+
+	test("booking kind without its settings object is refused (capacity itself is optional since S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The kind ⟷ config pairing still holds both directions...
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				kind: "booking" as const,
+			}),
+		).rejects.toThrow(/booking settings/);
+		// ...but an EMPTY settings object is valid: no capacity = unlimited (S7),
+		// the shape a gym selling memberships needs.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Unlimited listing" }),
+			kind: "booking" as const,
+			booking: {},
+		});
+		const listing = await asA.query(api.products.get, { productId: id });
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+	});
+
+	test("capacity on a non-booking product is refused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				booking: { capacityPerNight: 3 },
+			}),
+		).rejects.toThrow(/Booking kind/);
+	});
+
+	test("capacity is a whole number between 1 and 100", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		for (const capacityPerNight of [0, 101, 2.5]) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id),
+					kind: "booking" as const,
+					booking: { capacityPerNight },
+				}),
+			).rejects.toThrow(/whole number between 1 and 100/);
+		}
+	});
+
+	test("update re-tunes capacity on a booking listing only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const bookingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		await asA.mutation(api.products.update, {
+			productId: bookingId,
+			booking: { capacityPerNight: 8 },
+		});
+		const listing = await asA.query(api.products.get, {
+			productId: bookingId,
+		});
+		expect(listing?.booking).toEqual({ capacityPerNight: 8 });
+
+		// A physical product refuses the knob — capacity can't be parked on a
+		// row that will never read it.
+		const physicalId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P plain" }),
+		);
+		await expect(
+			asA.mutation(api.products.update, {
+				productId: physicalId,
+				booking: { capacityPerNight: 3 },
+			}),
+		).rejects.toThrow(/booking listing/);
+	});
+});

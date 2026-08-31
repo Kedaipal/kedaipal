@@ -176,6 +176,11 @@ export type CsvOrder = {
 	/** Frozen delivery charge (minor units) — same "0.00 never blank" rule as
 	 * pickupFee so the totals identity sums. */
 	deliveryFee?: number;
+	/** Refundable booking security deposit (minor units, S5) — same "0.00 never
+	 * blank" rule as the other money columns. HELD money, not revenue: it sits
+	 * inside `total`, so a bookkeeper subtracts this column to reconcile
+	 * against Insights, which already excludes it. */
+	securityDeposit?: number;
 	/** True while the delivery charge is still unquoted: `total` is provisional
 	 * and understates the final bill. Without this column the Total column lies
 	 * with no way to tell which rows are affected. */
@@ -254,6 +259,7 @@ export type OrderColumnKey =
 	| "customWork"
 	| "pickupFee"
 	| "deliveryFee"
+	| "securityDeposit"
 	| "total"
 	| "currency"
 	| "feePending"
@@ -663,6 +669,15 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		width: 116,
 		value: (o) => csvAmount(o.deliveryFee ?? 0),
 		sortKey: (o) => o.deliveryFee ?? 0,
+	},
+	{
+		key: "securityDeposit",
+		label: "Security deposit",
+		group: "money",
+		numeric: true,
+		width: 132,
+		value: (o) => csvAmount(o.securityDeposit ?? 0),
+		sortKey: (o) => o.securityDeposit ?? 0,
 	},
 	{
 		key: "total",

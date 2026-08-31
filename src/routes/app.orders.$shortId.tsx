@@ -4,6 +4,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
 import {
 	ArrowLeft,
+	CalendarRange,
 	ArrowRight,
 	BadgeCheck,
 	Ban,
@@ -31,7 +32,21 @@ import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
-import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
+import { describeBookingSpan } from "../lib/booking-dates";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	formatFulfilmentTime,
+} from "../../convex/lib/fulfilmentDate";
+import {
+	BookingRequestCard,
+	BookingResolutionNote,
+} from "../components/order/booking-request-card";
+import {
+	OrderItemLine,
+	type OrderBookingSpan,
+} from "../components/order/order-item-line";
+import { SecurityDepositCard } from "../components/order/security-deposit-card";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
@@ -111,6 +126,30 @@ import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
 import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
+/**
+ * The fulfilment card's one-line summary of a booking. A fixed-length package
+ * (S7, frozen `bookingPackageDays`) reads as a validity window in DAYS; a
+ * free-range stay reads as check-in → check-out in NIGHTS.
+ */
+function bookingFulfilmentLine(order: {
+	bookingCheckIn?: number;
+	bookingCheckOut?: number;
+	bookingPackageDays?: number;
+}): string {
+	if (order.bookingCheckIn === undefined || order.bookingCheckOut === undefined)
+		return "Booking";
+	const span = Math.round(
+		(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+	);
+	const isPackage = order.bookingPackageDays !== undefined;
+	const unit = isPackage ? "day" : "night";
+	return `Booking · ${span} ${unit}${span === 1 ? "" : "s"} · ${describeBookingSpan(
+		order.bookingCheckIn,
+		order.bookingCheckOut,
+		{ isPackage, format: formatFulfilmentDate },
+	)}`;
+}
+
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
 });
@@ -174,7 +213,9 @@ function OrderDetailSkeleton() {
 	);
 }
 
-type DeliveryMethod = "delivery" | "self_collect";
+// Local mirror of the shared union (src/lib/orderStatus.ts) — a route-level
+// alias so the file reads standalone.
+type DeliveryMethod = "delivery" | "self_collect" | "booking";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -309,6 +350,16 @@ function OrderDetailRoute() {
 	const itemImageUrls = useQuery(
 		convexQuery(api.orders.getItemImageUrls, { shortId }),
 	).data;
+	// A booking's item line reads as a span, not a quantity (see OrderItemLine).
+	// Only whole-order bookings carry one — a booking is always its own order.
+	const itemBookingSpan: OrderBookingSpan | undefined =
+		order?.bookingCheckIn !== undefined && order?.bookingCheckOut !== undefined
+			? {
+					checkIn: order.bookingCheckIn,
+					checkOut: order.bookingCheckOut,
+					packaged: order.bookingPackaged === true,
+				}
+			: undefined;
 	const orderId = order?._id;
 	const alreadySeen = order?.seenAt !== undefined;
 	useEffect(() => {
@@ -472,6 +523,7 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	const isBooking = deliveryMethod === "booking";
 	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
 	// facing labels in EN — a retailer's EN custom labels still flow through.
 	// The buyer tracking page resolves in the store's locale instead.
@@ -487,6 +539,7 @@ function OrderDetailRoute() {
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		deliveryMethod,
+		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
 		{ status: order.status, currentStageId: order.currentStageId },
@@ -545,11 +598,15 @@ function OrderDetailRoute() {
 		}
 	}
 
-	async function handleCancel() {
+	async function handleCancel(cancellationNote?: string) {
 		if (!order) return;
 		setPending("cancel");
 		try {
-			await updateStatus({ orderId: order._id, status: "cancelled" });
+			await updateStatus({
+				orderId: order._id,
+				status: "cancelled",
+				cancellationNote,
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the confirm dialog stays open for a retry; the toast above
@@ -720,6 +777,23 @@ function OrderDetailRoute() {
 				/>
 			</div>
 
+			{/* A booking request's stage control IS approve/decline (S3): the
+			    stepper can't move it (the server refuses), so its slot holds the
+			    request card until the seller answers. Once resolved without an
+			    approval, a quiet note keeps the WHY visible on the cancelled order. */}
+			{order.status === "booking_requested" ? (
+				<BookingRequestCard order={order} />
+			) : order.bookingResolution !== undefined ? (
+				<BookingResolutionNote
+					resolution={order.bookingResolution}
+					reason={order.cancellationNote}
+				/>
+			) : null}
+
+			{/* Security deposit (S5): the amber return card once the stay checks
+			    out, the settled outcome after, refund context on a paid cancel. */}
+			<SecurityDepositCard order={order} />
+			{order.status === "booking_requested" ? null : (
 			<OrderProgressStepper
 				stages={stages}
 				currentIndex={currentIdx}
@@ -892,6 +966,7 @@ function OrderDetailRoute() {
 					) : undefined
 				}
 			/>
+			)}
 
 			{/* Confirmation push failed (86eyf1rck). Amber like the payment claim: it
 			    needs the seller's eyes. Two causes, two different things for the
@@ -1466,7 +1541,9 @@ function OrderDetailRoute() {
 			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<div className="flex items-center gap-3">
 					<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-						{isSelfCollect ? (
+						{isBooking ? (
+							<CalendarRange className="size-4 text-muted-foreground" />
+						) : isSelfCollect ? (
 							<Package className="size-4 text-muted-foreground" />
 						) : (
 							<Truck className="size-4 text-muted-foreground" />
@@ -1477,31 +1554,45 @@ function OrderDetailRoute() {
 							Fulfillment
 						</p>
 						<p className="text-sm font-medium">
-							{isSelfCollect
-								? order.pickupSnapshot?.locationType === "drop_off"
-									? "Drop-off"
-									: "Self Collect"
-								: collectionService
-									? "Collection"
-									: "Delivery"}
+							{isBooking
+								? order.bookingCheckIn !== undefined &&
+									order.bookingCheckOut !== undefined
+									? bookingFulfilmentLine(order)
+									: "Booking"
+								: isSelfCollect
+									? order.pickupSnapshot?.locationType === "drop_off"
+										? "Drop-off"
+										: "Self Collect"
+									: collectionService
+										? "Collection"
+										: "Delivery"}
 						</p>
 					</div>
 					{/* Seller reschedule (86eyp5qd1) — renders only inside the
 					    reschedule window (pre-shipped, non-counter, not collected). */}
-					<div className="ml-auto shrink-0">
-						<RescheduleFulfilmentDialog order={order} />
-					</div>
+					{/* Not on a booking: this dialog moves `fulfilmentDate` only,
+					    while a stay's real dates are bookingCheckIn/Out under a
+					    capacity check — rescheduling one without the other would
+					    desync them. Changing a stay's dates is decline + re-request
+					    until the booking-aware reschedule ships. */}
+					{isBooking ? null : (
+						<div className="ml-auto shrink-0">
+							<RescheduleFulfilmentDialog order={order} />
+						</div>
+					)}
 				</div>
 				{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
 					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3">
 						<span className="text-xs text-muted-foreground">
-							{isSelfCollect
-								? order.pickupSnapshot?.locationType === "drop_off"
-									? "Meet on"
-									: "Collect on"
-								: collectionService
-									? "Collect on"
-									: "Deliver on"}
+							{isBooking
+								? "Check-in"
+								: isSelfCollect
+									? order.pickupSnapshot?.locationType === "drop_off"
+										? "Meet on"
+										: "Collect on"
+									: collectionService
+										? "Collect on"
+										: "Deliver on"}
 						</span>
 						<FulfilmentDateBadge
 							epoch={order.fulfilmentDate}
@@ -1524,39 +1615,17 @@ function OrderDetailRoute() {
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
 					{order.items.map((item, i) => (
-						<li
+						<OrderItemLine
 							key={item.variantId ?? `${item.productId}-${i}`}
-							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-						>
-							{/* Thumbnail (86eyrtz74) — variant photo, else the product's.
-							    A packing aid, not a record: the image is deliberately not
-							    frozen onto the order, so a replaced photo shows the new one
-							    and a deleted one degrades to AppImage's fallback box rather
-							    than a broken image or a collapsed row. Fixed size so the
-							    name never gets squeezed to two characters on a phone. */}
-							<AppImage
-								src={itemImageUrls?.[i] ?? undefined}
-								alt={item.name}
-								sizes="44px"
-								className="size-11 shrink-0 rounded-xl border border-border object-cover"
-							/>
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium">
-									{item.name}
-									{item.variantLabel ? (
-										<span className="ml-1.5 font-normal text-muted-foreground">
-											{item.variantLabel}
-										</span>
-									) : null}
-								</p>
-								<p className="text-xs text-muted-foreground">
-									{item.quantity} × {formatPrice(item.price, order.currency)}
-								</p>
-							</div>
-							<p className="shrink-0 text-sm font-semibold tabular-nums">
-								{formatPrice(item.price * item.quantity, order.currency)}
-							</p>
-						</li>
+							name={item.name}
+							variantLabel={item.variantLabel}
+							quantity={item.quantity}
+							unitPrice={item.price}
+							lineTotal={item.price * item.quantity}
+							currency={order.currency}
+							imageUrl={itemImageUrls?.[i] ?? undefined}
+							booking={itemBookingSpan}
+						/>
 					))}
 				</ul>
 				{order.mockupQuotedAmount != null && order.mockupQuotedAmount > 0 ? (
@@ -1618,6 +1687,16 @@ function OrderDetailRoute() {
 						<span>Delivery charge</span>
 						<span className="text-right font-medium">
 							To be set — see above
+						</span>
+					</div>
+				) : null}
+				{/* Refundable deposit inside the total — held money, returned after
+				    check-out (the card above tracks the return). */}
+				{order.securityDeposit && order.securityDeposit > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>Security deposit (refundable)</span>
+						<span className="tabular-nums">
+							{formatPrice(order.securityDeposit, order.currency)}
 						</span>
 					</div>
 				) : null}
@@ -1987,12 +2066,24 @@ function OrderDetailRoute() {
 				title={`Cancel order #${order.shortId}?`}
 				description={
 					hasActiveRiderBooking
-						? `Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-						: "Stock is restored and this can't be undone. The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."
+						? `Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
+						: "Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page."
 				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
 				destructive
+				reason={{
+					label: "Why are you cancelling?",
+					placeholder: isBooking
+						? "e.g. The site flooded after last night's storm"
+						: "e.g. Out of stock — sorry!",
+					// A guest planned around these dates, so a cancelled booking owes
+					// them the same explanation a declined request gives. The server
+					// enforces this too.
+					required: isBooking,
+					maxLength: 200,
+					helper: "The customer sees this on their order page.",
+				}}
 				onConfirm={handleCancel}
 			/>
 

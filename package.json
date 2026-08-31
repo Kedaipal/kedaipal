@@ -1,6 +1,6 @@
 {
   "name": "kedaipal",
-  "version": "2026.08.3",
+  "version": "2026.09.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.0",

@@ -77,6 +77,18 @@ export default defineSchema({
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
+		// "What does your store sell?" (Settings → Store) — same enum as
+		// products.kind, and its only job is to set the DEFAULT kind pre-selected
+		// for NEW products in the wizard. Never gates or re-types existing
+		// products; unset = today's behaviour exactly (wizard opens unanswered).
+		// See convex/lib/productKind.ts + docs/booking.md.
+		storeType: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
 		// back to the default catalog in convex/lib/whatsappCopy.ts.
 		// Variables supported in templates: {shortId}, {storeName}.
@@ -567,6 +579,10 @@ export default defineSchema({
 		// alphabet), NEVER the slug; rotating replaces it and kills old posters.
 		// See docs/counter-checkout.md (store QR poster, 86ey5m35w).
 		counterQrToken: v.optional(v.string()),
+		// Secret ICS calendar-feed token (booking S6, 86eyn4kf2) — the whole
+		// capability for GET /cal/<token>.ics, counterQrToken posture: high
+		// entropy, rotatable (rotation kills the old URL; Settings warns).
+		calendarFeedToken: v.optional(v.string()),
 		// Claim links (86eyq0epn): the store's default payment window (minutes) for
 		// a "send to buyer" claim link — remembered from the seller's last send (the
 		// send controls say so), no separate Settings card. Unset falls back to
@@ -590,6 +606,7 @@ export default defineSchema({
 		.index("by_slug", ["slug"])
 		// Inbound `KPS-<token>` poster scans resolve the store by token.
 		.index("by_counterQrToken", ["counterQrToken"])
+		.index("by_calendarFeedToken", ["calendarFeedToken"])
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
@@ -600,6 +617,34 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		expiresAt: v.number(),
 	}).index("by_old_slug", ["oldSlug"]),
+
+	/**
+	 * Seller-blocked nights (86eyj70z1 decision 8) — the Airbnb host primitive:
+	 * maintenance, private events, family weekends. `productId` unset = the
+	 * whole store, set = one listing; one table gives both granularities.
+	 * `startDate`/`endDate` are MYT midnights and END-INCLUSIVE per the spec
+	 * (single-day = start === end) — the availability seam converts to the
+	 * stay model's exclusive nights at read. Blocks only stop NEW requests:
+	 * nights with confirmed bookings can still be blocked (stops further
+	 * stacking on multi-capacity listings) and existing orders are untouched —
+	 * removing one is the order's own cancel flow, deliberately separate.
+	 * Overlapping/duplicate blocks are tolerated and unioned at read (spec
+	 * recommendation) — the seller unblocks rows one at a time.
+	 */
+	bookingBlocks: defineTable({
+		retailerId: v.id("retailers"),
+		productId: v.optional(v.id("products")),
+		startDate: v.number(),
+		endDate: v.number(),
+		// Private seller note ("Maintenance — river deck repair"). Never shown
+		// to buyers (blocked renders exactly like full, locked).
+		note: v.optional(v.string()),
+		createdAt: v.number(),
+	})
+		// Range scans for both calendars: blocks whose window could reach the
+		// queried month. startDate is the range key; the look-back bound is the
+		// max block length (see MAX_BLOCK_DAYS in bookingBlocks.ts).
+		.index("by_retailer_start", ["retailerId", "startDate"]),
 
 	products: defineTable({
 		retailerId: v.id("retailers"),
@@ -677,6 +722,63 @@ export default defineSchema({
 		// no override (0 is normalized to unset — one spelling). Capped at
 		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
 		minNoticeDays: v.optional(v.number()),
+		// What KIND of thing this is — the vocabulary + question router locked in
+		// the booking spec (86eyj70z1 decision 5). Unset = physical (legacy
+		// default, zero migration). "Food" is a wizard card, never a stored value
+		// (it routes to "physical" + re-words the preparation question), so no
+		// feature can ever branch on food. Kind changes which wizard steps show
+		// and what words render — NEVER a behaviour fork into a parallel product
+		// system. Immutable after create in v1 (a kind flip on an ordered product
+		// would leave orders whose semantics don't match the row — archive +
+		// recreate is the escape hatch). See convex/lib/productKind.ts +
+		// docs/booking.md.
+		kind: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
+		// Booking-kind config (86eyj70z1 decision 2): a site/plot IS a product;
+		// capacityPerNight counts interchangeable units bookable for the same
+		// night ("Standard Plot ×5" = one product, capacity 5, usually 1).
+		// Only present when kind === "booking" (enforced in create/update).
+		// Availability = overlapping non-declined bookings per night vs this
+		// capacity, checked by the shared availability module (S2); the security
+		// deposit field joins this object in S5. Public-safe — buyers price and
+		// book against it.
+		booking: v.optional(
+			v.object({
+				// UNSET = unlimited (S7, 86eyqxb14) — a gym selling month packages
+				// has no daily member cap. Never default a missing value to 1.
+				capacityPerNight: v.optional(v.number()),
+				// Fixed-length package (S7): set = the buyer picks a START date only,
+				// the end derives, and the price is FLAT per package rather than
+				// per night. Unset = the free check-in/check-out range a campsite
+				// sells. The UNIT matters — "monthly" to a gym means the calendar
+				// month ("join the 12th, renew the 12th"), which rolling days
+				// never gives; days remain right for a 3D2N stay or a day pass.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					// `night` is `day` arithmetic with the accommodation word — a
+					// widening, so every existing row stays valid.
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
+				),
+				// "Instant book" (S7 — the spec's named follow-up): set = a request
+				// lands `confirmed` with the payment ask firing straight away,
+				// skipping `booking_requested`. Unset = request-to-book.
+				autoAccept: v.optional(v.boolean()),
+				// Refundable security deposit (sen) collected ON TOP of the stay
+				// price in the one payment at approval (86eyn4kee; distinct from
+				// the parked partial-payment deposit 86eyhwb03). Optional; 0 is
+				// normalized to unset so "no deposit" has one spelling.
+				securityDeposit: v.optional(v.number()),
+			}),
+		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both
@@ -918,6 +1020,14 @@ export default defineSchema({
 		currency: v.string(),
 		status: v.union(
 			v.literal("pending"),
+			// Booking kind only (86eyj70z1 decision 3): a date-range request the
+			// seller must approve before anything is payable — the deliberate
+			// carve-out from confirm-at-create, because booking inventory is scarce
+			// and needs vetting. Soft-holds capacity from the moment it exists.
+			// Exits: approve → confirmed (+ the ONE payment ask, S3), decline /
+			// 24 h expiry / buyer cancel → cancelled (hold released). Never reached
+			// by non-booking orders.
+			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),
 			v.literal("shipped"),
@@ -968,11 +1078,68 @@ export default defineSchema({
 			waPhone: v.optional(v.string()),
 		}),
 		// How the customer receives the order. "delivery" = shipped via carrier;
-		// "self_collect" = customer picks up from the store. Defaults to "delivery"
-		// for orders created before this field existed.
+		// "self_collect" = customer picks up from the store; "booking" = a
+		// date-range stay/visit at the seller's venue (booking kind — nothing is
+		// shipped or collected; the guest shows up on check-in day). Defaults to
+		// "delivery" for orders created before this field existed.
 		deliveryMethod: v.optional(
-			v.union(v.literal("delivery"), v.literal("self_collect")),
+			v.union(
+				v.literal("delivery"),
+				v.literal("self_collect"),
+				v.literal("booking"),
+			),
 		),
+		// --- Booking request (booking kind, 86eyj70z1) -----------------------
+		// The spec's `bookingRange {checkIn, checkOut}` FLATTENED to top-level
+		// fields so the capacity scan can ride an index (arrays/objects can't be
+		// index keys; the overlap query needs checkIn range-scans). Both are
+		// MYT-midnight epoch-ms, frozen at create (snapshot posture — capacity or
+		// price edits never rewrite a placed request). checkOut is EXCLUSIVE: the
+		// stay occupies the nights [checkIn, checkOut), so a 25→27 stay is 2
+		// nights and the 27th is free for someone else's check-in.
+		bookingCheckIn: v.optional(v.number()),
+		bookingCheckOut: v.optional(v.number()),
+		// Denormalized from items[0].productId purely so `by_booking_product` can
+		// exist — the per-night capacity count asks "which bookings of THIS
+		// listing overlap these nights", and an array field can't be indexed.
+		bookingProductId: v.optional(v.id("products")),
+		// Set when the order was sold as a fixed-length PACKAGE (S7), so every
+		// surface reads it as a validity window ("Valid 1 – 30 Sep") and the
+		// line is quantity 1 at a flat price. Absent = the free per-night range.
+		// Frozen at request because a later edit to the listing must never
+		// re-describe a placed booking (the securityDeposit posture). The span
+		// itself lives in bookingCheckIn/Out; this only records the SHAPE.
+		bookingPackaged: v.optional(v.boolean()),
+		// HOW a request left `booking_requested` when it didn't get approved —
+		// "declined" (seller said no, reason below) or "expired" (the 24 h window
+		// lapsed). Both land the order in `cancelled`; this marker is what lets
+		// the buyer's page say the true thing ("Request declined: …" vs "Request
+		// expired") instead of a generic cancellation. Unset on approved bookings
+		// and on ordinary cancels.
+		bookingResolution: v.optional(
+			v.union(v.literal("declined"), v.literal("expired")),
+		),
+		// WHY this order isn't happening, in the seller's own words, quoted
+		// VERBATIM to the buyer on their order page. One field for every way an
+		// order ends: a declined booking request, a cancelled booking, or an
+		// ordinary cancelled order. REQUIRED on both booking paths (a silent no
+		// is a dead end for someone who planned around it), optional elsewhere.
+		// Always buyer-visible — there is deliberately no private twin, because
+		// a "private" reason field is one bug away from being leaked; the
+		// seller's internal notes live on the order timeline instead.
+		cancellationNote: v.optional(v.string()),
+		// Refundable security deposit (sen) FROZEN from the listing at request
+		// time (snapshot posture — a later policy edit never changes a placed
+		// booking). Part of `total` (one payment at approval) but NEVER revenue:
+		// CRM totalSpent + Insights subtract it (revenueExcludingDeposit).
+		securityDeposit: v.optional(v.number()),
+		// Deposit settlement after check-out (delivered): the moment the seller
+		// recorded the outcome. keptAmount (sen, ≤ securityDeposit) + its
+		// required reason exist only on a partial/full keep; returnedAt alone =
+		// fully returned. One-shot — settling twice is refused.
+		securityDepositReturnedAt: v.optional(v.number()),
+		securityDepositKeptAmount: v.optional(v.number()),
+		securityDepositKeptReason: v.optional(v.string()),
 		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
 		// create from the retailer's deliveryBooking.deliveryDirection so a later
 		// settings toggle never relabels a placed order (pickupSnapshot posture).
@@ -1433,7 +1600,24 @@ export default defineSchema({
 		// The payment-deadline sweep's range read (paymentDueAt < now). Kept tiny
 		// by the field's present-means-live contract above.
 		.index("by_payment_due", ["paymentDueAt"])
-		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
+		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"])
+		// Booking scan (booking kind): bookings of one listing whose stay
+		// overlaps a window. checkIn is the range key — the scan reads
+		// [windowStart − MAX_BOOKING_SPAN_DAYS, windowEnd) and filters the
+		// overlap in memory, so it's bounded by the longest span any booking can
+		// have, never the table. That bound is the MAX over every shape (a
+		// free-range stay AND a fixed-length package), not the 30-night stay cap
+		// — read it through `bookingsOverlapping()`, which is the only caller
+		// allowed to spell the look-back out.
+		.index("by_booking_product", ["bookingProductId", "bookingCheckIn"])
+		// Expiry cron (booking kind): un-actioned requests older than the
+		// approval window. Equality on status + the implicit _creationTime range
+		// = a scan bounded to exactly the stale rows.
+		.index("by_status", ["status"])
+		// The calendar feed's window read: this store's orders due inside
+		// [from, to). Range on the DUE date, not creation — a cake ordered in
+		// July for September belongs on September's calendar.
+		.index("by_retailer_fulfilment", ["retailerId", "fulfilmentDate"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto
@@ -1512,6 +1696,7 @@ export default defineSchema({
 		orderId: v.id("orders"),
 		status: v.union(
 			v.literal("pending"),
+			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),
 			v.literal("shipped"),
