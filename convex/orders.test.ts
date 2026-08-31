@@ -3038,6 +3038,47 @@ describe("orders — inbox search", () => {
 		expect(res.counts.bookingUpcoming).toBe(1);
 	});
 
+	/** Same wiring hazard as the test above — `bucketsNone` is another arg that
+	 * has to be threaded through the explicit field list by hand. */
+	test("deselecting every status leaves only the pinned orders", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const kept = await mkOrder(t, retailer._id, productId, { name: "Kept" });
+		const other = await mkOrder(t, retailer._id, productId, { name: "Other" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(kept._id, { pinnedAt: Date.now() });
+		});
+
+		const pinnedOnly = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucketsNone: true,
+			showPinned: true,
+		});
+		expect(pinnedOnly.orders.map((o) => o._id)).toEqual([kept._id]);
+
+		// The counts are tallied over the full window, so the chips still say what
+		// turning one back on would give you.
+		expect(pinnedOnly.counts.new + pinnedOnly.counts.in_progress).toBe(2);
+
+		// With the pin privilege off too, it is genuinely empty — the state the
+		// inbox's "No status selected" empty state exists for.
+		const nothing = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucketsNone: true,
+		});
+		expect(nothing.orders).toEqual([]);
+
+		// And it is not a one-way door: clearing it restores the full inbox.
+		const back = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+		});
+		expect(back.orders.map((o) => o._id).sort()).toEqual(
+			[kept._id, other._id].sort(),
+		);
+	});
+
 
 	test("omitting limit returns the full window; limit trims rows but keeps total/counts (stable-window pagination)", async () => {
 		const t = setup();

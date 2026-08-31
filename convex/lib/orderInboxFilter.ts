@@ -71,6 +71,7 @@ const NARROWING_FILTER_KEYS: Record<
 	true
 > = {
 	buckets: true,
+	bucketsNone: true,
 	paymentStatuses: true,
 	paymentMethods: true,
 	methodUnspecified: true,
@@ -94,6 +95,12 @@ export function narrowsTheInbox(args: InboxFilterArgs): boolean {
 		// An empty array narrows nothing (the predicate treats it as "no filter"),
 		// so it must not trip the Pro gate either — the two answer one question.
 		if (Array.isArray(value)) return value.length > 0;
+		// Same rule for the boolean flags: every one of them is read as
+		// `=== true` by the predicate, so an explicit `false` narrows nothing and
+		// must not gate. Without this the gate is stricter than the filter it
+		// claims to describe, and a client that sends `false` instead of omitting
+		// the field gets a paywall for a filter that is switched off.
+		if (typeof value === "boolean") return value;
 		return value !== undefined;
 	});
 }
@@ -131,6 +138,24 @@ export type InboxFilterArgs = {
 	 * (the wire still accepts the old singular; see `toInboxFilterArgs`).
 	 */
 	buckets?: OrderBucket[];
+	/**
+	 * The seller has explicitly selected NO bucket — every status chip off.
+	 *
+	 * A third state, because `buckets` cannot express it: empty/absent already
+	 * means "every bucket", and overloading it would make an accidentally-empty
+	 * array silently hide the whole inbox. So the distinction is carried in its
+	 * own field, and reading it is one line in the predicate.
+	 *
+	 * The state exists so "All statuses" is a real toggle rather than a chip that
+	 * lights up and can never be turned off. Combined with the pin privilege
+	 * below, turning it off is how a seller says **"just my pinned orders"** —
+	 * nothing matches the status filter, and only pins outrank it. That is not a
+	 * fourth concept bolted on: it falls out of the two rules already here.
+	 *
+	 * With pins off too it legitimately matches nothing. The inbox owns that dead
+	 * end with its own empty state and a one-tap way back — see `EmptyOrders`.
+	 */
+	bucketsNone?: boolean;
 	paymentStatuses?: Array<"unpaid" | "claimed" | "received">;
 	paymentMethods?: string[];
 	methodUnspecified?: boolean;
@@ -297,6 +322,10 @@ export function buildInboxPredicate(
 		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
 		// InboxFilterArgs.showPinned for why a pin outranks the filter.
 		if (pinPrivilege && o.pinnedAt !== undefined) return true;
+		// No bucket selected — nothing survives the status filter. Deliberately
+		// BELOW the pin short-circuit: "no statuses + pins on top" is exactly how
+		// the seller asks for a pinned-only inbox.
+		if (args.bucketsNone === true) return false;
 		// Bucket membership goes through the same seen-aware resolver the counts
 		// use, so the chip count and the list can't disagree: an unseen push-path
 		// order shows under "New" and NOT under "In progress" (86eyf1rck).

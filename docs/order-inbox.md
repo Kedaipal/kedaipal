@@ -52,9 +52,8 @@ them. That breadth is the point.
 "Completed or Cancelled" — everything closed — is a real question the single
 value could not ask, and every other enumerable filter on the inbox is already
 a multi-select, so a seller who has learnt "tap several chips" expects it here
-too. Each chip toggles membership; **"All" is the escape hatch, not a member** —
-it lights only while the set is empty and tapping it empties the set. Chip
-counts stay per-bucket. Chip taps `replace` history like the other
+too. Each chip toggles membership; **"All statuses" is the select-all, not a
+member.** Chip counts stay per-bucket. Chip taps `replace` history like the other
 multi-selects (a set built one tap at a time must not leave an entry per tap).
 The wire keeps accepting the old singular `bucket` (folded in by
 `toInboxFilterArgs`, "all" dropped), so deep links (`?bucket=new` from Home /
@@ -63,6 +62,44 @@ only `buckets`, and its presence-check joins `NARROWING_FILTER_KEYS`, which
 retires the gate's `bucket !== "all"` special case. The per-bucket empty-state
 copy ("No new orders…") only renders for a single-bucket selection; a multi
 set falls back to the generic line.
+
+### Three states, because "All" was a toggle that couldn't toggle (1 Sep)
+
+The chips are a checkbox set with a select-all, and they have **three** states:
+
+| State  | URL                        | Chips lit           |
+| ------ | -------------------------- | ------------------- |
+| all    | *(neither param)*          | All statuses        |
+| some   | `?bucket=new&bucket=…`     | the named buckets   |
+| none   | `?nobucket=true`           | nothing             |
+
+**"None" is what makes "All statuses" a real control.** Before this it lit up
+and could never be switched off, which is not a toggle — and the state it was
+missing is one sellers actually want: **turning every status off is how you ask
+for a pinned-only inbox.** Nothing matches the status filter, and a pin outranks
+the filter, so the pins are all that survive. That is not a fourth concept bolted
+on; it falls out of the two rules already here. Unticking your *last* bucket
+lands in "none" too — that is what unticking your last checkbox means everywhere
+else, and "All statuses" is one tap back.
+
+`InboxFilterArgs.bucketsNone` carries it, in its own field rather than as an
+empty `buckets` array: empty already means *every* bucket, so overloading it
+would let an accidentally-empty array silently blank the inbox. The predicate
+reads it in one line, deliberately **below** the pin short-circuit. The export
+sends it too, so a CSV of a pinned-only inbox holds the pinned orders.
+
+With the pin privilege *also* off it legitimately matches nothing — the one
+empty state **"Clear all" cannot fix**, since that deliberately keeps the bucket
+selection. So it gets its own copy ("No status selected") and a **Show all
+statuses** button, rather than the generic "adjust your filters" line that would
+send the seller hunting for the wrong cause.
+
+**The label says "All statuses", not "All"**, because it isn't all: the
+booking-period chips beside it are a second axis that keeps narrowing while it
+stays lit. A chip claiming to mean "everything" next to an active filter reads
+as a lie (owner report, 1 Sep). Bookings *are* included in every status bucket —
+an active booking is `in_progress` like any other order — so the fix is naming
+the axis, not excluding them.
 
 - **"New" means "the seller hasn't dealt with it yet."** That was originally
   synonymous with `pending`, because an order sat there until the buyer's
@@ -492,9 +529,19 @@ into. Only the soft-lock applies.
 **Never bumps `updatedAt`** — bookmarking is not progress on the order, and that
 field drives the time-in-status badge (the `markSeen` trap).
 
-**Discoverability + the staleness escape hatch.** The pin control is on every
-card, every table row and the order detail header, always rendered (never
-hover-only). The **Pinned N** chip appears once something is pinned, leads the
+**Discoverability + the staleness escape hatch.** The pin **toggle** is on every
+table row, the order detail header and the bulk bar, always rendered (never
+hover-only). A **card** shows a pin *marker* instead — a filled accent pin beside
+the customer name plus an accent-tinted border — because the card is a `<a>` and
+a button nested inside an anchor is invalid markup; toggling happens on the row,
+the detail page, or via select-mode. This was originally missing entirely
+(owner report, 1 Sep): cards are the default view and the only one on a phone, so
+pinned orders sorted to the top and then looked identical to everything else —
+"why are these first?" had no answer on screen. The border is *tinted*, not
+thicker, because a wider edge shifts that card's text against its grid
+neighbours and reads as a rendering bug rather than emphasis.
+
+The **Pinned N** chip appears once something is pinned, leads the
 chip row — the seller's own urgency outranks the system's buckets — and its
 count is tallied over the full window, so it states the real total and doesn't
 shrink under a filter. Since pins never auto-clear, that count is the standing

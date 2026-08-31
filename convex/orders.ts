@@ -1988,6 +1988,10 @@ export const searchOrders = query({
 		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
 		// real question one value couldn't ask. Empty/absent = every bucket.
 		buckets: v.optional(v.array(orderBucketValidator)),
+		// Explicitly NO bucket — the seller turned "All statuses" off. Its own
+		// field because an empty `buckets` already means "every bucket"; see
+		// `bucketsNone` in lib/orderInboxFilter.ts.
+		bucketsNone: v.optional(v.boolean()),
 		// Booking period (S8) — a chip, NOT a bucket. See
 		// `bookingPeriods` in lib/orderInboxFilter.ts for why it can't be one.
 		// Empty/absent = no period filtering.
@@ -2068,6 +2072,7 @@ export const searchOrders = query({
 			retailerId,
 			bucket,
 			buckets,
+			bucketsNone,
 			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
@@ -2103,6 +2108,7 @@ export const searchOrders = query({
 		const filters = toInboxFilterArgs({
 			bucket,
 			buckets,
+			bucketsNone,
 			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
@@ -2316,6 +2322,10 @@ const exportFilterValidators = {
 	// Same widen-with-legacy shape as searchOrders — see the note there.
 	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
 	buckets: v.optional(v.array(orderBucketValidator)),
+	// "All statuses" turned off — carried here for the same reason as every
+	// other filter: a CSV of a pinned-only inbox must hold the pinned orders,
+	// not the whole window.
+	bucketsNone: v.optional(v.boolean()),
 	// The export honours the period chip too — the whole point of the shared
 	// predicate is that "what the seller sees" and "what they export" can't
 	// diverge.

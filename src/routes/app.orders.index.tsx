@@ -136,6 +136,11 @@ type InboxSearch = {
 	 * parses (`?bucket=new` — every deep link and old bookmark), it just lands
 	 * in a one-element list. */
 	bucket?: OrderBucket[];
+	/** "All statuses" turned OFF — no bucket selected at all. Absent is the
+	 * default (every bucket), so only the non-default reaches the URL, like
+	 * `nopin`. Mutually exclusive with `bucket`: a named bucket IS a selection,
+	 * so the two can never both be set (see validateSearch). */
+	nobucket?: boolean;
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
@@ -310,6 +315,14 @@ export const Route = createFileRoute("/app/orders/")({
 				: undefined;
 		return {
 			bucket: bucket.length > 0 ? bucket : undefined,
+			// A named bucket wins: `?bucket=new&nobucket=true` is contradictory, and
+			// resolving it towards the SELECTION keeps a hand-edited or half-stale
+			// link showing orders rather than an empty inbox.
+			nobucket:
+				bucket.length === 0 &&
+				(search.nobucket === true || search.nobucket === "true")
+					? true
+					: undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -386,6 +399,7 @@ const INBOX_SORTS: {
 function OrdersRoute() {
 	const {
 		bucket: buckets = [],
+		nobucket: noBucket = false,
 		q = "",
 		pay = [],
 		method = [],
@@ -549,6 +563,7 @@ function OrdersRoute() {
 					? {
 							retailerId: retailer._id,
 							buckets: buckets.length > 0 ? buckets : undefined,
+							bucketsNone: noBucket || undefined,
 							paymentStatuses: pay.length > 0 ? pay : undefined,
 							paymentMethods: method.length > 0 ? method : undefined,
 							methodUnspecified: munspec || undefined,
@@ -704,6 +719,21 @@ function OrdersRoute() {
 		catunspec ||
 		asrc.length > 0;
 
+	/**
+	 * The status chips are a checkbox set with a select-all, and they have THREE
+	 * states — every bucket, some buckets, none (owner call, 1 Sep):
+	 *
+	 *   all  — no constraint. "All statuses" lit. (`bucket` and `nobucket` absent)
+	 *   some — 1–4 buckets. Those chips lit. (`bucket` set)
+	 *   none — nothing lit at all. (`nobucket`)
+	 *
+	 * "None" exists because "All statuses" was a toggle that could light up and
+	 * never turn off, and because turning it off is how a seller asks for a
+	 * PINNED-ONLY inbox: nothing matches the status filter, and pins outrank the
+	 * filter. Unticking the last bucket lands there too — that is what unticking
+	 * your last checkbox means everywhere else, and "All statuses" is one tap
+	 * back.
+	 */
 	function toggleBucket(next: InboxBucket) {
 		navigate({
 			// `replace`, like every other multi-select: a set is built one tap at a
@@ -712,14 +742,30 @@ function OrdersRoute() {
 			// they stopped being single-select.
 			replace: true,
 			search: (prev) => {
-				// "All" is the escape hatch, not a member: it clears the set.
-				if (next === "all") return { ...prev, bucket: undefined };
-				const has = buckets.includes(next);
-				const list = has
+				// "All statuses" is the select-all, not a member: on → every bucket,
+				// off → none.
+				if (next === "all")
+					return buckets.length === 0 && !noBucket
+						? { ...prev, bucket: undefined, nobucket: true }
+						: { ...prev, bucket: undefined, nobucket: undefined };
+				const list = buckets.includes(next)
 					? buckets.filter((b) => b !== next)
 					: [...buckets, next];
-				return { ...prev, bucket: list.length > 0 ? list : undefined };
+				return {
+					...prev,
+					bucket: list.length > 0 ? list : undefined,
+					// Emptying the set is the "none" state, not a silent reset to all.
+					nobucket: list.length > 0 ? undefined : true,
+				};
 			},
+		});
+	}
+
+	/** Back to an unfiltered inbox from the "nothing selected" dead end. */
+	function showAllBuckets() {
+		navigate({
+			replace: true,
+			search: (prev) => ({ ...prev, bucket: undefined, nobucket: undefined }),
 		});
 	}
 
@@ -1090,6 +1136,9 @@ function OrdersRoute() {
 				{
 					retailerId: retailer._id,
 					buckets: buckets.length > 0 ? buckets : undefined,
+					// Same reason as `bookingPeriods` below: a pinned-only inbox must
+					// export the pinned orders, not the whole window.
+					bucketsNone: noBucket || undefined,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
 					paymentMethods: method.length > 0 ? method : undefined,
 					methodUnspecified: munspec || undefined,
@@ -1428,22 +1477,33 @@ function OrdersRoute() {
 							{BUCKET_KEYS.map((key) => {
 								const label =
 									key === "all"
-										? "All"
+										? "All statuses"
 										: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
 								return (
 									<FilterChip
 										key={key}
-										// Multi-select (86eyrtz74): each bucket chip toggles
-										// membership; "All" is lit only while the set is empty,
-										// and tapping it empties the set.
+										// Multi-select (86eyrtz74) with a real select-all: each
+										// bucket chip toggles membership, "All statuses" is lit
+										// only while nothing narrower is chosen, and it can be
+										// turned OFF — see toggleBucket for the three states.
 										selected={
 											key === "all"
-												? buckets.length === 0
+												? buckets.length === 0 && !noBucket
 												: buckets.includes(key)
 										}
 										onClick={() => toggleBucket(key)}
 										count={bucketCount(key)}
 										countTone={key === "new" ? "attention" : "muted"}
+										// Named "All STATUSES", not "All", because it isn't: the
+										// booking-period chips to its right are a second axis that
+										// keeps narrowing while this stays lit, which read as a
+										// lie when the chip claimed to mean "everything" (owner
+										// report, 1 Sep).
+										title={
+											key === "all"
+												? "Every order, bookings included. Booking periods narrow this further. Tap to select no status — pinned orders only."
+												: undefined
+										}
 									>
 										{label}
 									</FilterChip>
@@ -1557,6 +1617,8 @@ function OrdersRoute() {
 					searching={searching}
 					filtersActive={filtersActive}
 					mockup={mockup}
+					noBucket={noBucket}
+					onShowAll={showAllBuckets}
 				/>
 			) : (
 				// `aria-busy` while a filter change is in flight: the rows on screen
@@ -1595,14 +1657,35 @@ function OrdersRoute() {
 								const age = formatStatusAge(now - o.createdAt);
 								const itemSummary = summarizeOrderCardItems(o.items);
 								const periodLine = bookingRowLine(o);
+								const isPinned = o.pinnedAt !== undefined;
 								const cardInner = (
 									<div className="flex min-w-0 flex-1 flex-col">
 										{/* Name + money get the hierarchy. */}
 										<div className="flex items-center justify-between gap-2.5">
+											{/* The pin, on the CARD. The table has had a pin column
+										    since 86eyrtz74, but cards — the default view, and the
+										    only one on a phone — showed nothing at all: pinned
+										    orders sorted to the top and then looked like every
+										    other order, so "why are these first?" had no answer
+										    on screen. Sits with the name because that is where
+										    the eye lands first, and the pinned partition is read
+										    top-down. */}
+											{isPinned ? (
+												<span
+													className="flex shrink-0 items-center text-accent"
+													title="Pinned — kept at the top of your inbox"
+												>
+													<Pin
+														className="size-3.5 fill-current"
+														aria-hidden="true"
+													/>
+													<span className="sr-only">Pinned.</span>
+												</span>
+											) : null}
 											{/* Mask only the name — items/prices/status are the useful replay signal. */}
 											<span
 												{...MASK_PII}
-												className="min-w-0 truncate text-[15px] font-semibold"
+												className="min-w-0 flex-1 truncate text-[15px] font-semibold"
 											>
 												{orderCustomerLabel(o.customer)}
 											</span>
@@ -1702,7 +1785,13 @@ function OrdersRoute() {
 									"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
 									isSel
 										? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
-										: "border-border hover:border-ring hover:shadow-sm",
+										: isPinned
+											? // Tinted border rather than a thicker one: a wider edge
+												// would shift this card's text 2px against its grid
+												// neighbours, which reads as a rendering bug, not as
+												// emphasis.
+												"border-accent/40 hover:border-accent hover:shadow-sm"
+											: "border-border hover:border-ring hover:shadow-sm",
 								);
 								return (
 									<li key={o._id}>
@@ -1868,13 +1957,24 @@ function EmptyOrders({
 	searching,
 	filtersActive,
 	mockup,
+	noBucket,
+	onShowAll,
 }: {
 	bucket: InboxBucket;
 	searching: boolean;
 	filtersActive: boolean;
 	mockup: boolean;
+	/** No status selected at all — see toggleBucket's three states. */
+	noBucket: boolean;
+	onShowAll: () => void;
 }) {
-	const { title, body } = emptyCopy(bucket, searching, filtersActive, mockup);
+	const { title, body } = emptyCopy(
+		bucket,
+		searching,
+		filtersActive,
+		mockup,
+		noBucket,
+	);
 	return (
 		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
 			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -1884,6 +1984,19 @@ function EmptyOrders({
 				<p className="font-medium">{title}</p>
 				<p className="mt-1 max-w-xs text-sm text-muted-foreground">{body}</p>
 			</div>
+			{/* The one empty state "Clear all" cannot fix — it deliberately keeps the
+			    bucket selection, so a seller who clears every filter here still sees
+			    nothing. The chips above are the other way back; this states the fix
+			    in words at the point the question is being asked. */}
+			{noBucket ? (
+				<button
+					type="button"
+					onClick={onShowAll}
+					className="flex h-11 items-center rounded-full bg-foreground px-5 text-sm font-semibold text-background transition-opacity hover:opacity-90"
+				>
+					Show all statuses
+				</button>
+			) : null}
 		</div>
 	);
 }
@@ -1893,7 +2006,16 @@ function emptyCopy(
 	searching: boolean,
 	filtersActive: boolean,
 	mockup: boolean,
+	noBucket: boolean,
 ): { title: string; body: string } {
+	// FIRST: this one is not "nothing matched", it is "nothing was asked for",
+	// and every other line here would send the seller looking for a filter to
+	// loosen that isn't the cause.
+	if (noBucket)
+		return {
+			title: "No status selected",
+			body: "Pick a status above, or pin an order to keep it here on its own.",
+		};
 	if (searching)
 		return {
 			title: "No matches",

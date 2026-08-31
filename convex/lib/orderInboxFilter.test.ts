@@ -450,6 +450,51 @@ describe("buildInboxPredicate — pin privilege", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// `bucketsNone` — the third state of the status chips (owner report, 1 Sep).
+// "All statuses" used to be a chip that lit up and could never be turned off;
+// turning it off now selects NO status, which is how a seller asks for a
+// pinned-only inbox. The whole feature is one line in the predicate, placed
+// below the pin short-circuit — so these tests pin the ORDER of those two rules,
+// which is the only part that can silently break.
+// ---------------------------------------------------------------------------
+
+describe("buildInboxPredicate — no bucket selected", () => {
+	test("nothing survives", () => {
+		const p = buildInboxPredicate({ bucketsNone: true });
+		expect(p(order({ status: "pending" }))).toBe(false);
+		expect(p(order({ status: "confirmed" }))).toBe(false);
+		expect(p(order({ status: "delivered" }))).toBe(false);
+		expect(p(order({ status: "cancelled" }))).toBe(false);
+	});
+
+	test("PINS still survive it — this is the pinned-only inbox", () => {
+		const p = buildInboxPredicate({ bucketsNone: true, showPinned: true });
+		expect(p(order({ status: "delivered", pinnedAt: 5_000 }))).toBe(true);
+		expect(p(order({ status: "delivered" }))).toBe(false);
+	});
+
+	test("with pins ALSO off it legitimately matches nothing at all", () => {
+		// The state the empty state has to own — see EmptyOrders.
+		const p = buildInboxPredicate({ bucketsNone: true, showPinned: false });
+		expect(p(order({ status: "pending", pinnedAt: 5_000 }))).toBe(false);
+	});
+
+	test("absent or false is NOT the same as true — it means every bucket", () => {
+		expect(buildInboxPredicate({})(order({ status: "pending" }))).toBe(true);
+		expect(
+			buildInboxPredicate({ bucketsNone: false })(order({ status: "pending" })),
+		).toBe(true);
+	});
+
+	test("it narrows, so the Pro gate sees it", () => {
+		expect(narrowsTheInbox({ bucketsNone: true })).toBe(true);
+		// …but only when actually set: `false` must not trip a gate on its own,
+		// since the client sends `undefined` for the default.
+		expect(narrowsTheInbox({ bucketsNone: false })).toBe(false);
+	});
+});
+
 describe("sortInboxOrders — pinned partition", () => {
 	const rows = [
 		{ id: "c", createdAt: 3_000, fulfilmentDate: 30 },
