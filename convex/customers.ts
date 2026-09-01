@@ -10,6 +10,7 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import { buildSearchText } from "./lib/customer";
+import { revenueExcludingDeposit } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
 import { assertPlanFeature } from "./subscriptions";
 
@@ -381,7 +382,7 @@ export async function moveOrderToPhone(
 	if (order.customerId) {
 		await decrementAggregatesForCancel(ctx, {
 			customerId: order.customerId,
-			orderTotal: order.total,
+			orderTotal: revenueExcludingDeposit(order),
 		});
 	}
 	// Re-link against the real number (also re-stamps order.customerId).
@@ -389,7 +390,7 @@ export async function moveOrderToPhone(
 		retailerId: order.retailerId,
 		waPhone: newPhone,
 		orderId: order._id,
-		orderTotal: order.total,
+		orderTotal: revenueExcludingDeposit(order),
 		orderCreatedAt: order.createdAt,
 		customerName: order.customer.name,
 	});
@@ -434,7 +435,7 @@ export const backfillCustomers = internalMutation({
 				retailerId: order.retailerId,
 				waPhone,
 				orderId: order._id,
-				orderTotal: order.total,
+				orderTotal: revenueExcludingDeposit(order),
 				orderCreatedAt: order.createdAt,
 				customerName: order.customer.name,
 			});

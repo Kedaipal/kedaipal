@@ -79,7 +79,9 @@ export function ReadyToShipStrip({
 			>
 				<Printer className="size-4" />
 				<span className="hidden sm:inline">Print labels</span>
-				{!empty ? <span className="font-bold tabular-nums">{count}</span> : null}
+				{!empty ? (
+					<span className="font-bold tabular-nums">{count}</span>
+				) : null}
 			</Button>
 			<PrintLabelsDialog
 				mode="queue"

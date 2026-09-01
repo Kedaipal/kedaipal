@@ -2,12 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	canKeepOriginal,
-	prepareImageUpload,
 	IMAGE_ACCEPT,
 	imageRejectMessage,
 	isPassthroughType,
 	MAX_IMAGE_EDGE,
 	PASSTHROUGH_TYPES,
+	prepareImageUpload,
 	shouldTryJpegFallback,
 	targetDimensions,
 } from "./image-upload";
@@ -197,7 +197,9 @@ describe("prepareImageUpload — the label is never the last word", () => {
 	});
 
 	it("refuses a file that DECLARES a non-image type", async () => {
-		const out = await prepareImageUpload(fileOf("application/pdf", "invoice.pdf"));
+		const out = await prepareImageUpload(
+			fileOf("application/pdf", "invoice.pdf"),
+		);
 		expect(out.ok).toBe(false);
 		if (!out.ok) expect(out.reason).toBe("not_an_image");
 	});

@@ -98,8 +98,8 @@ export function OnlinePaymentsCard({
 					{!canUse ? <ProBadge /> : null}
 				</div>
 				<p className="text-sm text-muted-foreground">
-					Let buyers pay online through your own HitPay account. Your bank
-					&amp; QR details above stay as the manual fallback.
+					Let buyers pay online through your own HitPay account. Your bank &amp;
+					QR details above stay as the manual fallback.
 				</p>
 			</div>
 
@@ -154,8 +154,7 @@ export function OnlinePaymentsCard({
 							</p>
 						) : (
 							<p className="text-xs text-muted-foreground">
-								Checking which payment methods your HitPay account has
-								enabled…
+								Checking which payment methods your HitPay account has enabled…
 							</p>
 						)}
 						{hitpay?.mode === "sandbox" ? (
@@ -266,9 +265,7 @@ export function OnlinePaymentsCard({
 						description="Buyers lose the Pay now button and go back to your manual bank/QR details. A payment made on an already-open checkout link after this won't auto-confirm — check your HitPay dashboard and mark it received by hand."
 						confirmLabel="Disconnect"
 						destructive
-						onConfirm={() =>
-							save({ hitpay: null }, "HitPay disconnected")
-						}
+						onConfirm={() => save({ hitpay: null }, "HitPay disconnected")}
 					/>
 				</>
 			) : (
@@ -331,7 +328,9 @@ export function OnlinePaymentsCard({
 								In the HitPay dashboard, open{" "}
 								<span className="font-medium">Settings → API Keys</span>.
 							</li>
-							<li>Paste the API key and the salt (side by side there) below.</li>
+							<li>
+								Paste the API key and the salt (side by side there) below.
+							</li>
 						</ol>
 						{/* Lalamove-guide precedent: a print-ready walkthrough for
 						    sellers who want every screen spelled out (86eyjmhby). */}
@@ -377,8 +376,8 @@ export function OnlinePaymentsCard({
 						</Button>
 						{locked ? (
 							<p className="text-xs text-muted-foreground">
-								Online payments is a Pro feature — upgrade in Settings →
-								Billing to connect. (Disconnecting is never locked.)
+								Online payments is a Pro feature — upgrade in Settings → Billing
+								to connect. (Disconnecting is never locked.)
 							</p>
 						) : !typedBothKeys ? (
 							<p className="text-xs text-muted-foreground">
@@ -407,7 +406,9 @@ function Bullet({ children }: { children: React.ReactNode }) {
 /** Official method marks from HitPay's own gateway plugin, keyed by the API
  * codes their account probe returns. "card" fans out to Visa+Mastercard. */
 const METHOD_ICONS: Record<string, Array<{ src: string; alt: string }>> = {
-	touch_n_go: [{ src: "/img/payment/touchngo.svg", alt: "Touch 'n Go eWallet" }],
+	touch_n_go: [
+		{ src: "/img/payment/touchngo.svg", alt: "Touch 'n Go eWallet" },
+	],
 	duitnow: [{ src: "/img/payment/duitnow.svg", alt: "DuitNow QR" }],
 	fpx: [{ src: "/img/payment/fpx.svg", alt: "FPX online banking" }],
 	card: [

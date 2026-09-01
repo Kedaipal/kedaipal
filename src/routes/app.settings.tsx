@@ -2,9 +2,9 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	ArrowLeft,
+	CalendarRange,
 	ChevronDown,
 	ChevronRight,
 	ClipboardList,
@@ -19,6 +19,8 @@ import {
 	ShieldCheck,
 	Store,
 	Trash2,
+	UtensilsCrossed,
+	Wrench,
 } from "lucide-react";
 import {
 	type FormEvent,
@@ -61,6 +63,7 @@ import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
+import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
@@ -90,6 +93,7 @@ import {
 	scrollToAnchor,
 } from "../lib/country-setup-copy";
 import { convexErrorMessage } from "../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -108,6 +112,7 @@ import {
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
 import { hasFeature, tierPill } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
@@ -139,6 +144,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
+	| "bookings"
 	| "order-status";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
@@ -186,6 +192,14 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Delivery & self-collect options",
 		icon: <MapPinned className="size-4" />,
 	},
+	// Booking stores only (filtered out of both navs otherwise) — the Google
+	// Calendar feed lives here, beside the other how-you-sell surfaces.
+	{
+		id: "bookings",
+		label: "Bookings",
+		description: "Google Calendar feed for your listings",
+		icon: <CalendarRange className="size-4" />,
+	},
 	{
 		id: "order-status",
 		label: "Order status",
@@ -207,7 +221,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: ["whatsapp", "payments", "fulfilment", "order-status"],
+		tabs: ["whatsapp", "payments", "fulfilment", "bookings", "order-status"],
 	},
 ];
 
@@ -375,6 +389,24 @@ function SettingsRoute() {
 	// mobile; desktop always shows a section (defaulting to Store).
 	const { tab, fix } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
+	// The Bookings tab exists only for stores selling the booking kind — a
+	// non-booking store never sees a calendar-feed section it has nothing to
+	// put in (a direct ?tab=bookings deep link still renders; the tab content
+	// explains itself). Filters BOTH navs below.
+	const hasBookingListings =
+		useQuery(
+			convexQuery(
+				api.bookingBlocks.hasBookingListings,
+				retailer ? { retailerId: retailer._id } : "skip",
+			),
+		).data === true;
+	const visibleTabs = SETTINGS_TABS.filter(
+		(t) => t.id !== "bookings" || hasBookingListings,
+	);
+	const visibleGroups = SETTINGS_GROUPS.map((g) => ({
+		...g,
+		tabs: g.tabs.filter((id) => id !== "bookings" || hasBookingListings),
+	}));
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
 	const backToIndex = () => navigate({ search: { tab: undefined } });
@@ -505,7 +537,7 @@ function SettingsRoute() {
 						/>
 					</div>
 
-					{SETTINGS_GROUPS.map((group) => (
+					{visibleGroups.map((group) => (
 						<div key={group.label} className="flex flex-col gap-1.5">
 							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
 								{group.label}
@@ -621,7 +653,7 @@ function SettingsRoute() {
 
 			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
 			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
-				{SETTINGS_TABS.map((t) => (
+				{visibleTabs.map((t) => (
 					<button
 						key={t.id}
 						type="button"
@@ -702,6 +734,12 @@ function SettingsRoute() {
 								onSave={(storeDescription) =>
 									updateSettings({ storeDescription })
 								}
+							/>
+						</Card>
+						<Card>
+							<StoreTypeForm
+								current={retailer.storeType}
+								onSave={(storeType) => updateSettings({ storeType })}
 							/>
 						</Card>
 						{slugRenameForm}
@@ -861,6 +899,12 @@ function SettingsRoute() {
 					/>
 				) : null}
 
+				{activeTab === "bookings" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<BookingsTab retailerId={retailer._id} />
+					</div>
+				) : null}
+
 				{activeTab === "order-status" ? (
 					<div className="flex flex-col gap-6 pt-2">
 						<InfoBanner title="How order stages work">
@@ -890,6 +934,23 @@ function SettingsRoute() {
 								production) → “Ready for pickup” (Ready) → “Collected” (Done).
 							</p>
 						</InfoBanner>
+
+						{/* The booking carve-out, stated where the seller configures the
+						    thing it carves out of. Custom steps describe how an order is
+						    PREPARED; a stay or a membership isn't prepared, so bookings
+						    keep their own three milestones. Without this line the rule
+						    would be invisible until a seller wondered why their campsite
+						    order ignored the flow they'd just built. */}
+						{hasBookingListings ? (
+							<p className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+								<span className="font-semibold text-foreground">
+									Bookings don&apos;t use these steps.
+								</span>{" "}
+								A stay always runs Confirmed → Checked in → Checked out, and a
+								fixed-length package Confirmed → Active → Ended. What you set
+								here applies to your product orders.
+							</p>
+						) : null}
 
 						<Card>
 							<StageEditor
@@ -1041,6 +1102,101 @@ function StoreDescriptionForm({
 				{saving ? "Saving…" : "Save description"}
 			</Button>
 		</form>
+	);
+}
+
+/**
+ * "What does your store sell?" (86eyj70z1 decision 5) — sets the DEFAULT kind
+ * pre-selected for NEW products in the wizard, nothing else: existing products
+ * never re-type, and every kind stays pickable per product. Four cards mirror
+ * the wizard's step 0 exactly (Food stores as `physical` — it's a vocabulary
+ * router, never a stored value). Tap to save; tap the selected card again to
+ * clear.
+ */
+function StoreTypeForm({
+	current,
+	onSave,
+}: {
+	current: "physical" | "service" | "booking" | undefined;
+	onSave: (
+		storeType: "physical" | "service" | "booking" | null,
+	) => Promise<unknown>;
+}) {
+	const [saving, setSaving] = useState(false);
+	// Three cards, not the wizard's four: Food is a wizard-session router that
+	// stores as `physical`, so here (where only the stored default matters) the
+	// two share one card — two lit cards for one saved value would read broken.
+	const cards = [
+		{
+			value: "physical" as const,
+			icon: <UtensilsCrossed className="size-4" aria-hidden />,
+			label: "Food & physical goods",
+			hint: "Cakes, kuih, frozen, gear, packaged items",
+		},
+		{
+			value: "service" as const,
+			icon: <Wrench className="size-4" aria-hidden />,
+			label: "Service",
+			hint: "Cleaning, wash, repair",
+		},
+		{
+			value: "booking" as const,
+			icon: <CalendarRange className="size-4" aria-hidden />,
+			label: "Booking",
+			hint: "Campsite, venue, homestay, rental",
+		},
+	];
+	async function pick(value: "physical" | "service" | "booking") {
+		setSaving(true);
+		try {
+			// Tapping the selected type again clears it (back to no default).
+			await onSave(current === value ? null : value);
+			toast.success(
+				current === value ? "Store type cleared." : "Store type saved.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+	return (
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="What does your store sell?"
+				description="Pre-selects the matching type when you add a new product — you can still pick a different type per product, and existing products never change. Tap again to clear."
+			/>
+			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{cards.map((card) => {
+					const selected = current === card.value;
+					return (
+						<button
+							key={card.label}
+							type="button"
+							disabled={saving}
+							aria-pressed={selected}
+							onClick={() => pick(card.value)}
+							className={cn(
+								"flex min-h-11 items-center gap-3 rounded-xl border p-3 text-left transition-colors disabled:opacity-60",
+								selected
+									? "border-accent bg-accent/10"
+									: "border-border hover:border-accent/60",
+							)}
+						>
+							<span className="text-accent-emphasis">{card.icon}</span>
+							<span className="min-w-0">
+								<span className="block text-sm font-semibold">
+									{card.label}
+								</span>
+								<span className="block truncate text-xs text-muted-foreground">
+									{card.hint}
+								</span>
+							</span>
+						</button>
+					);
+				})}
+			</div>
+		</div>
 	);
 }
 

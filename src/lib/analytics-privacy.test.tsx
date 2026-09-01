@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { isTrackingTokenPath, MASK_PII } from "./analytics-privacy";
+import { isCapabilityTokenPath, MASK_PII } from "./analytics-privacy";
 
 afterEach(cleanup);
 
@@ -32,27 +32,39 @@ describe("MASK_PII", () => {
 			</div>,
 		);
 
-		expect(
-			screen.getByTestId("region").getAttribute("data-clarity-mask"),
-		).toBe("true");
+		expect(screen.getByTestId("region").getAttribute("data-clarity-mask")).toBe(
+			"true",
+		);
 	});
 });
 
-describe("isTrackingTokenPath", () => {
+describe("isCapabilityTokenPath", () => {
 	// Shared by useClarity (refuses to boot) and useGoogleAnalytics (neither
-	// initializes nor sends) — the tracking URL is the buyer's capability
-	// secret, so both providers key off this single predicate.
+	// initializes nor sends) — the URL is the buyer's capability secret, so
+	// both providers key off this single predicate.
 	it("matches the tracking routes", () => {
-		expect(isTrackingTokenPath("/track")).toBe(true);
-		expect(isTrackingTokenPath("/track/")).toBe(true);
-		expect(isTrackingTokenPath("/track/8f3c09b1a7e24d5c9b0e")).toBe(true);
+		expect(isCapabilityTokenPath("/track")).toBe(true);
+		expect(isCapabilityTokenPath("/track/")).toBe(true);
+		expect(isCapabilityTokenPath("/track/8f3c09b1a7e24d5c9b0e")).toBe(true);
+	});
+
+	// The claim token is the STRONGER capability of the two: it reads the
+	// buyer's name/phone and can commit an order that decrements stock. It
+	// shipped excluded from Clerk but not from analytics (PR #227 review).
+	it("matches the claim routes", () => {
+		expect(isCapabilityTokenPath("/claim")).toBe(true);
+		expect(isCapabilityTokenPath("/claim/")).toBe(true);
+		expect(isCapabilityTokenPath("/claim/8f3c09b1a7e24d5c9b0e")).toBe(true);
 	});
 
 	it("leaves every other route alone", () => {
-		expect(isTrackingTokenPath("/")).toBe(false);
-		expect(isTrackingTokenPath("/tracking-guide")).toBe(false);
-		expect(isTrackingTokenPath("/app/orders")).toBe(false);
-		expect(isTrackingTokenPath("/k-frozen-food")).toBe(false);
+		expect(isCapabilityTokenPath("/")).toBe(false);
+		expect(isCapabilityTokenPath("/tracking-guide")).toBe(false);
+		expect(isCapabilityTokenPath("/app/orders")).toBe(false);
+		expect(isCapabilityTokenPath("/k-frozen-food")).toBe(false);
+		// A store slug that merely STARTS with a guarded word is a normal
+		// storefront page — the prefix match must not swallow it.
+		expect(isCapabilityTokenPath("/claim-your-free-kuih")).toBe(false);
 	});
 });
 
@@ -91,6 +103,14 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		["src/components/order/book-delivery-card.tsx", 2],
 		["src/components/settings/fulfilment-tab.tsx", 1],
 		["src/components/storefront/checkout-form.tsx", 1],
+		// Claim links (86eyq0epn). The BUYER-facing two shipped unmasked (PR #227
+		// review): with Clarity booting on /claim, Balanced mode records every
+		// rendered string verbatim, so the buyer's name and phone landed in
+		// session replays.
+		["src/routes/claim.$token.tsx", 1],
+		["src/components/claim/claim-checkout-page.tsx", 1],
+		["src/components/claim/send-claim.tsx", 2],
+		["src/components/claim/waiting-on-buyer.tsx", 2],
 	];
 
 	it.each(MASKED_FILES)("%s keeps ≥%i MASK_PII spreads", (file, min) => {
@@ -139,14 +159,13 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		"${customerName}",
 	];
 
-	it.each(TOAST_FILES)(
-		"%s keeps buyer names out of portal-rendered toast copy",
-		(file) => {
-			for (const call of toastCalls(readFileSync(file, "utf8"))) {
-				for (const token of BUYER_NAME_INTERPOLATIONS) {
-					expect(call).not.toContain(token);
-				}
+	it.each(
+		TOAST_FILES,
+	)("%s keeps buyer names out of portal-rendered toast copy", (file) => {
+		for (const call of toastCalls(readFileSync(file, "utf8"))) {
+			for (const token of BUYER_NAME_INTERPOLATIONS) {
+				expect(call).not.toContain(token);
 			}
-		},
-	);
+		}
+	});
 });

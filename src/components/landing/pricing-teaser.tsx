@@ -1,27 +1,37 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { convexQuery } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Check, Sparkles, Star } from "lucide-react";
-import { api } from "../../../convex/_generated/api";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ArrowRight, Check, Sparkles } from "lucide-react";
+import {
+	type BillingCurrency,
+	BILLING_CURRENCY_FOR_COUNTRY,
+	COMPETITOR_MONTHLY_RANGE,
+	isPlanSelectable,
+	type Plan,
+	PLAN_MONTHLY_PRICES,
+	starterPricePerDay,
+} from "../../../convex/lib/plans";
+import { useLandingRegion } from "../../hooks/useLandingRegion";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import {
-	carouselSlideClass,
-	carouselTrackClass,
+	CenterSnapCarousel,
+	centerSnapSlideClass,
 	GuaranteeLine,
+	RegionToggle,
 	Sticker,
 } from "./landing-ui";
 
-const TOTAL_FOUNDING_SPOTS = 10;
+// Bare symbol prefixes for Kedaipal's OWN subscription price, allowed here per
+// `currency-literals.test.ts` (components/landing/ is on the allowlist —
+// billing currency, not a seller's storefront currency).
+const CURRENCY_SYMBOL: Record<BillingCurrency, string> = { MYR: "RM", SGD: "S$" };
 
 interface TeaserTier {
-	id: string;
+	id: Plan;
 	name: string;
-	price: number;
-	foundingPrice?: number;
 	tagline: string;
 	features: string[];
 	popular: boolean;
@@ -35,7 +45,6 @@ function getTiers(): TeaserTier[] {
 		{
 			id: "starter",
 			name: "Starter",
-			price: 79,
 			tagline: m.pricing_tier_starter_tagline(),
 			features: [
 				m.pricing_feat_storefront(),
@@ -49,8 +58,6 @@ function getTiers(): TeaserTier[] {
 		{
 			id: "pro",
 			name: "Pro",
-			price: 149,
-			foundingPrice: 104,
 			tagline: m.pricing_tier_pro_tagline(),
 			// Online payments + Lalamove lead here now that both are shipped — they
 			// are the two Pro capabilities a seller can picture immediately, and
@@ -68,7 +75,6 @@ function getTiers(): TeaserTier[] {
 		{
 			id: "scale",
 			name: "Scale",
-			price: 299,
 			tagline: m.pricing_tier_scale_tagline(),
 			features: [
 				m.pricing_feat_everything_pro(),
@@ -77,7 +83,7 @@ function getTiers(): TeaserTier[] {
 				m.pricing_feat_5_users(),
 			],
 			popular: false,
-			comingSoon: true,
+			comingSoon: !isPlanSelectable("scale"),
 		},
 	];
 }
@@ -85,11 +91,13 @@ function getTiers(): TeaserTier[] {
 export function PricingTeaser() {
 	const { isSignedIn } = useAuth();
 	const tiers = getTiers();
-	// Live founding-spot count, same public query the Founding 10 section uses.
-	// Defaults to all-open while loading / on SSR — the honest fallback.
-	const remaining =
-		useQuery(convexQuery(api.foundingMembers.getSpotsRemaining, {})).data ??
-		TOTAL_FOUNDING_SPOTS;
+	const shouldReduceMotion = useReducedMotion();
+	const [region, setRegion] = useLandingRegion();
+	// `BILLING_CURRENCY_FOR_COUNTRY`, not `COUNTRY_CURRENCY`: the latter maps a
+	// country to the full storefront `SupportedCurrency` union, which is wider
+	// than the set Kedaipal invoices subscriptions in.
+	const currency: BillingCurrency = BILLING_CURRENCY_FOR_COUNTRY[region];
+	const symbol = CURRENCY_SYMBOL[currency];
 
 	return (
 		<section
@@ -115,35 +123,50 @@ export function PricingTeaser() {
 							{m.pricing_sub()}
 						</p>
 						<div className="mx-auto mt-5 max-w-xl rounded-2xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
-							{m.pricing_anchor()}
+							{m.pricing_anchor({
+								competitor: `${symbol} ${COMPETITOR_MONTHLY_RANGE[currency].min / 100}–${COMPETITOR_MONTHLY_RANGE[currency].max / 100}`,
+								starter: `${symbol} ${PLAN_MONTHLY_PRICES[currency].starter / 100}`,
+								perDay: `${symbol} ${starterPricePerDay(currency)}`,
+							})}
+						</div>
+						<div className="mt-6 flex justify-center">
+							<RegionToggle region={region} onChange={setRegion} />
 						</div>
 					</div>
 				</FadeIn>
 
 				<FadeIn delay={0.1}>
-					{/* Mobile: tier cards as a snap carousel (cheapest first, Pro
-					    peeking with its "Most popular" badge). pt-4 keeps the badge —
-					    absolutely positioned above the card edge — from being clipped
-					    by the scroller. */}
-					<div
-						className={carouselTrackClass(
-							"mt-12 pt-4 md:mt-12 md:grid md:grid-cols-3 md:items-stretch md:gap-4 md:pt-0 lg:gap-0",
-						)}
+					{/* Mobile: Embla carousel CENTERED ON PRO (owner call, 29 Aug) —
+					    startIndex 1 parks Pro dead-center with Starter/Scale peeking
+					    both sides, drag physics included; md+ deactivates Embla and the
+					    grid takes over. pt-4 on the flex container keeps the "Most
+					    popular" badge — absolutely positioned above the card edge —
+					    inside the overflow clip. */}
+					<CenterSnapCarousel
+						startIndex={1}
+						className="mt-12"
+						desktopClass="pt-4 md:grid md:grid-cols-3 md:items-stretch md:gap-4 md:pt-0 lg:gap-0"
 					>
 						{tiers.map((tier) => (
+							/* Slide shell ≠ card: the shell carries the inter-card gap
+							   (its px is OUTSIDE the card background); the card fills it.
+							   With the card as the slide, the same padding vanished into
+							   the card's own surface (owner-caught, 29 Aug). */
 							<div
 								key={tier.id}
-								className={cn(
-									carouselSlideClass(),
-									"relative flex flex-col rounded-3xl p-7",
-									tier.popular
-										? "z-10 bg-primary text-primary-foreground shadow-2xl lg:-my-5 lg:scale-[1.02]"
-										: "border border-border bg-card shadow-sm lg:my-0",
-									tier.id === "starter" && "lg:rounded-r-none lg:border-r-0",
-									tier.id === "scale" && "lg:rounded-l-none lg:border-l-0",
-									tier.comingSoon && "opacity-80",
-								)}
+								className={centerSnapSlideClass(cn("flex", tier.popular && "z-10"))}
 							>
+								<div
+									className={cn(
+										"relative flex w-full flex-col rounded-3xl p-7",
+										tier.popular
+											? "bg-primary text-primary-foreground shadow-2xl lg:-my-5 lg:scale-[1.02]"
+											: "border border-border bg-card shadow-sm lg:my-0",
+										tier.id === "starter" && "lg:rounded-r-none lg:border-r-0",
+										tier.id === "scale" && "lg:rounded-l-none lg:border-l-0",
+										tier.comingSoon && "opacity-80",
+									)}
+								>
 								{tier.popular && (
 									<span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rotate-2 rounded-lg bg-accent px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-foreground shadow-md">
 										{m.pricing_most_popular()}
@@ -164,8 +187,27 @@ export function PricingTeaser() {
 									{tier.name}
 								</p>
 								<div className="mt-3 flex items-end gap-1">
-									<span className="text-4xl font-bold tracking-tight">
-										RM {tier.price}
+									{/* The price rolls when the MY/SG toggle flips — the toggle's
+									    one visible consequence deserves a visible response. */}
+									<span className="overflow-hidden text-4xl font-bold tracking-tight">
+										<AnimatePresence mode="popLayout" initial={false}>
+											<motion.span
+												key={currency}
+												initial={
+													shouldReduceMotion ? false : { y: 14, opacity: 0 }
+												}
+												animate={{ y: 0, opacity: 1 }}
+												exit={
+													shouldReduceMotion
+														? undefined
+														: { y: -14, opacity: 0 }
+												}
+												transition={{ duration: 0.22, ease: "easeOut" }}
+												className="inline-block"
+											>
+												{symbol} {PLAN_MONTHLY_PRICES[currency][tier.id] / 100}
+											</motion.span>
+										</AnimatePresence>
 									</span>
 									<span
 										className={cn(
@@ -188,18 +230,6 @@ export function PricingTeaser() {
 								>
 									{tier.tagline}
 								</p>
-
-								{tier.foundingPrice !== undefined && (
-									<div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
-										<Star className="size-3.5 shrink-0 fill-accent text-accent" />
-										<p className="text-xs font-semibold text-accent">
-											{m.pricing_founding_line({
-												price: tier.foundingPrice,
-												remaining,
-											})}
-										</p>
-									</div>
-								)}
 
 								<ul className="mt-6 flex-1 space-y-2.5">
 									{tier.features.map((f) => (
@@ -244,17 +274,18 @@ export function PricingTeaser() {
 									{tier.popular && !tier.comingSoon ? (
 										<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
 									) : null}
+									</div>
 								</div>
 							</div>
 						))}
-					</div>
+					</CenterSnapCarousel>
 				</FadeIn>
 
 				<FadeIn delay={0.15}>
 					<div className="mt-10 flex flex-col items-center gap-3">
 						<Link
 							to="/pricing"
-							className="text-sm font-medium text-accent underline-offset-4 hover:underline"
+							className="inline-flex min-h-11 items-center text-sm font-medium text-accent underline-offset-4 hover:underline"
 						>
 							{m.pricing_full_breakdown()}
 						</Link>

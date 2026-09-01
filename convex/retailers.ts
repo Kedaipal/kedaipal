@@ -633,6 +633,9 @@ type RetailerPublic = {
 	// Public storefront blurb under the store name. Public-safe — surfaced on
 	// both the owner read and the by-slug storefront payload.
 	storeDescription?: string;
+	// "What does your store sell?" — the default kind for NEW products in the
+	// wizard (86eyj70z1 decision 5). Owner-facing config, harmless if public.
+	storeType?: "physical" | "service" | "booking";
 	waPhone?: string;
 	notifyEmail?: string;
 	// Seller WhatsApp order alerts (86eyhw9zy) — OWNER-only alert config: the
@@ -750,6 +753,13 @@ type RetailerPublic = {
 	// orderCap nudge ("X of 100 plan orders used"). OWNER-only, like
 	// `subscription`. See convex/subscriptionUsage.ts.
 	ordersThisMonth?: number;
+	// Claim links (86eyq0epn): the store's remembered default payment window —
+	// seeds the send controls' chips and is updated on every send. OWNER-only
+	// (seller config). Unset falls back to DEFAULT_CLAIM_WINDOW_MINUTES.
+	claimLinkWindowMinutes?: number;
+	// Claim links (86eyq0epn × 86eyq0eq9): the marketing origin the seller last
+	// tagged a claim with — seeds the send dialog's origin chips. OWNER-only.
+	claimLinkSource?: string;
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
@@ -843,6 +853,7 @@ async function buildRetailerPublic(
 		slug: row.slug,
 		storeName: row.storeName,
 		storeDescription: row.storeDescription,
+		storeType: row.storeType,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
 		notifyWaPhone: row.notifyWaPhone,
@@ -881,6 +892,8 @@ async function buildRetailerPublic(
 			adminFullAccess: opts?.adminFullAccess,
 		}),
 		ordersThisMonth: usedOrders,
+		claimLinkWindowMinutes: row.claimLinkWindowMinutes,
+		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
 		sendingPaused: !!sendingLimits?.pausedAt,
@@ -1358,6 +1371,17 @@ export const updateSettings = mutation({
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
+		// "What does your store sell?" — default kind for NEW products only
+		// (86eyj70z1 decision 5). `null` clears back to unset; undefined = no
+		// change. Un-gated: it's a default, not a feature.
+		storeType: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+				v.null(),
+			),
+		),
 		messageTemplates: v.optional(messageTemplatesValidator),
 		statusLabels: v.optional(statusLabelsValidator),
 		orderStages: v.optional(orderStagesValidator),
@@ -1433,6 +1457,7 @@ export const updateSettings = mutation({
 		const patch: Partial<{
 			storeName: string;
 			storeDescription: string | undefined;
+			storeType: "physical" | "service" | "booking" | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
 			notifyWaPhone: string | undefined;
@@ -1473,6 +1498,11 @@ export const updateSettings = mutation({
 		}
 		if (args.storeDescription !== undefined) {
 			patch.storeDescription = sanitizeStoreDescription(args.storeDescription);
+		}
+		if (args.storeType !== undefined) {
+			// null clears; changing it re-types NOTHING — it only pre-selects the
+			// wizard's kind card for the seller's NEXT product.
+			patch.storeType = args.storeType === null ? undefined : args.storeType;
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {

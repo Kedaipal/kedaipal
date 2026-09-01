@@ -1,7 +1,7 @@
 import Clarity from "@microsoft/clarity";
 import { useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { isTrackingTokenPath } from "../lib/analytics-privacy";
+import { isCapabilityTokenPath } from "../lib/analytics-privacy";
 import { clientEnv } from "../lib/env";
 
 let clarityInitialized = false;
@@ -16,7 +16,7 @@ let clarityInitialized = false;
  * whether booting is allowed at all.
  *
  * Never boots on `/track/*` — the tracking URL is the buyer's capability
- * secret; see `isTrackingTokenPath` for the full rationale shared with
+ * secret; see `isCapabilityTokenPath` for the full rationale shared with
  * `useGoogleAnalytics`.
  */
 export function useClarity() {
@@ -25,7 +25,7 @@ export function useClarity() {
 	useEffect(() => {
 		const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
 		if (!projectId || clarityInitialized) return;
-		if (isTrackingTokenPath(pathname)) return;
+		if (isCapabilityTokenPath(pathname)) return;
 
 		Clarity.init(projectId);
 		clarityInitialized = true;

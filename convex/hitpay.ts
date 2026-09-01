@@ -38,6 +38,7 @@ import {
 	resolveHitpayCredentials,
 } from "./lib/hitpay";
 import { isMockupGateClosed } from "./lib/order";
+import { extendedPaymentDue } from "./lib/orderClaims";
 import { rateLimiter } from "./lib/rateLimiter";
 import { orderByToken } from "./orders";
 
@@ -179,6 +180,16 @@ export const recordCheckoutRequest = internalMutation({
 			gatewayRequestedAmount: amountSen,
 			gatewayRequestedCurrency: currency,
 			gatewayRequestedAt: Date.now(),
+			// A payment session just STARTED — on a deadline-carrying order
+			// (86eyq0epn) that guarantees the runway, so a buyer who taps Pay
+			// with 40 seconds left watches the clock jump instead of being
+			// cancelled mid-checkout. Bounded extension, never a freeze (a
+			// freeze would be exploitable: tap Pay, close the tab, hold the
+			// stock forever); the sweep additionally leaves any order alone
+			// while gatewayRequestedAt is inside the session grace.
+			...(order.paymentDueAt !== undefined
+				? { paymentDueAt: extendedPaymentDue(order.paymentDueAt, Date.now()) }
+				: {}),
 			updatedAt: Date.now(),
 		});
 		return { ok: true, replacedRequestId };

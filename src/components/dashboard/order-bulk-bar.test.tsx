@@ -73,7 +73,21 @@ describe("OrderBulkBar", () => {
 		expect(screen.getByRole("dialog")).toBeTruthy();
 		// Confirming applies; the confirm button is labelled with the count.
 		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
-		expect(onApply).toHaveBeenCalledWith("cancelled");
+		expect(onApply).toHaveBeenCalledWith("cancelled", undefined);
+	});
+
+	it("carries ONE typed reason for the whole batch (86eyn4kcn follow-up)", () => {
+		const onApply = vi.fn();
+		renderBar({ onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
+		// The seller is asked once, and every order in the selection gets it —
+		// this is what the buyer reads on their order page.
+		fireEvent.change(screen.getByLabelText(/why are you cancelling/i), {
+			target: { value: "  Closed for maintenance  " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
+		expect(onApply).toHaveBeenCalledWith("cancelled", "Closed for maintenance");
 	});
 
 	it("awaits a rejecting destructive apply and keeps the confirm open for retry", async () => {
@@ -83,7 +97,7 @@ describe("OrderBulkBar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
 
-		await waitFor(() => expect(onApply).toHaveBeenCalledWith("cancelled"));
+		await waitFor(() => expect(onApply).toHaveBeenCalledWith("cancelled", undefined));
 		// The apply rejected, so the dialog must stay open (not auto-close).
 		expect(screen.getByRole("dialog")).toBeTruthy();
 	});
@@ -134,5 +148,34 @@ describe("OrderBulkBar", () => {
 		fireEvent.click(confirmButton);
 		expect(onDelete).toHaveBeenCalledTimes(1);
 		expect(onApply).not.toHaveBeenCalled();
+	});
+});
+
+describe("OrderBulkBar — bulk unpin (86eyrtz74)", () => {
+	it("offers Unpin only when the caller passes onUnpin", () => {
+		// The caller passes it only when the selection actually contains a pinned
+		// order — an item that would no-op is worse than no item.
+		renderBar();
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		expect(screen.queryByRole("button", { name: /^unpin$/i })).toBeNull();
+	});
+
+	it("calls onUnpin and closes the menu", async () => {
+		const onUnpin = vi.fn();
+		renderBar({ onUnpin });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^unpin$/i }));
+		expect(onUnpin).toHaveBeenCalledTimes(1);
+		await waitFor(() =>
+			expect(screen.queryByRole("button", { name: /^unpin$/i })).toBeNull(),
+		);
+	});
+
+	it("swallows a rejecting unpin — the caller owns the error toast", async () => {
+		const onUnpin = vi.fn().mockRejectedValue(new Error("boom"));
+		renderBar({ onUnpin });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^unpin$/i }));
+		await waitFor(() => expect(onUnpin).toHaveBeenCalled());
 	});
 });

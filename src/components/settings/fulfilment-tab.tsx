@@ -80,6 +80,7 @@ import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { DelyvaCard } from "./delyva-card";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
@@ -206,38 +207,6 @@ function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
  * today and a single use doesn't justify a new shared primitive. Keeps the
  * component count flat per the wider settings module convention.
  */
-function ToggleSwitch({
-	on,
-	onChange,
-	disabled = false,
-	label,
-}: {
-	on: boolean;
-	onChange: (next: boolean) => void;
-	disabled?: boolean;
-	label: string;
-}) {
-	return (
-		<button
-			type="button"
-			role="switch"
-			aria-checked={on}
-			aria-label={label}
-			disabled={disabled}
-			onClick={() => onChange(!on)}
-			className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
-				on ? "border-accent bg-accent" : "border-input bg-muted"
-			} ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
-		>
-			<span
-				className={`inline-block size-5 rounded-full bg-background shadow-sm transition-transform ${
-					on ? "translate-x-5" : "translate-x-0.5"
-				}`}
-			/>
-		</button>
-	);
-}
-
 /** The currency symbol worn by a money input, positioned for the shared
  * `pl-9` inputs on this tab. One author so a new currency never leaves a
  * stray "RM" behind on a field. */

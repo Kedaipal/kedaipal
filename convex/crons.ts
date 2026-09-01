@@ -43,6 +43,17 @@ crons.interval(
 	{},
 );
 
+// Booking requests the seller never answered auto-release after 24 h
+// (86eyj70z1 decision 3 — the buyer was promised "confirms within 24 hours"
+// up front, so the hold must actually die on schedule, not at the next
+// midnight). 15-min cadence keeps the worst-case overshoot ~1% of the window.
+crons.interval(
+	"expire stale booking requests",
+	{ minutes: 15 },
+	internal.bookings.expireStaleRequests,
+	{},
+);
+
 // PDPA retention: DELETE dead counter sessions (expired/cancelled) ~30 days
 // after they died — they hold buyer phone numbers, and the store QR poster
 // (86ey5m35w) increases junk-scan volume, so they must not live forever.
@@ -52,6 +63,40 @@ crons.daily(
 	"purge stale counter checkout sessions",
 	{ hourUTC: 3, minuteUTC: 45 },
 	internal.counterCheckout.purgeStaleSessions,
+	{},
+);
+
+// Claim links (86eyq0epn): auto-cancel orders whose payment deadline passed —
+// the carried timer's teeth (stock decremented at commit comes back). Every
+// minute so "time's up" on the buyer's page and the actual cancel stay close;
+// the by_payment_due index keeps each run a near-empty range read. The
+// predicate protects claimed / fee-pending / live-payment-session orders —
+// see convex/lib/orderClaims.ts isAutoCancelDue.
+crons.interval(
+	"cancel unpaid orders past their payment deadline",
+	{ minutes: 1 },
+	internal.orderClaims.cancelUnpaidDueOrders,
+	{},
+);
+
+// Claim links (86eyq0epn): flip open claims past their fixed deadline to
+// `expired`. Reads judge expiry live, so this keeps the status buckets true
+// (claims list, purge eligibility). Every 5 min like the session sweep — a
+// 15-minute live window reads expired instantly either way.
+crons.interval(
+	"expire stale claim links",
+	{ minutes: 5 },
+	internal.orderClaims.expireStaleClaims,
+	{},
+);
+
+// PDPA retention: DELETE dead claims (expired/cancelled) ~30 days after they
+// died — they hold buyer phone numbers + names. Completed claims are kept
+// (they link to an order; order retention is the Compliance Pack's job).
+crons.daily(
+	"purge stale claim links",
+	{ hourUTC: 3, minuteUTC: 45 },
+	internal.orderClaims.purgeStaleClaims,
 	{},
 );
 
