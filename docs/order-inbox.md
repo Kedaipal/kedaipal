@@ -166,6 +166,23 @@ review: with **every leaf selected, "All statuses" stays lit even when period
 chips are on** — the union already matches every order, and the panel's Status
 select-all on a booking store produces exactly that state.
 
+**Two empty-state bugs the wide table hid** (owner report, 2 Sep). The table's
+empty row spans every column, and with a wide column set that cell is ~4,500px
+across — `text-center` put the message halfway along it, i.e. **thousands of
+pixels off-screen at the resting scroll position**, so a seller who filtered to
+nothing saw a blank box with no explanation and no way out. The content is now
+`sticky left-0` and sized to itself, so it rides the horizontal scroll and stays
+readable at any offset (verified at `scrollLeft: 3000` on a 4,580px table). The
+table also **stopped writing its own copy** — it takes `inboxEmptyCopy`'s
+result, so the two views can't describe one state two different ways.
+
+And the copy now names **pinned-only**, ranked directly after search: reaching an
+empty list with it on means the pin set is the binding constraint (pins that
+matched would be showing), so every arm below it would be a lie — "no orders
+need a mockup" is false when unpinned mockup orders exist. It is also the
+easiest constraint to enter by accident, since the Pinned chip is a **three-way**
+cycle and "only" is its second position, so the copy names the way back out.
+
 **`Not yet opened` is a visible row** under NEW. The unseen rule has driven the
 New bucket, the Home tile and the age escalation since 86eyf1rck without ever
 being nameable in the UI; the leaf split is what makes it sayable. It is

@@ -126,6 +126,10 @@ export interface OrderTableProps {
 	/** Clear every active filter. Offered from the empty state — omit it when
 	 * nothing is filtered, so the button never appears with nothing to undo. */
 	onClearFilters?: () => void;
+	/** What to say when nothing matches. Passed in rather than written here so
+	 * the table and the cards view can't describe one state two different ways —
+	 * `src/lib/inbox-empty-copy.ts` ranks it for both. */
+	empty: { title: string; body: string };
 	selectMode: boolean;
 	selected: Set<string>;
 	onToggleSelect: (id: string) => void;
@@ -408,6 +412,7 @@ export function OrderTable({
 	onColumnWidthsChange,
 	columnFilters,
 	onClearFilters,
+	empty,
 }: OrderTableProps) {
 	const navigate = useNavigate();
 
@@ -699,25 +704,32 @@ export function OrderTable({
 						    un-pick it from where they were standing. */}
 						{sortedRows.length === 0 ? (
 							<TableRow className="hover:bg-transparent">
-								<TableCell
-									colSpan={columns.length + 2}
-									className="px-4 py-10 text-center"
-								>
-									<p className="text-sm font-medium">
-										No orders match these filters
-									</p>
-									<p className="mt-1 text-[13px] text-muted-foreground">
-										Clear one from a column header, or start over below.
-									</p>
-									{onClearFilters ? (
-										<button
-											type="button"
-											onClick={onClearFilters}
-											className="mt-3 inline-flex h-9 items-center rounded-lg border border-border px-3.5 text-[13px] font-medium transition-colors hover:border-foreground/30"
-										>
-											Clear all filters
-										</button>
-									) : null}
+								<TableCell colSpan={columns.length + 2} className="p-0">
+									{/* STICKY to the scroller's left edge, and sized to its own
+									    content — NOT centred in the cell. The cell spans every
+									    column, so with a wide column set it is thousands of
+									    pixels across: `text-center` put this message halfway
+									    along that, i.e. far off-screen at the resting scroll
+									    position, and the seller saw a blank box with no
+									    explanation and no way out (owner report, 2 Sep). */}
+									<div className="sticky left-0 flex w-fit max-w-[min(100%,34rem)] flex-col items-start px-4 py-10">
+										{/* Same copy the cards view shows — `inboxEmptyCopy`
+										    ranks it, so the two views can't describe one state
+										    two different ways. */}
+										<p className="text-sm font-medium">{empty.title}</p>
+										<p className="mt-1 text-left text-[13px] text-muted-foreground">
+											{empty.body}
+										</p>
+										{onClearFilters ? (
+											<button
+												type="button"
+												onClick={onClearFilters}
+												className="mt-3 inline-flex h-9 items-center rounded-lg border border-border px-3.5 text-[13px] font-medium transition-colors hover:border-foreground/30"
+											>
+												Clear all filters
+											</button>
+										) : null}
+									</div>
 								</TableCell>
 							</TableRow>
 						) : (

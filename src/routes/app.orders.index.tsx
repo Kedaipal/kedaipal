@@ -120,7 +120,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
-import { inboxEmptyCopy } from "../lib/inbox-empty-copy";
+import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
 import {
 	isBucketChip,
 	type StatusChipKey,
@@ -764,6 +764,17 @@ function OrdersRoute() {
 		cat.length > 0 ||
 		catunspec ||
 		asrc.length > 0;
+
+	// ONE empty-state copy for both views — the table used to hardcode its own,
+	// so the same state read differently depending on which view you were in.
+	const emptyCopy = inboxEmptyCopy({
+		searching,
+		pinOnly: pinMode === "only",
+		mockup,
+		filtersActive,
+		statuses: st,
+		periods: period,
+	});
 
 	/**
 	 * ONE flat set of status chips (owner call, 1 Sep).
@@ -1614,18 +1625,7 @@ function OrdersRoute() {
 			) : orders.length === 0 && !tableView ? (
 				// Table view keeps its table (and so its header filters) when nothing
 				// matches — the empty state renders as a row inside it instead.
-				<EmptyOrders
-					// Which copy renders — the per-bucket line, "nothing in those
-					// statuses", the generic filter line — is ranked in
-					// `inboxEmptyCopy`, pure and tested, because the ranking is
-					// exactly what regressed when the route derived it inline
-					// (PR #243 review: every chip tap read as "filters active").
-					searching={searching}
-					filtersActive={filtersActive}
-					mockup={mockup}
-					statuses={st}
-					periods={period}
-				/>
+				<EmptyOrders copy={emptyCopy} />
 			) : (
 				// `aria-busy` while a filter change is in flight: the rows on screen
 				// are the previous answer for a beat, and a screen reader should not
@@ -1647,6 +1647,7 @@ function OrdersRoute() {
 							columnWidths={columnState.widths}
 							onColumnWidthsChange={columnState.setWidths}
 							columnFilters={headerFilters}
+							empty={emptyCopy}
 							// Broader than `filtersActive` on purpose: the axis doesn't rank
 							// as a "filter" for the empty copy, but a status-only selection
 							// still empties the table and this row's copy points at this
@@ -1967,8 +1968,8 @@ function OrdersInboxSkeleton() {
 	);
 }
 
-function EmptyOrders(props: Parameters<typeof inboxEmptyCopy>[0]) {
-	const { title, body } = inboxEmptyCopy(props);
+function EmptyOrders({ copy }: { copy: InboxEmptyCopy }) {
+	const { title, body } = copy;
 	return (
 		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
 			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">

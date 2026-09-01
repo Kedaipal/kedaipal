@@ -9,19 +9,25 @@
  * Priority is part of the contract, most-specific claim last:
  *
  * 1. searching — the term explains the emptiness, whatever else is on;
- * 2. mockup — its own cross-cutting toggle, with its own "caught up" copy;
- * 3. any NON-status filter — the generic line plus the clear affordance. The
+ * 2. pinned-only — reaching an empty list with it on means the pin set is the
+ *    binding constraint (pins that matched would be showing), and it outranks
+ *    the arms below because each of those would then be a lie: "no orders need
+ *    a mockup" is false when unpinned mockup orders exist. It is also the
+ *    easiest constraint to enter by accident — the Pinned chip is a THREE-way
+ *    cycle and "only" is its second position;
+ * 3. mockup — its own cross-cutting toggle, with its own "caught up" copy;
+ * 4. any NON-status filter — the generic line plus the clear affordance. The
  *    status axis deliberately does NOT count here: the chip row is the
  *    seller's PLACE (the old bucket segment control's successor), and telling
  *    someone who tapped one chip to "adjust or clear the filters" hides the
  *    copy written for exactly that state;
- * 4. a status selection that is NOT exactly one whole bucket (a partial group,
+ * 5. a status selection that is NOT exactly one whole bucket (a partial group,
  *    a mix, or any booking period) — "nothing in those statuses", because the
  *    per-bucket copy would be false for it and the generic "no orders yet"
  *    would tell a seller with 118 orders that they have none;
- * 5. exactly one whole bucket — that bucket's own copy, the state one chip tap
+ * 6. exactly one whole bucket — that bucket's own copy, the state one chip tap
  *    produces;
- * 6. nothing at all — the true "no orders yet".
+ * 7. nothing at all — the true "no orders yet".
  */
 
 import type { BookingPeriod } from "../../convex/lib/bookingPeriod";
@@ -33,17 +39,24 @@ export function inboxEmptyCopy(args: {
 	searching: boolean;
 	mockup: boolean;
 	/** Any active filter OUTSIDE the status axis — payment, method, dates,
-	 * due window, order type, categories, origin. See rule 3 above. */
+	 * due window, order type, categories, origin. See rule 4 above. */
 	filtersActive: boolean;
+	/** `pinMode === "only"` — the seller asked for pinned orders alone. */
+	pinOnly: boolean;
 	/** The status axis, exactly as the chip rules read it. */
 	statuses: readonly string[];
 	periods: readonly BookingPeriod[];
 }): InboxEmptyCopy {
-	const { searching, mockup, filtersActive, statuses, periods } = args;
+	const { searching, pinOnly, mockup, filtersActive, statuses, periods } = args;
 	if (searching)
 		return {
 			title: "No matches",
 			body: "No orders match your search. Try an order #, name, phone, or item.",
+		};
+	if (pinOnly)
+		return {
+			title: "No pinned orders match",
+			body: "Only your pinned orders are showing, and none of them is in the statuses or filters you picked. Tap Pinned only again to switch it off.",
 		};
 	if (mockup)
 		return {

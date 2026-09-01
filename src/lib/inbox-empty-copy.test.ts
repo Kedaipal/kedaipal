@@ -5,6 +5,7 @@ import { inboxEmptyCopy } from "./inbox-empty-copy";
 
 const BASE = {
 	searching: false,
+	pinOnly: false,
 	mockup: false,
 	filtersActive: false,
 	statuses: [] as string[],
@@ -59,6 +60,32 @@ describe("inboxEmptyCopy — each arm is reachable and correctly ranked", () => 
 				statuses: [...BUCKET_LEAVES.completed],
 			}).title,
 		).toBe("No orders match your filters");
+	});
+
+	// The state the owner hit: "Pinned only" on + a 0-count status chip. The
+	// list is empty, the pin chip reads "2", and nothing explained why — the pin
+	// is the binding constraint, so it has to be the one named.
+	it("pinned-only is named, and outranks mockup and every filter below it", () => {
+		expect(
+			inboxEmptyCopy({ ...BASE, pinOnly: true, periods: ["upcoming"] }).title,
+		).toBe("No pinned orders match");
+		// "No orders need a mockup" would be false when UNPINNED mockup orders
+		// exist — the pin is what emptied the list, so it outranks that arm.
+		expect(inboxEmptyCopy({ ...BASE, pinOnly: true, mockup: true }).title).toBe(
+			"No pinned orders match",
+		);
+		expect(
+			inboxEmptyCopy({ ...BASE, pinOnly: true, filtersActive: true }).title,
+		).toBe("No pinned orders match");
+		// …but the search term still explains itself best.
+		expect(
+			inboxEmptyCopy({ ...BASE, pinOnly: true, searching: true }).title,
+		).toBe("No matches");
+		// It names the way out, since "only" is the middle of a 3-way cycle and
+		// easy to land on by accident.
+		expect(inboxEmptyCopy({ ...BASE, pinOnly: true }).body).toContain(
+			"Pinned only",
+		);
 	});
 
 	it("search outranks everything; mockup outranks filters", () => {
