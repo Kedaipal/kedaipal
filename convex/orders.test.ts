@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { BUCKET_LEAVES } from "./lib/orderBuckets";
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -2926,6 +2927,12 @@ describe("orders — inbox search", () => {
 			readyToShip: 0,
 			// Nothing pinned (86eyrtz74 — pinning is covered below).
 			pinned: 0,
+			// No booking orders in this fixture (S8). The assertion is
+			// deliberately exhaustive: a new count field has to be accounted for
+			// here consciously, not absorbed silently.
+			bookingActive: 0,
+			bookingEndingSoon: 0,
+			bookingUpcoming: 0,
 		});
 		expect(all.total).toBe(4);
 
@@ -2976,6 +2983,165 @@ describe("orders — inbox search", () => {
 		});
 		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
 	});
+
+	/**
+	 * This test exists because the first build DIDN'T have it.
+	 *
+	 * `searchOrders` assembles its filter set from an EXPLICIT field list, not a
+	 * rest spread — so a new arg can be declared in the validator, sent by the
+	 * client and carried in the URL while the server silently drops it. The chip
+	 * rendered, its count was right, and clicking it changed nothing. Unit tests
+	 * on `buildInboxPredicate` cannot see that: the break is in the wiring
+	 * between the query and the predicate, which only an end-to-end query test
+	 * crosses.
+	 */
+	test("the booking period chip actually filters (S8)", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const plain = await mkOrder(t, retailer._id, productId, { name: "Plain" });
+		const active = await mkOrder(t, retailer._id, productId, {
+			name: "Staying",
+		});
+		const future = await mkOrder(t, retailer._id, productId, { name: "Later" });
+
+		const DAY = 86_400_000;
+		const today = todayMytMidnight();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(active._id, {
+				deliveryMethod: "booking",
+				bookingCheckIn: today - 2 * DAY,
+				bookingCheckOut: today + 3 * DAY,
+			});
+			await ctx.db.patch(future._id, {
+				deliveryMethod: "booking",
+				bookingCheckIn: today + 2 * DAY,
+				bookingCheckOut: today + 5 * DAY,
+			});
+		});
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			bookingPeriods: ["active"],
+		});
+		const ids = res.orders.map((o) => o._id);
+		expect(ids).toEqual([active._id]);
+		// A plain order has no span at all — it must not survive the filter,
+		// or the chip would keep the whole product inbox.
+		expect(ids).not.toContain(plain._id);
+		expect(ids).not.toContain(future._id);
+
+		// Counts are tallied over the FULL window, so they do NOT move when the
+		// chip is on — that is what makes the chip's own number trustworthy.
+		expect(res.counts.bookingActive).toBe(1);
+		expect(res.counts.bookingUpcoming).toBe(1);
+	});
+
+	/** Same wiring hazard as the test above — `pinMode` is another arg that has
+	 * to be threaded through the explicit field list by hand. */
+	test('pinMode "only" narrows to the pinned orders', async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const kept = await mkOrder(t, retailer._id, productId, { name: "Kept" });
+		const other = await mkOrder(t, retailer._id, productId, { name: "Other" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(kept._id, { pinnedAt: Date.now() });
+		});
+
+		const pinnedOnly = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			pinMode: "only",
+		});
+		expect(pinnedOnly.orders.map((o) => o._id)).toEqual([kept._id]);
+
+		// The counts stay tallied over the full window, so the chips still say
+		// what turning one on would give you.
+		expect(pinnedOnly.counts.new + pinnedOnly.counts.in_progress).toBe(2);
+
+		// Not a one-way door: back to "top" restores the full inbox.
+		const back = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			pinMode: "top",
+		});
+		expect(back.orders.map((o) => o._id).sort()).toEqual(
+			[kept._id, other._id].sort(),
+		);
+	});
+
+	/** A client built before `pinMode` existed sends `showPinned` or nothing.
+	 * Nothing meant "no pin privilege" on the old wire, and must keep meaning
+	 * that — the new default is "top", so an unfolded arg would silently start
+	 * forcing pins into a filtered view for anyone who hadn't reloaded. */
+	test("a pre-pinMode client keeps exactly the behaviour it asked for", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const pinned = await mkOrder(t, retailer._id, productId, { name: "Pin" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(pinned._id, {
+				status: "delivered",
+				pinnedAt: Date.now(),
+			});
+		});
+
+		// No pin arg at all — the pin must NOT outrank the bucket.
+		const legacyOff = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+		});
+		expect(legacyOff.orders.map((o) => o._id)).not.toContain(pinned._id);
+
+		// The old boolean still turns the privilege on.
+		const legacyOn = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+			showPinned: true,
+		});
+		expect(legacyOn.orders.map((o) => o._id)).toContain(pinned._id);
+	});
+
+	/**
+	 * The fault that made the whole row confusing (owner report, 1 Sep): booking
+	 * chips ANDed with the status buckets while looking identical to them, so
+	 * "In progress" + "Ending this week" quietly intersected. They are ONE set
+	 * now, and this is the end-to-end proof that the union survives the wiring.
+	 */
+	test("a booking chip ORs with a status chip rather than narrowing it", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const plainNew = await mkOrder(t, retailer._id, productId, { name: "New" });
+		const stay = await mkOrder(t, retailer._id, productId, { name: "Stay" });
+
+		const DAY = 86_400_000;
+		const today = todayMytMidnight();
+		await t.run(async (ctx) => {
+			// A DELIVERED booking that is still running — deliberately in the
+			// "completed" bucket, so an intersection with New would drop it.
+			await ctx.db.patch(stay._id, {
+				status: "delivered",
+				deliveryMethod: "booking",
+				bookingCheckIn: today - DAY,
+				bookingCheckOut: today + 2 * DAY,
+			});
+		});
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+			bookingPeriods: ["active"],
+		});
+		const ids = res.orders.map((o) => o._id);
+		// Both survive: one via the bucket, one via the period.
+		expect(ids.sort()).toEqual([plainNew._id, stay._id].sort());
+	});
+
 
 	test("omitting limit returns the full window; limit trims rows but keeps total/counts (stable-window pagination)", async () => {
 		const t = setup();
@@ -9027,6 +9193,94 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		return { retailer, asA, a, b, mixed, d };
 	}
 
+	// === One status axis (1 Sep) ==========================================
+	// These live at the query layer on purpose: the pure predicate tests already
+	// pin the SEMANTICS, and every bug this change fixed was a WIRING bug — two
+	// fields that each worked alone and lied when combined.
+
+	test("a bucket's leaves and a leaf from another bucket UNION, never intersect", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		// "In progress" (as the chip writes it) + "Order Received". Under the old
+		// two-field model the chip wrote `buckets` and the panel wrote `statuses`
+		// and these ANDed to NOTHING, with both controls lit on screen.
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress, "pending"],
+		});
+		// confirmed(1) + packed(2) + pending(1)
+		expect(res.total).toBe(4);
+	});
+
+	test("an unseen push-path order is reachable from New and NOT from In progress", async () => {
+		const t = setup();
+		const { retailer, asA, d } = await seedForFilters(t);
+		// Born-confirmed, never opened — what the push flow produces (86eyf1rck).
+		await t.run(async (ctx) => {
+			await ctx.db.patch(d._id, {
+				status: "confirmed",
+				confirmationPushStatus: "sent",
+				seenAt: undefined,
+			});
+		});
+
+		const asNew = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.new],
+		});
+		expect(asNew.orders.map((o) => o.shortId)).toContain(d.shortId);
+
+		const asInProgress = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress],
+		});
+		expect(asInProgress.orders.map((o) => o.shortId)).not.toContain(d.shortId);
+
+		// And the panel can name it: its own row, split out of `confirmed`.
+		expect(asNew.facets.statusLeaf.confirmed_unseen).toBe(1);
+		expect(asNew.counts.new).toBe(1);
+	});
+
+	test("the chips and the panel rows are one tally — a bucket count is the sum of its leaves", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+		});
+		// THE property the whole model rests on: a chip can never advertise a
+		// total its own rows don't add up to.
+		for (const [bucket, leaves] of Object.entries(BUCKET_LEAVES)) {
+			const summed = leaves.reduce(
+				(n, leaf) => n + (res.facets.statusLeaf[leaf] ?? 0),
+				0,
+			);
+			expect(summed).toBe(res.counts[bucket as keyof typeof BUCKET_LEAVES]);
+		}
+	});
+
+	test("a pre-1-Sep client sending `buckets` keeps exactly the list it asked for", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["in_progress"],
+		});
+		const current = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress],
+		});
+		expect(legacy.total).toBe(current.total);
+		expect(legacy.total).toBe(3); // confirmed + 2 packed
+
+		// The old pair ANDed, so a stale tab holding both still intersects.
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["in_progress"],
+			statuses: ["packed"],
+		});
+		expect(both.total).toBe(2);
+	});
+
 	test("filters by exact status, several at once", async () => {
 		const t = setup();
 		const { retailer, asA } = await seedForFilters(t);
@@ -9074,7 +9328,9 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			statuses: ["packed"],
 		});
 		expect(res.total).toBe(2);
-		expect(res.facets.status).toEqual({
+		// Keyed by LEAF: none of these fixtures is an unseen push-path order, so
+		// every `confirmed` here is the seen half.
+		expect(res.facets.statusLeaf).toEqual({
 			pending: 1,
 			confirmed: 1,
 			packed: 2,
@@ -9160,3 +9416,4 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		expect(csv).toContain("Drinks");
 	});
 });
+

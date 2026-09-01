@@ -13,8 +13,9 @@ numbers come from the caps ticket `86eye2ccu`.
 - **`src/components/landing/pricing-teaser.tsx`** — the landing-page teaser; same
   three tiers, links to the full page.
 - **`src/components/cost/cost-calculator.tsx`** (`/cost`) — not a tier surface,
-  but it anchors the seller's own leak against the **Founding price**, so it
-  prices Kedaipal too and follows the same region.
+  but it anchors the seller's own leak against the **Pro list price**, so it
+  prices Kedaipal too and follows the same region. (It anchored on the Founding
+  price until that was retired — 30 Aug 2026 pricing reset, ClickUp z8r3fday21.)
 - Copy lives in `messages/en.json` + `messages/ms.json` + `messages/zh.json`
   (`pricing_*` for the teaser, `pricingpage_*` for the full page, `cost_*` for
   the calculator). All three locales are kept in lockstep — the i18n parity test
@@ -122,7 +123,7 @@ third billing currency is a compile error, never a silent Malaysian fallback.
 
 | | MYR | SGD |
 | --- | --- | --- |
-| Founding anchor | RM104 | S$41 |
+| Pro price anchor | RM149 | S$59 |
 | Labour rate (`LABOR_RATE_PER_HR`) | 25/hr | 15/hr |
 | AOV slider | max 500, step 5, default 35 | max 200, step 2, default 15 |
 
@@ -132,9 +133,9 @@ The MY column is byte-identical to pre-SG and a test pins it.
 implausibly cheap labour to a Singaporean and would quietly undercut the
 chase-cost half of the argument.
 
-`FOUNDING_PRICE` is **derived** from `FOUNDING_MONTHLY_PRICES`, not restated —
-the file used to carry its own literal `104`, a second copy of the Pro founding
-price with nothing stopping it drifting. A test asserts the identity.
+`PRO_PRICE` is **derived** from `PLAN_MONTHLY_PRICES`, not restated — the file
+used to carry its own literal, a second copy of the Pro price with nothing
+stopping it drifting. A test asserts the identity.
 
 The calculator holds only what the visitor **stated** (a shared link's params,
 then each slider they move) and derives the rest, because the region can resolve
@@ -179,8 +180,15 @@ today's is.
 | Tier | Price | Positioning | Orders (display) | Seats | Outlets |
 | --- | --- | --- | --- | --- | --- |
 | **Starter** | RM79/mo | Single home seller, just starting | 100/mo | 1 | 1 |
-| **Pro** | RM149/mo (founding RM104) | Established single shop | 200/mo | 2 | 1 |
-| **Scale** | **RM299/mo flat — Coming soon** (founding RM209) | Multi-outlet / high-volume seller | ~400/mo | 5 | Up to 3 (+RM49/mo each additional) |
+| **Pro** | RM149/mo | Established single shop | 200/mo | 2 | 1 |
+| **Scale** | **RM299/mo flat — Coming soon** | Multi-outlet / high-volume seller | ~400/mo | 5 | Up to 3 (+RM49/mo each additional) |
+
+**Founding pricing (RM104/S$41) is retired** (30 Aug 2026 pricing reset,
+ClickUp z8r3fday21): no public surface advertises it any more — a guard in
+`landing-redesign.test.ts` now covers `cost_*` too — and existing Founding
+Members simply keep their rate (`FOUNDING_MONTHLY_PRICES` stays in billing for
+them). Scale's launch price moves to **RM399/S$149** with the companion backend
+ticket (z8r3fday24); this table updates when that constant lands.
 
 All three prices are **flat** — no metering (Arif, 19 Jul 2026). The 1 Jul ICP
 audit disqualified reseller/wholesale networks; our real payers outgrow Pro on
@@ -236,7 +244,8 @@ Presentation rules:
   build ships. "Additional outlets RM49/mo each" is display copy only — the billing
   lever ships with that build.
 - Founding is generic across plans: `FOUNDING_MONTHLY_PRICE` covers pro (RM104) +
-  scale (RM209), 30% lifetime — not hardcoded to Pro.
+  scale (RM209), 30% lifetime — not hardcoded to Pro. **Retired for new signups
+  30 Aug 2026**; the constants remain only so existing members keep their rate.
 
 ## Enterprise — hidden
 

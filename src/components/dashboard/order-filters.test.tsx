@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
+import {
+	INBOX_BUCKETS,
+	statusToBucket,
+} from "../../../convex/lib/orderBuckets";
+import {
+	BUCKET_LEAVES,
+	INBOX_LEAF_KEYS,
+	leafBucket,
+} from "../../../convex/lib/orderBuckets";
 import {
 	activeFilterCount,
 	methodChoicesFor,
@@ -31,6 +39,7 @@ const EMPTY: Pick<
 	| "attributionSources"
 	| "sources"
 	| "statuses"
+	| "bookingPeriods"
 	| "categories"
 	| "categoriesUnspecified"
 > = {
@@ -40,6 +49,7 @@ const EMPTY: Pick<
 	attributionSources: [],
 	sources: [],
 	statuses: [],
+	bookingPeriods: [],
 	categories: [],
 	categoriesUnspecified: false,
 };
@@ -76,6 +86,7 @@ describe("OrderFilters", () => {
 				payment: ["unpaid", "received"],
 				method: ["cash"],
 				methodUnspecified: true,
+				bookingPeriods: [],
 				from: 1,
 				to: 2,
 				mockup: true,
@@ -333,7 +344,7 @@ describe("OrderFilters — status + categories mirror the header filters (86eyrt
 
 describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
 	const FACETS = {
-		status: { packed: 6, delivered: 0 },
+		statusLeaf: { packed: 6, delivered: 0 },
 		category: { Cakes: 9 },
 		source: { counter: 4 },
 		paymentStatus: { unpaid: 7 },
@@ -428,13 +439,13 @@ describe("OrderFilters — per-section select all / clear (86eyrtz74)", () => {
 		openFilters();
 		fireEvent.click(section("Status"));
 		expect(onChange).toHaveBeenCalledWith(
-			expect.objectContaining({ statuses: [...ORDER_STATUS_KEYS] }),
+			expect.objectContaining({ statuses: [...INBOX_LEAF_KEYS] }),
 		);
 	});
 
 	it("clicking a FULL section clears it — the way back from select-all", () => {
 		const { onChange } = renderFilters({
-			value: { ...EMPTY, mockup: false, statuses: [...ORDER_STATUS_KEYS] },
+			value: { ...EMPTY, mockup: false, statuses: [...INBOX_LEAF_KEYS] },
 		});
 		openFilters();
 		fireEvent.click(section("Status"));
@@ -451,7 +462,7 @@ describe("OrderFilters — per-section select all / clear (86eyrtz74)", () => {
 		openFilters();
 		fireEvent.click(section("Status"));
 		expect(onChange).toHaveBeenCalledWith(
-			expect.objectContaining({ statuses: [...ORDER_STATUS_KEYS] }),
+			expect.objectContaining({ statuses: [...INBOX_LEAF_KEYS] }),
 		);
 	});
 
@@ -470,7 +481,7 @@ describe("OrderFilters — per-section select all / clear (86eyrtz74)", () => {
 		// X", but on its own it matches every order — so the panel says so
 		// rather than leaving the seller wondering why the list didn't move.
 		renderFilters({
-			value: { ...EMPTY, mockup: false, statuses: [...ORDER_STATUS_KEYS] },
+			value: { ...EMPTY, mockup: false, statuses: [...INBOX_LEAF_KEYS] },
 		});
 		openFilters();
 		expect(screen.getByText(/same as no status filter/i)).toBeTruthy();
@@ -513,7 +524,7 @@ describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
 		screen.getByRole("checkbox", { name: new RegExp(`^${name} —`, "i") });
 
 	const FACETS = {
-		status: {},
+		statusLeaf: {},
 		category: { Cakes: 9, "": 4 },
 		source: {},
 		paymentStatus: {},
@@ -603,5 +614,42 @@ describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
 		expect(
 			screen.queryByRole("button", { name: optionNamed("PayNow") }),
 		).toBeNull();
+	});
+});
+
+describe("STATUS is grouped by bucket, and nothing falls out", () => {
+	/**
+	 * The panel renders every LEAF under its bucket heading, so the chip row
+	 * ("In progress") and the panel ("Ok go", "Packed", "Ready for Pickup")
+	 * visibly describe the same axis — and since 1 Sep they write the same state,
+	 * so a group ticked here lights its chip. Grouping introduces a way to LOSE a
+	 * row: any leaf whose bucket isn't in `INBOX_BUCKETS` renders nowhere,
+	 * silently. This pins the covering.
+	 */
+	it("every offered leaf lands in exactly one listed bucket", () => {
+		const bucketKeys = INBOX_BUCKETS.map((b) => b.key);
+		const seen = new Map<string, number>();
+		for (const leaf of INBOX_LEAF_KEYS) {
+			const bucket = leafBucket(leaf);
+			expect(bucketKeys).toContain(bucket);
+			expect(BUCKET_LEAVES[bucket]).toContain(leaf);
+			seen.set(leaf, (seen.get(leaf) ?? 0) + 1);
+		}
+		// Rendering walks buckets × leaves, so a leaf matching two buckets would
+		// appear twice. One each, no more.
+		expect([...seen.values()].every((n) => n === 1)).toBe(true);
+		expect(seen.size).toBe(INBOX_LEAF_KEYS.length);
+	});
+
+	it("reproduces the mapping the seller was confused by", () => {
+		// Three buckets are 1:1 with a status, which is why they look like they
+		// match; `in_progress` bundles three, which is why "Ok go" appeared to be
+		// missing from the pills. It is not — it is inside In progress.
+		expect(statusToBucket("pending")).toBe("new");
+		expect(statusToBucket("delivered")).toBe("completed");
+		expect(statusToBucket("cancelled")).toBe("cancelled");
+		expect(
+			(["confirmed", "packed", "shipped"] as const).map(statusToBucket),
+		).toEqual(["in_progress", "in_progress", "in_progress"]);
 	});
 });
