@@ -11,8 +11,19 @@ export type SubscriptionView = {
 	status: "trialing" | "active" | "past_due" | "cancelled";
 	comped?: boolean;
 	trialEndsAt?: number;
+	currentPeriodEnd?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
 	features?: Record<PlanFeature, boolean>;
+	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only. */
+	autoRenew?: {
+		method: string;
+		methodLabel: string;
+		failedAttempts: number;
+		failing: boolean;
+		nextChargeAt?: number;
+	};
+	autoRenewSetupPending?: boolean;
+	foundingIntent?: boolean;
 };
 
 /**
@@ -157,6 +168,7 @@ export function orderCapState(
 export type BannerState =
 	| { kind: "none" }
 	| { kind: "pastDue" }
+	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
 	| { kind: "orderCapOver"; used: number; cap: number }
@@ -171,6 +183,11 @@ export function resolveBannerState(
 ): BannerState {
 	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due") return { kind: "pastDue" };
+
+	// A declined auto-charge outranks the generic invoice countdown: it names
+	// the actual problem (the saved method) and its fix, while access is still
+	// on. Persistent, not dismissable — it clears when the invoice settles.
+	if (sub.autoRenew?.failing) return { kind: "autoRenewFailed" };
 
 	if (pendingDueAt !== undefined) {
 		const daysLeft = daysUntil(pendingDueAt, now);

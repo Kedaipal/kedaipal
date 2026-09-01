@@ -2044,11 +2044,60 @@ export default defineSchema({
 		orderCap: v.number(),
 		userCap: v.number(),
 		broadcastQuota: v.number(),
+		// --- Auto-renewal (HitPay tokenised recurring, 86eyb6z4r) --------------
+		// The HitPay recurring-billing SESSION id for this subscription — set when
+		// the seller starts auto-renewal setup, kept for the life of the saved
+		// method (it IS the id the tokenised-charge endpoint takes). Top-level +
+		// indexed so the recurring webhook can resolve a subscription from the
+		// billing id it carries. Cleared on detach/cancel.
+		autoRenewSessionId: v.optional(v.string()),
+		// Saved-method state. Present ⇒ the seller authorised a card / Touch 'n Go
+		// wallet and renewals auto-charge at period end. All patches to this object
+		// deliberately leave `updatedAt` alone — for a past_due row, `updatedAt` IS
+		// the lock-flip moment the founder report reads (docs/shipped-log.md).
+		autoRenew: v.optional(
+			v.object({
+				provider: v.literal("hitpay"),
+				// HitPay method code from the attach event ("card" / "touch_n_go").
+				method: v.string(),
+				// Display label when the event carries detail (e.g. "Visa ·· 4242").
+				methodLabel: v.optional(v.string()),
+				attachedAt: v.number(),
+				lastChargeAt: v.optional(v.number()),
+				// Successful tokenised charges on this session — compared against
+				// HitPay's `times_charged` to reconcile an attempt whose outcome was
+				// lost mid-action (crash between charge and settle) WITHOUT charging
+				// twice. See convex/subscriptionPayments.ts.
+				timesCharged: v.optional(v.number()),
+				// Dunning state for the CURRENT pending renewal invoice. Reset to
+				// zero/unset on a successful settle.
+				failedAttempts: v.optional(v.number()),
+				nextRetryAt: v.optional(v.number()),
+				lastChargeError: v.optional(v.string()),
+				// Stamped just BEFORE the charge HTTP call; cleared once the outcome
+				// (success/failure) is recorded. A fresh stamp with no outcome means
+				// "unknown — reconcile against HitPay before charging again".
+				lastChargeAttemptAt: v.optional(v.number()),
+				pendingChargeInvoiceId: v.optional(v.id("invoices")),
+			}),
+		),
+		// In-flight authorisation the seller hasn't finished (they were redirected
+		// to HitPay but no method_attached yet). Lets the billing tab offer
+		// "finish setting up" instead of minting a second session. Cleared on
+		// attach or cancel.
+		autoRenewSetup: v.optional(
+			v.object({ url: v.string(), createdAt: v.number() }),
+		),
+		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent
+		// for — one notice per cycle, reset naturally when the period rolls.
+		renewalNoticeSentForPeriodEnd: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_status", ["status"]), // drives the cron status scans
+		.index("by_status", ["status"]) // drives the cron status scans
+		// Recurring-webhook resolution: billing-session id → subscription.
+		.index("by_autorenew_session", ["autoRenewSessionId"]),
 
 	// Per-retailer × MYT-calendar-month order counter — the meter behind the SOFT
 	// orderCap nudge ("X of 100 plan orders used this month"). Keyed by calendar
@@ -2107,6 +2156,46 @@ export default defineSchema({
 		// Stamped when the pre-due-date reminder email is sent, so the daily cron
 		// sends it at most once. See convex/billingEmail.ts.
 		reminderSentAt: v.optional(v.number()),
+		// Who created this invoice (86eyb6z4r). Absent on rows issued before the
+		// field existed — read as "admin" (the only path that existed then).
+		origin: v.optional(
+			v.union(
+				v.literal("admin"), // Arif, from the admin console
+				v.literal("self_serve"), // the seller's own plan picker
+				v.literal("auto_renewal"), // the daily cron's renewal issuance
+			),
+		),
+		// --- HitPay Pay-now link + gateway settle (86eyb6z4r) ------------------
+		// One-off payment request minted against KEDAIPAL's own HitPay account so
+		// the seller can pay this invoice online. Top-level + indexed so the v1
+		// completion webhook can resolve the invoice from the request id — the
+		// same posture as orders.gatewayRequestId. Unlike buyer order links these
+		// carry NO expiry (they live in emails), and die via DELETE on void/settle.
+		gatewayRequestId: v.optional(v.string()),
+		gatewayPayment: v.optional(
+			v.object({
+				provider: v.literal("hitpay"),
+				url: v.string(),
+				// The settled payment/charge id once money landed via the gateway.
+				paymentId: v.optional(v.string()),
+			}),
+		),
+		// An authentic gateway event we deliberately did NOT settle from — the
+		// admin's audit trail for "seller paid the link after Arif marked it paid"
+		// (late_payment) or "the payment didn't match the invoice total"
+		// (amount_mismatch). Never auto-unsets anything; surfaced in the admin
+		// billing console.
+		gatewayIssue: v.optional(
+			v.object({
+				kind: v.union(
+					v.literal("amount_mismatch"),
+					v.literal("late_payment"),
+				),
+				paymentId: v.string(),
+				amountSen: v.optional(v.number()),
+				at: v.number(),
+			}),
+		),
 		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
 		// financial document, so we store the bytes (rather than regenerate on
 		// demand) — `billingConfig` bank details are a mutable singleton and could
@@ -2117,7 +2206,9 @@ export default defineSchema({
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_status", ["status"]),
+		.index("by_status", ["status"])
+		// v1 completion-webhook resolution: payment-request id → invoice.
+		.index("by_gateway_request", ["gatewayRequestId"]),
 
 	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
 	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can

@@ -23,6 +23,7 @@ How the product actually works. Read in this order.
 | [order-note.md](./order-note.md) | Shopper's free-text note at checkout: persisted on the order, carried in the `wa.me` body, surfaced to the seller + echoed to the buyer. |
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
+| [manual-subscription.md](./manual-subscription.md) → [hitpay-recurring.md](./hitpay-recurring.md) | How sellers pay **Kedaipal**: trial → invoice → settle → entitlement (manual v1 + the seam), then the automated layer — cron-issued renewals, invoice Pay-now links, self-serve subscribe, tokenised auto-renewal + dunning on Kedaipal's own HitPay account. |
 | [fulfilment.md](./fulfilment.md) | Delivery + self-collect as optional, symmetric methods: per-method toggles, the working-method invariant, multi-location pickup library, frozen snapshot lifecycle, WhatsApp confirm composition. |
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |

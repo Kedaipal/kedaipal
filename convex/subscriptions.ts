@@ -23,6 +23,7 @@ import {
 	type QueryCtx,
 } from "./_generated/server";
 import { isAdmin } from "./lib/auth";
+import { autoRenewMethodLabel } from "./lib/hitpayBilling";
 import {
 	capsForPlan,
 	featuresForPlan,
@@ -57,6 +58,21 @@ export type AccessState = {
 	active: boolean;
 	/** Soft-lock engaged — dashboard growth-writes must be blocked. */
 	frozen: boolean;
+	/** Saved-method auto-renewal summary (86eyb6z4r) — OWNER-only surface (this
+	 * state rides getMyRetailer, which shoppers never see). `failing` means the
+	 * last charge attempt was declined and dunning is running; `setupPending`
+	 * means the seller started authorisation but no method attached yet. */
+	autoRenew?: {
+		method: string;
+		methodLabel: string;
+		failedAttempts: number;
+		failing: boolean;
+		nextChargeAt?: number;
+	};
+	autoRenewSetupPending?: boolean;
+	/** Founding onboard promise (86eyb6z4r): lets the self-serve plan picker
+	 * show the discounted Pro price this store was promised. Owner-only. */
+	foundingIntent?: boolean;
 };
 
 /** Pure access resolution from a subscription doc (or null). Exported for tests
@@ -116,6 +132,22 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 		features: featuresForPlan(sub.plan),
 		active: !frozen,
 		frozen,
+		autoRenew: sub.autoRenew
+			? {
+					method: sub.autoRenew.method,
+					methodLabel:
+						sub.autoRenew.methodLabel ??
+						autoRenewMethodLabel(sub.autoRenew.method),
+					failedAttempts: sub.autoRenew.failedAttempts ?? 0,
+					failing: (sub.autoRenew.failedAttempts ?? 0) > 0,
+					nextChargeAt: sub.currentPeriodEnd,
+				}
+			: undefined,
+		autoRenewSetupPending:
+			sub.autoRenew === undefined && sub.autoRenewSetup !== undefined
+				? true
+				: undefined,
+		foundingIntent: sub.foundingIntent === true ? true : undefined,
 	};
 }
 
@@ -337,10 +369,17 @@ export const internalBackfillSubscriptions = internalMutation({
  *  - `trialing → past_due` when the trial has lapsed (`trialEndsAt < now`).
  *  - `active → past_due` when the retailer has a still-pending invoice past its
  *    `dueDate` (founding ghost / unpaid renewal). Comped subs are never flipped.
- * Also logs `active` subs nearing `currentPeriodEnd` so Arif chases the manual
- * renewal, and emails a one-time pre-due-date reminder for pending invoices.
- * Runs once daily — a retailer keeps access up to ~24h past the boundary
- * (acceptable grace). See docs/manual-subscription.md.
+ * Since 86eyb6z4r it also RUNS the renewal machine:
+ *  - a lapsed period with no pending invoice auto-issues the renewal invoice
+ *    (invoices.internalIssueRenewalInvoice — the bill Arif used to type), and
+ *    schedules the tokenised auto-charge when a saved method is attached;
+ *  - failed auto-charges are retried on the Kedaipal-owned schedule
+ *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts);
+ *  - auto-renew sellers get a one-per-cycle "renewing soon" notice ahead of
+ *    the charge (the no-surprise-MIT rule).
+ * Plus the one-time pre-due-date reminder for pending invoices. Runs once
+ * daily — a retailer keeps access up to ~24h past any boundary (acceptable
+ * grace). See docs/manual-subscription.md + docs/hitpay-recurring.md.
  */
 const REMINDER_DAYS_BEFORE = 3;
 
@@ -351,7 +390,9 @@ export const internalDailyBillingStatus = internalMutation({
 	): Promise<{
 		trialExpired: number;
 		overdue: number;
-		lapsed: number;
+		renewalsIssued: number;
+		autoChargeRetries: number;
+		renewalNotices: number;
 		renewalsDue: number;
 		remindersSent: number;
 		trialReminders: number;
@@ -359,7 +400,9 @@ export const internalDailyBillingStatus = internalMutation({
 		const now = Date.now();
 		let trialExpired = 0;
 		let overdue = 0;
-		let lapsed = 0;
+		let renewalsIssued = 0;
+		let autoChargeRetries = 0;
+		let renewalNotices = 0;
 		let renewalsDue = 0;
 		let remindersSent = 0;
 		let trialReminders = 0;
@@ -393,7 +436,8 @@ export const internalDailyBillingStatus = internalMutation({
 			}
 		}
 
-		// Active overdue (founding ghost / unpaid renewal) + renewal-chase flag.
+		// Active subs: overdue lock, auto-charge retries, renewal issuance, and
+		// the pre-renewal window.
 		const RENEWAL_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days out
 		const active = await ctx.db
 			.query("subscriptions")
@@ -419,22 +463,38 @@ export const internalDailyBillingStatus = internalMutation({
 				);
 				continue;
 			}
-			// Period lapsed with NO pending invoice → lock anyway. We never give a paid
-			// vendor free service past their cycle while waiting on Arif to issue a
-			// renewal. (A pending invoice with a future due date keeps them in grace.)
-			const hasPending = invoices.some((inv) => inv.status === "pending");
+			const pendingInvoice = invoices.find((inv) => inv.status === "pending");
+			// Dunning retry: a declined auto-charge whose retry window arrived.
+			// The charge action re-guards everything (still pending, still
+			// attached, outcome-unknown reconcile), so scheduling is safe.
 			if (
-				!hasPending &&
+				pendingInvoice &&
+				sub.autoRenew?.nextRetryAt !== undefined &&
+				sub.autoRenew.nextRetryAt <= now
+			) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.chargeDueRenewal,
+					{ invoiceId: pendingInvoice._id },
+				);
+				autoChargeRetries++;
+			}
+			// Period lapsed with no pending invoice → ISSUE THE RENEWAL (86eyb6z4r).
+			// This was the lock-them-out branch when renewals were Arif-typed; the
+			// machine now writes the bill instead, and the seller keeps access
+			// through the invoice's grace window exactly like every other pending
+			// invoice. The overdue branch above is still the lock.
+			if (
+				!pendingInvoice &&
 				sub.currentPeriodEnd !== undefined &&
 				sub.currentPeriodEnd < now
 			) {
-				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
-				lapsed++;
 				await ctx.scheduler.runAfter(
 					0,
-					internal.billingEmail.notifySubscriptionLapsed,
-					{ retailerId: sub.retailerId },
+					internal.invoices.internalIssueRenewalInvoice,
+					{ subscriptionId: sub._id },
 				);
+				renewalsIssued++;
 				continue;
 			}
 			if (
@@ -446,6 +506,31 @@ export const internalDailyBillingStatus = internalMutation({
 				console.info(
 					`[billing] renewal due soon for retailer ${sub.retailerId} (periodEnd ${new Date(sub.currentPeriodEnd).toISOString()})`,
 				);
+				// Auto-renew sellers get a one-per-cycle heads-up BEFORE the charge
+				// (no surprise merchant-initiated debits). Stamp deliberately skips
+				// `updatedAt` — for past_due rows that field is the lock-flip moment
+				// the founder report reads (docs/shipped-log.md).
+				if (
+					sub.autoRenew !== undefined &&
+					sub.renewalNoticeSentForPeriodEnd !== sub.currentPeriodEnd
+				) {
+					await ctx.db.patch(sub._id, {
+						renewalNoticeSentForPeriodEnd: sub.currentPeriodEnd,
+					});
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyAutoRenewEmail,
+						{
+							retailerId: sub.retailerId,
+							key: "autoRenewUpcoming",
+							chargeAt: sub.currentPeriodEnd,
+							methodLabel:
+								sub.autoRenew.methodLabel ??
+								autoRenewMethodLabel(sub.autoRenew.method),
+						},
+					);
+					renewalNotices++;
+				}
 			}
 		}
 
@@ -474,7 +559,9 @@ export const internalDailyBillingStatus = internalMutation({
 		return {
 			trialExpired,
 			overdue,
-			lapsed,
+			renewalsIssued,
+			autoChargeRetries,
+			renewalNotices,
 			renewalsDue,
 			remindersSent,
 			trialReminders,

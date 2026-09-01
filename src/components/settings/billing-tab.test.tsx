@@ -15,7 +15,11 @@ vi.mock("@convex-dev/react-query", () => ({
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 // InvoiceDownloadButton (rendered inside the pending-invoice card) fetches the
 // PDF URL via useAction — stub it so the card renders without a ConvexProvider.
-vi.mock("convex/react", () => ({ useAction: () => vi.fn() }));
+// The 86eyb6z4r cards (plan picker, auto-renewal) add useMutation.
+vi.mock("convex/react", () => ({
+	useAction: () => vi.fn(),
+	useMutation: () => vi.fn(),
+}));
 
 afterEach(cleanup);
 
@@ -55,16 +59,25 @@ function mockQueries({
 	// the destructuring default would swallow it.
 	supportWa = CONFIGURED_WA,
 	invoices = [],
+	gateway = null,
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
+	/** billingGatewayAvailable answer; null = gateway not configured. */
+	gateway?: {
+		payNow: boolean;
+		autoRenew: boolean;
+		methods: string[];
+		currency: string;
+	} | null;
 }) {
 	const NAME = {
 		amIAdmin: getFunctionName(api.billing.amIAdmin),
 		invoices: getFunctionName(api.invoices.myInvoices),
 		instructions: getFunctionName(api.billing.paymentInstructions),
 		supportWa: getFunctionName(api.contact.supportWhatsapp),
+		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -76,11 +89,19 @@ function mockQueries({
 			// Bank/DuitNow details only — the support number has its own query.
 			if (name === NAME.instructions) return { bankName: "Maybank" };
 			if (name === NAME.supportWa) return supportWa ?? undefined;
+			if (name === NAME.gateway) return gateway ?? undefined;
 			return undefined;
 		})();
 		return { data, isPending: false };
 	}) as unknown as typeof useQuery);
 }
+
+const GATEWAY_ON = {
+	payNow: true,
+	autoRenew: true,
+	methods: ["card", "touch_n_go"],
+	currency: "MYR",
+};
 
 /** Every wa.me href the tab renders. */
 function waLinks(): string[] {
@@ -192,6 +213,35 @@ describe("BillingTab pending invoice — how to pay", () => {
 		).toBeNull();
 	});
 
+	it("a pending invoice with a gateway link leads with Pay online now (86eyb6z4r)", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					...pendingInvoice("MYR"),
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_1",
+					},
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		const payNow = screen.getByText("Pay online now").closest("a");
+		expect(payNow?.getAttribute("href")).toBe(
+			"https://securecheckout.hit-pay.com/req_1",
+		);
+		// The manual rail stays underneath as the fallback.
+		expect(screen.getByText("How to pay")).toBeTruthy();
+	});
+
+	it("no gateway link → no Pay-now button, manual flow byte-identical", () => {
+		mockQueries({ isAdmin: false, invoices: [pendingInvoice("MYR")] });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.queryByText("Pay online now")).toBeNull();
+	});
+
 	it("a cross-border (SGD) invoice hides the MY rails and points at WhatsApp", () => {
 		// Fully-configured MY rails must STILL not render — they can't settle SGD.
 		vi.mocked(useQuery).mockImplementation(((opts: {
@@ -223,5 +273,100 @@ describe("BillingTab pending invoice — how to pay", () => {
 		).toBeGreaterThanOrEqual(2);
 		expect(screen.queryByText("Maybank")).toBeNull();
 		expect(screen.queryByText("DuitNow")).toBeNull();
+	});
+});
+
+describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
+	/** A trialing seller with nothing pending — the "choose a plan" state. */
+	const trialing = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "trialing",
+				comped: false,
+				trialEndsAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("gateway ON → the plan picker replaces the WhatsApp card", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={trialing()} />);
+		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
+		expect(screen.getByText(/Get my .* invoice/)).toBeTruthy();
+		expect(
+			screen.queryByText(/Message us on WhatsApp and we'll send your invoice/),
+		).toBeNull();
+		// Annual is pitched with its real hook, never a percentage.
+		expect(screen.getByText("2 months free")).toBeTruthy();
+	});
+
+	it("gateway OFF → the manual WhatsApp card renders exactly as before", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={trialing()} />);
+		expect(
+			screen.getByText(/Message us on WhatsApp and we'll send your invoice/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("gateway ON → the auto-renewal card offers the one-time setup", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={trialing()} />);
+		expect(screen.getByText("Auto-renewal")).toBeTruthy();
+		expect(screen.getByText("Turn on auto-renewal")).toBeTruthy();
+		// The trust line: Kedaipal never touches the card details.
+		expect(screen.getByText(/never\s+sees or stores your card/)).toBeTruthy();
+	});
+
+	it("an attached, failing method names the problem and keeps the off-switch", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+						autoRenew: {
+							method: "card",
+							methodLabel: "Visa ·· 4242",
+							failedAttempts: 1,
+							failing: true,
+						},
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(
+			screen.getByText(/couldn't charge your Visa ·· 4242/),
+		).toBeTruthy();
+		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
+	});
+
+	it("comped accounts and admins never see the gateway cards", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: true,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
 	});
 });

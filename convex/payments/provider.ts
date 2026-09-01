@@ -51,8 +51,34 @@ export const ManualAdminProvider: PaymentProvider = {
 	},
 };
 
-/** The active provider. v1 is always manual; swap here when automated billing
- * arrives (or route per-retailer). */
-export function getPaymentProvider(): PaymentProvider {
-	return ManualAdminProvider;
+/**
+ * Gateway settles (86eyb6z4r): a HitPay charge/payment on Kedaipal's own
+ * account — the tokenised auto-renewal charge or the invoice Pay-now link.
+ * `method` is the rail tag ("hitpay_card" / "hitpay_touch_n_go", bare
+ * "hitpay" when the v1 webhook omits the rail); `recordedBy` is the HitPay
+ * payment/charge id, which doubles as the settle-idempotency handle.
+ */
+export const HitPayProvider: PaymentProvider = {
+	id: "hitpay",
+	recordPayment({ method, recordedBy, paidAt }) {
+		if (!recordedBy || recordedBy.trim().length === 0)
+			throw new ConvexError("recordPayment: missing HitPay payment id");
+		if (!Number.isFinite(paidAt) || paidAt <= 0)
+			throw new ConvexError("recordPayment: invalid paidAt");
+		const m = (method ?? "").trim();
+		if (m.length === 0)
+			throw new ConvexError("recordPayment: missing gateway method tag");
+		return { method: m, recordedBy, paidAt };
+	},
+};
+
+export type PaymentSettleSource = "manual_admin" | "hitpay";
+
+/** Route by settle source — the admin mark-paid flow stays on the manual
+ * provider, gateway webhooks/charges produce the same normalized record via
+ * HitPay's. Downstream (settleInvoicePaid → founding → emails) is identical. */
+export function getPaymentProvider(
+	source: PaymentSettleSource = "manual_admin",
+): PaymentProvider {
+	return source === "hitpay" ? HitPayProvider : ManualAdminProvider;
 }

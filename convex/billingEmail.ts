@@ -8,8 +8,10 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, internalAction, internalQuery } from "./_generated/server";
 import {
+	type AutoRenewEmailKey,
 	type BillingEmailKey,
 	type PaymentEmailKey,
+	renderAutoRenewEmail,
 	renderBillingEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
@@ -17,6 +19,11 @@ import {
 } from "./lib/billingEmailCopy";
 import { sendEmail } from "./lib/email";
 import type { Locale } from "./lib/emailCopy";
+import {
+	BILLING_CURRENCY_FOR_COUNTRY,
+	type BillingCurrency,
+	planPrice,
+} from "./lib/plans";
 
 function billingPageUrl(): string {
 	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
@@ -63,6 +70,8 @@ type InvoiceEmailMeta = {
 	// above are deliberately withheld and the email shows a "we'll confirm
 	// payment details on WhatsApp" line instead.
 	crossBorder: boolean;
+	// HitPay Pay-now link (86eyb6z4r), when the mint landed for this invoice.
+	payNowUrl: string | undefined;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -101,6 +110,7 @@ export const getInvoiceForEmail = internalQuery({
 			bankAccountNumber: config?.bankAccountNumber,
 			duitnowId: config?.duitnowId,
 			crossBorder,
+			payNowUrl: invoice.gatewayPayment?.url,
 		};
 	},
 });
@@ -152,6 +162,7 @@ async function sendInvoiceEmail(
 		bankAccountNumber: meta.bankAccountNumber,
 		duitnowId: meta.duitnowId,
 		crossBorder: meta.crossBorder,
+		payNowUrl: meta.payNowUrl,
 		billingUrl: billingPageUrl(),
 	});
 
@@ -231,17 +242,25 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("trialEnded"),
 			v.literal("welcome"),
 			v.literal("thanks"),
+			v.literal("autoRenewEnabled"),
+			v.literal("autoRenewUpcoming"),
+			v.literal("autoRenewFailed"),
 		),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		founding: v.optional(v.boolean()),
 		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
+		// Adds the sample Pay-now button to the invoice emails ("payNow": true).
+		payNow: v.optional(v.boolean()),
 	},
 	handler: async (
 		_ctx,
-		{ to, key, locale, founding, currency },
+		{ to, key, locale, founding, currency, payNow },
 	): Promise<{ sent: string; key: string }> => {
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
+		const samplePayNow = payNow
+			? "https://securecheckout.sandbox.hit-pay.com/payment-request/sample"
+			: undefined;
 		const crossBorder = currency === "SGD";
 		const withDiscount = founding === true;
 		const sampleBase = crossBorder ? "SGD 59.00" : "MYR 149.00";
@@ -265,21 +284,35 @@ export const sendSampleBillingEmail = internalAction({
 							billingUrl: url,
 							daysLeft: 3,
 						})
-					: renderBillingEmail(loc, key, {
-						storeName: "Sample Store",
-						invoiceNumber: "INV-202607-SAMPLE",
-						planLabel: "Pro · Monthly",
-						totalFormatted: sampleTotal,
-						baseFormatted: withDiscount ? sampleBase : undefined,
-						discountFormatted: withDiscount ? sampleDiscount : undefined,
-						dueDateFormatted: "5 Jul 2026",
-						bankName: crossBorder ? undefined : "Maybank",
-						bankAccountName: crossBorder ? undefined : "Kedaipal Sdn Bhd",
-						bankAccountNumber: crossBorder ? undefined : "5123 4567 8901",
-						duitnowId: crossBorder ? undefined : "kedaipal",
-						crossBorder,
-						billingUrl: url,
-					});
+					: key === "autoRenewEnabled" ||
+							key === "autoRenewUpcoming" ||
+							key === "autoRenewFailed"
+						? renderAutoRenewEmail(loc, key, {
+								storeName: "Sample Store",
+								methodLabel: "Visa ·· 4242",
+								billingUrl: url,
+								planLabel: "Pro · Monthly",
+								amountFormatted: sampleTotal,
+								chargeDateFormatted: "5 Jul 2026",
+								payNowUrl: samplePayNow,
+								final: false,
+							})
+						: renderBillingEmail(loc, key, {
+								storeName: "Sample Store",
+								invoiceNumber: "INV-202607-SAMPLE",
+								planLabel: "Pro · Monthly",
+								totalFormatted: sampleTotal,
+								baseFormatted: withDiscount ? sampleBase : undefined,
+								discountFormatted: withDiscount ? sampleDiscount : undefined,
+								dueDateFormatted: "5 Jul 2026",
+								bankName: crossBorder ? undefined : "Maybank",
+								bankAccountName: crossBorder ? undefined : "Kedaipal Sdn Bhd",
+								bankAccountNumber: crossBorder ? undefined : "5123 4567 8901",
+								duitnowId: crossBorder ? undefined : "kedaipal",
+								crossBorder,
+								payNowUrl: samplePayNow,
+								billingUrl: url,
+							});
 		await sendEmail(to, rendered.subject, rendered.html, rendered.text);
 		return { sent: to, key };
 	},
@@ -371,10 +404,129 @@ export const notifyPaymentReceived = internalAction({
 });
 
 /** Scheduled when the daily cron locks a paid vendor whose period lapsed with no
- * pending invoice (Arif hasn't issued a renewal). */
+ * pending invoice. Since 86eyb6z4r the cron ISSUES the renewal instead of
+ * locking, so this no longer fires in the normal flow — kept (path-stable) for
+ * any in-flight scheduled call across the deploy. */
 export const notifySubscriptionLapsed = internalAction({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<void> => {
 		await sendRetailerNotice(ctx, retailerId, "subscriptionLapsed");
+	},
+});
+
+// --- Auto-renewal notices (86eyb6z4r) ---------------------------------------
+
+/** Everything the auto-renew notices need: contact + the seller's CURRENT
+ * renewal price (plan/cycle/founding/currency-aware — the number the upcoming
+ * charge will actually be) + the pending invoice's Pay-now link for the
+ * failure notice. */
+export const getAutoRenewEmailContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+		planLabel: string;
+		amountFormatted: string;
+		payNowUrl: string | undefined;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (!sub) return null;
+		const invoices = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.collect();
+		const lastPaid = invoices.find((inv) => inv.status === "paid");
+		const pending = invoices.find((inv) => inv.status === "pending");
+		const currency: BillingCurrency =
+			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
+				? lastPaid.currency
+				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const founding =
+			retailer.isFoundingMember === true &&
+			(sub.plan === "pro" || sub.plan === "scale");
+		const amount = planPrice(sub.plan, sub.billingCycle, founding, currency);
+		return {
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			planLabel: planLabel(sub.plan, sub.billingCycle),
+			amountFormatted: formatMoney(amount, currency),
+			payNowUrl: pending?.gatewayPayment?.url,
+		};
+	},
+});
+
+/** The three auto-renewal notices: setup confirmation, the pre-charge
+ * "renewing soon" heads-up (once per cycle — no surprise merchant-initiated
+ * debits), and the charge-failure dunning notice. Fire-and-forget like every
+ * other billing email. */
+export const notifyAutoRenewEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(
+			v.literal("autoRenewEnabled"),
+			v.literal("autoRenewUpcoming"),
+			v.literal("autoRenewFailed"),
+		),
+		methodLabel: v.string(),
+		chargeAt: v.optional(v.number()),
+		invoiceId: v.optional(v.id("invoices")),
+		final: v.optional(v.boolean()),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, key, methodLabel, chargeAt, final },
+	): Promise<void> => {
+		let meta: {
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			planLabel: string;
+			amountFormatted: string;
+			payNowUrl: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getAutoRenewEmailContext, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error(`Auto-renew email ${key} lookup failed`, err);
+			return;
+		}
+		if (!meta || !meta.notifyEmail) return;
+		const { subject, html, text } = renderAutoRenewEmail(
+			meta.locale,
+			key as AutoRenewEmailKey,
+			{
+				storeName: meta.storeName,
+				methodLabel,
+				billingUrl: billingPageUrl(),
+				planLabel: meta.planLabel,
+				amountFormatted: meta.amountFormatted,
+				chargeDateFormatted:
+					chargeAt !== undefined ? formatDueDate(chargeAt) : undefined,
+				payNowUrl: meta.payNowUrl,
+				final,
+			},
+		);
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Auto-renew email ${key} failed (${retailerId}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
 	},
 });

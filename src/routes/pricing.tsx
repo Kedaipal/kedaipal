@@ -46,12 +46,12 @@ const OG_IMAGE = `${SITE_URL}/og-image.png`;
 // Kedaipal's OWN subscription price, not a seller's storefront currency).
 const CURRENCY_SYMBOL: Record<BillingCurrency, string> = { MYR: "RM", SGD: "S$" };
 
-// Annual billing is hidden until tokenised recurring ships (HitPay recurring
-// 86eyb6z4r). There are no recurring rails behind an annual price today, and a
-// permanent visible % discount undercuts the flat-price value posture (Arif,
-// 28 Jul + 9 Aug 2026). Flip to true to re-expose the monthly/annual toggle;
-// if reinstated, frame the saving as "2 months free", never a percentage.
-const SHOW_ANNUAL_TOGGLE = false;
+// Annual billing went live with tokenised recurring (HitPay recurring
+// 86eyb6z4r): self-serve annual invoices exist, so the toggle is honest again.
+// The saving is framed as "2 months free", never a percentage — a permanent
+// visible % discount undercuts the flat-price value posture (Arif, 28 Jul +
+// 9 Aug 2026).
+const SHOW_ANNUAL_TOGGLE = true;
 
 export const Route = createFileRoute("/pricing")({
 	head: () => ({
@@ -687,8 +687,8 @@ function PricingPage() {
 						</div>
 					</FadeIn>
 
-					{/* Billing toggle — hidden until recurring billing ships; see
-					    SHOW_ANNUAL_TOGGLE. Monthly is the only cycle meanwhile. */}
+					{/* Billing toggle — live since recurring billing shipped; see
+					    SHOW_ANNUAL_TOGGLE. */}
 					{SHOW_ANNUAL_TOGGLE && (
 						<FadeIn delay={0.1}>
 							<div className="mt-8 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm">
@@ -715,8 +715,9 @@ function PricingPage() {
 									)}
 								>
 									{m.pricingpage_toggle_annual()}
-									<span className="absolute -right-1 -top-2 rotate-3 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
-										-17%
+									{/* "2 months free", never a percentage (Arif, 9 Aug 2026). */}
+									<span className="absolute -right-2 -top-2 rotate-3 whitespace-nowrap rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+										{m.pricingpage_toggle_annual_badge()}
 									</span>
 								</button>
 							</div>

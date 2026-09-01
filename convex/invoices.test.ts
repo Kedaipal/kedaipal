@@ -741,7 +741,7 @@ describe("daily billing cron", () => {
 		expect(second.trialReminders).toBe(0);
 	});
 
-	test("locks an active vendor whose period lapsed with NO pending invoice", async () => {
+	test("period lapsed with NO pending invoice → auto-issues the renewal, never locks (86eyb6z4r)", async () => {
 		const t = setup();
 		const { retailerId, invoiceId } = await seedFounding(t, "u_laps", "laps-store");
 		// Settle the invoice (no pending left), then expire the paid period.
@@ -758,15 +758,56 @@ describe("daily billing cron", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.lapsed).toBe(1);
-		expect((await getSubFor(t, retailerId))?.status).toBe("past_due");
+		// The old behavior locked here (`lapsed`); the machine now writes the
+		// renewal bill instead and the seller keeps access through its grace.
+		expect(res.renewalsIssued).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("active");
+
+		// Run the issuance the cron scheduled (invoked directly — fake timers
+		// hold scheduled functions, and the mutation is the thing under test)
+		// and check the bill it wrote: renewal origin, founding discount
+		// preserved (lifetime), same plan/cycle.
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		const issued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId },
+		);
+		expect(issued.issued).toBe(true);
+		expect(issued.autoCharge).toBe(false); // no saved method on this store
+		const renewal = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((inv) => inv.status === "pending");
+		});
+		expect(renewal).toBeDefined();
+		expect(renewal?.origin).toBe("auto_renewal");
+		expect(renewal?.plan).toBe("pro");
+		// seedFounding claims the rank at markPaid → the renewal keeps the 30%.
+		expect(renewal?.foundingDiscount).toBeGreaterThan(0);
+		expect(renewal?.currency).toBe("MYR"); // follows the last PAID invoice
+
+		// Idempotent both ways: a second direct call no-ops on the pending
+		// invoice, and a second cron run schedules nothing new.
+		const reissued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId },
+		);
+		expect(reissued.issued).toBe(false);
+		const again = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(again.renewalsIssued).toBe(0);
 	});
 
-	test("does NOT lapse-lock while a pending invoice still gives grace", async () => {
+	test("does NOT re-issue while a pending invoice still gives grace", async () => {
 		const t = setup();
 		const { retailerId } = await seedFounding(t, "u_grace", "grace-store");
 		// A converted (active) vendor: period ended, but the invoice is still pending +
-		// due in the future, so grace holds.
+		// due in the future, so grace holds and no new bill is written.
 		await t.run(async (ctx) => {
 			const sub = await ctx.db
 				.query("subscriptions")
@@ -782,8 +823,92 @@ describe("daily billing cron", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.lapsed).toBe(0);
+		expect(res.renewalsIssued).toBe(0);
 		expect((await getSubFor(t, retailerId))?.status).toBe("active");
+	});
+
+	test("picks up a due auto-charge retry while a renewal invoice pends (86eyb6z4r)", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_rty", "rty-store");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			const now = Date.now();
+			await ctx.db.patch(sub!._id, {
+				autoRenewSessionId: "rb_rty",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: now,
+					failedAttempts: 1,
+					nextRetryAt: now - 60_000, // retry window arrived
+				},
+			});
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: sub!._id,
+				invoiceNumber: "INV-RTY-2",
+				plan: "pro" as const,
+				billingCycle: "monthly" as const,
+				amount: 10400,
+				total: 10400,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86400000,
+				dueDate: now + 10 * 86400000,
+				status: "pending" as const,
+				origin: "auto_renewal" as const,
+				createdAt: now,
+			});
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.autoChargeRetries).toBe(1);
+	});
+
+	test("auto-renew sellers get ONE pre-charge notice per cycle; updatedAt untouched", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_ntc", "ntc-store");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		const before = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			const now = Date.now();
+			await ctx.db.patch(sub!._id, {
+				currentPeriodEnd: now + 2 * 24 * 60 * 60 * 1000, // inside the window
+				autoRenewSessionId: "rb_ntc",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "touch_n_go",
+					attachedAt: now,
+				},
+			});
+			return (await ctx.db.get(sub!._id))?.updatedAt;
+		});
+
+		const first = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(first.renewalNotices).toBe(1);
+		const sub = await getSubFor(t, retailerId);
+		expect(sub?.renewalNoticeSentForPeriodEnd).toBe(sub?.currentPeriodEnd);
+		// The stamp must NOT touch updatedAt — for past_due rows that field is
+		// the lock-flip moment the founder report reads (docs/shipped-log.md).
+		expect(sub?.updatedAt).toBe(before);
+
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.renewalNotices).toBe(0);
 	});
 
 	test("reminders fire again next cycle — dedup is per-invoice, not per-vendor", async () => {
