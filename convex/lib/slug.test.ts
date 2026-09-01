@@ -1,12 +1,16 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
+import { COUNTRIES } from "./country";
 import {
 	assertValidMobileForCountry,
 	assertValidMyMobile,
 	assertValidMyWaPhone,
 	assertValidWaPhone,
 	assertValidWaPhoneForCountry,
+	MOBILE_EXAMPLE,
+	MOBILE_MESSAGE,
 	normalizeMobileDigits,
+	otherCountryMobile,
 } from "./slug";
 
 describe("assertValidMyWaPhone", () => {
@@ -180,5 +184,66 @@ describe("normalizeMobileDigits", () => {
 	test("never throws — invalid shapes fall through as digits", () => {
 		expect(normalizeMobileDigits("not a phone", "MY")).toBe("");
 		expect(normalizeMobileDigits(undefined, "SG")).toBe("");
+	});
+});
+
+describe("otherCountryMobile — cross-country detection for rejection copy (z8r3fdbmc9)", () => {
+	test("recognises the other country's mobile in every shape the plate teaches", () => {
+		// SG typed into an MY-plated field: bare NSN, international, stored form.
+		expect(otherCountryMobile("9123 4567", "MY")).toBe("SG");
+		expect(otherCountryMobile("+65 9123 4567", "MY")).toBe("SG");
+		expect(otherCountryMobile("6591234567", "MY")).toBe("SG");
+		// MY into an SG-plated field: local 0-prefixed, bare NSN, stored form.
+		expect(otherCountryMobile("012-345 6789", "SG")).toBe("MY");
+		expect(otherCountryMobile("12-345 6789", "SG")).toBe("MY");
+		expect(otherCountryMobile("60123456789", "SG")).toBe("MY");
+	});
+
+	test("stays null for junk, landlines, and third countries — the copy must not guess", () => {
+		expect(otherCountryMobile("03-1234 5678", "SG")).toBeNull(); // MY landline
+		expect(otherCountryMobile("61234567", "MY")).toBeNull(); // SG fixed line
+		expect(otherCountryMobile("+44 7123 456789", "MY")).toBeNull();
+		expect(otherCountryMobile("not a phone", "SG")).toBeNull();
+		expect(otherCountryMobile("", "MY")).toBeNull();
+	});
+
+	test("a number valid for the field's own country is never 'the other country'", () => {
+		expect(otherCountryMobile("012-345 6789", "MY")).toBeNull();
+		expect(otherCountryMobile("9123 4567", "SG")).toBeNull();
+	});
+});
+
+describe("cross-country rejection copy (z8r3fdbmc9)", () => {
+	test("names the mismatch instead of a dead end, both directions", () => {
+		// Still REJECTED — acceptance is untouched; only the message changes.
+		expect(() => assertValidMobileForCountry("+65 9123 4567", "MY")).toThrow(
+			/looks like a Singapore mobile/i,
+		);
+		expect(() => assertValidMobileForCountry("012-345 6789", "SG")).toThrow(
+			/looks like a Malaysian mobile/i,
+		);
+	});
+
+	test("the cross message shows the store's own accepted example", () => {
+		expect(() => assertValidMobileForCountry("9123 4567", "MY")).toThrow(
+			new RegExp(MOBILE_EXAMPLE.MY.replace(/[-\s]/g, "[-\\s]")),
+		);
+	});
+
+	test("junk keeps the store's own generic line — no false hint", () => {
+		expect(() => assertValidMobileForCountry("12345", "MY")).toThrow(
+			MOBILE_MESSAGE.MY,
+		);
+		expect(() => assertValidMobileForCountry("61234567", "SG")).toThrow(
+			MOBILE_MESSAGE.SG,
+		);
+	});
+
+	test("every example the copy shows is accepted by its own validator", () => {
+		for (const country of COUNTRIES) {
+			expect(() =>
+				assertValidMobileForCountry(MOBILE_EXAMPLE[country], country),
+			).not.toThrow();
+		}
 	});
 });

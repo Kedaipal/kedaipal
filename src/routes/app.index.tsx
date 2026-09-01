@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
@@ -65,6 +66,13 @@ import { cn } from "../lib/utils";
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
 });
+
+// Named per store country (z8r3fdbmc9) — DuitNow is a Malaysian rail; an SG
+// store's confirmation carries PayNow instead.
+const PAYMENT_STEP_WHY: Record<Country, string> = {
+	MY: "Your bank account or DuitNow QR is included automatically in the order confirmation message sent to every shopper.",
+	SG: "Your bank account or PayNow QR is included automatically in the order confirmation message sent to every shopper.",
+};
 
 /**
  * How long the first-order celebration stays on the dashboard after activation.
@@ -293,7 +301,7 @@ function DashboardHome() {
 			done: hasPayment,
 			icon: CreditCard,
 			title: "Add payment details",
-			why: "Your bank account or DuitNow QR is included automatically in the order confirmation message sent to every shopper.",
+			why: PAYMENT_STEP_WHY[retailer.country],
 			time: "~2 min",
 			cta: "Go to Settings",
 			to: "/app/settings",

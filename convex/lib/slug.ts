@@ -14,7 +14,7 @@
  * validator can never disagree about what a store accepts.
  */
 
-import { type Country, COUNTRY_DIAL_CODE } from "./country";
+import { COUNTRIES, type Country, COUNTRY_DIAL_CODE } from "./country";
 
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
 	"_",
@@ -162,12 +162,33 @@ export const STORED_MOBILE_PATTERN: Record<Country, RegExp> = {
 };
 
 /**
+ * The noun the phone copy leads with — "Malaysian mobile", not "Malaysia
+ * mobile", so it can't be derived from COUNTRY_LABELS. One author for every
+ * surface that names the kind: the messages below, the settings cards' helper
+ * lines, and the cross-country rejection copy.
+ */
+export const MOBILE_KIND: Record<Country, string> = {
+	MY: "Malaysian mobile",
+	SG: "Singapore mobile",
+};
+
+/**
+ * The example each rejection shows — shaped the way a local writes one, and
+ * (pinned by test) a value that country's own validator accepts, so the copy
+ * can never demonstrate a format the save then refuses.
+ */
+export const MOBILE_EXAMPLE: Record<Country, string> = {
+	MY: "012-345 6789",
+	SG: "9123 4567",
+};
+
+/**
  * One rejection message per country — referenced by the server validators AND
  * the client schemas/fallback copy, so the wording exists in exactly one place.
  */
 export const MOBILE_MESSAGE: Record<Country, string> = {
-	MY: "Enter a Malaysian mobile number (e.g. 012-345 6789)",
-	SG: "Enter a Singapore mobile number (e.g. 9123 4567)",
+	MY: `Enter a ${MOBILE_KIND.MY} number (e.g. ${MOBILE_EXAMPLE.MY})`,
+	SG: `Enter a ${MOBILE_KIND.SG} number (e.g. ${MOBILE_EXAMPLE.SG})`,
 };
 
 /**
@@ -249,6 +270,65 @@ export function normalizeMobileDigits(
 }
 
 /**
+ * Which OTHER supported country would accept this value as a mobile, if any —
+ * input to better rejection copy, never to acceptance (z8r3fdbmc9).
+ *
+ * Sniffing a country from digits is deliberately banned for VALIDATION (see
+ * `assertValidWaPhoneForCountry` — sniffing is how a typo in one country's
+ * shape gets silently accepted as the other's). Error copy is the one place
+ * it's safe: the value is rejected either way, and naming what it looks like
+ * turns a dead end into a fix. The case that matters is a store sitting on the
+ * wrong country (a missed onboarding default): the seller types their own
+ * number, and "enter a Singapore mobile" describes the symptom while "that
+ * looks like a Malaysian mobile" names the cause.
+ */
+export function otherCountryMobile(
+	raw: string,
+	country: Country,
+): Country | null {
+	for (const candidate of COUNTRIES) {
+		if (candidate === country) continue;
+		if (
+			STORED_MOBILE_PATTERN[candidate].test(
+				normalizeMobileDigits(raw, candidate),
+			)
+		) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+/**
+ * The neutral cross-country rejection line — audience-safe, because the same
+ * schemas serve buyer checkout, the track-page repair, and the seller's alert
+ * and pickup-contact fields: it names what the number looks like and what this
+ * store takes, with no fix path only one side could follow. Surfaces with a
+ * country control in reach (onboarding, the settings contact card) layer their
+ * own pointed copy on top.
+ */
+export function crossCountryMobileMessage(
+	store: Country,
+	typed: Country,
+): string {
+	return `That looks like a ${MOBILE_KIND[typed]} number (+${COUNTRY_DIAL_CODE[typed]}) — this store takes ${MOBILE_KIND[store]} numbers (e.g. ${MOBILE_EXAMPLE[store]})`;
+}
+
+/**
+ * What a refused value's rejection SAYS — the cross-country line when the
+ * digits cleanly match the other supported country, the store's own
+ * `MOBILE_MESSAGE` otherwise. Acceptance is untouched; both the server
+ * authority below and the client schemas built from these pieces route their
+ * message through here so the copy can't drift between the two sides.
+ */
+export function mobileRejectionMessage(raw: string, country: Country): string {
+	const other = otherCountryMobile(raw, country);
+	return other
+		? crossCountryMobileMessage(country, other)
+		: MOBILE_MESSAGE[country];
+}
+
+/**
  * Stricter sibling of `assertValidWaPhoneForCountry` for numbers we intend to
  * MESSAGE: normalizes the same way, then requires the country's **mobile**
  * shape (`STORED_MOBILE_PATTERN`). An MY landline (`03-…` → `60312345678`)
@@ -277,9 +357,12 @@ export function normalizeMobileDigits(
  *
  * Which arm applies is the RETAILER's country (SG-lite, 86eynw28q/86eynw2dy) —
  * never a permissive both-countries regex. Cross-country numbers are rejected
- * on purpose: an SG store's checkout refuses a `+60` buyer with the SG
- * message, an MY store's refuses `+65`, keeping each side's typo protection
- * exactly as strict as it was when the app was MY-only.
+ * on purpose — an SG store's checkout refuses a `+60` buyer and vice versa,
+ * keeping each side's typo protection exactly as strict as it was when the
+ * app was MY-only — but the rejection copy names the mismatch when the digits
+ * cleanly match the other country (`mobileRejectionMessage`, z8r3fdbmc9),
+ * because "enter a Singapore mobile" is a dead end when the real problem is a
+ * store on the wrong country.
  *
  * Deliberately NOT applied to the counter's manual bind, where a cashier may
  * legitimately key an unusual number for a buyer standing in front of them
@@ -303,10 +386,10 @@ export function assertValidMobileForCountry(
 				)
 			: assertValidWaPhoneForCountry(raw, country);
 	} catch {
-		throw new Error(MOBILE_MESSAGE[country]);
+		throw new Error(mobileRejectionMessage(raw, country));
 	}
 	if (!STORED_MOBILE_PATTERN[country].test(normalized)) {
-		throw new Error(MOBILE_MESSAGE[country]);
+		throw new Error(mobileRejectionMessage(raw, country));
 	}
 	return normalized;
 }
