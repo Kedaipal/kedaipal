@@ -136,6 +136,18 @@ leaf picked, the same reading a parent checkbox gives over ticked children. The
 rules are pure and unit-tested in `src/lib/inbox-status-chips.ts` rather than
 buried in the route.
 
+**The Status section is rendered as a TREE**, because it is the only section
+three levels deep: section → bucket group → leaf. First pass gave the group a
+`BulkSelectRow` at the section's own offset and weight, and the seller had to
+read the words to work out which row was which (owner report). Now each level
+indents from the last, nested groups take `tone="subgroup"` on `BulkSelectRow`
+(smaller box, quieter label — a section heading must outrank a group heading,
+never the reverse), and the leaves sit behind a 1px left rule, which is the cue
+that reads the indent as *containment* rather than as a stray margin. Row height
+stays at the panel's 36px everywhere: a shorter subgroup row looked marginally
+tidier and made a tap target smaller than everything around it, which is not a
+trade worth making.
+
 **`Not yet opened` is a visible row** under NEW. The unseen rule has driven the
 New bucket, the Home tile and the age escalation since 86eyf1rck without ever
 being nameable in the UI; the leaf split is what makes it sayable. It is

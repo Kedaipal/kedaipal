@@ -217,7 +217,10 @@ function activeFilterTokens(
 			key: `status-${st}`,
 			// Through `leafLabel`, or the unseen leaf prints its raw key —
 			// `statusLabel` only knows the six renameable statuses.
-			label: leafLabel(st as InboxStatusLeaf, (raw) => statusLabel?.(raw) ?? raw),
+			label: leafLabel(
+				st as InboxStatusLeaf,
+				(raw) => statusLabel?.(raw) ?? raw,
+			),
 			clear: (x) => ({ ...x, statuses: x.statuses.filter((y) => y !== st) }),
 		});
 	}
@@ -613,15 +616,18 @@ export function OrderFilters({
 									    same state, so a group ticked here lights its chip. */}
 									<FilterSection
 										title="Status"
-										selected={value.statuses.length + value.bookingPeriods.length}
+										selected={
+											value.statuses.length + value.bookingPeriods.length
+										}
 										total={statusAxisTotal}
 										onToggleAll={(all) =>
 											onChange({
 												...value,
 												statuses: all ? [...INBOX_LEAF_KEYS] : [],
-												bookingPeriods: all && showBookingPeriods
-													? [...BOOKING_PERIOD_CHIPS]
-													: [],
+												bookingPeriods:
+													all && showBookingPeriods
+														? [...BOOKING_PERIOD_CHIPS]
+														: [],
 											})
 										}
 									>
@@ -639,12 +645,14 @@ export function OrderFilters({
 												value.statuses.includes(l),
 											).length;
 											return (
-												// Indented: STATUS is the section, NEW is a group
-												// inside it, and at the same offset the two tri-state
-												// rows read as siblings — three levels of hierarchy
-												// rendered flat.
-												<div key={bucket.key} className="flex flex-col pl-2.5">
+												// THREE levels, each indented from the last: STATUS is
+												// the section, NEW is a group inside it, Incoming is a
+												// row inside NEW. Rendered flat — one offset, one
+												// weight — the seller had to read the words to work
+												// out which was which (owner report, 1 Sep).
+												<div key={bucket.key} className="flex flex-col pl-2">
 													<BulkSelectRow
+														tone="subgroup"
 														label={bucket.label}
 														selected={onCount}
 														total={leaves.length}
@@ -655,38 +663,50 @@ export function OrderFilters({
 																statuses: all
 																	? [
 																			...value.statuses.filter(
-																				(x) => !leaves.includes(x as InboxStatusLeaf),
+																				(x) =>
+																					!leaves.includes(
+																						x as InboxStatusLeaf,
+																					),
 																			),
 																			...leaves,
 																		]
 																	: value.statuses.filter(
-																			(x) => !leaves.includes(x as InboxStatusLeaf),
+																			(x) =>
+																				!leaves.includes(x as InboxStatusLeaf),
 																		),
 															})
 														}
 													/>
-													{leaves.map((leaf) => (
-														<FilterOptionRow
-															key={leaf}
-															label={leafLabel(leaf, (st) => statusLabel?.(st) ?? st)}
-															count={facets?.statusLeaf[leaf] ?? 0}
-															selected={value.statuses.includes(leaf)}
-															onToggle={() =>
-																onChange({
-																	...value,
-																	statuses: value.statuses.includes(leaf)
-																		? value.statuses.filter((x) => x !== leaf)
-																		: [...value.statuses, leaf],
-																})
-															}
-														/>
-													))}
+													{/* The tree rule turns the indent into CONTAINMENT rather than a
+												    stray margin — the one cue that survives a glance. */}
+													<div className="ml-[7px] flex flex-col border-l border-border pl-1.5">
+														{leaves.map((leaf) => (
+															<FilterOptionRow
+																key={leaf}
+																label={leafLabel(
+																	leaf,
+																	(st) => statusLabel?.(st) ?? st,
+																)}
+																count={facets?.statusLeaf[leaf] ?? 0}
+																selected={value.statuses.includes(leaf)}
+																onToggle={() =>
+																	onChange({
+																		...value,
+																		statuses: value.statuses.includes(leaf)
+																			? value.statuses.filter((x) => x !== leaf)
+																			: [...value.statuses, leaf],
+																	})
+																}
+															/>
+														))}
+													</div>
 												</div>
 											);
 										})}
 										{showBookingPeriods ? (
-											<div className="flex flex-col pl-2.5">
+											<div className="flex flex-col pl-2">
 												<BulkSelectRow
+													tone="subgroup"
 													label="Booking period"
 													selected={value.bookingPeriods.length}
 													total={BOOKING_PERIOD_CHIPS.length}
@@ -694,30 +714,36 @@ export function OrderFilters({
 													onToggle={(all) =>
 														onChange({
 															...value,
-															bookingPeriods: all ? [...BOOKING_PERIOD_CHIPS] : [],
+															bookingPeriods: all
+																? [...BOOKING_PERIOD_CHIPS]
+																: [],
 														})
 													}
 												/>
-												{BOOKING_PERIOD_CHIPS.map((period) => (
-													<FilterOptionRow
-														key={period}
-														label={BOOKING_PERIOD_LABELS[period]}
-														count={bookingPeriodCounts?.[period] ?? 0}
-														selected={value.bookingPeriods.includes(period)}
-														onToggle={() =>
-															onChange({
-																...value,
-																bookingPeriods: value.bookingPeriods.includes(
-																	period,
-																)
-																	? value.bookingPeriods.filter(
-																			(x) => x !== period,
-																		)
-																	: [...value.bookingPeriods, period],
-															})
-														}
-													/>
-												))}
+												{/* Same rule as the bucket groups above — a period group is a
+												    group inside Status like any other. */}
+												<div className="ml-[7px] flex flex-col border-l border-border pl-1.5">
+													{BOOKING_PERIOD_CHIPS.map((period) => (
+														<FilterOptionRow
+															key={period}
+															label={BOOKING_PERIOD_LABELS[period]}
+															count={bookingPeriodCounts?.[period] ?? 0}
+															selected={value.bookingPeriods.includes(period)}
+															onToggle={() =>
+																onChange({
+																	...value,
+																	bookingPeriods: value.bookingPeriods.includes(
+																		period,
+																	)
+																		? value.bookingPeriods.filter(
+																				(x) => x !== period,
+																			)
+																		: [...value.bookingPeriods, period],
+																})
+															}
+														/>
+													))}
+												</div>
 											</div>
 										) : null}
 									</FilterSection>
