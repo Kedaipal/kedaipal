@@ -91,11 +91,11 @@ describe("CostCalculator — switching region re-seeds what the visitor never to
 
 	it("moves every currency-shaped figure together, leaving no ringgit behind", () => {
 		render(<CostCalculator />);
-		expect(text()).toContain("RM104/mo");
+		expect(text()).toContain("RM149/mo");
 
 		switchToSingapore();
 		const shown = text();
-		expect(shown).toContain("S$41/mo");
+		expect(shown).toContain("S$59/mo");
 		expect(shown).not.toMatch(/RM\s?\d/);
 	});
 
