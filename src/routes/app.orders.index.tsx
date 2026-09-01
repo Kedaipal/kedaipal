@@ -25,8 +25,11 @@ import { sanitizeAttributionSource } from "../../convex/lib/attribution";
 import { resolveAwbConfig } from "../../convex/lib/awbConfig";
 import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
 import {
+	foldLegacyBuckets,
 	formatStatusAge,
 	INBOX_BUCKETS,
+	INBOX_LEAF_KEYS,
+	type InboxStatusLeaf,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
 import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
@@ -110,7 +113,6 @@ import { summarizeOrderCardItems } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
-	ORDER_STATUS_KEYS,
 	type OrderStatus,
 	resolveAnchorLabel,
 	resolveCurrentStage,
@@ -118,6 +120,13 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import {
+	isBucketChip,
+	type StatusChipKey,
+	statusChipSelected as chipSelected,
+	toggleBucketChip,
+	wholeBucketSelected,
+} from "../lib/inbox-status-chips";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -132,16 +141,11 @@ const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
  * whose members OR together, so the UI has exactly one list, one toggle and one
  * count function. Two lists behaving differently is what made this confusing.
  */
-type StatusChipKey = InboxBucket | BookingPeriod;
 const BUCKET_CHIP_KEYS: StatusChipKey[] = BUCKET_KEYS;
-
-function isBookingPeriod(key: StatusChipKey): key is BookingPeriod {
-	return (BOOKING_PERIOD_CHIPS as readonly string[]).includes(key);
-}
 
 function statusChipLabel(key: StatusChipKey): string {
 	if (key === "all") return "All statuses";
-	if (isBookingPeriod(key)) return BOOKING_PERIOD_LABELS[key];
+	if (!isBucketChip(key)) return BOOKING_PERIOD_LABELS[key];
 	return INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key;
 }
 
@@ -152,10 +156,9 @@ function isPaymentStatus(x: unknown): x is PaymentStatus {
 // All optional (defaults applied in the component) so links elsewhere can target
 // `/app/orders` without specifying search, and defaults stay out of the URL.
 type InboxSearch = {
-	/** Workflow buckets to keep — MULTI since 86eyrtz74, repeated in the URL
-	 * like `pay`/`st`. Absent = every bucket ("All"). A single value still
-	 * parses (`?bucket=new` — every deep link and old bookmark), it just lands
-	 * in a one-element list. */
+	/** Pre-1-Sep workflow buckets. READ ONLY — `validateSearch` folds any value
+	 * here into `st` and returns `undefined`, so old bookmarks and deep links
+	 * keep working and the param drops out of the URL on the next tap. */
 	bucket?: OrderBucket[];
 	q?: string;
 	pay?: PaymentStatus[];
@@ -173,10 +176,14 @@ type InboxSearch = {
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
 	 * so old bookmarks keep working. */
 	sources?: OrderSource[];
-	/** Exact order statuses to keep (86eyrtz74) — repeated in the URL like
-	 * `pay`/`method`. A separate, finer dimension from `bucket`: the bucket is
-	 * the coarse stage you navigate by, this is the precise one you question. */
-	st?: OrderStatus[];
+	/**
+	 * THE status axis — status LEAVES, repeated in the URL like `pay`/`method`.
+	 * Written by the chip row (a whole bucket's leaves at a tap), the Filters
+	 * panel (one at a time) and the Status column header; they are one state, so
+	 * a link carries whatever the seller was looking at regardless of which
+	 * surface they set it from. Legacy `?bucket=` folds in at parse time.
+	 */
+	st?: InboxStatusLeaf[];
 	/** Frozen line categories to keep (86eyrtz74). Free-form seller names. */
 	cat?: string[];
 	/** Keep orders with NO frozen categories (PR #235 review) — the twin of
@@ -223,8 +230,8 @@ function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
 }
 
-function isOrderStatusKey(x: unknown): x is OrderStatus {
-	return ORDER_STATUS_KEYS.includes(x as OrderStatus);
+function isInboxLeaf(x: unknown): x is InboxStatusLeaf {
+	return (INBOX_LEAF_KEYS as readonly string[]).includes(x as string);
 }
 
 /** A repeated search param arrives as a value, an array, or nothing. */
@@ -325,7 +332,18 @@ export const Route = createFileRoute("/app/orders/")({
 				),
 			),
 		];
-		const st = [...new Set(toList(search.st).filter(isOrderStatusKey))];
+		// Legacy `?bucket=` folds into `st` right here, so the rest of the route
+		// only ever sees ONE status field and a stale bookmark heals on the next
+		// navigate. Same helper the server folds with, so a link and the query it
+		// produces can't disagree.
+		const st = [
+			...new Set(
+				foldLegacyBuckets(
+					bucket.length > 0 ? bucket : undefined,
+					[...new Set(toList(search.st).filter(isInboxLeaf))],
+				) ?? [],
+			),
+		];
 		// Category names are the seller's own words — no allowlist to validate
 		// against, so they are only de-duplicated and length-capped. An unknown
 		// name simply matches nothing, which is the honest outcome for a stale
@@ -342,7 +360,11 @@ export const Route = createFileRoute("/app/orders/")({
 				? search.q
 				: undefined;
 		return {
-			bucket: bucket.length > 0 ? bucket : undefined,
+			// Never written back: it folded into `st` above. Keeping it out of the
+			// returned object is what makes the old param disappear from the URL
+			// on the seller's next tap instead of lingering as a second source of
+			// truth for the same thing.
+			bucket: undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -424,7 +446,6 @@ const INBOX_SORTS: {
 
 function OrdersRoute() {
 	const {
-		bucket: buckets = [],
 		q = "",
 		pay = [],
 		method = [],
@@ -504,7 +525,6 @@ function OrdersRoute() {
 		hasFeature(retailer.subscription, "orderInbox");
 	const view = resolveInboxView(urlView, storedView, inboxEnabled);
 
-	const bucketKey = buckets.join(",");
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
@@ -526,7 +546,6 @@ function OrdersRoute() {
 		setVisibleCount(PAGE_SIZE);
 		setSelected(new Set());
 	}, [
-		bucketKey,
 		debounced,
 		payKey,
 		methodKey,
@@ -585,7 +604,6 @@ function OrdersRoute() {
 				? inboxEnabled
 					? {
 							retailerId: retailer._id,
-							buckets: buckets.length > 0 ? buckets : undefined,
 							paymentStatuses: pay.length > 0 ? pay : undefined,
 							paymentMethods: method.length > 0 ? method : undefined,
 							methodUnspecified: munspec || undefined,
@@ -725,6 +743,12 @@ function OrdersRoute() {
 	const allCount = counts
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
 		: undefined;
+	/**
+	 * The one bucket whose leaves the seller has selected EXACTLY — i.e. the
+	 * state "one chip is lit". `null` for a partial group, a mix, or nothing,
+	 * which is what the empty-state copy branches on.
+	 */
+	const selectedWholeBucket = wholeBucketSelected(st, period);
 	const now = Date.now();
 	const searching = debounced.length > 0;
 	const filtersActive =
@@ -763,27 +787,21 @@ function OrdersRoute() {
 			search: (prev) => {
 				// "All statuses" is the select-all — it clears the whole row.
 				if (next === "all")
-					return { ...prev, bucket: undefined, period: undefined };
-				if (isBookingPeriod(next)) {
+					return { ...prev, st: undefined, period: undefined };
+				if (!isBucketChip(next)) {
 					const list = period.includes(next)
 						? period.filter((x) => x !== next)
 						: [...period, next];
 					return { ...prev, period: list.length > 0 ? list : undefined };
 				}
-				const list = buckets.includes(next)
-					? buckets.filter((b) => b !== next)
-					: [...buckets, next];
-				return { ...prev, bucket: list.length > 0 ? list : undefined };
+				// A bucket chip is the GROUP CONTROL over its leaves — the same
+				// control as the group heading inside the Filters panel, writing the
+				// same state. Rules live in src/lib/inbox-status-chips.ts so they are
+				// unit-testable rather than buried in this closure.
+				const list = toggleBucketChip(next, st, period);
+				return { ...prev, st: list.length > 0 ? list : undefined };
 			},
 		});
-	}
-
-	/** Is this chip currently on? "All statuses" is on only when the row is
-	 * empty, which is what makes it a select-all rather than a member. */
-	function statusChipSelected(key: StatusChipKey): boolean {
-		if (key === "all") return buckets.length === 0 && period.length === 0;
-		if (isBookingPeriod(key)) return period.includes(key);
-		return buckets.includes(key);
 	}
 
 	/** Cycle the pin chip: top -> only -> off -> top. "Only" comes second
@@ -936,8 +954,10 @@ function OrdersRoute() {
 				sources: next.sources.length > 0 ? next.sources : undefined,
 				st:
 					next.statuses.length > 0
-						? (next.statuses as OrderStatus[])
+						? (next.statuses as InboxStatusLeaf[])
 						: undefined,
+				period:
+					next.bookingPeriods.length > 0 ? next.bookingPeriods : undefined,
 				cat: next.categories.length > 0 ? next.categories : undefined,
 				catunspec: next.categoriesUnspecified ? true : undefined,
 			}),
@@ -950,10 +970,10 @@ function OrdersRoute() {
 	 * something: a store with no booking listings gets no new chrome, and the
 	 * query that answers that is the same one the Calendar view is gated on.
 	 */
-	const statusChipKeys: StatusChipKey[] =
-		hasBookingListings === true
-			? [...BUCKET_CHIP_KEYS, ...BOOKING_PERIOD_CHIPS]
-			: BUCKET_CHIP_KEYS;
+	const showBookingChips = hasBookingListings === true;
+	const statusChipKeys: StatusChipKey[] = showBookingChips
+		? [...BUCKET_CHIP_KEYS, ...BOOKING_PERIOD_CHIPS]
+		: BUCKET_CHIP_KEYS;
 
 	/**
 	 * Every chip's count is tallied over the FULL window, independent of what is
@@ -1156,7 +1176,6 @@ function OrdersRoute() {
 				api.orders.exportOrders,
 				{
 					retailerId: retailer._id,
-					buckets: buckets.length > 0 ? buckets : undefined,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
 					paymentMethods: method.length > 0 ? method : undefined,
 					methodUnspecified: munspec || undefined,
@@ -1439,6 +1458,7 @@ function OrdersRoute() {
 								fwin,
 								sources,
 								statuses: st,
+								bookingPeriods: period,
 								categories: cat,
 								categoriesUnspecified: catunspec,
 								attributionSources: asrc,
@@ -1453,6 +1473,14 @@ function OrdersRoute() {
 							statusLabel={(status) => statusLabelFor({ status })}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
+							// Same gate as the chip row: a store with no booking listings
+							// never sees the group, in either place.
+							showBookingPeriods={showBookingChips}
+							bookingPeriodCounts={{
+								active: counts?.bookingActive,
+								ending_soon: counts?.bookingEndingSoon,
+								upcoming: counts?.bookingUpcoming,
+							}}
 						/>
 					</div>
 
@@ -1498,7 +1526,7 @@ function OrdersRoute() {
 							{statusChipKeys.map((key) => (
 								<FilterChip
 									key={key}
-									selected={statusChipSelected(key)}
+									selected={chipSelected(key, st, period)}
 									onClick={() => toggleStatusChip(key)}
 									count={statusChipCount(key)}
 									countTone={key === "new" ? "attention" : "muted"}
@@ -1582,17 +1610,21 @@ function OrdersRoute() {
 				// Table view keeps its table (and so its header filters) when nothing
 				// matches — the empty state renders as a row inside it instead.
 				<EmptyOrders
-					// The per-bucket copy ("No new orders…") only makes sense for ONE
-					// bucket; a multi-set or empty set falls back to the generic line.
-					bucket={buckets.length === 1 ? buckets[0] : "all"}
+					// The per-bucket copy ("No new orders…") is right only when the
+					// selection is EXACTLY one whole bucket — the state a seller reaches
+					// by tapping one chip. A partial group ("Packed" alone) or a mix
+					// gets the general line instead, because "No new orders" is simply
+					// false for a seller who picked three statuses across two buckets.
+					bucket={selectedWholeBucket ?? "all"}
 					searching={searching}
 					filtersActive={filtersActive}
 					mockup={mockup}
-					// The per-bucket copy ("No new orders…") is right only for exactly
-					// ONE bucket and nothing else. Any other selection — two buckets, or
-					// any booking chip — gets the general line, or a seller who taps
-					// "Upcoming 0" is told they have no orders at all.
-					statusChipsOn={period.length > 0 || buckets.length > 1}
+					// Anything narrower than one whole bucket, or any booking chip:
+					// without this a seller who taps "Upcoming 0" is told they have no
+					// orders at all.
+					statusChipsOn={
+						period.length > 0 || (st.length > 0 && selectedWholeBucket === null)
+					}
 				/>
 			) : (
 				// `aria-busy` while a filter change is in flight: the rows on screen

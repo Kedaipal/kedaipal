@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { BUCKET_LEAVES } from "./lib/orderBuckets";
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -9192,6 +9193,94 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		return { retailer, asA, a, b, mixed, d };
 	}
 
+	// === One status axis (1 Sep) ==========================================
+	// These live at the query layer on purpose: the pure predicate tests already
+	// pin the SEMANTICS, and every bug this change fixed was a WIRING bug — two
+	// fields that each worked alone and lied when combined.
+
+	test("a bucket's leaves and a leaf from another bucket UNION, never intersect", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		// "In progress" (as the chip writes it) + "Order Received". Under the old
+		// two-field model the chip wrote `buckets` and the panel wrote `statuses`
+		// and these ANDed to NOTHING, with both controls lit on screen.
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress, "pending"],
+		});
+		// confirmed(1) + packed(2) + pending(1)
+		expect(res.total).toBe(4);
+	});
+
+	test("an unseen push-path order is reachable from New and NOT from In progress", async () => {
+		const t = setup();
+		const { retailer, asA, d } = await seedForFilters(t);
+		// Born-confirmed, never opened — what the push flow produces (86eyf1rck).
+		await t.run(async (ctx) => {
+			await ctx.db.patch(d._id, {
+				status: "confirmed",
+				confirmationPushStatus: "sent",
+				seenAt: undefined,
+			});
+		});
+
+		const asNew = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.new],
+		});
+		expect(asNew.orders.map((o) => o.shortId)).toContain(d.shortId);
+
+		const asInProgress = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress],
+		});
+		expect(asInProgress.orders.map((o) => o.shortId)).not.toContain(d.shortId);
+
+		// And the panel can name it: its own row, split out of `confirmed`.
+		expect(asNew.facets.statusLeaf.confirmed_unseen).toBe(1);
+		expect(asNew.counts.new).toBe(1);
+	});
+
+	test("the chips and the panel rows are one tally — a bucket count is the sum of its leaves", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+		});
+		// THE property the whole model rests on: a chip can never advertise a
+		// total its own rows don't add up to.
+		for (const [bucket, leaves] of Object.entries(BUCKET_LEAVES)) {
+			const summed = leaves.reduce(
+				(n, leaf) => n + (res.facets.statusLeaf[leaf] ?? 0),
+				0,
+			);
+			expect(summed).toBe(res.counts[bucket as keyof typeof BUCKET_LEAVES]);
+		}
+	});
+
+	test("a pre-1-Sep client sending `buckets` keeps exactly the list it asked for", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["in_progress"],
+		});
+		const current = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress],
+		});
+		expect(legacy.total).toBe(current.total);
+		expect(legacy.total).toBe(3); // confirmed + 2 packed
+
+		// The old pair ANDed, so a stale tab holding both still intersects.
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["in_progress"],
+			statuses: ["packed"],
+		});
+		expect(both.total).toBe(2);
+	});
+
 	test("filters by exact status, several at once", async () => {
 		const t = setup();
 		const { retailer, asA } = await seedForFilters(t);
@@ -9239,7 +9328,9 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			statuses: ["packed"],
 		});
 		expect(res.total).toBe(2);
-		expect(res.facets.status).toEqual({
+		// Keyed by LEAF: none of these fixtures is an unseen push-path order, so
+		// every `confirmed` here is the seen half.
+		expect(res.facets.statusLeaf).toEqual({
 			pending: 1,
 			confirmed: 1,
 			packed: 2,

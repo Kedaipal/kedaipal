@@ -10,7 +10,11 @@ import {
 	matchesAnyBookingPeriod,
 } from "./bookingPeriod";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
-import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
+import {
+	type InboxStatusLeaf,
+	orderLeaf,
+	type OrderStatus,
+} from "./orderBuckets";
 import {
 	type CsvOrder,
 	ORDER_COLUMNS,
@@ -68,7 +72,6 @@ const NARROWING_FILTER_KEYS: Record<
 	Exclude<keyof InboxFilterArgs, "searchText" | "pinMode" | "bookingPeriods">,
 	true
 > = {
-	buckets: true,
 	paymentStatuses: true,
 	paymentMethods: true,
 	methodUnspecified: true,
@@ -125,16 +128,6 @@ function matchesAnyCategory(o: CsvOrder, wanted: ReadonlySet<string>): boolean {
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
 
 export type InboxFilterArgs = {
-	/**
-	 * Workflow buckets to keep — MULTI since 86eyrtz74 (was one `bucket` with an
-	 * "all" sentinel). "Completed or Cancelled" — everything closed — is a real
-	 * question the single value could not ask, and every other enumerable filter
-	 * on the inbox is already a multi-select, so a seller who has learnt "tap
-	 * several chips" everywhere else expects it here too. Empty or undefined =
-	 * every bucket, which retires the "all" sentinel from this shape entirely
-	 * (the wire still accepts the old singular; see `toInboxFilterArgs`).
-	 */
-	buckets?: OrderBucket[];
 	paymentStatuses?: Array<"unpaid" | "claimed" | "received">;
 	paymentMethods?: string[];
 	methodUnspecified?: boolean;
@@ -143,16 +136,27 @@ export type InboxFilterArgs = {
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
 	mockupPending?: boolean;
 	/**
-	 * Exact order status (86eyrtz74), multi-select — OR within itself, AND with
-	 * everything else.
+	 * THE status axis — one flat set of leaves (1 Sep). Empty or undefined = no
+	 * status filtering.
 	 *
-	 * Deliberately a SEPARATE dimension from `bucket`, not a replacement for it.
-	 * A bucket is the coarse workflow stage a seller navigates by ("what's in
-	 * progress"); this is the precise state a seller *questions* ("what is packed
-	 * or shipped — out of my hands but not delivered"), which no single bucket
-	 * expresses. They compose: bucket narrows, statuses narrow further.
+	 * It used to be two fields: `buckets` (coarse, what the chip row wrote) AND
+	 * `statuses` (exact, what the filter panel wrote), which **ANDed**. That gave
+	 * the seller two filter states wearing the same word — ticking every row under
+	 * the panel's "IN PROGRESS" heading left the "In progress" chip dark, and
+	 * combining the two surfaces could produce an empty list from two selections
+	 * that each had orders. Buckets were never expressible as statuses anyway (see
+	 * `INBOX_LEAF_KEYS`), so the fix was to give both surfaces the same atom.
+	 *
+	 * A bucket chip now writes its bucket's leaves — it IS the group control over
+	 * the panel's rows, so the two surfaces are one state and can only agree. The
+	 * coarse/exact distinction the old split was reaching for survives as
+	 * granularity of selection, not as a second dimension: "everything in
+	 * progress" is one tap, "packed or shipped — out of my hands but not
+	 * delivered" is two ticks, and both write this field.
+	 *
+	 * Legacy `buckets` on the wire folds in here; see `toInboxFilterArgs`.
 	 */
-	statuses?: OrderStatus[];
+	statuses?: InboxStatusLeaf[];
 	/**
 	 * Category names frozen on the order's lines (86eyrtz74), multi-select. An
 	 * order matches when ANY of its lines carries ANY of these names — a mixed
@@ -191,11 +195,14 @@ export type InboxFilterArgs = {
 	/**
 	 * Where a booking sits in TIME (S8) — active, ending soon, upcoming, ended.
 	 *
-	 * **ORs with `buckets`, in ONE flat set** (owner call, 1 Sep). These two
+	 * **ORs with `statuses`, in ONE flat set** (owner call, 1 Sep). These two
 	 * fields are separate on the wire only because they are computed from
-	 * different data — a bucket from `status`, a period from the booking span —
-	 * but to the seller they are one row of status chips, and "In progress +
-	 * Active now" means *either*, exactly like "New + Completed" does.
+	 * different data — a leaf from `status` + seen-state, a period from the
+	 * booking span — but to the seller they are one row of status chips, and
+	 * "In progress + Active now" means *either*, exactly like "New + Completed"
+	 * does. A period is not part of the leaf partition (an active booking also
+	 * has a leaf), so it is the one member of the set that never rolls up into a
+	 * bucket chip.
 	 *
 	 * It shipped first as a separate AND dimension, on the reasoning that
 	 * buckets are a partition (every order in exactly one, so the counts sum)
@@ -297,9 +304,7 @@ export function buildInboxPredicate(
 		args.attributionSources && args.attributionSources.length > 0
 			? new Set(args.attributionSources)
 			: null;
-	const bucketSet =
-		args.buckets && args.buckets.length > 0 ? new Set(args.buckets) : null;
-	const statusSet =
+	const leafSet =
 		args.statuses && args.statuses.length > 0 ? new Set(args.statuses) : null;
 	const categorySet =
 		args.categories && args.categories.length > 0
@@ -323,23 +328,23 @@ export function buildInboxPredicate(
 		if (pinMode === "only" && o.pinnedAt === undefined) return false;
 		// Pin privilege short-circuits EVERY rule below (86eyrtz74).
 		if (pinMode === "top" && o.pinnedAt !== undefined) return true;
-		// ONE flat status set: workflow buckets and booking periods OR together
-		// (owner call, 1 Sep — see InboxFilterArgs.bookingPeriods). Same shape as
-		// the category arm below, and for the same reason: two ways of naming a
+		// ONE flat status set: status leaves and booking periods OR together
+		// (owner call, 1 Sep — see InboxFilterArgs.statuses). Same shape as the
+		// category arm below, and for the same reason: two ways of naming a
 		// member of one set must not become an intersection.
 		//
-		// Bucket membership goes through the same seen-aware resolver the counts
-		// use, so the chip count and the list can't disagree: an unseen push-path
-		// order shows under "New" and NOT under "In progress" (86eyf1rck).
-		if (bucketSet || periodList) {
-			const byBucket = bucketSet ? bucketSet.has(orderBucket(o)) : false;
+		// Membership goes through `orderLeaf`, never `o.status`, so the chip
+		// count and the list can't disagree: an unseen push-path order is
+		// `confirmed_unseen` and shows under "New", NOT under "In progress"
+		// (86eyf1rck).
+		if (leafSet || periodList) {
+			const byLeaf = leafSet ? leafSet.has(orderLeaf(o)) : false;
 			const byPeriod = periodList
 				? matchesAnyBookingPeriod(o, periodList, now)
 				: false;
-			if (!byBucket && !byPeriod) return false;
+			if (!byLeaf && !byPeriod) return false;
 		}
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
-		if (statusSet && !statusSet.has(o.status)) return false;
 		// Category filter — the same shape as the method filter below: the named
 		// set ORs with the "none recorded" arm, so selecting every category plus
 		// Uncategorized genuinely matches every order.

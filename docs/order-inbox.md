@@ -82,22 +82,93 @@ A distinction the seller cannot see is not a distinction worth having. They are
 means *either*, "All statuses" is the select-all and any chip unlights it.
 Unticking the last chip returns to "All". Same tone, no divider, no third state.
 
-`buckets` and `bookingPeriods` stay separate args on the wire — they are computed
-from different data — but the predicate ORs them in one arm, the same shape the
-category filter already uses, and the UI has exactly **one list, one toggle and
-one count function** (`StatusChipKey`). Booking chips are appended only for a
-store with booking listings, and sit last because booking is a minority feature,
-not because they are a different kind of thing.
+`statuses` and `bookingPeriods` stay separate args on the wire — they are
+computed from different data — but the predicate ORs them in one arm, the same
+shape the category filter already uses, and the UI has exactly **one list, one
+toggle and one count function** (`StatusChipKey`). Booking chips are appended
+only for a store with booking listings, and sit last because booking is a
+minority feature, not because they are a different kind of thing.
 
 The partition property survives where it was actually load-bearing: **counts are
 still per-chip tallies over the full window**, which under a union is the honest
 reading — "this is what tapping me adds" — and is what makes it impossible for a
 chip to advertise rows the list won't show.
 
-**Booking periods are NOT in the filter panel.** They were, briefly. The panel's
-sections all AND with each other; a section that ORs with the chip row would be a
-worse lie than the one this replaced. Status lives in the chip row — buckets and
-periods alike — and the panel owns the orthogonal dimensions.
+### One status axis: the chip row and the panel are two grains of one state (1 Sep)
+
+The round above fixed the chip row against itself; this one fixes it against the
+**Filters panel**, which was a second filter state wearing the same word. The
+chips wrote `buckets` (coarse), the panel's STATUS section wrote `statuses`
+(exact `orders.status`), and the two **ANDed**. So:
+
+- ticking every row under the panel's `IN PROGRESS` heading left the "In
+  progress" chip dark — the panel could not express what the chip expressed;
+- and two selections that each had orders could combine to an empty list, with
+  both controls sitting lit on screen.
+
+**A bucket was never a set of statuses**, which is why syncing them was
+impossible rather than merely unwritten. `orderBucket` routes an **unseen
+push-path order** (born `confirmed`, never opened — 86eyf1rck) to *New*, so
+`New ⊅ {pending, booking_requested}`. On real data a store showed `New 2` on the
+chip while the panel's NEW group totalled `0`.
+
+The fix is a **leaf** — the filterable atom, `INBOX_LEAF_KEYS` in
+`convex/lib/orderBuckets.ts`. Every order resolves to exactly one via
+`orderLeaf`, and a bucket is *defined* as the union of its leaves
+(`BUCKET_LEAVES`), so `orderBucket = leafBucket(orderLeaf(o))` — same membership
+as before, now derived. `confirmed` splits into `confirmed_unseen` (New) and
+`confirmed` (In progress), which makes the leaf set a true partition, so **a
+bucket's count is the sum of its rows' counts** (pinned by tests at both the pure
+and the query layer).
+
+Three surfaces now write ONE field, `statuses`:
+
+| surface | grain |
+| --- | --- |
+| chip row | a whole bucket's leaves per tap — the group control |
+| Filters panel | one leaf per tick, grouped under tri-state bucket headings |
+| Status column header | one leaf per tick |
+
+The chip is therefore **tri-state**: all / some (a dash, `aria-pressed="mixed"`)
+/ none, and a partly-filled chip FILLS on tap exactly like `BulkSelectRow`.
+"All statuses" is on when the axis isn't narrowing — nothing picked **or** every
+leaf picked, the same reading a parent checkbox gives over ticked children. The
+rules are pure and unit-tested in `src/lib/inbox-status-chips.ts` rather than
+buried in the route.
+
+**`Not yet opened` is a visible row** under NEW. The unseen rule has driven the
+New bucket, the Home tile and the age escalation since 86eyf1rck without ever
+being nameable in the UI; the leaf split is what makes it sayable. It is
+deliberately **absent from `ORDER_STATUS_KEYS`** — that list is the seller's
+*rename* list, and "not yet opened" is a fact about their attention, not a
+pipeline stage they name. It is also self-clearing (open the order and it
+leaves), the same as an unread filter anywhere else.
+
+Two knock-on effects worth knowing:
+
+- **`booking_requested` became filterable**, closing a gap that predated this:
+  the panel built from `ORDER_STATUS_KEYS` (6, correctly excluding it), so
+  "Awaiting Approval" was reachable by the server validator and by nothing a
+  seller could click.
+- **`Ok go 118` becomes `Ok go 116` + `Not yet opened 2`.** More accurate — the
+  old number silently included orders the inbox was badging as New — but it is a
+  seller-visible figure that moves.
+
+Legacy `?bucket=` and any in-flight client sending `buckets` fold through the one
+shared `foldLegacyBuckets`, preserving the old AND as an intersection; the route
+folds at `validateSearch` so the stale param drops out of the URL on the next
+tap. Two cases it cannot recover exactly, both self-healing on refresh and both
+covered by tests: a legacy `statuses: ["confirmed"]` now means confirmed-AND-SEEN
+(nothing distinguishes it from a new client picking "Ok go" alone), and a
+contradictory pair falls back to the panel's own selection rather than to an
+empty array, which the predicate would read as *no filter at all*.
+
+**Booking periods ARE in the filter panel — inside the STATUS section.** They
+were briefly given their own section, then removed: the panel's sections all AND
+with each other, so a section that ORs with the chip row would be a worse lie
+than the one this replaced. Inside Status they OR with the leaves, which is what
+the section already does within itself, and every chip in the row now has a home
+in the panel.
 
 ### The Pinned chip has three modes, and is not part of that set
 
@@ -446,13 +517,16 @@ WhatsApp.
     never shrinks as it is used; one that did would read as orders vanishing.
     An order counts **once per category**, never once per line, so the number
     beside an option is the number of rows it will show.
-  - **Two new server dimensions.** `statuses` is exact order status, multi, and
-    deliberately a *separate* dimension from `bucket` rather than a replacement:
-    a bucket is the coarse stage you navigate by, this is the precise one you
-    question ("packed OR shipped — out of my hands but not delivered"), which no
-    single bucket expresses. `categories` matches when ANY line carries ANY
-    chosen name — a mixed ticket belongs to every category it contains — and is
-    only affordable because categories are frozen at checkout.
+  - **Two new server dimensions.** `statuses` is the status axis, multi. It
+    shipped as a *separate* dimension that ANDed with `bucket`, on the reasoning
+    that a bucket is the coarse stage you navigate by while this is the precise
+    one you question ("packed OR shipped — out of my hands but not delivered").
+    The distinction was real; making it two filter states was not — see
+    [One status axis](#one-status-axis-the-chip-row-and-the-panel-are-two-grains-of-one-state-1-sep).
+    Both grains now write this one field, at leaf granularity, and `bucket` is
+    accepted only as a legacy alias. `categories` matches when ANY line carries
+    ANY chosen name — a mixed ticket belongs to every category it contains — and
+    is only affordable because categories are frozen at checkout.
   - **`source` widened to `sources`** (multi): "online or claim link, but not
     counter" is a real question a single value could not ask. The singular is
     still accepted and folded in by `toInboxFilterArgs`, so bookmarks survive;

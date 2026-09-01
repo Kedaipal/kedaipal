@@ -1,3 +1,4 @@
+import { Minus } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
@@ -36,34 +37,51 @@ export function FilterChip({
 	children,
 	...props
 }: ComponentProps<"button"> & {
-	selected?: boolean;
+	/**
+	 * `"mixed"` is a real third state, not a styling flag: a chip that summarises
+	 * several options (the inbox's bucket chips over their statuses) must not read
+	 * as OFF while two of its three are on. Renders the dash the house uses for
+	 * "some" everywhere else (see `BulkSelectRow`) and reports `aria-pressed`
+	 * `"mixed"`, which is the native tri-state for a toggle button.
+	 */
+	selected?: boolean | "mixed";
 	tone?: "primary" | "accent";
 	/** Optional count rendered as a small pill inside the chip; caps at 99+. */
 	count?: number;
 	/** `attention` = amber (e.g. the New bucket), `muted` = quiet slate. */
 	countTone?: "muted" | "attention";
 }) {
+	const mixed = selected === "mixed";
+	const on = selected === true;
 	return (
 		<button
 			type="button"
-			aria-pressed={selected}
+			aria-pressed={mixed ? "mixed" : on}
 			className={cn(
 				"inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-				selected
+				on
 					? tone === "primary"
 						? "border-primary bg-primary text-primary-foreground"
 						: "border-accent bg-accent/15 font-semibold text-accent-emphasis"
-					: "border-border bg-card text-muted-foreground hover:border-accent/40 hover:text-foreground",
+					: mixed
+						? // Between off and on, and legibly so: the selected border with
+							// an unfilled body. Never the solid fill — "some" reading the
+							// same as "all" is the exact lie the dash is here to prevent.
+							tone === "primary"
+							? "border-primary bg-primary/10 font-semibold text-foreground"
+							: "border-accent bg-accent/5 font-semibold text-accent-emphasis"
+						: "border-border bg-card text-muted-foreground hover:border-accent/40 hover:text-foreground",
 				className,
 			)}
 			{...props}
 		>
+			{mixed ? <Minus className="size-3.5 shrink-0" aria-hidden="true" /> : null}
 			{children}
 			{count != null ? (
 				<span
 					className={cn(
 						"flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-semibold leading-none tabular-nums",
-						selected
+						on
 							? tone === "primary"
 								? countTone === "attention"
 									? "bg-amber-500 text-white"

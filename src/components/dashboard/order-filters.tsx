@@ -17,10 +17,17 @@ import {
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
 import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+} from "../../../convex/lib/bookingPeriod";
+import {
+	BUCKET_LEAVES,
 	INBOX_BUCKETS,
-	statusToBucket,
+	INBOX_LEAF_KEYS,
+	type InboxStatusLeaf,
+	leafLabel,
 } from "../../../convex/lib/orderBuckets";
-import { ORDER_STATUS_KEYS } from "../../lib/orderStatus";
 import { cn } from "../../lib/utils";
 import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
@@ -78,12 +85,25 @@ export interface OrderFilterValue {
 	 */
 	sources: OrderSource[];
 	/**
-	 * Exact order statuses to keep (86eyrtz74). Mirrors the Status column's own
-	 * header filter — both write this, so a filter set in the table is visible
-	 * and clearable here, and a cards-view seller (who has no table headers) can
-	 * still set it.
+	 * THE status axis — status LEAVES (1 Sep). Written by all three surfaces that
+	 * express it: the chip row above the list (whole groups at a tap), these rows
+	 * (one leaf at a time), and the Status column's own header filter. One state,
+	 * so a selection made anywhere is visible and clearable everywhere; they used
+	 * to be two ANDed fields and disagreed on screen.
 	 */
 	statuses: string[];
+	/**
+	 * Booking periods to keep (S8) — lives in the STATUS section and **ORs with
+	 * `statuses`**, the one member of that section computed from the booking span
+	 * rather than from the order's leaf.
+	 *
+	 * It is here and not in a section of its own because sections AND with each
+	 * other: an "Active now" box that intersected the status rows would answer a
+	 * question nobody asked ("in progress AND currently staying"), and the chip
+	 * row two feet above already ORs it. A separate section was built, shipped,
+	 * and taken back out for exactly that reason.
+	 */
+	bookingPeriods: BookingPeriod[];
 	/** Frozen line categories to keep (86eyrtz74). Same mirroring rule. */
 	categories: string[];
 	/** Keep orders with NO categories — the twin of `methodUnspecified`. Without
@@ -113,6 +133,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		(v.fwin != null ? 1 : 0) +
 		v.sources.length +
 		v.statuses.length +
+		v.bookingPeriods.length +
 		v.categories.length +
 		(v.categoriesUnspecified ? 1 : 0) +
 		v.attributionSources.length
@@ -194,8 +215,20 @@ function activeFilterTokens(
 	for (const st of v.statuses) {
 		tokens.push({
 			key: `status-${st}`,
-			label: statusLabel?.(st) ?? st,
+			// Through `leafLabel`, or the unseen leaf prints its raw key —
+			// `statusLabel` only knows the six renameable statuses.
+			label: leafLabel(st as InboxStatusLeaf, (raw) => statusLabel?.(raw) ?? raw),
 			clear: (x) => ({ ...x, statuses: x.statuses.filter((y) => y !== st) }),
+		});
+	}
+	for (const period of v.bookingPeriods) {
+		tokens.push({
+			key: `period-${period}`,
+			label: BOOKING_PERIOD_LABELS[period],
+			clear: (x) => ({
+				...x,
+				bookingPeriods: x.bookingPeriods.filter((y) => y !== period),
+			}),
 		});
 	}
 	for (const c of v.categories) {
@@ -281,6 +314,7 @@ export function clearedFilters(): OrderFilterValue {
 	return {
 		payment: [],
 		method: [],
+		bookingPeriods: [],
 		methodUnspecified: false,
 		from: undefined,
 		to: undefined,
@@ -352,6 +386,8 @@ export function OrderFilters({
 	facets,
 	mockupCount,
 	resultCount,
+	showBookingPeriods = false,
+	bookingPeriodCounts,
 }: {
 	value: OrderFilterValue;
 	onChange: (next: OrderFilterValue) => void;
@@ -381,12 +417,24 @@ export function OrderFilters({
 	mockupCount?: number;
 	/** Live match count for the current filters — shown on the apply button. */
 	resultCount?: number;
+	/** Whether this store sells bookings at all. Hides the Booking period group
+	 * for the majority who don't, rather than showing three permanently-zero
+	 * rows inside the section every seller opens. */
+	showBookingPeriods?: boolean;
+	/** Per-period tallies over the unfiltered window, same rule as `facets`. */
+	bookingPeriodCounts?: Partial<Record<BookingPeriod, number>>;
 }) {
 	const [open, setOpen] = useState(false);
 	// Custom date inputs stay collapsed behind the calendar icon unless a custom
 	// range is already applied — presets cover the common cases.
 	const [customDates, setCustomDates] = useState(false);
 	const count = activeFilterCount(value);
+	// Denominator for the section's select-all. Booking periods are part of the
+	// axis only where the store has bookings, so the "x/y" and the "every option
+	// selected" hint stay true for the stores that never see that group.
+	const statusAxisTotal =
+		INBOX_LEAF_KEYS.length +
+		(showBookingPeriods ? BOOKING_PERIOD_CHIPS.length : 0);
 	const showMockup = (mockupCount ?? 0) > 0 || value.mockup;
 	const tokens = activeFilterTokens(value, mockupCount, statusLabel);
 	const clearFilters = () => onChange(clearedFilters());
@@ -557,50 +605,78 @@ export function OrderFilters({
 						    up roughly level.                                      */}
 							<div className="grid gap-x-5 gap-y-4 sm:grid-cols-2">
 								<div className="flex flex-col gap-4">
+									{/* ONE section for the whole status axis, because everything
+									    in it ORs and everything in a DIFFERENT section ANDs.
+									    Booking periods are inside it for that reason alone —
+									    see OrderFilterValue.bookingPeriods. The chip row above
+									    shows the same axis one grain coarser, and writes the
+									    same state, so a group ticked here lights its chip. */}
 									<FilterSection
 										title="Status"
-										selected={value.statuses.length}
-										total={ORDER_STATUS_KEYS.length}
+										selected={value.statuses.length + value.bookingPeriods.length}
+										total={statusAxisTotal}
 										onToggleAll={(all) =>
 											onChange({
 												...value,
-												statuses: all ? [...ORDER_STATUS_KEYS] : [],
+												statuses: all ? [...INBOX_LEAF_KEYS] : [],
+												bookingPeriods: all && showBookingPeriods
+													? [...BOOKING_PERIOD_CHIPS]
+													: [],
 											})
 										}
 									>
-										{/* GROUPED BY BUCKET, not a flat six.
-										    The chip row above shows the same axis at a coarser
-										    grain, in the SYSTEM's words ("In progress"), while
-										    these rows carry the SELLER's own renames ("Ok go").
-										    Flat, that made statuses look like a second, unrelated
-										    system — "why is Ok go nowhere in the pills?" — when
-										    Ok go simply lives inside In progress along with two
-										    others. The heading is the missing sentence, and it
-										    comes from `statusToBucket`, the same function the
-										    chips count through, so the grouping can never drift
-										    from the buckets it claims to explain. */}
+										{/* GROUPED BY BUCKET, and the heading is a real tri-state
+										    control, not a caption: this is the same set the "New" /
+										    "In progress" chips toggle, so the group needs to be
+										    tickable in both places or the chip is doing something
+										    the panel can't undo. Rows carry the SELLER's renames
+										    ("Ok go"); the heading carries the SYSTEM's word ("In
+										    progress"), which is the sentence that explains where
+										    Ok go went. */}
 										{INBOX_BUCKETS.map((bucket) => {
-											const inBucket = ORDER_STATUS_KEYS.filter(
-												(st) => statusToBucket(st) === bucket.key,
-											);
-											if (inBucket.length === 0) return null;
+											const leaves = BUCKET_LEAVES[bucket.key];
+											const onCount = leaves.filter((l) =>
+												value.statuses.includes(l),
+											).length;
 											return (
-												<div key={bucket.key} className="flex flex-col">
-													<span className="px-1 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-														{bucket.label}
-													</span>
-													{inBucket.map((st) => (
+												// Indented: STATUS is the section, NEW is a group
+												// inside it, and at the same offset the two tri-state
+												// rows read as siblings — three levels of hierarchy
+												// rendered flat.
+												<div key={bucket.key} className="flex flex-col pl-2.5">
+													<BulkSelectRow
+														label={bucket.label}
+														selected={onCount}
+														total={leaves.length}
+														unit="statuses"
+														onToggle={(all) =>
+															onChange({
+																...value,
+																statuses: all
+																	? [
+																			...value.statuses.filter(
+																				(x) => !leaves.includes(x as InboxStatusLeaf),
+																			),
+																			...leaves,
+																		]
+																	: value.statuses.filter(
+																			(x) => !leaves.includes(x as InboxStatusLeaf),
+																		),
+															})
+														}
+													/>
+													{leaves.map((leaf) => (
 														<FilterOptionRow
-															key={st}
-															label={statusLabel?.(st) ?? st}
-															count={facets?.status[st] ?? 0}
-															selected={value.statuses.includes(st)}
+															key={leaf}
+															label={leafLabel(leaf, (st) => statusLabel?.(st) ?? st)}
+															count={facets?.statusLeaf[leaf] ?? 0}
+															selected={value.statuses.includes(leaf)}
 															onToggle={() =>
 																onChange({
 																	...value,
-																	statuses: value.statuses.includes(st)
-																		? value.statuses.filter((x) => x !== st)
-																		: [...value.statuses, st],
+																	statuses: value.statuses.includes(leaf)
+																		? value.statuses.filter((x) => x !== leaf)
+																		: [...value.statuses, leaf],
 																})
 															}
 														/>
@@ -608,6 +684,42 @@ export function OrderFilters({
 												</div>
 											);
 										})}
+										{showBookingPeriods ? (
+											<div className="flex flex-col pl-2.5">
+												<BulkSelectRow
+													label="Booking period"
+													selected={value.bookingPeriods.length}
+													total={BOOKING_PERIOD_CHIPS.length}
+													unit="periods"
+													onToggle={(all) =>
+														onChange({
+															...value,
+															bookingPeriods: all ? [...BOOKING_PERIOD_CHIPS] : [],
+														})
+													}
+												/>
+												{BOOKING_PERIOD_CHIPS.map((period) => (
+													<FilterOptionRow
+														key={period}
+														label={BOOKING_PERIOD_LABELS[period]}
+														count={bookingPeriodCounts?.[period] ?? 0}
+														selected={value.bookingPeriods.includes(period)}
+														onToggle={() =>
+															onChange({
+																...value,
+																bookingPeriods: value.bookingPeriods.includes(
+																	period,
+																)
+																	? value.bookingPeriods.filter(
+																			(x) => x !== period,
+																		)
+																	: [...value.bookingPeriods, period],
+															})
+														}
+													/>
+												))}
+											</div>
+										) : null}
 									</FilterSection>
 
 									<FilterSection

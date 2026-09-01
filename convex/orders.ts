@@ -62,7 +62,12 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
+import {
+	foldLegacyBuckets,
+	isUnseenOrder,
+	leafBucket,
+	orderLeaf,
+} from "./lib/orderBuckets";
 import {
 	type CsvOrder,
 	orderCategoryNames,
@@ -1909,7 +1914,7 @@ const MAX_INBOX_SCAN = 1000;
  * pre-widen singular `source` (86eyrtz74), still accepted so a bookmarked URL
  * or a client that hasn't reloaded keeps filtering.
  */
-type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
+type InboxFilterInput = Omit<InboxFilterArgs, "sources"> & {
 	/** Pre-"only" pin boolean (86eyrtz74), folded into `pinMode`. */
 	showPinned?: boolean;
 	source?: "storefront" | "counter" | "claim";
@@ -1931,6 +1936,7 @@ type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
 function toInboxFilterArgs({
 	source,
 	bucket,
+	buckets,
 	showPinned,
 	...rest
 }: InboxFilterInput): InboxFilterArgs {
@@ -1941,12 +1947,15 @@ function toInboxFilterArgs({
 		// in-flight client keeps exactly the behaviour it asked for.
 		pinMode: rest.pinMode ?? (showPinned === true ? "top" : "off"),
 		sources: rest.sources ?? (source ? [source] : undefined),
-		// The old singular carried an "all" sentinel; the multi shape says the
-		// same thing by absence.
-		buckets:
-			rest.buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+		statuses: foldLegacyBuckets(
+			// The oldest singular carried an "all" sentinel; the multi shape says
+			// the same thing by absence.
+			buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+			rest.statuses,
+		),
 	};
 }
+
 
 /** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
  * worth a name. */
@@ -1983,6 +1992,20 @@ const orderSourceValidator = v.union(
 	v.literal("claim"),
 );
 
+// THE status axis on the wire (1 Sep) — leaves, not raw statuses. `confirmed`
+// here means confirmed AND SEEN; `confirmed_unseen` is its own member. See
+// INBOX_LEAF_KEYS in lib/orderBuckets.ts for why the split exists.
+const statusLeafValidator = v.union(
+	v.literal("pending"),
+	v.literal("booking_requested"),
+	v.literal("confirmed_unseen"),
+	v.literal("confirmed"),
+	v.literal("packed"),
+	v.literal("shipped"),
+	v.literal("delivered"),
+	v.literal("cancelled"),
+);
+
 /**
  * Order inbox: one query that returns the filtered/searched page **plus** the
  * per-bucket counts (over the full set, independent of the active filters), in a
@@ -1999,8 +2022,10 @@ export const searchOrders = query({
 		bucket: v.optional(
 			v.union(v.literal("all"), orderBucketValidator),
 		),
-		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
-		// real question one value couldn't ask. Empty/absent = every bucket.
+		// Pre-1-Sep workflow buckets, when the chip row and the filter panel
+		// were two ANDed filter states. Both now write `statuses`; this is kept
+		// only so a bookmarked URL or an in-flight client keeps filtering, and
+		// folds in via toInboxFilterArgs. Drop it a release on.
 		buckets: v.optional(v.array(orderBucketValidator)),
 		// Booking period (S8) — a chip, NOT a bucket. See
 		// `bookingPeriods` in lib/orderInboxFilter.ts for why it can't be one.
@@ -2044,7 +2069,7 @@ export const searchOrders = query({
 	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
 	// bucket is the coarse stage a seller navigates by; this is the precise one
 	// they question ("packed OR shipped"). Driven from the Status column header.
-	statuses: v.optional(v.array(statusValidator)),
+	statuses: v.optional(v.array(statusLeafValidator)),
 	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
 	// ANY line carries ANY of these. Free-form names (the seller's own
 	// catalogue), so v.string(); the picker is driven by `availableCategories`.
@@ -2205,7 +2230,10 @@ export const searchOrders = query({
 		// you used it would make the seller think orders had vanished. Showing the
 		// count next to each option is most of what makes a header filter usable —
 		// it answers "is there anything in there?" before you commit to the click.
-		const statusTally = new Map<string, number>();
+		// Keyed by LEAF, not `o.status` — see INBOX_LEAF_KEYS. Named for it so a
+		// future reader can't index this with a raw status and quietly miss the
+		// unseen half of `confirmed`.
+		const leafTally = new Map<string, number>();
 		const categoryTally = new Map<string, number>();
 		const checkoutSourceTally = new Map<string, number>();
 		const paymentStatusTally = new Map<string, number>();
@@ -2214,8 +2242,14 @@ export const searchOrders = query({
 		const paymentMethodTally = new Map<string, number>();
 
 		for (const o of all) {
-			const b = orderBucket(o);
+			// Leaf first, bucket derived from it — so the per-leaf rows in the
+			// filter panel and the per-bucket chips above them are the same tally
+			// summed at two grains, and a bucket chip can never advertise a count
+			// its own rows don't add up to.
+			const leaf = orderLeaf(o);
+			const b = leafBucket(leaf);
 			counts[b]++;
+			bump(leafTally, leaf);
 			const asrc = attributionBucket(o);
 			sourceTally.set(asrc, (sourceTally.get(asrc) ?? 0) + 1);
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
@@ -2240,7 +2274,6 @@ export const searchOrders = query({
 			if (matchesBookingPeriod(o, "upcoming", now)) counts.bookingUpcoming++;
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
-			bump(statusTally, o.status);
 			bump(checkoutSourceTally, o.source ?? "storefront");
 			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
 			bump(paymentMethodTally, o.paymentMethod ?? "");
@@ -2305,7 +2338,7 @@ export const searchOrders = query({
 			// Per-option row counts for the header filters. Plain objects rather
 			// than Maps so they cross the wire.
 			facets: {
-				status: Object.fromEntries(statusTally),
+				statusLeaf: Object.fromEntries(leafTally),
 				category: Object.fromEntries(categoryTally),
 				source: Object.fromEntries(checkoutSourceTally),
 				paymentStatus: Object.fromEntries(paymentStatusTally),
@@ -2369,7 +2402,7 @@ const exportFilterValidators = {
 	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
 	// bucket is the coarse stage a seller navigates by; this is the precise one
 	// they question ("packed OR shipped"). Driven from the Status column header.
-	statuses: v.optional(v.array(statusValidator)),
+	statuses: v.optional(v.array(statusLeafValidator)),
 	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
 	// ANY line carries ANY of these. Free-form names (the seller's own
 	// catalogue), so v.string(); the picker is driven by `availableCategories`.
