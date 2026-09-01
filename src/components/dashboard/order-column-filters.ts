@@ -14,7 +14,11 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import { ORDER_STATUS_KEYS, type OrderStatus } from "../../lib/orderStatus";
+import {
+	INBOX_LEAF_KEYS,
+	leafLabel,
+} from "../../../convex/lib/orderBuckets";
+import type { OrderStatus } from "../../lib/orderStatus";
 import type { ColumnFilterOption } from "../ui/column-filter-menu";
 
 /**
@@ -64,7 +68,8 @@ export interface OrderColumnFilterState {
 
 /** Per-option row counts over the UNFILTERED window, from `searchOrders`. */
 export interface OrderFilterFacets {
-	status: Record<string, number>;
+	/** Keyed by status LEAF, not `orders.status` — see INBOX_LEAF_KEYS. */
+	statusLeaf: Record<string, number>;
 	category: Record<string, number>;
 	source: Record<string, number>;
 	paymentStatus: Record<string, number>;
@@ -151,10 +156,14 @@ export function buildOrderColumnFilters({
 	// Status — in LIFECYCLE order, never alphabetical or by count: a seller
 	// reading a status list is reading a pipeline, and "Cancelled, Confirmed,
 	// Delivered, Packed…" destroys the one thing that makes it scannable.
+	// LEAVES, not raw statuses — the same atom the chip row and the Filters panel
+	// select on. A column header offering a different status vocabulary from the
+	// panel two feet away is how the inbox came to have two disagreeing filters
+	// in the first place; there is exactly one status axis now, at three grains.
 	map.set("status", {
 		label: "Status",
-		options: ORDER_STATUS_KEYS.map((s) =>
-			opt(s, statusLabel(s), facets?.status),
+		options: INBOX_LEAF_KEYS.map((leaf) =>
+			opt(leaf, leafLabel(leaf, statusLabel), facets?.statusLeaf),
 		),
 		selected: state.statuses,
 		onChange: (statuses) => onApply({ statuses }),
