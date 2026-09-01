@@ -38,6 +38,7 @@ import {
 	isFailedDeliveryAttempt,
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
+	parseCompanyResponse,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -179,6 +180,8 @@ export const storeConnection = internalMutation({
 		customerId: v.number(),
 		companyId: v.optional(v.string()),
 		accountName: v.optional(v.string()),
+		isDemo: v.optional(v.boolean()),
+		companyCode: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const retailer = await ctx.db.get(args.retailerId);
@@ -195,6 +198,8 @@ export const storeConnection = internalMutation({
 				customerId: args.customerId,
 				companyId: args.companyId,
 				accountName: args.accountName,
+				isDemo: args.isDemo,
+				companyCode: args.companyCode,
 				// Pickup address + parcel-type default survive a key rotation.
 				defaultItemType: prev?.defaultItemType,
 				pickupAddress: prev?.pickupAddress,
@@ -261,7 +266,12 @@ export const connect = action({
 		args,
 	): Promise<
 		| { ok: false; message: string }
-		| { ok: true; accountName?: string; webhooksSubscribed: boolean }
+		| {
+				ok: true;
+				accountName?: string;
+				webhooksSubscribed: boolean;
+				isDemo?: boolean;
+		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getConnectContext, {
 			retailerId: args.retailerId,
@@ -276,6 +286,8 @@ export const connect = action({
 		let companyId: string | undefined;
 		let customerId: number | undefined;
 		let accountName: string | undefined;
+		let isDemo: boolean | undefined;
+		let companyCode: string | undefined;
 		try {
 			const user = (await callDelyvaWithKey(apiKey, "GET", "/user")) as {
 				data?: { apiSecret?: unknown; companyId?: unknown; name?: unknown };
@@ -297,6 +309,29 @@ export const connect = action({
 				typeof customer.data?.name === "string" && customer.data.name
 					? customer.data.name
 					: undefined;
+			// Which Delyva WORLD this key lives in. Their demo environment
+			// shares the production API host and issues no key prefix, so the
+			// company record is the only tell — `code: "demo"` /
+			// `websiteUrl: demo.delyva.app`. Non-fatal: an unreadable company
+			// leaves `isDemo` unset, which every surface renders as "unknown"
+			// rather than a false all-clear.
+			if (companyId) {
+				try {
+					const company = parseCompanyResponse(
+						await callDelyvaWithKey(
+							apiKey,
+							"GET",
+							`/company/${encodeURIComponent(companyId)}`,
+						),
+					);
+					isDemo = company.isDemo;
+					companyCode = company.code;
+				} catch (err) {
+					console.warn("[delyva] company lookup failed — env unknown", {
+						message: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
 		} catch (err) {
 			if (err instanceof DelyvaApiError && err.status === 401) {
 				return {
@@ -330,6 +365,8 @@ export const connect = action({
 			customerId,
 			companyId,
 			accountName,
+			isDemo,
+			companyCode,
 		});
 
 		// Webhooks: best-effort — a subscribe failure must not fail the connect
@@ -354,7 +391,7 @@ export const connect = action({
 				});
 			}
 		}
-		return { ok: true, accountName, webhooksSubscribed };
+		return { ok: true, accountName, webhooksSubscribed, isDemo };
 	},
 });
 
@@ -564,6 +601,11 @@ export type DelyvaSummary = {
 	enabled: boolean;
 	apiKeyHint?: string;
 	accountName?: string;
+	/** True = the key belongs to Delyva's DEMO environment (play money, no
+	 * courier ever dispatched). Undefined = connected before we looked, or the
+	 * lookup failed — render as "unknown", never as live. */
+	isDemo?: boolean;
+	companyCode?: string;
 	defaultItemType: DelyvaItemType;
 	pickupAddress?: {
 		address1: string;
@@ -588,6 +630,8 @@ export const getSettings = query({
 			enabled: config?.enabled === true,
 			apiKeyHint: config?.apiKeyHint,
 			accountName: config?.accountName,
+			isDemo: config?.isDemo,
+			companyCode: config?.companyCode,
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
 			pickupAddress: config?.pickupAddress,
 			connectedAt: config?.connectedAt,
@@ -1484,6 +1528,11 @@ export const getDispatchState = query({
 		/** The store has a working, enabled Delyva connection. */
 		bookingEnabled: boolean;
 		defaultItemType: DelyvaItemType;
+		/** Demo account (86eyjpv6z): a booking from this card dispatches no
+		 * courier and spends no real credit. Said out loud at the point of
+		 * spend, the Lalamove sandbox-banner posture (86eypncfy). Undefined =
+		 * un-stamped row — rendered as nothing, never as a false all-clear. */
+		isDemo?: boolean;
 		/** Auto-resolved cart weight (kg); null = the dialog must ask. */
 		computedWeightKg: number | null;
 		weightIssue: "custom_item" | "missing_weights" | null;
@@ -1546,6 +1595,7 @@ export const getDispatchState = query({
 				config?.enabled === true &&
 				delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
+			isDemo: config?.isDemo,
 			computedWeightKg: weight.kind === "ok" ? weight.kg : null,
 			weightIssue: weight.kind === "ok" ? null : weight.kind,
 		};

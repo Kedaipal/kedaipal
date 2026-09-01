@@ -21,6 +21,7 @@ import { useAction } from "convex/react";
 import {
 	CircleAlert,
 	ExternalLink,
+	FlaskConical,
 	RefreshCw,
 	Snowflake,
 	Truck,
@@ -207,6 +208,28 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 					</span>
 				) : null}
 			</div>
+
+			{/* A demo booking dispatches no courier and spends play money, and
+			    looks identical to a real one until nobody turns up — so it is said
+			    at the point of spend, not only in Settings (86eypncfy). */}
+			{dispatch.isDemo ? (
+				<p className="flex items-start gap-2 rounded-xl bg-amber-100 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+					<FlaskConical className="mt-0.5 size-4 shrink-0" />
+					<span>
+						<span className="font-medium">Test mode — no courier will come.</span>{" "}
+						Your Delyva key is a demo-account key, so any booking here is
+						simulated and nothing is really charged. Connect your live key in{" "}
+						<Link
+							to="/app/settings"
+							search={{ tab: "fulfilment" }}
+							className="font-medium underline underline-offset-2"
+						>
+							Settings → Fulfilment
+						</Link>
+						.
+					</span>
+				</p>
+			) : null}
 
 			{/* Failed booking — amber, with the one-tap rebook below it. */}
 			{failedJob && !activeJob ? (
@@ -492,6 +515,16 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 								);
 							})}
 
+							{dispatch.isDemo ? (
+								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+									<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+									<span>
+										<span className="font-medium">Test keys.</span> This books a
+										simulated shipment — no courier is dispatched and nothing is
+										charged.
+									</span>
+								</p>
+							) : null}
 							<Button
 								type="button"
 								className="h-11 w-full"

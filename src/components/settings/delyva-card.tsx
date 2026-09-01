@@ -1,38 +1,54 @@
 /**
- * Delyva courier booking card — Settings → Fulfilment (86eyjpv6z).
+ * Delyva courier booking — Settings → Fulfilment → Delivery (86eyjpv6z).
  *
  * BYO model, the Lalamove/HitPay credential card's sibling: the seller opens
  * their OWN Delyva account and pastes ONE API key. Delyva authenticates every
  * call with that single key, and the webhook HMAC secret + the integer
  * customerId are fetchable with it — so `delyva.connect` validates the key,
  * fetches the rest, encrypts it, and registers our webhook URL, all server
- * side. That is why this card asks for one field where the HitPay card asks
- * for two: there is nothing else for the seller to find.
+ * side. That is why this asks for one field where the HitPay card asks for
+ * two: there is nothing else for the seller to find.
  *
- * Unlike that card this one owns its own reads and actions rather than taking
- * a summary + `onSave` — Delyva has its own Convex namespace (four actions and
- * a mutation), so threading them through the tab would be five more props for
- * no gain. Act-as is honoured the way `useUpdateSettings` does it: the
- * seller's `retailerId` is injected so a white-glove edit lands on THEIR store.
+ * PROGRESSIVE DISCLOSURE (2 Sep): this is a courier-booking OPTION, revealed
+ * only when picked — not a permanently-expanded card. It deliberately does NOT
+ * join the delivery-CHARGE grid beside Lalamove, because that grid decides
+ * what the BUYER pays and Delyva never prices a checkout: buyers keep paying
+ * the store's flat/weight-zone charge, and the seller picks the courier at
+ * dispatch. Selecting "Lalamove" there changes the buyer's price; selecting
+ * Delyva here does not. Two different questions, so two different controls,
+ * inside the one Delivery card.
+ *
+ * Unlike the HitPay card this owns its own reads and actions rather than
+ * taking a summary + `onSave` — Delyva has its own Convex namespace, so
+ * threading four actions and a mutation through the tab would be five more
+ * props for no gain. Act-as is honoured the way `useUpdateSettings` does it.
  *
  * Connecting/enabling is Pro; disconnecting and pausing never are (downgrade
- * never traps). Malaysia-only for v1 — an SG store gets the reason, not a
- * button that fails server-side.
+ * never traps). Malaysia-only for v1.
  */
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useAction, useMutation } from "convex/react";
-import { CircleCheck, ExternalLink, Snowflake, TriangleAlert } from "lucide-react";
+import {
+	CircleCheck,
+	ExternalLink,
+	FlaskConical,
+	Snowflake,
+	TriangleAlert,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
 import type { DelyvaItemType } from "../../../convex/lib/delyva";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { convexErrorMessage } from "../../lib/format";
+import { parseGoogleAddress } from "../../lib/google-address";
 import { ProBadge } from "../app/pro-gate";
+import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
@@ -67,9 +83,13 @@ const EMPTY_ADDRESS: PickupAddressDraft = {
 };
 
 export function DelyvaCard({
+	retailerId,
 	canUse,
 	country,
 }: {
+	/** The store being edited — the autocomplete bills Google per session
+	 * against it and region-locks predictions to its country. */
+	retailerId: Id<"retailers">;
 	/** Client mirror of PLAN_FEATURES.delivery (server is the lock). */
 	canUse: boolean;
 	/** Store country — Delyva booking is Malaysia-only for v1. */
@@ -91,16 +111,19 @@ export function DelyvaCard({
 	const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 	const [address, setAddress] = useState<PickupAddressDraft | null>(null);
 	const [addressError, setAddressError] = useState<string | null>(null);
+	// "I picked Delyva but haven't connected yet" — a local intent, since there
+	// is nothing to persist until a key exists.
+	const [choosingDelyva, setChoosingDelyva] = useState(false);
 
 	const connected = settings?.connected === true;
-	// A downgraded-but-connected seller keeps every control except re-enabling
-	// — same posture as the HitPay card.
+	// A downgraded-but-connected seller keeps every control except re-enabling.
 	const locked = !canUse && !connected;
 	const countryBlocked = settings ? !settings.countryAllowed : country === "SG";
 	const typedKey = apiKey.trim().length > 0;
+	// The option is "on" when a working connection is enabled — or while the
+	// seller is part-way through setting one up.
+	const delyvaSelected = (connected && settings?.enabled === true) || choosingDelyva;
 
-	// The stored address is the draft's source of truth until the seller starts
-	// editing; `null` draft = "showing what the server has".
 	const storedAddress = settings?.pickupAddress;
 	const addressDraft: PickupAddressDraft =
 		address ??
@@ -147,11 +170,17 @@ export function DelyvaCard({
 			}
 			setApiKey("");
 			setEditingKey(false);
+			setChoosingDelyva(false);
 			toast.success(
 				result.accountName
 					? `Delyva connected — ${result.accountName}`
 					: "Delyva connected",
 			);
+			if (result.isDemo) {
+				toast.warning(
+					"This is a Delyva DEMO account — bookings are simulated and no courier is dispatched.",
+				);
+			}
 			if (!result.webhooksSubscribed) {
 				// Bookings still work; only automatic status updates are missing, so
 				// this is a warning with a retry, never a failed connect.
@@ -200,45 +229,79 @@ export function DelyvaCard({
 		});
 	}
 
-	// A store in a country Delyva booking doesn't serve, with nothing connected,
-	// has no action to take — so the card stays out of its settings entirely
-	// (the SG-lite posture: MY-only delivery modes are hidden, not disabled). A
-	// store that switched country WHILE connected still sees it, with the reason
-	// and a way to disconnect.
+	/** Picking an option: with a live connection this pauses/resumes, which is
+	 * what "am I booking couriers through Kedaipal?" actually means. Without
+	 * one it only reveals (or hides) the setup form. */
+	function selectDelyva(next: boolean) {
+		setChoosingDelyva(next);
+		if (!connected) return;
+		if (next === (settings?.enabled === true)) return;
+		void run(
+			() => updateSettings({ retailerId: actAsRetailerId, enabled: next }),
+			next ? "Delyva booking on" : "Delyva booking paused",
+		);
+	}
+
+	// Nothing to offer in a country Delyva booking doesn't serve, and nothing
+	// connected to unwind — stay out of the settings entirely (the SG-lite
+	// posture: MY-only options are hidden, not disabled).
 	if (countryBlocked && !connected) return null;
 
 	return (
-		// Owns its own card container (the DespatchLabelCard posture) so the
-		// hidden case above leaves no empty bordered box behind.
-		<section className="flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6">
-			<div className="flex flex-col gap-2">
-				<div className="flex items-center gap-2.5">
-					<h2 className="font-heading text-lg font-bold">Delyva courier</h2>
+		<div className="flex flex-col gap-3">
+			<div className="flex flex-col gap-0.5">
+				<span className="flex items-center gap-2 text-sm font-medium">
+					Courier booking
 					{!canUse ? <ProBadge /> : null}
-				</div>
-				<p className="text-sm text-muted-foreground">
-					Book nationwide and cold-chain couriers straight from an order — J&amp;T,
-					DHL, Ninja and more. The tracking number lands on your buyer&apos;s
-					order page by itself.
+				</span>
+				<p className="text-xs text-muted-foreground">
+					How parcels physically leave. Separate from the delivery charge above
+					— that decides what your buyer pays.
 				</p>
 			</div>
 
-			{/* Additive, not exclusive: a store that switched country while connected
-			    still needs the controls below it — telling a seller the feature is
-			    unavailable and giving them no way to disconnect is a dead end. */}
 			{countryBlocked ? (
 				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 					Delyva courier booking is Malaysia-only for now — Singapore stores
 					arrange their own courier and record the tracking number on the order.
 					Your account stays connected until you disconnect it below.
 				</p>
-			) : null}
+			) : (
+				<div className="grid grid-cols-2 gap-2">
+					<OptionTile
+						active={!delyvaSelected}
+						disabled={busy}
+						title="I arrange it"
+						subtitle="Book your own courier, type the tracking number"
+						onClick={() => selectDelyva(false)}
+					/>
+					<OptionTile
+						active={delyvaSelected}
+						disabled={busy || locked}
+						title="Delyva"
+						subtitle={
+							locked
+								? "One-tap booking — upgrade to Pro to use"
+								: "Book couriers in one tap, tracking fills itself"
+						}
+						badge={locked ? <ProBadge /> : undefined}
+						onClick={() => selectDelyva(true)}
+					/>
+				</div>
+			)}
 
-			{settings === undefined ? (
+			{!delyvaSelected ? (
+				connected ? (
+					<p className="text-xs text-muted-foreground">
+						Your Delyva account is still connected and paused — pick Delyva
+						again to resume, or disconnect it below.
+					</p>
+				) : null
+			) : settings === undefined ? (
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			) : connected ? (
-				<>
-					<div className="flex flex-col gap-2 rounded-xl border border-input p-3">
+				<div className="flex flex-col gap-4 rounded-xl border border-input p-3">
+					<div className="flex flex-col gap-2">
 						<div className="flex flex-wrap items-center justify-between gap-2">
 							<span className="flex items-center gap-2 text-sm">
 								<CircleCheck className="size-4 shrink-0 text-accent" />
@@ -256,24 +319,51 @@ export function DelyvaCard({
 									</span>
 								</span>
 							</span>
-							<span
-								className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-									settings.enabled
-										? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-										: "bg-muted text-muted-foreground"
-								}`}
-							>
-								{settings.enabled ? "On" : "Paused"}
-							</span>
+							{settings.isDemo ? (
+								<span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+									Demo account
+								</span>
+							) : settings.isDemo === false ? (
+								<span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+									Live
+								</span>
+							) : null}
 						</div>
-						<p className="text-xs text-muted-foreground">
-							{settings.enabled
-								? "Book a courier from any confirmed delivery order — you pick from live prices, and the order updates itself once the parcel is collected."
-								: "Paused — the Book button is hidden on your orders. Your key is kept, so resuming is one tap."}
-						</p>
-						{/* Webhooks are what make an order move itself. A failed
-						    subscription is invisible until an order silently stops
-						    updating, so it is said out loud with its own fix. */}
+
+						{/* A demo key looks identical to a real one until no courier ever
+						    turns up — say it at every point of spend (86eypncfy). */}
+						{settings.isDemo ? (
+							<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+								<span>
+									<strong>Test mode — no courier will come.</strong> This key
+									belongs to Delyva&apos;s demo environment
+									{settings.companyCode ? (
+										<>
+											{" "}
+											(company{" "}
+											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+												{settings.companyCode}
+											</code>
+											)
+										</>
+									) : null}
+									, so bookings are simulated and its credit is play money —
+									topping up a real Delyva wallet won&apos;t change that. Connect
+									the key from your live account at{" "}
+									<a
+										href="https://delyva.com"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="font-medium underline underline-offset-2"
+									>
+										delyva.com
+									</a>{" "}
+									before telling buyers.
+								</span>
+							</p>
+						) : null}
+
 						{!settings.webhooksSubscribed ? (
 							<div className="flex flex-col items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								<p className="flex items-start gap-2">
@@ -301,10 +391,12 @@ export function DelyvaCard({
 						) : null}
 					</div>
 
-					{/* 1 · Pickup address — its own field, not the business address:
-					    a parcel courier prices on postcode/state, and this is the
-					    address Delyva activates for cold chain. */}
+					{/* 1 · Pickup address — its own field, not the business address: a
+					    parcel courier prices on postcode/state, and this is the address
+					    Delyva activates for cold chain. */}
 					<PickupAddressFields
+						retailerId={retailerId}
+						country={country}
 						draft={addressDraft}
 						dirty={addressDirty}
 						disabled={busy}
@@ -328,11 +420,12 @@ export function DelyvaCard({
 						</span>
 						<div className="grid grid-cols-3 gap-2">
 							{ITEM_TYPES.map((type) => (
-								<button
+								<OptionTile
 									key={type.value}
-									type="button"
+									active={settings.defaultItemType === type.value}
 									disabled={busy}
-									aria-pressed={settings.defaultItemType === type.value}
+									title={type.label}
+									subtitle={type.hint}
 									onClick={() =>
 										void run(
 											() =>
@@ -343,29 +436,7 @@ export function DelyvaCard({
 											`Default parcel type set to ${type.label}`,
 										)
 									}
-									className={`relative flex min-h-[60px] flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-										settings.defaultItemType === type.value
-											? "border-accent bg-accent/5"
-											: "border-border bg-card hover:border-accent/40"
-									}`}
-								>
-									<span className="text-sm font-semibold">{type.label}</span>
-									<span className="text-xs text-muted-foreground">
-										{type.hint}
-									</span>
-									<span
-										aria-hidden="true"
-										className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
-											settings.defaultItemType === type.value
-												? "border-accent"
-												: "border-border"
-										}`}
-									>
-										{settings.defaultItemType === type.value ? (
-											<span className="size-2 rounded-full bg-accent" />
-										) : null}
-									</span>
-								</button>
+								/>
 							))}
 						</div>
 						<p className="text-xs text-muted-foreground">
@@ -374,8 +445,7 @@ export function DelyvaCard({
 					</div>
 
 					{/* Cold-chain activation is a manual step at Delyva's end and the
-					    single most likely reason a frozen seller's first booking fails.
-					    Said here, before they ever reach for the Book button. */}
+					    single most likely reason a frozen seller's first booking fails. */}
 					{settings.defaultItemType !== "PARCEL" ? (
 						<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 							<Snowflake className="mt-0.5 size-3.5 shrink-0" />
@@ -399,11 +469,7 @@ export function DelyvaCard({
 
 					{editingKey ? (
 						<div className="flex flex-col gap-2">
-							<KeyInput
-								value={apiKey}
-								disabled={busy}
-								onChange={setApiKey}
-							/>
+							<KeyInput value={apiKey} disabled={busy} onChange={setApiKey} />
 							<div className="flex flex-wrap items-center gap-2">
 								<Button
 									type="button"
@@ -431,29 +497,6 @@ export function DelyvaCard({
 						<div className="flex flex-wrap items-center gap-2">
 							<Button
 								type="button"
-								variant={settings.enabled ? "outline" : "default"}
-								className="h-11"
-								isLoading={busy}
-								disabled={
-									busy || (!settings.enabled && (!canUse || countryBlocked))
-								}
-								onClick={() =>
-									void run(
-										() =>
-											updateSettings({
-												retailerId: actAsRetailerId,
-												enabled: !settings.enabled,
-											}),
-										settings.enabled
-											? "Delyva booking paused"
-											: "Delyva booking on",
-									)
-								}
-							>
-								{settings.enabled ? "Pause" : "Resume"}
-							</Button>
-							<Button
-								type="button"
 								variant="outline"
 								className="h-11"
 								onClick={() => setEditingKey(true)}
@@ -469,12 +512,6 @@ export function DelyvaCard({
 							</button>
 						</div>
 					)}
-					{!editingKey && !settings.enabled && !canUse ? (
-						<p className="text-xs text-muted-foreground">
-							Resuming courier booking needs Pro — upgrade in Settings → Billing.
-							Your key is kept meanwhile.
-						</p>
-					) : null}
 
 					<ConfirmDialog
 						open={confirmingDisconnect}
@@ -490,17 +527,17 @@ export function DelyvaCard({
 							)
 						}
 					/>
-				</>
+				</div>
 			) : (
-				<>
+				<div className="flex flex-col gap-3 rounded-xl border border-input p-3">
 					<ul className="flex flex-col gap-1.5 text-sm">
 						<Bullet>
 							<strong>One tap</strong> from the order to a booked courier — no
 							re-typing addresses.
 						</Bullet>
 						<Bullet>
-							You <strong>pick the courier</strong> and see every price before you
-							spend.
+							You <strong>pick the courier</strong> and see every price before
+							you spend.
 						</Bullet>
 						<Bullet>
 							The tracking number reaches your buyer <strong>by itself</strong>,
@@ -516,7 +553,7 @@ export function DelyvaCard({
 						</Bullet>
 					</ul>
 
-					<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
+					<div className="flex flex-col gap-2 rounded-lg bg-muted/40 p-3 text-sm">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 							How to connect
 						</p>
@@ -538,7 +575,9 @@ export function DelyvaCard({
 								In the Delyva portal, open{" "}
 								<span className="font-medium">Settings → API Integrations</span>.
 							</li>
-							<li>Paste the API key below — that&apos;s the only thing we need.</li>
+							<li>
+								Paste the API key below — that&apos;s the only thing we need.
+							</li>
 						</ol>
 						<a
 							href="/guides/delyva-setup.html"
@@ -551,7 +590,11 @@ export function DelyvaCard({
 						</a>
 					</div>
 
-					<KeyInput value={apiKey} disabled={locked || busy} onChange={setApiKey} />
+					<KeyInput
+						value={apiKey}
+						disabled={locked || busy}
+						onChange={setApiKey}
+					/>
 
 					<div className="flex flex-col gap-2">
 						<Button
@@ -575,9 +618,9 @@ export function DelyvaCard({
 							</p>
 						) : null}
 					</div>
-				</>
+				</div>
 			)}
-		</section>
+		</div>
 	);
 }
 
@@ -589,6 +632,52 @@ function Bullet({ children }: { children: React.ReactNode }) {
 			</span>
 			<span>{children}</span>
 		</li>
+	);
+}
+
+/** Pick-one tile with the radio dot the fulfilment tab's other grids use — the
+ * tinted border alone reads as "these might all be on" (Zaki, 27 Jul). */
+function OptionTile({
+	active,
+	disabled,
+	title,
+	subtitle,
+	badge,
+	onClick,
+}: {
+	active: boolean;
+	disabled?: boolean;
+	title: string;
+	subtitle: string;
+	badge?: React.ReactNode;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			aria-pressed={active}
+			disabled={disabled}
+			onClick={onClick}
+			className={`relative flex min-h-[64px] flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+				active
+					? "border-accent bg-accent/5"
+					: "border-border bg-card hover:border-accent/40"
+			}`}
+		>
+			<span className="flex items-center gap-1.5 text-sm font-semibold">
+				{title}
+				{badge}
+			</span>
+			<span className="text-xs text-muted-foreground">{subtitle}</span>
+			<span
+				aria-hidden="true"
+				className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
+					active ? "border-accent" : "border-border"
+				}`}
+			>
+				{active ? <span className="size-2 rounded-full bg-accent" /> : null}
+			</span>
+		</button>
 	);
 }
 
@@ -623,6 +712,8 @@ function KeyInput({
 }
 
 function PickupAddressFields({
+	retailerId,
+	country,
 	draft,
 	dirty,
 	disabled,
@@ -632,6 +723,8 @@ function PickupAddressFields({
 	onSave,
 	onCancel,
 }: {
+	retailerId: Id<"retailers">;
+	country: Country;
 	draft: PickupAddressDraft;
 	dirty: boolean;
 	disabled: boolean;
@@ -648,8 +741,8 @@ function PickupAddressFields({
 					Pickup address
 				</span>
 				<p className="text-xs text-muted-foreground">
-					Where couriers collect from. The postcode decides the price, so make it
-					exact — and match what Delyva has on file for cold chain.
+					Where couriers collect from. The postcode decides the price, so make
+					it exact — and match what Delyva has on file for cold chain.
 				</p>
 			</div>
 			{missing && !dirty ? (
@@ -661,6 +754,31 @@ function PickupAddressFields({
 					</span>
 				</p>
 			) : null}
+
+			{/* Search fills the fields below; they stay editable because Google
+			    routinely returns a place with no postcode, and Delyva prices on the
+			    postcode. Same component + parser as every other address in the app,
+			    so MY territory names normalise identically. */}
+			<GoogleAddressAutocomplete
+				retailerId={retailerId}
+				country={country}
+				placeholder="Search your pickup address…"
+				disabled={disabled}
+				onSelect={(picked) => {
+					const parsed = parseGoogleAddress(
+						picked.addressComponents,
+						picked.formattedAddress,
+						country,
+					);
+					onChange({
+						address1: parsed.line1,
+						city: parsed.city,
+						state: parsed.state,
+						postcode: parsed.postcode,
+					});
+				}}
+			/>
+
 			<Input
 				variant="field"
 				aria-label="Street address"

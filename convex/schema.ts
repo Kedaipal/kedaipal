@@ -487,6 +487,21 @@ export default defineSchema({
 				// Delyva company scope of the account (GET /user) — kept for
 				// support/debugging; not used in API calls today.
 				companyId: v.optional(v.string()),
+				// Whether this key belongs to Delyva's DEMO environment, resolved
+				// at connect from `GET /company/{companyId}` (the demo company
+				// answers `code: "demo"`, `websiteUrl: demo.delyva.app`). Delyva
+				// has no key prefix and one API host, so this lookup is the ONLY
+				// way to tell a play-money account from a real one — and it is
+				// load-bearing for the same reason the Lalamove `env` stamp is
+				// (86eypncfy): a demo booking dispatches no courier and spends no
+				// real credit, so every surface that spends must be able to say
+				// so. Undefined = a row connected before this lookup existed;
+				// treat as "unknown", never as production.
+				isDemo: v.optional(v.boolean()),
+				// Delyva's company code ("demo", or the real operator's) — shown
+				// in the settings card so an unexpected account is legible rather
+				// than just a boolean.
+				companyCode: v.optional(v.string()),
 				// The account's display name (GET /customer) — settings card
 				// "Connected — <name>" proof that the key hit the right account.
 				accountName: v.optional(v.string()),

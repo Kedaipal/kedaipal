@@ -423,15 +423,19 @@ export function FulfilmentTab({
 						canUseLalamove={hasFeature(subscription, "delivery")}
 					/>
 				</div>
-			</Card>
 
-			{/* Between the delivery CHARGE and the despatch LABEL, because that is
-			    the order the seller thinks in: what the buyer pays → how the parcel
-			    actually leaves → the paper that goes on it. Booking is orthogonal to
-			    pricing (a flat-fee store can still book couriers), so it is its own
-			    card rather than a delivery-charge mode. 86eyjpv6z. */}
-			<Card>
-				<DelyvaCard canUse={hasFeature(subscription, "delivery")} country={country} />
+				{/* Second question inside the same card: the charge above decides
+				    what the BUYER pays; this decides how the parcel physically
+				    leaves. Deliberately NOT a tile in the charge grid — Delyva never
+				    prices a checkout, so putting it there would imply a buyer-facing
+				    price it can't produce. 86eyjpv6z. */}
+				<div className="border-t border-border pt-4">
+					<DelyvaCard
+						retailerId={retailerId}
+						canUse={hasFeature(subscription, "delivery")}
+						country={country}
+					/>
+				</div>
 			</Card>
 
 			{/* Directly after Delivery, and before Pickup, because that is what it

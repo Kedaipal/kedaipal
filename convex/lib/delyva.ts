@@ -366,6 +366,36 @@ export function parseOrderResponse(json: unknown): ParsedDelyvaOrder {
 	};
 }
 
+export type DelyvaCompany = {
+	/** Delyva's company code — `"demo"` for their shared demo environment. */
+	code?: string;
+	name?: string;
+	websiteUrl?: string;
+	/** True when this company IS the demo environment: play-money credit, no
+	 * courier ever dispatched. Delyva issues no key prefix and runs one API
+	 * host, so this is the only signal that distinguishes a test account. */
+	isDemo: boolean;
+};
+
+/** Parse `GET /company/{id}`. Note the payload is NOT `{data: …}`-wrapped
+ * (verified live 2 Sep 2026) — unlike most of their API — so tolerate both. */
+export function parseCompanyResponse(json: unknown): DelyvaCompany {
+	const raw =
+		(json as { data?: Record<string, unknown> })?.data ??
+		(json as Record<string, unknown>);
+	const record = (raw ?? {}) as Record<string, unknown>;
+	const code = typeof record.code === "string" ? record.code : undefined;
+	const name = typeof record.name === "string" ? record.name : undefined;
+	const websiteUrl =
+		typeof record.websiteUrl === "string" ? record.websiteUrl : undefined;
+	// Two independent tells, either one is enough: a rename of the company
+	// shouldn't silently turn a demo account into a "live" one.
+	const isDemo =
+		code?.toLowerCase() === "demo" ||
+		(websiteUrl ?? "").toLowerCase().includes("demo.delyva.app");
+	return { code, name, websiteUrl, isDemo };
+}
+
 /**
  * Delyva's numeric status vocabulary → our normalized job status. Codes from
  * their own maintained WooCommerce plugin (Statuses mapping, verified against

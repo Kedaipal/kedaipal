@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-// Delyva settings card (86eyjpv6z) — the single-key connect flow, the Pro gate
-// (which never traps a downgraded seller), the pickup-address rule mirrored
-// from the server, and the two states that would otherwise fail silently: a
-// missing pickup address and an unregistered tracking webhook.
+// Delyva courier-booking option (86eyjpv6z) — Settings → Fulfilment → Delivery.
+// Covers the progressive disclosure (settings appear only once the option is
+// picked), the single-key connect, the demo-account warning, the Pro gate
+// (which never traps a downgraded seller), and the pickup-address rule
+// mirrored from the server.
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { DelyvaCard } from "./delyva-card";
 
 const state = vi.hoisted(() => ({
@@ -35,6 +37,42 @@ vi.mock("sonner", () => ({
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
 }));
+// The real one talks to Google through Convex actions; the card only cares
+// that a pick lands in the structured fields, which `onSelect` drives.
+vi.mock("../forms/google-address-autocomplete", () => ({
+	GoogleAddressAutocomplete: ({
+		onSelect,
+		disabled,
+	}: {
+		onSelect: (p: unknown) => void;
+		disabled?: boolean;
+	}) => (
+		<button
+			type="button"
+			aria-label="address search"
+			disabled={disabled}
+			onClick={() =>
+				onSelect({
+					formattedAddress: "12 Jalan Ampang, 50450 Kuala Lumpur",
+					placeId: "p1",
+					latitude: 3.1,
+					longitude: 101.7,
+					addressComponents: [],
+				})
+			}
+		/>
+	),
+}));
+// parseGoogleAddress is pure but component-agnostic — stub the shape it
+// returns so the test asserts the card's own wiring, not Google's parser.
+vi.mock("../../lib/google-address", () => ({
+	parseGoogleAddress: () => ({
+		line1: "12 Jalan Ampang",
+		city: "Kuala Lumpur",
+		state: "WP Kuala Lumpur",
+		postcode: "50450",
+	}),
+}));
 
 const NAME = {
 	connect: getFunctionName(api.delyva.connect),
@@ -42,17 +80,31 @@ const NAME = {
 	resubscribe: getFunctionName(api.delyva.resubscribeWebhooks),
 };
 
+const RETAILER = "r1" as Id<"retailers">;
+
+function card(props: { canUse?: boolean; country?: "MY" | "SG" } = {}) {
+	return (
+		<DelyvaCard
+			retailerId={RETAILER}
+			canUse={props.canUse ?? true}
+			country={props.country ?? "MY"}
+		/>
+	);
+}
+
 function settings(overrides: Record<string, unknown> = {}) {
 	return {
 		connected: true,
 		enabled: true,
 		apiKeyHint: "42dd",
 		accountName: "Wagyu Walid Trading",
+		isDemo: false,
+		companyCode: "wwt",
 		defaultItemType: "CHILLED",
 		pickupAddress: {
 			address1: "12 Jalan Ampang",
 			city: "Kuala Lumpur",
-			state: "Kuala Lumpur",
+			state: "WP Kuala Lumpur",
 			postcode: "50450",
 		},
 		connectedAt: Date.now(),
@@ -62,8 +114,21 @@ function settings(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+const disconnected = () =>
+	settings({
+		connected: false,
+		enabled: false,
+		apiKeyHint: undefined,
+		accountName: undefined,
+		isDemo: undefined,
+		companyCode: undefined,
+		pickupAddress: undefined,
+		connectedAt: undefined,
+		webhooksSubscribed: false,
+	});
+
 beforeEach(() => {
-	state.settings = settings({ connected: false, enabled: false, apiKeyHint: undefined, accountName: undefined, pickupAddress: undefined, connectedAt: undefined, webhooksSubscribed: false });
+	state.settings = disconnected();
 	state.actions.clear();
 	state.mutation = vi.fn().mockResolvedValue({ ok: true });
 });
@@ -72,17 +137,73 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-describe("not connected", () => {
-	it("asks for ONE key and says so", () => {
-		const { container } = render(<DelyvaCard canUse country="MY" />);
+describe("progressive disclosure", () => {
+	it("offers the two options and hides the setup until Delyva is picked", () => {
+		render(card());
+		expect(screen.getByRole("button", { name: /I arrange it/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /^Delyva/i })).toBeTruthy();
+		// Nothing to configure until the seller opts in.
+		expect(screen.queryByLabelText(/delyva api key/i)).toBeNull();
+	});
+
+	it("reveals the connect form once Delyva is picked", () => {
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		expect(screen.getByLabelText(/delyva api key/i)).toBeTruthy();
-		expect(container.textContent).toContain("One key is all we need");
-		// There is exactly one credential field — no secret, no salt.
-		expect(container.querySelectorAll("input[type='text']")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
+	});
+
+	it("shows the settings straight away for a connected, enabled store", () => {
+		state.settings = settings();
+		render(card());
+		expect(screen.getByText(/Wagyu Walid Trading/)).toBeTruthy();
+		expect(screen.getByText(/Default parcel type/i)).toBeTruthy();
+	});
+
+	it("picking 'I arrange it' pauses a live connection rather than losing it", async () => {
+		state.settings = settings();
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /I arrange it/i }));
+		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
+		expect(state.mutation).toHaveBeenCalledWith({
+			retailerId: undefined,
+			enabled: false,
+		});
+	});
+
+	it("a paused store says its account is kept, and hides the settings", () => {
+		state.settings = settings({ enabled: false });
+		render(card());
+		expect(screen.getByText(/still connected and paused/i)).toBeTruthy();
+		expect(screen.queryByText(/Default parcel type/i)).toBeNull();
+	});
+
+	it("picking Delyva again resumes it", async () => {
+		state.settings = settings({ enabled: false });
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
+		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
+		expect(state.mutation).toHaveBeenCalledWith({
+			retailerId: undefined,
+			enabled: true,
+		});
+	});
+});
+
+describe("connect", () => {
+	beforeEach(() => {
+		state.settings = disconnected();
+	});
+
+	it("asks for ONE key and says so", () => {
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
+		expect(screen.getByText(/One key is all we need/i)).toBeTruthy();
 	});
 
 	it("keeps Connect disabled until a key is typed", () => {
-		render(<DelyvaCard canUse country="MY" />);
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		const connect = screen.getByRole("button", { name: /connect delyva/i });
 		expect(connect.hasAttribute("disabled")).toBe(true);
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
@@ -91,21 +212,17 @@ describe("not connected", () => {
 		expect(connect.hasAttribute("disabled")).toBe(false);
 	});
 
-	it("links the print-ready setup guide", () => {
-		render(<DelyvaCard canUse country="MY" />);
-		const link = screen
-			.getAllByRole("link")
-			.find((a) => a.getAttribute("href") === "/guides/delyva-setup.html");
-		expect(link).toBeTruthy();
-	});
-
 	it("connects with the trimmed key", async () => {
-		const connect = vi
-			.fn()
-			.mockResolvedValue({ ok: true, accountName: "Kedai Beku", webhooksSubscribed: true });
+		const connect = vi.fn().mockResolvedValue({
+			ok: true,
+			accountName: "Kedai Beku",
+			webhooksSubscribed: true,
+			isDemo: false,
+		});
 		state.actions.set(NAME.connect, connect);
-		render(<DelyvaCard canUse country="MY" />);
+		render(card());
 
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "  dx-abc  " },
 		});
@@ -119,13 +236,15 @@ describe("not connected", () => {
 
 	it("surfaces a rejected key as a message, not a crash", async () => {
 		const { toast } = await import("sonner");
-		const connect = vi.fn().mockResolvedValue({
-			ok: false,
-			message: "Delyva didn't recognise this API key.",
-		});
-		state.actions.set(NAME.connect, connect);
-		render(<DelyvaCard canUse country="MY" />);
-
+		state.actions.set(
+			NAME.connect,
+			vi.fn().mockResolvedValue({
+				ok: false,
+				message: "Delyva didn't recognise this API key.",
+			}),
+		);
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "bad" },
 		});
@@ -137,90 +256,120 @@ describe("not connected", () => {
 		);
 	});
 
-	it("warns when the key worked but the webhook didn't register", async () => {
+	it("warns immediately when the connected key turns out to be a demo one", async () => {
 		const { toast } = await import("sonner");
-		const connect = vi
-			.fn()
-			.mockResolvedValue({ ok: true, accountName: "X", webhooksSubscribed: false });
-		state.actions.set(NAME.connect, connect);
-		render(<DelyvaCard canUse country="MY" />);
-
+		state.actions.set(
+			NAME.connect,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				accountName: "Demo",
+				webhooksSubscribed: true,
+				isDemo: true,
+			}),
+		);
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "dx1" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: /connect delyva/i }));
-		await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+		await waitFor(() =>
+			expect(vi.mocked(toast.warning).mock.calls.flat().join(" ")).toMatch(
+				/DEMO account/i,
+			),
+		);
+	});
+
+	it("warns when the key worked but the webhook didn't register", async () => {
+		const { toast } = await import("sonner");
+		state.actions.set(
+			NAME.connect,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				webhooksSubscribed: false,
+				isDemo: false,
+			}),
+		);
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
+		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
+			target: { value: "dx1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /connect delyva/i }));
+		await waitFor(() =>
+			expect(vi.mocked(toast.warning).mock.calls.flat().join(" ")).toMatch(
+				/webhook/i,
+			),
+		);
+	});
+});
+
+describe("demo vs live account", () => {
+	it("badges a demo account and spells out that no courier will come", () => {
+		state.settings = settings({ isDemo: true, companyCode: "demo" });
+		const { container } = render(card());
+		expect(screen.getByText(/Demo account/i)).toBeTruthy();
+		expect(container.textContent).toContain("no courier will come");
+		expect(container.textContent).toContain("play money");
+	});
+
+	it("badges a real account Live, with no scary copy", () => {
+		state.settings = settings({ isDemo: false });
+		const { container } = render(card());
+		expect(screen.getByText(/^Live$/i)).toBeTruthy();
+		expect(container.textContent).not.toContain("no courier will come");
+	});
+
+	it("says nothing at all when the environment is unknown — never a false all-clear", () => {
+		state.settings = settings({ isDemo: undefined });
+		const { container } = render(card());
+		expect(screen.queryByText(/^Live$/i)).toBeNull();
+		expect(screen.queryByText(/Demo account/i)).toBeNull();
+		expect(container.textContent).not.toContain("no courier will come");
 	});
 });
 
 describe("plan gate", () => {
-	it("shows Pro and blocks connecting for a Starter seller", () => {
-		const { container } = render(<DelyvaCard canUse={false} country="MY" />);
-		expect(container.textContent).toContain("Pro");
-		expect(
-			screen.getByRole("button", { name: /connect delyva/i }).hasAttribute("disabled"),
-		).toBe(true);
-		expect(screen.getByText(/Disconnecting is never locked/i)).toBeTruthy();
+	it("marks the option Pro and blocks picking it for a Starter seller", () => {
+		state.settings = disconnected();
+		render(card({ canUse: false }));
+		const tile = screen.getByRole("button", { name: /^Delyva/i });
+		expect(tile.hasAttribute("disabled")).toBe(true);
+		expect(tile.textContent).toContain("Pro");
 	});
 
 	it("never traps a downgraded seller who is already connected", () => {
 		state.settings = settings();
-		render(<DelyvaCard canUse={false} country="MY" />);
-		// Pausing and disconnecting stay available…
-		expect(
-			screen.getByRole("button", { name: /^pause$/i }).hasAttribute("disabled"),
-		).toBe(false);
+		render(card({ canUse: false }));
 		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-	});
-
-	it("blocks RESUMING on a downgrade, with the reason", () => {
-		state.settings = settings({ enabled: false });
-		render(<DelyvaCard canUse={false} country="MY" />);
 		expect(
-			screen.getByRole("button", { name: /^resume$/i }).hasAttribute("disabled"),
-		).toBe(true);
-		expect(screen.getByText(/Resuming courier booking needs Pro/i)).toBeTruthy();
+			screen.getByRole("button", { name: /I arrange it/i }).hasAttribute("disabled"),
+		).toBe(false);
 	});
 });
 
 describe("country gate", () => {
-	it("stays out of a Singapore store's settings entirely — there's no action to offer", () => {
+	it("stays out of a Singapore store's settings entirely", () => {
 		state.settings = settings({ connected: false, countryAllowed: false });
-		const { container } = render(<DelyvaCard canUse country="SG" />);
+		const { container } = render(card({ country: "SG" }));
 		expect(container.textContent).toBe("");
 	});
 
 	it("but a store that switched country WHILE connected sees the reason AND a way out", () => {
 		state.settings = settings({ countryAllowed: false });
-		render(<DelyvaCard canUse country="SG" />);
+		render(card({ country: "SG" }));
 		expect(screen.getByText(/Malaysia-only for now/i)).toBeTruthy();
-		// Telling a seller it's unavailable and stranding them would be the dead
-		// end this card exists to avoid.
 		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-	});
-
-	it("won't let a country-blocked store resume booking it can't use", () => {
-		state.settings = settings({ countryAllowed: false, enabled: false });
-		render(<DelyvaCard canUse country="SG" />);
-		expect(
-			screen.getByRole("button", { name: /^resume$/i }).hasAttribute("disabled"),
-		).toBe(true);
 	});
 });
 
-describe("connected", () => {
+describe("connected settings", () => {
 	beforeEach(() => {
 		state.settings = settings();
 	});
 
-	it("proves which account the key belongs to", () => {
-		const { container } = render(<DelyvaCard canUse country="MY" />);
-		expect(container.textContent).toContain("Wagyu Walid Trading");
-		expect(container.textContent).toContain("42dd");
-	});
-
 	it("switches the store default parcel type", async () => {
-		render(<DelyvaCard canUse country="MY" />);
+		render(card());
 		fireEvent.click(screen.getByRole("button", { name: /frozen/i }));
 		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
 		expect(state.mutation).toHaveBeenCalledWith({
@@ -230,14 +379,14 @@ describe("connected", () => {
 	});
 
 	it("surfaces the cold-chain activation step for a chilled store", () => {
-		const { container } = render(<DelyvaCard canUse country="MY" />);
+		const { container } = render(card());
 		expect(container.textContent).toContain("one-time activation");
 		expect(screen.getByText("support@delyva.com")).toBeTruthy();
 	});
 
 	it("keeps that note off an ambient-only store", () => {
 		state.settings = settings({ defaultItemType: "PARCEL" });
-		const { container } = render(<DelyvaCard canUse country="MY" />);
+		const { container } = render(card());
 		expect(container.textContent).not.toContain("one-time activation");
 	});
 
@@ -245,7 +394,7 @@ describe("connected", () => {
 		state.settings = settings({ webhooksSubscribed: false });
 		const resubscribe = vi.fn().mockResolvedValue({ ok: true });
 		state.actions.set(NAME.resubscribe, resubscribe);
-		const { container } = render(<DelyvaCard canUse country="MY" />);
+		const { container } = render(card());
 
 		expect(container.textContent).toContain("won't move to Shipped");
 		fireEvent.click(screen.getByRole("button", { name: /retry now/i }));
@@ -254,66 +403,60 @@ describe("connected", () => {
 
 	it("flags a missing pickup address before the first booking fails", () => {
 		state.settings = settings({ pickupAddress: undefined });
-		render(<DelyvaCard canUse country="MY" />);
+		render(card());
 		expect(screen.getByText(/Add this before your first booking/i)).toBeTruthy();
 	});
+});
 
-	it("refuses a bad postcode client-side, mirroring the server rule", async () => {
+describe("pickup address", () => {
+	beforeEach(() => {
 		state.settings = settings({ pickupAddress: undefined });
-		render(<DelyvaCard canUse country="MY" />);
+	});
 
-		fireEvent.change(screen.getByLabelText(/street address/i), {
-			target: { value: "12 Jalan Ampang" },
+	it("fills every structured field from an address search", () => {
+		render(card());
+		fireEvent.click(screen.getByLabelText(/address search/i));
+		expect((screen.getByLabelText(/street address/i) as HTMLInputElement).value).toBe(
+			"12 Jalan Ampang",
+		);
+		expect((screen.getByLabelText(/city/i) as HTMLInputElement).value).toBe(
+			"Kuala Lumpur",
+		);
+		expect((screen.getByLabelText(/postcode/i) as HTMLInputElement).value).toBe(
+			"50450",
+		);
+		expect((screen.getByLabelText(/^state$/i) as HTMLSelectElement).value).toBe(
+			"WP Kuala Lumpur",
+		);
+	});
+
+	it("leaves the searched fields editable — Google often omits a postcode", async () => {
+		render(card());
+		fireEvent.click(screen.getByLabelText(/address search/i));
+		fireEvent.change(screen.getByLabelText(/postcode/i), {
+			target: { value: "50480" },
 		});
-		fireEvent.change(screen.getByLabelText(/city/i), {
-			target: { value: "Kuala Lumpur" },
-		});
-		fireEvent.change(screen.getByLabelText(/^state$/i), {
-			target: { value: "Selangor" },
-		});
+		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
+		expect(state.mutation?.mock.calls[0][0].pickupAddress.postcode).toBe(
+			"50480",
+		);
+	});
+
+	it("refuses a bad postcode client-side, mirroring the server rule", () => {
+		render(card());
+		fireEvent.click(screen.getByLabelText(/address search/i));
 		fireEvent.change(screen.getByLabelText(/postcode/i), {
 			target: { value: "504" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
-
 		expect(screen.getByText(/5-digit postcode/i)).toBeTruthy();
 		expect(state.mutation).not.toHaveBeenCalled();
 	});
 
-	it("saves a complete pickup address", async () => {
-		state.settings = settings({ pickupAddress: undefined });
-		render(<DelyvaCard canUse country="MY" />);
-
-		fireEvent.change(screen.getByLabelText(/street address/i), {
-			target: { value: "12 Jalan Ampang" },
-		});
-		fireEvent.change(screen.getByLabelText(/city/i), {
-			target: { value: "Kuala Lumpur" },
-		});
-		fireEvent.change(screen.getByLabelText(/^state$/i), {
-			target: { value: "Selangor" },
-		});
-		fireEvent.change(screen.getByLabelText(/postcode/i), {
-			target: { value: "50450" },
-		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
-
-		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
-		expect(state.mutation).toHaveBeenCalledWith({
-			retailerId: undefined,
-			pickupAddress: {
-				address1: "12 Jalan Ampang",
-				address2: undefined,
-				city: "Kuala Lumpur",
-				state: "Selangor",
-				postcode: "50450",
-			},
-		});
-	});
-
 	it("strips non-digits from the postcode as it's typed", () => {
-		state.settings = settings({ pickupAddress: undefined });
-		render(<DelyvaCard canUse country="MY" />);
+		render(card());
+		fireEvent.click(screen.getByLabelText(/address search/i));
 		const postcode = screen.getByLabelText(/postcode/i) as HTMLInputElement;
 		fireEvent.change(postcode, { target: { value: "50-450x" } });
 		expect(postcode.value).toBe("50450");
