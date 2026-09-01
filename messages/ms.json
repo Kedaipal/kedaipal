@@ -366,7 +366,7 @@
 	"cost_min_suffix": "{minutes} min",
 	"cost_disq_reassure": "Tiada tekanan — kami ada di sini bila ia berbaloi.",
 	"cost_keep_number": "Simpan nombor saya untuk kemudian",
-	"cost_cta_join": "Jadi Ahli Pengasas — {price}/bulan",
+	"cost_cta_join": "Mula dengan Kedaipal — {price}/bulan",
 	"cost_result_lead": "Pesanan melalui WhatsApp sahaja merugikan anda kira-kira",
 	"cost_missed_revenue": "Hasil pesanan terlepas",
 	"cost_chase_cost": "Masa mengejar bayaran",
@@ -376,7 +376,7 @@
 	"cost_disq_notyet_title": "Belum berbaloi lagi — jujur",
 	"cost_disq_nomiss_body": "Anda beritahu kami yang anda tidak terlepas sebarang pesanan. Maka tiada apa untuk Kedaipal tutup buat masa ini — dan kami tidak akan berpura-pura sebaliknya. Jika pesanan mula tertinggal dalam sembang WhatsApp nanti, kembali dan jalankan semula ini.",
 	"cost_disq_notyet_body": "Buat masa ini kos status quo anda ({total}/bulan) lebih kecil daripada {price}/bulan Kedaipal. Ia belum berbaloi lagi. Kembali bila jumlah pesanan anda bertambah.",
-	"cost_wa_message": "Hai Kedaipal! Saya dapati pesanan melalui WhatsApp sahaja merugikan saya kira-kira {cost}/bulan. Saya ingin menyertai sebagai Ahli Pengasas ({price}/bulan).",
+	"cost_wa_message": "Hai Kedaipal! Saya dapati pesanan melalui WhatsApp sahaja merugikan saya kira-kira {cost}/bulan. Saya ingin mula menggunakan Kedaipal ({price}/bulan).",
 
 	"pricingpage_hero_highlight": "14 hari percuma.",
 	"pricingpage_hero_rest": "Kemudian harga yang mudah dan jujur.",
