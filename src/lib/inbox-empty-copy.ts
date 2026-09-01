@@ -43,21 +43,43 @@ export function inboxEmptyCopy(args: {
 	filtersActive: boolean;
 	/** `pinMode === "only"` — the seller asked for pinned orders alone. */
 	pinOnly: boolean;
+	/** Whether the seller has ANY pinned orders. Splits "your pins are all
+	 * outside this filter" from "you haven't pinned anything" — the second is
+	 * reachable by unpinning the last row while in "only" mode, and the first
+	 * sentence would be false there. */
+	anyPinned: boolean;
 	/** The status axis, exactly as the chip rules read it. */
 	statuses: readonly string[];
 	periods: readonly BookingPeriod[];
 }): InboxEmptyCopy {
-	const { searching, pinOnly, mockup, filtersActive, statuses, periods } = args;
+	const {
+		searching,
+		pinOnly,
+		anyPinned,
+		mockup,
+		filtersActive,
+		statuses,
+		periods,
+	} = args;
 	if (searching)
 		return {
 			title: "No matches",
 			body: "No orders match your search. Try an order #, name, phone, or item.",
 		};
 	if (pinOnly)
-		return {
-			title: "No pinned orders match",
-			body: "Only your pinned orders are showing, and none of them is in the statuses or filters you picked. Tap Pinned only again to switch it off.",
-		};
+		return anyPinned
+			? {
+					title: "No pinned orders match",
+					body: "Only your pinned orders are showing, and none of them is in the statuses or filters you picked. Tap Pinned only again to switch it off.",
+				}
+			: {
+					// Reachable by unpinning the last row while in "only" mode — the
+					// list empties under you. The sentence above would be a lie here,
+					// and the way out is the chip, since the list has no row left to
+					// unpin.
+					title: "No pinned orders",
+					body: "You haven't pinned anything yet. Tap Pinned only to switch the filter off — then pin an order from its row to keep it handy.",
+				};
 	if (mockup)
 		return {
 			title: "No orders need a mockup",

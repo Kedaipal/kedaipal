@@ -6,6 +6,7 @@ import { inboxEmptyCopy } from "./inbox-empty-copy";
 const BASE = {
 	searching: false,
 	pinOnly: false,
+	anyPinned: true,
 	mockup: false,
 	filtersActive: false,
 	statuses: [] as string[],
@@ -86,6 +87,19 @@ describe("inboxEmptyCopy — each arm is reachable and correctly ranked", () => 
 		expect(inboxEmptyCopy({ ...BASE, pinOnly: true }).body).toContain(
 			"Pinned only",
 		);
+	});
+
+	// Reachable by unpinning the last row while in "only" mode: the list empties
+	// under the seller, and the chip that is their way out now reads 0.
+	it("with NO pins at all, pinned-only says so rather than blaming the filters", () => {
+		const copy = inboxEmptyCopy({ ...BASE, pinOnly: true, anyPinned: false });
+		expect(copy.title).toBe("No pinned orders");
+		// "none of them is in the statuses you picked" would be a lie — there are
+		// no pins to be anywhere.
+		expect(copy.body).not.toContain("none of them");
+		// Still names the escape, which is the only one left: with an empty list
+		// there is no row to unpin.
+		expect(copy.body).toContain("Pinned only");
 	});
 
 	it("search outranks everything; mockup outranks filters", () => {

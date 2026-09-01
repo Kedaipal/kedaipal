@@ -181,6 +181,19 @@ review: with **every leaf selected, "All statuses" stays lit even when period
 chips are on** — the union already matches every order, and the panel's Status
 select-all on a booking store produces exactly that state.
 
+**The Pinned chip renders whenever the mode is non-default, even at ZERO**
+(PR #243 re-review). Unpinning the last row while in "only" mode empties the
+list and used to take the chip away with it — leaving `?pin=only` in the URL, an
+empty inbox, and copy naming a control no longer on screen, with no way back
+except leaving the page (`clearAllFilters` deliberately doesn't touch `pin`, and
+the panel doesn't own it). A lit "Pinned only · 0" is truthful and is itself the
+exit. Deliberately NOT folding the mode to `"top"` when the count is zero:
+`pinnedCount` is `counts?.pinned ?? 0`, so it reads 0 while the counts load and
+that would silently rewrite a legitimate `?pin=only` bookmark before its data
+arrived — honouring the URL also removes the chip's first-paint flash. The copy
+splits on `anyPinned` too, because "none of them is in the statuses you picked"
+is false when there are no pins at all.
+
 **Two empty-state bugs the wide table hid** (owner report, 2 Sep). The table's
 empty row spans every column, and with a wide column set that cell is ~4,500px
 across — `text-center` put the message halfway along it, i.e. **thousands of

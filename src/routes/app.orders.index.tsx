@@ -770,6 +770,7 @@ function OrdersRoute() {
 	const emptyCopy = inboxEmptyCopy({
 		searching,
 		pinOnly: pinMode === "only",
+		anyPinned: pinnedCount > 0,
 		mockup,
 		filtersActive,
 		statuses: st,
@@ -1517,11 +1518,23 @@ function OrdersRoute() {
 						    OWN mark — the statuses after it are the system's opinion,
 						    this one is theirs. That is also why it is NOT part of the
 						    status set: "All statuses" never clears it, and turning it on
-						    never unlights "All". It appears only once something is
-						    pinned (a permanent "Pinned 0" is noise); the pin control on
-						    every row is what teaches the feature. Three modes — see
-						    cyclePinMode. */}
-							{pinnedCount > 0 ? (
+						    never unlights "All". It appears once something is pinned (a
+						    permanent "Pinned 0" is noise for a seller who never pins); the
+						    pin control on every row is what teaches the feature. Three
+						    modes — see cyclePinMode.
+
+						    It ALSO renders whenever the mode is non-default, even at ZERO.
+						    Unpinning the last row while in "only" mode empties the list,
+						    and the chip used to vanish with it — leaving `?pin=only` in the
+						    URL, an empty inbox, and copy naming a control that was no
+						    longer on screen. The only exit was leaving the page (PR #243
+						    review). A lit "Pinned only · 0" is truthful and is itself the
+						    way out. Deliberately NOT folding the mode back to "top"
+						    instead: `pinnedCount` is 0 while the counts are still loading,
+						    so that would silently rewrite a legitimate `?pin=only` bookmark
+						    before its data arrived. Honouring the URL also removes the
+						    chip's first-paint flash. */}
+							{pinnedCount > 0 || pinMode !== "top" ? (
 								<FilterChip
 									tone="accent"
 									selected={pinMode !== "off"}
