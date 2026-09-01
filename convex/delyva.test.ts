@@ -509,3 +509,120 @@ describe("getDispatchState", () => {
 		expect(state?.weightIssue).toBe("missing_weights");
 	});
 });
+
+describe("Singapore stores (z8r3fdbqmc)", () => {
+	// SG has no Lalamove at all, so Delyva is that market's only courier
+	// automation — the country gate and the address rules have to hold here,
+	// not just in Malaysia.
+	async function seedSgRetailer(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				country: "SG",
+				delyva: {
+					enabled: true,
+					apiKey: "dx-test-key",
+					apiSecret: "dx-test-secret",
+					apiKeyHint: "-key",
+					customerId: 128399,
+					defaultItemType: "PARCEL",
+					pickupAddress: {
+						address1: "10 Bayfront Ave",
+						city: "Singapore",
+						state: "Singapore",
+						postcode: "018956",
+					},
+					connectedAt: Date.now(),
+					webhooksSubscribedAt: Date.now(),
+				},
+			});
+		});
+		return retailer;
+	}
+
+	test("booking is allowed in SG — the gate is per provider, not inherited", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.countryAllowed).toBe(true);
+		expect(view.connected).toBe(true);
+	});
+
+	test("accepts a 6-digit SG postal code", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.delyva.updateSettings, {
+			retailerId: retailer._id,
+			pickupAddress: {
+				address1: "1 Raffles Place",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "048616",
+			},
+		});
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.pickupAddress?.postcode).toBe("048616");
+	});
+
+	test("refuses a 5-digit code on an SG store — the MY rule must not leak", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		await expect(
+			asUser.mutation(api.delyva.updateSettings, {
+				retailerId: retailer._id,
+				pickupAddress: {
+					address1: "1 Raffles Place",
+					city: "Singapore",
+					state: "Singapore",
+					postcode: "04861",
+				},
+			}),
+		).rejects.toThrow(/6-digit postal code/i);
+	});
+
+	test("refuses a 6-digit code on a MY store — and the reverse", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		await expect(
+			asUser.mutation(api.delyva.updateSettings, {
+				retailerId: retailer._id,
+				pickupAddress: {
+					address1: "12 Jalan Ampang",
+					city: "Kuala Lumpur",
+					state: "Kuala Lumpur",
+					postcode: "504501",
+				},
+			}),
+		).rejects.toThrow(/5-digit postcode/i);
+	});
+
+	test("stamps SG on both waypoints — an MY literal would quote nothing", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "1 Raffles Place",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "048616",
+			},
+		});
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const context = await t
+			.withIdentity({ subject: USER })
+			.query(internal.delyva.getDispatchContext, { shortId });
+		expect(context.ok).toBe(true);
+		if (!context.ok) return;
+		expect(context.origin.country).toBe("SG");
+		expect(context.destination.country).toBe("SG");
+	});
+});

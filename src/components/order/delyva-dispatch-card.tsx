@@ -436,7 +436,7 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 									this weight to this address right now.
 								</span>{" "}
 								{effectiveItemType !== "PARCEL"
-									? "Cold-chain coverage is West Malaysia only for most couriers."
+									? "Cold-chain couriers cover far less ground than ordinary parcels — check with Delyva before promising a chilled or frozen delivery to a distant address."
 									: ""}
 							</p>
 							<p className="text-sm text-muted-foreground">

@@ -24,7 +24,11 @@
  * props for no gain. Act-as is honoured the way `useUpdateSettings` does it.
  *
  * Connecting/enabling is Pro; disconnecting and pausing never are (downgrade
- * never traps). Malaysia-only for v1.
+ * never traps). Serves BOTH Malaysia and Singapore (z8r3fdbqmc) — and SG is
+ * the country that needs it most, having no Lalamove at all. Everything
+ * country-shaped (the postal-code rule and its name, whether there is a state
+ * tier, the cold-chain coverage line) keys off the store's country rather
+ * than assuming Malaysia.
  */
 
 import { convexQuery } from "@convex-dev/react-query";
@@ -41,7 +45,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { MY_STATES } from "../../../convex/lib/address";
+import {
+	MY_STATES,
+	postcodeRule,
+	SG_STATE_LABEL,
+} from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
 import type { DelyvaItemType } from "../../../convex/lib/delyva";
 import { useActAsRetailerId } from "../../hooks/useActAs";
@@ -92,7 +100,8 @@ export function DelyvaCard({
 	retailerId: Id<"retailers">;
 	/** Client mirror of PLAN_FEATURES.delivery (server is the lock). */
 	canUse: boolean;
-	/** Store country — Delyva booking is Malaysia-only for v1. */
+	/** Store country — drives the address form's shape (SG has no state tier
+	 * and a 6-digit postal code) and the coverage copy. */
 	country: Country;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
@@ -118,7 +127,10 @@ export function DelyvaCard({
 	const connected = settings?.connected === true;
 	// A downgraded-but-connected seller keeps every control except re-enabling.
 	const locked = !canUse && !connected;
-	const countryBlocked = settings ? !settings.countryAllowed : country === "SG";
+	// Server's answer is authoritative; while it loads, assume allowed — both
+	// MY and SG are served, so a pessimistic guess would flash the card away
+	// from a Singapore seller who is perfectly entitled to it.
+	const countryBlocked = settings ? !settings.countryAllowed : false;
 	const typedKey = apiKey.trim().length > 0;
 	// The option is "on" when a working connection is enabled — or while the
 	// seller is part-way through setting one up.
@@ -197,16 +209,25 @@ export function DelyvaCard({
 
 	function saveAddress() {
 		const draft = addressDraft;
+		const postcode = postcodeRule(country);
+		// Singapore has no state tier — the island IS the city, and the server
+		// arm enforces that literal on both fields. So it is implied here rather
+		// than asked for, and never blocks the save.
+		const city = country === "SG" ? SG_STATE_LABEL : draft.city.trim();
+		const state = country === "SG" ? SG_STATE_LABEL : draft.state.trim();
 		if (
 			!draft.address1.trim() ||
-			!draft.city.trim() ||
-			!draft.state.trim() ||
-			!/^\d{5}$/.test(draft.postcode.trim())
+			!city ||
+			!state ||
+			!postcode.pattern.test(draft.postcode.trim())
 		) {
-			// Mirrors the server rule in convex/delyva.ts so the seller is told
-			// here, not by a thrown error after a round trip.
+			// Mirrors the server rule (which reads the same `postcodeRule`), so
+			// the seller is told here rather than by a thrown error after a round
+			// trip.
 			setAddressError(
-				"Fill in the street address, city, state and a 5-digit postcode.",
+				country === "SG"
+					? "Fill in the street address and a 6-digit postal code."
+					: "Fill in the street address, city, state and a 5-digit postcode.",
 			);
 			return;
 		}
@@ -218,8 +239,8 @@ export function DelyvaCard({
 					pickupAddress: {
 						address1: draft.address1.trim(),
 						address2: draft.address2.trim() || undefined,
-						city: draft.city.trim(),
-						state: draft.state.trim(),
+						city,
+						state,
 						postcode: draft.postcode.trim(),
 					},
 				}),
@@ -262,9 +283,9 @@ export function DelyvaCard({
 
 			{countryBlocked ? (
 				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-					Delyva courier booking is Malaysia-only for now — Singapore stores
-					arrange their own courier and record the tracking number on the order.
-					Your account stays connected until you disconnect it below.
+					Delyva courier booking isn&apos;t available in your store&apos;s country
+					yet — arrange your own courier and record the tracking number on the
+					order. Your account stays connected until you disconnect it below.
 				</p>
 			) : (
 				<div className="grid grid-cols-2 gap-2">
@@ -734,6 +755,7 @@ function PickupAddressFields({
 	onSave: () => void;
 	onCancel: () => void;
 }) {
+	const postcode = postcodeRule(country);
 	return (
 		<div className="flex flex-col gap-2">
 			<div className="flex flex-col gap-0.5">
@@ -741,8 +763,9 @@ function PickupAddressFields({
 					Pickup address
 				</span>
 				<p className="text-xs text-muted-foreground">
-					Where couriers collect from. The postcode decides the price, so make
-					it exact — and match what Delyva has on file for cold chain.
+					Where couriers collect from. The {postcode.label.toLowerCase()}{" "}
+					decides the price, so make it exact — and match what Delyva has on
+					file for cold chain.
 				</p>
 			</div>
 			{missing && !dirty ? (
@@ -796,48 +819,63 @@ function PickupAddressFields({
 				disabled={disabled}
 				onChange={(e) => onChange({ address2: e.target.value })}
 			/>
-			<div className="grid grid-cols-2 gap-2">
+			<div
+				className={
+					country === "SG" ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2"
+				}
+			>
+				{country === "SG" ? null : (
+					<Input
+						variant="field"
+						aria-label="City"
+						placeholder="City"
+						value={draft.city}
+						disabled={disabled}
+						isError={error !== null && !draft.city.trim()}
+						onChange={(e) => onChange({ city: e.target.value })}
+					/>
+				)}
 				<Input
 					variant="field"
-					aria-label="City"
-					placeholder="City"
-					value={draft.city}
-					disabled={disabled}
-					isError={error !== null && !draft.city.trim()}
-					onChange={(e) => onChange({ city: e.target.value })}
-				/>
-				<Input
-					variant="field"
-					aria-label="Postcode"
-					placeholder="Postcode"
+					aria-label={postcode.label}
+					placeholder={postcode.label}
 					inputMode="numeric"
-					maxLength={5}
+					maxLength={postcode.digits}
 					value={draft.postcode}
 					disabled={disabled}
-					isError={error !== null && !/^\d{5}$/.test(draft.postcode.trim())}
+					isError={error !== null && !postcode.pattern.test(draft.postcode.trim())}
 					onChange={(e) =>
-						onChange({ postcode: e.target.value.replace(/\D/g, "").slice(0, 5) })
+						onChange({
+							postcode: e.target.value
+								.replace(/\D/g, "")
+								.slice(0, postcode.digits),
+						})
 					}
 				/>
 			</div>
-			<select
-				aria-label="State"
-				value={draft.state}
-				disabled={disabled}
-				onChange={(e) => onChange({ state: e.target.value })}
-				className={`min-h-11 w-full rounded-xl border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-					error !== null && !draft.state.trim()
-						? "border-destructive"
-						: "border-input"
-				}`}
-			>
-				<option value="">Select state…</option>
-				{MY_STATES.map((state) => (
-					<option key={state} value={state}>
-						{state}
-					</option>
-				))}
-			</select>
+			{/* Singapore has no state tier — the whole island is one city, and the
+			    server arm enforces the SG_STATE_LABEL literal on both fields. A
+			    dropdown with one option is not a choice, so there isn't one. */}
+			{country === "SG" ? null : (
+				<select
+					aria-label="State"
+					value={draft.state}
+					disabled={disabled}
+					onChange={(e) => onChange({ state: e.target.value })}
+					className={`min-h-11 w-full rounded-xl border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
+						error !== null && !draft.state.trim()
+							? "border-destructive"
+							: "border-input"
+					}`}
+				>
+					<option value="">Select state…</option>
+					{MY_STATES.map((state) => (
+						<option key={state} value={state}>
+							{state}
+						</option>
+					))}
+				</select>
+			)}
 			{error ? (
 				<p className="text-xs font-medium text-destructive">{error}</p>
 			) : null}

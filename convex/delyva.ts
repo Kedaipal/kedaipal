@@ -45,7 +45,8 @@ import {
 } from "./lib/delyva";
 import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { postcodeRule } from "./lib/address";
+import { DEFAULT_COUNTRY, type Country } from "./lib/country";
 import {
 	type CartWeightItem,
 	delyvaBookingAllowed,
@@ -151,8 +152,10 @@ export const getConnectContext = internalQuery({
 		if (!delyvaBookingAllowed(country)) {
 			return {
 				ok: false,
+				// Both MY and SG are served now (z8r3fdbqmc), so this is the guard
+				// for a country we haven't opened yet — worded without naming one.
 				message:
-					"Delyva courier booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+					"Delyva courier booking isn't available in your store's country yet — arrange your own courier and record the tracking number on the order.",
 			};
 		}
 		if (!access.actingAsAdmin) {
@@ -565,15 +568,22 @@ export const updateSettings = mutation({
 							state: args.pickupAddress.state.trim(),
 							postcode: args.pickupAddress.postcode.trim(),
 						};
+		// The postcode rule is the store country's, taken from the one place that
+		// owns it (convex/lib/address.ts) — Singapore's postal codes are SIX
+		// digits, and a hardcoded 5 here is what made this feature MY-shaped.
+		const country = access.retailer.country ?? DEFAULT_COUNTRY;
+		const postcode = postcodeRule(country);
 		if (
 			pickupAddress &&
 			(!pickupAddress.address1 ||
 				!pickupAddress.city ||
 				!pickupAddress.state ||
-				!/^\d{5}$/.test(pickupAddress.postcode))
+				!postcode.pattern.test(pickupAddress.postcode))
 		) {
 			throw new ConvexError(
-				"The pickup address needs a street address, city, state and a 5-digit postcode.",
+				country === "SG"
+					? "The pickup address needs a street address, city and a 6-digit postal code."
+					: "The pickup address needs a street address, city, state and a 5-digit postcode.",
 			);
 		}
 		await ctx.db.patch(access.retailer._id, {
@@ -665,6 +675,7 @@ export const WEIGHT_OVERRIDE_MAX_KG = 1_000;
 
 function formatBuyerAddress(
 	address: NonNullable<Doc<"orders">["deliveryAddress"]>,
+	country: Country,
 ): DelyvaAddress {
 	return {
 		address1: address.line1,
@@ -672,7 +683,10 @@ function formatBuyerAddress(
 		city: address.city,
 		state: address.state,
 		postcode: address.postcode,
-		country: "MY",
+		// The store's country, never a literal — Delyva takes SG addresses
+		// unchanged (verified 2 Sep 2026) and an "MY" stamp on a Singapore
+		// parcel is how a quote silently returns nothing.
+		country,
 	};
 }
 
@@ -798,7 +812,8 @@ export const getDispatchContext = internalQuery({
 			return { ok: false, reason: "not_connected" }; // restated for types
 
 		const weight = await resolveOrderWeightKg(ctx, order);
-		const buyerAddress = formatBuyerAddress(order.deliveryAddress);
+		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+		const buyerAddress = formatBuyerAddress(order.deliveryAddress, storeCountry);
 		const buyerPhone = (order.customer.waPhone ?? "").replace(/\D/g, "");
 		const sellerPhone = (retailer.waPhone ?? "").replace(/\D/g, "");
 		const inventory: DelyvaInventoryLine[] = await Promise.all(
@@ -829,7 +844,7 @@ export const getDispatchContext = internalQuery({
 			customerId: credentials.customerId,
 			origin: {
 				...config.pickupAddress,
-				country: "MY",
+				country: storeCountry,
 				name: retailer.storeName,
 				phone: sellerPhone,
 				email: retailer.notifyEmail || undefined,

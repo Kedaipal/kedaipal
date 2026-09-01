@@ -156,14 +156,18 @@ export function riderBookingAllowed(country: Country): boolean {
  * Whether a store COUNTRY may connect Delyva courier booking (86eyjpv6z).
  * Its own table for the same reason as COUNTRY_RIDER_BOOKING above — booking
  * capabilities are decided per provider, never derived from a pricing-mode
- * list. Malaysia-only for v1: the ICP is MY frozen sellers, and every
- * seller-facing string (West-Malaysia cold-chain coverage, MYR) assumes it.
- * Delyva does operate in SG, so widening later is a product decision, not a
- * rewrite.
+ * list. Note this is the one place the two providers DISAGREE: Lalamove is
+ * MY-only, Delyva serves both, and deriving either from the other would have
+ * made that impossible to express.
  */
 export const COUNTRY_DELYVA_BOOKING: Record<Country, boolean> = {
 	MY: true,
-	SG: false,
+	// Singapore needs this MORE than Malaysia does (z8r3fdbqmc): SG stores have
+	// no Lalamove (COUNTRY_RIDER_BOOKING.SG = false) and only HitPay for
+	// payments, so without Delyva they have no courier automation at all.
+	// Delyva's API takes SG addresses unchanged — verified 2 Sep 2026: a
+	// country:"SG" quote with a 6-digit postal code returns a well-formed 200.
+	SG: true,
 };
 
 export function delyvaBookingAllowed(country: Country): boolean {

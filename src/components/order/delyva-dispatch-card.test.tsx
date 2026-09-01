@@ -262,7 +262,9 @@ describe("quote → pick → book", () => {
 		await waitFor(() =>
 			expect(screen.getByText(/No courier can take/i)).toBeTruthy(),
 		);
-		expect(container.textContent).toContain("West Malaysia only");
+		// Country-neutral since SG shipped (z8r3fdbqmc) — the point is that the
+		// empty state explains cold-chain coverage, not that it names a market.
+		expect(container.textContent).toContain("cover far less ground");
 		expect(container.textContent).toContain("add the tracking number below");
 	});
 

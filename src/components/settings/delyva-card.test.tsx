@@ -348,18 +348,80 @@ describe("plan gate", () => {
 	});
 });
 
-describe("country gate", () => {
-	it("stays out of a Singapore store's settings entirely", () => {
+describe("Singapore (z8r3fdbqmc)", () => {
+	// SG stores have no Lalamove at all, so this IS their courier automation.
+	it("is offered to a Singapore store like any other", () => {
+		state.settings = disconnected();
+		render(card({ country: "SG" }));
+		expect(screen.getByRole("button", { name: /^Delyva/i })).toBeTruthy();
+		expect(screen.queryByText(/isn't available in your store's country/i)).toBeNull();
+	});
+
+	it("asks for a 6-digit postal code, not a 5-digit postcode", () => {
+		state.settings = settings({ pickupAddress: undefined });
+		render(card({ country: "SG" }));
+		const field = screen.getByLabelText(/postal code/i) as HTMLInputElement;
+		expect(field.maxLength).toBe(6);
+		expect(screen.queryByLabelText(/^postcode$/i)).toBeNull();
+	});
+
+	it("drops the state and city fields — the island is both", () => {
+		state.settings = settings({ pickupAddress: undefined });
+		render(card({ country: "SG" }));
+		expect(screen.queryByLabelText(/^state$/i)).toBeNull();
+		expect(screen.queryByLabelText(/^city$/i)).toBeNull();
+	});
+
+	it("saves with Singapore implied on both fields", async () => {
+		state.settings = settings({ pickupAddress: undefined });
+		render(card({ country: "SG" }));
+		fireEvent.change(screen.getByLabelText(/street address/i), {
+			target: { value: "10 Bayfront Ave" },
+		});
+		fireEvent.change(screen.getByLabelText(/postal code/i), {
+			target: { value: "018956" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
+		expect(state.mutation).toHaveBeenCalledWith({
+			retailerId: undefined,
+			pickupAddress: {
+				address1: "10 Bayfront Ave",
+				address2: undefined,
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "018956",
+			},
+		});
+	});
+
+	it("refuses a 5-digit code on an SG store — the MY rule must not leak across", () => {
+		state.settings = settings({ pickupAddress: undefined });
+		render(card({ country: "SG" }));
+		fireEvent.change(screen.getByLabelText(/street address/i), {
+			target: { value: "10 Bayfront Ave" },
+		});
+		fireEvent.change(screen.getByLabelText(/postal code/i), {
+			target: { value: "01895" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		expect(screen.getByText(/6-digit postal code/i)).toBeTruthy();
+		expect(state.mutation).not.toHaveBeenCalled();
+	});
+
+	it("a store in a country we don't serve yet still gets a way out", () => {
+		state.settings = settings({ countryAllowed: false });
+		render(card({ country: "SG" }));
+		expect(
+			screen.getByText(/isn't available in your store's country yet/i),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
+	});
+
+	it("…and vanishes entirely when there is nothing connected to unwind", () => {
 		state.settings = settings({ connected: false, countryAllowed: false });
 		const { container } = render(card({ country: "SG" }));
 		expect(container.textContent).toBe("");
-	});
-
-	it("but a store that switched country WHILE connected sees the reason AND a way out", () => {
-		state.settings = settings({ countryAllowed: false });
-		render(card({ country: "SG" }));
-		expect(screen.getByText(/Malaysia-only for now/i)).toBeTruthy();
-		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
 	});
 });
 

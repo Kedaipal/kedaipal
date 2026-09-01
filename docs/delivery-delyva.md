@@ -50,10 +50,51 @@ separate account registered at `demo.delyva.app`. The ticket's
 "infer env from key prefix" AC is void; a key is just a key.
 
 Gates: connect/enable is **Pro-gated** via `PLAN_FEATURES.delivery` (the same
-flag as Lalamove booking; admin act-as bypasses for white-glove), and
-**Malaysia-only** via `delyvaBookingAllowed` (`convex/lib/delivery.ts`) —
-its own table, never derived from pricing modes. Disconnect/disable is never
-gated (downgrade never traps).
+flag as Lalamove booking; admin act-as bypasses for white-glove), and country
+is checked via `delyvaBookingAllowed` (`convex/lib/delivery.ts`) — its own
+table, never derived from pricing modes. Disconnect/disable is never gated
+(downgrade never traps).
+
+## Malaysia and Singapore (z8r3fdbqmc)
+
+Delyva serves **both** countries, and this is the one place the two booking
+providers disagree: Lalamove is Malaysia-only, Delyva is not. Deriving either
+gate from the other — or from `COUNTRY_DELIVERY_MODES` — would have made that
+impossible to express, which is why each provider owns its own table.
+
+**Singapore needs this more than Malaysia does.** SG stores have no Lalamove
+(`COUNTRY_RIDER_BOOKING.SG = false`) and only HitPay for payments, so before
+this they had *no* courier automation at all — every parcel arranged by hand
+with the tracking number typed in. Delyva is that market's whole answer.
+
+What is country-shaped, and where it comes from:
+
+- **Postal codes.** MY is 5 digits and called a *postcode*; SG is 6 and called
+  a *postal code*. Both the pickup-address form and its server validator read
+  **`postcodeRule(country)`** from `convex/lib/address.ts`, which already owned
+  the rule — the feature first shipped with a hardcoded `/^\d{5}$/` on both
+  sides, which silently made it Malaysia-shaped. Anything that asks a seller
+  for a postcode should ask that helper. (`src/lib/schemas.ts` still keeps its
+  own copies for the zod form schemas — pre-existing, worth folding in later.)
+- **The state tier.** Singapore has none: the island is both the city and the
+  "state", and the server arm enforces the `SG_STATE_LABEL` literal on both
+  fields. So the SG form renders **neither** a state dropdown nor a city input
+  — a dropdown with one option is not a choice — and `saveAddress` supplies the
+  literal. `parseGoogleAddress` already returns it when handed `country`.
+- **The country on the wire.** `getDispatchContext` stamps the store's country
+  on both waypoints and `formatBuyerAddress` takes it as an argument. It was
+  hardcoded `"MY"`, which on a Singapore parcel is exactly how a quote comes
+  back empty with no error to explain it.
+- **Coverage copy.** The cold-chain line no longer claims "West Malaysia only";
+  it says cold-chain couriers cover less ground than ordinary parcels and to
+  check with Delyva, which is true in both markets.
+
+**Verified 2 Sep 2026:** a quote with `country: "SG"`, `state: "Singapore"` and
+a 6-digit postal code returns a well-formed HTTP 200 — the payload shape needs
+no change. It returned zero services only because the probing account is a
+Malaysian demo account with no SG couriers enabled. **What is NOT verified is
+that a real SG account returns real SG couriers** — that needs an SG Delyva
+account, and it is the SG twin of the cold-chain gap below.
 
 ## Schema
 
@@ -275,6 +316,9 @@ precedent.
 - **Live Delyva rates at checkout** — a new *pricing* mode (the Lalamove
   live-quote parallel), deliberately out of scope: buyer pricing stays
   weight-band. Its own ticket if weight bands prove too coarse.
+- **An SG Delyva account** — needed to confirm a real Singapore account
+  returns Singapore couriers, and to sanity-check SGD pricing end to end
+  before the SG pilot (z8r3fdbqmc).
 - **Cold-chain quote verification on a real account** — the `CHILLED`
   itemType is confirmed in Delyva's plugin and API enum, but the demo
   account returns no cold-chain services; verify pricing + the activation
