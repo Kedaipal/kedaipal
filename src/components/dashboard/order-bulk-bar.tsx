@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Printer, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, PinOff, Printer, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -40,6 +40,14 @@ export type BulkAction = {
  * while there's a selection — the dialog it opens is where a selection with
  * nothing printable in it gets explained (the "blocked but tappable" pattern;
  * a disabled Button can't even show a reason on touch).
+ *
+ * `onUnpin` (optional, 86eyrtz74) adds a bulk **Unpin** item ABOVE the status
+ * transitions — it is the escape hatch for a pin set that has grown, and pins
+ * never auto-clear (a delivered order can still be worth keeping on top), so
+ * clearing several has to be cheap. It sits above "Mark N as" rather than
+ * inside it because unpinning is not a status change, and the caller passes it
+ * only when the selection actually contains a pinned order — an item that
+ * would no-op is worse than no item.
  */
 export function OrderBulkBar({
 	count,
@@ -48,6 +56,7 @@ export function OrderBulkBar({
 	onApply,
 	onDelete,
 	onPrint,
+	onUnpin,
 	onToggleSelectAll,
 	onExit,
 	busy = false,
@@ -59,11 +68,17 @@ export function OrderBulkBar({
 	allSelected: boolean;
 	// May return a promise — the destructive confirm awaits it so the confirm
 	// button shows its in-flight spinner and stays open if the apply rejects.
-	onApply: (status: BulkAction["status"]) => void | Promise<void>;
+	onApply: (
+		status: BulkAction["status"],
+		cancellationNote?: string,
+	) => void | Promise<void>;
 	// Permanent hard delete of the selection. Omit to hide the delete item.
 	onDelete?: () => void | Promise<void>;
 	// Open the despatch-label print dialog for the selection. Omit to hide.
 	onPrint?: () => void;
+	// Unpin every pinned order in the selection. Omit when the selection holds
+	// no pinned orders, which hides the item entirely.
+	onUnpin?: () => void | Promise<void>;
 	onToggleSelectAll: () => void;
 	onExit: () => void;
 	busy?: boolean;
@@ -135,6 +150,21 @@ export function OrderBulkBar({
 						</button>
 					</PopoverTrigger>
 					<PopoverContent align="end" side="top" className="w-56 p-1">
+						{onUnpin ? (
+							<div className="mb-1 flex flex-col border-b border-border pb-1">
+								<button
+									type="button"
+									onClick={() => {
+										setOpen(false);
+										void Promise.resolve(onUnpin()).catch(() => {});
+									}}
+									className="flex h-11 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted"
+								>
+									<PinOff className="size-4 shrink-0" aria-hidden="true" />
+									Unpin
+								</button>
+							</div>
+						) : null}
 						<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
 							Mark {count} {orderWord} as
 						</p>
@@ -187,15 +217,29 @@ export function OrderBulkBar({
 					if (!o) setPendingDestructive(null);
 				}}
 				title={`Cancel ${count} ${orderWord}?`}
-				description={`${count === 1 ? "The customer is" : "Customers are"} NOT notified — the cancellation shows on their order page, so message them yourself if it can't wait. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
+				description={`${count === 1 ? "The customer is" : "Customers are"} NOT sent a WhatsApp — your reason below is what they see on their order page. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
 				confirmLabel={`Cancel ${count} ${orderWord}`}
 				cancelLabel={`Keep ${orderWord}`}
 				destructive
-				onConfirm={() => {
+				reason={{
+					label: "Why are you cancelling?",
+					placeholder: "e.g. Closed for maintenance this weekend",
+					maxLength: 200,
+					// Deliberately not `required` here even though a booking demands
+					// one: the selection may be all ordinary orders. The SERVER
+					// applies the booking rule per order, so a batch containing a
+					// booking is refused with the reason named — one prompt, and the
+					// rule still can't be bypassed.
+					helper:
+						count === 1
+							? "The customer sees this on their order page. Required if it's a booking."
+							: `All ${count} customers see this on their order page. Required if any is a booking.`,
+				}}
+				onConfirm={(cancellationNote) => {
 					const action = pendingDestructive;
 					// Return the promise so ConfirmDialog can show its spinner while the
 					// bulk op runs and keep itself open if it rejects.
-					if (action) return onApply(action.status);
+					if (action) return onApply(action.status, cancellationNote);
 				}}
 			/>
 

@@ -61,7 +61,10 @@ describe("landing payment-method catalogue", () => {
 			const path = join(PUBLIC_DIR, method.src);
 			if (!existsSync(path)) continue; // reported by the test above
 			const svg = readFileSync(path, "utf8");
-			if (/<image\b/i.test(svg) || /data:image\/(png|jpe?g|gif|webp);base64/i.test(svg))
+			if (
+				/<image\b/i.test(svg) ||
+				/data:image\/(png|jpe?g|gif|webp);base64/i.test(svg)
+			)
 				rasters.push(`${method.id}: ${method.src} embeds a raster`);
 		}
 		expect(rasters, rasters.join("\n")).toEqual([]);

@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
@@ -33,10 +33,20 @@ import {
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
-import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	formatFulfilmentDateTime,
+} from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import {
+	OrderItemLine,
+	type OrderBookingSpan,
+} from "../components/order/order-item-line";
+import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -218,7 +228,7 @@ export const Route = createFileRoute("/track/$token")({
 	component: TrackingRoute,
 });
 
-type DeliveryMethod = "delivery" | "self_collect";
+type DeliveryMethod = "delivery" | "self_collect" | "booking";
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
@@ -235,6 +245,11 @@ function getStatusConfig(
 	return {
 		pending: {
 			label: label("pending"),
+			icon: <Clock className="size-5" />,
+			color: "text-amber-500",
+		},
+		booking_requested: {
+			label: label("booking_requested"),
 			icon: <Clock className="size-5" />,
 			color: "text-amber-500",
 		},
@@ -348,6 +363,14 @@ function TrackingRoute() {
 	} = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const order = useQuery(convexQuery(api.orders.get, { token })).data;
+	// Line-item thumbnails. The seller's order page has had these since
+	// 86eyrtz74; the BUYER — the side that has to recognise what they ordered,
+	// often days later from a WhatsApp link — had a bare list of names. Same
+	// token-keyed query the seller's shortId path uses (`resolveSharedOrder`
+	// already accepts either), so this costs no new endpoint.
+	const itemImageUrls = useQuery(
+		convexQuery(api.orders.getItemImageUrls, { token }),
+	).data;
 	// Only subscribe to payment methods when the "How to pay" section can actually
 	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
 	// second order+retailer read+subscription on this hot public path. (Kept a
@@ -424,6 +447,22 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// Booking kind (S3): the page speaks stay language — range card, request
+	// states, and no payment surface until the seller approves.
+	const isBooking = deliveryMethod === "booking";
+	// Frozen at request (S7): a package reads as a validity window, a
+	// free-range stay as check-in → check-out.
+	const isBookingPackage = order.bookingPackaged === true;
+	// A booking's item line reads as a span, not a quantity (see OrderItemLine).
+	const itemBookingSpan: OrderBookingSpan | undefined =
+		order.bookingCheckIn !== undefined && order.bookingCheckOut !== undefined
+			? {
+					checkIn: order.bookingCheckIn,
+					checkOut: order.bookingCheckOut,
+					packaged: isBookingPackage,
+				}
+			: undefined;
+	const ms = order.retailerLocale === "ms";
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
@@ -502,6 +541,7 @@ function TrackingRoute() {
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		deliveryMethod,
+		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
 		{ status: order.status, currentStageId: order.currentStageId },
@@ -511,8 +551,14 @@ function TrackingRoute() {
 		? stages.findIndex((s) => s.id === currentStage.id)
 		: -1;
 	// Combined position into the rendered list: 0 = pending node, 1..N = stages.
+	// A booking request sits at position 0 too — its "received" node reads
+	// "Awaiting Approval" (below) until the seller answers.
 	const currentPos =
-		order.status === "pending" ? 0 : stageIdx >= 0 ? stageIdx + 1 : 0;
+		order.status === "pending" || order.status === "booking_requested"
+			? 0
+			: stageIdx >= 0
+				? stageIdx + 1
+				: 0;
 
 	const timelineNodes: Array<{
 		key: string;
@@ -524,7 +570,11 @@ function TrackingRoute() {
 	}> = [
 		{
 			key: "pending",
-			label: statusConfig.pending.label,
+			// A booking's first beat is the request, not "Order Received" — reuse
+			// the swept status label so a seller's locale flows through.
+			label: isBooking
+				? statusConfig.booking_requested.label
+				: statusConfig.pending.label,
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -627,6 +677,78 @@ function TrackingRoute() {
 				) : null
 			) : null}
 
+			{/* Booking request states (S3, design 86eym0pjg §2): the request's own
+			    lifecycle, stated where the buyer lands. While awaiting, the payment
+			    card below is suppressed — nothing is payable until the seller
+			    approves, and an armed Pay button on a request would be a lie. */}
+			{isBooking && order.status === "booking_requested" ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+						<Clock className="size-3.5" aria-hidden />
+						{ms ? "Menunggu kelulusan" : "Awaiting approval"}
+					</span>
+					<p className="font-heading text-lg font-extrabold leading-tight">
+						{ms ? "Permintaan dihantar" : "Request sent"}
+					</p>
+					<p className="text-sm leading-relaxed text-muted-foreground">
+						{ms
+							? `${order.storeName} biasanya mengesahkan dalam masa 24 jam — kami akan WhatsApp anda sama ada diterima atau tidak. Tiada bayaran dibuat lagi.`
+							: `${order.storeName} usually confirms within 24 hours — we'll WhatsApp you either way. Nothing has been charged.`}
+					</p>
+				</section>
+			) : null}
+			{isBooking && order.bookingResolution !== undefined ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+						{order.bookingResolution === "declined"
+							? ms
+								? "Permintaan ditolak"
+								: "Request declined"
+							: ms
+								? "Permintaan tamat tempoh"
+								: "Request expired"}
+					</span>
+					{order.bookingResolution === "declined" && order.cancellationNote ? (
+						<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+							“{order.cancellationNote}”
+						</blockquote>
+					) : order.bookingResolution === "expired" ? (
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							{ms
+								? "Penjual tidak menjawab dalam masa 24 jam, jadi tarikh anda dilepaskan."
+								: "The seller didn't respond within 24 hours, so your dates were released."}
+						</p>
+					) : null}
+					<p className="text-sm font-medium">
+						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
+					</p>
+					{order.retailerSlug ? (
+						<Link
+							to="/$slug"
+							params={{ slug: order.retailerSlug }}
+							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
+						>
+							{ms ? "Cuba tarikh lain" : "Try different dates"}
+						</Link>
+					) : null}
+				</section>
+			) : null}
+
+			{/* Why the order was cancelled, when a robot did it (86eyq0epn): a
+			    buyer who ran out of payment time must not come back to a bare
+			    "Cancelled" and wonder — say what happened and what to do next.
+			    Human cancellations carry no reason stamp and keep today's copy. */}
+			{isCancelled && order.cancelledReason === "payment_window_expired" ? (
+				<div className="mt-6 flex items-start gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">
+					<Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
+					<p>
+						The payment window for this order ran out, so it was cancelled and
+						the items were released. Still want it? Message the store — they can
+						send you a fresh order link.
+					</p>
+				</div>
+			) : null}
+
 			{/* Current status card */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 				<span className={config?.color}>{config?.icon}</span>
@@ -642,8 +764,30 @@ function TrackingRoute() {
 				</div>
 			</div>
 
-			{/* Payment card — independent of fulfilment status. Hidden once cancelled. */}
-			{!isCancelled ? (
+			{/* Payment deadline (86eyq0epn) — the claim timer continuing until real
+			    money. Rendered only while the clock is LIVE: unpaid (a `claimed`
+			    order shows the being-confirmed card instead — the countdown pauses
+			    on an "I've paid"), still in a status where the deadline means
+			    something, and no hold that makes payment impossible (fee-pending /
+			    gateway issue) — the exact states the auto-cancel sweep skips, so
+			    the UI never threatens what the server wouldn't do.
+
+			    `paymentDeadlineApplies` covers cancelled AND anything past
+			    `confirmed`: both writers now clear `paymentDueAt` on those
+			    transitions (PR #227 review), and this is the defence for rows
+			    already stranded before that fix shipped. */}
+			{paymentDeadlineApplies(order.status) &&
+			order.paymentDueAt !== undefined &&
+			paymentStatus === "unpaid" &&
+			!deliveryFeeHeld &&
+			!gatewayIssueUnresolved ? (
+				<PaymentDueCountdown dueAt={order.paymentDueAt} />
+			) : null}
+
+			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
+			    and held back on a booking REQUEST: nothing is payable until the seller
+			    approves (the awaiting card above says so). */}
+			{!isCancelled && order.status !== "booking_requested" ? (
 				<section
 					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
 				>
@@ -1069,6 +1213,154 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
+			{/* The stay itself — a booking's equivalent of the address/pickup blocks.
+			    Frozen at request (bookingCheckIn/Out never change after create). */}
+			{isBooking &&
+			order.bookingCheckIn !== undefined &&
+			order.bookingCheckOut !== undefined ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{isBookingPackage
+							? ms
+								? "Pakej anda"
+								: "Your package"
+							: ms
+								? "Penginapan anda"
+								: "Your stay"}
+					</p>
+					<div className="flex flex-col gap-1.5 text-sm tabular-nums">
+						<div className="flex items-baseline gap-1.5">
+							<span className="font-medium">
+								{isBookingPackage
+									? ms
+										? "Mula"
+										: "Starts"
+									: ms
+										? "Daftar masuk"
+										: "Check-in"}
+							</span>
+							<span className="flex-1 border-b-2 border-dotted border-border" />
+							<span className="font-semibold">
+								{formatFulfilmentDate(order.bookingCheckIn)}
+							</span>
+						</div>
+						<div className="flex items-baseline gap-1.5">
+							<span className="font-medium">
+								{isBookingPackage
+									? ms
+										? "Hari terakhir"
+										: "Last day"
+									: ms
+										? "Daftar keluar"
+										: "Check-out"}
+							</span>
+							<span className="flex-1 border-b-2 border-dotted border-border" />
+							<span className="font-semibold">
+								{/* A package's last USABLE day is the night before the
+								    exclusive check-out — printing the check-out would
+								    promise a day the buyer doesn't have. */}
+								{formatFulfilmentDate(
+									isBookingPackage
+										? order.bookingCheckOut - DAY_MS
+										: order.bookingCheckOut,
+								)}
+							</span>
+						</div>
+						<p className="text-xs text-muted-foreground">
+							{Math.round(
+								(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+							)}{" "}
+							{isBookingPackage
+								? ms
+									? "hari"
+									: "days"
+								: ms
+									? "malam"
+									: "night(s)"}{" "}
+							· {order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
+						</p>
+					</div>
+				</section>
+			) : null}
+
+			{/* Why the order was cancelled, in the seller's own words. Request-stage
+			    endings render in the resolution card above; this covers everything
+			    else — an approved booking the seller later cancelled, and ordinary
+			    cancelled orders where the seller chose to explain. Without it, a
+			    buyer whose booking was cancelled after approval learned nothing. */}
+			{isCancelled &&
+			order.bookingResolution === undefined &&
+			order.cancellationNote ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Sebab pembatalan" : "Why this was cancelled"}
+					</p>
+					<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+						“{order.cancellationNote}”
+					</blockquote>
+					<p className="text-xs text-muted-foreground">
+						{ms ? `Daripada ${order.storeName}.` : `From ${order.storeName}.`}
+					</p>
+				</section>
+			) : null}
+
+			{/* Security-deposit outcome (86eyn4kee): the seller settled it after
+			    check-out — returned in full (mint) or partly kept with their
+			    reason (amber, with the split). While unsettled the totals row +
+			    receipt already state the hold; a cancelled-but-paid booking gets
+			    the refund context instead (the deposit rides the one refund
+			    conversation — Kedaipal never moves the money). */}
+			{isBooking && order.securityDeposit && order.securityDeposit > 0 ? (
+				order.securityDepositReturnedAt !== undefined ? (
+					(order.securityDepositKeptAmount ?? 0) > 0 ? (
+						<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
+							<p className="text-sm font-bold text-amber-900 dark:text-amber-200">
+								{ms
+									? `${formatPrice(order.securityDepositKeptAmount ?? 0, order.currency)} daripada deposit anda ditahan`
+									: `${formatPrice(order.securityDepositKeptAmount ?? 0, order.currency)} of your deposit was kept`}
+							</p>
+							{order.securityDepositKeptReason ? (
+								<blockquote className="border-l-2 border-amber-300 pl-3 text-sm text-amber-900/90 dark:border-amber-700 dark:text-amber-200/90">
+									{order.securityDepositKeptReason}
+								</blockquote>
+							) : null}
+							<p className="text-xs text-amber-900/80 dark:text-amber-200/80">
+								{ms
+									? `Baki ${formatPrice((order.securityDeposit ?? 0) - (order.securityDepositKeptAmount ?? 0), order.currency)} daripada deposit ${formatPrice(order.securityDeposit ?? 0, order.currency)} dipulangkan kepada anda. Hubungi ${order.storeName} jika ada soalan.`
+									: `The remaining ${formatPrice((order.securityDeposit ?? 0) - (order.securityDepositKeptAmount ?? 0), order.currency)} of your ${formatPrice(order.securityDeposit ?? 0, order.currency)} deposit is returned to you. Contact ${order.storeName} with any questions.`}
+							</p>
+						</section>
+					) : (
+						<section className="mt-6 flex items-start gap-2.5 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+							<CheckCircle
+								className="mt-0.5 size-4 shrink-0 text-accent-emphasis"
+								aria-hidden
+							/>
+							<div className="flex flex-col gap-0.5">
+								<p className="text-sm font-bold">
+									{ms
+										? "Deposit sekuriti dipulangkan"
+										: "Security deposit returned"}
+								</p>
+								<p className="text-xs text-muted-foreground">
+									{ms
+										? `${order.storeName} telah memulangkan deposit ${formatPrice(order.securityDeposit, order.currency)} anda sepenuhnya.`
+										: `${order.storeName} returned your ${formatPrice(order.securityDeposit, order.currency)} deposit in full.`}
+								</p>
+							</div>
+						</section>
+					)
+				) : isCancelled && paymentStatus === "received" ? (
+					<section className="mt-6 rounded-2xl border border-border bg-card p-4">
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							{ms
+								? `Bayaran anda termasuk deposit sekuriti ${formatPrice(order.securityDeposit, order.currency)} (dipulangkan). ${order.storeName} akan uruskan bayaran balik terus dengan anda.`
+								: `Your payment included the ${formatPrice(order.securityDeposit, order.currency)} refundable security deposit. ${order.storeName} will arrange the refund with you directly.`}
+						</p>
+					</section>
+				) : null
+			) : null}
+
 			{/* Pickup location — shown for self-collect orders that have a snapshot.
 			    Reads the frozen snapshot (not the live pickupLocations row) so a
 			    retailer edit after the order was placed never rewrites history. */}
@@ -1238,27 +1530,17 @@ function TrackingRoute() {
 							? customQuote / item.quantity
 							: item.price;
 						return (
-							<li
+							<OrderItemLine
 								key={item.variantId ?? `${item.productId}-${i}`}
-								className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-							>
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm font-medium">
-										{item.name}
-										{item.variantLabel ? (
-											<span className="ml-1.5 font-normal text-muted-foreground">
-												{item.variantLabel}
-											</span>
-										) : null}
-									</p>
-									<p className="text-xs text-muted-foreground">
-										{item.quantity} × {formatPrice(unitPrice, order.currency)}
-									</p>
-								</div>
-								<p className="shrink-0 text-sm font-semibold tabular-nums">
-									{formatPrice(lineTotal, order.currency)}
-								</p>
-							</li>
+								name={item.name}
+								variantLabel={item.variantLabel}
+								quantity={item.quantity}
+								unitPrice={unitPrice}
+								lineTotal={lineTotal}
+								currency={order.currency}
+								imageUrl={itemImageUrls?.[i] ?? undefined}
+								booking={itemBookingSpan}
+							/>
 						);
 					})}
 				</ul>
@@ -1298,6 +1580,20 @@ function TrackingRoute() {
 					<div className="flex items-center justify-between gap-3 px-3 text-sm text-muted-foreground">
 						<span>Delivery charge</span>
 						<span className="text-right">To be confirmed</span>
+					</div>
+				) : null}
+				{/* Refundable security deposit (booking) — inside the total, named
+				    so the stay never reads as costing more than it does. */}
+				{order.securityDeposit && order.securityDeposit > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							{ms
+								? "Deposit sekuriti (dipulangkan)"
+								: "Security deposit (refundable)"}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.securityDeposit, order.currency)}
+						</span>
 					</div>
 				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">

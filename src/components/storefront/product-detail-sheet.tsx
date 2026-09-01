@@ -1,6 +1,8 @@
-import { X } from "lucide-react";
+import { CalendarRange, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { formatPrice } from "../../lib/format";
+import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
@@ -50,6 +52,13 @@ export function ProductDetailSheet({
 	onAdd,
 }: ProductDetailSheetProps) {
 	const pp = useProductPurchase({ product, retailerId, cartQuantity });
+
+	// Mirrors product-page.tsx's booking branch — same three signals, so the
+	// preview and the real page can't disagree about what the buyer is offered.
+	const isBooking = product?.kind === "booking";
+	const instantBook = product?.booking?.autoAccept === true;
+	const isPackage = (product?.booking?.packageLength ?? 0) > 0;
+	const securityDeposit = product?.booking?.securityDeposit ?? 0;
 
 	const open = product !== null;
 	if (!product) {
@@ -105,15 +114,39 @@ export function ProductDetailSheet({
 							<h2 className="text-xl font-bold leading-tight">
 								{product.name}
 							</h2>
-							<PriceLabel
-								value={pp.priceLabel}
-								className="shrink-0 text-2xl"
-							/>
+							<PriceLabel value={pp.priceLabel} className="shrink-0 text-2xl" />
 						</div>
 
-						<OptionPills pp={pp} />
-						<PurchaseHints pp={pp} />
-						<CustomOrderCard pp={pp} onAdd={onAdd} />
+						{isBooking ? (
+							<div className="mt-3 flex flex-col gap-2">
+								{securityDeposit > 0 ? (
+									<p className="rounded-xl border border-border bg-card px-3 py-2.5 text-sm leading-relaxed">
+										<span className="font-semibold">
+											+ {formatPrice(securityDeposit, product.currency)}{" "}
+											refundable security deposit
+										</span>
+										<span className="text-muted-foreground">
+											{" "}
+											— collected with your payment, returned after check-out.
+										</span>
+									</p>
+								) : null}
+								<p className="rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+									{isPackage
+										? "Buyers pick a start date on a calendar"
+										: "Buyers pick their dates on a calendar"}
+									{instantBook
+										? " and the booking is confirmed straight away."
+										: " and nothing is paid until you approve the request."}
+								</p>
+							</div>
+						) : (
+							<>
+								<OptionPills pp={pp} />
+								<PurchaseHints pp={pp} />
+								<CustomOrderCard pp={pp} onAdd={onAdd} />
+							</>
+						)}
 
 						{product.description ? (
 							<div className="mt-4">
@@ -123,8 +156,30 @@ export function ProductDetailSheet({
 					</div>
 
 					<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
-						<TotalPreviewRow pp={pp} />
-						<PurchaseActions pp={pp} onAdd={onAdd} />
+						{isBooking ? (
+							// A booking has no cart, no quantity and no "Add to cart" — the
+							// buyer goes to a calendar. This preview used to render the
+							// ordinary stepper + Add-to-cart regardless of kind, so the one
+							// surface promising "what you preview is what the buyer gets"
+							// showed the seller a purchase flow their listing doesn't have.
+							// Disabled: it's a preview, and the seller has no cart to add to.
+							<div className="flex flex-col gap-1.5">
+								<Button disabled className="tap-target h-12 w-full">
+									<CalendarRange className="size-4" aria-hidden />
+									{instantBook ? "Book now" : "Request to book"}
+								</Button>
+								<p className="text-center text-xs text-muted-foreground">
+									{instantBook
+										? "Confirmed instantly — payment details follow."
+										: "You confirm within 24 hours — nothing is paid yet."}
+								</p>
+							</div>
+						) : (
+							<>
+								<TotalPreviewRow pp={pp} />
+								<PurchaseActions pp={pp} onAdd={onAdd} />
+							</>
+						)}
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

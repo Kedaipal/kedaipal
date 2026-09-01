@@ -13,12 +13,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
+import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
@@ -313,18 +313,28 @@ export function StockInput({
 	className,
 	stepper = false,
 	invalid = false,
+	placeholder = "0",
+	ariaLabel = "Stock on hand",
 }: {
 	value: string;
 	onChange: (next: string) => void;
 	className?: string;
 	stepper?: boolean;
 	invalid?: boolean;
+	/** What an EMPTY field means. "0" for stock on hand, where blank and zero
+	 * are the same thing — but booking capacity reads blank as UNLIMITED, and a
+	 * greyed "0" sitting under a "blank = unlimited" label says the opposite. */
+	placeholder?: string;
+	/** The control's accessible name. The stepper's inner input can't inherit a
+	 * wrapping `<label>` (the row holds several controls), so it carries its
+	 * own — and "Stock on hand" is a lie on a booking-capacity field. */
+	ariaLabel?: string;
 }) {
 	if (!stepper) {
 		return (
 			<Input
 				inputMode="numeric"
-				placeholder="0"
+				placeholder={placeholder}
 				value={value}
 				onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
 				isError={invalid}
@@ -356,11 +366,11 @@ export function StockInput({
 			</button>
 			<input
 				inputMode="numeric"
-				placeholder="0"
+				placeholder={placeholder}
 				value={value}
 				onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
-				className="h-full w-full min-w-0 flex-1 bg-transparent text-center text-[15px] font-semibold tabular-nums outline-none"
-				aria-label="Stock on hand"
+				className="h-full w-full min-w-0 flex-1 bg-transparent text-center text-[15px] font-semibold tabular-nums outline-none placeholder:font-normal placeholder:tabular-nums"
+				aria-label={ariaLabel}
 				aria-invalid={invalid || undefined}
 			/>
 			<button
@@ -1131,9 +1141,8 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("custom", 0, "price")} />
 						<span className="text-xs font-normal text-muted-foreground">
-							Buyers see “From {currency} …”, so they know the final price
-							comes with the mockup. Leave blank to show “Price on quote”
-							instead.
+							Buyers see “From {currency} …”, so they know the final price comes
+							with the mockup. Leave blank to show “Price on quote” instead.
 						</span>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">

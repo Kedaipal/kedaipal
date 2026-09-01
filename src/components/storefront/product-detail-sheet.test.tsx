@@ -320,3 +320,79 @@ describe("ProductDetailSheet — minimum order quantity (86ey9unyx)", () => {
 		expect(onAdd).not.toHaveBeenCalled();
 	});
 });
+
+/**
+ * The sheet's whole promise is "what the seller previews is what the buyer
+ * gets" — both surfaces compose from `product-purchase.tsx`. That held for
+ * every product kind except the one whose purchase flow is genuinely different:
+ * a booking has no cart, no quantity and no Add-to-cart, yet the preview
+ * rendered all three, so a seller checking their campsite listing was shown a
+ * flow their buyers never see.
+ */
+describe("ProductDetailSheet — a booking previews the booking flow", () => {
+	const bookingProduct = {
+		_id: "pb",
+		name: "Campsite",
+		slug: "campsite",
+		kind: "booking",
+		currency: "MYR",
+		imageUrls: [],
+		options: [],
+		priceFrom: 8000,
+		variants: [
+			{
+				_id: "vb",
+				optionValues: [],
+				onHand: 0,
+				active: true,
+				blockWhenOutOfStock: false,
+				requiresProof: false,
+				price: 8000,
+				imageUrls: [],
+			},
+		],
+		booking: { capacityPerNight: 5 },
+	} as unknown as StorefrontProduct;
+
+	function renderBooking(overrides: Record<string, unknown> = {}) {
+		render(
+			<ProductDetailSheet
+				product={
+					{
+						...bookingProduct,
+						...overrides,
+					} as unknown as StorefrontProduct
+				}
+				retailerId={RID}
+				cartQuantity={0}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+			/>,
+		);
+	}
+
+	it("offers 'Request to book' — never a quantity stepper or Add to cart", () => {
+		renderBooking();
+		expect(screen.getByRole("button", { name: /request to book/i })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /add to cart/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /increase quantity/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /decrease quantity/i })).toBeNull();
+	});
+
+	it("promises approval only when the listing actually requires it", () => {
+		renderBooking();
+		expect(screen.getByText(/nothing is paid until you approve/i)).toBeTruthy();
+
+		cleanup();
+		// Instant book skips approval entirely — nothing here may promise one.
+		renderBooking({ booking: { capacityPerNight: 5, autoAccept: true } });
+		expect(screen.getByRole("button", { name: /book now/i })).toBeTruthy();
+		expect(screen.getByText(/confirmed straight away/i)).toBeTruthy();
+		expect(screen.queryByText(/until you approve/i)).toBeNull();
+	});
+
+	it("states a deposit before the buyer commits", () => {
+		renderBooking({ booking: { capacityPerNight: 5, securityDeposit: 2000 } });
+		expect(screen.getByText(/RM\s?20\.00 refundable security deposit/i)).toBeTruthy();
+	});
+});

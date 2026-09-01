@@ -1,3 +1,4 @@
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
@@ -5,6 +6,7 @@ import { m } from "../../paraglide/messages";
 import { Eyebrow } from "./landing-ui";
 
 export function Faq() {
+	const shouldReduceMotion = useReducedMotion();
 	const [openIndex, setOpenIndex] = useState<number | null>(0);
 	const [showAll, setShowAll] = useState(false);
 
@@ -75,14 +77,34 @@ export function Faq() {
 										<Plus className="size-4" />
 									</span>
 								</button>
-								<section
-									id={panelId}
-									aria-labelledby={buttonId}
-									hidden={!isOpen}
-									className="pb-6 pr-12 text-sm leading-relaxed text-muted-foreground"
-								>
-									{item.a}
-								</section>
+								{/* Height-animated reveal replacing the `hidden` snap (29 Aug
+								    motion pass). The inner div carries the padding so the
+								    animated element collapses to a true 0 height. */}
+								<AnimatePresence initial={false}>
+									{isOpen && (
+										<motion.section
+											id={panelId}
+											aria-labelledby={buttonId}
+											initial={
+												shouldReduceMotion
+													? false
+													: { height: 0, opacity: 0 }
+											}
+											animate={{ height: "auto", opacity: 1 }}
+											exit={
+												shouldReduceMotion
+													? undefined
+													: { height: 0, opacity: 0 }
+											}
+											transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+											className="overflow-hidden"
+										>
+											<div className="pb-6 pr-12 text-sm leading-relaxed text-muted-foreground">
+												{item.a}
+											</div>
+										</motion.section>
+									)}
+								</AnimatePresence>
 							</div>
 						);
 					})}
@@ -94,7 +116,7 @@ export function Faq() {
 							setShowAll((v) => !v);
 							if (showAll) setOpenIndex(null);
 						}}
-						className="text-sm font-medium text-accent underline-offset-4 hover:underline"
+						className="inline-flex min-h-11 items-center text-sm font-medium text-accent underline-offset-4 hover:underline"
 					>
 						{showAll ? m.faq_see_less() : m.faq_see_all()}
 					</button>

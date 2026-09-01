@@ -58,9 +58,10 @@ describe("defaultCheckedQueueIds (the print-queue modal's default ticks)", () =>
 	});
 
 	test("keeps the queue's own order (oldest first)", () => {
-		expect(
-			defaultCheckedQueueIds([row("z"), row("m", 5), row("a")]),
-		).toEqual(["z", "a"]);
+		expect(defaultCheckedQueueIds([row("z"), row("m", 5), row("a")])).toEqual([
+			"z",
+			"a",
+		]);
 	});
 });
 

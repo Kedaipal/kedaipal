@@ -144,7 +144,10 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 
 	it("still reads as a quote when the bespoke line has no price", () => {
 		expect(
-			describeProduct({ options: [], rows: [], customLine: { price: "" } }, "RM"),
+			describeProduct(
+				{ options: [], rows: [], customLine: { price: "" } },
+				"RM",
+			),
 		).toBe("Made to order · Price on quote");
 	});
 
@@ -159,5 +162,32 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 				"RM",
 			),
 		).toBe("One item · Made fresh · RM 12");
+	});
+
+	it("speaks booking vocabulary for a booking listing", () => {
+		// Booking bundle S1 (86eyn4kap): capacity + per-night price, never stock
+		// words or choice counts — those concepts don't exist on this kind.
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "80", blockWhenOutOfStock: false })],
+					customLine: null,
+					booking: { capacityPerNight: "5" },
+				},
+				"RM",
+			),
+		).toBe("Booking · 5 spots/night · RM 80/night");
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "", blockWhenOutOfStock: false })],
+					customLine: null,
+					booking: { capacityPerNight: "1" },
+				},
+				"RM",
+			),
+		).toBe("Booking · 1 spot/night · No price yet");
 	});
 });

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { MIN_SCHEDULE_LEAD_MS, resolveScheduleAt } from "./lalamove";
 import {
+	addMytCalendarMonths,
+	DAY_MS,
 	assertValidFulfilmentTime,
 	EARLIEST_FULFILMENT_LEAD_MINUTES,
 	composeFulfilmentMoment,
@@ -292,5 +294,59 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		expect(formatFulfilmentDateTime(AUG4, undefined)).toBe(
 			formatFulfilmentDate(AUG4),
 		);
+	});
+});
+
+describe("addMytCalendarMonths (S7 — what 'monthly' actually means)", () => {
+	const myt = (y: number, m: number, d: number) =>
+		Date.UTC(y, m - 1, d) - MYT_OFFSET_MS;
+	const readBack = (epoch: number) => {
+		const d = new Date(epoch + MYT_OFFSET_MS);
+		return [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()];
+	};
+
+	test("same day, next month — join the 12th, renew the 12th", () => {
+		expect(readBack(addMytCalendarMonths(myt(2026, 1, 12), 1))).toEqual([
+			2026, 2, 12,
+		]);
+	});
+
+	test("clamps into a SHORT month instead of spilling over", () => {
+		// 31 Jan + 1 month is the 28th, not 3 March.
+		expect(readBack(addMytCalendarMonths(myt(2026, 1, 31), 1))).toEqual([
+			2026, 2, 28,
+		]);
+		// A leap year gets its extra day.
+		expect(readBack(addMytCalendarMonths(myt(2028, 1, 31), 1))).toEqual([
+			2028, 2, 29,
+		]);
+		// 31 Mar + 1 month = 30 Apr.
+		expect(readBack(addMytCalendarMonths(myt(2026, 3, 31), 1))).toEqual([
+			2026, 4, 30,
+		]);
+	});
+
+	test("rolls the year over", () => {
+		expect(readBack(addMytCalendarMonths(myt(2026, 12, 5), 1))).toEqual([
+			2027, 1, 5,
+		]);
+		expect(readBack(addMytCalendarMonths(myt(2026, 6, 15), 12))).toEqual([
+			2027, 6, 15,
+		]);
+	});
+
+	test("lands on MYT midnight, so day arithmetic stays exact", () => {
+		const end = addMytCalendarMonths(myt(2026, 1, 12), 1);
+		expect(isMytMidnight(end)).toBe(true);
+	});
+
+	test("this is what a rolling 30 days could NOT do", () => {
+		// The whole reason for the change: 30 days from 1 Feb overshoots into
+		// March, so a member's renewal date walks through the year.
+		const rolling = myt(2026, 2, 1) + 30 * DAY_MS;
+		expect(readBack(rolling)).toEqual([2026, 3, 3]);
+		expect(readBack(addMytCalendarMonths(myt(2026, 2, 1), 1))).toEqual([
+			2026, 3, 1,
+		]);
 	});
 });

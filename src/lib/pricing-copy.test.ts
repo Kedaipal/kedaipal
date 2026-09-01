@@ -57,6 +57,29 @@ describe("pricing copy stays aligned with the flat multi-outlet Scale", () => {
 		expect(offenders, offenders.join("\n")).toEqual([]);
 	});
 
+	/**
+	 * Kedaipal bills Malaysian sellers in MYR and Singaporean ones in SGD, and
+	 * the region is now detected from the visitor's IP (`src/lib/geo-region.ts`)
+	 * with a MY/SG toggle beside the cards. A currency spelled into the copy
+	 * therefore quotes the wrong money to half the audience: the anchor line
+	 * said "Starter from RM 79/mo" directly above S$29 tier cards, and the Scale
+	 * outlet add-on said "RM49/mo each" beside S$119.
+	 *
+	 * So: pricing copy names no currency. It takes a formatted amount as a
+	 * placeholder and the surface derives it from the resolved currency.
+	 */
+	it("names no currency — every amount arrives as a placeholder", () => {
+		const forbidden = /\bRM\s?\d|S\$\s?\d|\bMYR\b|\bSGD\b/;
+		const offenders: string[] = [];
+		for (const [locale, catalog] of catalogs) {
+			for (const [key, value] of pricingEntries(catalog)) {
+				if (forbidden.test(value))
+					offenders.push(`${locale}.${key} = ${value}`);
+			}
+		}
+		expect(offenders, offenders.join("\n")).toEqual([]);
+	});
+
 	it("advertises the decided order allowances (100 / 200 / 400)", () => {
 		for (const [locale, catalog] of catalogs) {
 			expect(catalog.pricingpage_ordercap_starter, locale).toContain("100");

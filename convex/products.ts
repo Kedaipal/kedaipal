@@ -21,6 +21,13 @@ import {
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import {
+	effectiveKind,
+	sanitizeCapacityPerNight,
+	sanitizePackageLength,
+	sanitizeSecurityDeposit,
+	type PackageUnit,
+} from "./lib/productKind";
+import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
 	productCapState,
@@ -599,10 +606,16 @@ export const listForCounter = query({
 			.collect();
 		rows.sort(bySortOrder);
 		return Promise.all(
-			rows.map((row) =>
-				// Owner-gated read (counter checkout), so seller-only fields are safe.
-				productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
-			),
+			rows
+				// Booking listings never sell at the counter (86eyj70z1/S2): a stay
+				// needs the calendar + request-to-book flow, and the counter has no
+				// date-range UI. A walk-in guest books on the storefront instead —
+				// revisit only if a real seller asks for counter bookings.
+				.filter((row) => effectiveKind(row.kind) !== "booking")
+				.map((row) =>
+					// Owner-gated read (counter checkout), so seller-only fields are safe.
+					productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
+				),
 		);
 	},
 });
@@ -701,6 +714,34 @@ export const create = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
+		// Kind + booking config land together at create and the kind is immutable
+		// after (update deliberately has no kind arg) — see schema comment.
+		kind: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
+		booking: v.optional(
+			v.object({
+				// Unset = unlimited (S7) — a gym has no daily member cap.
+				capacityPerNight: v.optional(v.number()),
+				securityDeposit: v.optional(v.number()),
+				// Fixed-length package; unset = free check-in/check-out. The unit
+				// decides how the end derives — a calendar month, or N days.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
+				),
+				// Instant book — skip the request-to-book approval step.
+				autoAccept: v.optional(v.boolean()),
+			}),
+		),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -730,6 +771,47 @@ export const create = mutation({
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
 
+		// Kind ⟷ booking config travel together, both directions: a booking
+		// listing with no capacity has no availability semantics, and capacity on
+		// a non-booking product is dead config waiting to mislead (86eyj70z1).
+		const kind = args.kind ?? undefined;
+		let booking:
+			| {
+					capacityPerNight?: number;
+					securityDeposit?: number;
+					packageLength?: number;
+					packageUnit?: PackageUnit;
+					autoAccept?: boolean;
+			  }
+			| undefined;
+		if (kind === "booking") {
+			if (!args.booking)
+				throw new ConvexError("A booking listing needs its booking settings");
+			try {
+				booking = {
+					// Unset capacity = unlimited (S7), not a missing value.
+					capacityPerNight: sanitizeCapacityPerNight(
+						args.booking.capacityPerNight,
+					),
+					securityDeposit: sanitizeSecurityDeposit(
+						args.booking.securityDeposit,
+					),
+					packageLength: sanitizePackageLength(
+						args.booking.packageLength,
+						args.booking.packageUnit,
+					),
+					packageUnit: args.booking.packageUnit,
+					autoAccept: args.booking.autoAccept === true ? true : undefined,
+				};
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		} else if (args.booking) {
+			throw new ConvexError(
+				"Capacity only applies to a booking listing — pick the Booking kind first",
+			);
+		}
+
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
 		for (const variant of variants) {
 			if (variant.sku)
@@ -750,6 +832,11 @@ export const create = mutation({
 			minNoticeDays: sanitizeMinNoticeDays(args.minNoticeDays),
 			hidden: args.hidden,
 			minQuantity: sanitizeMinQuantity(args.minQuantity),
+			// "physical" stays UNSET (the legacy default) so pre-kind and post-kind
+			// rows read identically — one spelling for the default, minQuantity's
+			// 0-normalizes-to-unset posture.
+			kind: kind === "physical" ? undefined : kind,
+			booking,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -814,6 +901,37 @@ export const update = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
+		// Booking config edit. The kind itself is immutable (no kind arg here,
+		// by design); capacity, package length, instant-book and the deposit are
+		// the knobs a seller re-tunes. Rejected on non-booking products. A
+		// lowered capacity never cancels existing bookings (86eyj70z1 edge case)
+		// — the availability module simply stops taking new requests past it.
+		//
+		// WHOLE-OBJECT REPLACE, not a merge: sending `{ capacityPerNight: 5 }`
+		// clears `packageLength`, `packageUnit`, `autoAccept` and
+		// `securityDeposit`. Both callers (the full form and the wizard) always
+		// send every field, so this is safe today — but a future partial caller
+		// would silently wipe a seller's package and instant-book settings.
+		// Send the complete object, or change this to merge first.
+		booking: v.optional(
+			v.object({
+				// Unset = unlimited (S7) — a gym has no daily member cap.
+				capacityPerNight: v.optional(v.number()),
+				securityDeposit: v.optional(v.number()),
+				// Fixed-length package; unset = free check-in/check-out. The unit
+				// decides how the end derives — a calendar month, or N days.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
+				),
+				// Instant book — skip the request-to-book approval step.
+				autoAccept: v.optional(v.boolean()),
+			}),
+		),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -853,6 +971,30 @@ export const update = mutation({
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+		if (fields.booking !== undefined) {
+			if (effectiveKind(ownedProduct.kind) !== "booking")
+				throw new ConvexError(
+					"Capacity only applies to a booking listing",
+				);
+			try {
+				updates.booking = {
+					capacityPerNight: sanitizeCapacityPerNight(
+						fields.booking.capacityPerNight,
+					),
+					securityDeposit: sanitizeSecurityDeposit(
+						fields.booking.securityDeposit,
+					),
+					packageLength: sanitizePackageLength(
+						fields.booking.packageLength,
+						fields.booking.packageUnit,
+					),
+					packageUnit: fields.booking.packageUnit,
+					autoAccept: fields.booking.autoAccept === true ? true : undefined,
+				};
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Lazy slug convergence for legacy rows (pre-slug catalog): the first
 		// edit gives the product its permanent URL, using the freshest name.
@@ -1178,6 +1320,10 @@ const importVariantValidator = v.object({
 const importProductValidator = v.object({
 	name: v.string(),
 	description: v.optional(v.string()),
+	// Round-tripped from the export's `product_status` (86eyrtz74). Optional so
+	// a client that predates the column, or any hand-made sheet, still imports —
+	// absent reads as active on the create path below.
+	active: v.optional(v.boolean()),
 	options: v.array(optionAxisValidator),
 	variants: v.array(importVariantValidator),
 });
@@ -1185,6 +1331,7 @@ const importProductValidator = v.object({
 type ImportProduct = {
 	name: string;
 	description?: string;
+	active?: boolean;
 	options: OptionAxis[];
 	variants: VariantInput[];
 };
@@ -1319,7 +1466,12 @@ export const bulkUpsert = mutation({
 					imageStorageIds: [],
 					options,
 					sortOrder: now + created,
-					active: true,
+					// Was hardcoded `true`, the product-level twin of the variant bug
+					// fixed alongside it: export a catalogue and import it into a
+					// SECOND store — where no SKU matches, so every row takes this
+					// path — and archived products came back live on the storefront.
+					// `?? true` keeps every hand-made sheet behaving as before.
+					active: product.active ?? true,
 					channel: "whatsapp",
 					createdAt: now,
 					updatedAt: now,

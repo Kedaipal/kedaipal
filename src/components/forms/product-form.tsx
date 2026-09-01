@@ -21,14 +21,23 @@ import {
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
+import {
+	MAX_CAPACITY_PER_NIGHT,
+	type PackageUnit,
+	type ProductKind,
+	packageUnitMax,
+} from "../../../convex/lib/productKind";
+import { bookingSpanNoun } from "../../lib/booking-dates";
+import { asPackageUnit } from "../../lib/package-unit";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
-import { cartesian } from "../../lib/variant";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
+import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
@@ -48,6 +57,19 @@ export interface ProductFormSubmitValues {
 	// Storefront visibility. true = hidden from the public store (still sellable
 	// at the counter). See docs/hidden-products.md.
 	hidden: boolean;
+	// Product kind (86eyj70z1). Set at create by the wizard; immutable after —
+	// the edit route never sends it to `products.update` (which has no kind arg).
+	kind?: ProductKind;
+	// Booking-kind config — travels with kind at create; capacity, deposit,
+	// package length and instant-book stay editable. securityDeposit in sen;
+	// 0 clears (server normalizes). capacityPerNight undefined = unlimited.
+	booking?: {
+		capacityPerNight?: number;
+		securityDeposit?: number;
+		packageLength?: number;
+		packageUnit?: PackageUnit;
+		autoAccept?: boolean;
+	};
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
 	minNoticeDays?: number;
@@ -99,6 +121,19 @@ export type ProductFormDraft = {
 	name: string;
 	description: string;
 	hidden: boolean;
+	/** Stored kind (physical default) — round-trips to the wizard's card. */
+	kind: ProductKind;
+	/** Booking capacity, as typed (only meaningful when kind === "booking").
+	 * Blank = unlimited. */
+	capacityPerNight: string;
+	/** Package length in days, as typed; blank = free check-in/check-out. */
+	packageLength?: string;
+	packageUnit?: PackageUnit;
+	/** Instant book — skip the approval step. */
+	autoAccept?: boolean;
+	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
+	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
+	securityDeposit?: string;
 	categoryIds: Id<"categories">[];
 	images: ProductImage[];
 	editor: VariantEditorState;
@@ -116,6 +151,20 @@ interface ProductFormProps {
 		name?: string;
 		description?: string;
 		hidden?: boolean;
+		/** Product kind — routes the form's vocabulary + which cards render.
+		 * Absent = physical (legacy). Immutable in the form (create sets it via
+		 * the wizard; edit displays it in the summary strip only). */
+		kind?: ProductKind;
+		/** Booking capacity as a string draft ("5") — wizard handoff + edit seed.
+		 * Blank = unlimited. */
+		capacityPerNight?: string;
+		/** Package length in days as a string draft ("30"); blank = free range. */
+		packageLength?: string;
+		packageUnit?: PackageUnit;
+		autoAccept?: boolean;
+		/** Booking security deposit as an RM string draft ("100") — wizard
+		 * handoff + edit seed. Blank/undefined = none. */
+		securityDeposit?: string;
 		minNoticeDays?: number;
 		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
@@ -352,9 +401,8 @@ export function buildSubmitVariants(
 			active: row.active,
 			blockWhenOutOfStock: row.blockWhenOutOfStock,
 			requiresProof: row.requiresProof,
-			parcelWeightG: weightOk && weightStr.length > 0
-				? Number.parseInt(weightStr, 10)
-				: 0,
+			parcelWeightG:
+				weightOk && weightStr.length > 0 ? Number.parseInt(weightStr, 10) : 0,
 			imageStorageIds: row.imageStorageIds,
 		});
 	});
@@ -484,16 +532,25 @@ function ProductSummaryStrip({
 	name,
 	editor,
 	currency,
+	booking = null,
 }: {
 	name: string;
 	editor: VariantEditorState;
 	currency: string;
+	/** Booking kind + its capacity draft — flips the strip to booking words. */
+	booking?: {
+		capacityPerNight: string;
+		packageLength?: string;
+		packageUnit?: PackageUnit;
+		autoAccept?: boolean;
+	} | null;
 }) {
 	const summary = describeProduct(
 		{
 			options: editor.options,
 			rows: editor.rows,
 			customLine: editor.customLine,
+			booking,
 		},
 		currency,
 	);
@@ -595,6 +652,26 @@ export function ProductForm({
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
+	// Kind is IMMUTABLE in the form (86eyj70z1: set at create via the wizard;
+	// archive + recreate is the escape hatch) — read once, routes the booking
+	// rendering below. Capacity is the one booking knob that stays editable.
+	const kind: ProductKind = initialValues?.kind ?? "physical";
+	const isBooking = kind === "booking";
+	const [capacityDraft, setCapacityDraft] = useState(
+		initialValues?.capacityPerNight ?? "1",
+	);
+	const [depositDraft, setDepositDraft] = useState(
+		initialValues?.securityDeposit ?? "",
+	);
+	const [packageDraft, setPackageDraft] = useState(
+		initialValues?.packageLength ?? "",
+	);
+	const [packageUnit, setPackageUnit] = useState<PackageUnit>(
+		initialValues?.packageUnit ?? "month",
+	);
+	const [autoAccept, setAutoAccept] = useState(
+		initialValues?.autoAccept === true,
+	);
 	// Draft as a string so the input can be cleared while typing; parsed at
 	// submit (blank/0 = no override).
 	const [minNoticeDraft, setMinNoticeDraft] = useState(
@@ -662,8 +739,10 @@ export function ProductForm({
 			}
 			// `issues` empty ⇒ built carries the variants.
 			const variants = "variants" in built ? built.variants : [];
-			// Min-quantity input invalid → its inline error is already on screen.
+			// Min-quantity / capacity input invalid → inline error already on screen.
 			if (!minQtyValid) return;
+			if (isBooking && (!capacityValid || !depositValid || !packageValid))
+				return;
 
 			try {
 				const minNoticeParsed = Number.parseInt(minNoticeDraft, 10);
@@ -671,12 +750,32 @@ export function ProductForm({
 					name: parsed.name,
 					description: parsed.description,
 					hidden,
+					kind,
+					booking: isBooking
+						? {
+								// Blank = unlimited; the server keeps it unset.
+								capacityPerNight:
+									capacityTrimmed.length > 0
+										? Number(capacityTrimmed)
+										: undefined,
+								packageLength:
+									packageTrimmed.length > 0 ? Number(packageTrimmed) : 0,
+								packageUnit,
+								autoAccept,
+								// Sen; 0 = clear (the server normalizes 0 → unset).
+								securityDeposit:
+									depositParsed !== null && depositParsed > 0
+										? Math.round(depositParsed * 100)
+										: 0,
+							}
+						: undefined,
 					minNoticeDays:
 						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
 							? Math.min(minNoticeParsed, MAX_NOTICE_DAYS)
 							: 0,
 					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
-					minQuantity: minQtyParsed,
+					// A booking listing never carries one (its input isn't rendered).
+					minQuantity: isBooking ? 0 : minQtyParsed,
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					// Derived from the SAME reconciled pair as `variants` above, so the
@@ -700,6 +799,12 @@ export function ProductForm({
 			name: form.state.values.name,
 			description: form.state.values.description ?? "",
 			hidden,
+			kind,
+			capacityPerNight: capacityDraft,
+			securityDeposit: depositDraft,
+			packageLength: packageDraft,
+			packageUnit,
+			autoAccept,
 			categoryIds,
 			images,
 			editor,
@@ -716,6 +821,42 @@ export function ProductForm({
 	}
 
 	const hasAnyPrice = editor.rows.some((row) => row.price.trim().length > 0);
+
+	// Booking capacity — required whole number 1..MAX (mirrors the wizard +
+	// the server's sanitizeCapacityPerNight, so the form can't accept what the
+	// save then refuses).
+	const capacityTrimmed = capacityDraft.trim();
+	const capacityParsed = Number(capacityTrimmed);
+	// Blank capacity = UNLIMITED (S7), a valid choice — not a missing value.
+	const capacityValid =
+		capacityTrimmed.length === 0 ||
+		(Number.isInteger(capacityParsed) &&
+			capacityParsed >= 1 &&
+			capacityParsed <= MAX_CAPACITY_PER_NIGHT);
+
+	// Package length — blank = the free check-in/check-out range.
+	const packageTrimmed = packageDraft.trim();
+	const packageParsed = Number(packageTrimmed);
+	const packageValid =
+		packageTrimmed.length === 0 ||
+		(Number.isInteger(packageParsed) &&
+			packageParsed >= 1 &&
+			packageParsed <= packageUnitMax(packageUnit));
+	// Names the span in the price label ("Price per month") while the seller is
+	// still typing it. Only a VALID length renames anything — a half-typed or
+	// out-of-range value leaves the label on "night" rather than flickering
+	// through nonsense like "per 0 months".
+	const packageLengthNum =
+		packageValid && packageTrimmed.length > 0 ? packageParsed : undefined;
+
+	// Booking security deposit — blank = none; else a price 0..RM10,000
+	// (mirrors the server's sanitizeSecurityDeposit ceiling).
+	const depositTrimmed = depositDraft.trim();
+	const depositParsed =
+		depositTrimmed.length === 0 ? 0 : parsePriceInput(depositTrimmed);
+	const depositValid =
+		depositTrimmed.length === 0 ||
+		(depositParsed !== null && depositParsed >= 0 && depositParsed <= 10_000);
 
 	// Minimum order quantity — blank clears; whole number ≤ MIN_QUANTITY_MAX.
 	const minQtyTrimmed = minQty.trim();
@@ -754,6 +895,15 @@ export function ProductForm({
 							name={name}
 							editor={editor}
 							currency={currency}
+							booking={
+								isBooking
+									? {
+											capacityPerNight: capacityDraft,
+											packageLength: packageDraft,
+											autoAccept,
+										}
+									: null
+							}
 						/>
 					) : (
 						<ProductReadiness
@@ -834,29 +984,208 @@ export function ProductForm({
 				/>
 			</ProductStepCard>
 
-			<ProductStepCard
-				icon={<Layers3 className="size-5" />}
-				kicker="Selling"
-				title="Pricing & choices"
-				description="One price for one item — or let buyers pick a size, flavour or weight, each with its own price."
-			>
-				<VariantEditor
-					value={editor}
-					onChange={setEditor}
-					currency={currency}
-					issues={editorIssues}
-					weightMode={weightMode}
-				/>
-
-				<Link
-					to="/app/settings"
-					search={{ tab: "store" }}
-					className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+			{isBooking ? (
+				// Booking listing: no variant matrix — one implicit row priced per
+				// night, capacity beside it. The kind itself is immutable (set at
+				// create; archive + recreate is the escape hatch).
+				<ProductStepCard
+					icon={<Layers3 className="size-5" />}
+					kicker="Selling"
+					title="Pricing & capacity"
+					description={
+						packageTrimmed.length > 0
+							? `Guests pick a start date on a calendar — set the flat price per ${bookingSpanNoun(packageLengthNum, packageUnit)} and how many bookings can run at once.`
+							: "Guests request dates on a calendar — set the per-night price and how many bookings a night can hold."
+					}
 				>
-					<Info className="size-3.5" aria-hidden />
-					Currency is set in Settings
-				</Link>
-			</ProductStepCard>
+					{/* Package length leads: it decides what the price MEANS, so asking
+					    for the price first left a monthly membership fee sitting under a
+					    "Price per night" label. Same order as the create wizard. */}
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="booking-package" className="text-sm font-medium">
+							Package length{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<div className="flex items-center gap-2">
+							<Input
+								id="booking-package"
+								type="number"
+								inputMode="numeric"
+								min={1}
+								max={packageUnitMax(packageUnit)}
+								placeholder="e.g. 30"
+								value={packageDraft}
+								onChange={(e) => setPackageDraft(e.target.value)}
+								variant="field"
+								isError={!packageValid}
+								className="w-32"
+							/>
+							<select
+								aria-label="Package length unit"
+								value={packageUnit}
+								onChange={(e) => setPackageUnit(asPackageUnit(e.target.value))}
+								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
+							>
+								<option value="month">months</option>
+								{/* Same span as days; the word is the seller's trade. */}
+								<option value="night">nights</option>
+								<option value="day">days</option>
+							</select>
+						</div>
+						{!packageValid ? (
+							<p className="text-xs text-destructive">
+								Enter a whole number of {packageUnit}s between 1 and{" "}
+								{packageUnitMax(packageUnit)}, or leave blank.
+							</p>
+						) : null}
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{packageTrimmed.length > 0
+								? packageUnit === "month"
+									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${packageTrimmed} month${packageTrimmed === "1" ? "" : "s"} later, at one flat price.`
+									: `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there, at one flat price.`
+								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
+						</p>
+					</div>
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-price" className="text-sm font-medium">
+							Price per {bookingSpanNoun(packageLengthNum, packageUnit)} (
+							{currency})
+						</label>
+						<Input
+							id="booking-price"
+							inputMode="decimal"
+							placeholder="0.00"
+							value={editor.rows[0]?.price ?? ""}
+							onChange={(e) =>
+								setEditor({
+									...editor,
+									rows: editor.rows.map((r, i) =>
+										i === 0 ? { ...r, price: e.target.value } : r,
+									),
+								})
+							}
+							variant="field"
+							isError={editorIssues.some(
+								(i) => i.where === "row" && i.field === "price",
+							)}
+							className="w-40"
+						/>
+						{editorIssues
+							.filter((i) => i.where === "row" && i.field === "price")
+							.map((i) => (
+								<p key={i.message} className="text-xs text-destructive">
+									{i.message}
+								</p>
+							))}
+					</div>
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-capacity" className="text-sm font-medium">
+							{packageTrimmed.length > 0
+								? "Spots available at a time"
+								: "Spots available each night"}{" "}
+							<span className="font-normal text-muted-foreground">
+								(leave blank for unlimited)
+							</span>
+						</label>
+						<Input
+							id="booking-capacity"
+							type="number"
+							inputMode="numeric"
+							min={1}
+							max={MAX_CAPACITY_PER_NIGHT}
+							value={capacityDraft}
+							onChange={(e) => setCapacityDraft(e.target.value)}
+							variant="field"
+							isError={!capacityValid}
+							className="w-32"
+						/>
+						{!capacityValid ? (
+							<p className="text-xs text-destructive">
+								Enter a whole number between 1 and {MAX_CAPACITY_PER_NIGHT}, or
+								leave blank for unlimited.
+							</p>
+						) : null}
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{capacityTrimmed.length === 0
+								? "Anyone can book any date — nothing ever sells out. Right for a gym or class where there's no daily limit."
+								: packageTrimmed.length > 0
+									? "How many bookings can run at the same time — e.g. 20 members on a package at once. Bookings stop once they're all taken. Lowering it never cancels bookings you've already accepted."
+									: "How many bookings can share the same night — e.g. 5 identical plots = 5. Requests stop once a night is full. Lowering it never cancels bookings you've already accepted."}
+						</p>
+					</div>
+
+					{/* Instant book (S7) — skip the approval step. */}
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<div className="flex items-center justify-between gap-3">
+							<span className="text-sm font-medium">Instant book</span>
+							<ToggleSwitch
+								on={autoAccept}
+								onChange={setAutoAccept}
+								label="Confirm bookings instantly"
+							/>
+						</div>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{autoAccept
+								? "Bookings are confirmed instantly and the payment request goes out straight away. Turn off to approve each request first."
+								: "You approve each request before the buyer pays. Turn on to confirm bookings instantly."}
+						</p>
+					</div>
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-deposit" className="text-sm font-medium">
+							Security deposit ({currency}){" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<Input
+							id="booking-deposit"
+							inputMode="decimal"
+							placeholder="0.00"
+							value={depositDraft}
+							onChange={(e) => setDepositDraft(e.target.value)}
+							variant="field"
+							isError={!depositValid}
+							className="w-40"
+						/>
+						{!depositValid ? (
+							<p className="text-xs text-destructive">
+								Enter an amount between RM 0 and RM 10,000, or leave blank.
+							</p>
+						) : null}
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							A refundable hold collected with the booking payment and returned
+							after check-out. Guests see it before they request — changing it
+							never affects bookings already placed.
+						</p>
+					</div>
+				</ProductStepCard>
+			) : (
+				<ProductStepCard
+					icon={<Layers3 className="size-5" />}
+					kicker="Selling"
+					title="Pricing & choices"
+					description="One price for one item — or let buyers pick a size, flavour or weight, each with its own price."
+				>
+					<VariantEditor
+						value={editor}
+						onChange={setEditor}
+						currency={currency}
+						issues={editorIssues}
+						weightMode={weightMode}
+					/>
+
+					<Link
+						to="/app/settings"
+						search={{ tab: "store" }}
+						className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+					>
+						<Info className="size-3.5" aria-hidden />
+						Currency is set in Settings
+					</Link>
+				</ProductStepCard>
+			)}
 
 			{/* Order rules — the two constraints on HOW a buyer may order this
 			    product (how many, how soon). Grouped in one card because they're
@@ -866,11 +1195,16 @@ export function ProductForm({
 				icon={<ClipboardList className="size-5" />}
 				kicker="Selling"
 				title="Order rules"
-				description="Optional limits on how buyers can order this product. Leave both blank for no restrictions."
+				description={
+					isBooking
+						? "How much lead time a booking request needs. Optional."
+						: "Optional limits on how buyers can order this product. Leave both blank for no restrictions."
+				}
 			>
 				{/* Minimum order quantity (86ey9unyx) — summed across options, so
-				    it's a product-level rule, not a per-variant one. */}
-				<div className="flex flex-col gap-2">
+				    it's a product-level rule, not a per-variant one. Never rendered
+				    for a booking listing (one request = one booking). */}
+				<div className={isBooking ? "hidden" : "flex flex-col gap-2"}>
 					<div className="flex flex-col gap-1.5">
 						<label htmlFor="min-order-qty" className="text-sm font-medium">
 							Minimum order quantity{" "}
@@ -915,8 +1249,15 @@ export function ProductForm({
 
 				{/* Per-product fulfilment notice (made-to-order lead time). Buyers
 				    see the effect as a raised earliest-date floor at checkout, which
-				    is why the helper spells the interaction out. */}
-				<div className="flex flex-col gap-2 border-t border-border pt-4">
+				    is why the helper spells the interaction out. On a booking listing
+				    it's the card's only control — no divider above it. */}
+				<div
+					className={
+						isBooking
+							? "flex flex-col gap-2"
+							: "flex flex-col gap-2 border-t border-border pt-4"
+					}
+				>
 					<div className="flex flex-col gap-1.5">
 						<label htmlFor="min-notice-days" className="text-sm font-medium">
 							Minimum notice{" "}
@@ -937,15 +1278,23 @@ export function ProductForm({
 								variant="field"
 								className="w-24 text-center"
 							/>
-							<span className="text-sm text-muted-foreground">days</span>
+							<select
+								aria-label="Package length unit"
+								value={packageUnit}
+								onChange={(e) =>
+									setPackageUnit(e.target.value === "day" ? "day" : "month")
+								}
+								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
+							>
+								<option value="month">months</option>
+								<option value="day">days</option>
+							</select>
 						</div>
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">
-						Days of lead time this product needs (custom / made-to-order items).
-						Buyers can&apos;t pick a delivery or pickup date sooner than this —
-						it raises your store-level notice when higher, and the strictest
-						item in a cart sets the whole order&apos;s earliest date. Leave 0
-						for no extra notice.
+						{isBooking
+							? "Days of lead time a booking needs — guests can't request a check-in sooner than this. Leave 0 to allow same-day requests."
+							: "Days of lead time this product needs (custom / made-to-order items). Buyers can't pick a delivery or pickup date sooner than this — it raises your store-level notice when higher, and the strictest item in a cart sets the whole order's earliest date. Leave 0 for no extra notice."}
 					</p>
 				</div>
 			</ProductStepCard>

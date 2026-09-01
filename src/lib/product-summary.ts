@@ -20,6 +20,14 @@ export type SummaryInput = {
 	/** The product's bespoke line, if it offers one — its price is the seller's
 	 * starting price, so the strip needs the value, not just its presence. */
 	customLine: { price: string } | null;
+	/** Booking kind describes itself in booking words — "Booking · 5
+	 * spots/night · RM 80/night" for a free-range stay, "Booking · 30-day
+	 * package · RM 150 per package" for a fixed-length one (S7). */
+	booking?: {
+		capacityPerNight: string;
+		packageLength?: string;
+		autoAccept?: boolean;
+	} | null;
 };
 
 /** "12" / "12.50" — trailing .00 dropped so the strip reads like speech. */
@@ -28,10 +36,36 @@ function formatMajor(n: number): string {
 }
 
 export function describeProduct(
-	{ options, rows, customLine }: SummaryInput,
+	{ options, rows, customLine, booking }: SummaryInput,
 	currency: string,
 ): string {
 	const parts: string[] = [];
+
+	// A booking listing speaks its own vocabulary: capacity per night + a
+	// per-night price ("Booking · 5 spots/night · RM 80/night"). Choices, stock
+	// words and the bespoke line don't exist on this kind by construction.
+	if (booking) {
+		const price = parsePriceInput(rows[0]?.price.trim() ?? "");
+		const cap = booking.capacityPerNight.trim();
+		const days = Number(booking.packageLength?.trim() || "0");
+		const isPackage = Number.isFinite(days) && days > 0;
+		const parts = ["Booking"];
+		if (isPackage) parts.push(`${days}-day package`);
+		// Blank capacity = unlimited (S7); saying "1 spot/night" there would be
+		// a different product from the one the seller configured.
+		parts.push(
+			cap.length === 0
+				? "Unlimited spots"
+				: `${cap} spot${cap === "1" ? "" : "s"}/night`,
+		);
+		parts.push(
+			price && price > 0
+				? `${currency} ${formatMajor(price)}${isPackage ? " per package" : "/night"}`
+				: "No price yet",
+		);
+		if (booking.autoAccept) parts.push("Instant book");
+		return parts.join(" · ");
+	}
 
 	// A made-to-order product describes itself: no choices, no stock, and a
 	// price that doesn't exist yet by design. Reading "One item · Made fresh ·

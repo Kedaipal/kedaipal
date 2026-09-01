@@ -7,6 +7,8 @@ function draft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
 		name: "Brownies",
 		description: "",
 		hidden: false,
+		kind: "physical" as const,
+		capacityPerNight: "1",
 		categoryIds: [],
 		images: [{ id: "st1", url: "blob:hero" }],
 		editor: {
@@ -91,9 +93,9 @@ describe("draftPreviewOverlay", () => {
 
 	it("carries a valid minimum order quantity, ignoring blanks and invalids", () => {
 		expect(draftPreviewOverlay(draft()).minQuantity).toBeUndefined();
-		expect(
-			draftPreviewOverlay(draft({ minQuantity: "20" })).minQuantity,
-		).toBe(20);
+		expect(draftPreviewOverlay(draft({ minQuantity: "20" })).minQuantity).toBe(
+			20,
+		);
 		expect(
 			draftPreviewOverlay(draft({ minQuantity: "1" })).minQuantity,
 		).toBeUndefined();

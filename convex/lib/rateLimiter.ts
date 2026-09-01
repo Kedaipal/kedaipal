@@ -98,6 +98,18 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Buyer committing a claim link (86eyq0epn) — public token-authenticated
+	// mutation. Keyed by the claim token so abuse of one link can't starve
+	// others; a couple of validation-fix retries is the realistic ceiling.
+	// The commit ALSO runs the retailer-keyed orderCreate/orderCreateDaily
+	// pair (it schedules the same Meta-billed confirmation push an order
+	// create does, so it must share that spend ceiling).
+	claimCommit: {
+		kind: "token bucket",
+		rate: 5,
+		period: MINUTE,
+		capacity: 3,
+	},
 	// Buyer's "Pay now" tap (86eyb6z3a) — mints (or reuses) a HitPay payment
 	// request. Keyed by tracking token. Each fresh mint is an outbound API call
 	// on the SELLER's HitPay account, so sized like paymentClaim: a burst of

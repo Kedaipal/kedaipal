@@ -1,0 +1,627 @@
+/**
+ * Booking requests — the buyer half of the booking kind (86eyj70z1, build S2
+ * `86eyn4kbw`). A booking is an ORDER (same table, same lifecycle machinery)
+ * created through its own mutation rather than a branch inside the 600-line
+ * storefront `orders.create`: the two paths share almost no validation
+ * (no cart, no delivery/pickup/fee resolution, no stock movement, no
+ * confirmation push) and interleaving them would thread ~20 conditionals
+ * through the hottest mutation in the app. Everything they DO share
+ * (customer sanitation, id generation, usage metering, CRM linking,
+ * orderedAt stamping) is imported from the same lib seams.
+ *
+ * The request lands as `booking_requested` — the locked carve-out from
+ * confirm-at-create (scarce inventory needs vetting). Nothing is charged and
+ * no WhatsApp is sent at request time; the seller's approve (S3) fires the
+ * ONE confirmation + payment ask.
+ */
+
+import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
+import {
+	internalMutation,
+	mutation,
+	type MutationCtx,
+	query,
+	type QueryCtx,
+} from "./_generated/server";
+import { stampRetailerActivation } from "./lib/activation";
+import { linkOrderToCustomer } from "./customers";
+import {
+	assertValidBookingRange,
+	BOOKING_HORIZON_DAYS,
+	BOOKING_REQUEST_TTL_MS,
+	findFullNights,
+	MAX_AVAILABILITY_WINDOW_DAYS,
+	MAX_BOOKING_NIGHTS,
+	maxPackageQuantity,
+	normalizePackageQuantity,
+	resolveBookingRange,
+	nightsBetween,
+} from "./lib/bookingAvailability";
+import { requireCustomerName } from "./lib/customer";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	isMytMidnight,
+} from "./lib/fulfilmentDate";
+import {
+	CANCELLATION_NOTE_MAX,
+	computeOrderTotals,
+	generateShortId,
+	generateTrackingToken,
+} from "./lib/order";
+import { logAdminAction } from "./lib/auth";
+import { effectiveKind, type PackageUnit } from "./lib/productKind";
+import { stampProductsOrdered } from "./lib/productOrdered";
+import { rateLimiter } from "./lib/rateLimiter";
+import { DEFAULT_COUNTRY } from "./lib/country";
+import { assertValidMobileForCountry } from "./lib/slug";
+import { orderConfirmTemplateName } from "./lib/whatsapp";
+import {
+	applyStatusTransition,
+	MAX_CUSTOMER_NOTE,
+	requireOrderAccess,
+} from "./orders";
+import { assertSubscriptionActive } from "./subscriptions";
+import { recordOrderCreated } from "./subscriptionUsage";
+
+/** Decline reasons are quoted verbatim in the guest's page (and, once the
+ * dedicated template is registered, their WhatsApp) — bounded like a note. */
+
+
+const SHORT_ID_RETRIES = 3;
+
+/** Load + vet the bookable listing behind a public booking surface. */
+async function loadBookableListing(
+	ctx: QueryCtx | MutationCtx,
+	productId: Doc<"products">["_id"],
+): Promise<Doc<"products"> | null> {
+	const product = await ctx.db.get(productId);
+	if (!product) return null;
+	if (effectiveKind(product.kind) !== "booking") return null;
+	// Public-visibility rules mirror products.list: an archived or hidden
+	// listing takes no requests, and one whose every category is hidden is off
+	// the storefront too — the direct-mutation hole must not out-sell the UI.
+	if (!product.active || product.hidden === true) return null;
+	if (product.hiddenByCategory === true) return null;
+	return product;
+}
+
+/**
+ * Public month-window availability for one listing's calendar. BINARY per
+ * night (locked: capacity counts never cross the public wire — a probe must
+ * not learn "2 of 5 sites left"). Returns null for a listing that isn't
+ * publicly bookable, which the route treats as 404 (no-leak posture).
+ */
+export const availability = query({
+	args: {
+		productId: v.id("products"),
+		// MYT-midnight window [from, to) — the calendar asks month by month with
+		// stable anchors (insights cache-discipline precedent; unaligned args are
+		// a bug, not a preference, so they throw).
+		from: v.number(),
+		to: v.number(),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<{
+		// Nights inside [from, to) that can NOT take another booking (full —
+		// and, from S4, seller-blocked: never distinguished). Everything else in
+		// the window is open.
+		unavailable: number[];
+		// The calendar's own gates, so client + server can't disagree.
+		noticeDays: number;
+		horizonDays: number;
+		maxNights: number;
+		/** Fixed-length package (S7): set = the buyer picks a start date only
+		 * and the calendar derives the end. Unset = free check-in/check-out. */
+		packageLength?: number;
+		/** How that length counts — a calendar month's span depends on WHICH
+		 * month, so the calendar has to derive each candidate start's range
+		 * rather than adding a fixed number of days. */
+		packageUnit?: PackageUnit;
+		/** How many packages one booking may hold. Computed HERE rather than in
+		 * the client so the stepper's ceiling and the mutation's clamp are the
+		 * same number — that ceiling protects the capacity scans' span bound. */
+		maxPackageQuantity: number;
+	} | null> => {
+		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
+			throw new ConvexError("Availability window must be calendar days");
+		}
+		const windowDays = Math.round((args.to - args.from) / DAY_MS);
+		if (windowDays < 1 || windowDays > MAX_AVAILABILITY_WINDOW_DAYS) {
+			throw new ConvexError("Availability window too large");
+		}
+		const product = await loadBookableListing(ctx, args.productId);
+		if (!product) return null;
+		const retailer = await ctx.db.get(product.retailerId);
+		if (!retailer) return null;
+
+		// One evaluator with the create-time check (capacity full OR blocked,
+		// never distinguished) — the calendar and `requestBooking` can't disagree.
+		const unavailable = await findFullNights(
+			ctx,
+			product,
+			args.from,
+			args.to,
+		);
+		return {
+			unavailable,
+			noticeDays: Math.max(
+				retailer.minFulfilmentNoticeDays ?? 0,
+				product.minNoticeDays ?? 0,
+			),
+			horizonDays: BOOKING_HORIZON_DAYS,
+			// Free-range listings only: a package's length is the seller's, not a
+			// ceiling the buyer picks under. Quoting packageLength here would
+			// read as "max 1 night" for a one-MONTH package.
+			maxNights: MAX_BOOKING_NIGHTS,
+			packageLength: product.booking?.packageLength,
+			packageUnit: product.booking?.packageUnit,
+			maxPackageQuantity: maxPackageQuantity(product.booking),
+		};
+	},
+});
+
+export const requestBooking = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// MYT midnights; checkOut exclusive — the stay occupies [checkIn, checkOut).
+		// checkOut is OMITTED for a fixed-length package (S7): the server derives
+		// it from the listing's own `packageLength`, so a tampered client can't buy
+		// 90 days at the 30-day price.
+		checkIn: v.number(),
+		checkOut: v.optional(v.number()),
+		// How many packages, for a fixed-length listing ("3 months up front").
+		// Ignored on a free-range stay, where the range IS the quantity. Clamped
+		// server-side rather than trusted: `maxPackageQuantity` protects the
+		// capacity scans' span bound, so a tampered value must not get through.
+		packageQuantity: v.optional(v.number()),
+		customer: v.object({
+			name: v.optional(v.string()),
+			// REQUIRED here (validated below), unlike the storefront path's
+			// protocol-optional phone: a request's whole lifecycle (approved +
+			// payment ask, declined-with-reason, expiry) reaches the guest on
+			// WhatsApp — a phone-less request would dead-end at approval.
+			waPhone: v.optional(v.string()),
+		}),
+		customerNote: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ shortId: string; trackingToken: string }> => {
+		// Same public-endpoint throttle bucket as the storefront checkout.
+		await rateLimiter.limit(ctx, "orderCreate", {
+			key: args.retailerId,
+			throws: true,
+		});
+
+		const retailer = await ctx.db.get(args.retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const product = await loadBookableListing(ctx, args.productId);
+		if (!product || product.retailerId !== args.retailerId) {
+			throw new ConvexError("This listing isn't taking bookings right now");
+		}
+
+		// Guest identity — name required (same rule as every checkout) and a
+		// reachable MY WhatsApp mobile required (see the args comment).
+		const name = requireCustomerName(args.customer.name);
+		if (!args.customer.waPhone) {
+			throw new ConvexError("A WhatsApp number is required to request a booking");
+		}
+		let waPhone: string;
+		try {
+			// Judged by the STORE's country (SG-lite) — the same bridge
+			// orders.create uses, so a booking checkout can't reject a number
+			// the ordinary checkout would accept.
+			waPhone = assertValidMobileForCountry(
+				args.customer.waPhone,
+				retailer.country ?? DEFAULT_COUNTRY,
+			);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+
+		const trimmedNote = args.customerNote?.trim();
+		if (trimmedNote && trimmedNote.length > MAX_CUSTOMER_NOTE) {
+			throw new ConvexError(
+				`Note must be ${MAX_CUSTOMER_NOTE} characters or fewer`,
+			);
+		}
+
+		// The listing's single implicit variant carries the per-night price.
+		const variants = await ctx.db
+			.query("productVariants")
+			.withIndex("by_product", (q) => q.eq("productId", product._id))
+			.collect();
+		const variant = variants.find((row) => row.active);
+		if (!variant || variants.filter((row) => row.active).length !== 1) {
+			// A booking listing is one implicit variant by construction (S1 wizard
+			// + form); anything else is a corrupted row, not a buyer mistake.
+			throw new ConvexError("This listing isn't taking bookings right now");
+		}
+
+		// The listing's shape decides the range: a fixed-length package derives
+		// its end from the start (S7), a free range keeps the buyer's check-out.
+		// One resolver shared with the calendar, so they can't differ by a day.
+		const isPackageListing = (product.booking?.packageLength ?? 0) > 0;
+		// Clamped, never trusted: the term this produces has to stay inside
+		// MAX_PACKAGE_DAYS or the capacity scans stop seeing the booking.
+		const packageQuantity = isPackageListing
+			? normalizePackageQuantity(args.packageQuantity ?? 1, product.booking)
+			: 1;
+		let checkIn: number;
+		let checkOut: number;
+		try {
+			({ checkIn, checkOut } = resolveBookingRange(
+				product.booking,
+				args.checkIn,
+				args.checkOut,
+				packageQuantity,
+			));
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+
+		// Range gates — notice window is max(store, listing), same composition as
+		// the fulfilment-date path. A package passes its own length as the
+		// ceiling: the seller chose that span, the buyer never picks it.
+		try {
+			assertValidBookingRange(checkIn, checkOut, {
+				noticeDays: Math.max(
+					retailer.minFulfilmentNoticeDays ?? 0,
+					product.minNoticeDays ?? 0,
+				),
+				// A package's span is the seller's choice, already capped when they
+				// set it — so it is its own ceiling. Computed from the RESOLVED
+				// range because a calendar month is 28–31 nights, not a constant.
+				maxNights: isPackageListing
+					? nightsBetween(checkIn, checkOut)
+					: undefined,
+			});
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+
+		// Capacity — the authoritative re-check, atomically inside this mutation
+		// (Convex serializes, so two buyers racing for the last spot can't both
+		// pass; a block/booking landing mid-checkout surfaces here as the
+		// friendly retry, never a silent failure).
+		const fullNights = await findFullNights(ctx, product, checkIn, checkOut);
+		if (fullNights.length > 0) {
+			throw new ConvexError(
+				`${formatFulfilmentDate(fullNights[0])} is no longer available — pick different dates`,
+			);
+		}
+
+		const nights = nightsBetween(checkIn, checkOut);
+		// A PACKAGE is priced per package (S7) — "2 × RM 150 per month", not
+		// "RM 5 × 61 nights". A free-range stay is per-night × nights. Both ride
+		// the standard quantity math, so every money surface (totals, CSV,
+		// insights, receipts, PDF) needs zero special-casing either way — and on
+		// a package `quantity` now carries its natural meaning, the number of
+		// packages bought.
+		const items = [
+			{
+				productId: product._id,
+				variantId: variant._id,
+				name: product.name,
+				variantLabel: undefined,
+				price: variant.price,
+				quantity: isPackageListing ? packageQuantity : nights,
+			},
+		];
+		// The refundable security deposit rides the one payment (86eyn4kee):
+		// frozen from the listing NOW (snapshot posture — a later policy edit
+		// never changes a placed booking) and folded into `total` through the
+		// extras seam. Held money — every revenue surface subtracts it.
+		const securityDeposit = product.booking?.securityDeposit;
+		const { subtotal, total } = computeOrderTotals(items, { securityDeposit });
+		const now = Date.now();
+
+		// "Instant book" (S7): a gym doesn't vet each signup, so an auto-accept
+		// listing lands CONFIRMED and the payment ask fires straight away.
+		const instantBook = product.booking?.autoAccept === true;
+		// Same rule the storefront's confirm-at-create uses — a message needs a
+		// registered template. Env unset ⇒ the order is still confirmed and
+		// payable, just silently (the S3 approve posture).
+		const pushAtCreate =
+			instantBook && orderConfirmTemplateName() !== undefined;
+
+		let shortId: string | null = null;
+		for (let attempt = 0; attempt < SHORT_ID_RETRIES; attempt++) {
+			const candidate = generateShortId();
+			const existing = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", candidate))
+				.first();
+			if (!existing) {
+				shortId = candidate;
+				break;
+			}
+		}
+		if (!shortId)
+			throw new ConvexError("Failed to generate unique order ID, please retry");
+		const trackingToken = generateTrackingToken();
+
+		const orderId = await ctx.db.insert("orders", {
+			retailerId: args.retailerId,
+			shortId,
+			trackingToken,
+			items,
+			subtotal,
+			total,
+			currency: product.currency,
+			status: instantBook ? "confirmed" : "booking_requested",
+			channel: "whatsapp",
+			source: "storefront",
+			customer: { name, waPhone },
+			deliveryMethod: "booking",
+			bookingCheckIn: checkIn,
+			bookingCheckOut: checkOut,
+			bookingProductId: product._id,
+			// Frozen shape (S7) — a later listing edit never re-describes this
+			// order, and every money/date surface reads the span correctly.
+			bookingPackaged: isPackageListing ? true : undefined,
+			securityDeposit,
+			// The check-in day IS the order's due date — the inbox sort, due-today
+			// strip and urgency badges all read fulfilmentDate, so a request for
+			// this weekend surfaces exactly like an order due this weekend.
+			fulfilmentDate: checkIn,
+			customerNote:
+				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined,
+			// Request-to-book pushes nothing at request time (approve fires the one
+			// message, S3), and leaving the stamp unset keeps the unseen-order
+			// machinery keyed to push-path orders only. Instant book IS the push
+			// path, so it stamps here exactly as the storefront does.
+			confirmationPushStatus: pushAtCreate ? "sending" : undefined,
+			statusChangedAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: instantBook ? "confirmed" : "booking_requested",
+			note: instantBook ? "Booked instantly" : undefined,
+			createdAt: now,
+		});
+		// A confirmed order is the activation milestone — the same one-time stamp
+		// every other confirm site makes.
+		if (instantBook) await stampRetailerActivation(ctx, args.retailerId, now);
+
+		// Same bookkeeping as any created order: usage meter (soft cap), the
+		// sold-once stamp (protects the listing from permanent delete), CRM link.
+		await recordOrderCreated(ctx, args.retailerId, now);
+		await stampProductsOrdered(ctx, items, now);
+		await linkOrderToCustomer(ctx, {
+			retailerId: args.retailerId,
+			waPhone,
+			orderId,
+			// Held money is not spend — totalSpent counts the stay, not the
+			// deposit the seller hands back (revenueExcludingDeposit rule).
+			orderTotal: total - (securityDeposit ?? 0),
+			orderCreatedAt: now,
+			customerName: name,
+		});
+
+		// The buyer's ONE outbound message, on the instant-book path only — the
+		// exact storefront machinery (stamps, retries, webhook correlation).
+		// Request-to-book stays silent until the seller approves (S3).
+		if (pushAtCreate) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		}
+
+		// Seller attention: the standard new-order email + the seller WhatsApp
+		// alert (86eyhw9zy plumbing — env-gated utility template whose button
+		// opens the order page, where Approve/Decline leads; a booking-worded
+		// template is a Meta-registration follow-up). Browser alerts ride the
+		// client's existing new-order watch for free.
+		await ctx.scheduler.runAfter(0, internal.email.notifyRetailerOrderAlert, {
+			orderId,
+		});
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifySellerNewOrder, {
+			orderId,
+		});
+
+		return { shortId, trackingToken };
+	},
+});
+
+/** Cause-true refusals for acting on a request that is no longer one. */
+function assertStillRequested(order: {
+	status: string;
+	bookingResolution?: "declined" | "expired";
+}): void {
+	if (order.status === "booking_requested") return;
+	if (order.bookingResolution === "expired") {
+		throw new ConvexError(
+			"This request expired after 24 hours and the dates were released — ask the guest to book again",
+		);
+	}
+	if (order.bookingResolution === "declined") {
+		throw new ConvexError("This request was already declined");
+	}
+	if (order.status === "cancelled") {
+		throw new ConvexError("This booking was cancelled");
+	}
+	throw new ConvexError("This booking was already approved");
+}
+
+/**
+ * Approve a booking request (86eyj70z1 decision 3): the request becomes a
+ * confirmed order and the guest gets the ONE combined message — the same
+ * confirmation template + payment machinery the storefront push uses, whose
+ * button lands on the payable order page. Never two messages.
+ */
+export const approveBookingRequest = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		assertStillRequested(order);
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, order.retailerId);
+
+		// The one transition path: timeline event, activation stamp, stage reset.
+		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
+		await applyStatusTransition(ctx, order, "confirmed", {
+			note: "Booking approved",
+		});
+
+		// The confirm+pay message rides the EXACT storefront-push machinery
+		// (stamps, retries, delivery webhooks) — a booking's total is always
+		// final at approval (no mockup/fee holds by construction), so the
+		// template's "Total: {{3}}" is true. Env unset ⇒ no automatic message
+		// (the order page still shows approved + Pay now; posture matches the
+		// storefront's legacy fallback).
+		if (order.customer.waPhone && orderConfirmTemplateName() !== undefined) {
+			await ctx.db.patch(order._id, { confirmationPushStatus: "sending" });
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		}
+		await logAdminAction(ctx, access, "bookings.approve", orderId);
+	},
+});
+
+/**
+ * Decline a booking request. The reason is REQUIRED — it's quoted verbatim on
+ * the guest's page (a silent no is a dead end for someone planning a trip) —
+ * and the hold releases through the one cancel path. The seller gets no
+ * notification of their own action (signal-over-noise matrix).
+ */
+export const declineBookingRequest = mutation({
+	args: { orderId: v.id("orders"), reason: v.string() },
+	handler: async (ctx, { orderId, reason }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		assertStillRequested(order);
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, order.retailerId);
+
+		const trimmed = reason.trim();
+		if (trimmed.length === 0) {
+			throw new ConvexError(
+				"Add a short reason — the guest sees it with the decline",
+			);
+		}
+		if (trimmed.length > CANCELLATION_NOTE_MAX) {
+			throw new ConvexError(
+				`Keep the reason under ${CANCELLATION_NOTE_MAX} characters`,
+			);
+		}
+
+		// Resolution FIRST, then the transition, so any later reader sees a
+		// cancelled booking that already knows WHY. (This ordering also used to
+		// suppress the generic "order cancelled" WhatsApp; since 86eyd63r8 no
+		// automatic status sends exist at all, so the marker's remaining job is
+		// the buyer's page and the seller's resolution note.)
+		await ctx.db.patch(order._id, {
+			bookingResolution: "declined",
+			cancellationNote: trimmed,
+		});
+		await applyStatusTransition(
+			ctx,
+			{ ...order, bookingResolution: "declined" },
+			"cancelled",
+			{ note: `Booking declined: ${trimmed}` },
+		);
+		await logAdminAction(ctx, access, "bookings.decline", orderId);
+	},
+});
+
+/**
+ * Record the security-deposit outcome after check-out (86eyn4kee). One shot:
+ * "Mark returned" (keptAmount 0) or a partial/full keep (validated ≤ the
+ * frozen deposit, reason REQUIRED — it renders verbatim on the guest's page).
+ * The actual money movement stays off-platform (Kedaipal never touches order
+ * money); this stamps the record both sides see. Delivered-only: before
+ * check-out there is nothing to return yet, and a cancelled-after-payment
+ * booking settles the WHOLE payment in one refund conversation (the order
+ * page states that context), not a deposit-only split.
+ */
+export const settleSecurityDeposit = mutation({
+	args: {
+		orderId: v.id("orders"),
+		/** Sen kept by the seller; 0 = fully returned. */
+		keptAmount: v.number(),
+		reason: v.optional(v.string()),
+	},
+	handler: async (ctx, { orderId, keptAmount, reason }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, order.retailerId);
+
+		const deposit = order.securityDeposit ?? 0;
+		if (order.deliveryMethod !== "booking" || deposit <= 0)
+			throw new ConvexError("This order has no security deposit");
+		if (order.securityDepositReturnedAt !== undefined)
+			throw new ConvexError("The deposit is already settled");
+		if (order.status !== "delivered")
+			throw new ConvexError(
+				"Settle the deposit after check-out — mark the stay as checked out first",
+			);
+		if (order.paymentStatus !== "received")
+			throw new ConvexError(
+				"The deposit was never collected — there's nothing to return",
+			);
+		if (!Number.isInteger(keptAmount) || keptAmount < 0 || keptAmount > deposit)
+			throw new ConvexError(
+				"The kept amount can't exceed the deposit collected",
+			);
+		const trimmed = reason?.trim() ?? "";
+		if (keptAmount > 0 && trimmed.length === 0)
+			throw new ConvexError(
+				"Add a short reason — the guest sees it with the deduction",
+			);
+		if (trimmed.length > CANCELLATION_NOTE_MAX)
+			throw new ConvexError(
+				`Keep the reason under ${CANCELLATION_NOTE_MAX} characters`,
+			);
+
+		await ctx.db.patch(order._id, {
+			securityDepositReturnedAt: Date.now(),
+			securityDepositKeptAmount: keptAmount > 0 ? keptAmount : undefined,
+			securityDepositKeptReason: keptAmount > 0 ? trimmed : undefined,
+			updatedAt: Date.now(),
+		});
+		await logAdminAction(ctx, access, "bookings.settleDeposit", orderId);
+	},
+});
+
+/**
+ * Release requests the seller never actioned (86eyj70z1 decision 3: default
+ * 24 h, promised to the buyer up front). Runs on a cron; cancellation rides
+ * `applyStatusTransition`, so the hold release, CRM/usage reversal, timeline
+ * event and buyer notice all follow the one cancel path.
+ */
+export const expireStaleRequests = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const cutoff = Date.now() - BOOKING_REQUEST_TTL_MS;
+		// Bounded batch; the cron cadence drains any backlog. _creationTime is
+		// the index's implicit trailing key, so this reads exactly the stale rows.
+		const stale = await ctx.db
+			.query("orders")
+			.withIndex("by_status", (q) =>
+				q.eq("status", "booking_requested").lt("_creationTime", cutoff),
+			)
+			.take(50);
+		for (const order of stale) {
+			// The resolution marker is what the buyer's page reads ("Request
+			// expired", never a bare "cancelled").
+			await ctx.db.patch(order._id, { bookingResolution: "expired" });
+			await applyStatusTransition(ctx, order, "cancelled", {
+				note: "Booking request expired — not answered within 24 hours",
+			});
+		}
+	},
+});

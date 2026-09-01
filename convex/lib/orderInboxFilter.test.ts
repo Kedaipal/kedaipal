@@ -13,37 +13,39 @@ function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
 		createdAt: 1_000,
 		shortId: "ORD-0001",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
-		items: [{ name: "Vanilla Cake", variantLabel: "1kg" }],
+		items: [{ name: "Vanilla Cake", variantLabel: "1kg", quantity: 1 }],
+		subtotal: 12500,
+		total: 12500,
+		currency: "MYR",
 		...overrides,
 	};
 }
 
 describe("buildInboxPredicate — bucket", () => {
 	test("'new' matches only pending", () => {
-		const p = buildInboxPredicate({ bucket: "new" });
+		const p = buildInboxPredicate({ buckets: ["new"] });
 		expect(p(order({ status: "pending" }))).toBe(true);
 		expect(p(order({ status: "confirmed" }))).toBe(false);
 	});
 	test("'in_progress' spans confirmed/packed/shipped", () => {
-		const p = buildInboxPredicate({ bucket: "in_progress" });
+		const p = buildInboxPredicate({ buckets: ["in_progress"] });
 		expect(p(order({ status: "packed" }))).toBe(true);
 		expect(p(order({ status: "delivered" }))).toBe(false);
 	});
 	test("'all' matches every status", () => {
-		const p = buildInboxPredicate({ bucket: "all" });
+		const p = buildInboxPredicate({});
 		expect(p(order({ status: "cancelled" }))).toBe(true);
 	});
 });
 
 describe("buildInboxPredicate — payment", () => {
 	test("undefined paymentStatus reads as unpaid", () => {
-		const p = buildInboxPredicate({ bucket: "all", paymentStatuses: ["unpaid"] });
+		const p = buildInboxPredicate({ paymentStatuses: ["unpaid"] });
 		expect(p(order({ paymentStatus: undefined }))).toBe(true);
 		expect(p(order({ paymentStatus: "received" }))).toBe(false);
 	});
 	test("method filter and 'unspecified' OR together", () => {
 		const p = buildInboxPredicate({
-			bucket: "all",
 			paymentMethods: ["duitnow"],
 			methodUnspecified: true,
 		});
@@ -55,14 +57,14 @@ describe("buildInboxPredicate — payment", () => {
 
 describe("buildInboxPredicate — dates", () => {
 	test("createdAt range is inclusive", () => {
-		const p = buildInboxPredicate({ bucket: "all", dateFrom: 100, dateTo: 200 });
+		const p = buildInboxPredicate({ dateFrom: 100, dateTo: 200 });
 		expect(p(order({ createdAt: 100 }))).toBe(true);
 		expect(p(order({ createdAt: 200 }))).toBe(true);
 		expect(p(order({ createdAt: 99 }))).toBe(false);
 		expect(p(order({ createdAt: 201 }))).toBe(false);
 	});
 	test("fulfilmentWindow 'today' matches a today-dated order, not a far-future one", () => {
-		const p = buildInboxPredicate({ bucket: "all", fulfilmentWindow: "today" });
+		const p = buildInboxPredicate({ fulfilmentWindow: "today" });
 		expect(p(order({ fulfilmentDate: todayMytMidnight() }))).toBe(true);
 		expect(
 			p(order({ fulfilmentDate: todayMytMidnight() + 40 * 86_400_000 })),
@@ -74,22 +76,22 @@ describe("buildInboxPredicate — dates", () => {
 
 describe("buildInboxPredicate — search", () => {
 	test("matches order id, name, item, and trailing phone digits", () => {
-		const byId = buildInboxPredicate({ bucket: "all", searchText: "ORD-0001" });
+		const byId = buildInboxPredicate({ searchText: "ORD-0001" });
 		expect(byId(order())).toBe(true);
-		const byName = buildInboxPredicate({ bucket: "all", searchText: "aish" });
+		const byName = buildInboxPredicate({ searchText: "aish" });
 		expect(byName(order())).toBe(true);
-		const byItem = buildInboxPredicate({ bucket: "all", searchText: "vanilla" });
+		const byItem = buildInboxPredicate({ searchText: "vanilla" });
 		expect(byItem(order())).toBe(true);
-		const byPhone = buildInboxPredicate({ bucket: "all", searchText: "6789" });
+		const byPhone = buildInboxPredicate({ searchText: "6789" });
 		expect(byPhone(order())).toBe(true);
-		const miss = buildInboxPredicate({ bucket: "all", searchText: "zzzz" });
+		const miss = buildInboxPredicate({ searchText: "zzzz" });
 		expect(miss(order())).toBe(false);
 	});
 });
 
 describe("buildInboxPredicate — mockupPending", () => {
 	test("matches only orders awaiting the seller's mockup action", () => {
-		const p = buildInboxPredicate({ bucket: "all", mockupPending: true });
+		const p = buildInboxPredicate({ mockupPending: true });
 		expect(p(order({ mockupStatus: "pending" }))).toBe(true);
 		expect(p(order({ mockupStatus: "changes_requested" }))).toBe(true);
 		expect(p(order({ mockupStatus: "approved" }))).toBe(false);
@@ -97,25 +99,178 @@ describe("buildInboxPredicate — mockupPending", () => {
 	});
 });
 
+describe("buildInboxPredicate — buckets are MULTI (86eyrtz74)", () => {
+	test("undefined / empty means every bucket", () => {
+		for (const args of [{}, { buckets: [] }]) {
+			const p = buildInboxPredicate(args);
+			expect(p(order({ status: "pending" }))).toBe(true);
+			expect(p(order({ status: "cancelled" }))).toBe(true);
+		}
+	});
+
+	test("two buckets OR together — 'everything closed' in one view", () => {
+		// The ask that widened this: Completed + Cancelled at once, which the
+		// old single-value chip could never show.
+		const p = buildInboxPredicate({ buckets: ["completed", "cancelled"] });
+		expect(p(order({ status: "delivered" }))).toBe(true);
+		expect(p(order({ status: "cancelled" }))).toBe(true);
+		expect(p(order({ status: "packed" }))).toBe(false);
+		expect(p(order({ status: "pending" }))).toBe(false);
+	});
+});
+
+describe("buildInboxPredicate — statuses (86eyrtz74)", () => {
+	test("undefined / empty means no status filtering", () => {
+		for (const args of [
+			{},
+			{ statuses: [] },
+		]) {
+			const p = buildInboxPredicate(args);
+			expect(p(order({ status: "packed" }))).toBe(true);
+			expect(p(order({ status: "cancelled" }))).toBe(true);
+		}
+	});
+
+	test("several statuses OR together — the thing one bucket cannot express", () => {
+		// "Out of my hands but not delivered" spans two statuses inside one
+		// bucket, which is exactly why this is its own dimension.
+		const p = buildInboxPredicate({
+			statuses: ["packed", "shipped"],
+		});
+		expect(p(order({ status: "packed" }))).toBe(true);
+		expect(p(order({ status: "shipped" }))).toBe(true);
+		expect(p(order({ status: "confirmed" }))).toBe(false);
+		expect(p(order({ status: "delivered" }))).toBe(false);
+	});
+
+	test("ANDs with the bucket rather than overriding it", () => {
+		// Bucket narrows, statuses narrow further. A status outside the bucket
+		// yields nothing — the honest intersection, not a silent union.
+		const p = buildInboxPredicate({
+			buckets: ["in_progress"],
+			statuses: ["packed", "delivered"],
+		});
+		expect(p(order({ status: "packed" }))).toBe(true);
+		expect(p(order({ status: "delivered" }))).toBe(false); // completed bucket
+	});
+});
+
+describe("buildInboxPredicate — categories (86eyrtz74)", () => {
+	const cake = order({
+		items: [{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"] }],
+	});
+	const mixed = order({
+		items: [
+			{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"] },
+			{ name: "Teh Ais", quantity: 1, categoryNames: ["Drinks"] },
+		],
+	});
+	const uncategorised = order({
+		items: [{ name: "Custom", quantity: 1, categoryNames: [] }],
+	});
+	const legacy = order({ items: [{ name: "Old order", quantity: 1 }] });
+
+	test("undefined / empty means no category filtering", () => {
+		for (const args of [
+			{},
+			{ categories: [] },
+		]) {
+			const p = buildInboxPredicate(args);
+			expect(p(cake)).toBe(true);
+			expect(p(legacy)).toBe(true);
+		}
+	});
+
+	test("ANY line matching is enough — a mixed order is in both categories", () => {
+		// "Show me the cake orders" has to include the ticket with a cake and a
+		// drink on it, or the filter under-reports the seller's actual work.
+		expect(buildInboxPredicate({ categories: ["Cakes"] })(mixed)).toBe(true);
+		expect(buildInboxPredicate({ categories: ["Drinks"] })(mixed)).toBe(true);
+	});
+
+	test("several categories OR together", () => {
+		const p = buildInboxPredicate({
+			categories: ["Drinks", "Pastry"],
+		});
+		expect(p(mixed)).toBe(true);
+		expect(p(cake)).toBe(false);
+	});
+
+	test("selecting every category WITHOUT the uncategorized arm still drops them", () => {
+		// The bug (PR #235 review): `availableCategories` is tallied only from
+		// orders that HAVE categories, so "select all" could never reach an
+		// uncategorized order — while the panel claimed nothing was filtered.
+		const p = buildInboxPredicate({ categories: ["Cakes", "Drinks"] });
+		expect(p(mixed)).toBe(true);
+		expect(p(uncategorised)).toBe(false);
+		expect(p(legacy)).toBe(false);
+	});
+
+	test("categoriesUnspecified keeps the uncategorized ones", () => {
+		const p = buildInboxPredicate({ categoriesUnspecified: true });
+		expect(p(uncategorised)).toBe(true);
+		// Absent (predates the field) reads the same as recorded-empty — both are
+		// blank on screen, so both are "uncategorized" to a seller.
+		expect(p(legacy)).toBe(true);
+		expect(p(cake)).toBe(false);
+	});
+
+	test("every category PLUS uncategorized matches everything — the honest select-all", () => {
+		const p = buildInboxPredicate({
+			categories: ["Cakes", "Drinks"],
+			categoriesUnspecified: true,
+		});
+		for (const o of [cake, mixed, uncategorised, legacy]) {
+			expect(p(o)).toBe(true);
+		}
+	});
+
+	test("uncategorized alone is a filter, not a no-op", () => {
+		const p = buildInboxPredicate({ categoriesUnspecified: true });
+		expect(p(mixed)).toBe(false);
+	});
+
+	test("orders with no recorded categories never match a named one", () => {
+		const p = buildInboxPredicate({ categories: ["Cakes"] });
+		expect(p(uncategorised)).toBe(false);
+		// Pre-freeze orders that were never backfilled: absent, not empty.
+		expect(p(legacy)).toBe(false);
+	});
+});
+
 describe("buildInboxPredicate — source", () => {
 	test("no source filter matches every checkout surface", () => {
-		const p = buildInboxPredicate({ bucket: "all" });
+		const p = buildInboxPredicate({});
 		expect(p(order({ source: "storefront" }))).toBe(true);
 		expect(p(order({ source: "counter" }))).toBe(true);
 		expect(p(order({ source: undefined }))).toBe(true);
 	});
 	test("counter matches only counter orders", () => {
-		const p = buildInboxPredicate({ bucket: "all", source: "counter" });
+		const p = buildInboxPredicate({ sources: ["counter"] });
 		expect(p(order({ source: "counter" }))).toBe(true);
 		expect(p(order({ source: "storefront" }))).toBe(false);
 		// Legacy orders have no stamped source — they are NOT counter sales.
 		expect(p(order({ source: undefined }))).toBe(false);
 	});
 	test("storefront matches storefront AND legacy (undefined ⇒ storefront)", () => {
-		const p = buildInboxPredicate({ bucket: "all", source: "storefront" });
+		const p = buildInboxPredicate({ sources: ["storefront"] });
 		expect(p(order({ source: "storefront" }))).toBe(true);
 		expect(p(order({ source: undefined }))).toBe(true);
 		expect(p(order({ source: "counter" }))).toBe(false);
+	});
+	test("several surfaces OR together — the reason it became multi-select", () => {
+		// "Everything that isn't a walk-in" is a real question, and one value
+		// could never ask it.
+		const p = buildInboxPredicate({
+			sources: ["storefront", "claim"],
+		});
+		expect(p(order({ source: "storefront" }))).toBe(true);
+		expect(p(order({ source: "claim" }))).toBe(true);
+		expect(p(order({ source: "counter" }))).toBe(false);
+	});
+	test("an empty list means no filtering, not 'match nothing'", () => {
+		const p = buildInboxPredicate({ sources: [] });
+		expect(p(order({ source: "counter" }))).toBe(true);
 	});
 });
 
@@ -127,8 +282,8 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 
 	test("undefined / empty means no attribution filtering", () => {
 		for (const args of [
-			{ bucket: "all" as const },
-			{ bucket: "all" as const, attributionSources: [] },
+			{},
+			{ attributionSources: [] },
 		]) {
 			const p = buildInboxPredicate(args);
 			expect([tiktok, instagram, untagged, counter].every(p)).toBe(true);
@@ -137,7 +292,6 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 
 	test("one origin keeps only that origin", () => {
 		const p = buildInboxPredicate({
-			bucket: "all",
 			attributionSources: ["tiktok"],
 		});
 		expect(p(tiktok)).toBe(true);
@@ -148,7 +302,6 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 
 	test("several origins OR together (the multi-select)", () => {
 		const p = buildInboxPredicate({
-			bucket: "all",
 			attributionSources: ["tiktok", "instagram"],
 		});
 		expect(p(tiktok)).toBe(true);
@@ -158,7 +311,6 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 
 	test("'direct' matches untagged storefront AND legacy sourceless orders", () => {
 		const p = buildInboxPredicate({
-			bucket: "all",
 			attributionSources: ["direct"],
 		});
 		expect(p(untagged)).toBe(true);
@@ -169,7 +321,6 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 
 	test("'counter' matches counter orders, which are never stamped", () => {
 		const p = buildInboxPredicate({
-			bucket: "all",
 			attributionSources: ["counter"],
 		});
 		expect(p(counter)).toBe(true);
@@ -178,7 +329,6 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 
 	test("ANDs with the other filters rather than replacing them", () => {
 		const p = buildInboxPredicate({
-			bucket: "all",
 			attributionSources: ["tiktok"],
 			paymentStatuses: ["received"],
 		});
@@ -192,8 +342,7 @@ describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 		// the two must intersect, not collide.
 		const tagged = order({ source: "counter", attributionSource: "tiktok" });
 		const p = buildInboxPredicate({
-			bucket: "all",
-			source: "counter",
+			sources: ["counter"],
 			attributionSources: ["tiktok"],
 		});
 		expect(p(tagged)).toBe(true);
@@ -241,5 +390,231 @@ describe("sortInboxOrders", () => {
 		const input = [...scanOrder];
 		sortInboxOrders(input, "due");
 		expect(input.map((o) => o.id)).toEqual(["d", "c", "b", "a"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 86eyrtz74 — pinning. Two rules, both deliberate and both counter-intuitive
+// enough to need pinning down: a pin OUTRANKS the filter (so the seller can
+// filter to something else and still compare against it), and pinning is a
+// PARTITION, never a sort option competing with newest/due.
+// ---------------------------------------------------------------------------
+
+describe("buildInboxPredicate — pin privilege", () => {
+	const pinned = order({ status: "delivered", pinnedAt: 5_000 });
+
+	test("showPinned keeps a pinned order that fails the bucket", () => {
+		const p = buildInboxPredicate({ buckets: ["new"], showPinned: true });
+		expect(p(pinned)).toBe(true);
+	});
+
+	test("a pin outranks EVERY other filter at once, not just the bucket", () => {
+		const p = buildInboxPredicate({
+			buckets: ["new"],
+			paymentStatuses: ["unpaid"],
+			paymentMethods: ["cash"],
+			sources: ["counter"],
+			statuses: ["delivered"],
+			categories: ["Nothing Matches This"],
+			attributionSources: ["tiktok"],
+			dateFrom: 9_000_000,
+			dateTo: 9_100_000,
+			fulfilmentWindow: "today",
+			mockupPending: true,
+			searchText: "nothing-matches-this",
+			showPinned: true,
+		});
+		expect(p(pinned)).toBe(true);
+	});
+
+	test("without showPinned a pinned order is filtered like any other", () => {
+		expect(buildInboxPredicate({ buckets: ["new"] })(pinned)).toBe(false);
+		expect(
+			buildInboxPredicate({ buckets: ["new"], showPinned: false })(pinned),
+		).toBe(false);
+	});
+
+	test("turning the toggle off does NOT hide a pin that legitimately matches", () => {
+		// The toggle removes the pin's privilege; it is not a "hide my pins"
+		// switch. A pinned order inside the filter is still in the filter.
+		const matching = order({ status: "pending", pinnedAt: 5_000 });
+		expect(
+			buildInboxPredicate({ buckets: ["new"], showPinned: false })(matching),
+		).toBe(true);
+	});
+
+	test("showPinned does not smuggle in UNpinned orders", () => {
+		const p = buildInboxPredicate({ buckets: ["new"], showPinned: true });
+		expect(p(order({ status: "delivered" }))).toBe(false);
+	});
+});
+
+describe("sortInboxOrders — pinned partition", () => {
+	const rows = [
+		{ id: "c", createdAt: 3_000, fulfilmentDate: 30 },
+		{ id: "b", createdAt: 2_000, fulfilmentDate: 10, pinnedAt: 100 },
+		{ id: "a", createdAt: 1_000, fulfilmentDate: 20, pinnedAt: 200 },
+	];
+
+	test("recent: pins lead, most-recently-pinned first", () => {
+		expect(sortInboxOrders(rows, "recent").map((o) => o.id)).toEqual([
+			"a",
+			"b",
+			"c",
+		]);
+	});
+
+	test("due: pins still lead, ordered by due date among themselves", () => {
+		// b is due sooner than a, so inside the pinned group b wins — the pinned
+		// group obeys the active sort rather than becoming a second list with
+		// its own rules.
+		expect(sortInboxOrders(rows, "due").map((o) => o.id)).toEqual([
+			"b",
+			"a",
+			"c",
+		]);
+	});
+
+	test("a pin sorts ahead even when its due date is the furthest out", () => {
+		const late = [
+			{ id: "soon", fulfilmentDate: 1 },
+			{ id: "pinned-late", fulfilmentDate: 999, pinnedAt: 1 },
+		];
+		expect(sortInboxOrders(late, "due").map((o) => o.id)).toEqual([
+			"pinned-late",
+			"soon",
+		]);
+	});
+
+	test("no pins leaves the existing ordering untouched", () => {
+		const plain = [
+			{ id: "x", fulfilmentDate: 20 },
+			{ id: "y", fulfilmentDate: 10 },
+		];
+		expect(sortInboxOrders(plain, "recent").map((o) => o.id)).toEqual(["x", "y"]);
+		expect(sortInboxOrders(plain, "due").map((o) => o.id)).toEqual(["y", "x"]);
+	});
+
+	test("never mutates the input", () => {
+		const input = [...rows];
+		sortInboxOrders(input, "due");
+		expect(input.map((o) => o.id)).toEqual(["c", "b", "a"]);
+	});
+
+	test("dateless pins still lead, and dateless non-pins still sink", () => {
+		const mixed = [
+			{ id: "dated", fulfilmentDate: 5 },
+			{ id: "dateless" },
+			{ id: "dateless-pin", pinnedAt: 1 },
+		];
+		expect(sortInboxOrders(mixed, "due").map((o) => o.id)).toEqual([
+			"dateless-pin",
+			"dated",
+			"dateless",
+		]);
+	});
+});
+
+describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => {
+	// Search used to cover order #, customer name, phone and item names only —
+	// so "find the order with tracking 630002864925" or "the one going to
+	// Puchong" simply didn't work. It now runs over the same column registry the
+	// table renders and the CSV writes.
+	const rich = order({
+		shortId: "ORD-7788",
+		customer: { name: "Nurul Ain", waPhone: "+60123456789" },
+		items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2 }],
+		deliveryAddress: {
+			line1: "12 Jalan Kenari 5",
+			city: "Puchong",
+			state: "Selangor",
+			postcode: "47100",
+			notes: "Gate code 1234",
+		},
+		courierName: "J&T Express",
+		trackingNo: "630002864925",
+		paymentReference: "MBB-88213",
+		customerNote: "no onions please",
+		attributionSource: "tiktok",
+		pickupSnapshot: { label: "Setapak stall", address: "3 Jalan Genting" },
+		cancelledReason: "Buyer changed mind",
+	});
+	const hits = (term: string) =>
+		buildInboxPredicate({ searchText: term })(rich);
+
+	test("finds by the fields it always could", () => {
+		expect(hits("ORD-7788")).toBe(true);
+		expect(hits("nurul")).toBe(true);
+		expect(hits("kek lapis")).toBe(true);
+	});
+
+	test("finds by tracking number, courier and payment reference", () => {
+		expect(hits("630002864925")).toBe(true);
+		expect(hits("j&t")).toBe(true);
+		expect(hits("MBB-88213")).toBe(true);
+	});
+
+	test("finds by any part of the delivery address", () => {
+		expect(hits("jalan kenari")).toBe(true);
+		expect(hits("puchong")).toBe(true);
+		expect(hits("47100")).toBe(true);
+		expect(hits("gate code")).toBe(true);
+	});
+
+	test("finds by pickup outlet, note, origin and cancel reason", () => {
+		expect(hits("setapak")).toBe(true);
+		expect(hits("no onions")).toBe(true);
+		expect(hits("tiktok")).toBe(true);
+		expect(hits("changed mind")).toBe(true);
+	});
+
+	test("is case-insensitive and still rejects a genuine miss", () => {
+		expect(hits("PUCHONG")).toBe(true);
+		expect(hits("kuala lumpur")).toBe(false);
+	});
+
+	test("phone still matches on TRAILING digits, which substring can't do", () => {
+		// "123456789" has to find "+60123456789" however the seller typed it.
+		expect(hits("123456789")).toBe(true);
+		expect(hits("60123456789")).toBe(true);
+	});
+
+	test("an order with none of those fields is unaffected", () => {
+		const plain = order({ shortId: "ORD-0002" });
+		expect(
+			buildInboxPredicate({ searchText: "puchong" })(plain),
+		).toBe(false);
+		expect(
+			buildInboxPredicate({ searchText: "ORD-0002" })(plain),
+		).toBe(true);
+	});
+
+	test("search still ANDs with the other filters, never ORs", () => {
+		expect(
+			buildInboxPredicate({
+				buckets: ["completed"],
+				searchText: "puchong",
+			})(rich),
+		).toBe(false);
+	});
+});
+
+describe("search matches both the stored value and the on-screen wording", () => {
+	// A seller typing "storefront" is reading the Order type column; one typing
+	// "received" may be reading an old export or a colleague's note. Neither
+	// guess should come back empty (86eyrtz74).
+	const o = order({ source: "storefront", paymentStatus: "received" });
+
+	test("finds an order by the word the column shows", () => {
+		expect(buildInboxPredicate({ searchText: "storefront" })(o)).toBe(true);
+		expect(buildInboxPredicate({ searchText: "paid" })(o)).toBe(true);
+	});
+
+	test("finds it by the value the CSV writes", () => {
+		expect(buildInboxPredicate({ searchText: "received" })(o)).toBe(true);
+	});
+
+	test("still misses what the order genuinely is not", () => {
+		expect(buildInboxPredicate({ searchText: "counter" })(o)).toBe(false);
 	});
 });

@@ -13,6 +13,7 @@ import {
 	PLANS,
 	planPrice,
 	planQualifiesForFounding,
+	starterPricePerDay,
 	UNLIMITED,
 } from "./plans";
 
@@ -118,6 +119,27 @@ describe("plans — pricing", () => {
 				);
 			}
 		}
+	});
+});
+
+describe("plans — \"less than X a day\"", () => {
+	/**
+	 * The landing anchor renders this as "less than {perDay} a day", so the
+	 * number has to make that sentence TRUE, not merely close. `Math.ceil`
+	 * returns the daily rate itself at a price that divides evenly (RM90 → 3,
+	 * and "less than RM3 a day" is then false); `floor + 1` cannot.
+	 */
+	test("is strictly greater than the actual daily rate", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			const daily = PLAN_MONTHLY_PRICES[currency].starter / 100 / 30;
+			expect(starterPricePerDay(currency)).toBeGreaterThan(daily);
+		}
+	});
+
+	test("holds the copy today's prices produce", () => {
+		// RM79/mo → "less than RM3 a day"; S$29/mo → "less than S$1 a day".
+		expect(starterPricePerDay("MYR")).toBe(3);
+		expect(starterPricePerDay("SGD")).toBe(1);
 	});
 });
 
