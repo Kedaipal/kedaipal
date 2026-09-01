@@ -148,6 +148,24 @@ stays at the panel's 36px everywhere: a shorter subgroup row looked marginally
 tidier and made a tap target smaller than everything around it, which is not a
 trade worth making.
 
+**The empty-state copy ranks the axis as PLACE, not filter** (PR #243 review).
+The route's `filtersActive` fed the empty state a condition that counted the
+status axis, so one chip tap always rendered the generic "No orders match your
+filters" and the per-bucket copy ("No new orders…") plus the "Nothing in those
+statuses" arm were unreachable dead code. The ranking now lives pure in
+`src/lib/inbox-empty-copy.ts` — search → mockup → non-status filters → status
+selection (not exactly one whole bucket) → the whole bucket's own copy → "no
+orders yet" — with a test per arm, because reachability is exactly what
+regressed. Two clear affordances, two scopes, each matching its promise: the
+cards empty state has no button (its copy points at the chips/panel), while the
+table's **"Clear all filters" is the start-over** — it resets the axis too,
+since in table view the axis is set from the Status column's own filter funnel,
+and it appears for a status-only empty as well (gating it on non-status filters
+left that state with no way out). One more chip-rule corner from the same
+review: with **every leaf selected, "All statuses" stays lit even when period
+chips are on** — the union already matches every order, and the panel's Status
+select-all on a booking store produces exactly that state.
+
 **`Not yet opened` is a visible row** under NEW. The unseen rule has driven the
 New bucket, the Home tile and the age escalation since 86eyf1rck without ever
 being nameable in the UI; the leaf split is what makes it sayable. It is

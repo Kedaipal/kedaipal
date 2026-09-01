@@ -46,10 +46,15 @@ export function statusChipState(
 	periods: readonly BookingPeriod[],
 ): BulkState {
 	if (key === "all") {
+		// The full-leaf check comes FIRST: with every leaf selected the axis
+		// matches every order under the union — any period chips add nothing —
+		// so it isn't narrowing and "All statuses" must read on. The panel's
+		// Status select-all on a booking store produces exactly this state
+		// (all leaves + all periods); checking periods first read it as dark
+		// above a list showing everything (PR #243 review).
+		if (selected.length === INBOX_LEAF_KEYS.length) return "all";
 		if (periods.length > 0) return "none";
-		return selected.length === 0 || selected.length === INBOX_LEAF_KEYS.length
-			? "all"
-			: "none";
+		return selected.length === 0 ? "all" : "none";
 	}
 	if (!isBucketChip(key)) return periods.includes(key) ? "all" : "none";
 	const leaves = BUCKET_LEAVES[key];

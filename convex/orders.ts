@@ -2590,10 +2590,15 @@ export const exportPage = internalQuery({
 		retailerId: v.id("retailers"),
 		...exportFilterValidators,
 		paginationOpts: paginationOptsValidator,
+		// The action's clock, sampled ONCE for the whole export: a multi-page run
+		// straddling MYT midnight must not classify booking periods against one
+		// day on page 1 and the next day on page 9 (same rule as searchOrders'
+		// shared `now`). Optional only for an in-flight pre-deploy caller.
+		now: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, paginationOpts, ...filters },
+		{ retailerId, paginationOpts, now, ...filters },
 	): Promise<ExportPageResult> => {
 		await assertExportAccess(ctx, retailerId);
 		const page = await ctx.db
@@ -2601,7 +2606,10 @@ export const exportPage = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
-		const predicate = buildInboxPredicate(toInboxFilterArgs(filters));
+		const predicate = buildInboxPredicate(
+			toInboxFilterArgs(filters),
+			now ?? Date.now(),
+		);
 		const matched = page.page.filter(predicate);
 		return {
 			rows: matched.map(orderToCsvSource),
@@ -2668,6 +2676,7 @@ export const exportOrders = action({
 			rows = [];
 			let scanned = 0;
 			let cursor: string | null = null;
+			const now = Date.now();
 			for (;;) {
 				const page: ExportPageResult = await ctx.runQuery(
 					internal.orders.exportPage,
@@ -2675,6 +2684,7 @@ export const exportOrders = action({
 						retailerId,
 						...filters,
 						paginationOpts: { numItems: EXPORT_PAGE_SIZE, cursor },
+						now,
 					},
 				);
 				rows.push(...page.rows);

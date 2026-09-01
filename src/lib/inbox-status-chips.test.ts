@@ -20,8 +20,15 @@ describe("status chips — one set, two grains", () => {
 		// parent checkbox gives over fully-ticked children. This is reachable:
 		// tap all four bucket chips, or use the panel's Status select-all.
 		expect(statusChipState("all", [...INBOX_LEAF_KEYS], NONE)).toBe("all");
-		// A booking period DOES narrow (it is not part of the leaf partition).
+		// A booking period DOES narrow (it is not part of the leaf partition)…
 		expect(statusChipState("all", [], ["active"])).toBe("none");
+		// …UNLESS every leaf is also selected: then the union already matches
+		// every order and the periods add nothing. The panel's Status select-all
+		// on a booking store produces exactly this state, so getting it wrong
+		// puts a dark "All statuses" above a list showing everything.
+		expect(
+			statusChipState("all", [...INBOX_LEAF_KEYS], ["active", "ending_soon"]),
+		).toBe("all");
 	});
 
 	it("a bucket chip is tri-state over its own leaves", () => {

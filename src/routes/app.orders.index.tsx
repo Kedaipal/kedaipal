@@ -120,12 +120,12 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { inboxEmptyCopy } from "../lib/inbox-empty-copy";
 import {
 	isBucketChip,
 	type StatusChipKey,
 	statusChipSelected as chipSelected,
 	toggleBucketChip,
-	wholeBucketSelected,
 } from "../lib/inbox-status-chips";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -312,7 +312,9 @@ export const Route = createFileRoute("/app/orders/")({
 		const period = [
 			...new Set(
 				periodArr.filter((x): x is BookingPeriod =>
-					BOOKING_PERIOD_CHIPS.includes(x as (typeof BOOKING_PERIOD_CHIPS)[number]),
+					BOOKING_PERIOD_CHIPS.includes(
+						x as (typeof BOOKING_PERIOD_CHIPS)[number],
+					),
 				),
 			),
 		];
@@ -338,10 +340,9 @@ export const Route = createFileRoute("/app/orders/")({
 		// produces can't disagree.
 		const st = [
 			...new Set(
-				foldLegacyBuckets(
-					bucket.length > 0 ? bucket : undefined,
-					[...new Set(toList(search.st).filter(isInboxLeaf))],
-				) ?? [],
+				foldLegacyBuckets(bucket.length > 0 ? bucket : undefined, [
+					...new Set(toList(search.st).filter(isInboxLeaf)),
+				]) ?? [],
 			),
 		];
 		// Category names are the seller's own words — no allowlist to validate
@@ -743,14 +744,14 @@ function OrdersRoute() {
 	const allCount = counts
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
 		: undefined;
-	/**
-	 * The one bucket whose leaves the seller has selected EXACTLY — i.e. the
-	 * state "one chip is lit". `null` for a partial group, a mix, or nothing,
-	 * which is what the empty-state copy branches on.
-	 */
-	const selectedWholeBucket = wholeBucketSelected(st, period);
 	const now = Date.now();
 	const searching = debounced.length > 0;
+	// Every active filter OUTSIDE the status axis. `st`/`period` deliberately
+	// don't count: the chip row is the seller's PLACE — the old bucket segment
+	// control's successor — so a chip tap must not flip the empty state to "No
+	// orders match your filters" (which buried the per-bucket copy, PR #243
+	// review), and "Clear filters" must not throw the seller back to All. The
+	// panel's own "Clear all (N)" is the control that owns the whole axis.
 	const filtersActive =
 		pay.length > 0 ||
 		method.length > 0 ||
@@ -760,7 +761,6 @@ function OrdersRoute() {
 		mockup ||
 		fwin != null ||
 		sources.length > 0 ||
-		st.length > 0 ||
 		cat.length > 0 ||
 		catunspec ||
 		asrc.length > 0;
@@ -924,7 +924,14 @@ function OrdersRoute() {
 				mockup: undefined,
 				fwin: undefined,
 				sources: undefined,
+				// The status axis clears too — BOTH halves. This is the table's
+				// "start over below" button, and in table view the axis is set from
+				// the Status column's own filter funnel, so leaving it would strand
+				// the seller on the very filter the row is telling them about. It
+				// used to clear `st` but not `period` — half the chip row (PR #243
+				// review).
 				st: undefined,
+				period: undefined,
 				cat: undefined,
 				catunspec: undefined,
 				asrc: undefined,
@@ -1320,9 +1327,7 @@ function OrdersRoute() {
 							? "Updating…"
 							: `${total} order${total === 1 ? "" : "s"}`
 				}
-				actions={
-					inboxEnabled ? headerActions : undefined
-				}
+				actions={inboxEnabled ? headerActions : undefined}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -1610,21 +1615,16 @@ function OrdersRoute() {
 				// Table view keeps its table (and so its header filters) when nothing
 				// matches — the empty state renders as a row inside it instead.
 				<EmptyOrders
-					// The per-bucket copy ("No new orders…") is right only when the
-					// selection is EXACTLY one whole bucket — the state a seller reaches
-					// by tapping one chip. A partial group ("Packed" alone) or a mix
-					// gets the general line instead, because "No new orders" is simply
-					// false for a seller who picked three statuses across two buckets.
-					bucket={selectedWholeBucket ?? "all"}
+					// Which copy renders — the per-bucket line, "nothing in those
+					// statuses", the generic filter line — is ranked in
+					// `inboxEmptyCopy`, pure and tested, because the ranking is
+					// exactly what regressed when the route derived it inline
+					// (PR #243 review: every chip tap read as "filters active").
 					searching={searching}
 					filtersActive={filtersActive}
 					mockup={mockup}
-					// Anything narrower than one whole bucket, or any booking chip:
-					// without this a seller who taps "Upcoming 0" is told they have no
-					// orders at all.
-					statusChipsOn={
-						period.length > 0 || (st.length > 0 && selectedWholeBucket === null)
-					}
+					statuses={st}
+					periods={period}
 				/>
 			) : (
 				// `aria-busy` while a filter change is in flight: the rows on screen
@@ -1647,7 +1647,16 @@ function OrdersRoute() {
 							columnWidths={columnState.widths}
 							onColumnWidthsChange={columnState.setWidths}
 							columnFilters={headerFilters}
-							onClearFilters={filtersActive ? clearAllFilters : undefined}
+							// Broader than `filtersActive` on purpose: the axis doesn't rank
+							// as a "filter" for the empty copy, but a status-only selection
+							// still empties the table and this row's copy points at this
+							// button — gating it on filters alone left that state with no
+							// way out (PR #243 review).
+							onClearFilters={
+								filtersActive || st.length > 0 || period.length > 0
+									? clearAllFilters
+									: undefined
+							}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}
@@ -1958,27 +1967,8 @@ function OrdersInboxSkeleton() {
 	);
 }
 
-function EmptyOrders({
-	bucket,
-	searching,
-	filtersActive,
-	mockup,
-	statusChipsOn,
-}: {
-	bucket: InboxBucket;
-	searching: boolean;
-	filtersActive: boolean;
-	mockup: boolean;
-	/** More than one status chip is on, so no single chip's copy applies. */
-	statusChipsOn: boolean;
-}) {
-	const { title, body } = emptyCopy(
-		bucket,
-		searching,
-		filtersActive,
-		mockup,
-		statusChipsOn,
-	);
+function EmptyOrders(props: Parameters<typeof inboxEmptyCopy>[0]) {
+	const { title, body } = inboxEmptyCopy(props);
 	return (
 		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
 			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -1990,62 +1980,4 @@ function EmptyOrders({
 			</div>
 		</div>
 	);
-}
-
-function emptyCopy(
-	bucket: InboxBucket,
-	searching: boolean,
-	filtersActive: boolean,
-	mockup: boolean,
-	statusChipsOn: boolean,
-): { title: string; body: string } {
-	if (searching)
-		return {
-			title: "No matches",
-			body: "No orders match your search. Try an order #, name, phone, or item.",
-		};
-	if (mockup)
-		return {
-			title: "No orders need a mockup",
-			body: "You're all caught up — nothing is waiting on a design right now.",
-		};
-	if (filtersActive)
-		return {
-			title: "No orders match your filters",
-			body: "Adjust or clear the filters to see more.",
-		};
-	// Several chips on and still nothing: the generic "no orders yet" line below
-	// would tell a seller with 118 orders that they have none.
-	if (statusChipsOn)
-		return {
-			title: "Nothing in those statuses",
-			body: "None of the statuses you picked has an order right now. Each chip shows its own count.",
-		};
-	switch (bucket) {
-		case "new":
-			return {
-				title: "No new orders",
-				body: "You're all caught up 🎉 New WhatsApp orders land here first.",
-			};
-		case "in_progress":
-			return {
-				title: "Nothing in progress",
-				body: "Orders you've confirmed, packed, or shipped will show here.",
-			};
-		case "completed":
-			return {
-				title: "No completed orders yet",
-				body: "Delivered orders move here once you mark them done.",
-			};
-		case "cancelled":
-			return {
-				title: "No cancelled orders",
-				body: "Nothing cancelled — good.",
-			};
-		default:
-			return {
-				title: "No orders yet",
-				body: "When shoppers checkout via WhatsApp, orders will appear here.",
-			};
-	}
 }
