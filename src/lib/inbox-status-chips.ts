@@ -30,38 +30,59 @@ export function isBucketChip(key: StatusChipKey): key is OrderBucket {
 	return key in BUCKET_LEAVES;
 }
 
+/** A bucket chip over its own leaves. Split out so `toggleBucketChip` can ask
+ * for it without being handed the row context only "All statuses" needs. */
+function bucketChipState(
+	bucket: OrderBucket,
+	selected: readonly string[],
+): BulkState {
+	const leaves = BUCKET_LEAVES[bucket];
+	return bulkStateOf(
+		leaves.length,
+		leaves.filter((l) => selected.includes(l)).length,
+	);
+}
+
 /**
  * Tri-state, because a bucket chip summarises several leaves: a chip reading OFF
  * while two of its three statuses are ticked would be telling the seller
  * something false (CLAUDE.md — a parent that summarises children is tri-state).
  *
- * "All statuses" is on when the axis is not narrowing, which is true both when
- * nothing is picked AND when every leaf is — the same reading a parent checkbox
- * gives over fully-ticked children. Without the second arm, ticking all four
- * groups leaves it dark above a list that is showing everything.
+ * **"All statuses" is the select-all over THE ROW**, so it is on in exactly two
+ * states: nothing picked, or every chip in the row picked. It is deliberately
+ * NOT "the axis isn't narrowing" — that reading lit it with all eight leaves on
+ * while two booking chips sat visibly dark beside it (owner report, 2 Sep),
+ * which is the same "a chip claiming everything next to an unlit one" problem
+ * the earlier rounds existed to remove. Semantically the two agree wherever it
+ * matters: a booking period adds nothing once every leaf is on, so the only
+ * states they disagree about are ones where the seller can SEE unlit chips.
+ *
+ * This still satisfies the case that produced the narrower rule (PR #243
+ * review): the panel's Status select-all sets every leaf AND every period, so
+ * the row is fully picked and "All statuses" lights.
+ *
+ * Binary, not tri-state, unlike its neighbours: "All statuses" means the ABSENCE
+ * of a selection, so a dash on it while one chip is lit would read as "partly
+ * everything", which is not a state.
  */
 export function statusChipState(
 	key: StatusChipKey,
 	selected: readonly string[],
 	periods: readonly BookingPeriod[],
+	/** The period chips this row is OFFERING — empty for a store with no
+	 * booking listings, where the row is buckets only. Without it "every chip
+	 * picked" can't be told apart from "some chips picked". */
+	availablePeriods: readonly BookingPeriod[],
 ): BulkState {
 	if (key === "all") {
-		// The full-leaf check comes FIRST: with every leaf selected the axis
-		// matches every order under the union — any period chips add nothing —
-		// so it isn't narrowing and "All statuses" must read on. The panel's
-		// Status select-all on a booking store produces exactly this state
-		// (all leaves + all periods); checking periods first read it as dark
-		// above a list showing everything (PR #243 review).
-		if (selected.length === INBOX_LEAF_KEYS.length) return "all";
-		if (periods.length > 0) return "none";
-		return selected.length === 0 ? "all" : "none";
+		const nothingPicked = selected.length === 0 && periods.length === 0;
+		const everyChipPicked =
+			selected.length === INBOX_LEAF_KEYS.length &&
+			periods.length === availablePeriods.length;
+		return nothingPicked || everyChipPicked ? "all" : "none";
 	}
 	if (!isBucketChip(key)) return periods.includes(key) ? "all" : "none";
-	const leaves = BUCKET_LEAVES[key];
-	return bulkStateOf(
-		leaves.length,
-		leaves.filter((l) => selected.includes(l)).length,
-	);
+	return bucketChipState(key, selected);
 }
 
 /** `FilterChip`'s tri-state prop for a chip. */
@@ -69,8 +90,9 @@ export function statusChipSelected(
 	key: StatusChipKey,
 	selected: readonly string[],
 	periods: readonly BookingPeriod[],
+	availablePeriods: readonly BookingPeriod[],
 ): boolean | "mixed" {
-	const state = statusChipState(key, selected, periods);
+	const state = statusChipState(key, selected, periods, availablePeriods);
 	return state === "all" ? true : state === "some" ? "mixed" : false;
 }
 
@@ -83,13 +105,12 @@ export function statusChipSelected(
 export function toggleBucketChip(
 	bucket: OrderBucket,
 	selected: readonly string[],
-	periods: readonly BookingPeriod[],
 ): InboxStatusLeaf[] {
 	const leaves = BUCKET_LEAVES[bucket];
 	const without = selected.filter(
 		(x) => !leaves.includes(x as InboxStatusLeaf),
 	) as InboxStatusLeaf[];
-	return statusChipState(bucket, selected, periods) === "all"
+	return bucketChipState(bucket, selected) === "all"
 		? without
 		: [...without, ...leaves];
 }

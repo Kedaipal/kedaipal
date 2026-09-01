@@ -131,10 +131,25 @@ Three surfaces now write ONE field, `statuses`:
 
 The chip is therefore **tri-state**: all / some (a dash, `aria-pressed="mixed"`)
 / none, and a partly-filled chip FILLS on tap exactly like `BulkSelectRow`.
-"All statuses" is on when the axis isn't narrowing — nothing picked **or** every
-leaf picked, the same reading a parent checkbox gives over ticked children. The
-rules are pure and unit-tested in `src/lib/inbox-status-chips.ts` rather than
-buried in the route.
+
+**"All statuses" is the select-all over THE ROW** — on in exactly two states,
+nothing picked or *every chip* picked, and binary rather than tri-state because
+it means the ABSENCE of a selection (a dash on it while one chip is lit would
+read as "partly everything", which is not a state). It is deliberately **not**
+"the axis isn't narrowing": that reading is defensible semantically — once every
+leaf is on, a booking period adds nothing under the union — but it lit "All"
+with all eight leaves on while two booking chips sat visibly dark beside it
+(owner report, 2 Sep), which is the same "a chip claiming everything next to an
+unlit one" problem the rounds above existed to remove. The two readings only
+disagree in states where the seller can SEE unlit chips. The row rule still
+covers the case that produced the narrower one (PR #243 review): the panel's
+Status select-all sets every leaf AND every period, so the row is fully picked
+and "All statuses" lights. Because "every chip picked" cannot be told from "some
+chips picked" without knowing what the row is OFFERING, `statusChipState` takes
+the available periods — empty for a store with no booking listings.
+
+The rules are pure and unit-tested in `src/lib/inbox-status-chips.ts` rather
+than buried in the route.
 
 **The Status section is rendered as a TREE**, because it is the only section
 three levels deep: section → bucket group → leaf. First pass gave the group a

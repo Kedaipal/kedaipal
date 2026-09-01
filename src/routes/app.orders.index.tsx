@@ -809,7 +809,7 @@ function OrdersRoute() {
 				// control as the group heading inside the Filters panel, writing the
 				// same state. Rules live in src/lib/inbox-status-chips.ts so they are
 				// unit-testable rather than buried in this closure.
-				const list = toggleBucketChip(next, st, period);
+				const list = toggleBucketChip(next, st);
 				return { ...prev, st: list.length > 0 ? list : undefined };
 			},
 		});
@@ -989,6 +989,11 @@ function OrdersRoute() {
 	 * query that answers that is the same one the Calendar view is gated on.
 	 */
 	const showBookingChips = hasBookingListings === true;
+	// What the row is OFFERING — "All statuses" is the select-all over exactly
+	// these, so it must not light while one of them sits unlit beside it.
+	const availablePeriods: BookingPeriod[] = showBookingChips
+		? [...BOOKING_PERIOD_CHIPS]
+		: [];
 	const statusChipKeys: StatusChipKey[] = showBookingChips
 		? [...BUCKET_CHIP_KEYS, ...BOOKING_PERIOD_CHIPS]
 		: BUCKET_CHIP_KEYS;
@@ -1542,7 +1547,7 @@ function OrdersRoute() {
 							{statusChipKeys.map((key) => (
 								<FilterChip
 									key={key}
-									selected={chipSelected(key, st, period)}
+									selected={chipSelected(key, st, period, availablePeriods)}
 									onClick={() => toggleStatusChip(key)}
 									count={statusChipCount(key)}
 									countTone={key === "new" ? "attention" : "muted"}
