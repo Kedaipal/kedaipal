@@ -52,9 +52,8 @@ them. That breadth is the point.
 "Completed or Cancelled" — everything closed — is a real question the single
 value could not ask, and every other enumerable filter on the inbox is already
 a multi-select, so a seller who has learnt "tap several chips" expects it here
-too. Each chip toggles membership; **"All" is the escape hatch, not a member** —
-it lights only while the set is empty and tapping it empties the set. Chip
-counts stay per-bucket. Chip taps `replace` history like the other
+too. Each chip toggles membership; **"All statuses" is the select-all, not a
+member.** Chip counts stay per-bucket. Chip taps `replace` history like the other
 multi-selects (a set built one tap at a time must not leave an entry per tap).
 The wire keeps accepting the old singular `bucket` (folded in by
 `toInboxFilterArgs`, "all" dropped), so deep links (`?bucket=new` from Home /
@@ -63,6 +62,207 @@ only `buckets`, and its presence-check joins `NARROWING_FILTER_KEYS`, which
 retires the gate's `bucket !== "all"` special case. The per-bucket empty-state
 copy ("No new orders…") only renders for a single-bucket selection; a multi
 set falls back to the generic line.
+
+### One flat set: buckets and booking chips are the same row (1 Sep)
+
+The booking-period chips shipped as a **separate dimension that ANDed** with the
+buckets, on the reasoning that buckets are a partition (every order in exactly
+one, so the counts sum) while an active booking is *simultaneously*
+`in_progress`. That reasoning is correct about the data and wrong about the
+product. What it produced:
+
+- two visually identical chips in one row that combined by different rules;
+- **"All statuses" staying lit** while a booking chip narrowed the list — a chip
+  claiming "everything" next to an active filter;
+- and, once an explicit "no status" state existed, **a chip reading `1` above an
+  empty list** (`Ending this week 1` + no bucket = nothing survives the AND).
+
+A distinction the seller cannot see is not a distinction worth having. They are
+**one multi-select set** now: every chip ORs into it, `In progress + Active now`
+means *either*, "All statuses" is the select-all and any chip unlights it.
+Unticking the last chip returns to "All". Same tone, no divider, no third state.
+
+`statuses` and `bookingPeriods` stay separate args on the wire — they are
+computed from different data — but the predicate ORs them in one arm, the same
+shape the category filter already uses, and the UI has exactly **one list, one
+toggle and one count function** (`StatusChipKey`). Booking chips are appended
+only for a store with booking listings, and sit last because booking is a
+minority feature, not because they are a different kind of thing.
+
+The partition property survives where it was actually load-bearing: **counts are
+still per-chip tallies over the full window**, which under a union is the honest
+reading — "this is what tapping me adds" — and is what makes it impossible for a
+chip to advertise rows the list won't show.
+
+### One status axis: the chip row and the panel are two grains of one state (1 Sep)
+
+The round above fixed the chip row against itself; this one fixes it against the
+**Filters panel**, which was a second filter state wearing the same word. The
+chips wrote `buckets` (coarse), the panel's STATUS section wrote `statuses`
+(exact `orders.status`), and the two **ANDed**. So:
+
+- ticking every row under the panel's `IN PROGRESS` heading left the "In
+  progress" chip dark — the panel could not express what the chip expressed;
+- and two selections that each had orders could combine to an empty list, with
+  both controls sitting lit on screen.
+
+**A bucket was never a set of statuses**, which is why syncing them was
+impossible rather than merely unwritten. `orderBucket` routes an **unseen
+push-path order** (born `confirmed`, never opened — 86eyf1rck) to *New*, so
+`New ⊅ {pending, booking_requested}`. On real data a store showed `New 2` on the
+chip while the panel's NEW group totalled `0`.
+
+The fix is a **leaf** — the filterable atom, `INBOX_LEAF_KEYS` in
+`convex/lib/orderBuckets.ts`. Every order resolves to exactly one via
+`orderLeaf`, and a bucket is *defined* as the union of its leaves
+(`BUCKET_LEAVES`), so `orderBucket = leafBucket(orderLeaf(o))` — same membership
+as before, now derived. `confirmed` splits into `confirmed_unseen` (New) and
+`confirmed` (In progress), which makes the leaf set a true partition, so **a
+bucket's count is the sum of its rows' counts** (pinned by tests at both the pure
+and the query layer).
+
+Three surfaces now write ONE field, `statuses`:
+
+| surface | grain |
+| --- | --- |
+| chip row | a whole bucket's leaves per tap — the group control |
+| Filters panel | one leaf per tick, grouped under tri-state bucket headings |
+| Status column header | one leaf per tick |
+
+The chip is therefore **tri-state**: all / some (a dash, `aria-pressed="mixed"`)
+/ none, and a partly-filled chip FILLS on tap exactly like `BulkSelectRow`.
+
+**"All statuses" is the select-all over THE ROW** — on in exactly two states,
+nothing picked or *every chip* picked, and binary rather than tri-state because
+it means the ABSENCE of a selection (a dash on it while one chip is lit would
+read as "partly everything", which is not a state). It is deliberately **not**
+"the axis isn't narrowing": that reading is defensible semantically — once every
+leaf is on, a booking period adds nothing under the union — but it lit "All"
+with all eight leaves on while two booking chips sat visibly dark beside it
+(owner report, 2 Sep), which is the same "a chip claiming everything next to an
+unlit one" problem the rounds above existed to remove. The two readings only
+disagree in states where the seller can SEE unlit chips. The row rule still
+covers the case that produced the narrower one (PR #243 review): the panel's
+Status select-all sets every leaf AND every period, so the row is fully picked
+and "All statuses" lights. Because "every chip picked" cannot be told from "some
+chips picked" without knowing what the row is OFFERING, `statusChipState` takes
+the available periods — empty for a store with no booking listings.
+
+The rules are pure and unit-tested in `src/lib/inbox-status-chips.ts` rather
+than buried in the route.
+
+**The Status section is rendered as a TREE**, because it is the only section
+three levels deep: section → bucket group → leaf. First pass gave the group a
+`BulkSelectRow` at the section's own offset and weight, and the seller had to
+read the words to work out which row was which (owner report). Now each level
+indents from the last, nested groups take `tone="subgroup"` on `BulkSelectRow`
+(smaller box, quieter label — a section heading must outrank a group heading,
+never the reverse), and the leaves sit behind a 1px left rule, which is the cue
+that reads the indent as *containment* rather than as a stray margin. Row height
+stays at the panel's 36px everywhere: a shorter subgroup row looked marginally
+tidier and made a tap target smaller than everything around it, which is not a
+trade worth making.
+
+**The empty-state copy ranks the axis as PLACE, not filter** (PR #243 review).
+The route's `filtersActive` fed the empty state a condition that counted the
+status axis, so one chip tap always rendered the generic "No orders match your
+filters" and the per-bucket copy ("No new orders…") plus the "Nothing in those
+statuses" arm were unreachable dead code. The ranking now lives pure in
+`src/lib/inbox-empty-copy.ts` — search → mockup → non-status filters → status
+selection (not exactly one whole bucket) → the whole bucket's own copy → "no
+orders yet" — with a test per arm, because reachability is exactly what
+regressed. Two clear affordances, two scopes, each matching its promise: the
+cards empty state has no button (its copy points at the chips/panel), while the
+table's **"Clear all filters" is the start-over** — it resets the axis too,
+since in table view the axis is set from the Status column's own filter funnel,
+and it appears for a status-only empty as well (gating it on non-status filters
+left that state with no way out). One more chip-rule corner from the same
+review: with **every leaf selected, "All statuses" stays lit even when period
+chips are on** — the union already matches every order, and the panel's Status
+select-all on a booking store produces exactly that state.
+
+**The Pinned chip renders whenever the mode is non-default, even at ZERO**
+(PR #243 re-review). Unpinning the last row while in "only" mode empties the
+list and used to take the chip away with it — leaving `?pin=only` in the URL, an
+empty inbox, and copy naming a control no longer on screen, with no way back
+except leaving the page (`clearAllFilters` deliberately doesn't touch `pin`, and
+the panel doesn't own it). A lit "Pinned only · 0" is truthful and is itself the
+exit. Deliberately NOT folding the mode to `"top"` when the count is zero:
+`pinnedCount` is `counts?.pinned ?? 0`, so it reads 0 while the counts load and
+that would silently rewrite a legitimate `?pin=only` bookmark before its data
+arrived — honouring the URL also removes the chip's first-paint flash. The copy
+splits on `anyPinned` too, because "none of them is in the statuses you picked"
+is false when there are no pins at all.
+
+**Two empty-state bugs the wide table hid** (owner report, 2 Sep). The table's
+empty row spans every column, and with a wide column set that cell is ~4,500px
+across — `text-center` put the message halfway along it, i.e. **thousands of
+pixels off-screen at the resting scroll position**, so a seller who filtered to
+nothing saw a blank box with no explanation and no way out. The content is now
+`sticky left-0` and sized to itself, so it rides the horizontal scroll and stays
+readable at any offset (verified at `scrollLeft: 3000` on a 4,580px table). The
+table also **stopped writing its own copy** — it takes `inboxEmptyCopy`'s
+result, so the two views can't describe one state two different ways.
+
+And the copy now names **pinned-only**, ranked directly after search: reaching an
+empty list with it on means the pin set is the binding constraint (pins that
+matched would be showing), so every arm below it would be a lie — "no orders
+need a mockup" is false when unpinned mockup orders exist. It is also the
+easiest constraint to enter by accident, since the Pinned chip is a **three-way**
+cycle and "only" is its second position, so the copy names the way back out.
+
+**`Not yet opened` is a visible row** under NEW. The unseen rule has driven the
+New bucket, the Home tile and the age escalation since 86eyf1rck without ever
+being nameable in the UI; the leaf split is what makes it sayable. It is
+deliberately **absent from `ORDER_STATUS_KEYS`** — that list is the seller's
+*rename* list, and "not yet opened" is a fact about their attention, not a
+pipeline stage they name. It is also self-clearing (open the order and it
+leaves), the same as an unread filter anywhere else.
+
+Two knock-on effects worth knowing:
+
+- **`booking_requested` became filterable**, closing a gap that predated this:
+  the panel built from `ORDER_STATUS_KEYS` (6, correctly excluding it), so
+  "Awaiting Approval" was reachable by the server validator and by nothing a
+  seller could click.
+- **`Ok go 118` becomes `Ok go 116` + `Not yet opened 2`.** More accurate — the
+  old number silently included orders the inbox was badging as New — but it is a
+  seller-visible figure that moves.
+
+Legacy `?bucket=` and any in-flight client sending `buckets` fold through the one
+shared `foldLegacyBuckets`, preserving the old AND as an intersection; the route
+folds at `validateSearch` so the stale param drops out of the URL on the next
+tap. Two cases it cannot recover exactly, both self-healing on refresh and both
+covered by tests: a legacy `statuses: ["confirmed"]` now means confirmed-AND-SEEN
+(nothing distinguishes it from a new client picking "Ok go" alone), and a
+contradictory pair falls back to the panel's own selection rather than to an
+empty array, which the predicate would read as *no filter at all*.
+
+**Booking periods ARE in the filter panel — inside the STATUS section.** They
+were briefly given their own section, then removed: the panel's sections all AND
+with each other, so a section that ORs with the chip row would be a worse lie
+than the one this replaced. Inside Status they OR with the leaves, which is what
+the section already does within itself, and every chip in the row now has a home
+in the panel.
+
+### The Pinned chip has three modes, and is not part of that set
+
+Pinning is the seller's own mark, not a status, so **"All statuses" never clears
+it and turning it on never unlights "All"**. It cycles `top → only → off → top`:
+
+| Mode          | URL             | Behaviour                                          |
+| ------------- | --------------- | -------------------------------------------------- |
+| `top` default | *(absent)*      | a pin outranks every filter (86eyrtz74)            |
+| `only`        | `?pin=only`     | show only pinned — **still ANDs with the filters** |
+| `off`         | `?pin=off`      | pins filtered like any other order                 |
+
+`only` is where "let me see just my pinned orders" lives. It deliberately keeps
+ANDing with everything else rather than short-circuiting: "pinned + New" is a
+sensible question, and a mode that ignored the lit status chips would leave them
+on screen asserting something false. One `pinMode` field rather than two
+booleans, so `{off, only}` can't both be set; the pre-`only` `showPinned` boolean
+is still accepted on the wire and folded in by `toInboxFilterArgs`, and a legacy
+`?nopin=true` still parses as `off`.
 
 - **"New" means "the seller hasn't dealt with it yet."** That was originally
   synonymous with `pending`, because an order sat there until the buyer's
@@ -392,13 +592,16 @@ WhatsApp.
     never shrinks as it is used; one that did would read as orders vanishing.
     An order counts **once per category**, never once per line, so the number
     beside an option is the number of rows it will show.
-  - **Two new server dimensions.** `statuses` is exact order status, multi, and
-    deliberately a *separate* dimension from `bucket` rather than a replacement:
-    a bucket is the coarse stage you navigate by, this is the precise one you
-    question ("packed OR shipped — out of my hands but not delivered"), which no
-    single bucket expresses. `categories` matches when ANY line carries ANY
-    chosen name — a mixed ticket belongs to every category it contains — and is
-    only affordable because categories are frozen at checkout.
+  - **Two new server dimensions.** `statuses` is the status axis, multi. It
+    shipped as a *separate* dimension that ANDed with `bucket`, on the reasoning
+    that a bucket is the coarse stage you navigate by while this is the precise
+    one you question ("packed OR shipped — out of my hands but not delivered").
+    The distinction was real; making it two filter states was not — see
+    [One status axis](#one-status-axis-the-chip-row-and-the-panel-are-two-grains-of-one-state-1-sep).
+    Both grains now write this one field, at leaf granularity, and `bucket` is
+    accepted only as a legacy alias. `categories` matches when ANY line carries
+    ANY chosen name — a mixed ticket belongs to every category it contains — and
+    is only affordable because categories are frozen at checkout.
   - **`source` widened to `sources`** (multi): "online or claim link, but not
     counter" is a real question a single value could not ask. The singular is
     still accepted and folded in by `toInboxFilterArgs`, so bookmarks survive;
@@ -492,9 +695,19 @@ into. Only the soft-lock applies.
 **Never bumps `updatedAt`** — bookmarking is not progress on the order, and that
 field drives the time-in-status badge (the `markSeen` trap).
 
-**Discoverability + the staleness escape hatch.** The pin control is on every
-card, every table row and the order detail header, always rendered (never
-hover-only). The **Pinned N** chip appears once something is pinned, leads the
+**Discoverability + the staleness escape hatch.** The pin **toggle** is on every
+table row, the order detail header and the bulk bar, always rendered (never
+hover-only). A **card** shows a pin *marker* instead — a filled accent pin beside
+the customer name plus an accent-tinted border — because the card is a `<a>` and
+a button nested inside an anchor is invalid markup; toggling happens on the row,
+the detail page, or via select-mode. This was originally missing entirely
+(owner report, 1 Sep): cards are the default view and the only one on a phone, so
+pinned orders sorted to the top and then looked identical to everything else —
+"why are these first?" had no answer on screen. The border is *tinted*, not
+thicker, because a wider edge shifts that card's text against its grid
+neighbours and reads as a rendering bug rather than emphasis.
+
+The **Pinned N** chip appears once something is pinned, leads the
 chip row — the seller's own urgency outranks the system's buckets — and its
 count is tallied over the full window, so it states the real total and doesn't
 shrink under a filter. Since pins never auto-clear, that count is the standing
