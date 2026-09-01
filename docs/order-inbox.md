@@ -63,43 +63,60 @@ retires the gate's `bucket !== "all"` special case. The per-bucket empty-state
 copy ("No new orders…") only renders for a single-bucket selection; a multi
 set falls back to the generic line.
 
-### Three states, because "All" was a toggle that couldn't toggle (1 Sep)
+### One flat set: buckets and booking chips are the same row (1 Sep)
 
-The chips are a checkbox set with a select-all, and they have **three** states:
+The booking-period chips shipped as a **separate dimension that ANDed** with the
+buckets, on the reasoning that buckets are a partition (every order in exactly
+one, so the counts sum) while an active booking is *simultaneously*
+`in_progress`. That reasoning is correct about the data and wrong about the
+product. What it produced:
 
-| State  | URL                        | Chips lit           |
-| ------ | -------------------------- | ------------------- |
-| all    | *(neither param)*          | All statuses        |
-| some   | `?bucket=new&bucket=…`     | the named buckets   |
-| none   | `?nobucket=true`           | nothing             |
+- two visually identical chips in one row that combined by different rules;
+- **"All statuses" staying lit** while a booking chip narrowed the list — a chip
+  claiming "everything" next to an active filter;
+- and, once an explicit "no status" state existed, **a chip reading `1` above an
+  empty list** (`Ending this week 1` + no bucket = nothing survives the AND).
 
-**"None" is what makes "All statuses" a real control.** Before this it lit up
-and could never be switched off, which is not a toggle — and the state it was
-missing is one sellers actually want: **turning every status off is how you ask
-for a pinned-only inbox.** Nothing matches the status filter, and a pin outranks
-the filter, so the pins are all that survive. That is not a fourth concept bolted
-on; it falls out of the two rules already here. Unticking your *last* bucket
-lands in "none" too — that is what unticking your last checkbox means everywhere
-else, and "All statuses" is one tap back.
+A distinction the seller cannot see is not a distinction worth having. They are
+**one multi-select set** now: every chip ORs into it, `In progress + Active now`
+means *either*, "All statuses" is the select-all and any chip unlights it.
+Unticking the last chip returns to "All". Same tone, no divider, no third state.
 
-`InboxFilterArgs.bucketsNone` carries it, in its own field rather than as an
-empty `buckets` array: empty already means *every* bucket, so overloading it
-would let an accidentally-empty array silently blank the inbox. The predicate
-reads it in one line, deliberately **below** the pin short-circuit. The export
-sends it too, so a CSV of a pinned-only inbox holds the pinned orders.
+`buckets` and `bookingPeriods` stay separate args on the wire — they are computed
+from different data — but the predicate ORs them in one arm, the same shape the
+category filter already uses, and the UI has exactly **one list, one toggle and
+one count function** (`StatusChipKey`). Booking chips are appended only for a
+store with booking listings, and sit last because booking is a minority feature,
+not because they are a different kind of thing.
 
-With the pin privilege *also* off it legitimately matches nothing — the one
-empty state **"Clear all" cannot fix**, since that deliberately keeps the bucket
-selection. So it gets its own copy ("No status selected") and a **Show all
-statuses** button, rather than the generic "adjust your filters" line that would
-send the seller hunting for the wrong cause.
+The partition property survives where it was actually load-bearing: **counts are
+still per-chip tallies over the full window**, which under a union is the honest
+reading — "this is what tapping me adds" — and is what makes it impossible for a
+chip to advertise rows the list won't show.
 
-**The label says "All statuses", not "All"**, because it isn't all: the
-booking-period chips beside it are a second axis that keeps narrowing while it
-stays lit. A chip claiming to mean "everything" next to an active filter reads
-as a lie (owner report, 1 Sep). Bookings *are* included in every status bucket —
-an active booking is `in_progress` like any other order — so the fix is naming
-the axis, not excluding them.
+**Booking periods are NOT in the filter panel.** They were, briefly. The panel's
+sections all AND with each other; a section that ORs with the chip row would be a
+worse lie than the one this replaced. Status lives in the chip row — buckets and
+periods alike — and the panel owns the orthogonal dimensions.
+
+### The Pinned chip has three modes, and is not part of that set
+
+Pinning is the seller's own mark, not a status, so **"All statuses" never clears
+it and turning it on never unlights "All"**. It cycles `top → only → off → top`:
+
+| Mode          | URL             | Behaviour                                          |
+| ------------- | --------------- | -------------------------------------------------- |
+| `top` default | *(absent)*      | a pin outranks every filter (86eyrtz74)            |
+| `only`        | `?pin=only`     | show only pinned — **still ANDs with the filters** |
+| `off`         | `?pin=off`      | pins filtered like any other order                 |
+
+`only` is where "let me see just my pinned orders" lives. It deliberately keeps
+ANDing with everything else rather than short-circuiting: "pinned + New" is a
+sensible question, and a mode that ignored the lit status chips would leave them
+on screen asserting something false. One `pinMode` field rather than two
+booleans, so `{off, only}` can't both be set; the pre-`only` `showPinned` boolean
+is still accepted on the wire and folded in by `toInboxFilterArgs`, and a legacy
+`?nopin=true` still parses as `off`.
 
 - **"New" means "the seller hasn't dealt with it yet."** That was originally
   synonymous with `pending`, because an order sat there until the buyer's

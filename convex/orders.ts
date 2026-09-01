@@ -1910,6 +1910,8 @@ const MAX_INBOX_SCAN = 1000;
  * or a client that hasn't reloaded keeps filtering.
  */
 type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
+	/** Pre-"only" pin boolean (86eyrtz74), folded into `pinMode`. */
+	showPinned?: boolean;
 	source?: "storefront" | "counter" | "claim";
 	sources?: Array<"storefront" | "counter" | "claim">;
 	/** Pre-multi singular bucket, "all" sentinel included (86eyrtz74). */
@@ -1929,10 +1931,15 @@ type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
 function toInboxFilterArgs({
 	source,
 	bucket,
+	showPinned,
 	...rest
 }: InboxFilterInput): InboxFilterArgs {
 	return {
 		...rest,
+		// The pre-"only" boolean says the same thing the first two modes do. On
+		// the wire absent/false meant "no privilege", so it maps to "off" — an
+		// in-flight client keeps exactly the behaviour it asked for.
+		pinMode: rest.pinMode ?? (showPinned === true ? "top" : "off"),
 		sources: rest.sources ?? (source ? [source] : undefined),
 		// The old singular carried an "all" sentinel; the multi shape says the
 		// same thing by absence.
@@ -1946,6 +1953,13 @@ function toInboxFilterArgs({
 function bump(tally: Map<string, number>, key: string): void {
 	tally.set(key, (tally.get(key) ?? 0) + 1);
 }
+
+// See InboxFilterArgs.pinMode.
+const pinModeValidator = v.union(
+	v.literal("top"),
+	v.literal("off"),
+	v.literal("only"),
+);
 
 const bookingPeriodValidator = v.union(
 	v.literal("upcoming"),
@@ -1988,10 +2002,6 @@ export const searchOrders = query({
 		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
 		// real question one value couldn't ask. Empty/absent = every bucket.
 		buckets: v.optional(v.array(orderBucketValidator)),
-		// Explicitly NO bucket — the seller turned "All statuses" off. Its own
-		// field because an empty `buckets` already means "every bucket"; see
-		// `bucketsNone` in lib/orderInboxFilter.ts.
-		bucketsNone: v.optional(v.boolean()),
 		// Booking period (S8) — a chip, NOT a bucket. See
 		// `bookingPeriods` in lib/orderInboxFilter.ts for why it can't be one.
 		// Empty/absent = no period filtering.
@@ -2053,11 +2063,15 @@ export const searchOrders = query({
 		// driven by `availableSources` below. Distinct dimension from `source`.
 		attributionSources: v.optional(v.array(v.string())),
 		searchText: v.optional(v.string()),
-		// Pin privilege (86eyrtz74): keep PINNED orders in the result even when
-		// they fail the filters above. On by default in the UI — the seller pins
-		// an order so they can filter to something else and still compare against
-		// it. Not a plan-gated inbox feature (see the gate below): pinning is
-		// all-tier, so its visibility rule has to be too.
+		// What the seller's pins do to this list (86eyrtz74, extended 1 Sep):
+		// "top" keeps PINNED orders even when they fail the filters, "off"
+		// filters them like any other order, "only" narrows to them. Not a
+		// plan-gated inbox feature (see the gate below): pinning is all-tier, so
+		// its visibility rule has to be too.
+		pinMode: v.optional(pinModeValidator),
+		// Pre-"only" boolean, still accepted so an in-flight client keeps its
+		// pins on top; folded into `pinMode` by toInboxFilterArgs. Drop it a
+		// release on.
 		showPinned: v.optional(v.boolean()),
 		// Max rows to return. OMIT it for the inbox: the query then returns the
 		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
@@ -2072,7 +2086,6 @@ export const searchOrders = query({
 			retailerId,
 			bucket,
 			buckets,
-			bucketsNone,
 			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
@@ -2089,6 +2102,7 @@ export const searchOrders = query({
 			attributionSources,
 			searchText,
 			showPinned,
+			pinMode,
 			limit,
 		},
 	) => {
@@ -2108,7 +2122,6 @@ export const searchOrders = query({
 		const filters = toInboxFilterArgs({
 			bucket,
 			buckets,
-			bucketsNone,
 			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
@@ -2125,6 +2138,7 @@ export const searchOrders = query({
 			attributionSources,
 			searchText,
 			showPinned,
+			pinMode,
 		});
 		if (narrowsTheInbox(filters) && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
@@ -2322,10 +2336,6 @@ const exportFilterValidators = {
 	// Same widen-with-legacy shape as searchOrders — see the note there.
 	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
 	buckets: v.optional(v.array(orderBucketValidator)),
-	// "All statuses" turned off — carried here for the same reason as every
-	// other filter: a CSV of a pinned-only inbox must hold the pinned orders,
-	// not the whole window.
-	bucketsNone: v.optional(v.boolean()),
 	// The export honours the period chip too — the whole point of the shared
 	// predicate is that "what the seller sees" and "what they export" can't
 	// diverge.
@@ -2372,9 +2382,11 @@ const exportFilterValidators = {
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
 	searchText: v.optional(v.string()),
-	// Pin privilege (86eyrtz74) — kept in the SHARED validator set so an export
-	// of a filtered view contains exactly the rows the seller was looking at,
-	// forced-in pins included. See InboxFilterArgs.showPinned.
+	// Pin mode (86eyrtz74) — kept in the SHARED validator set so an export of a
+	// filtered view contains exactly the rows the seller was looking at, forced-in
+	// pins included and a pinned-only view exported as pinned-only. See
+	// InboxFilterArgs.pinMode; `showPinned` is the pre-"only" boolean.
+	pinMode: v.optional(pinModeValidator),
 	showPinned: v.optional(v.boolean()),
 } as const;
 

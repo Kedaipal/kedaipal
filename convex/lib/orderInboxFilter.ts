@@ -55,23 +55,20 @@ function searchHaystack(o: CsvOrder): string {
  * added without touching it (86eyrtz74) — a gate that quietly stops guarding is
  * worse than no gate, because nothing looks wrong.
  *
- * Excluded on purpose: `searchText` (blank is not a search); `showPinned`,
- * which WIDENS the result and is all-tier because pinning is; and
- * `bookingPeriods`, all-tier because BOOKING is — S4 put the seller calendar
- * deliberately outside this same gate, and a store that gets a free calendar
- * but must pay to ask "who is here right now" is incoherent. It cannot be used
- * to dodge the gate either: a period only ever matches an order carrying a
- * booking span, so on a product inbox it returns nothing.
+ * Excluded on purpose: `searchText` (blank is not a search); `pinMode`, because
+ * pinning is all-tier in every one of its modes — a Starter who can pin but
+ * can't ask to see only their pins would be paywalled out of the feature's
+ * point; and `bookingPeriods`, all-tier because BOOKING is — S4 put the seller
+ * calendar deliberately outside this same gate, and a store that gets a free
+ * calendar but must pay to ask "who is here right now" is incoherent. It cannot
+ * be used to dodge the gate either: a period only ever matches an order carrying
+ * a booking span, so on a product inbox it returns nothing.
  */
 const NARROWING_FILTER_KEYS: Record<
-	Exclude<
-		keyof InboxFilterArgs,
-		"searchText" | "showPinned" | "bookingPeriods"
-	>,
+	Exclude<keyof InboxFilterArgs, "searchText" | "pinMode" | "bookingPeriods">,
 	true
 > = {
 	buckets: true,
-	bucketsNone: true,
 	paymentStatuses: true,
 	paymentMethods: true,
 	methodUnspecified: true,
@@ -138,24 +135,6 @@ export type InboxFilterArgs = {
 	 * (the wire still accepts the old singular; see `toInboxFilterArgs`).
 	 */
 	buckets?: OrderBucket[];
-	/**
-	 * The seller has explicitly selected NO bucket — every status chip off.
-	 *
-	 * A third state, because `buckets` cannot express it: empty/absent already
-	 * means "every bucket", and overloading it would make an accidentally-empty
-	 * array silently hide the whole inbox. So the distinction is carried in its
-	 * own field, and reading it is one line in the predicate.
-	 *
-	 * The state exists so "All statuses" is a real toggle rather than a chip that
-	 * lights up and can never be turned off. Combined with the pin privilege
-	 * below, turning it off is how a seller says **"just my pinned orders"** —
-	 * nothing matches the status filter, and only pins outrank it. That is not a
-	 * fourth concept bolted on: it falls out of the two rules already here.
-	 *
-	 * With pins off too it legitimately matches nothing. The inbox owns that dead
-	 * end with its own empty state and a one-tap way back — see `EmptyOrders`.
-	 */
-	bucketsNone?: boolean;
 	paymentStatuses?: Array<"unpaid" | "claimed" | "received">;
 	paymentMethods?: string[];
 	methodUnspecified?: boolean;
@@ -211,14 +190,25 @@ export type InboxFilterArgs = {
 	attributionSources?: string[];
 	/**
 	 * Where a booking sits in TIME (S8) — active, ending soon, upcoming, ended.
-	 * MULTI-select, OR within itself and AND with the rest.
 	 *
-	 * A separate DIMENSION from `buckets`, and that separation is the reason
-	 * this is a chip rather than the inbox bucket the ticket asked for: buckets
-	 * partition the inbox (every order in exactly one, so counts sum and
-	 * "select all" is unambiguous) while an active booking is simultaneously
-	 * `in_progress`. Adding it there would have made buckets overlap and
-	 * quietly broken both properties.
+	 * **ORs with `buckets`, in ONE flat set** (owner call, 1 Sep). These two
+	 * fields are separate on the wire only because they are computed from
+	 * different data — a bucket from `status`, a period from the booking span —
+	 * but to the seller they are one row of status chips, and "In progress +
+	 * Active now" means *either*, exactly like "New + Completed" does.
+	 *
+	 * It shipped first as a separate AND dimension, on the reasoning that
+	 * buckets are a partition (every order in exactly one, so the counts sum)
+	 * while an active booking is *simultaneously* `in_progress`. That reasoning
+	 * is sound about the data and wrong about the product: it produced a chip row
+	 * where two visually identical chips combined by different rules, an "All"
+	 * that stayed lit while a booking chip narrowed the list, and — once "no
+	 * status" existed — a chip reading `1` above an empty list. A distinction the
+	 * seller cannot see is not a distinction worth having.
+	 *
+	 * The partition property survives where it is actually load-bearing: the
+	 * COUNTS are still per-chip tallies over the full window, which under a union
+	 * is exactly the honest reading ("this is what tapping me adds").
 	 *
 	 * Non-bookings and cancelled bookings never match — see
 	 * `matchesBookingPeriod` for why those exclusions live in the predicate
@@ -227,19 +217,28 @@ export type InboxFilterArgs = {
 	bookingPeriods?: BookingPeriod[];
 	searchText?: string;
 	/**
-	 * Pin privilege (86eyrtz74). When true, a PINNED order is kept even if it
-	 * fails every other rule above; when false, pins are filtered like any other
-	 * order.
+	 * What the seller's pins do to this list (86eyrtz74, extended 1 Sep):
 	 *
-	 * This is deliberately not "filter to pinned only". Sellers pin an order so
-	 * they can then filter the inbox to something else and compare against it —
-	 * so the pin has to survive the filter, or the feature does nothing for its
-	 * main use. Turning the toggle off is how they get a filter that means
-	 * exactly what it says. Applied by `buildInboxPredicate` so the live inbox
-	 * and the export can't diverge (the invariant this module exists for).
+	 * - `"top"` (default) — a pinned order is kept even if it fails every other
+	 *   rule. Sellers pin an order so they can then filter to something else and
+	 *   compare against it, so the pin has to survive the filter or the feature
+	 *   does nothing for its main use.
+	 * - `"off"` — pins are filtered like any other order, for when they want a
+	 *   filter that means exactly what it says.
+	 * - `"only"` — show ONLY pinned orders. Deliberately still ANDs with every
+	 *   other filter rather than short-circuiting them: "pinned + New" is a
+	 *   sensible question, and a mode that silently ignored the lit status chips
+	 *   would leave them on screen asserting something false.
+	 *
+	 * One field rather than two booleans, so `{off, only}` can't both be set.
+	 * Applied by `buildInboxPredicate` so the live inbox and the export can't
+	 * diverge (the invariant this module exists for).
 	 */
-	showPinned?: boolean;
+	pinMode?: PinMode;
 };
+
+/** See `InboxFilterArgs.pinMode`. */
+export type PinMode = "top" | "off" | "only";
 
 /**
  * The order fields the predicate reads. A structural subset of Doc<"orders">.
@@ -317,19 +316,28 @@ export function buildInboxPredicate(
 		args.bookingPeriods && args.bookingPeriods.length > 0
 			? args.bookingPeriods
 			: null;
-	const pinPrivilege = args.showPinned === true;
+	const pinMode = args.pinMode ?? "top";
 	return (o) => {
-		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
-		// InboxFilterArgs.showPinned for why a pin outranks the filter.
-		if (pinPrivilege && o.pinnedAt !== undefined) return true;
-		// No bucket selected — nothing survives the status filter. Deliberately
-		// BELOW the pin short-circuit: "no statuses + pins on top" is exactly how
-		// the seller asks for a pinned-only inbox.
-		if (args.bucketsNone === true) return false;
+		// "Only pinned" is a narrowing gate, so it runs before everything and then
+		// falls through to the rest of the filters — see InboxFilterArgs.pinMode.
+		if (pinMode === "only" && o.pinnedAt === undefined) return false;
+		// Pin privilege short-circuits EVERY rule below (86eyrtz74).
+		if (pinMode === "top" && o.pinnedAt !== undefined) return true;
+		// ONE flat status set: workflow buckets and booking periods OR together
+		// (owner call, 1 Sep — see InboxFilterArgs.bookingPeriods). Same shape as
+		// the category arm below, and for the same reason: two ways of naming a
+		// member of one set must not become an intersection.
+		//
 		// Bucket membership goes through the same seen-aware resolver the counts
 		// use, so the chip count and the list can't disagree: an unseen push-path
 		// order shows under "New" and NOT under "In progress" (86eyf1rck).
-		if (bucketSet && !bucketSet.has(orderBucket(o))) return false;
+		if (bucketSet || periodList) {
+			const byBucket = bucketSet ? bucketSet.has(orderBucket(o)) : false;
+			const byPeriod = periodList
+				? matchesAnyBookingPeriod(o, periodList, now)
+				: false;
+			if (!byBucket && !byPeriod) return false;
+		}
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
 		if (statusSet && !statusSet.has(o.status)) return false;
 		// Category filter — the same shape as the method filter below: the named
@@ -348,11 +356,6 @@ export function buildInboxPredicate(
 		// reports with (attribution.ts), so a row in the by-source breakdown and
 		// the inbox it drills into can never disagree about which orders count.
 		if (attributionSet && !attributionSet.has(attributionBucket(o)))
-			return false;
-		// Booking period (S8). Placed with the other membership tests rather
-		// than the date arms below: those ask about `createdAt`/`fulfilmentDate`
-		// on any order, this one only ever means something for a booking.
-		if (periodList && !matchesAnyBookingPeriod(o, periodList, now))
 			return false;
 		// Undefined paymentStatus reads as "unpaid".
 		if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;

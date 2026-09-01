@@ -3038,9 +3038,9 @@ describe("orders — inbox search", () => {
 		expect(res.counts.bookingUpcoming).toBe(1);
 	});
 
-	/** Same wiring hazard as the test above — `bucketsNone` is another arg that
-	 * has to be threaded through the explicit field list by hand. */
-	test("deselecting every status leaves only the pinned orders", async () => {
+	/** Same wiring hazard as the test above — `pinMode` is another arg that has
+	 * to be threaded through the explicit field list by hand. */
+	test('pinMode "only" narrows to the pinned orders', async () => {
 		const t = setup();
 		const asA = t.withIdentity({ subject: USER_A });
 		const retailer = await seedRetailer(t, USER_A);
@@ -3053,30 +3053,92 @@ describe("orders — inbox search", () => {
 
 		const pinnedOnly = await asA.query(api.orders.searchOrders, {
 			retailerId: retailer._id,
-			bucketsNone: true,
-			showPinned: true,
+			pinMode: "only",
 		});
 		expect(pinnedOnly.orders.map((o) => o._id)).toEqual([kept._id]);
 
-		// The counts are tallied over the full window, so the chips still say what
-		// turning one back on would give you.
+		// The counts stay tallied over the full window, so the chips still say
+		// what turning one on would give you.
 		expect(pinnedOnly.counts.new + pinnedOnly.counts.in_progress).toBe(2);
 
-		// With the pin privilege off too, it is genuinely empty — the state the
-		// inbox's "No status selected" empty state exists for.
-		const nothing = await asA.query(api.orders.searchOrders, {
-			retailerId: retailer._id,
-			bucketsNone: true,
-		});
-		expect(nothing.orders).toEqual([]);
-
-		// And it is not a one-way door: clearing it restores the full inbox.
+		// Not a one-way door: back to "top" restores the full inbox.
 		const back = await asA.query(api.orders.searchOrders, {
 			retailerId: retailer._id,
+			pinMode: "top",
 		});
 		expect(back.orders.map((o) => o._id).sort()).toEqual(
 			[kept._id, other._id].sort(),
 		);
+	});
+
+	/** A client built before `pinMode` existed sends `showPinned` or nothing.
+	 * Nothing meant "no pin privilege" on the old wire, and must keep meaning
+	 * that — the new default is "top", so an unfolded arg would silently start
+	 * forcing pins into a filtered view for anyone who hadn't reloaded. */
+	test("a pre-pinMode client keeps exactly the behaviour it asked for", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const pinned = await mkOrder(t, retailer._id, productId, { name: "Pin" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(pinned._id, {
+				status: "delivered",
+				pinnedAt: Date.now(),
+			});
+		});
+
+		// No pin arg at all — the pin must NOT outrank the bucket.
+		const legacyOff = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+		});
+		expect(legacyOff.orders.map((o) => o._id)).not.toContain(pinned._id);
+
+		// The old boolean still turns the privilege on.
+		const legacyOn = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+			showPinned: true,
+		});
+		expect(legacyOn.orders.map((o) => o._id)).toContain(pinned._id);
+	});
+
+	/**
+	 * The fault that made the whole row confusing (owner report, 1 Sep): booking
+	 * chips ANDed with the status buckets while looking identical to them, so
+	 * "In progress" + "Ending this week" quietly intersected. They are ONE set
+	 * now, and this is the end-to-end proof that the union survives the wiring.
+	 */
+	test("a booking chip ORs with a status chip rather than narrowing it", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const plainNew = await mkOrder(t, retailer._id, productId, { name: "New" });
+		const stay = await mkOrder(t, retailer._id, productId, { name: "Stay" });
+
+		const DAY = 86_400_000;
+		const today = todayMytMidnight();
+		await t.run(async (ctx) => {
+			// A DELIVERED booking that is still running — deliberately in the
+			// "completed" bucket, so an intersection with New would drop it.
+			await ctx.db.patch(stay._id, {
+				status: "delivered",
+				deliveryMethod: "booking",
+				bookingCheckIn: today - DAY,
+				bookingCheckOut: today + 2 * DAY,
+			});
+		});
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+			bookingPeriods: ["active"],
+		});
+		const ids = res.orders.map((o) => o._id);
+		// Both survive: one via the bucket, one via the period.
+		expect(ids.sort()).toEqual([plainNew._id, stay._id].sort());
 	});
 
 

@@ -404,8 +404,8 @@ describe("sortInboxOrders", () => {
 describe("buildInboxPredicate — pin privilege", () => {
 	const pinned = order({ status: "delivered", pinnedAt: 5_000 });
 
-	test("showPinned keeps a pinned order that fails the bucket", () => {
-		const p = buildInboxPredicate({ buckets: ["new"], showPinned: true });
+	test("the default mode keeps a pinned order that fails the bucket", () => {
+		const p = buildInboxPredicate({ buckets: ["new"], pinMode: "top" });
 		expect(p(pinned)).toBe(true);
 	});
 
@@ -423,16 +423,21 @@ describe("buildInboxPredicate — pin privilege", () => {
 			fulfilmentWindow: "today",
 			mockupPending: true,
 			searchText: "nothing-matches-this",
-			showPinned: true,
+			pinMode: "top",
 		});
 		expect(p(pinned)).toBe(true);
 	});
 
-	test("without showPinned a pinned order is filtered like any other", () => {
-		expect(buildInboxPredicate({ buckets: ["new"] })(pinned)).toBe(false);
+	test("mode off filters a pinned order like any other", () => {
 		expect(
-			buildInboxPredicate({ buckets: ["new"], showPinned: false })(pinned),
+			buildInboxPredicate({ buckets: ["new"], pinMode: "off" })(pinned),
 		).toBe(false);
+		// …and the default is NOT off: an absent mode is "top" (the product
+		// default), which is why every production caller reaches this through
+		// `toInboxFilterArgs` — that sets the mode explicitly, so a pre-"only"
+		// client sending no `showPinned` still gets its old "off" behaviour
+		// rather than silently gaining pin privilege.
+		expect(buildInboxPredicate({ buckets: ["new"] })(pinned)).toBe(true);
 	});
 
 	test("turning the toggle off does NOT hide a pin that legitimately matches", () => {
@@ -440,58 +445,47 @@ describe("buildInboxPredicate — pin privilege", () => {
 		// switch. A pinned order inside the filter is still in the filter.
 		const matching = order({ status: "pending", pinnedAt: 5_000 });
 		expect(
-			buildInboxPredicate({ buckets: ["new"], showPinned: false })(matching),
+			buildInboxPredicate({ buckets: ["new"], pinMode: "off" })(matching),
 		).toBe(true);
 	});
 
-	test("showPinned does not smuggle in UNpinned orders", () => {
-		const p = buildInboxPredicate({ buckets: ["new"], showPinned: true });
+	test("keeping pins on top does not smuggle in UNpinned orders", () => {
+		const p = buildInboxPredicate({ buckets: ["new"], pinMode: "top" });
 		expect(p(order({ status: "delivered" }))).toBe(false);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// `bucketsNone` — the third state of the status chips (owner report, 1 Sep).
-// "All statuses" used to be a chip that lit up and could never be turned off;
-// turning it off now selects NO status, which is how a seller asks for a
-// pinned-only inbox. The whole feature is one line in the predicate, placed
-// below the pin short-circuit — so these tests pin the ORDER of those two rules,
-// which is the only part that can silently break.
+// `pinMode: "only"` — the seller's pinned-only inbox (owner call, 1 Sep),
+// reached by tapping the Pinned chip a second time. It deliberately ANDs with
+// the rest of the filters rather than short-circuiting them, so the lit status
+// chips keep meaning what they say — these tests pin exactly that.
 // ---------------------------------------------------------------------------
 
-describe("buildInboxPredicate — no bucket selected", () => {
-	test("nothing survives", () => {
-		const p = buildInboxPredicate({ bucketsNone: true });
+describe('buildInboxPredicate - pinMode "only"', () => {
+	test("keeps pinned orders and drops everything else", () => {
+		const p = buildInboxPredicate({ pinMode: "only" });
+		expect(p(order({ status: "delivered", pinnedAt: 5_000 }))).toBe(true);
 		expect(p(order({ status: "pending" }))).toBe(false);
 		expect(p(order({ status: "confirmed" }))).toBe(false);
-		expect(p(order({ status: "delivered" }))).toBe(false);
-		expect(p(order({ status: "cancelled" }))).toBe(false);
 	});
 
-	test("PINS still survive it — this is the pinned-only inbox", () => {
-		const p = buildInboxPredicate({ bucketsNone: true, showPinned: true });
-		expect(p(order({ status: "delivered", pinnedAt: 5_000 }))).toBe(true);
-		expect(p(order({ status: "delivered" }))).toBe(false);
+	test("still ANDs with the rest - a lit status chip must not become a lie", () => {
+		const p = buildInboxPredicate({ pinMode: "only", buckets: ["new"] });
+		expect(p(order({ status: "pending", pinnedAt: 1 }))).toBe(true);
+		// Pinned, but not in the selected bucket: the chip says New, so a
+		// Completed order must not appear under it.
+		expect(p(order({ status: "delivered", pinnedAt: 1 }))).toBe(false);
 	});
 
-	test("with pins ALSO off it legitimately matches nothing at all", () => {
-		// The state the empty state has to own — see EmptyOrders.
-		const p = buildInboxPredicate({ bucketsNone: true, showPinned: false });
-		expect(p(order({ status: "pending", pinnedAt: 5_000 }))).toBe(false);
+	test('"top" is the default, so an absent mode keeps pins on top', () => {
+		const pinned = order({ status: "delivered", pinnedAt: 5_000 });
+		expect(buildInboxPredicate({ buckets: ["new"] })(pinned)).toBe(true);
 	});
 
-	test("absent or false is NOT the same as true — it means every bucket", () => {
-		expect(buildInboxPredicate({})(order({ status: "pending" }))).toBe(true);
-		expect(
-			buildInboxPredicate({ bucketsNone: false })(order({ status: "pending" })),
-		).toBe(true);
-	});
-
-	test("it narrows, so the Pro gate sees it", () => {
-		expect(narrowsTheInbox({ bucketsNone: true })).toBe(true);
-		// …but only when actually set: `false` must not trip a gate on its own,
-		// since the client sends `undefined` for the default.
-		expect(narrowsTheInbox({ bucketsNone: false })).toBe(false);
+	test("pinning is all-tier in every mode, so none of them gates", () => {
+		expect(narrowsTheInbox({ pinMode: "only" })).toBe(false);
+		expect(narrowsTheInbox({ pinMode: "off" })).toBe(false);
 	});
 });
 
@@ -713,7 +707,7 @@ describe("buildInboxPredicate — booking period (S8)", () => {
 		// Pin privilege short-circuits every rule; a new one must not be the
 		// exception that quietly breaks it.
 		const p = buildInboxPredicate(
-			{ bookingPeriods: ["active"], showPinned: true },
+			{ bookingPeriods: ["active"], pinMode: "top" },
 			NOW,
 		);
 		expect(p(order({ status: "confirmed", pinnedAt: 1 }))).toBe(true);

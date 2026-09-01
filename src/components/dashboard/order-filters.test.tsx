@@ -37,7 +37,6 @@ const EMPTY: Pick<
 	| "statuses"
 	| "categories"
 	| "categoriesUnspecified"
-	| "bookingPeriods"
 > = {
 	payment: [],
 	method: [],
@@ -47,7 +46,6 @@ const EMPTY: Pick<
 	statuses: [],
 	categories: [],
 	categoriesUnspecified: false,
-	bookingPeriods: [],
 };
 
 /** Defaults to MY so every pre-SG assertion below stays exactly what it was. */
@@ -82,7 +80,6 @@ describe("OrderFilters", () => {
 				payment: ["unpaid", "received"],
 				method: ["cash"],
 				methodUnspecified: true,
-				bookingPeriods: [],
 				from: 1,
 				to: 2,
 				mockup: true,
