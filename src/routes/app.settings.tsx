@@ -296,7 +296,12 @@ export const Route = createFileRoute("/app/settings")({
 	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { tab?: SettingsTab; fix?: CountrySetupItemKey } => {
+	): {
+		tab?: SettingsTab;
+		fix?: CountrySetupItemKey;
+		autorenew?: "return";
+		paid?: "return";
+	} => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
@@ -313,6 +318,11 @@ export const Route = createFileRoute("/app/settings")({
 				? (raw as SettingsTab)
 				: undefined,
 			...(fix ? { fix } : {}),
+			// HitPay redirect returns (86eyb6z4r): back from the auto-renewal
+			// authorisation page / from an invoice's hosted checkout. The billing
+			// tab reconciles once and then clears the flag from the URL.
+			...(search.autorenew === "return" ? { autorenew: "return" as const } : {}),
+			...(search.paid === "return" ? { paid: "return" as const } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -387,7 +397,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix } = Route.useSearch();
+	const { tab, fix, autorenew, paid } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -785,7 +795,21 @@ function SettingsRoute() {
 					</div>
 				) : null}
 
-				{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
+				{activeTab === "billing" ? (
+					<BillingTab
+						retailer={retailer}
+						billingReturn={
+							autorenew === "return"
+								? "autorenew"
+								: paid === "return"
+									? "paid"
+									: undefined
+						}
+						onBillingReturnHandled={() =>
+							navigate({ search: { tab: "billing" }, replace: true })
+						}
+					/>
+				) : null}
 
 				{activeTab === "whatsapp" ? (
 					<div className="flex flex-col gap-6 pt-2">

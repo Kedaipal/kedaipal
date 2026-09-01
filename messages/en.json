@@ -1,6 +1,5 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-
 	"nav_features": "Features",
 	"nav_how": "How it works",
 	"nav_pricing": "Pricing",
@@ -10,7 +9,6 @@
 	"nav_go_to_dashboard": "Go to Dashboard",
 	"book_demo_cta": "Book a demo",
 	"demo_wa_message": "Hi! I'd like to book a demo of Kedaipal.",
-
 	"hero_badge": "Built for sellers doing 20+ orders/week",
 	"hero_headline_part1": "Stop losing orders.",
 	"hero_headline_part2": "Stop chasing payments.",
@@ -22,7 +20,6 @@
 	"hero_pain_missed": "Missed order · RM 95",
 	"hero_pain_chase": "Sis dah bayar ke? 😩",
 	"hero_pain_chase_sub": "Asked 3× · still no reply",
-
 	"problem_heading": "If you're selling on WhatsApp, you're probably losing more than you think.",
 	"problem_1_title": "Orders buried in chat history",
 	"problem_1_body": "A customer messages on Monday about an order. You scroll past it chasing 30 other chats. By Friday they've bought from someone else. You never even saw it.",
@@ -30,11 +27,9 @@
 	"problem_2_body": "\"Dah transfer\" — but the screenshot never came. You're DMing customers to confirm, they're slow to reply, and you can't pack the order until you're sure. That's 20 minutes per order, every order.",
 	"problem_3_title": "The stall and the chat don't talk",
 	"problem_3_body": "Walk-ins at the counter, pre-orders in chat, pickups on Saturday. When it's time to pack, you're reconciling three lists from memory. Wrong guess = wasted stock or a disappointed customer.",
-
 	"how_label": "How it works",
 	"how_heading": "Share one link. Everything after is handled.",
 	"how_sub": "Your customers never install anything. The same flow handles the buyer in your chat, the walk-in at your stall, and the one who takes two weeks to decide.",
-
 	"features_label": "Features",
 	"features_heading": "Everything the close-by-hand seller needs.",
 	"features_sub": "No enterprise bloat, no ten-seat minimum. The tools that made-to-order and multi-outlet sellers actually asked for — all live today.",
@@ -62,7 +57,6 @@
 	"bento_inbox_body": "Search, filter, bulk-update every order. One tap on a customer shows their full history, spend and your private notes — auto-captured from WhatsApp. No more “wait, who is this again?”",
 	"bento_inbox_stats": "12 orders · RM 1,240 lifetime",
 	"bento_inbox_note": "📝 No pandan — always chocolate",
-
 	"proof_label": "Real sellers, real orders",
 	"proof_heading": "Running on Kedaipal today.",
 	"proof_sub": "Not a waitlist — paying sellers whose buyers order through Kedaipal every day. All closed by referral, zero ad spend.",
@@ -106,7 +100,6 @@
 	"proof_stat_2_value": "RM 0",
 	"proof_customer_count_number": "10+",
 	"proof_customer_count_label": "paying sellers across Malaysia & Singapore",
-
 	"pricing_badge": "Simple pricing",
 	"pricing_heading": "One subscription. No per-message fees. No cut of your sales.",
 	"pricing_sub": "14-day free trial on every plan. No credit card to start. Kedaipal never touches your order money — your customers pay you directly.",
@@ -119,7 +112,6 @@
 	"pricing_cta": "Start 14-day free trial",
 	"pricing_coming_soon": "Coming soon",
 	"pricing_see_full_breakdown": "See full feature breakdown →",
-
 	"mm_label": "The money math",
 	"mm_heading": "Marketplaces take a cut of every sale. Kedaipal never does.",
 	"mm_line1": "Shopee takes up to ~20%. TikTok Shop up to ~19%. GrabFood 15–22%. foodpanda 12–20%.",
@@ -146,7 +138,6 @@
 	"pay_fee_note": "Gateway fees are billed by HitPay directly — we add nothing on top.",
 	"pay_powered": "Payments powered by",
 	"footer_pay_line": "Customers can pay with",
-
 	"faq_label": "FAQ",
 	"faq_heading": "Questions sellers actually ask.",
 	"faq_q_1": "Do I need my own WhatsApp Business number?",
@@ -175,19 +166,15 @@
 	"faq_a_12": "Yes — that's exactly who we built for. Counter checkout gives your stall one QR: walk-ins scan, order and pair to WhatsApp on the spot. Counter and chat orders share one inbox, one stock count, and one customer list.",
 	"faq_see_all": "See all questions",
 	"faq_see_less": "See fewer questions",
-
 	"final_heading": "Every order and payment, one dashboard.",
 	"final_sub": "14-day free trial. No credit card. No Meta setup. Your storefront is live in 5 minutes.",
 	"final_cta": "Start 14-day free trial",
 	"guarantee_line": "Your first real order lands in the dashboard in our first session, or we set it up until it does.",
-
 	"footer_tagline": "The shopkeeper's buddy. Made in SEA.",
 	"footer_copyright": "© {year} Kedaipal. All rights reserved.",
-
 	"nav_menu_open": "Open menu",
 	"nav_menu_close": "Close menu",
 	"nav_home": "Kedaipal home",
-
 	"how_step_1_label": "SHARE",
 	"how_step_1_heading": "One link, every channel",
 	"how_step_1_body": "Drop kedaipal.com/your-store in WhatsApp status, IG bio, or Facebook — and print the free QR poster for your counter. Every channel funnels into the same catalog and pipeline.",
@@ -208,7 +195,6 @@
 	"how_step_4_heading": "You run it all from one inbox",
 	"how_step_4_body": "Confirm payments, update statuses, see exactly what to pack. Confirmed → packed → shipped → delivered — the buyer gets a WhatsApp message at every step, automatically.",
 	"how_step_of": "Step {step} of {total}",
-
 	"how_mockup_1_store": "K Frozen Food",
 	"how_mockup_1_tagline": "Browse & order on WhatsApp",
 	"how_mockup_1_caption": "This week's menu is up! Order here 👆",
@@ -254,7 +240,6 @@
 	"how_mockup_4_order_2_item_1": "1× Brownie Box (8 pcs)",
 	"how_mockup_4_order_2_item_1_price": "RM 65.00",
 	"how_mockup_4_order_2_badge_1": "Packed",
-
 	"phone_chat_1": "Hi! Do you have brownies available today?",
 	"phone_chat_2": "Yes! Browse our full menu here 👇",
 	"phone_store_name": "Maya's Bakery",
@@ -266,7 +251,6 @@
 	"phone_order_item": "Brownie Box × 1",
 	"phone_order_total": "Total: RM 65",
 	"phone_order_status": "Status: Packing 📦",
-
 	"footer_privacy": "Privacy",
 	"footer_terms": "Terms",
 	"footer_aup": "Acceptable Use",
@@ -274,9 +258,7 @@
 	"footer_legal": "Legal",
 	"footer_instagram": "Instagram",
 	"footer_tiktok": "TikTok",
-
 	"features_full_list": "Full feature list →",
-
 	"hero_marquee": "Custom cakes · Keropok lekor · Kuih & pastry · Frozen food · Central kitchens · Fruit & fish sellers · Market stalls · Campsites · Made-to-order · Pre-order menus · Service jobs · Live drops",
 	"hero_chat_store": "K Frozen Food",
 	"hero_chat_online": "online",
@@ -295,7 +277,6 @@
 	"demo_video_play": "Play the demo",
 	"demo_video_pause": "Pause the demo",
 	"demo_video_transcript": "Demo captions: Orders buried in WhatsApp chat? Kedaipal replies to every customer with your store link. They browse your storefront — no app, no login. The order lands back in WhatsApp — confirmed instantly. You track every order in one dashboard. Live in 5 minutes. No Meta setup. No WABA. Just share your link.",
-
 	"problem_chat_1": "Kak, ada stok lagi?",
 	"problem_chat_2": "Nak order 3 boleh? 🙏",
 	"problem_chat_3": "Dah transfer ya",
@@ -324,8 +305,6 @@
 	"handshake_card_decline": "Not received",
 	"handshake_chat_received": "✅ Payment received — RM 76.00",
 	"handshake_chat_receipt": "Your receipt: kedaipal.com/r/ORD-0042",
-
-
 	"pricing_most_popular": "Most popular",
 	"pricing_per_month": "/mo",
 	"pricing_tier_starter_tagline": "Just starting out · up to 100 orders/mo",
@@ -348,12 +327,10 @@
 	"pricing_feat_broadcast": "Broadcast to customer list",
 	"pricing_feat_5_users": "5 users",
 	"pricing_full_breakdown": "See full feature breakdown →",
-
 	"lang_switcher_label": "Language",
 	"lang_en": "English",
 	"lang_ms": "Bahasa Malaysia",
 	"lang_zh": "中文",
-
 	"cost_badge": "The real cost of WhatsApp-only orders",
 	"cost_heading_1": "What is WhatsApp-only ordering",
 	"cost_heading_2": "costing you?",
@@ -377,12 +354,12 @@
 	"cost_disq_nomiss_body": "You told us you're not missing any orders. Then there's nothing for Kedaipal to plug right now — and we won't pretend otherwise. If orders ever start slipping through WhatsApp chat, come back and run this again.",
 	"cost_disq_notyet_body": "Right now your status-quo cost ({total}/mo) is smaller than Kedaipal's {price}/mo. It wouldn't pay for itself yet. Come back when your order volume grows.",
 	"cost_wa_message": "Hi Kedaipal! I worked out WhatsApp-only ordering is costing me about {cost}/mo. I'd like to join as a Founding Member ({price}/mo).",
-
 	"pricingpage_hero_highlight": "14 days free.",
 	"pricingpage_hero_rest": "Then simple, honest pricing.",
 	"pricingpage_hero_sub": "Try every Pro feature free for 14 days — no credit card, no Meta setup. When your trial ends, pick the plan that fits.",
 	"pricingpage_toggle_monthly": "Monthly",
 	"pricingpage_toggle_annual": "Annual",
+	"pricingpage_toggle_annual_badge": "2 months free",
 	"pricingpage_tier_starter_tagline": "For sellers just starting out — up to 100 orders a month. Covers the basics, nudges you to grow.",
 	"pricingpage_tier_pro_tagline": "For an established single shop shipping weekly — up to 200 orders a month. The tier most home sellers grow into.",
 	"pricingpage_tier_scale_tagline": "For multi-outlet and high-volume kitchens — up to 400 orders a month across your outlets.",
@@ -461,7 +438,6 @@
 	"pricingpage_cta_trial_btn": "Start 14-day free trial",
 	"pricingpage_cta_how": "See how it works",
 	"pricingpage_no_lockin_note": "One flat monthly price. Cancel anytime. Export your data anytime.",
-
 	"poster_headline": "Just Scan & Order",
 	"poster_counter_badge": "At the Counter",
 	"poster_counter_title": "Order & Collect Here",

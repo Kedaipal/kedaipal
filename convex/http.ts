@@ -1,5 +1,7 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
+import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
 import { reportSecretMatches } from "./lib/businessReport";
 import { getAdapter } from "./lib/channels/registry";
@@ -9,6 +11,11 @@ import {
 	HITPAY_PROVIDER_LABEL,
 	verifyHitpayWebhook,
 } from "./lib/hitpay";
+import {
+	extractRecurringEvent,
+	resolveBillingGatewayCredentials,
+	verifyEventSignature,
+} from "./lib/hitpayBilling";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
@@ -271,6 +278,115 @@ http.route({
 	method: "POST",
 	handler: httpAction(async (ctx, req) => {
 		const rawBody = await req.text();
+
+		// --- Branch 1: V2 event webhook (Kedaipal's own account, 86eyb6z4r) ---
+		// Dashboard-registered events (charge.created, recurring_billing.*)
+		// arrive as JSON signed via the `Hitpay-Signature` header — raw-body
+		// HMAC with KEDAIPAL's salt, a different scheme from the per-request v1
+		// form webhooks below (seller BYO accounts, `hmac` field). The header is
+		// the discriminator: v1 callbacks never carry it.
+		const eventSignature = req.headers.get("hitpay-signature");
+		if (eventSignature) {
+			const credentials = resolveBillingGatewayCredentials({
+				HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
+				HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
+			});
+			if (!credentials) {
+				// We only receive these if we registered the endpoint — a missing
+				// salt is OUR misconfiguration. Fail closed like /webhook/whatsapp.
+				console.error(
+					"HitPay event webhook rejected: HITPAY_BILLING_SALT not configured",
+				);
+				return new Response("server misconfigured", { status: 500 });
+			}
+			const valid = await verifyEventSignature(
+				rawBody,
+				eventSignature,
+				credentials.salt,
+			);
+			if (!valid) {
+				console.warn("HitPay event webhook rejected: invalid signature");
+				return new Response("invalid signature", { status: 401 });
+			}
+			let payload: unknown;
+			try {
+				payload = JSON.parse(rawBody);
+			} catch {
+				console.error("HitPay event webhook: unparseable JSON, acking");
+				return new Response("ok", { status: 200 });
+			}
+			const event = extractRecurringEvent(payload, {
+				eventObject: req.headers.get("hitpay-event-object"),
+				eventType: req.headers.get("hitpay-event-type"),
+			});
+			if (!event) {
+				console.log("HitPay event webhook: unrecognised event, acking");
+				return new Response("ok", { status: 200 });
+			}
+			if (event.kind === "charge") {
+				// Corroboration for the synchronous charge path (which usually
+				// settled already — the settle mutation no-ops duplicates).
+				if (event.status !== "succeeded") {
+					console.log("HitPay event webhook: non-succeeded charge, acking", {
+						status: event.status,
+					});
+					return new Response("ok", { status: 200 });
+				}
+				if (!event.recurringBillingId) {
+					console.log(
+						"HitPay event webhook: charge without a billing id, acking",
+					);
+					return new Response("ok", { status: 200 });
+				}
+				const recurring = await ctx.runQuery(
+					internal.subscriptionPayments.resolveRecurringContext,
+					{ billingId: event.recurringBillingId },
+				);
+				if (!recurring?.settleInvoiceId) {
+					console.log("HitPay event webhook: no invoice to settle, acking", {
+						billingId: event.recurringBillingId,
+					});
+					return new Response("ok", { status: 200 });
+				}
+				const result = await ctx.runMutation(
+					internal.invoices.internalSettleFromGateway,
+					{
+						invoiceId: recurring.settleInvoiceId,
+						paymentId: event.paymentId,
+						amountSen: event.amountSen ?? -1,
+						currency: event.currency ?? "",
+						methodCode: event.methodCode ?? recurring.methodCode,
+					},
+				);
+				console.log("HitPay event webhook processed", {
+					kind: "charge",
+					applied: result.applied,
+					reason: result.reason,
+				});
+				return new Response("ok", { status: 200 });
+			}
+			await ctx.runMutation(
+				internal.subscriptionPayments.applyRecurringEvent,
+				event.kind === "method_attached"
+					? {
+							kind: event.kind,
+							billingId: event.billingId,
+							methodCode: event.methodCode,
+							methodLabel: event.methodLabel,
+						}
+					: event.kind === "method_detached"
+						? { kind: event.kind, billingId: event.billingId }
+						: {
+								kind: event.kind,
+								billingId: event.billingId,
+								status: event.status,
+							},
+			);
+			console.log("HitPay event webhook processed", { kind: event.kind });
+			return new Response("ok", { status: 200 });
+		}
+
+		// --- Branch 2: v1 form-encoded completion webhooks ---------------------
 		const fields: Record<string, string> = {};
 		for (const [key, value] of new URLSearchParams(rawBody)) {
 			fields[key] = value;
@@ -288,6 +404,15 @@ http.route({
 			paymentRequestId: requestId,
 		});
 		if (!context) {
+			// Not a buyer order — a subscription-invoice Pay-now request?
+			// (Kedaipal's own account, so the verifying salt is the env one.)
+			const invoiceContext = await ctx.runQuery(
+				internal.subscriptionPayments.resolveInvoiceRequestContext,
+				{ paymentRequestId: requestId },
+			);
+			if (invoiceContext) {
+				return handleInvoiceCompletionWebhook(ctx, fields, invoiceContext);
+			}
 			console.log("HitPay webhook: no matching order, ignoring", {
 				requestId,
 			});
@@ -357,6 +482,67 @@ http.route({
 		return new Response("ok", { status: 200 });
 	}),
 });
+
+/**
+ * v1 completion webhook for a SUBSCRIPTION-INVOICE Pay-now request
+ * (86eyb6z4r): same wire format as the buyer-order branch above, but the
+ * request was minted on KEDAIPAL's own account, so the verifying salt is the
+ * env credential (plaintext — never a per-seller stored secret). Settles
+ * through invoices.internalSettleFromGateway, whose amount check + duplicate
+ * guard mirror receiveGatewayPayment's posture.
+ */
+async function handleInvoiceCompletionWebhook(
+	ctx: ActionCtx,
+	fields: Record<string, string>,
+	invoiceContext: { invoiceId: Id<"invoices"> },
+): Promise<Response> {
+	const requestId = fields.payment_request_id;
+	const salt = process.env.HITPAY_BILLING_SALT;
+	if (!salt) {
+		// A request we minted with credentials that have since vanished — our
+		// misconfiguration, fail closed.
+		console.error(
+			"HitPay invoice webhook rejected: HITPAY_BILLING_SALT not configured",
+			{ requestId },
+		);
+		return new Response("server misconfigured", { status: 500 });
+	}
+	const valid = await verifyHitpayWebhook(fields, salt);
+	if (!valid) {
+		console.warn("HitPay invoice webhook rejected: invalid hmac", { requestId });
+		return new Response("invalid signature", { status: 401 });
+	}
+	if (fields.status !== "completed") {
+		console.log("HitPay invoice webhook: non-completed status, acking", {
+			requestId,
+			status: fields.status,
+		});
+		return new Response("ok", { status: 200 });
+	}
+	const amountSen = decimalStringToSen(fields.amount ?? "");
+	if (amountSen === null || !fields.payment_id) {
+		console.error("HitPay invoice webhook: malformed completed payload", {
+			requestId,
+			amount: fields.amount,
+		});
+		return new Response("ok", { status: 200 });
+	}
+	const result = await ctx.runMutation(
+		internal.invoices.internalSettleFromGateway,
+		{
+			invoiceId: invoiceContext.invoiceId,
+			paymentId: fields.payment_id,
+			amountSen,
+			currency: fields.currency ?? "",
+		},
+	);
+	console.log("HitPay invoice webhook processed", {
+		requestId,
+		applied: result.applied,
+		reason: result.reason,
+	});
+	return new Response("ok", { status: 200 });
+}
 
 /**
  * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google

@@ -31,6 +31,11 @@ export type BillingEmailVars = {
 	// a "we'll confirm payment details on WhatsApp" line instead. Callers must
 	// leave the bank fields unset alongside this flag.
 	crossBorder?: boolean;
+	// HitPay hosted-checkout link for this invoice (86eyb6z4r). Present ⇒ the
+	// pay panel leads with a "Pay online now" button; the manual rails stay
+	// underneath as the fallback. Works for cross-border invoices too — it's
+	// the ONLY self-serve rail an SGD seller has.
+	payNowUrl?: string;
 	billingUrl: string;
 };
 
@@ -57,6 +62,9 @@ const t = {
 		storeStaysLive:
 			"Your storefront and existing orders stay live — editing your store is paused until you pay.",
 		choosePlan: "Choose a plan",
+		payNow: "Pay online now",
+		payNowHint: "Card, banking or eWallet — confirmed automatically.",
+		orManual: "Prefer a bank transfer? The manual details are below.",
 	},
 	ms: {
 		bank: "Bank",
@@ -78,6 +86,9 @@ const t = {
 		storeStaysLive:
 			"Storefront dan pesanan sedia ada kekal aktif — penyuntingan kedai dijeda sehingga anda membayar.",
 		choosePlan: "Pilih pelan",
+		payNow: "Bayar dalam talian",
+		payNowHint: "Kad, perbankan atau eWallet — disahkan secara automatik.",
+		orManual: "Lebih suka pindahan bank? Butiran manual di bawah.",
 	},
 	zh: {
 		bank: "银行",
@@ -99,6 +110,9 @@ const t = {
 		storeStaysLive:
 			"您的商店和现有订单会继续正常运作 —— 付款前暂停编辑功能。",
 		choosePlan: "选择套餐",
+		payNow: "立即在线付款",
+		payNowHint: "银行卡、网银或电子钱包 —— 自动确认到账。",
+		orManual: "想用银行转账？手动付款详情见下方。",
 	},
 } as const;
 
@@ -113,14 +127,15 @@ function contactForPaymentLine(locale: Locale, v: BillingEmailVars): string {
 /** Plain-text version of the pay lines (no HTML tags). */
 function payText(locale: Locale, v: BillingEmailVars): string {
 	const L = t[locale];
-	if (v.crossBorder) return contactForPaymentLine(locale, v);
+	const payNow = v.payNowUrl ? `${L.payNow}: ${v.payNowUrl}\n` : "";
+	if (v.crossBorder) return `${payNow}${contactForPaymentLine(locale, v)}`;
 	const rows: string[] = [];
 	if (v.bankName) rows.push(`${L.bank}: ${v.bankName}`);
 	if (v.bankAccountName) rows.push(`${L.accountName}: ${v.bankAccountName}`);
 	if (v.bankAccountNumber) rows.push(`${L.accountNo}: ${v.bankAccountNumber}`);
 	if (v.duitnowId) rows.push(`${L.duitnow}: ${v.duitnowId}`);
-	if (rows.length === 0) return L.noDetails;
-	return `${L.howToPay}:\n${rows.join("\n")}\n${L.qrNote}`;
+	if (rows.length === 0) return `${payNow}${L.noDetails}`;
+	return `${payNow}${L.howToPay}:\n${rows.join("\n")}\n${L.qrNote}`;
 }
 
 function amountText(locale: Locale, v: BillingEmailVars): string {
@@ -177,10 +192,23 @@ function paymentRow(label: string, value: string, strong = false): string {
 </tr>`;
 }
 
+/** The lead "Pay online now" block when the invoice carries a HitPay link —
+ * rendered ABOVE whatever manual rail applies. */
+function payNowBlock(locale: Locale, v: BillingEmailVars): string {
+	if (!v.payNowUrl) return "";
+	const L = t[locale];
+	const safeUrl = escapeHtml(v.payNowUrl);
+	return `<div style="border:1px solid #a7f3d0;background:#ecfdf5;border-radius:16px;padding:16px;margin:0 0 12px 0;">
+<a href="${safeUrl}" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:12px 18px;border-radius:12px;">${escapeHtml(L.payNow)}</a>
+<p style="margin:10px 0 0 0;font-size:12px;line-height:1.5;color:#047857;">${escapeHtml(L.payNowHint)}</p>
+</div>`;
+}
+
 function paymentPanel(locale: Locale, v: BillingEmailVars): string {
 	const L = t[locale];
+	const payNow = payNowBlock(locale, v);
 	if (v.crossBorder) {
-		return `<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
+		return `${payNow}<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
 <p style="margin:0;font-size:13px;line-height:1.6;color:#1e3a8a;">${escapeHtml(contactForPaymentLine(locale, v))}</p>
 </div>`;
 	}
@@ -191,12 +219,12 @@ function paymentPanel(locale: Locale, v: BillingEmailVars): string {
 		v.duitnowId ? paymentRow(L.duitnow, v.duitnowId, true) : "",
 	].join("");
 	if (!rows) {
-		return `<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
+		return `${payNow}<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
 <p style="margin:0;font-size:13px;line-height:1.6;color:#1e3a8a;">${escapeHtml(L.noDetails)}</p>
 </div>`;
 	}
-	return `<div style="border:1px solid #e5e7eb;background:#ffffff;border-radius:16px;padding:16px;">
-<p style="margin:0 0 10px 0;font-size:13px;font-weight:800;color:#111827;">${escapeHtml(L.howToPay)}</p>
+	return `${payNow}<div style="border:1px solid #e5e7eb;background:#ffffff;border-radius:16px;padding:16px;">
+<p style="margin:0 0 10px 0;font-size:13px;font-weight:800;color:#111827;">${escapeHtml(payNow ? L.orManual : L.howToPay)}</p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
 <p style="margin:12px 0 0 0;font-size:12px;line-height:1.5;color:#64748b;">${escapeHtml(L.qrNote)}</p>
 </div>`;
@@ -620,4 +648,157 @@ export function renderBillingEmail(
 	vars: BillingEmailVars,
 ): RenderedEmail {
 	return render[locale][key](vars);
+}
+
+/**
+ * Auto-renewal notices (86eyb6z4r): the setup confirmation, the one-per-cycle
+ * "renewing soon" heads-up before a merchant-initiated charge (the
+ * no-surprise-debit rule), and the charge-failure dunning notice. Same small
+ * shell as the trial emails — these are notices, not invoices.
+ */
+export type AutoRenewEmailKey =
+	| "autoRenewEnabled"
+	| "autoRenewUpcoming"
+	| "autoRenewFailed";
+
+export type AutoRenewEmailVars = {
+	storeName: string;
+	/** "Card" / "Touch 'n Go" / "Visa ·· 4242". */
+	methodLabel: string;
+	billingUrl: string;
+	/** upcoming only. */
+	planLabel?: string;
+	amountFormatted?: string;
+	chargeDateFormatted?: string;
+	/** failed only. */
+	payNowUrl?: string;
+	final?: boolean;
+};
+
+const autoRenewRender: Record<
+	Locale,
+	Record<AutoRenewEmailKey, (v: AutoRenewEmailVars) => RenderedEmail>
+> = {
+	en: {
+		autoRenewEnabled: (v) => {
+			const subject = "✅ Auto-renewal is on";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, auto-renewal is now on for your Kedaipal subscription using <strong>${escapeHtml(v.methodLabel)}</strong>.`,
+				"Each renewal will be charged automatically and you'll get a receipt every time. You can turn this off any time in Settings → Billing.",
+			];
+			const html = wrapHtml("✅", "Auto-renewal is on", lines, v.billingUrl, "View billing");
+			const text = `✅ Auto-renewal is on\nYour Kedaipal subscription will renew automatically using ${v.methodLabel}. You'll get a receipt for every charge, and you can turn it off any time in Settings → Billing.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewUpcoming: (v) => {
+			const subject = `🔄 Your Kedaipal plan renews on ${v.chargeDateFormatted}`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your <strong>${escapeHtml(v.planLabel ?? "Kedaipal")}</strong> plan renews on <strong>${escapeHtml(v.chargeDateFormatted ?? "")}</strong>.`,
+				`We'll charge ${escapeHtml(v.amountFormatted ?? "the renewal amount")} to your ${escapeHtml(v.methodLabel)} automatically — nothing for you to do.`,
+				"Not planning to continue? Turn off auto-renewal in Settings → Billing before then.",
+			];
+			const html = wrapHtml("🔄", `Renewing on ${v.chargeDateFormatted}`, lines, v.billingUrl, "View billing");
+			const text = `🔄 Your Kedaipal plan renews on ${v.chargeDateFormatted}\nWe'll charge ${v.amountFormatted ?? "the renewal amount"} to your ${v.methodLabel} automatically. Turn off auto-renewal in Settings → Billing if you don't want this.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewFailed: (v) => {
+			const subject = v.final
+				? "⚠️ We couldn't charge your saved payment method"
+				: "⚠️ Renewal payment failed — we'll retry";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, we tried to charge your <strong>${escapeHtml(v.methodLabel)}</strong> for your Kedaipal renewal and it didn't go through.`,
+				v.final
+					? "We've stopped retrying. Pay your invoice online or by bank transfer to keep your store fully active — or update your payment method for next time."
+					: "We'll retry automatically in a couple of days. You can also pay now, or update your payment method, and it's settled straight away.",
+			];
+			const cta = v.payNowUrl ?? v.billingUrl;
+			const html = wrapHtml("⚠️", "Renewal payment failed", lines, cta, "Pay now");
+			const text = `⚠️ Renewal payment failed\nWe tried to charge your ${v.methodLabel} and it didn't go through. ${v.final ? "We've stopped retrying — pay online or by bank transfer to keep your store fully active." : "We'll retry in a couple of days, or pay now to settle it straight away."}\n\n${cta}`;
+			return { subject, html, text };
+		},
+	},
+	ms: {
+		autoRenewEnabled: (v) => {
+			const subject = "✅ Pembaharuan automatik telah diaktifkan";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pembaharuan automatik kini aktif untuk langganan Kedaipal anda menggunakan <strong>${escapeHtml(v.methodLabel)}</strong>.`,
+				"Setiap pembaharuan akan dicaj secara automatik dan anda akan menerima resit setiap kali. Anda boleh mematikannya bila-bila masa di Tetapan → Bil.",
+			];
+			const html = wrapHtml("✅", "Pembaharuan automatik aktif", lines, v.billingUrl, "Lihat bil");
+			const text = `✅ Pembaharuan automatik telah diaktifkan\nLangganan Kedaipal anda akan diperbaharui secara automatik menggunakan ${v.methodLabel}. Anda akan menerima resit untuk setiap caj, dan boleh mematikannya bila-bila masa di Tetapan → Bil.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewUpcoming: (v) => {
+			const subject = `🔄 Pelan Kedaipal anda diperbaharui pada ${v.chargeDateFormatted}`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pelan <strong>${escapeHtml(v.planLabel ?? "Kedaipal")}</strong> anda akan diperbaharui pada <strong>${escapeHtml(v.chargeDateFormatted ?? "")}</strong>.`,
+				`Kami akan mencaj ${escapeHtml(v.amountFormatted ?? "jumlah pembaharuan")} ke ${escapeHtml(v.methodLabel)} anda secara automatik — tiada apa yang perlu anda buat.`,
+				"Tidak mahu meneruskan? Matikan pembaharuan automatik di Tetapan → Bil sebelum tarikh itu.",
+			];
+			const html = wrapHtml("🔄", `Diperbaharui pada ${v.chargeDateFormatted}`, lines, v.billingUrl, "Lihat bil");
+			const text = `🔄 Pelan Kedaipal anda diperbaharui pada ${v.chargeDateFormatted}\nKami akan mencaj ${v.amountFormatted ?? "jumlah pembaharuan"} ke ${v.methodLabel} anda secara automatik. Matikan pembaharuan automatik di Tetapan → Bil jika anda tidak mahu.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewFailed: (v) => {
+			const subject = v.final
+				? "⚠️ Kami tidak dapat mencaj kaedah pembayaran anda"
+				: "⚠️ Caj pembaharuan gagal — kami akan cuba lagi";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, kami cuba mencaj <strong>${escapeHtml(v.methodLabel)}</strong> anda untuk pembaharuan Kedaipal tetapi tidak berjaya.`,
+				v.final
+					? "Kami telah berhenti mencuba. Bayar bil anda dalam talian atau melalui pindahan bank untuk memastikan kedai anda aktif sepenuhnya — atau kemas kini kaedah pembayaran untuk kali seterusnya."
+					: "Kami akan cuba lagi secara automatik dalam beberapa hari. Anda juga boleh bayar sekarang, atau kemas kini kaedah pembayaran, dan ia selesai serta-merta.",
+			];
+			const cta = v.payNowUrl ?? v.billingUrl;
+			const html = wrapHtml("⚠️", "Caj pembaharuan gagal", lines, cta, "Bayar sekarang");
+			const text = `⚠️ Caj pembaharuan gagal\nKami cuba mencaj ${v.methodLabel} anda tetapi tidak berjaya. ${v.final ? "Kami telah berhenti mencuba — bayar dalam talian atau melalui pindahan bank untuk memastikan kedai anda aktif sepenuhnya." : "Kami akan cuba lagi dalam beberapa hari, atau bayar sekarang untuk menyelesaikannya serta-merta."}\n\n${cta}`;
+			return { subject, html, text };
+		},
+	},
+	zh: {
+		autoRenewEnabled: (v) => {
+			const subject = "✅ 自动续订已开启";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 订阅已开启自动续订，使用 <strong>${escapeHtml(v.methodLabel)}</strong>。`,
+				"每次续订都会自动扣款，并且每次都会收到收据。您可以随时在 设置 → 账单 中关闭。",
+			];
+			const html = wrapHtml("✅", "自动续订已开启", lines, v.billingUrl, "查看账单");
+			const text = `✅ 自动续订已开启\n您的 Kedaipal 订阅将使用 ${v.methodLabel} 自动续订。每次扣款都会收到收据，您可以随时在 设置 → 账单 中关闭。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewUpcoming: (v) => {
+			const subject = `🔄 您的 Kedaipal 套餐将于 ${v.chargeDateFormatted} 续订`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 <strong>${escapeHtml(v.planLabel ?? "Kedaipal")}</strong> 套餐将于 <strong>${escapeHtml(v.chargeDateFormatted ?? "")}</strong> 续订。`,
+				`我们会自动从您的 ${escapeHtml(v.methodLabel)} 扣除 ${escapeHtml(v.amountFormatted ?? "续订金额")} —— 您无需任何操作。`,
+				"不打算继续？请在此之前到 设置 → 账单 关闭自动续订。",
+			];
+			const html = wrapHtml("🔄", `将于 ${v.chargeDateFormatted} 续订`, lines, v.billingUrl, "查看账单");
+			const text = `🔄 您的 Kedaipal 套餐将于 ${v.chargeDateFormatted} 续订\n我们会自动从您的 ${v.methodLabel} 扣除 ${v.amountFormatted ?? "续订金额"}。如不需要，请到 设置 → 账单 关闭自动续订。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewFailed: (v) => {
+			const subject = v.final
+				? "⚠️ 我们无法从您保存的付款方式扣款"
+				: "⚠️ 续订扣款失败 —— 我们会重试";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，我们尝试从您的 <strong>${escapeHtml(v.methodLabel)}</strong> 扣除 Kedaipal 续订费用，但没有成功。`,
+				v.final
+					? "我们已停止重试。请在线支付账单或通过银行转账，让您的商店保持完整运作 —— 也可以更新付款方式以备下次使用。"
+					: "我们会在几天后自动重试。您也可以立即付款，或更新付款方式，马上完成结算。",
+			];
+			const cta = v.payNowUrl ?? v.billingUrl;
+			const html = wrapHtml("⚠️", "续订扣款失败", lines, cta, "立即付款");
+			const text = `⚠️ 续订扣款失败\n我们尝试从您的 ${v.methodLabel} 扣款但没有成功。${v.final ? "我们已停止重试 —— 请在线支付或通过银行转账，让您的商店保持完整运作。" : "我们会在几天后重试，您也可以立即付款马上完成结算。"}\n\n${cta}`;
+			return { subject, html, text };
+		},
+	},
+};
+
+export function renderAutoRenewEmail(
+	locale: Locale,
+	key: AutoRenewEmailKey,
+	vars: AutoRenewEmailVars,
+): RenderedEmail {
+	return autoRenewRender[locale][key](vars);
 }

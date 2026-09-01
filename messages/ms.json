@@ -1,6 +1,5 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-
 	"nav_features": "Ciri",
 	"nav_how": "Cara ia berfungsi",
 	"nav_pricing": "Harga",
@@ -10,7 +9,6 @@
 	"nav_go_to_dashboard": "Pergi ke Dashboard",
 	"book_demo_cta": "Tempah demo",
 	"demo_wa_message": "Hai! Saya nak tempah demo Kedaipal.",
-
 	"hero_badge": "Dibina untuk penjual yang terima 20+ pesanan seminggu",
 	"hero_headline_part1": "Henti kehilangan pesanan.",
 	"hero_headline_part2": "Henti mengejar bayaran.",
@@ -22,7 +20,6 @@
 	"hero_pain_missed": "Order terlepas · RM 95",
 	"hero_pain_chase": "Sis dah bayar ke? 😩",
 	"hero_pain_chase_sub": "Dah tanya 3× · belum balas",
-
 	"problem_heading": "Kalau anda berjual di WhatsApp, anda mungkin kehilangan lebih dari yang anda sedar.",
 	"problem_1_title": "Pesanan terbenam dalam sejarah chat",
 	"problem_1_body": "Pelanggan mesej Isnin tentang satu pesanan. Anda terlepas pandang sambil balas 30 chat lain. Jumaat dia dah beli dari orang lain. Anda tak sedar pun.",
@@ -30,11 +27,9 @@
 	"problem_2_body": "\"Dah transfer\" — tapi tangkapan skrin tak sampai. Anda kena DM pelanggan untuk sahkan, mereka lambat balas, dan anda tak boleh bungkus pesanan sebelum pasti. Itu 20 minit untuk setiap pesanan.",
 	"problem_3_title": "Gerai dan chat tak bercakap",
 	"problem_3_body": "Pelanggan walk-in di kaunter, pra-tempahan dalam chat, ambilan hari Sabtu. Bila tiba masa membungkus, anda cuba padankan tiga senarai dari ingatan. Teka silap = stok membazir atau pelanggan kecewa.",
-
 	"how_label": "Cara ia berfungsi",
 	"how_heading": "Kongsi satu pautan. Selebihnya kami uruskan.",
 	"how_sub": "Pelanggan anda tak perlu pasang apa-apa. Aliran yang sama urus pembeli dalam sembang anda, pelanggan lalu-lalang di gerai, dan yang ambil masa dua minggu untuk buat keputusan.",
-
 	"features_label": "Ciri",
 	"features_heading": "Semua yang penjual tutup-jualan-sendiri perlukan.",
 	"features_sub": "Tiada kerenah korporat, tiada minimum sepuluh pengguna. Alat yang penjual made-to-order dan berbilang cawangan betul-betul minta — semuanya sudah tersedia hari ini.",
@@ -62,7 +57,6 @@
 	"bento_inbox_body": "Cari, tapis, kemas kini pukal setiap pesanan. Satu ketukan pada pelanggan tunjukkan sejarah penuh, perbelanjaan dan nota peribadi anda — ditangkap automatik dari WhatsApp. Tiada lagi “kejap, siapa ni?”",
 	"bento_inbox_stats": "12 pesanan · RM 1,240 sepanjang masa",
 	"bento_inbox_note": "📝 Tak nak pandan — selalu coklat",
-
 	"proof_label": "Peniaga sebenar, pesanan sebenar",
 	"proof_heading": "Sedang berjalan di Kedaipal hari ini.",
 	"proof_sub": "Bukan senarai tunggu — peniaga berbayar yang pembelinya buat pesanan melalui Kedaipal setiap hari. Semua ditutup melalui rujukan, sifar belanja iklan.",
@@ -106,7 +100,6 @@
 	"proof_stat_2_value": "RM 0",
 	"proof_customer_count_number": "10+",
 	"proof_customer_count_label": "penjual berbayar di Malaysia & Singapura",
-
 	"pricing_badge": "Harga mudah",
 	"pricing_heading": "Satu langganan. Tiada caj setiap mesej. Tiada potongan dari jualan anda.",
 	"pricing_sub": "Percubaan percuma 14 hari untuk setiap pelan. Tiada kad kredit untuk bermula. Kedaipal tidak pernah sentuh wang pesanan anda — pelanggan bayar terus kepada anda.",
@@ -119,7 +112,6 @@
 	"pricing_cta": "Mula percubaan percuma 14 hari",
 	"pricing_coming_soon": "Akan datang",
 	"pricing_see_full_breakdown": "Lihat pecahan ciri penuh →",
-
 	"mm_label": "Kira-kira duit",
 	"mm_heading": "Marketplace potong setiap jualan. Kedaipal tak pernah.",
 	"mm_line1": "Shopee ambil sampai ~20%. TikTok Shop sampai ~19%. GrabFood 15–22%. foodpanda 12–20%.",
@@ -146,7 +138,6 @@
 	"pay_fee_note": "Yuran gateway ikut HitPay, kami tak tambah apa-apa di atas tu.",
 	"pay_powered": "Pembayaran dikuasakan oleh",
 	"footer_pay_line": "Pelanggan boleh bayar dengan",
-
 	"faq_label": "Soalan Lazim",
 	"faq_heading": "Soalan yang penjual betul-betul tanya.",
 	"faq_q_1": "Adakah saya perlukan nombor WhatsApp Business sendiri?",
@@ -175,19 +166,15 @@
 	"faq_a_12": "Boleh — itulah sasaran kami. Checkout kaunter beri gerai anda satu QR: pembeli walk-in imbas, pesan dan berpadan ke WhatsApp serta-merta. Pesanan kaunter dan chat kongsi satu peti masuk, satu kiraan stok, dan satu senarai pelanggan.",
 	"faq_see_all": "Lihat semua soalan",
 	"faq_see_less": "Lihat lebih sedikit soalan",
-
 	"final_heading": "Setiap pesanan dan bayaran, satu papan pemuka.",
 	"final_sub": "Percubaan percuma 14 hari. Tiada kad kredit. Tiada setup Meta. Etalase anda hidup dalam 5 minit.",
 	"final_cta": "Mula percubaan percuma 14 hari",
 	"guarantee_line": "Order pertama masuk dashboard dalam sesi pertama, kalau tak, kami set up sampai jadi.",
-
 	"footer_tagline": "Kawan peniaga kedai. Dibuat di Asia Tenggara.",
 	"footer_copyright": "© {year} Kedaipal. Hak cipta terpelihara.",
-
 	"nav_menu_open": "Buka menu",
 	"nav_menu_close": "Tutup menu",
 	"nav_home": "Laman utama Kedaipal",
-
 	"how_step_1_label": "KONGSI",
 	"how_step_1_heading": "Satu pautan, setiap saluran",
 	"how_step_1_body": "Letak kedaipal.com/kedai-anda di status WhatsApp, bio IG, atau Facebook — dan cetak poster QR percuma untuk kaunter anda. Setiap saluran menuju ke katalog dan saluran paip yang sama.",
@@ -208,7 +195,6 @@
 	"how_step_4_heading": "Anda urus semuanya dari satu peti masuk",
 	"how_step_4_body": "Sahkan bayaran, kemas kini status, lihat tepat apa yang perlu dibungkus. Disahkan → dibungkus → dihantar → sampai — pelanggan menerima mesej WhatsApp pada setiap langkah, secara automatik.",
 	"how_step_of": "Langkah {step} daripada {total}",
-
 	"how_mockup_1_store": "K Frozen Food",
 	"how_mockup_1_tagline": "Layari & pesan di WhatsApp",
 	"how_mockup_1_caption": "Menu minggu ini dah siap! Pesan di sini 👆",
@@ -254,7 +240,6 @@
 	"how_mockup_4_order_2_item_1": "1× Kotak Brownie (8 keping)",
 	"how_mockup_4_order_2_item_1_price": "RM 65.00",
 	"how_mockup_4_order_2_badge_1": "Dibungkus",
-
 	"phone_chat_1": "Hi! Ada brownies untuk hari ini?",
 	"phone_chat_2": "Ada! Layari menu penuh kami di sini 👇",
 	"phone_store_name": "Maya's Bakery",
@@ -266,7 +251,6 @@
 	"phone_order_item": "Kotak Brownie × 1",
 	"phone_order_total": "Jumlah: RM 65",
 	"phone_order_status": "Status: Membungkus 📦",
-
 	"footer_privacy": "Privasi",
 	"footer_terms": "Terma",
 	"footer_aup": "Penggunaan Boleh Terima",
@@ -274,9 +258,7 @@
 	"footer_legal": "Legal",
 	"footer_instagram": "Instagram",
 	"footer_tiktok": "TikTok",
-
 	"features_full_list": "Senarai ciri penuh →",
-
 	"hero_marquee": "Kek custom · Keropok lekor · Kuih & pastri · Makanan beku · Dapur pusat · Penjual buah & ikan · Gerai pasar · Tapak perkhemahan · Made-to-order · Menu pra-tempah · Kerja servis · Live drop",
 	"hero_chat_store": "K Frozen Food",
 	"hero_chat_online": "dalam talian",
@@ -295,7 +277,6 @@
 	"demo_video_play": "Main demo",
 	"demo_video_pause": "Jeda demo",
 	"demo_video_transcript": "Kapsyen demo: Order tertimbus dalam chat WhatsApp? Kedaipal balas setiap pelanggan dengan link kedai anda. Mereka browse storefront anda — tanpa app, tanpa login. Order masuk semula ke WhatsApp — disahkan serta-merta. Anda jejak setiap order dalam satu dashboard. Hidup dalam 5 minit. Tiada setup Meta. Tiada WABA. Cuma kongsi link anda.",
-
 	"problem_chat_1": "Kak, ada stok lagi?",
 	"problem_chat_2": "Nak order 3 boleh? 🙏",
 	"problem_chat_3": "Dah transfer ya",
@@ -324,8 +305,6 @@
 	"handshake_card_decline": "Belum terima",
 	"handshake_chat_received": "✅ Bayaran diterima — RM 76.00",
 	"handshake_chat_receipt": "Resit anda: kedaipal.com/r/ORD-0042",
-
-
 	"pricing_most_popular": "Paling popular",
 	"pricing_per_month": "/bulan",
 	"pricing_tier_starter_tagline": "Baru bermula · sehingga 100 order/bulan",
@@ -348,12 +327,10 @@
 	"pricing_feat_broadcast": "Broadcast ke senarai pelanggan",
 	"pricing_feat_5_users": "5 pengguna",
 	"pricing_full_breakdown": "Lihat pecahan ciri penuh →",
-
 	"lang_switcher_label": "Bahasa",
 	"lang_en": "English",
 	"lang_ms": "Bahasa Malaysia",
 	"lang_zh": "中文",
-
 	"cost_badge": "Kos sebenar pesanan melalui WhatsApp sahaja",
 	"cost_heading_1": "Berapa kos pesanan melalui WhatsApp sahaja",
 	"cost_heading_2": "kepada anda?",
@@ -377,12 +354,12 @@
 	"cost_disq_nomiss_body": "Anda beritahu kami yang anda tidak terlepas sebarang pesanan. Maka tiada apa untuk Kedaipal tutup buat masa ini — dan kami tidak akan berpura-pura sebaliknya. Jika pesanan mula tertinggal dalam sembang WhatsApp nanti, kembali dan jalankan semula ini.",
 	"cost_disq_notyet_body": "Buat masa ini kos status quo anda ({total}/bulan) lebih kecil daripada {price}/bulan Kedaipal. Ia belum berbaloi lagi. Kembali bila jumlah pesanan anda bertambah.",
 	"cost_wa_message": "Hai Kedaipal! Saya dapati pesanan melalui WhatsApp sahaja merugikan saya kira-kira {cost}/bulan. Saya ingin menyertai sebagai Ahli Pengasas ({price}/bulan).",
-
 	"pricingpage_hero_highlight": "14 hari percuma.",
 	"pricingpage_hero_rest": "Kemudian harga yang mudah dan jujur.",
 	"pricingpage_hero_sub": "Cuba setiap ciri Pro percuma selama 14 hari — tiada kad kredit, tiada persediaan Meta. Bila percubaan tamat, pilih pelan yang sesuai.",
 	"pricingpage_toggle_monthly": "Bulanan",
 	"pricingpage_toggle_annual": "Tahunan",
+	"pricingpage_toggle_annual_badge": "2 bulan percuma",
 	"pricingpage_tier_starter_tagline": "Untuk penjual yang baru bermula — sehingga 100 order sebulan. Asas yang lengkap, cukup untuk anda berkembang.",
 	"pricingpage_tier_pro_tagline": "Untuk kedai tunggal yang mantap dan menghantar setiap minggu — sehingga 200 order sebulan. Tier yang kebanyakan penjual rumah akan capai.",
 	"pricingpage_tier_scale_tagline": "Untuk pelbagai cawangan dan dapur volum tinggi — sehingga 400 order sebulan merentas cawangan anda.",
@@ -461,7 +438,6 @@
 	"pricingpage_cta_trial_btn": "Mula percubaan percuma 14 hari",
 	"pricingpage_cta_how": "Lihat cara ia berfungsi",
 	"pricingpage_no_lockin_note": "Satu harga bulanan tetap. Batal pada bila-bila masa. Eksport data anda pada bila-bila masa.",
-
 	"poster_headline": "Scan Je, Order Terus",
 	"poster_counter_badge": "Kat Kaunter",
 	"poster_counter_title": "Order & Ambil Sini",

@@ -338,8 +338,9 @@ export async function verifyHitpayWebhook(
 }
 
 /** Constant-time compare (same shape as whatsappSignature.ts — hex digests
- * are fixed-length, so length short-circuit leaks nothing). */
-function timingSafeEqual(a: string, b: string): boolean {
+ * are fixed-length, so length short-circuit leaks nothing). Exported for the
+ * Kedaipal-account recurring-webhook verifier (lib/hitpayBilling.ts). */
+export function timingSafeEqual(a: string, b: string): boolean {
 	if (a.length !== b.length) return false;
 	let mismatch = 0;
 	for (let i = 0; i < a.length; i++) {

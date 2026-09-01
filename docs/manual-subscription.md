@@ -6,9 +6,14 @@ out-of-band (DuitNow / bank), the admin flips "paid", and entitlement + Founding
 rank-claim happen atomically. Built behind a typed `PaymentProvider` seam so the
 future automated-billing integration touches only the adapter.
 
-**Status:** All phases shipped (1–4) + the **admin Issue-invoice flow** (the
-operational piece that makes invoices actually appear). Remaining for prod: run the
-backfill, set payment details in the admin UI.
+**Status:** All phases shipped (1–4) + the **admin Issue-invoice flow**. Since
+[`86eyb6z4r`](./hitpay-recurring.md) this manual flow is the **fallback rail**,
+not the whole system: renewal invoices are cron-issued, every invoice carries a
+HitPay **Pay-now** link, sellers can **self-serve subscribe** and opt into
+**auto-renewal** (tokenised card / Touch 'n Go). The admin issue + mark-paid
+flow documented here is fully retained for founding onboards and bank-transfer
+holdouts — see [`hitpay-recurring.md`](./hitpay-recurring.md) for the
+automated layer.
 
 ## How invoices appear (the operational loop)
 
@@ -191,14 +196,19 @@ starts once payment lands, never at issue time. Founding members
 auto-get their lifetime discount: the issue form detects `isFoundingMember` and force-applies
 (and locks) the founding toggle, so Arif can't accidentally bill them full price on a renewal.
 
-## Deferred / known gaps (manual-sub era — revisit for auto-sub)
+## Deferred / known gaps
 
 - **No cancellation flow.** The `cancelled` status exists but nothing reaches it; a churning
-  vendor just stops paying and sits at `past_due`. Fine while billing is manual — needed once
-  we have automated subscriptions.
-- **No self-serve plan picker.** Trial-ended / lapsed vendors can't choose a plan in-app; the
-  "Choose a plan" CTA + billing page route them to **message Arif on WhatsApp**, who issues +
-  activates manually (no payment is auto-trusted). Revisit when payment is automated.
+  vendor just stops paying and sits at `past_due` (auto-renewal itself is always cancellable —
+  that kills the *charge*, not the subscription). A real "cancel my subscription" flow is
+  still an open follow-up.
+- ~~No self-serve plan picker~~ — **closed by 86eyb6z4r**: with the payment gateway
+  configured, trial-ended / lapsed / cancelled vendors pick a plan + cycle in the billing tab
+  (`invoices.subscribeSelf`) and pay the invoice online. Without gateway credentials the old
+  "message Arif on WhatsApp" card renders unchanged.
+- ~~Renewals typed by hand~~ — **closed by 86eyb6z4r**: the daily cron issues renewal
+  invoices (`invoices.internalIssueRenewalInvoice`); the old lapse-lock branch is gone (the
+  overdue flip at `dueDate` is still the lock).
 
 ## Soft-lock (`past_due`)
 
