@@ -93,7 +93,6 @@ export function LalamoveIntegrationCard({
 						fill={false}
 						className="shrink-0"
 					/>
-					<h2 className="font-heading text-lg font-bold">Lalamove</h2>
 				</div>
 				<p className="text-sm text-muted-foreground">
 					Same-day riders across your city, on your own Lalamove Business

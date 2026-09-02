@@ -1,0 +1,178 @@
+/**
+ * Dispatch hub — order detail (86eyjpv6z, 3 Sep). When a store has BOTH
+ * booking providers armed, stacking two full cards put two spend buttons on
+ * one screen ("Book delivery" and "Book Instant Delivery" a scroll apart) —
+ * a mis-tap books a rider when the seller meant a courier. The hub renders a
+ * segmented switch and ONE provider's card at a time, so exactly one primary
+ * action is ever visible.
+ *
+ * With one (or neither) provider relevant it renders the cards directly —
+ * each already hides itself or shows its own discoverability hint — so
+ * single-provider stores see exactly what they saw before.
+ *
+ * The switch is a VIEW control, not a setting: nothing persists server-side,
+ * and the per-order one-active-job reservation still arbitrates the actual
+ * booking. Defaults follow the facts on the ground: a provider with a live
+ * job wins (its card is where the tracking/cancel lives), then the seller's
+ * last choice on this device, then rider-first for a live-quote store.
+ */
+
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { api } from "../../../convex/_generated/api";
+import type { Doc } from "../../../convex/_generated/dataModel";
+import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
+import { BookDeliveryCard } from "./book-delivery-card";
+import { DelyvaDispatchCard } from "./delyva-dispatch-card";
+
+type Provider = "lalamove" | "delyva";
+
+const STORAGE_KEY = "kp:dispatch-provider";
+
+function storedChoice(): Provider | null {
+	try {
+		const v = localStorage.getItem(STORAGE_KEY);
+		return v === "lalamove" || v === "delyva" ? v : null;
+	} catch {
+		return null;
+	}
+}
+
+export function DispatchHub({
+	order,
+	bookRequestToken,
+	advanceWithoutRider,
+	onAdvanceBookUnavailable,
+}: {
+	order: Doc<"orders">;
+	bookRequestToken?: number;
+	advanceWithoutRider?: Parameters<
+		typeof BookDeliveryCard
+	>[0]["advanceWithoutRider"];
+	onAdvanceBookUnavailable?: () => void;
+}) {
+	// The same subscriptions the cards themselves hold — Convex dedupes, so
+	// the hub's peek costs nothing extra.
+	const lalamove = useQuery(
+		convexQuery(api.lalamove.getDeliveryJob, { shortId: order.shortId }),
+	).data;
+	const delyva = useQuery(
+		convexQuery(api.delyva.getDispatchState, { shortId: order.shortId }),
+	).data;
+
+	const lalamoveRelevant =
+		lalamove?.bookingEnabled === true || lalamove?.job != null;
+	const delyvaRelevant = delyva?.bookingEnabled === true || delyva?.job != null;
+
+	const lalamoveActive =
+		lalamove?.job != null && isActiveJobStatus(lalamove.job.status);
+	const delyvaActive =
+		delyva?.job != null && isActiveJobStatus(delyva.job.status);
+
+	const [choice, setChoice] = useState<Provider | null>(null);
+
+	// One primary action at a time only matters when both compete.
+	if (!lalamoveRelevant || !delyvaRelevant) {
+		return (
+			<>
+				<BookDeliveryCard
+					order={order}
+					bookRequestToken={bookRequestToken}
+					advanceWithoutRider={advanceWithoutRider}
+					onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+				/>
+				<DelyvaDispatchCard order={order} />
+			</>
+		);
+	}
+
+	// Facts beat preference: a live booking's card is where tracking and
+	// cancel live, so it always wins the default.
+	const selected: Provider =
+		choice ??
+		(lalamoveActive
+			? "lalamove"
+			: delyvaActive
+				? "delyva"
+				: (storedChoice() ??
+					(lalamove?.riderOnlyStore === true ? "lalamove" : "delyva")));
+
+	function pick(next: Provider) {
+		setChoice(next);
+		try {
+			localStorage.setItem(STORAGE_KEY, next);
+		} catch {
+			// Private windows — the default chain covers it next time.
+		}
+	}
+
+	return (
+		<section className="flex flex-col gap-3">
+			<div
+				role="tablist"
+				aria-label="Booking provider"
+				className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"
+			>
+				<ProviderTab
+					label="Lalamove rider"
+					active={selected === "lalamove"}
+					hasLiveJob={lalamoveActive}
+					onClick={() => pick("lalamove")}
+				/>
+				<ProviderTab
+					label="Delyva courier"
+					active={selected === "delyva"}
+					hasLiveJob={delyvaActive}
+					onClick={() => pick("delyva")}
+				/>
+			</div>
+			{selected === "lalamove" ? (
+				<BookDeliveryCard
+					order={order}
+					bookRequestToken={bookRequestToken}
+					advanceWithoutRider={advanceWithoutRider}
+					onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+				/>
+			) : (
+				<DelyvaDispatchCard order={order} />
+			)}
+		</section>
+	);
+}
+
+function ProviderTab({
+	label,
+	active,
+	hasLiveJob,
+	onClick,
+}: {
+	label: string;
+	active: boolean;
+	hasLiveJob: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			role="tab"
+			aria-selected={active}
+			onClick={onClick}
+			className={`flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors ${
+				active
+					? "bg-background text-foreground shadow-sm"
+					: "text-muted-foreground hover:text-foreground"
+			}`}
+		>
+			{label}
+			{/* A live booking marks its tab even while the other is fronted, so
+			    "where is my courier?" is answerable without switching. */}
+			{hasLiveJob ? (
+				<span
+					aria-label="has a live booking"
+					className="size-2 rounded-full bg-accent"
+				/>
+			) : null}
+		</button>
+	);
+}

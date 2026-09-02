@@ -69,8 +69,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
-import { BookDeliveryCard } from "../components/order/book-delivery-card";
-import { DelyvaDispatchCard } from "../components/order/delyva-dispatch-card";
+import { DispatchHub } from "../components/order/dispatch-hub";
 import {
 	canPrintLabel,
 	PrintLabelButton,
@@ -1827,11 +1826,12 @@ function OrderDetailRoute() {
 				/>
 			) : null}
 
-			{/* Lalamove dispatch (delivery orders): one-tap "Book delivery" with
-			    re-quote confirm, live job card (driver/plate/tracking), failed-
-			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
+			{/* Dispatch (delivery orders) — the hub renders ONE provider's card at
+			    a time when both Lalamove and Delyva are armed (two stacked spend
+			    buttons invited mis-taps, 3 Sep), and falls through to the plain
+			    cards when only one provider is relevant. 86eyb5hrf + 86eyjpv6z. */}
 			{!isSelfCollect ? (
-				<BookDeliveryCard
+				<DispatchHub
 					order={order}
 					bookRequestToken={bookRequestToken}
 					// The way out of that modal when this one is going by hand. The
@@ -1850,13 +1850,6 @@ function OrderDetailRoute() {
 					onAdvanceBookUnavailable={() => setShipDialogOpen(true)}
 				/>
 			) : null}
-
-			{/* Delyva courier dispatch (86eyjpv6z) — the parcel sibling of the
-			    rider card above, and deliberately right after it: both answer "how
-			    is this going out?", and a store may have both connected (rider
-			    across town, courier across the country). Each card hides itself
-			    when its own provider isn't set up, so nobody sees two. */}
-			{!isSelfCollect ? <DelyvaDispatchCard order={order} /> : null}
 
 			{/* Delivery address (delivery orders only). Collection orders relabel:
 			    this is where the rider COLLECTS, not where anything is delivered

@@ -14,6 +14,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
+	internalAction,
 	internalMutation,
 	internalQuery,
 	mutation,
@@ -443,17 +444,137 @@ export const getAccountContext = internalQuery({
 		retailerId: Id<"retailers">;
 		credentials: DelyvaCredentials;
 		actingAsAdmin: boolean;
+		companyId?: string;
+		/** True when the demo-vs-live lookup never ran for this row (connected
+		 * before detection existed, or the lookup failed) — the signal that
+		 * refreshEnvironment has something to heal. */
+		environmentUnknown: boolean;
 	} | null> => {
 		const access = await resolveStoreAccess(ctx, retailerId);
-		const credentials = resolveDelyvaCredentials(
-			access.retailer.delyva as DelyvaConfig | undefined,
-		);
+		const config = access.retailer.delyva as DelyvaConfig | undefined;
+		const credentials = resolveDelyvaCredentials(config);
 		if (!credentials) return null;
 		return {
 			retailerId: access.retailer._id,
 			credentials,
 			actingAsAdmin: access.actingAsAdmin,
+			companyId: config?.companyId,
+			environmentUnknown: config?.isDemo === undefined,
 		};
+	},
+});
+
+export const stampEnvironment = internalMutation({
+	args: {
+		retailerId: v.id("retailers"),
+		isDemo: v.boolean(),
+		companyCode: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const retailer = await ctx.db.get(args.retailerId);
+		const config = retailer?.delyva as DelyvaConfig | undefined;
+		// Only heal a still-unstamped row — a later reconnect's fresh stamp must
+		// never be overwritten by a slow in-flight lookup.
+		if (!retailer || !config || config.isDemo !== undefined) return;
+		await ctx.db.patch(args.retailerId, {
+			delyva: {
+				...config,
+				isDemo: args.isDemo,
+				companyCode: args.companyCode,
+			},
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Lazily stamp demo-vs-live on a connection made BEFORE detection existed
+ * (isDemo undefined renders as "unknown" — honest, but it hides the one
+ * warning that matters on a demo key). Fired once by the settings card on
+ * mount and piggybacked on prepareBooking, so every legacy row heals on the
+ * next visit to either surface. Failure is silent: the row simply stays
+ * unknown until a retry.
+ */
+export const getEnvironmentHealContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		credentials: DelyvaCredentials;
+		companyId: string;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		const config = retailer?.delyva as DelyvaConfig | undefined;
+		const credentials = resolveDelyvaCredentials(config);
+		if (!credentials || !config?.companyId || config.isDemo !== undefined)
+			return null;
+		return { credentials, companyId: config.companyId };
+	},
+});
+
+/** The scheduled twin of refreshEnvironment — runs with no user identity
+ * (prepareBooking schedules it), so it resolves the retailer directly. */
+export const refreshEnvironmentBySystem = internalAction({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const target = await ctx.runQuery(
+			internal.delyva.getEnvironmentHealContext,
+			{ retailerId },
+		);
+		if (!target) return;
+		try {
+			const live = await decryptDelyvaCredentials(target.credentials);
+			const company = parseCompanyResponse(
+				await callDelyvaWithKey(
+					live.apiKey,
+					"GET",
+					`/company/${encodeURIComponent(target.companyId)}`,
+				),
+			);
+			await ctx.runMutation(internal.delyva.stampEnvironment, {
+				retailerId,
+				isDemo: company.isDemo,
+				companyCode: company.code,
+			});
+		} catch (err) {
+			console.warn("[delyva] scheduled environment refresh failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
+	},
+});
+
+export const refreshEnvironment = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (ctx, args): Promise<{ ok: boolean }> => {
+		const target = await ctx.runQuery(internal.delyva.getAccountContext, {
+			retailerId: args.retailerId,
+		});
+		if (!target || !target.environmentUnknown || !target.companyId) {
+			return { ok: false };
+		}
+		try {
+			const live = await decryptDelyvaCredentials(target.credentials);
+			const company = parseCompanyResponse(
+				await callDelyvaWithKey(
+					live.apiKey,
+					"GET",
+					`/company/${encodeURIComponent(target.companyId)}`,
+				),
+			);
+			await ctx.runMutation(internal.delyva.stampEnvironment, {
+				retailerId: target.retailerId,
+				isDemo: company.isDemo,
+				companyCode: company.code,
+			});
+			return { ok: true };
+		} catch (err) {
+			console.warn("[delyva] environment refresh failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return { ok: false };
+		}
 	},
 });
 
@@ -738,6 +859,9 @@ type DelyvaDispatchContext =
 			buyerPaidFee: number;
 			currency: string;
 			note?: string;
+			/** The demo-vs-live lookup never ran for this row — prepareBooking
+			 * schedules the heal so the badge appears without a reconnect. */
+			environmentUnknown: boolean;
 	  };
 
 function dispatchBlockReason(args: {
@@ -861,6 +985,7 @@ export const getDispatchContext = internalQuery({
 			buyerPaidFee: order.deliveryFee ?? 0,
 			currency: order.currency,
 			note: noteParts.length ? noteParts.join(" · ") : undefined,
+			environmentUnknown: config.isDemo === undefined,
 		};
 	},
 });
@@ -954,6 +1079,13 @@ export const prepareBooking = action({
 			shortId: args.shortId,
 		});
 		if (!context.ok) return context;
+		// Heal an un-stamped demo/live badge in passing (see refreshEnvironment)
+		// — scheduled, so a slow company lookup never delays the quote.
+		if (context.environmentUnknown) {
+			await ctx.scheduler.runAfter(0, internal.delyva.refreshEnvironmentBySystem, {
+				retailerId: context.retailerId,
+			});
+		}
 		const weight = resolveWeightKg(context, args.weightKgOverride);
 		if (!weight.ok)
 			return { ok: false, reason: "no_weight", message: weight.message };

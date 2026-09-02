@@ -94,7 +94,7 @@ export function OnlinePaymentsCard({
 						fill={false}
 						className="shrink-0"
 					/>
-					<h2 className="font-heading text-lg font-bold">Online payments</h2>
+					<h2 className="font-heading text-lg font-bold">HitPay</h2>
 					{!canUse ? <ProBadge /> : null}
 				</div>
 				<p className="text-sm text-muted-foreground">

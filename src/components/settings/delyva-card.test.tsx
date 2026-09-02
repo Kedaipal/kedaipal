@@ -20,7 +20,8 @@ vi.mock("convex/react", async () => {
 	const { getFunctionName: name } = await import("convex/server");
 	return {
 		useAction: (ref: unknown) =>
-			state.actions.get(name(ref as never)) ?? vi.fn(),
+			state.actions.get(name(ref as never)) ??
+			vi.fn().mockResolvedValue(undefined),
 		useMutation: () => state.mutation ?? vi.fn(),
 	};
 });
@@ -80,6 +81,7 @@ const NAME = {
 	connect: getFunctionName(api.delyva.connect),
 	disconnect: getFunctionName(api.delyva.disconnect),
 	resubscribe: getFunctionName(api.delyva.resubscribeWebhooks),
+	refreshEnvironment: getFunctionName(api.delyva.refreshEnvironment),
 };
 
 const RETAILER = "r1" as Id<"retailers">;
@@ -295,6 +297,23 @@ describe("demo vs live account", () => {
 		expect(screen.queryByText(/^Live$/i)).toBeNull();
 		expect(screen.queryByText(/Demo account/i)).toBeNull();
 		expect(container.textContent).not.toContain("no courier will come");
+	});
+
+	it("heals an unknown environment once on mount — pre-detection connections get their badge", async () => {
+		const refresh = vi.fn().mockResolvedValue({ ok: true });
+		state.actions.set(NAME.refreshEnvironment, refresh);
+		state.settings = settings({ isDemo: undefined });
+		render(card());
+		await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+	});
+
+	it("never fires the heal when the environment is already stamped", async () => {
+		const refresh = vi.fn().mockResolvedValue({ ok: true });
+		state.actions.set(NAME.refreshEnvironment, refresh);
+		state.settings = settings({ isDemo: true });
+		render(card());
+		await new Promise((r) => setTimeout(r, 20));
+		expect(refresh).not.toHaveBeenCalled();
 	});
 });
 

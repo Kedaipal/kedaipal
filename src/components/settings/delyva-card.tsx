@@ -28,7 +28,7 @@ import {
 	Snowflake,
 	TriangleAlert,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -100,6 +100,7 @@ export function DelyvaCard({
 	const connect = useAction(api.delyva.connect);
 	const disconnect = useAction(api.delyva.disconnect);
 	const resubscribe = useAction(api.delyva.resubscribeWebhooks);
+	const refreshEnvironment = useAction(api.delyva.refreshEnvironment);
 	const updateSettings = useMutation(api.delyva.updateSettings);
 
 	const [apiKey, setApiKey] = useState("");
@@ -110,6 +111,19 @@ export function DelyvaCard({
 	const [addressError, setAddressError] = useState<string | null>(null);
 
 	const connected = settings?.connected === true;
+
+	// Heal a pre-detection connection's missing demo/live badge (isDemo
+	// undefined) once per mount — the row then re-renders with the stamp via
+	// the live query. Ref-guarded so a slow lookup never double-fires.
+	const healedEnv = useRef(false);
+	useEffect(() => {
+		if (healedEnv.current) return;
+		if (!connected || settings?.isDemo !== undefined) return;
+		healedEnv.current = true;
+		void refreshEnvironment({ retailerId: actAsRetailerId }).catch(() => {
+			// Silent — the badge simply stays unknown until the next visit.
+		});
+	}, [connected, settings?.isDemo, refreshEnvironment, actAsRetailerId]);
 	// A downgraded-but-connected seller keeps every control except re-enabling
 	// (which lives in Fulfilment) — connection management is never gated.
 	const locked = !canUse && !connected;
