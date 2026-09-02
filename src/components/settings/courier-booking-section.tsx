@@ -31,6 +31,7 @@ import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
+import { AppImage } from "../ui/app-image";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
 export function CourierBookingSection({
@@ -91,7 +92,16 @@ export function CourierBookingSection({
 			{riderBookingAvailable ? (
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
-						<p className="text-sm font-medium">Lalamove riders</p>
+						<p className="flex items-center gap-2 text-sm font-medium">
+							<AppImage
+								src="/img/lalamove-logo.svg"
+								alt=""
+								aspect="h-3.5 w-auto"
+								fill={false}
+								className="shrink-0"
+							/>
+							Lalamove riders
+						</p>
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 							{lalamovePricing
 								? "On — your delivery charge runs on Lalamove live quotes, so rider booking comes with it. Switch the charge mode above to change this."
@@ -144,7 +154,14 @@ export function CourierBookingSection({
 			{delyvaCountryOk ? (
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
-						<p className="flex items-center gap-1.5 text-sm font-medium">
+						<p className="flex items-center gap-2 text-sm font-medium">
+							<AppImage
+								src="/img/delyva-logo.png"
+								alt=""
+								aspect="h-3.5 w-auto"
+								fill={false}
+								className="shrink-0"
+							/>
 							Delyva couriers
 							{delyva?.isDemo ? (
 								<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">

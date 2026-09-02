@@ -44,6 +44,7 @@ import { convexErrorMessage } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
 import { ProBadge } from "../app/pro-gate";
 import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
@@ -238,7 +239,21 @@ export function DelyvaCard({
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-2">
 				<div className="flex items-center gap-2.5">
-					<h2 className="font-heading text-lg font-bold">Delyva</h2>
+					{/* The DelyvaNow wordmark — what the seller sees in their own
+					    portal, so the card visually matches the account it manages
+					    (the Lalamove-logo precedent). PNG from Delyva's own site;
+					    brand marks are never redrawn or re-tinted. */}
+					<AppImage
+						src="/img/delyva-logo.png"
+						alt=""
+						aspect="h-5 w-auto"
+						fill={false}
+						className="shrink-0"
+					/>
+					{/* The wordmark carries the visual identity; the heading stays in
+					    the tree for structure/anchors, unseen (the image would double
+					    it visually). */}
+					<h2 className="sr-only font-heading text-lg font-bold">Delyva</h2>
 					{!canUse ? <ProBadge /> : null}
 				</div>
 				<p className="text-sm text-muted-foreground">
