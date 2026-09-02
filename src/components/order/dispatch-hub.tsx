@@ -6,9 +6,17 @@
  * segmented switch and ONE provider's card at a time, so exactly one primary
  * action is ever visible.
  *
- * With one (or neither) provider relevant it renders the cards directly —
- * each already hides itself or shows its own discoverability hint — so
- * single-provider stores see exactly what they saw before.
+ * A tab is only ever offered for a provider that actually RENDERS something
+ * on this order (`dispatch-surface.ts`, the same predicate the cards use to
+ * decide). Offering one for a provider whose card returns null hands the
+ * seller a tab that opens onto nothing — which is exactly what a delivered
+ * order did: Delyva held the history, Lalamove had no job and a delivered
+ * order is not bookable, so its pane came up blank. With one (or neither)
+ * provider showing a card, the cards render directly and nothing is grouped.
+ *
+ * The switch is grouped INTO the card it drives — one bordered shell, tabs on
+ * top of the pane they swap — because a floating segmented control above a
+ * separate card reads as two unrelated things (Zaki, 2 Sep).
  *
  * The switch is a VIEW control, not a setting: nothing persists server-side,
  * and the per-order one-active-job reservation still arbitrates the actual
@@ -23,6 +31,7 @@ import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
+import { delyvaSurface, lalamoveSurface } from "../../lib/dispatch-surface";
 import { BookDeliveryCard } from "./book-delivery-card";
 import { DelyvaDispatchCard } from "./delyva-dispatch-card";
 
@@ -61,9 +70,11 @@ export function DispatchHub({
 		convexQuery(api.delyva.getDispatchState, { shortId: order.shortId }),
 	).data;
 
-	const lalamoveRelevant =
-		lalamove?.bookingEnabled === true || lalamove?.job != null;
-	const delyvaRelevant = delyva?.bookingEnabled === true || delyva?.job != null;
+	// "Has a card", not "is switched on": a discoverability hint is a nudge,
+	// not a dispatch surface, and a provider with nothing to show must never
+	// get a tab.
+	const lalamoveCard = lalamoveSurface(order, lalamove) === "card";
+	const delyvaCard = delyvaSurface(order, delyva) === "card";
 
 	const lalamoveActive =
 		lalamove?.job != null && isActiveJobStatus(lalamove.job.status);
@@ -73,7 +84,7 @@ export function DispatchHub({
 	const [choice, setChoice] = useState<Provider | null>(null);
 
 	// One primary action at a time only matters when both compete.
-	if (!lalamoveRelevant || !delyvaRelevant) {
+	if (!lalamoveCard || !delyvaCard) {
 		return (
 			<>
 				<BookDeliveryCard
@@ -108,11 +119,11 @@ export function DispatchHub({
 	}
 
 	return (
-		<section className="flex flex-col gap-3">
+		<section className="overflow-hidden rounded-2xl border border-border bg-card">
 			<div
 				role="tablist"
 				aria-label="Booking provider"
-				className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"
+				className="grid grid-cols-2 gap-1 border-b border-border bg-muted/60 p-2"
 			>
 				<ProviderTab
 					label="Lalamove rider"
@@ -127,32 +138,35 @@ export function DispatchHub({
 					onClick={() => pick("delyva")}
 				/>
 			</div>
-			{/* The order's booking slot is singular (cross-provider reservation),
-			    so fronting the OTHER provider while one holds a live job used to
-			    render an empty pane — its card nulls out under job_active. Say
-			    what's happening instead, with the way back. */}
-			{selected === "lalamove" && delyvaActive ? (
-				<OtherProviderNotice
-					holder="Delyva courier"
-					here="a Lalamove rider"
-					onView={() => pick("delyva")}
-				/>
-			) : selected === "delyva" && lalamoveActive ? (
-				<OtherProviderNotice
-					holder="Lalamove rider"
-					here="a Delyva courier"
-					onView={() => pick("lalamove")}
-				/>
-			) : selected === "lalamove" ? (
-				<BookDeliveryCard
-					order={order}
-					bookRequestToken={bookRequestToken}
-					advanceWithoutRider={advanceWithoutRider}
-					onAdvanceBookUnavailable={onAdvanceBookUnavailable}
-				/>
-			) : (
-				<DelyvaDispatchCard order={order} />
-			)}
+			<div className="p-4">
+				{/* The order's booking slot is singular (cross-provider
+				    reservation), so fronting the OTHER provider while one holds a
+				    live job would offer a Book button the server refuses. Say
+				    what's happening instead, with the way back. */}
+				{selected === "lalamove" && delyvaActive ? (
+					<OtherProviderNotice
+						holder="Delyva courier"
+						here="a Lalamove rider"
+						onView={() => pick("delyva")}
+					/>
+				) : selected === "delyva" && lalamoveActive ? (
+					<OtherProviderNotice
+						holder="Lalamove rider"
+						here="a Delyva courier"
+						onView={() => pick("lalamove")}
+					/>
+				) : selected === "lalamove" ? (
+					<BookDeliveryCard
+						order={order}
+						bookRequestToken={bookRequestToken}
+						advanceWithoutRider={advanceWithoutRider}
+						onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+						embedded
+					/>
+				) : (
+					<DelyvaDispatchCard order={order} embedded />
+				)}
+			</div>
 		</section>
 	);
 }
@@ -169,7 +183,7 @@ function OtherProviderNotice({
 	onView: () => void;
 }) {
 	return (
-		<section className="flex flex-col items-start gap-2 rounded-2xl border border-dashed border-border bg-card p-4">
+		<section className="flex flex-col items-start gap-2">
 			<p className="text-sm text-muted-foreground">
 				A <span className="font-medium text-foreground">{holder}</span> is
 				already on this order — one booking at a time. Cancel it first if you
@@ -205,7 +219,7 @@ function ProviderTab({
 			onClick={onClick}
 			className={`flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors ${
 				active
-					? "bg-background text-foreground shadow-sm"
+					? "bg-card text-foreground shadow-sm ring-1 ring-border"
 					: "text-muted-foreground hover:text-foreground"
 			}`}
 		>

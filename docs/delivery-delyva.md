@@ -288,10 +288,25 @@ warning** when `webhooksSubscribedAt` is unset, since a silent subscription
 failure otherwise shows up only as orders that mysteriously stop updating.
 
 **Order detail → Dispatch hub** (`src/components/order/dispatch-hub.tsx`):
-when BOTH providers are relevant (armed, or holding a job), a segmented switch
+when BOTH providers have a card to show on this order, a segmented switch
 renders ONE provider's card at a time — two full cards stacked two spend
 buttons a scroll apart, and a mis-tap books a rider when the seller meant a
-courier. The switch is a view control (localStorage, never server state); the
+courier. The switch is **grouped into the card it drives** — one bordered
+shell, tabs sitting on top of the pane they swap, cards rendering `embedded`
+(no chrome of their own) inside it; a segmented control floating above a
+separate card read as two unrelated things.
+
+"Has a card" is `src/lib/dispatch-surface.ts`, the SAME predicate the cards
+use for their own early returns — the hub cannot be allowed to offer a tab a
+card then declines to fill. That was a real blank pane: on a *delivered*
+order carrying a cancelled Delyva booking, Delyva had history to show while
+Lalamove had no job and a delivered order isn't bookable, so its card
+returned null under a tab that promised something. The predicate is
+tri-state, because a never-set-up provider's dashed discoverability **hint**
+is a nudge, not a dispatch surface: `"none" | "hint" | "card"`, and only
+`"card"` on both sides builds a tab strip.
+
+The switch is a view control (localStorage, never server state); the
 default follows the facts: a provider with a live job fronts (its card holds
 tracking/cancel, and the other tab wears a live-booking dot), then the last
 choice on this device, then rider-first for a live-quote store. While one
@@ -317,7 +332,11 @@ editable) → parcel-type pills (store default, per-order override; changing
 either drops stale prices) → **Get courier prices** → the list, cheapest
 pre-selected with the CTA repeating the choice and its price → book. Booked
 state shows the courier, the AWB with one-tap copy, the cost, a tracking link
-and cancel. A booking failure renders **in place, not as a toast** (the
+and cancel. A failed booking on an order that can no longer be booked (delivered,
+cancelled) shows the failure **as history** — the amber banner plus the
+disabled-with-reason line — rather than a "Try again" the server would
+refuse. A booking failure on a still-bookable order renders **in place, not
+as a toast** (the
 86eypncfy lesson: the seller is coming back from a top-up and the reason must
 still be on screen), with the picker intact so retrying is one tap.
 

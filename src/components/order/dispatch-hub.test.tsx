@@ -35,7 +35,14 @@ vi.mock("@tanstack/react-query", async () => {
 	};
 });
 
-const order = { _id: "o1", shortId: "ORD-1", deliveryMethod: "delivery" } as unknown as Doc<"orders">;
+// A tab is only offered for a provider that RENDERS — which depends on the
+// order's own status, so the fixture carries a bookable one.
+const order = {
+	_id: "o1",
+	shortId: "ORD-1",
+	deliveryMethod: "delivery",
+	status: "confirmed",
+} as unknown as Doc<"orders">;
 
 const lalamove = (over: Record<string, unknown> = {}) => ({
 	job: null,
@@ -112,7 +119,7 @@ describe("when both providers are armed", () => {
 	});
 });
 
-describe("when only one provider is relevant", () => {
+describe("a tab is only offered for a provider that renders", () => {
 	it("renders both components plainly — no tabs (each hides itself)", () => {
 		state.delyva = delyva({ bookingEnabled: false });
 		const { container } = render(<DispatchHub order={order} />);
@@ -122,10 +129,52 @@ describe("when only one provider is relevant", () => {
 		expect(container.textContent).toContain("DELYVA-CARD");
 	});
 
-	it("a disabled provider with a lingering JOB still counts as relevant", () => {
+	it("a disabled provider with a lingering JOB still gets its tab", () => {
 		state.delyva = delyva({ bookingEnabled: false, job: { status: "completed" } });
 		render(<DispatchHub order={order} />);
 		expect(screen.getByRole("tab", { name: /delyva courier/i })).toBeTruthy();
+	});
+
+	// Zaki's blank pane, 2 Sep: a DELIVERED order carrying a cancelled Delyva
+	// booking. Delyva has history to show; Lalamove has no job and a delivered
+	// order can't be booked, so its card returns null — and the hub used to
+	// offer the tab anyway, opening onto nothing.
+	it("no tabs on a closed order where only one provider has history", () => {
+		const delivered = { ...order, status: "delivered" } as Doc<"orders">;
+		state.delyva = delyva({ job: { status: "canceled" }, blockReason: "bad_status" });
+		const { container } = render(<DispatchHub order={delivered} />);
+		expect(screen.queryByRole("tab", { name: /lalamove rider/i })).toBeNull();
+		expect(container.textContent).toContain("DELYVA-CARD");
+	});
+
+	it("…and no tabs when neither provider can act on a closed order", () => {
+		const delivered = { ...order, status: "delivered" } as Doc<"orders">;
+		const { container } = render(<DispatchHub order={delivered} />);
+		expect(screen.queryByRole("tablist")).toBeNull();
+		// The cards are still mounted — each renders its own nothing.
+		expect(container.textContent).toContain("LALAMOVE-CARD");
+	});
+
+	it("a bare discoverability hint never earns a tab", () => {
+		// Never-set-up Lalamove renders a dashed one-liner, not a card — a
+		// tab strip around it would read as a broken provider.
+		state.lalamove = lalamove({
+			bookingEnabled: false,
+			blockReason: "booking_disabled",
+		});
+		render(<DispatchHub order={order} />);
+		expect(screen.queryByRole("tablist")).toBeNull();
+	});
+});
+
+describe("the switch is grouped with the card it drives", () => {
+	it("wraps tabs and pane in ONE bordered shell, and the card drops its own", () => {
+		const { container } = render(<DispatchHub order={order} />);
+		const shell = container.querySelector("section");
+		expect(shell?.className).toContain("border");
+		expect(shell?.className).toContain("rounded-2xl");
+		// The tablist is inside that shell, not floating above it.
+		expect(shell?.querySelector('[role="tablist"]')).toBeTruthy();
 	});
 });
 

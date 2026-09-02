@@ -462,3 +462,59 @@ describe("collect-from line", () => {
 		expect(container.textContent).not.toContain("Collecting from");
 	});
 });
+
+describe("a closed order's failed booking is history, not a retry", () => {
+	// The card offered "Try again" for any failed job, even on an order the
+	// server would refuse to book (Zaki's delivered order, 2 Sep) — a
+	// wrong-but-enabled button where a disabled-with-reason belongs.
+	const cancelledOnClosedOrder = {
+		blockReason: "bad_status",
+		job: {
+			status: "canceled",
+			providerOrderId: "delyva-9",
+			costActual: 1850,
+			serviceCode: "NINJA-COLD",
+			serviceName: "Ninja Cold",
+			itemType: "CHILLED",
+			awb: "DX0010754MY",
+			failureReason: "Cancelled by Delyva",
+			createdAt: Date.now(),
+		},
+	};
+
+	it("keeps the failure visible but retires the retry", () => {
+		state.dispatch = dispatchState(cancelledOnClosedOrder);
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain("Booking didn't go through");
+		expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+		expect(container.textContent).toContain(
+			"only be booked while the order is confirmed or packed",
+		);
+	});
+
+	it("still offers the retry while the order IS bookable", () => {
+		state.dispatch = dispatchState({
+			...cancelledOnClosedOrder,
+			blockReason: null,
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+	});
+});
+
+describe("embedded in the dispatch hub", () => {
+	it("drops its own border so the hub's shell isn't a card inside a card", () => {
+		const { container } = render(
+			<DelyvaDispatchCard order={order} embedded />,
+		);
+		const root = container.querySelector("section");
+		expect(root?.className).not.toContain("border");
+		expect(root?.className).not.toContain("rounded-2xl");
+	});
+
+	it("keeps its own chrome when it stands alone", () => {
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		const root = container.querySelector("section");
+		expect(root?.className).toContain("border");
+	});
+});

@@ -31,7 +31,9 @@ import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import type { DelyvaItemType, DelyvaService } from "../../../convex/lib/delyva";
+import { delyvaSurface } from "../../lib/dispatch-surface";
 import {
 	delyvaBlockCopy,
 	delyvaStatusLabel,
@@ -50,9 +52,14 @@ const ITEM_TYPES: ReadonlyArray<{ value: DelyvaItemType; label: string }> = [
 ];
 
 /** Terminal statuses free the order's booking slot — a rebook is allowed. */
-const TERMINAL = new Set(["completed", "canceled", "expired", "rejected"]);
-
-export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
+export function DelyvaDispatchCard({
+	order,
+	embedded = false,
+}: {
+	order: Doc<"orders">;
+	/** Rendered inside the dispatch hub's shell — see BookDeliveryCard. */
+	embedded?: boolean;
+}) {
 	const dispatch = useQuery(
 		convexQuery(api.delyva.getDispatchState, { shortId: order.shortId }),
 	).data;
@@ -83,10 +90,13 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 		}
 	}, [dispatch?.computedWeightKg]);
 
-	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
+	// One source for "does this provider have anything to show here" — the
+	// dispatch hub asks the same question before it offers a tab.
+	const surface = delyvaSurface(order, dispatch);
+	if (surface === "none" || !dispatch) return null;
 
 	const job = dispatch.job;
-	const activeJob = job && !TERMINAL.has(job.status) ? job : null;
+	const activeJob = job && isActiveJobStatus(job.status) ? job : null;
 	const failedJob =
 		job && (job.status === "canceled" || job.status === "expired" || job.status === "rejected")
 			? job
@@ -96,16 +106,9 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 	const bookable = blockReason === null;
 	const effectiveItemType = itemType ?? dispatch.defaultItemType;
 
-	// A store in a country we don't serve, with nothing booked, has no business
-	// showing a courier card at all — the Lalamove posture.
-	if (blockReason === "country_unsupported" && !job) return null;
-	// Not a delivery order, or nothing to say: stay out of the way entirely.
-	if ((blockReason === "not_delivery" || blockReason === "no_address") && !job)
-		return null;
-
 	// Never set up — a one-line discoverability hint, not a disabled button for
 	// a feature the seller has never heard of.
-	if (!dispatch.bookingEnabled && !job) {
+	if (surface === "hint") {
 		if (blockReason === "plan_gated") {
 			return (
 				<p className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
@@ -121,7 +124,7 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 				Ship parcels without leaving Kedaipal —{" "}
 				<Link
 					to="/app/settings"
-					search={{ tab: "fulfilment" }}
+					search={{ tab: "integrations" }}
 					className="font-medium text-accent hover:underline"
 				>
 					connect Delyva
@@ -191,7 +194,13 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 	const selected = services?.find((s) => s.code === selectedCode) ?? null;
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+		<section
+			className={
+				embedded
+					? "flex flex-col gap-3"
+					: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+			}
+		>
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Delyva Courier
@@ -221,10 +230,10 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 						simulated and nothing is really charged. Connect your live key in{" "}
 						<Link
 							to="/app/settings"
-							search={{ tab: "fulfilment" }}
+							search={{ tab: "integrations" }}
 							className="font-medium underline underline-offset-2"
 						>
-							Settings → Fulfilment
+							Settings → Integrations
 						</Link>
 						.
 					</span>
@@ -309,7 +318,7 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 						</Button>
 					) : null}
 				</div>
-			) : bookable || failedJob ? (
+			) : bookable ? (
 				<>
 					{/* Where the courier collects — surfaced BEFORE the first quote so a
 					    stale pickup address (imported from Delyva's profile at connect)

@@ -19,13 +19,13 @@ const BLOCK_COPY: Record<DelyvaDispatchBlock, string> = {
 		"A courier can only be booked while the order is confirmed or packed.",
 	job_active: "A courier is already booked on this order.",
 	not_connected:
-		"Connect your Delyva account first — Settings → Fulfilment → Delyva courier.",
+		"Connect your Delyva account first — Settings → Integrations → Delyva.",
 	disabled:
-		"Delyva booking is paused — resume it under Settings → Fulfilment → Delyva courier.",
+		"Delyva booking is paused — resume it under Settings → Fulfilment → Courier booking.",
 	plan_gated:
 		"Delyva courier booking is a Pro feature. Upgrade to book couriers in one tap.",
 	no_pickup_address:
-		"Add your pickup address under Settings → Fulfilment → Delyva courier — couriers need somewhere to collect from.",
+		"Add your pickup address under Settings → Integrations → Delyva — couriers need somewhere to collect from.",
 	no_address:
 		"This order has no delivery address, so there's nowhere to send the parcel.",
 };
