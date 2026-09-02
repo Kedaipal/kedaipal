@@ -212,6 +212,28 @@ pickup activation pending), `no_service`, `unknown`. Booking failures email
 the seller through the same `notifyDeliveryJobFailed` template, now
 provider-aware in all three locales.
 
+## One automated provider at a time (2 Sep, Zaki)
+
+A store runs **either** Lalamove **or** Delyva as its automated fulfilment,
+never both. The pivot is the delivery-charge mode:
+
+- **Charge mode = `lalamove`** — every checkout fee IS a live rider quote and
+  every order goes out by rider (checkout refuses addresses Lalamove can't
+  quote). Booking a parcel courier on such an order would ship it by a method
+  the buyer's fee doesn't describe, so Delyva is unavailable: the Courier
+  booking section explains why and how to switch instead of offering tiles,
+  `delyva.connect`/`updateSettings` refuse the enable, and the dispatch card
+  blocks with `lalamove_active` (belt-and-braces for legacy rows).
+- **Any other charge mode** (flat / weight / radius / free) — the buyer's fee
+  is priced by the rate card independent of dispatch, so the seller may pick
+  "I arrange it" or Delyva. This is where "pricing ⊥ booking" genuinely holds.
+- **The reverse switch is guarded too**: `retailers.updateSettings` refuses
+  `mode: "lalamove"` while Delyva booking is enabled — pause Delyva first.
+  Refuse-with-reason, never a silent auto-pause.
+
+Pausing Delyva is never blocked (it only makes the state more coherent), and
+a connected account under Lalamove pricing keeps a visible Disconnect.
+
 ## Seller UI
 
 Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the

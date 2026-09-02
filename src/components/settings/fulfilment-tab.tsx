@@ -434,6 +434,7 @@ export function FulfilmentTab({
 						retailerId={retailerId}
 						canUse={hasFeature(subscription, "delivery")}
 						country={country}
+						chargeMode={deliveryConfig?.mode}
 					/>
 				</div>
 			</Card>

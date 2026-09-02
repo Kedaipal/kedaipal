@@ -148,6 +148,19 @@ export const getConnectContext = internalQuery({
 		| { ok: true; retailerId: Id<"retailers">; actingAsAdmin: boolean }
 	> => {
 		const access = await resolveStoreAccess(ctx, retailerId);
+		// ONE automated fulfilment provider at a time (Zaki, 2 Sep). Lalamove
+		// live-quote pricing means every checkout fee IS a rider quote and every
+		// order goes out by rider — booking a parcel courier on such an order
+		// would ship it by a method the buyer didn't pay for. The reverse guard
+		// (switching pricing TO lalamove while Delyva is on) lives in
+		// retailers.updateSettings.
+		if (access.retailer.deliveryConfig?.mode === "lalamove") {
+			return {
+				ok: false,
+				message:
+					"Your delivery charge is set to Lalamove live quotes, so riders handle every delivery. Switch the delivery charge to a flat or weight-based fee first, then connect Delyva.",
+			};
+		}
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
 		if (!delyvaBookingAllowed(country)) {
 			return {
@@ -551,10 +564,19 @@ export const updateSettings = mutation({
 			await assertSubscriptionActive(ctx, access.retailer._id);
 		const prev = access.retailer.delyva as DelyvaConfig | undefined;
 		if (!prev) throw new ConvexError("Connect your Delyva account first.");
-		if (args.enabled === true && !access.actingAsAdmin) {
-			// Same gate as connect — re-enabling after a downgrade is the moment
-			// this needs to hold. Disabling stays free.
-			await assertPlanFeature(ctx, access.retailer._id, "delivery");
+		if (args.enabled === true) {
+			// One automated provider at a time — same rule as connect. Pausing
+			// stays free (it can only make the state MORE coherent).
+			if (access.retailer.deliveryConfig?.mode === "lalamove") {
+				throw new ConvexError(
+					"Your delivery charge is set to Lalamove live quotes, so riders handle every delivery. Switch the delivery charge to another mode first, then resume Delyva.",
+				);
+			}
+			if (!access.actingAsAdmin) {
+				// Same gate as connect — re-enabling after a downgrade is the
+				// moment this needs to hold. Disabling stays free.
+				await assertPlanFeature(ctx, access.retailer._id, "delivery");
+			}
 		}
 		const pickupAddress =
 			args.pickupAddress === undefined
@@ -660,6 +682,7 @@ export const getSettings = query({
 /** Why the Book button is disabled for this order (null = live). */
 export type DelyvaDispatchBlock =
 	| "country_unsupported"
+	| "lalamove_active"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -753,6 +776,10 @@ function dispatchBlockReason(args: {
 	// is none to name (the Lalamove 86eyqgujv lesson).
 	if (!delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	// Belt-and-braces for the one-provider rule: connect/enable refuse this
+	// state, but a store that switched pricing to Lalamove with a legacy
+	// enabled row must still find the Book button gone, not half-working.
+	if (retailer.deliveryConfig?.mode === "lalamove") return "lalamove_active";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	// Same eligible window as Lalamove: a pending order never ships itself,
 	// shipped/delivered orders are already on their way.

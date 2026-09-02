@@ -82,12 +82,19 @@ const NAME = {
 
 const RETAILER = "r1" as Id<"retailers">;
 
-function card(props: { canUse?: boolean; country?: "MY" | "SG" } = {}) {
+function card(
+	props: {
+		canUse?: boolean;
+		country?: "MY" | "SG";
+		chargeMode?: string;
+	} = {},
+) {
 	return (
 		<DelyvaCard
 			retailerId={RETAILER}
 			canUse={props.canUse ?? true}
 			country={props.country ?? "MY"}
+			chargeMode={props.chargeMode}
 		/>
 	);
 }
@@ -422,6 +429,33 @@ describe("Singapore (z8r3fdbqmc)", () => {
 		state.settings = settings({ connected: false, countryAllowed: false });
 		const { container } = render(card({ country: "SG" }));
 		expect(container.textContent).toBe("");
+	});
+});
+
+describe("one automated provider at a time", () => {
+	it("under Lalamove pricing: explains instead of offering, with no tiles", () => {
+		state.settings = disconnected();
+		const { container } = render(card({ chargeMode: "lalamove" }));
+		expect(container.textContent).toContain(
+			"Lalamove riders handle this store",
+		);
+		expect(container.textContent).toContain("switch the delivery charge");
+		// No pickable option, no key field — the section is informational.
+		expect(screen.queryByRole("button", { name: /^Delyva/i })).toBeNull();
+		expect(screen.queryByLabelText(/delyva api key/i)).toBeNull();
+	});
+
+	it("a still-connected account keeps its way out", () => {
+		state.settings = settings();
+		render(card({ chargeMode: "lalamove" }));
+		expect(screen.getByText(/stays connected and paused/i)).toBeTruthy();
+		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
+	});
+
+	it("any other charge mode offers the tiles as usual", () => {
+		state.settings = disconnected();
+		render(card({ chargeMode: "weight" }));
+		expect(screen.getByRole("button", { name: /^Delyva/i })).toBeTruthy();
 	});
 });
 

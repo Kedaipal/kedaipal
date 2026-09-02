@@ -94,6 +94,7 @@ export function DelyvaCard({
 	retailerId,
 	canUse,
 	country,
+	chargeMode,
 }: {
 	/** The store being edited — the autocomplete bills Google per session
 	 * against it and region-locks predictions to its country. */
@@ -103,6 +104,11 @@ export function DelyvaCard({
 	/** Store country — drives the address form's shape (SG has no state tier
 	 * and a 6-digit postal code) and the coverage copy. */
 	country: Country;
+	/** The active delivery-charge mode. "lalamove" means live rider quotes
+	 * price every checkout and riders carry every order — ONE automated
+	 * provider at a time, so this section then explains instead of offering
+	 * (the server refuses the combo either way). */
+	chargeMode?: string;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
 	const settings = useQuery(
@@ -267,6 +273,65 @@ export function DelyvaCard({
 	// connected to unwind — stay out of the settings entirely (the SG-lite
 	// posture: MY-only options are hidden, not disabled).
 	if (countryBlocked && !connected) return null;
+
+	// One automated fulfilment provider at a time (Zaki, 2 Sep): under
+	// Lalamove live-quote pricing every checkout fee IS a rider quote and
+	// every order goes out by rider — there are no parcels to book. The
+	// section stays visible so the seller learns WHY Delyva is absent and how
+	// to switch, rather than the option silently vanishing; a still-connected
+	// account keeps its way out.
+	if (chargeMode === "lalamove") {
+		return (
+			<div className="flex flex-col gap-3">
+				<div className="flex flex-col gap-0.5">
+					<span className="flex items-center gap-2 text-sm font-medium">
+						Courier booking
+					</span>
+					<p className="text-xs text-muted-foreground">
+						How parcels physically leave. Separate from the delivery charge
+						above — that decides what your buyer pays.
+					</p>
+				</div>
+				<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+					<strong className="text-foreground">
+						Lalamove riders handle this store&apos;s deliveries
+					</strong>{" "}
+					— your delivery charge above quotes the rider price at checkout, and
+					you book the rider from each order. To ship parcels through Delyva
+					couriers instead, switch the delivery charge to a flat or
+					weight-based fee first.
+				</p>
+				{connected ? (
+					<div className="flex flex-wrap items-center gap-2">
+						<p className="text-xs text-muted-foreground">
+							Your Delyva account stays connected and paused meanwhile.
+						</p>
+						<button
+							type="button"
+							onClick={() => setConfirmingDisconnect(true)}
+							className="ml-auto min-h-11 text-sm font-medium text-destructive hover:underline"
+						>
+							Disconnect
+						</button>
+						<ConfirmDialog
+							open={confirmingDisconnect}
+							onOpenChange={setConfirmingDisconnect}
+							title="Disconnect Delyva?"
+							description="Your pickup address and parcel type are kept, so reconnecting is just one key."
+							confirmLabel="Disconnect"
+							destructive
+							onConfirm={() =>
+								void run(
+									() => disconnect({ retailerId: actAsRetailerId }),
+									"Delyva disconnected",
+								)
+							}
+						/>
+					</div>
+				) : null}
+			</div>
+		);
+	}
 
 	return (
 		<div className="flex flex-col gap-3">

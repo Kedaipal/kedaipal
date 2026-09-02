@@ -1774,6 +1774,17 @@ export const updateSettings = mutation({
 							"Turn on Lalamove delivery booking first — live quotes use its credentials and vehicle type.",
 						);
 					}
+					// One automated fulfilment provider at a time (86eyjpv6z, Zaki
+					// 2 Sep): under Lalamove live-quote pricing every order goes out
+					// by rider, so an enabled Delyva booking would offer a second
+					// dispatch path the buyer's fee doesn't describe. The forward
+					// guard (connecting Delyva under lalamove pricing) lives in
+					// convex/delyva.ts; this is the reverse switch.
+					if (retailer.delyva?.enabled) {
+						throw new ConvexError(
+							"Delyva courier booking is on — pause it under Courier booking first. Lalamove pricing sends every order by rider, so the two can't run together.",
+						);
+					}
 					if (!access.actingAsAdmin) {
 						await assertPlanFeature(ctx, retailer._id, "delivery");
 					}
