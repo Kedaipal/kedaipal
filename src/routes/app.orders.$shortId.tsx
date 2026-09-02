@@ -426,9 +426,12 @@ function OrderDetailRoute() {
 	const hasActiveDelyvaBooking =
 		!!delyvaInfo?.job && isActiveJobStatus(delyvaInfo.job.status);
 	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
-	// their delivery charge). They never ship parcels, so no manual courier
-	// surface is offered anywhere on this page — 86eyff02p.
-	const lalamoveVendor = dispatchInfo?.bookingEnabled === true;
+	// their delivery CHARGE — every checkout was priced as a rider trip). They
+	// never ship parcels, so no manual courier surface is offered anywhere on
+	// this page — 86eyff02p. Deliberately NOT `bookingEnabled`: since
+	// multi-provider (2 Sep) a weight-priced store can arm riders AND Delyva,
+	// and its parcel surfaces must stay.
+	const lalamoveVendor = dispatchInfo?.riderOnlyStore === true;
 	// Collection service (86eyg0n8e): the rider collects FROM the customer, so
 	// the webhook only ever moves the JOB — the order status stays the
 	// seller's to advance by hand throughout.

@@ -18,8 +18,6 @@ const BLOCK_COPY: Record<DelyvaDispatchBlock, string> = {
 	bad_status:
 		"A courier can only be booked while the order is confirmed or packed.",
 	job_active: "A courier is already booked on this order.",
-	lalamove_active:
-		"Your delivery charge is set to Lalamove live quotes, so riders handle every delivery — parcels can't be booked while it's on.",
 	not_connected:
 		"Connect your Delyva account first — Settings → Fulfilment → Delyva courier.",
 	disabled:

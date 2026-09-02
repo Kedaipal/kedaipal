@@ -212,29 +212,46 @@ pickup activation pending), `no_service`, `unknown`. Booking failures email
 the seller through the same `notifyDeliveryJobFailed` template, now
 provider-aware in all three locales.
 
-## One automated provider at a time (2 Sep, Zaki)
+## Settings IA — Integrations vs Fulfilment (2 Sep, Zaki)
 
-A store runs **either** Lalamove **or** Delyva as its automated fulfilment,
-never both. The pivot is the delivery-charge mode:
+The first cut shipped a **one-automated-provider-at-a-time** rule (Lalamove OR
+Delyva, mutually exclusive). Zaki's test round overturned it, and the revised
+reasoning is recorded here because the first version *sounded* right:
 
-- **Charge mode = `lalamove`** — every checkout fee IS a live rider quote and
-  every order goes out by rider (checkout refuses addresses Lalamove can't
-  quote). Booking a parcel courier on such an order would ship it by a method
-  the buyer's fee doesn't describe, so Delyva is unavailable: the Courier
-  booking section explains why and how to switch instead of offering tiles,
-  `delyva.connect`/`updateSettings` refuse the enable, and the dispatch card
-  blocks with `lalamove_active` (belt-and-braces for legacy rows).
-- **Any other charge mode** (flat / weight / radius / free) — the buyer's fee
-  is priced by the rate card independent of dispatch, so the seller may pick
-  "I arrange it" or Delyva. This is where "pricing ⊥ booking" genuinely holds.
-- **The reverse switch is guarded too**: `retailers.updateSettings` refuses
-  `mode: "lalamove"` while Delyva booking is enabled — pause Delyva first.
-  Refuse-with-reason, never a silent auto-pause.
+**The mutual exclusion solved a money-safety problem that doesn't exist.** The
+buyer's delivery fee is collected at checkout, before any booking is made —
+which tool sends the parcel afterwards changes nothing the buyer paid, only
+the seller's margin, and the dispatch card shows "buyer paid X" beside every
+courier price at the moment of choice. So the rule is now:
 
-Pausing Delyva is never blocked (it only makes the state more coherent), and
-a connected account under Lalamove pricing keeps a visible Disconnect.
+- **Charge mode** (Fulfilment → Delivery charge) answers "what does the buyer
+  pay". Lalamove live-quote remains one of those modes; Delyva never is.
+- **Courier booking** (Fulfilment → Courier booking) is **independent
+  toggles**, not a radio — a seller may arm Lalamove riders AND Delyva
+  couriers and pick per order (rider across town today, parcel across the
+  country tomorrow). Arranging your own courier is the ever-present baseline,
+  not an option. Each unconnected provider's toggle is disabled-with-reason
+  plus a link to Integrations.
+- **One coupling survives**: Lalamove live-quote pricing implies rider booking
+  (the checkout quote runs on those credentials), so under that charge mode
+  the rider toggle is locked on with the reason shown. Switching pricing AWAY
+  no longer disarms rider booking — it's the seller's toggle now.
+- Per ORDER, the **one-active-job reservation** (cross-provider) is what
+  arbitrates: both cards may render, whichever books first takes the slot and
+  the other card shows `job_active`.
 
-## Seller UI
+**Settings → Integrations** (new tab) is one home for third-party ACCOUNTS —
+Lalamove keys (with the 86eypncfy env badge + webhook row), the Delyva
+account card (connect, pickup address, parcel type, webhook health), and the
+HitPay card (moved from Payments; its country-switch checklist deep-link
+retargeted). Keys are pasted once and rotated rarely; behavioural switches
+are day-to-day — mixing the two is how the Fulfilment tab ended up carrying
+credential forms inside a pricing section. Fulfilment/Payments link here
+whenever a needed account isn't connected, and `riderOnlyStore` (not
+`bookingEnabled`) now drives the "no parcels ever leave this store" surfaces,
+since a weight-priced store can legitimately arm riders too.
+
+## Seller UI## Seller UI
 
 Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the
 store's existing delivery charge (flat / weight-zone) at checkout and get the

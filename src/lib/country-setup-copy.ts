@@ -25,7 +25,14 @@ import type {
  */
 
 /** Which settings tab fixes this row. */
-export type CountrySetupTab = "store" | "whatsapp" | "payments" | "fulfilment";
+export type CountrySetupTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "fulfilment"
+	// Third-party accounts (2 Sep IA rework) — HitPay's checklist row lands
+	// on the card's new home.
+	| "integrations";
 
 type CountrySetupCopy = {
 	title: string;
@@ -56,8 +63,9 @@ const COPY: Record<
 	hitpay: ({ to, from }) => ({
 		title: "Check your HitPay account",
 		body: `Your HitPay keys were connected while the store was in ${placeName(from)}. A HitPay account settles one country's currency, so ${COUNTRY_CURRENCY[to]} payments will be declined at checkout.`,
-		tab: "payments",
-		action: "Open Payments",
+		// HitPay's card moved to Integrations (2 Sep IA rework).
+		tab: "integrations",
+		action: "Open Integrations",
 	}),
 	business_address: ({ to, from }) => ({
 		title: "Set your business address",

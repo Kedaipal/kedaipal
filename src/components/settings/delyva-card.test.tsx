@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
-// Delyva courier-booking option (86eyjpv6z) — Settings → Fulfilment → Delivery.
-// Covers the progressive disclosure (settings appear only once the option is
-// picked), the single-key connect, the demo-account warning, the Pro gate
-// (which never traps a downgraded seller), and the pickup-address rule
-// mirrored from the server.
+// Delyva connection card (86eyjpv6z) — Settings → Integrations. Covers the
+// single-key connect, the demo-account warning, the Pro gate (which never
+// traps a downgraded seller), and the country-aware pickup-address rules.
+// The on/off toggle lives in Fulfilment → Courier booking, not here.
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +35,9 @@ vi.mock("sonner", () => ({
 }));
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
+}));
+vi.mock("@tanstack/react-router", () => ({
+	Link: (props: Record<string, unknown>) => <a {...props} />,
 }));
 // The real one talks to Google through Convex actions; the card only cares
 // that a pick lands in the structured fields, which `onSelect` drives.
@@ -82,19 +84,12 @@ const NAME = {
 
 const RETAILER = "r1" as Id<"retailers">;
 
-function card(
-	props: {
-		canUse?: boolean;
-		country?: "MY" | "SG";
-		chargeMode?: string;
-	} = {},
-) {
+function card(props: { canUse?: boolean; country?: "MY" | "SG" } = {}) {
 	return (
 		<DelyvaCard
 			retailerId={RETAILER}
 			canUse={props.canUse ?? true}
 			country={props.country ?? "MY"}
-			chargeMode={props.chargeMode}
 		/>
 	);
 }
@@ -144,56 +139,29 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-describe("progressive disclosure", () => {
-	it("offers the two options and hides the setup until Delyva is picked", () => {
+describe("account card", () => {
+	it("offers the connect form straight away when nothing is connected", () => {
 		render(card());
-		expect(screen.getByRole("button", { name: /I arrange it/i })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /^Delyva/i })).toBeTruthy();
-		// Nothing to configure until the seller opts in.
-		expect(screen.queryByLabelText(/delyva api key/i)).toBeNull();
-	});
-
-	it("reveals the connect form once Delyva is picked", () => {
-		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		expect(screen.getByLabelText(/delyva api key/i)).toBeTruthy();
 		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
 	});
 
-	it("shows the settings straight away for a connected, enabled store", () => {
+	it("shows the account settings once connected, plus the cross-tab pointer", () => {
 		state.settings = settings();
-		render(card());
+		const { container } = render(card());
 		expect(screen.getByText(/Wagyu Walid Trading/)).toBeTruthy();
 		expect(screen.getByText(/Default parcel type/i)).toBeTruthy();
+		// The on/off switch lives in Fulfilment — the card says where.
+		expect(container.textContent).toContain("Courier booking");
+		expect(container.textContent).toContain("Booking is on");
 	});
 
-	it("picking 'I arrange it' pauses a live connection rather than losing it", async () => {
-		state.settings = settings();
-		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /I arrange it/i }));
-		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
-		expect(state.mutation).toHaveBeenCalledWith({
-			retailerId: undefined,
-			enabled: false,
-		});
-	});
-
-	it("a paused store says its account is kept, and hides the settings", () => {
+	it("says so when booking is off, without hiding the account settings", () => {
 		state.settings = settings({ enabled: false });
-		render(card());
-		expect(screen.getByText(/still connected and paused/i)).toBeTruthy();
-		expect(screen.queryByText(/Default parcel type/i)).toBeNull();
-	});
-
-	it("picking Delyva again resumes it", async () => {
-		state.settings = settings({ enabled: false });
-		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
-		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
-		expect(state.mutation).toHaveBeenCalledWith({
-			retailerId: undefined,
-			enabled: true,
-		});
+		const { container } = render(card());
+		expect(container.textContent).toContain("Booking is currently off");
+		// Unlike the old option card, being off never hides the account config.
+		expect(screen.getByText(/Default parcel type/i)).toBeTruthy();
 	});
 });
 
@@ -204,13 +172,11 @@ describe("connect", () => {
 
 	it("asks for ONE key and says so", () => {
 		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		expect(screen.getByText(/One key is all we need/i)).toBeTruthy();
 	});
 
 	it("keeps Connect disabled until a key is typed", () => {
 		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		const connect = screen.getByRole("button", { name: /connect delyva/i });
 		expect(connect.hasAttribute("disabled")).toBe(true);
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
@@ -229,7 +195,6 @@ describe("connect", () => {
 		state.actions.set(NAME.connect, connect);
 		render(card());
 
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "  dx-abc  " },
 		});
@@ -251,7 +216,6 @@ describe("connect", () => {
 			}),
 		);
 		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "bad" },
 		});
@@ -275,7 +239,6 @@ describe("connect", () => {
 			}),
 		);
 		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "dx1" },
 		});
@@ -298,7 +261,6 @@ describe("connect", () => {
 			}),
 		);
 		render(card());
-		fireEvent.click(screen.getByRole("button", { name: /^Delyva/i }));
 		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
 			target: { value: "dx1" },
 		});
@@ -337,21 +299,23 @@ describe("demo vs live account", () => {
 });
 
 describe("plan gate", () => {
-	it("marks the option Pro and blocks picking it for a Starter seller", () => {
+	it("marks the card Pro and blocks connecting for a Starter seller", () => {
 		state.settings = disconnected();
-		render(card({ canUse: false }));
-		const tile = screen.getByRole("button", { name: /^Delyva/i });
-		expect(tile.hasAttribute("disabled")).toBe(true);
-		expect(tile.textContent).toContain("Pro");
+		const { container } = render(card({ canUse: false }));
+		expect(container.textContent).toContain("Pro");
+		expect(
+			screen
+				.getByRole("button", { name: /connect delyva/i })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		expect(screen.getByText(/Disconnecting is never locked/i)).toBeTruthy();
 	});
 
 	it("never traps a downgraded seller who is already connected", () => {
 		state.settings = settings();
 		render(card({ canUse: false }));
 		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: /I arrange it/i }).hasAttribute("disabled"),
-		).toBe(false);
+		expect(screen.getByRole("button", { name: /replace key/i })).toBeTruthy();
 	});
 });
 
@@ -360,8 +324,10 @@ describe("Singapore (z8r3fdbqmc)", () => {
 	it("is offered to a Singapore store like any other", () => {
 		state.settings = disconnected();
 		render(card({ country: "SG" }));
-		expect(screen.getByRole("button", { name: /^Delyva/i })).toBeTruthy();
-		expect(screen.queryByText(/isn't available in your store's country/i)).toBeNull();
+		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
+		expect(
+			screen.queryByText(/isn't available in your store's country/i),
+		).toBeNull();
 	});
 
 	it("asks for a 6-digit postal code, not a 5-digit postcode", () => {
@@ -429,33 +395,6 @@ describe("Singapore (z8r3fdbqmc)", () => {
 		state.settings = settings({ connected: false, countryAllowed: false });
 		const { container } = render(card({ country: "SG" }));
 		expect(container.textContent).toBe("");
-	});
-});
-
-describe("one automated provider at a time", () => {
-	it("under Lalamove pricing: explains instead of offering, with no tiles", () => {
-		state.settings = disconnected();
-		const { container } = render(card({ chargeMode: "lalamove" }));
-		expect(container.textContent).toContain(
-			"Lalamove riders handle this store",
-		);
-		expect(container.textContent).toContain("switch the delivery charge");
-		// No pickable option, no key field — the section is informational.
-		expect(screen.queryByRole("button", { name: /^Delyva/i })).toBeNull();
-		expect(screen.queryByLabelText(/delyva api key/i)).toBeNull();
-	});
-
-	it("a still-connected account keeps its way out", () => {
-		state.settings = settings();
-		render(card({ chargeMode: "lalamove" }));
-		expect(screen.getByText(/stays connected and paused/i)).toBeTruthy();
-		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-	});
-
-	it("any other charge mode offers the tiles as usual", () => {
-		state.settings = disconnected();
-		render(card({ chargeMode: "weight" }));
-		expect(screen.getByRole("button", { name: /^Delyva/i })).toBeTruthy();
 	});
 });
 

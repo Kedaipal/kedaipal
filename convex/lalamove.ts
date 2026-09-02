@@ -1614,13 +1614,19 @@ export const getDeliveryJob = query({
 		/** Seller's opt-in "prompt me to book when I mark packed" preference —
 		 * the card auto-opens the confirm dialog on the packed transition. */
 		promptBookOnPacked: boolean;
-		/** Rider dispatch IS this vendor's delivery method. Settings couples this
-		 * 1:1 with the "Lalamove" delivery-charge choice (picking it enables
-		 * booking, switching away disables it), so it answers the seller-facing
-		 * question "do I send riders or parcels?" — and the dashboard drops every
-		 * manual parcel-courier surface when it's true (86eyff02p). Distinct from
-		 * `blockReason === null`, which is about THIS order being bookable now. */
+		/** Rider booking is armed for this store (credentials + the Courier
+		 * booking toggle). Since multi-provider (2 Sep, Zaki) this NO LONGER
+		 * means "rider is the only way out" — a store can run rider booking
+		 * beside Delyva parcels; see `riderOnlyStore` for that question. */
 		bookingEnabled: boolean;
+		/** Rider dispatch IS this vendor's delivery method: the delivery CHARGE
+		 * is Lalamove live quotes, so every checkout was priced (and gated) as a
+		 * rider trip and no parcel ever leaves this store. This is what drops
+		 * the manual parcel-courier surfaces (86eyff02p) — it used to key off
+		 * `bookingEnabled`, which was equivalent while Settings coupled booking
+		 * 1:1 to the pricing mode, and stopped being equivalent the day a
+		 * weight-priced store could arm riders too. */
+		riderOnlyStore: boolean;
 		/** The STORE's current direction (86eyg0n8e) — what booking from this
 		 * card would do right now, so it drives the button/dialog wording and
 		 * the manual-advance gate. What a past trip actually did lives on
@@ -1693,6 +1699,9 @@ export const getDeliveryJob = query({
 			// mark-shipped prompt keys off this to decide rider-vs-courier.
 			bookingEnabled:
 				retailer.deliveryBooking?.enabled === true &&
+				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			riderOnlyStore:
+				retailer.deliveryConfig?.mode === "lalamove" &&
 				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",

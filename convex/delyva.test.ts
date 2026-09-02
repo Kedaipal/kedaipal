@@ -627,10 +627,12 @@ describe("Singapore stores (z8r3fdbqmc)", () => {
 	});
 });
 
-describe("one automated provider at a time (Zaki, 2 Sep)", () => {
-	// Lalamove live-quote pricing means every checkout fee IS a rider quote and
-	// every order goes out by rider — an enabled Delyva booking beside it would
-	// dispatch orders by a method the buyer's fee doesn't describe.
+describe("providers coexist; the order's booking slot arbitrates (Zaki, 2 Sep)", () => {
+	// The revised model: a store may arm Lalamove riders AND Delyva couriers
+	// and pick per order. What stays strict is the per-ORDER invariant — one
+	// active job across both providers — plus the money fact that makes the
+	// whole thing safe: the buyer's fee was collected at checkout, before any
+	// booking existed.
 	async function withLalamovePricing(
 		t: ReturnType<typeof setup>,
 		retailerId: Id<"retailers">,
@@ -653,56 +655,23 @@ describe("one automated provider at a time (Zaki, 2 Sep)", () => {
 		});
 	}
 
-	test("connect is refused while Lalamove pricing runs the store", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t);
-		await t.run(async (ctx) => {
-			await ctx.db.patch(retailer._id, { delyva: undefined });
-		});
-		await withLalamovePricing(t, retailer._id);
-		const context = await t
-			.withIdentity({ subject: USER })
-			.query(internal.delyva.getConnectContext, { retailerId: retailer._id });
-		expect(context.ok).toBe(false);
-		if (context.ok) return;
-		expect(context.message).toMatch(/Lalamove live quotes/i);
-	});
-
-	test("resuming Delyva is refused under Lalamove pricing; pausing stays free", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t);
-		await withLalamovePricing(t, retailer._id);
-		const asUser = t.withIdentity({ subject: USER });
-		// Pausing can only make the state MORE coherent — never blocked.
-		await asUser.mutation(api.delyva.updateSettings, {
-			retailerId: retailer._id,
-			enabled: false,
-		});
-		await expect(
-			asUser.mutation(api.delyva.updateSettings, {
-				retailerId: retailer._id,
-				enabled: true,
-			}),
-		).rejects.toThrow(/Lalamove live quotes/i);
-	});
-
-	test("dispatch blocks with lalamove_active even on a legacy enabled row", async () => {
+	test("Delyva stays bookable under Lalamove live-quote pricing", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t); // delyva enabled by the seed
-		await withLalamovePricing(t, retailer._id); // …then pricing switched under it
+		await withLalamovePricing(t, retailer._id);
 		const orderId = await seedOrder(t, retailer._id);
 		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
 			?.shortId as string;
 		const state = await t
 			.withIdentity({ subject: USER })
 			.query(api.delyva.getDispatchState, { shortId });
-		expect(state?.blockReason).toBe("lalamove_active");
+		expect(state?.blockReason).toBeNull();
+		expect(state?.bookingEnabled).toBe(true);
 	});
 
-	test("switching pricing TO lalamove is refused while Delyva booking is on", async () => {
+	test("switching pricing to lalamove no longer needs Delyva paused", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t); // delyva enabled
-		// Lalamove booking prerequisites, but pricing still on flat.
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailer._id, {
 				businessAddress: {
@@ -719,20 +688,28 @@ describe("one automated provider at a time (Zaki, 2 Sep)", () => {
 			});
 		});
 		const asUser = t.withIdentity({ subject: USER });
-		await expect(
-			asUser.mutation(api.retailers.updateSettings, {
-				deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
-			}),
-		).rejects.toThrow(/Delyva courier booking is on/i);
-		// Pause Delyva → the same switch goes through.
-		await asUser.mutation(api.delyva.updateSettings, {
-			retailerId: retailer._id,
-			enabled: false,
-		});
 		await asUser.mutation(api.retailers.updateSettings, {
 			deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
 		});
 		const row = await t.run(async (ctx) => ctx.db.get(retailer._id));
 		expect(row?.deliveryConfig?.mode).toBe("lalamove");
+		expect(row?.delyva?.enabled).toBe(true); // untouched — never auto-paused
+	});
+
+	test("an active LALAMOVE job still blocks a Delyva booking on that order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			provider: "lalamove",
+			providerOrderId: "LLM-77",
+			status: "ongoing",
+		});
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const state = await t
+			.withIdentity({ subject: USER })
+			.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.blockReason).toBe("job_active");
 	});
 });

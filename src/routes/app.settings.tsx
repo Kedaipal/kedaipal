@@ -13,6 +13,7 @@ import {
 	Landmark,
 	MapPinned,
 	MessageCircle,
+	Plug,
 	Plus,
 	QrCode,
 	ReceiptText,
@@ -67,7 +68,7 @@ import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
-import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
+import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -144,6 +145,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
+	| "integrations"
 	| "bookings"
 	| "order-status";
 
@@ -192,6 +194,15 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Delivery & self-collect options",
 		icon: <MapPinned className="size-4" />,
 	},
+	// Third-party ACCOUNTS (Lalamove, Delyva, HitPay): keys, connection
+	// health, per-service details. The behaviour those accounts power stays
+	// under Fulfilment / Payments, which link here when nothing is connected.
+	{
+		id: "integrations",
+		label: "Integrations",
+		description: "Lalamove, Delyva & HitPay accounts",
+		icon: <Plug className="size-4" />,
+	},
 	// Booking stores only (filtered out of both navs otherwise) — the Google
 	// Calendar feed lives here, beside the other how-you-sell surfaces.
 	{
@@ -221,7 +232,14 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: ["whatsapp", "payments", "fulfilment", "bookings", "order-status"],
+		tabs: [
+			"whatsapp",
+			"payments",
+			"fulfilment",
+			"integrations",
+			"bookings",
+			"order-status",
+		],
 	},
 ];
 
@@ -854,17 +872,21 @@ function SettingsRoute() {
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 							/>
 						</Card>
-						<Card
-							id={SETTINGS_ANCHOR.hitpay}
-							highlight={ringFor(SETTINGS_ANCHOR.hitpay)}
-						>
-							<OnlinePaymentsCard
-								hitpay={retailer.hitpay}
-								canUse={hasFeature(retailer.subscription, "onlinePayments")}
-								country={retailer.country}
-								onSave={(patch) => updateSettings(patch)}
-							/>
-						</Card>
+						{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
+						    one home for every third-party account. The pointer keeps the
+						    old home from reading as "online payments are gone". */}
+						<p className="px-1 text-xs text-muted-foreground">
+							Online payments (HitPay) moved to{" "}
+							<button
+								type="button"
+								onClick={() => navigate({ search: { tab: "integrations" } })}
+								className="font-medium text-accent hover:underline"
+							>
+								Settings → Integrations
+							</button>
+							 — connect your account there; buyers keep seeing Pay now on
+							their orders as before.
+						</p>
 						{/* Says plainly that nothing chases the buyer automatically, and
 						    names the one manual tool that exists — so the behaviour is
 						    discoverable without a seller assuming a nudge went out that
@@ -896,6 +918,17 @@ function SettingsRoute() {
 						minOrderValue={retailer.minOrderValue}
 						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}
+					/>
+				) : null}
+
+				{activeTab === "integrations" ? (
+					<IntegrationsTab
+						retailerId={retailer._id}
+						country={retailer.country}
+						deliveryBooking={retailer.deliveryBooking}
+						hitpay={retailer.hitpay}
+						subscription={retailer.subscription}
+						onSave={updateSettings}
 					/>
 				) : null}
 
