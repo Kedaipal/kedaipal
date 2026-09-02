@@ -25,13 +25,17 @@ import { sanitizeAttributionSource } from "../../convex/lib/attribution";
 import { resolveAwbConfig } from "../../convex/lib/awbConfig";
 import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
 import {
+	foldLegacyBuckets,
 	formatStatusAge,
 	INBOX_BUCKETS,
+	INBOX_LEAF_KEYS,
+	type InboxStatusLeaf,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
 import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
+	type PinMode,
 	sortInboxOrders,
 } from "../../convex/lib/orderInboxFilter";
 import {
@@ -72,6 +76,13 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
+import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+	describeBookingPeriod,
+	ENDING_SOON_DAYS,
+} from "../../convex/lib/bookingPeriod";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import {
@@ -102,7 +113,6 @@ import { summarizeOrderCardItems } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
-	ORDER_STATUS_KEYS,
 	type OrderStatus,
 	resolveAnchorLabel,
 	resolveCurrentStage,
@@ -110,11 +120,34 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
+import {
+	isBucketChip,
+	type StatusChipKey,
+	statusChipSelected as chipSelected,
+	toggleBucketChip,
+} from "../lib/inbox-status-chips";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
 const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
+
+/**
+ * One row of status chips: the select-all, the workflow buckets, then the
+ * booking periods (owner call, 1 Sep). They are separate args on the wire
+ * because they are computed from different data — a bucket from `status`, a
+ * period from the booking span — but to the seller they are one multi-select
+ * whose members OR together, so the UI has exactly one list, one toggle and one
+ * count function. Two lists behaving differently is what made this confusing.
+ */
+const BUCKET_CHIP_KEYS: StatusChipKey[] = BUCKET_KEYS;
+
+function statusChipLabel(key: StatusChipKey): string {
+	if (key === "all") return "All statuses";
+	if (!isBucketChip(key)) return BOOKING_PERIOD_LABELS[key];
+	return INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key;
+}
 
 function isPaymentStatus(x: unknown): x is PaymentStatus {
 	return x === "unpaid" || x === "claimed" || x === "received";
@@ -123,10 +156,9 @@ function isPaymentStatus(x: unknown): x is PaymentStatus {
 // All optional (defaults applied in the component) so links elsewhere can target
 // `/app/orders` without specifying search, and defaults stay out of the URL.
 type InboxSearch = {
-	/** Workflow buckets to keep — MULTI since 86eyrtz74, repeated in the URL
-	 * like `pay`/`st`. Absent = every bucket ("All"). A single value still
-	 * parses (`?bucket=new` — every deep link and old bookmark), it just lands
-	 * in a one-element list. */
+	/** Pre-1-Sep workflow buckets. READ ONLY — `validateSearch` folds any value
+	 * here into `st` and returns `undefined`, so old bookmarks and deep links
+	 * keep working and the param drops out of the URL on the next tap. */
 	bucket?: OrderBucket[];
 	q?: string;
 	pay?: PaymentStatus[];
@@ -144,10 +176,14 @@ type InboxSearch = {
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
 	 * so old bookmarks keep working. */
 	sources?: OrderSource[];
-	/** Exact order statuses to keep (86eyrtz74) — repeated in the URL like
-	 * `pay`/`method`. A separate, finer dimension from `bucket`: the bucket is
-	 * the coarse stage you navigate by, this is the precise one you question. */
-	st?: OrderStatus[];
+	/**
+	 * THE status axis — status LEAVES, repeated in the URL like `pay`/`method`.
+	 * Written by the chip row (a whole bucket's leaves at a tap), the Filters
+	 * panel (one at a time) and the Status column header; they are one state, so
+	 * a link carries whatever the seller was looking at regardless of which
+	 * surface they set it from. Legacy `?bucket=` folds in at parse time.
+	 */
+	st?: InboxStatusLeaf[];
 	/** Frozen line categories to keep (86eyrtz74). Free-form seller names. */
 	cat?: string[];
 	/** Keep orders with NO frozen categories (PR #235 review) — the twin of
@@ -157,6 +193,10 @@ type InboxSearch = {
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
 	asrc?: string[];
+	/** Booking periods to keep (S8) — "active", "ending_soon", "upcoming".
+	 * Repeated in the URL like `asrc`, so "who's on site right now" is a link a
+	 * seller can pin or send. */
+	period?: BookingPeriod[];
 	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
 	sort?: InboxSort;
 	/** Card list vs table (86eyrtz74), both available at every width.
@@ -175,10 +215,11 @@ type InboxSearch = {
 	 * here. Ignored in cards view, which keeps the `sort` popover. */
 	tsort?: string;
 	tdesc?: boolean;
-	/** Pin privilege OFF (86eyrtz74). Inverted on purpose: keeping pins visible
-	 * is the default, so only the non-default reaches the URL — the same rule
-	 * `sort` and `bucket` follow. */
-	nopin?: boolean;
+	/** What the pins do (86eyrtz74, extended 1 Sep): `"off"` filters them like
+	 * any other order, `"only"` narrows to them. Absent = `"top"`, the default,
+	 * so only the non-default reaches the URL — the rule `sort` and `bucket`
+	 * follow. A legacy `?nopin=true` still parses as `"off"`. */
+	pin?: Exclude<PinMode, "top">;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
@@ -189,14 +230,34 @@ function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
 }
 
-function isOrderStatusKey(x: unknown): x is OrderStatus {
-	return ORDER_STATUS_KEYS.includes(x as OrderStatus);
+function isInboxLeaf(x: unknown): x is InboxStatusLeaf {
+	return (INBOX_LEAF_KEYS as readonly string[]).includes(x as string);
 }
 
 /** A repeated search param arrives as a value, an array, or nothing. */
 function toList(raw: unknown): unknown[] {
 	return Array.isArray(raw) ? raw : raw != null ? [raw] : [];
 }
+
+/** Why a seller would tap each status chip. The booking ones carry new
+ * vocabulary so they must explain themselves; "All statuses" states the two
+ * things the row's behaviour depends on — that it covers bookings too, and that
+ * chips add up rather than narrow each other. */
+const STATUS_CHIP_HINTS: Partial<Record<StatusChipKey, string>> = {
+	all: "Every order, bookings included. Tap any chip to narrow — chips add up, so picking two shows both.",
+	active:
+		"Stays and memberships running right now — checked in, not yet checked out.",
+	ending_soon: `Active bookings finishing within ${ENDING_SOON_DAYS} days — the renewal and check-out list.`,
+	upcoming: "Booked, but not started yet.",
+};
+
+/** What the next tap on the Pinned chip will do — the only way a three-state
+ * control can be honest about a state the seller hasn't reached yet. */
+const PIN_MODE_HINTS: Record<PinMode, string> = {
+	top: "Pinned orders stay on top, even when they don't match your filters. Tap to show only pinned.",
+	only: "Showing only your pinned orders. Tap to filter them like any other order.",
+	off: "Pinned orders are being filtered like any other order. Tap to keep them on top.",
+};
 
 export const Route = createFileRoute("/app/orders/")({
 	// URL is the source of truth for what the seller is LOOKING AT — bucket,
@@ -240,6 +301,23 @@ export const Route = createFileRoute("/app/orders/")({
 			: asrcRaw != null
 				? [asrcRaw]
 				: [];
+		const periodRaw = search.period;
+		const periodArr = Array.isArray(periodRaw)
+			? periodRaw
+			: periodRaw != null
+				? [periodRaw]
+				: [];
+		// Narrowed against the real union, so a hand-edited or stale URL can't
+		// push a value the server would reject.
+		const period = [
+			...new Set(
+				periodArr.filter((x): x is BookingPeriod =>
+					BOOKING_PERIOD_CHIPS.includes(
+						x as (typeof BOOKING_PERIOD_CHIPS)[number],
+					),
+				),
+			),
+		];
 		const asrc = [
 			...new Set(
 				asrcArr.flatMap((x) => {
@@ -256,7 +334,17 @@ export const Route = createFileRoute("/app/orders/")({
 				),
 			),
 		];
-		const st = [...new Set(toList(search.st).filter(isOrderStatusKey))];
+		// Legacy `?bucket=` folds into `st` right here, so the rest of the route
+		// only ever sees ONE status field and a stale bookmark heals on the next
+		// navigate. Same helper the server folds with, so a link and the query it
+		// produces can't disagree.
+		const st = [
+			...new Set(
+				foldLegacyBuckets(bucket.length > 0 ? bucket : undefined, [
+					...new Set(toList(search.st).filter(isInboxLeaf)),
+				]) ?? [],
+			),
+		];
 		// Category names are the seller's own words — no allowlist to validate
 		// against, so they are only de-duplicated and length-capped. An unknown
 		// name simply matches nothing, which is the honest outcome for a stale
@@ -273,7 +361,11 @@ export const Route = createFileRoute("/app/orders/")({
 				? search.q
 				: undefined;
 		return {
-			bucket: bucket.length > 0 ? bucket : undefined,
+			// Never written back: it folded into `st` above. Keeping it out of the
+			// returned object is what makes the old param disappear from the URL
+			// on the seller's next tap instead of lingering as a second source of
+			// truth for the same thing.
+			bucket: undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -294,6 +386,7 @@ export const Route = createFileRoute("/app/orders/")({
 					? true
 					: undefined,
 			asrc: asrc.length > 0 ? asrc : undefined,
+			period: period.length > 0 ? period : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
 			sort: search.sort === "due" ? "due" : undefined,
 			// Both values survive (see InboxSearch.view) — absent means "the view
@@ -311,8 +404,14 @@ export const Route = createFileRoute("/app/orders/")({
 					: undefined,
 			tdesc:
 				search.tdesc === true || search.tdesc === "true" ? true : undefined,
-			nopin:
-				search.nopin === true || search.nopin === "true" ? true : undefined,
+			// Legacy `?nopin=true` folds in, so a bookmark from before the third
+			// mode existed still opens the view it named.
+			pin:
+				search.pin === "off" || search.pin === "only"
+					? search.pin
+					: search.nopin === true || search.nopin === "true"
+						? "off"
+						: undefined,
 		};
 	},
 	component: OrdersRoute,
@@ -348,12 +447,12 @@ const INBOX_SORTS: {
 
 function OrdersRoute() {
 	const {
-		bucket: buckets = [],
 		q = "",
 		pay = [],
 		method = [],
 		munspec = false,
 		asrc = [],
+		period = [],
 		from,
 		to,
 		mockup = false,
@@ -364,18 +463,16 @@ function OrdersRoute() {
 		catunspec = false,
 		sort = "recent",
 		view: urlView,
-		nopin = false,
+		pin: pinMode = "top",
 		tsort,
 		tdesc = false,
 	} = Route.useSearch();
 	// TanStack Table's own sorting shape, derived from the URL so a sorted table
 	// survives refresh and can be shared.
 	const tableSorting: SortingState = tsort ? [{ id: tsort, desc: tdesc }] : [];
-	// Pin privilege is ON unless the seller explicitly turned it off (see the
-	// `nopin` search param) — pins outranking the filter is the default because
-	// that is the case they pin FOR: park an order on top, filter to something
-	// else, compare.
-	const showPinned = !nopin;
+	// Pins outrank the filter by default — that is the case they pin FOR: park an
+	// order on top, filter to something else, compare. See the `pin` search param
+	// for the other two modes.
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useDashboardRetailer();
 	const convex = useConvex();
@@ -429,10 +526,10 @@ function OrdersRoute() {
 		hasFeature(retailer.subscription, "orderInbox");
 	const view = resolveInboxView(urlView, storedView, inboxEnabled);
 
-	const bucketKey = buckets.join(",");
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
+	const periodKey = period.join(",");
 	const sourcesKey = sources.join(",");
 	const stKey = st.join(",");
 	const catKey = cat.join(",");
@@ -450,11 +547,11 @@ function OrdersRoute() {
 		setVisibleCount(PAGE_SIZE);
 		setSelected(new Set());
 	}, [
-		bucketKey,
 		debounced,
 		payKey,
 		methodKey,
 		asrcKey,
+		periodKey,
 		munspec,
 		from,
 		to,
@@ -466,8 +563,8 @@ function OrdersRoute() {
 		catunspec,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
-		// Toggling pin privilege changes which rows are in the set.
-		nopin,
+		// Changing the pin mode changes which rows are in the set.
+		pinMode,
 	]);
 
 	// Permanent hard delete (single + bulk) is admin-only (Kedaipal support); a
@@ -508,7 +605,6 @@ function OrdersRoute() {
 				? inboxEnabled
 					? {
 							retailerId: retailer._id,
-							buckets: buckets.length > 0 ? buckets : undefined,
 							paymentStatuses: pay.length > 0 ? pay : undefined,
 							paymentMethods: method.length > 0 ? method : undefined,
 							methodUnspecified: munspec || undefined,
@@ -521,11 +617,12 @@ function OrdersRoute() {
 							categories: cat.length > 0 ? cat : undefined,
 							categoriesUnspecified: catunspec || undefined,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
+							bookingPeriods: period.length > 0 ? period : undefined,
 							searchText: debounced || undefined,
-							// Pins keep their privilege in the live inbox AND in the
-							// export below — the two must send the same value or the CSV
-							// would hold different rows than the screen it came from.
-							showPinned: showPinned || undefined,
+							// The inbox AND the export below must send the same pin mode,
+							// or the CSV would hold different rows than the screen it came
+							// from.
+							pinMode,
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
@@ -649,6 +746,12 @@ function OrdersRoute() {
 		: undefined;
 	const now = Date.now();
 	const searching = debounced.length > 0;
+	// Every active filter OUTSIDE the status axis. `st`/`period` deliberately
+	// don't count: the chip row is the seller's PLACE — the old bucket segment
+	// control's successor — so a chip tap must not flip the empty state to "No
+	// orders match your filters" (which buried the per-bucket copy, PR #243
+	// review), and "Clear filters" must not throw the seller back to All. The
+	// panel's own "Clear all (N)" is the control that owns the whole axis.
 	const filtersActive =
 		pay.length > 0 ||
 		method.length > 0 ||
@@ -658,34 +761,70 @@ function OrdersRoute() {
 		mockup ||
 		fwin != null ||
 		sources.length > 0 ||
-		st.length > 0 ||
 		cat.length > 0 ||
 		catunspec ||
 		asrc.length > 0;
 
-	function toggleBucket(next: InboxBucket) {
+	// ONE empty-state copy for both views — the table used to hardcode its own,
+	// so the same state read differently depending on which view you were in.
+	const emptyCopy = inboxEmptyCopy({
+		searching,
+		pinOnly: pinMode === "only",
+		anyPinned: pinnedCount > 0,
+		mockup,
+		filtersActive,
+		statuses: st,
+		periods: period,
+	});
+
+	/**
+	 * ONE flat set of status chips (owner call, 1 Sep).
+	 *
+	 * Workflow buckets and booking periods are separate args on the wire because
+	 * they are computed from different data, but to the seller they are one row:
+	 * every chip ORs into the same set, "All statuses" is the select-all, and
+	 * tapping anything unlights it. They shipped first as two dimensions that
+	 * ANDed — visually identical chips combining by different rules, which is
+	 * exactly as confusing as it sounds.
+	 *
+	 * The Pinned chip is NOT part of this set: it is the seller's own mark, not a
+	 * status, so "All statuses" never touches it and it never unlights "All".
+	 */
+	function toggleStatusChip(next: StatusChipKey) {
 		navigate({
 			// `replace`, like every other multi-select: a set is built one tap at a
 			// time, and each push was a history entry plus (via scrollRestoration) a
-			// scroll-to-top. The chips stopped being single-shot navigation when
-			// they stopped being single-select.
+			// scroll-to-top.
 			replace: true,
 			search: (prev) => {
-				// "All" is the escape hatch, not a member: it clears the set.
-				if (next === "all") return { ...prev, bucket: undefined };
-				const has = buckets.includes(next);
-				const list = has
-					? buckets.filter((b) => b !== next)
-					: [...buckets, next];
-				return { ...prev, bucket: list.length > 0 ? list : undefined };
+				// "All statuses" is the select-all — it clears the whole row.
+				if (next === "all")
+					return { ...prev, st: undefined, period: undefined };
+				if (!isBucketChip(next)) {
+					const list = period.includes(next)
+						? period.filter((x) => x !== next)
+						: [...period, next];
+					return { ...prev, period: list.length > 0 ? list : undefined };
+				}
+				// A bucket chip is the GROUP CONTROL over its leaves — the same
+				// control as the group heading inside the Filters panel, writing the
+				// same state. Rules live in src/lib/inbox-status-chips.ts so they are
+				// unit-testable rather than buried in this closure.
+				const list = toggleBucketChip(next, st);
+				return { ...prev, st: list.length > 0 ? list : undefined };
 			},
 		});
 	}
 
-	function setShowPinned(next: boolean) {
+	/** Cycle the pin chip: top -> only -> off -> top. "Only" comes second
+	 * because it is the useful next step from the default; "off" is the rarely
+	 * wanted escape hatch, so it sits furthest from the first tap. */
+	function cyclePinMode() {
+		const next: PinMode =
+			pinMode === "top" ? "only" : pinMode === "only" ? "off" : "top";
 		navigate({
-			// Default (on) stays out of the URL; only the opt-out is persisted.
-			search: (prev) => ({ ...prev, nopin: next ? undefined : true }),
+			// The default stays out of the URL; only the two opt-outs persist.
+			search: (prev) => ({ ...prev, pin: next === "top" ? undefined : next }),
 		});
 	}
 
@@ -797,7 +936,14 @@ function OrdersRoute() {
 				mockup: undefined,
 				fwin: undefined,
 				sources: undefined,
+				// The status axis clears too — BOTH halves. This is the table's
+				// "start over below" button, and in table view the axis is set from
+				// the Status column's own filter funnel, so leaving it would strand
+				// the seller on the very filter the row is telling them about. It
+				// used to clear `st` but not `period` — half the chip row (PR #243
+				// review).
 				st: undefined,
+				period: undefined,
 				cat: undefined,
 				catunspec: undefined,
 				asrc: undefined,
@@ -827,19 +973,66 @@ function OrdersRoute() {
 				sources: next.sources.length > 0 ? next.sources : undefined,
 				st:
 					next.statuses.length > 0
-						? (next.statuses as OrderStatus[])
+						? (next.statuses as InboxStatusLeaf[])
 						: undefined,
+				period:
+					next.bookingPeriods.length > 0 ? next.bookingPeriods : undefined,
 				cat: next.categories.length > 0 ? next.categories : undefined,
 				catunspec: next.categoriesUnspecified ? true : undefined,
 			}),
 		});
 	}
 
-	const bucketCount = (key: InboxBucket): number | undefined => {
+	/**
+	 * The status chip row, in order. Booking periods join the workflow buckets in
+	 * ONE set (owner call, 1 Sep) and are appended only where they mean
+	 * something: a store with no booking listings gets no new chrome, and the
+	 * query that answers that is the same one the Calendar view is gated on.
+	 */
+	const showBookingChips = hasBookingListings === true;
+	// What the row is OFFERING — "All statuses" is the select-all over exactly
+	// these, so it must not light while one of them sits unlit beside it.
+	const availablePeriods: BookingPeriod[] = showBookingChips
+		? [...BOOKING_PERIOD_CHIPS]
+		: [];
+	const statusChipKeys: StatusChipKey[] = showBookingChips
+		? [...BUCKET_CHIP_KEYS, ...BOOKING_PERIOD_CHIPS]
+		: BUCKET_CHIP_KEYS;
+
+	/**
+	 * Every chip's count is tallied over the FULL window, independent of what is
+	 * currently selected — which under a union is exactly the honest reading:
+	 * "this is what tapping me adds". It also means a chip can never say `1` above
+	 * a list showing none of it.
+	 */
+	const statusChipCount = (key: StatusChipKey): number | undefined => {
 		if (!counts) return undefined;
-		if (key === "all") return allCount;
-		return counts[key];
+		switch (key) {
+			case "all":
+				return allCount;
+			case "active":
+				return counts.bookingActive;
+			case "ending_soon":
+				return counts.bookingEndingSoon;
+			case "upcoming":
+				return counts.bookingUpcoming;
+			// "Ended" has no chip — a seller browses finished stays through the
+			// Completed bucket, not a fourth booking chip nobody asked for.
+			case "ended":
+				return undefined;
+			default:
+				return counts[key];
+		}
 	};
+
+	/** The period line for one inbox row — null for anything that isn't a live
+	 * booking, so a product store's cards are byte-identical to before. */
+	const bookingRowLine = (o: {
+		bookingCheckIn?: number;
+		bookingCheckOut?: number;
+		bookingPackaged?: boolean;
+		status: string;
+	}): string | null => describeBookingPeriod(o);
 
 	// --- Bulk multi-select ---------------------------------------------------
 	// "Select all" targets the rows actually on screen (the revealed window), not
@@ -1007,7 +1200,6 @@ function OrdersRoute() {
 				api.orders.exportOrders,
 				{
 					retailerId: retailer._id,
-					buckets: buckets.length > 0 ? buckets : undefined,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
 					paymentMethods: method.length > 0 ? method : undefined,
 					methodUnspecified: munspec || undefined,
@@ -1020,8 +1212,12 @@ function OrdersRoute() {
 					categories: cat.length > 0 ? cat : undefined,
 					categoriesUnspecified: catunspec || undefined,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
+					// The export MUST send this too, or "what the seller sees" and
+					// "what they export" diverge — the one invariant
+					// lib/orderInboxFilter.ts exists to hold.
+					bookingPeriods: period.length > 0 ? period : undefined,
 					searchText: debounced || undefined,
-					showPinned: showPinned || undefined,
+					pinMode,
 					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
 					columnKeys: onlyVisibleColumns ? columnState.visibleKeys : undefined,
 				},
@@ -1148,9 +1344,7 @@ function OrdersRoute() {
 							? "Updating…"
 							: `${total} order${total === 1 ? "" : "s"}`
 				}
-				actions={
-					inboxEnabled ? headerActions : undefined
-				}
+				actions={inboxEnabled ? headerActions : undefined}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -1286,6 +1480,7 @@ function OrdersRoute() {
 								fwin,
 								sources,
 								statuses: st,
+								bookingPeriods: period,
 								categories: cat,
 								categoriesUnspecified: catunspec,
 								attributionSources: asrc,
@@ -1300,6 +1495,14 @@ function OrdersRoute() {
 							statusLabel={(status) => statusLabelFor({ status })}
 							mockupCount={counts?.mockupPending}
 							resultCount={loading ? undefined : total}
+							// Same gate as the chip row: a store with no booking listings
+							// never sees the group, in either place.
+							showBookingPeriods={showBookingChips}
+							bookingPeriodCounts={{
+								active: counts?.bookingActive,
+								ending_soon: counts?.bookingEndingSoon,
+								upcoming: counts?.bookingUpcoming,
+							}}
 						/>
 					</div>
 
@@ -1311,57 +1514,61 @@ function OrdersRoute() {
 					    reason the view switch moved up into the header. */}
 					<div className="flex items-center gap-2">
 						<FilterChipRow className="min-w-0 flex-1">
-							{/* Pin privilege, leading the row (86eyrtz74). It is FIRST because
-						    it is the seller's OWN urgency marker — the buckets below are
-						    the system's opinion, this one is theirs. It appears only once
-						    something is pinned: a permanent "Pinned 0" is noise, and the
-						    pin control on every row is the surface that teaches the
-						    feature. Turning it off doesn't hide pins, it just stops them
-						    outranking the filter. */}
-							{pinnedCount > 0 ? (
+							{/* Pinned leads the row (86eyrtz74) because it is the seller's
+						    OWN mark — the statuses after it are the system's opinion,
+						    this one is theirs. That is also why it is NOT part of the
+						    status set: "All statuses" never clears it, and turning it on
+						    never unlights "All". It appears once something is pinned (a
+						    permanent "Pinned 0" is noise for a seller who never pins); the
+						    pin control on every row is what teaches the feature. Three
+						    modes — see cyclePinMode.
+
+						    It ALSO renders whenever the mode is non-default, even at ZERO.
+						    Unpinning the last row while in "only" mode empties the list,
+						    and the chip used to vanish with it — leaving `?pin=only` in the
+						    URL, an empty inbox, and copy naming a control that was no
+						    longer on screen. The only exit was leaving the page (PR #243
+						    review). A lit "Pinned only · 0" is truthful and is itself the
+						    way out. Deliberately NOT folding the mode back to "top"
+						    instead: `pinnedCount` is 0 while the counts are still loading,
+						    so that would silently rewrite a legitimate `?pin=only` bookmark
+						    before its data arrived. Honouring the URL also removes the
+						    chip's first-paint flash. */}
+							{pinnedCount > 0 || pinMode !== "top" ? (
 								<FilterChip
 									tone="accent"
-									selected={showPinned}
-									onClick={() => setShowPinned(!showPinned)}
+									selected={pinMode !== "off"}
+									onClick={cyclePinMode}
 									count={pinnedCount}
-									title={
-										showPinned
-											? "Pinned orders stay on top, even when they don't match your filters. Tap to filter them like any other order."
-											: "Pinned orders are being filtered like any other order. Tap to keep them on top."
-									}
+									title={PIN_MODE_HINTS[pinMode]}
 								>
 									<Pin
 										className="size-3.5"
-										fill={showPinned ? "currentColor" : "none"}
+										fill={pinMode === "off" ? "none" : "currentColor"}
 										aria-hidden="true"
 									/>
-									Pinned
+									{pinMode === "only" ? "Pinned only" : "Pinned"}
 								</FilterChip>
 							) : null}
-							{BUCKET_KEYS.map((key) => {
-								const label =
-									key === "all"
-										? "All"
-										: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
-								return (
-									<FilterChip
-										key={key}
-										// Multi-select (86eyrtz74): each bucket chip toggles
-										// membership; "All" is lit only while the set is empty,
-										// and tapping it empties the set.
-										selected={
-											key === "all"
-												? buckets.length === 0
-												: buckets.includes(key)
-										}
-										onClick={() => toggleBucket(key)}
-										count={bucketCount(key)}
-										countTone={key === "new" ? "attention" : "muted"}
-									>
-										{label}
-									</FilterChip>
-								);
-							})}
+							{/* ONE flat set: workflow buckets then booking periods, all
+							    behaving identically — same tone, no divider, OR'd together,
+							    and every one of them unlights "All statuses". Periods sit
+							    LAST only because most sellers don't sell bookings, so a
+							    minority feature must not displace the statuses every seller
+							    navigates by; they are hidden entirely for a store with no
+							    booking listings. Owner call, 1 Sep. */}
+							{statusChipKeys.map((key) => (
+								<FilterChip
+									key={key}
+									selected={chipSelected(key, st, period, availablePeriods)}
+									onClick={() => toggleStatusChip(key)}
+									count={statusChipCount(key)}
+									countTone={key === "new" ? "attention" : "muted"}
+									title={STATUS_CHIP_HINTS[key]}
+								>
+									{statusChipLabel(key)}
+								</FilterChip>
+							))}
 						</FilterChipRow>
 						{tableView ? (
 							<OrderColumnPicker
@@ -1436,14 +1643,7 @@ function OrdersRoute() {
 			) : orders.length === 0 && !tableView ? (
 				// Table view keeps its table (and so its header filters) when nothing
 				// matches — the empty state renders as a row inside it instead.
-				<EmptyOrders
-					// The per-bucket copy ("No new orders…") only makes sense for ONE
-					// bucket; a multi-set or empty set falls back to the generic line.
-					bucket={buckets.length === 1 ? buckets[0] : "all"}
-					searching={searching}
-					filtersActive={filtersActive}
-					mockup={mockup}
-				/>
+				<EmptyOrders copy={emptyCopy} />
 			) : (
 				// `aria-busy` while a filter change is in flight: the rows on screen
 				// are the previous answer for a beat, and a screen reader should not
@@ -1465,7 +1665,17 @@ function OrdersRoute() {
 							columnWidths={columnState.widths}
 							onColumnWidthsChange={columnState.setWidths}
 							columnFilters={headerFilters}
-							onClearFilters={filtersActive ? clearAllFilters : undefined}
+							empty={emptyCopy}
+							// Broader than `filtersActive` on purpose: the axis doesn't rank
+							// as a "filter" for the empty copy, but a status-only selection
+							// still empties the table and this row's copy points at this
+							// button — gating it on filters alone left that state with no
+							// way out (PR #243 review).
+							onClearFilters={
+								filtersActive || st.length > 0 || period.length > 0
+									? clearAllFilters
+									: undefined
+							}
 							selectMode={selectMode}
 							selected={selected}
 							onToggleSelect={toggleSelect}
@@ -1480,14 +1690,36 @@ function OrdersRoute() {
 								const placedAt = formatOrderTimestamp(o.createdAt, now);
 								const age = formatStatusAge(now - o.createdAt);
 								const itemSummary = summarizeOrderCardItems(o.items);
+								const periodLine = bookingRowLine(o);
+								const isPinned = o.pinnedAt !== undefined;
 								const cardInner = (
 									<div className="flex min-w-0 flex-1 flex-col">
 										{/* Name + money get the hierarchy. */}
 										<div className="flex items-center justify-between gap-2.5">
+											{/* The pin, on the CARD. The table has had a pin column
+										    since 86eyrtz74, but cards — the default view, and the
+										    only one on a phone — showed nothing at all: pinned
+										    orders sorted to the top and then looked like every
+										    other order, so "why are these first?" had no answer
+										    on screen. Sits with the name because that is where
+										    the eye lands first, and the pinned partition is read
+										    top-down. */}
+											{isPinned ? (
+												<span
+													className="flex shrink-0 items-center text-accent"
+													title="Pinned — kept at the top of your inbox"
+												>
+													<Pin
+														className="size-3.5 fill-current"
+														aria-hidden="true"
+													/>
+													<span className="sr-only">Pinned.</span>
+												</span>
+											) : null}
 											{/* Mask only the name — items/prices/status are the useful replay signal. */}
 											<span
 												{...MASK_PII}
-												className="min-w-0 truncate text-[15px] font-semibold"
+												className="min-w-0 flex-1 truncate text-[15px] font-semibold"
 											>
 												{orderCustomerLabel(o.customer)}
 											</span>
@@ -1497,6 +1729,21 @@ function OrdersRoute() {
 										</div>
 										<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
 											<span className="font-mono">#{o.shortId}</span>
+											{/* The period, on the ROW (S8). Filtering to "Active now"
+										    and then getting rows that read like any other order is
+										    half the feature: the seller's next question is always
+										    "how long have they got". Shown on every booking row,
+										    not just while the chip is on — the answer is useful
+										    whenever a stay is in the list, and a badge that
+										    appears only under a filter teaches nothing. */}
+											{periodLine ? (
+												<>
+													<span aria-hidden="true">·</span>
+													<span className="font-semibold text-accent-emphasis">
+														{periodLine}
+													</span>
+												</>
+											) : null}
 											<span aria-hidden="true">·</span>
 											{/* Absolute placed-at datetime + relative age, so the seller
 										    reads "when" AND "how long ago" without opening the
@@ -1572,7 +1819,13 @@ function OrdersRoute() {
 									"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
 									isSel
 										? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
-										: "border-border hover:border-ring hover:shadow-sm",
+										: isPinned
+											? // Tinted border rather than a thicker one: a wider edge
+												// would shift this card's text 2px against its grid
+												// neighbours, which reads as a rendering bug, not as
+												// emphasis.
+												"border-accent/40 hover:border-accent hover:shadow-sm"
+											: "border-border hover:border-ring hover:shadow-sm",
 								);
 								return (
 									<li key={o._id}>
@@ -1733,18 +1986,8 @@ function OrdersInboxSkeleton() {
 	);
 }
 
-function EmptyOrders({
-	bucket,
-	searching,
-	filtersActive,
-	mockup,
-}: {
-	bucket: InboxBucket;
-	searching: boolean;
-	filtersActive: boolean;
-	mockup: boolean;
-}) {
-	const { title, body } = emptyCopy(bucket, searching, filtersActive, mockup);
+function EmptyOrders({ copy }: { copy: InboxEmptyCopy }) {
+	const { title, body } = copy;
 	return (
 		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
 			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -1756,54 +1999,4 @@ function EmptyOrders({
 			</div>
 		</div>
 	);
-}
-
-function emptyCopy(
-	bucket: InboxBucket,
-	searching: boolean,
-	filtersActive: boolean,
-	mockup: boolean,
-): { title: string; body: string } {
-	if (searching)
-		return {
-			title: "No matches",
-			body: "No orders match your search. Try an order #, name, phone, or item.",
-		};
-	if (mockup)
-		return {
-			title: "No orders need a mockup",
-			body: "You're all caught up — nothing is waiting on a design right now.",
-		};
-	if (filtersActive)
-		return {
-			title: "No orders match your filters",
-			body: "Adjust or clear the filters to see more.",
-		};
-	switch (bucket) {
-		case "new":
-			return {
-				title: "No new orders",
-				body: "You're all caught up 🎉 New WhatsApp orders land here first.",
-			};
-		case "in_progress":
-			return {
-				title: "Nothing in progress",
-				body: "Orders you've confirmed, packed, or shipped will show here.",
-			};
-		case "completed":
-			return {
-				title: "No completed orders yet",
-				body: "Delivered orders move here once you mark them done.",
-			};
-		case "cancelled":
-			return {
-				title: "No cancelled orders",
-				body: "Nothing cancelled — good.",
-			};
-		default:
-			return {
-				title: "No orders yet",
-				body: "When shoppers checkout via WhatsApp, orders will appear here.",
-			};
-	}
 }

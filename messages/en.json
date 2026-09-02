@@ -366,7 +366,7 @@
 	"cost_min_suffix": "{minutes} min",
 	"cost_disq_reassure": "No pressure — we'll be here when it's worth it.",
 	"cost_keep_number": "Keep my number for later",
-	"cost_cta_join": "Become a Founding Member — {price}/mo",
+	"cost_cta_join": "Start with Kedaipal — {price}/mo",
 	"cost_result_lead": "WhatsApp-only ordering is costing you about",
 	"cost_missed_revenue": "Missed-order revenue",
 	"cost_chase_cost": "Time chasing payments",
@@ -376,7 +376,7 @@
 	"cost_disq_notyet_title": "Not worth it yet — honestly",
 	"cost_disq_nomiss_body": "You told us you're not missing any orders. Then there's nothing for Kedaipal to plug right now — and we won't pretend otherwise. If orders ever start slipping through WhatsApp chat, come back and run this again.",
 	"cost_disq_notyet_body": "Right now your status-quo cost ({total}/mo) is smaller than Kedaipal's {price}/mo. It wouldn't pay for itself yet. Come back when your order volume grows.",
-	"cost_wa_message": "Hi Kedaipal! I worked out WhatsApp-only ordering is costing me about {cost}/mo. I'd like to join as a Founding Member ({price}/mo).",
+	"cost_wa_message": "Hi Kedaipal! I worked out WhatsApp-only ordering is costing me about {cost}/mo. I'd like to get started ({price}/mo).",
 
 	"pricingpage_hero_highlight": "14 days free.",
 	"pricingpage_hero_rest": "Then simple, honest pricing.",

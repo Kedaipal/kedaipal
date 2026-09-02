@@ -77,15 +77,21 @@ describe("landing redesign — Founding 10 off the landing page", () => {
 	});
 
 	it("keeps the pricing surfaces' key namespaces founding-free", () => {
-		// Both the landing teaser (`pricing_*`) and `/pricing` (`pricingpage_*`).
-		// `/cost` (`cost_*`) still carries its own founding-price CTA — that page
-		// is a lead tool with its own copy pass, deliberately out of scope here.
+		// The landing teaser (`pricing_*`), `/pricing` (`pricingpage_*`) AND
+		// `/cost` (`cost_*`) — the calculator's founding-price CTA was the last
+		// public advert of the retired RM104/S$41 rate (30 Aug 2026 pricing
+		// reset, ClickUp z8r3fday21). The regex covers all three locales'
+		// wording: "Founding", "Pengasas", "创始".
 		const offenders: string[] = [];
 		for (const [locale, catalog] of catalogs) {
 			for (const [key, value] of Object.entries(catalog)) {
-				if (!key.startsWith("pricing_") && !key.startsWith("pricingpage_"))
+				if (
+					!key.startsWith("pricing_") &&
+					!key.startsWith("pricingpage_") &&
+					!key.startsWith("cost_")
+				)
 					continue;
-				if (typeof value === "string" && /founding/i.test(value)) {
+				if (typeof value === "string" && /founding|pengasas|创始/i.test(value)) {
 					offenders.push(`${locale}.${key} = ${value}`);
 				}
 			}

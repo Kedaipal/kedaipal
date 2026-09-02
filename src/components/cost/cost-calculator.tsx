@@ -17,7 +17,7 @@ import {
 	clampInputs,
 	computeStatusQuoCost,
 	DEFAULT_INPUTS_FOR,
-	FOUNDING_PRICE,
+	PRO_PRICE,
 } from "#/lib/calculator";
 import { buildWaContactLink } from "#/lib/contact";
 import { currencySymbol, formatPrice } from "#/lib/format";
@@ -30,12 +30,12 @@ function money(major: number, currency: BillingCurrency): string {
 }
 
 /**
- * The Founding price as it reads inside a sentence — "RM104", "S$41". The
+ * The Pro price as it reads inside a sentence — "RM149", "S$59". The
  * message catalogs used to hardcode the "RM", which left an SG visitor being
  * quoted ringgit beside S$ figures; they now take this whole string.
  */
-function foundingPriceLabel(currency: BillingCurrency): string {
-	return `${currencySymbol(currency)}${FOUNDING_PRICE[currency]}`;
+function proPriceLabel(currency: BillingCurrency): string {
+	return `${currencySymbol(currency)}${PRO_PRICE[currency]}`;
 }
 
 function buildWaLink(
@@ -45,7 +45,7 @@ function buildWaLink(
 ): string {
 	const message = m.cost_wa_message({
 		cost: money(monthlyCost, currency),
-		price: foundingPriceLabel(currency),
+		price: proPriceLabel(currency),
 	});
 	return buildWaContactLink(message, supportWa);
 }
@@ -105,7 +105,7 @@ export function CostCalculator({
 	onInputsChange,
 }: CostCalculatorProps) {
 	// The calculator owns the region, not the route: every currency-shaped
-	// value here (the Founding anchor, the labour rate, the AOV slider's range
+	// value here (the Pro price anchor, the labour rate, the AOV slider's range
 	// and default) is derived from it, and keeping one owner means the toggle
 	// can never disagree with the numbers beside it.
 	const [region, setRegion] = useLandingRegion();
@@ -264,7 +264,7 @@ export function CostCalculator({
 									target="_blank"
 									rel="noopener noreferrer"
 								>
-									{m.cost_cta_join({ price: foundingPriceLabel(currency) })}
+									{m.cost_cta_join({ price: proPriceLabel(currency) })}
 									<ArrowRight />
 								</a>
 							</Button>
@@ -357,7 +357,7 @@ function QualifiedBody({ result, ratioLabel, currency }: ResultCardProps) {
 			<div className="mt-6 rounded-2xl border border-accent/30 bg-accent/15 p-5">
 				<p className="text-sm leading-relaxed text-cta-mesh-foreground/90">
 					{m.cost_plug({
-						price: foundingPriceLabel(currency),
+						price: proPriceLabel(currency),
 						savings: money(result.savings, currency),
 					})}
 				</p>
@@ -387,7 +387,7 @@ function DisqualifiedBody({
 					? m.cost_disq_nomiss_body()
 					: m.cost_disq_notyet_body({
 							total: money(result.total, currency),
-							price: foundingPriceLabel(currency),
+							price: proPriceLabel(currency),
 						})}
 			</p>
 		</div>
