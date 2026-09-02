@@ -29,7 +29,9 @@ vi.mock("@tanstack/react-query", () => ({
 	useQuery: () => ({ data: state.dispatch }),
 }));
 vi.mock("@tanstack/react-router", () => ({
-	Link: (props: Record<string, unknown>) => <a {...props} />,
+	Link: ({ to, search, ...props }: Record<string, unknown>) => (
+		<a href={String(to)} {...props} />
+	),
 }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -438,5 +440,25 @@ describe("booked states", () => {
 		const { container } = render(<DelyvaDispatchCard order={order} />);
 		expect(container.textContent).toContain("Delivered");
 		expect(screen.queryByRole("button", { name: /cancel booking/i })).toBeNull();
+	});
+});
+
+describe("collect-from line", () => {
+	// The address imported from the seller's Delyva profile at connect is
+	// prefill, not truth — so the first booking IS the double-check: the card
+	// says where the courier will collect, with the edit one tap away.
+	it("shows the stored pickup address above the quote, with an Edit link", () => {
+		state.dispatch = dispatchState({
+			pickupSummary: "55 Jln Eco Majestic, 43500 Semenyih",
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain("Collecting from");
+		expect(container.textContent).toContain("55 Jln Eco Majestic, 43500 Semenyih");
+		expect(screen.getByRole("link", { name: /edit/i })).toBeTruthy();
+	});
+
+	it("says nothing when no address is stored — the block reason covers that", () => {
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).not.toContain("Collecting from");
 	});
 });

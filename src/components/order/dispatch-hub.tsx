@@ -127,7 +127,23 @@ export function DispatchHub({
 					onClick={() => pick("delyva")}
 				/>
 			</div>
-			{selected === "lalamove" ? (
+			{/* The order's booking slot is singular (cross-provider reservation),
+			    so fronting the OTHER provider while one holds a live job used to
+			    render an empty pane — its card nulls out under job_active. Say
+			    what's happening instead, with the way back. */}
+			{selected === "lalamove" && delyvaActive ? (
+				<OtherProviderNotice
+					holder="Delyva courier"
+					here="a Lalamove rider"
+					onView={() => pick("delyva")}
+				/>
+			) : selected === "delyva" && lalamoveActive ? (
+				<OtherProviderNotice
+					holder="Lalamove rider"
+					here="a Delyva courier"
+					onView={() => pick("lalamove")}
+				/>
+			) : selected === "lalamove" ? (
 				<BookDeliveryCard
 					order={order}
 					bookRequestToken={bookRequestToken}
@@ -137,6 +153,35 @@ export function DispatchHub({
 			) : (
 				<DelyvaDispatchCard order={order} />
 			)}
+		</section>
+	);
+}
+
+/** One booking at a time, said in place of an empty pane: the fronted
+ * provider can't book while the other holds the order's slot. */
+function OtherProviderNotice({
+	holder,
+	here,
+	onView,
+}: {
+	holder: string;
+	here: string;
+	onView: () => void;
+}) {
+	return (
+		<section className="flex flex-col items-start gap-2 rounded-2xl border border-dashed border-border bg-card p-4">
+			<p className="text-sm text-muted-foreground">
+				A <span className="font-medium text-foreground">{holder}</span> is
+				already on this order — one booking at a time. Cancel it first if you
+				want to send this by {here} instead.
+			</p>
+			<button
+				type="button"
+				onClick={onView}
+				className="min-h-9 text-sm font-medium text-accent underline-offset-2 hover:underline"
+			>
+				View the {holder} booking
+			</button>
 		</section>
 	);
 }
@@ -169,6 +214,7 @@ function ProviderTab({
 			    "where is my courier?" is answerable without switching. */}
 			{hasLiveJob ? (
 				<span
+					role="img"
 					aria-label="has a live booking"
 					className="size-2 rounded-full bg-accent"
 				/>

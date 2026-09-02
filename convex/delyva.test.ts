@@ -713,3 +713,72 @@ describe("providers coexist; the order's booking slot arbitrates (Zaki, 2 Sep)",
 		expect(state?.blockReason).toBe("job_active");
 	});
 });
+
+describe("pickup address import (profile → settings)", () => {
+	// The connect action reads the seller's Delyva PROFILE address and hands
+	// it to storeConnection so nobody retypes what Delyva already knows —
+	// but only fill-if-unset: an address the seller saved here was possibly a
+	// deliberate correction of what Delyva holds, and a reconnect must never
+	// clobber it.
+	const imported = {
+		address1: "55 Jln Eco Majestic",
+		address2: "7/1D",
+		city: "Semenyih",
+		state: "Selangor",
+		postcode: "43500",
+	};
+
+	test("fills an empty pickup address at connect", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			const doc = await ctx.db.get(retailer._id);
+			if (!doc?.delyva) throw new Error("seed missing delyva");
+			await ctx.db.patch(retailer._id, {
+				delyva: { ...doc.delyva, pickupAddress: undefined },
+			});
+		});
+		await t.mutation(internal.delyva.storeConnection, {
+			retailerId: retailer._id,
+			apiKey: "enc.v1.rotated",
+			apiKeyHint: "ated",
+			customerId: 128399,
+			importedPickupAddress: imported,
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.pickupAddress?.address1).toBe("55 Jln Eco Majestic");
+		expect(view.pickupAddress?.postcode).toBe("43500");
+	});
+
+	test("never overwrites an address the seller already saved", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t); // seeds 12 Jalan Ampang
+		await t.mutation(internal.delyva.storeConnection, {
+			retailerId: retailer._id,
+			apiKey: "enc.v1.rotated",
+			apiKeyHint: "ated",
+			customerId: 128399,
+			importedPickupAddress: imported,
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.pickupAddress?.address1).toBe("12 Jalan Ampang");
+		expect(view.pickupAddress?.postcode).toBe("50450");
+	});
+
+	test("getDispatchState renders the stored address as a one-line summary", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const asUser = t.withIdentity({ subject: USER });
+		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.pickupSummary).toBe("12 Jalan Ampang, 50450 Kuala Lumpur");
+	});
+});

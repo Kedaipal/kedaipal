@@ -46,7 +46,7 @@ import {
 } from "./lib/delyva";
 import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
-import { postcodeRule } from "./lib/address";
+import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
 import {
 	type CartWeightItem,
@@ -116,6 +116,20 @@ async function callDelyvaWithKey(
 	return text ? JSON.parse(text) : {};
 }
 
+const itemTypeValidator = v.union(
+	v.literal("PARCEL"),
+	v.literal("CHILLED"),
+	v.literal("FROZEN"),
+);
+
+const pickupAddressValidator = v.object({
+	address1: v.string(),
+	address2: v.optional(v.string()),
+	city: v.string(),
+	state: v.string(),
+	postcode: v.string(),
+});
+
 // ---------------------------------------------------------------------------
 // Connect / disconnect / settings
 // ---------------------------------------------------------------------------
@@ -146,7 +160,12 @@ export const getConnectContext = internalQuery({
 		{ retailerId },
 	): Promise<
 		| { ok: false; message: string }
-		| { ok: true; retailerId: Id<"retailers">; actingAsAdmin: boolean }
+		| {
+				ok: true;
+				retailerId: Id<"retailers">;
+				actingAsAdmin: boolean;
+				country: Country;
+		  }
 	> => {
 		const access = await resolveStoreAccess(ctx, retailerId);
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
@@ -169,6 +188,7 @@ export const getConnectContext = internalQuery({
 			ok: true,
 			retailerId: access.retailer._id,
 			actingAsAdmin: access.actingAsAdmin,
+			country,
 		};
 	},
 });
@@ -186,6 +206,11 @@ export const storeConnection = internalMutation({
 		accountName: v.optional(v.string()),
 		isDemo: v.optional(v.boolean()),
 		companyCode: v.optional(v.string()),
+		// The pickup address on the seller's Delyva PROFILE, imported at
+		// connect so the seller doesn't retype what Delyva already knows.
+		// Fill-if-unset only: an address the seller already saved here wins —
+		// they may have deliberately corrected what Delyva holds.
+		importedPickupAddress: v.optional(pickupAddressValidator),
 	},
 	handler: async (ctx, args) => {
 		const retailer = await ctx.db.get(args.retailerId);
@@ -206,7 +231,7 @@ export const storeConnection = internalMutation({
 				companyCode: args.companyCode,
 				// Pickup address + parcel-type default survive a key rotation.
 				defaultItemType: prev?.defaultItemType,
-				pickupAddress: prev?.pickupAddress,
+				pickupAddress: prev?.pickupAddress ?? args.importedPickupAddress,
 				connectedAt: prev?.connectedAt ?? Date.now(),
 				// Re-stamped by markWebhooksSubscribed once the subscribe pass
 				// after this save succeeds; a rotation resets it honestly.
@@ -292,6 +317,15 @@ export const connect = action({
 		let accountName: string | undefined;
 		let isDemo: boolean | undefined;
 		let companyCode: string | undefined;
+		let importedPickupAddress:
+			| {
+					address1: string;
+					address2?: string;
+					city: string;
+					state: string;
+					postcode: string;
+			  }
+			| undefined;
 		try {
 			const user = (await callDelyvaWithKey(apiKey, "GET", "/user")) as {
 				data?: { apiSecret?: unknown; companyId?: unknown; name?: unknown };
@@ -305,7 +339,16 @@ export const connect = action({
 					? user.data.companyId
 					: undefined;
 			const customer = (await callDelyvaWithKey(apiKey, "GET", "/customer")) as {
-				data?: { id?: unknown; name?: unknown };
+				data?: {
+					id?: unknown;
+					name?: unknown;
+					unitNo?: unknown;
+					address1?: unknown;
+					address2?: unknown;
+					city?: unknown;
+					state?: unknown;
+					postcode?: unknown;
+				};
 			};
 			customerId =
 				typeof customer.data?.id === "number" ? customer.data.id : undefined;
@@ -313,6 +356,42 @@ export const connect = action({
 				typeof customer.data?.name === "string" && customer.data.name
 					? customer.data.name
 					: undefined;
+			// The profile's pickup address, imported so the seller doesn't retype
+			// what Delyva already knows (verified live: unitNo/address1/address2
+			// are split on their side — recompose into our address1 + unit line).
+			// PREFILL, not truth: it stays editable, and an address the seller
+			// already saved with us always wins (storeConnection fill-if-unset) —
+			// a real account was seen holding a stale postcode.
+			const str = (v: unknown) =>
+				typeof v === "string" && v.trim() ? v.trim() : undefined;
+			const profile = customer.data ?? {};
+			const line1 = [str(profile.unitNo), str(profile.address1)]
+				.filter(Boolean)
+				.join(" ");
+			const profilePostcode = str(profile.postcode);
+			const rule = postcodeRule(context.country);
+			if (line1 && profilePostcode && rule.pattern.test(profilePostcode)) {
+				importedPickupAddress =
+					context.country === "SG"
+						? {
+								address1: line1,
+								address2: str(profile.address2),
+								city: SG_STATE_LABEL,
+								state: SG_STATE_LABEL,
+								postcode: profilePostcode,
+							}
+						: str(profile.city) && str(profile.state)
+							? {
+									address1: line1,
+									address2: str(profile.address2),
+									// biome-ignore lint/style/noNonNullAssertion: guarded above
+									city: str(profile.city)!,
+									// biome-ignore lint/style/noNonNullAssertion: guarded above
+									state: str(profile.state)!,
+									postcode: profilePostcode,
+								}
+							: undefined;
+			}
 			// Which Delyva WORLD this key lives in. Their demo environment
 			// shares the production API host and issues no key prefix, so the
 			// company record is the only tell — `code: "demo"` /
@@ -371,6 +450,7 @@ export const connect = action({
 			accountName,
 			isDemo,
 			companyCode,
+			importedPickupAddress,
 		});
 
 		// Webhooks: best-effort — a subscribe failure must not fail the connect
@@ -639,20 +719,6 @@ export const disconnect = action({
 		}
 		return { ok: true };
 	},
-});
-
-const itemTypeValidator = v.union(
-	v.literal("PARCEL"),
-	v.literal("CHILLED"),
-	v.literal("FROZEN"),
-);
-
-const pickupAddressValidator = v.object({
-	address1: v.string(),
-	address2: v.optional(v.string()),
-	city: v.string(),
-	state: v.string(),
-	postcode: v.string(),
 });
 
 /** Non-credential Delyva settings (settings card): pause/resume, the store's
@@ -1675,6 +1741,10 @@ export const getDispatchState = query({
 		/** The store has a working, enabled Delyva connection. */
 		bookingEnabled: boolean;
 		defaultItemType: DelyvaItemType;
+		/** One-line render of the stored pickup address ("55 Jln Eco Majestic,
+		 * 43700 Beranang") — the dispatch card shows it before the first quote
+		 * so a stale imported address is caught at the moment it matters. */
+		pickupSummary?: string;
 		/** Demo account (86eyjpv6z): a booking from this card dispatches no
 		 * courier and spends no real credit. Said out loud at the point of
 		 * spend, the Lalamove sandbox-banner posture (86eypncfy). Undefined =
@@ -1742,6 +1812,12 @@ export const getDispatchState = query({
 				config?.enabled === true &&
 				delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
+			pickupSummary: config?.pickupAddress
+				? [
+						config.pickupAddress.address1,
+						`${config.pickupAddress.postcode} ${config.pickupAddress.city}`,
+					].join(", ")
+				: undefined,
 			isDemo: config?.isDemo,
 			computedWeightKg: weight.kind === "ok" ? weight.kg : null,
 			weightIssue: weight.kind === "ok" ? null : weight.kind,

@@ -128,3 +128,36 @@ describe("when only one provider is relevant", () => {
 		expect(screen.getByRole("tab", { name: /delyva courier/i })).toBeTruthy();
 	});
 });
+
+describe("the other provider holds the booking", () => {
+	// One booking per order (cross-provider reservation) — fronting the OTHER
+	// tab while one provider holds a live job must say so, never render an
+	// empty pane (the cards null themselves out under job_active).
+	it("Lalamove tab shows the Delyva-holds-it notice, not an empty pane", () => {
+		state.delyva = delyva({ job: { status: "picked_up" } });
+		const { container } = render(<DispatchHub order={order} />);
+		fireEvent.click(screen.getByRole("tab", { name: /lalamove rider/i }));
+		expect(container.textContent).not.toContain("LALAMOVE-CARD");
+		expect(container.textContent).toContain("Delyva courier is");
+		expect(container.textContent).toContain("one booking at a time");
+	});
+
+	it("the notice's view button jumps back to the booking's tab", () => {
+		state.lalamove = lalamove({ job: { status: "ongoing" } });
+		const { container } = render(<DispatchHub order={order} />);
+		fireEvent.click(screen.getByRole("tab", { name: /delyva courier/i }));
+		expect(container.textContent).not.toContain("DELYVA-CARD");
+		fireEvent.click(
+			screen.getByRole("button", { name: /view the lalamove rider booking/i }),
+		);
+		expect(container.textContent).toContain("LALAMOVE-CARD");
+	});
+
+	it("a terminal job frees both tabs — no notice", () => {
+		state.delyva = delyva({ job: { status: "completed" } });
+		const { container } = render(<DispatchHub order={order} />);
+		fireEvent.click(screen.getByRole("tab", { name: /lalamove rider/i }));
+		expect(container.textContent).toContain("LALAMOVE-CARD");
+		expect(container.textContent).not.toContain("one booking at a time");
+	});
+});

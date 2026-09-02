@@ -311,6 +311,26 @@ export function DelyvaDispatchCard({ order }: { order: Doc<"orders"> }) {
 				</div>
 			) : bookable || failedJob ? (
 				<>
+					{/* Where the courier collects — surfaced BEFORE the first quote so a
+					    stale pickup address (imported from Delyva's profile at connect)
+					    is caught at the moment it matters, with the edit one tap away. */}
+					{dispatch.pickupSummary ? (
+						<p className="text-xs text-muted-foreground">
+							Collecting from{" "}
+							<span className="font-medium text-foreground">
+								{dispatch.pickupSummary}
+							</span>{" "}
+							·{" "}
+							<Link
+								to="/app/settings"
+								search={{ tab: "integrations" }}
+								className="font-medium text-accent hover:underline"
+							>
+								Edit
+							</Link>
+						</p>
+					) : null}
+
 					{/* What is being shipped, in the seller's terms. The weight is the
 					    one number that changes the price, so it is editable here rather
 					    than hidden behind a re-quote. */}

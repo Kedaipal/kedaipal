@@ -251,7 +251,7 @@ whenever a needed account isn't connected, and `riderOnlyStore` (not
 `bookingEnabled`) now drives the "no parcels ever leave this store" surfaces,
 since a weight-priced store can legitimately arm riders too.
 
-## Seller UI## Seller UI
+## Seller UI
 
 Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the
 store's existing delivery charge (flat / weight-zone) at checkout and get the
@@ -277,22 +277,42 @@ one-key connect (with the "one key is all we need" line, because every other
 integration asks for two), the connected proof (**account name** + key hint —
 so a seller can see they pasted the *right* account's key), pause/replace/
 disconnect, the structured pickup address with the 5-digit-postcode rule
-mirrored from the server, the default parcel-type tiles, the **cold-chain
+mirrored from the server (**pre-filled at connect from the seller's Delyva
+profile** — `GET /customer` already holds it, so `storeConnection` imports it
+fill-if-unset; an address the seller saved here is never overwritten, since a
+reconnect must not clobber a deliberate correction), the default parcel-type
+tiles, the **cold-chain
 activation note** (shown only for a chilled/frozen default — the single most
 likely reason a frozen seller's first booking fails), and a **webhook-retry
 warning** when `webhooksSubscribedAt` is unset, since a silent subscription
 failure otherwise shows up only as orders that mysteriously stop updating.
 
-**Order detail → Delyva Courier** (`src/components/order/delyva-dispatch-card.tsx`),
-directly after the Lalamove card — both answer "how is this going out?", and a
-store may have both connected (rider across town, courier across the country);
+**Order detail → Dispatch hub** (`src/components/order/dispatch-hub.tsx`):
+when BOTH providers are relevant (armed, or holding a job), a segmented switch
+renders ONE provider's card at a time — two full cards stacked two spend
+buttons a scroll apart, and a mis-tap books a rider when the seller meant a
+courier. The switch is a view control (localStorage, never server state); the
+default follows the facts: a provider with a live job fronts (its card holds
+tracking/cancel, and the other tab wears a live-booking dot), then the last
+choice on this device, then rider-first for a live-quote store. While one
+provider holds the active job, fronting the OTHER tab shows a **notice**
+("A Delyva courier is already on this order — one booking at a time…") with a
+jump back to the booking — the cards null themselves out under `job_active`,
+and an empty pane reads as broken. Single-provider stores bypass the hub
+entirely and see exactly what they saw before.
+
+**Order detail → Delyva Courier** (`src/components/order/delyva-dispatch-card.tsx`) —
 each card hides itself when its own provider isn't set up, so nobody sees two.
 The picker is **inline on the card, not in a modal** — the deliberate
 divergence from `BookDeliveryCard`. Lalamove returns one price bound to a
 5-minute quotation id, so its flow is a modal with a countdown; Delyva returns
 a list whose prices are indicative and never expire, so the task is a
 comparison, and on a phone a scrollable courier list inside a scrollable
-dialog is the worse of the two. Flow: weight (seeded from the order, always
+dialog is the worse of the two. Above the flow sits a one-line **"Collecting from <address> · Edit"** —
+the imported profile address is prefill, not truth (live probe: Delyva held
+43500 Semenyih where the seller had corrected to 43700 Beranang), so the
+first booking doubles as the address check, with the fix one tap away in
+Integrations. Flow: weight (seeded from the order, always
 editable) → parcel-type pills (store default, per-order override; changing
 either drops stale prices) → **Get courier prices** → the list, cheapest
 pre-selected with the CTA repeating the choice and its price → book. Booked
