@@ -17,6 +17,7 @@ import {
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
 	parseDelyvaWebhookEvent,
+	parseCompanyResponse,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -505,5 +506,30 @@ describe("countActiveDelyvaServices", () => {
 		expect(countActiveDelyvaServices({})).toBeNull();
 		expect(countActiveDelyvaServices({ data: "nope" })).toBeNull();
 		expect(countActiveDelyvaServices(null)).toBeNull();
+	});
+})
+
+describe("parseCompanyResponse — the sandbox tenant counts as test too", () => {
+	// Delyva's own developer guide sends integrators to trydx.delyva.app
+	// ("try express"). Badging that LIVE would be the 86eypncfy failure: a
+	// simulated booking that looks real until no courier turns up.
+	test("flags the trydx sandbox by company code", () => {
+		expect(parseCompanyResponse({ data: { code: "trydx" } }).isDemo).toBe(true);
+	});
+
+	test("…and by website, if the company was renamed", () => {
+		expect(
+			parseCompanyResponse({
+				data: { code: "try-express", websiteUrl: "https://trydx.delyva.app" },
+			}).isDemo,
+		).toBe(true);
+	});
+
+	test("a real market tenant stays live", () => {
+		expect(
+			parseCompanyResponse({
+				data: { code: "sg", websiteUrl: "https://sg.delyva.app" },
+			}).isDemo,
+		).toBe(false);
 	});
 })

@@ -412,11 +412,22 @@ export function parseCompanyResponse(json: unknown): DelyvaCompany {
 	const name = typeof record.name === "string" ? record.name : undefined;
 	const websiteUrl =
 		typeof record.websiteUrl === "string" ? record.websiteUrl : undefined;
-	// Two independent tells, either one is enough: a rename of the company
-	// shouldn't silently turn a demo account into a "live" one.
+	// Two independent tells per tenant, either one is enough: a rename of the
+	// company shouldn't silently turn a test account into a "live" one.
+	//
+	// `demo` is the one the seller-facing guide points at; `trydx` ("try
+	// express") is the SANDBOX tenant Delyva's own developer guide sends
+	// integrators to, found 3 Sep. Missing it would have been the 86eypncfy
+	// bug exactly: a sandbox booking is indistinguishable from a real one
+	// right up until no courier ever arrives, and we'd have badged it LIVE —
+	// a false all-clear is worse than no badge at all.
+	const host = (websiteUrl ?? "").toLowerCase();
+	const slug = code?.toLowerCase();
 	const isDemo =
-		code?.toLowerCase() === "demo" ||
-		(websiteUrl ?? "").toLowerCase().includes("demo.delyva.app");
+		slug === "demo" ||
+		slug === "trydx" ||
+		host.includes("demo.delyva.app") ||
+		host.includes("trydx.delyva.app");
 	return { code, name, websiteUrl, isDemo };
 }
 

@@ -269,6 +269,26 @@ comes back with `services: []` — no error, just nothing, because the company's
 service providers only cover Malaysia. The same key quoting MY→MY returns
 three services in MYR. IP/geolocation has nothing to do with it.
 
+**Test tenants, and why both are Malaysian.** Delyva's own developer guide
+names a sandbox portal at `trydx.delyva.app` ("try express") alongside
+`demo.delyva.app` — and BOTH sign up at +60. There is no Singapore test
+tenant under any name we could find, so an SG account is necessarily a live
+one. `parseCompanyResponse` therefore treats `trydx` as non-production too
+(code or website): the guide sends integrators there, and badging a sandbox
+LIVE is the 86eypncfy failure exactly — a simulated booking looks real right
+up until no courier arrives.
+
+**Singapore looks dormant, not merely empty** (3 Sep): `delyva.com/sg/`
+302-redirects to the global country chooser while `/my/` serves a full
+product page, and a fresh SG account has an empty Service Providers panel.
+The tenant is real (`sg.delyva.app` renders +65, the account connects, all
+three webhooks register) but no courier is behind it. **If Delyva confirms
+there are no SG partners to enable, the whole surface retires from SG stores
+with a one-line change** — `COUNTRY_DELYVA_BOOKING.SG = false` in
+`convex/lib/delivery.ts`: the settings toggle hides (`countryAllowed`) and
+`delyvaSurface` returns `"none"` on `country_unsupported`, so no seller is
+offered a courier we can't deliver.
+
 **To test Singapore, the seller (or we) needs a key issued by the SG tenant:**
 sign up at `https://sg.delyva.app/customer/signup`. Nothing in our integration
 is host-aware — `api.delyva.app` is the single API host and the access token
@@ -282,8 +302,9 @@ courier list can be verified end-to-end on a fresh SG account without paying
 anything; only the final booking needs a top-up, in SGD.
 
 There is no SG demo/sandbox tenant under any obvious name (`demosg`,
-`sgdemo`, `demo-sg` all answer "Company not found."). If a sandbox is wanted
-for SG it has to come from Delyva support.
+`sgdemo`, `demo-sg` all answer "Company not found."), and the two real test
+tenants (`demo`, `trydx`) are both Malaysian. If a sandbox is wanted for SG
+it has to come from Delyva support.
 
 ## Seller UI
 
