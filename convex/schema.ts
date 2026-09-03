@@ -459,6 +459,72 @@ export default defineSchema({
 				methodsCheckedAt: v.optional(v.number()),
 			}),
 		),
+		// Delyva courier booking (86eyjpv6z) — nationwide parcel + cold-chain
+		// dispatch, ADDITIVE to deliveryBooking (Lalamove) above: a seller can
+		// run both (rider for intra-city, Delyva for outstation). BYO-ONLY like
+		// its siblings — the seller's own Delyva account; Kedaipal never books
+		// or pays on their behalf. Connect flow is a single API key: the
+		// delyva.connect ACTION validates it against GET /user + GET /customer
+		// and stores everything else itself (apiSecret is Delyva's webhook
+		// HMAC secret fetched from /user, customerId the integer quote/order
+		// payloads need), already `enc.v1.`-encrypted — no plaintext ever lands
+		// here, unlike the Lalamove/HitPay save-then-encrypt path. There is NO
+		// env/sandbox field by design: Delyva has one API host and no key
+		// prefix — a "sandbox" is just a separate account made at
+		// demo.delyva.app, indistinguishable by key. See docs/delivery-delyva.md.
+		delyva: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				apiKey: v.optional(v.string()),
+				// Webhook HMAC secret (X-Delyvax-Hmac-SHA256), from GET /user.
+				apiSecret: v.optional(v.string()),
+				// Last 4 chars of the plaintext key, for the settings card.
+				apiKeyHint: v.optional(v.string()),
+				// Delyva's integer customer id (GET /customer) — required by
+				// instantQuote/order payloads and doubles as a webhook
+				// cross-check (their events echo it).
+				customerId: v.optional(v.number()),
+				// Delyva company scope of the account (GET /user) — kept for
+				// support/debugging; not used in API calls today.
+				companyId: v.optional(v.string()),
+				// The account's display name (GET /customer) — settings card
+				// "Connected — <name>" proof that the key hit the right account.
+				accountName: v.optional(v.string()),
+				// Store-level default parcel type (locked decision 27 Aug):
+				// PARCEL (ambient) / CHILLED / FROZEN — the frozen-seller ICP is
+				// store-wide, so the default lives here with a per-order
+				// override in the dispatch dialog. Unset → PARCEL.
+				defaultItemType: v.optional(
+					v.union(
+						v.literal("PARCEL"),
+						v.literal("CHILLED"),
+						v.literal("FROZEN"),
+					),
+				),
+				// Structured pickup address for Delyva bookings. Deliberately its
+				// own field, not a parse of `businessAddress` (that is one
+				// free-text label + coords — fine for a rider, not for a parcel
+				// courier's zone pricing, which keys on postcode/state). Also the
+				// unit Delyva's cold-chain activation applies to, so precision
+				// here is part of the setup story. Required before booking
+				// (dispatch blocks with reason when absent).
+				pickupAddress: v.optional(
+					v.object({
+						address1: v.string(),
+						address2: v.optional(v.string()),
+						city: v.string(),
+						state: v.string(),
+						postcode: v.string(),
+					}),
+				),
+				// First save that stored a full credential (settings card copy).
+				connectedAt: v.optional(v.number()),
+				// When connect last (re)registered our webhook URL with Delyva —
+				// unset means subscription failed and the card offers a retry
+				// (bookings still work; status just won't flow until it's set).
+				webhooksSubscribedAt: v.optional(v.number()),
+			}),
+		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
 		// the lower bound of the storefront date picker (earliest selectable day =
 		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
@@ -1747,7 +1813,9 @@ export default defineSchema({
 	deliveryJobs: defineTable({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
-		provider: v.literal("lalamove"),
+		// Which booking provider ran this job. Lalamove = intra-city rider;
+		// Delyva (86eyjpv6z) = nationwide parcel/cold-chain courier aggregator.
+		provider: v.union(v.literal("lalamove"), v.literal("delyva")),
 		// Unset while the row is a pre-call RESERVATION (inserted atomically
 		// before the POST /v3/orders side effect so two concurrent confirms can't
 		// both dispatch a rider); patched in by commitBooking once Lalamove
@@ -1771,8 +1839,26 @@ export default defineSchema({
 		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
 		// lives HERE, never rewriting the order.
 		costActual: v.number(),
+		// Lalamove: the 5-minute quotation the booking was placed against.
+		// Delyva: the service CODE picked in the dispatch dialog (their quotes
+		// are indicative, not id-bound — create re-prices), so this stays the
+		// "what was bought" audit slot for both providers.
 		quotationId: v.string(),
+		// Lalamove: MOTORCYCLE/CAR. Delyva: the service code again (machine
+		// slot); the human name lives in `serviceName` below.
 		vehicleType: v.string(),
+		// Delyva only — the courier service actually booked ("DHL eCommerce",
+		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
+		serviceName: v.optional(v.string()),
+		// Delyva only — the consignment number (AWB) the buyer can track with.
+		// Arrives via the order.created webhook (or the post-process fetch) and
+		// is mirrored onto orders.courierName/trackingNo (86eyehvk4 fields) the
+		// moment it's known. Distinct from providerOrderId (Delyva's internal
+		// order id, which webhooks correlate on).
+		awb: v.optional(v.string()),
+		// Delyva only — the itemType this trip was booked as (PARCEL/CHILLED/
+		// FROZEN), frozen at dispatch for the audit trail.
+		itemType: v.optional(v.string()),
 		// Trip direction frozen at reserve time (86eyg0n8e). "collection" = this
 		// booking picked up FROM the buyer and dropped off AT the seller, so the
 		// webhook must update THIS row only — picked_up/completed never advance
@@ -1816,7 +1902,10 @@ export default defineSchema({
 	})
 		.index("by_order", ["orderId"])
 		.index("by_retailer", ["retailerId"])
-		.index("by_provider_order", ["providerOrderId"]),
+		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
+		// are both opaque strings, so a bare providerOrderId index + .unique()
+		// would let a cross-provider collision throw in a webhook handler.
+		.index("by_provider_order", ["provider", "providerOrderId"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter

@@ -51,6 +51,7 @@ import {
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import { assertWithinOpeningHours } from "./lib/openingHours";
+import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
 	countBookedPerNight,
 	holdsCapacity,
@@ -61,7 +62,12 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
+import {
+	foldLegacyBuckets,
+	isUnseenOrder,
+	leafBucket,
+	orderLeaf,
+} from "./lib/orderBuckets";
 import {
 	type CsvOrder,
 	orderCategoryNames,
@@ -1908,7 +1914,9 @@ const MAX_INBOX_SCAN = 1000;
  * pre-widen singular `source` (86eyrtz74), still accepted so a bookmarked URL
  * or a client that hasn't reloaded keeps filtering.
  */
-type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
+type InboxFilterInput = Omit<InboxFilterArgs, "sources"> & {
+	/** Pre-"only" pin boolean (86eyrtz74), folded into `pinMode`. */
+	showPinned?: boolean;
 	source?: "storefront" | "counter" | "claim";
 	sources?: Array<"storefront" | "counter" | "claim">;
 	/** Pre-multi singular bucket, "all" sentinel included (86eyrtz74). */
@@ -1928,23 +1936,46 @@ type InboxFilterInput = Omit<InboxFilterArgs, "sources" | "buckets"> & {
 function toInboxFilterArgs({
 	source,
 	bucket,
+	buckets,
+	showPinned,
 	...rest
 }: InboxFilterInput): InboxFilterArgs {
 	return {
 		...rest,
+		// The pre-"only" boolean says the same thing the first two modes do. On
+		// the wire absent/false meant "no privilege", so it maps to "off" — an
+		// in-flight client keeps exactly the behaviour it asked for.
+		pinMode: rest.pinMode ?? (showPinned === true ? "top" : "off"),
 		sources: rest.sources ?? (source ? [source] : undefined),
-		// The old singular carried an "all" sentinel; the multi shape says the
-		// same thing by absence.
-		buckets:
-			rest.buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+		statuses: foldLegacyBuckets(
+			// The oldest singular carried an "all" sentinel; the multi shape says
+			// the same thing by absence.
+			buckets ?? (bucket && bucket !== "all" ? [bucket] : undefined),
+			rest.statuses,
+		),
 	};
 }
+
 
 /** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
  * worth a name. */
 function bump(tally: Map<string, number>, key: string): void {
 	tally.set(key, (tally.get(key) ?? 0) + 1);
 }
+
+// See InboxFilterArgs.pinMode.
+const pinModeValidator = v.union(
+	v.literal("top"),
+	v.literal("off"),
+	v.literal("only"),
+);
+
+const bookingPeriodValidator = v.union(
+	v.literal("upcoming"),
+	v.literal("active"),
+	v.literal("ending_soon"),
+	v.literal("ended"),
+);
 
 // One workflow bucket, for the MULTI filter (86eyrtz74) — no "all" member:
 // "every bucket" is said by omitting the arg, not by a sentinel inside it.
@@ -1959,6 +1990,20 @@ const orderSourceValidator = v.union(
 	v.literal("storefront"),
 	v.literal("counter"),
 	v.literal("claim"),
+);
+
+// THE status axis on the wire (1 Sep) — leaves, not raw statuses. `confirmed`
+// here means confirmed AND SEEN; `confirmed_unseen` is its own member. See
+// INBOX_LEAF_KEYS in lib/orderBuckets.ts for why the split exists.
+const statusLeafValidator = v.union(
+	v.literal("pending"),
+	v.literal("booking_requested"),
+	v.literal("confirmed_unseen"),
+	v.literal("confirmed"),
+	v.literal("packed"),
+	v.literal("shipped"),
+	v.literal("delivered"),
+	v.literal("cancelled"),
 );
 
 /**
@@ -1977,9 +2022,15 @@ export const searchOrders = query({
 		bucket: v.optional(
 			v.union(v.literal("all"), orderBucketValidator),
 		),
-		// Workflow buckets, MULTI (86eyrtz74) — "Completed or Cancelled" is a
-		// real question one value couldn't ask. Empty/absent = every bucket.
+		// Pre-1-Sep workflow buckets, when the chip row and the filter panel
+		// were two ANDed filter states. Both now write `statuses`; this is kept
+		// only so a bookmarked URL or an in-flight client keeps filtering, and
+		// folds in via toInboxFilterArgs. Drop it a release on.
 		buckets: v.optional(v.array(orderBucketValidator)),
+		// Booking period (S8) — a chip, NOT a bucket. See
+		// `bookingPeriods` in lib/orderInboxFilter.ts for why it can't be one.
+		// Empty/absent = no period filtering.
+		bookingPeriods: v.optional(v.array(bookingPeriodValidator)),
 		paymentStatuses: v.optional(
 			v.array(
 				v.union(
@@ -2018,7 +2069,7 @@ export const searchOrders = query({
 	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
 	// bucket is the coarse stage a seller navigates by; this is the precise one
 	// they question ("packed OR shipped"). Driven from the Status column header.
-	statuses: v.optional(v.array(statusValidator)),
+	statuses: v.optional(v.array(statusLeafValidator)),
 	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
 	// ANY line carries ANY of these. Free-form names (the seller's own
 	// catalogue), so v.string(); the picker is driven by `availableCategories`.
@@ -2037,11 +2088,15 @@ export const searchOrders = query({
 		// driven by `availableSources` below. Distinct dimension from `source`.
 		attributionSources: v.optional(v.array(v.string())),
 		searchText: v.optional(v.string()),
-		// Pin privilege (86eyrtz74): keep PINNED orders in the result even when
-		// they fail the filters above. On by default in the UI — the seller pins
-		// an order so they can filter to something else and still compare against
-		// it. Not a plan-gated inbox feature (see the gate below): pinning is
-		// all-tier, so its visibility rule has to be too.
+		// What the seller's pins do to this list (86eyrtz74, extended 1 Sep):
+		// "top" keeps PINNED orders even when they fail the filters, "off"
+		// filters them like any other order, "only" narrows to them. Not a
+		// plan-gated inbox feature (see the gate below): pinning is all-tier, so
+		// its visibility rule has to be too.
+		pinMode: v.optional(pinModeValidator),
+		// Pre-"only" boolean, still accepted so an in-flight client keeps its
+		// pins on top; folded into `pinMode` by toInboxFilterArgs. Drop it a
+		// release on.
 		showPinned: v.optional(v.boolean()),
 		// Max rows to return. OMIT it for the inbox: the query then returns the
 		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
@@ -2056,6 +2111,7 @@ export const searchOrders = query({
 			retailerId,
 			bucket,
 			buckets,
+			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -2071,6 +2127,7 @@ export const searchOrders = query({
 			attributionSources,
 			searchText,
 			showPinned,
+			pinMode,
 			limit,
 		},
 	) => {
@@ -2090,6 +2147,7 @@ export const searchOrders = query({
 		const filters = toInboxFilterArgs({
 			bucket,
 			buckets,
+			bookingPeriods,
 			paymentStatuses,
 			paymentMethods,
 			methodUnspecified,
@@ -2105,6 +2163,7 @@ export const searchOrders = query({
 			attributionSources,
 			searchText,
 			showPinned,
+			pinMode,
 		});
 		if (narrowsTheInbox(filters) && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
@@ -2132,6 +2191,19 @@ export const searchOrders = query({
 			/** Sum of `total` across those unpaid open orders (RM outstanding). */
 			unpaidAmount: 0,
 			/**
+			 * Booking periods (S8) — how many stays/memberships are running now,
+			 * ending within the week, or still to start.
+			 *
+			 * Tallied over the FULL window like every other count, never the
+			 * filtered set: a chip whose number changes as you use it tells the
+			 * seller their bookings vanished. `endingSoon` is a SUBSET of `active`,
+			 * so the two deliberately do not sum — the chips read as "12 active, 3
+			 * of them ending this week", which is the sentence a seller wants.
+			 */
+			bookingActive: 0,
+			bookingEndingSoon: 0,
+			bookingUpcoming: 0,
+			/**
 			 * Packed + paid parcel orders waiting to go out (86eyp63mp) — the
 			 * one-click "print all despatch labels" queue. Computed here, over the
 			 * FULL set like every other count, precisely so the control's number is
@@ -2158,7 +2230,10 @@ export const searchOrders = query({
 		// you used it would make the seller think orders had vanished. Showing the
 		// count next to each option is most of what makes a header filter usable —
 		// it answers "is there anything in there?" before you commit to the click.
-		const statusTally = new Map<string, number>();
+		// Keyed by LEAF, not `o.status` — see INBOX_LEAF_KEYS. Named for it so a
+		// future reader can't index this with a raw status and quietly miss the
+		// unseen half of `confirmed`.
+		const leafTally = new Map<string, number>();
 		const categoryTally = new Map<string, number>();
 		const checkoutSourceTally = new Map<string, number>();
 		const paymentStatusTally = new Map<string, number>();
@@ -2167,8 +2242,14 @@ export const searchOrders = query({
 		const paymentMethodTally = new Map<string, number>();
 
 		for (const o of all) {
-			const b = orderBucket(o);
+			// Leaf first, bucket derived from it — so the per-leaf rows in the
+			// filter panel and the per-bucket chips above them are the same tally
+			// summed at two grains, and a bucket chip can never advertise a count
+			// its own rows don't add up to.
+			const leaf = orderLeaf(o);
+			const b = leafBucket(leaf);
 			counts[b]++;
+			bump(leafTally, leaf);
 			const asrc = attributionBucket(o);
 			sourceTally.set(asrc, (sourceTally.get(asrc) ?? 0) + 1);
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
@@ -2188,9 +2269,11 @@ export const searchOrders = query({
 				counts.unpaid++;
 				counts.unpaidAmount += o.total;
 			}
+			if (matchesBookingPeriod(o, "active", now)) counts.bookingActive++;
+			if (matchesBookingPeriod(o, "ending_soon", now)) counts.bookingEndingSoon++;
+			if (matchesBookingPeriod(o, "upcoming", now)) counts.bookingUpcoming++;
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
-			bump(statusTally, o.status);
 			bump(checkoutSourceTally, o.source ?? "storefront");
 			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
 			bump(paymentMethodTally, o.paymentMethod ?? "");
@@ -2208,7 +2291,10 @@ export const searchOrders = query({
 
 		// Filter + sort via the shared inbox predicate, so the export honours the
 		// exact same rules (see lib/orderInboxFilter.ts).
-		const filtered = all.filter(buildInboxPredicate(filters));
+		// The SAME `now` the counts were tallied against — otherwise a request
+		// that straddles midnight could count a booking as active and then filter
+		// it out, and the chip's number wouldn't match its own list.
+		const filtered = all.filter(buildInboxPredicate(filters, now));
 		// Pinned first, then newest-created (the scan order) — the inbox's default
 		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
 		// over this stable window (the same `sortInboxOrders`), so toggling never
@@ -2252,7 +2338,7 @@ export const searchOrders = query({
 			// Per-option row counts for the header filters. Plain objects rather
 			// than Maps so they cross the wire.
 			facets: {
-				status: Object.fromEntries(statusTally),
+				statusLeaf: Object.fromEntries(leafTally),
 				category: Object.fromEntries(categoryTally),
 				source: Object.fromEntries(checkoutSourceTally),
 				paymentStatus: Object.fromEntries(paymentStatusTally),
@@ -2283,6 +2369,10 @@ const exportFilterValidators = {
 	// Same widen-with-legacy shape as searchOrders — see the note there.
 	bucket: v.optional(v.union(v.literal("all"), orderBucketValidator)),
 	buckets: v.optional(v.array(orderBucketValidator)),
+	// The export honours the period chip too — the whole point of the shared
+	// predicate is that "what the seller sees" and "what they export" can't
+	// diverge.
+	bookingPeriods: v.optional(v.array(bookingPeriodValidator)),
 	paymentStatuses: v.optional(
 		v.array(
 			v.union(
@@ -2312,7 +2402,7 @@ const exportFilterValidators = {
 	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
 	// bucket is the coarse stage a seller navigates by; this is the precise one
 	// they question ("packed OR shipped"). Driven from the Status column header.
-	statuses: v.optional(v.array(statusValidator)),
+	statuses: v.optional(v.array(statusLeafValidator)),
 	// Frozen line categories (86eyrtz74) — multi-select; an order matches when
 	// ANY line carries ANY of these. Free-form names (the seller's own
 	// catalogue), so v.string(); the picker is driven by `availableCategories`.
@@ -2325,9 +2415,11 @@ const exportFilterValidators = {
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
 	searchText: v.optional(v.string()),
-	// Pin privilege (86eyrtz74) — kept in the SHARED validator set so an export
-	// of a filtered view contains exactly the rows the seller was looking at,
-	// forced-in pins included. See InboxFilterArgs.showPinned.
+	// Pin mode (86eyrtz74) — kept in the SHARED validator set so an export of a
+	// filtered view contains exactly the rows the seller was looking at, forced-in
+	// pins included and a pinned-only view exported as pinned-only. See
+	// InboxFilterArgs.pinMode; `showPinned` is the pre-"only" boolean.
+	pinMode: v.optional(pinModeValidator),
 	showPinned: v.optional(v.boolean()),
 } as const;
 
@@ -2498,10 +2590,15 @@ export const exportPage = internalQuery({
 		retailerId: v.id("retailers"),
 		...exportFilterValidators,
 		paginationOpts: paginationOptsValidator,
+		// The action's clock, sampled ONCE for the whole export: a multi-page run
+		// straddling MYT midnight must not classify booking periods against one
+		// day on page 1 and the next day on page 9 (same rule as searchOrders'
+		// shared `now`). Optional only for an in-flight pre-deploy caller.
+		now: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, paginationOpts, ...filters },
+		{ retailerId, paginationOpts, now, ...filters },
 	): Promise<ExportPageResult> => {
 		await assertExportAccess(ctx, retailerId);
 		const page = await ctx.db
@@ -2509,7 +2606,10 @@ export const exportPage = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
-		const predicate = buildInboxPredicate(toInboxFilterArgs(filters));
+		const predicate = buildInboxPredicate(
+			toInboxFilterArgs(filters),
+			now ?? Date.now(),
+		);
 		const matched = page.page.filter(predicate);
 		return {
 			rows: matched.map(orderToCsvSource),
@@ -2576,6 +2676,7 @@ export const exportOrders = action({
 			rows = [];
 			let scanned = 0;
 			let cursor: string | null = null;
+			const now = Date.now();
 			for (;;) {
 				const page: ExportPageResult = await ctx.runQuery(
 					internal.orders.exportPage,
@@ -2583,6 +2684,7 @@ export const exportOrders = action({
 						retailerId,
 						...filters,
 						paginationOpts: { numItems: EXPORT_PAGE_SIZE, cursor },
+						now,
 					},
 				);
 				rows.push(...page.rows);
@@ -2702,15 +2804,15 @@ async function riderOwnsTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
-): Promise<boolean> {
-	if (!isRiderManagedTransition(targetAnchor, order.status)) return false;
+): Promise<"lalamove" | "delyva" | null> {
+	if (!isRiderManagedTransition(targetAnchor, order.status)) return null;
 	// Collection orders (86eyg0n8e): the rider drives the FRONT of the flow —
 	// the webhook moves the JOB only, and the order stays the seller's to
 	// advance by hand throughout — so this gate would both lie ("it updates
 	// itself" never comes true) and strand. Read from the ORDER's frozen
 	// direction, never the store's live setting, mirroring the client: a mode
 	// switch must not re-gate (or un-gate) in-flight orders.
-	if (order.deliveryDirection === "collection") return false;
+	if (order.deliveryDirection === "collection") return null;
 	// An order can hold SEVERAL job rows: a failed booking's released row is kept
 	// on purpose (it doubles as the amber "failed" card) and `reserveBooking`
 	// then lets the seller rebook, so a live rider is routinely NOT the oldest
@@ -2728,13 +2830,18 @@ async function riderOwnsTransition(
 	// and the first event landing. The confirm-gated override is what protects
 	// the webhook-less seller instead, and cancelling the booking lifts the gate
 	// outright, so neither can be stranded.
-	return jobs.some((j) => isActiveJobStatus(j.status));
+	const active = jobs.find((j) => isActiveJobStatus(j.status));
+	return active ? active.provider : null;
 }
 
-/** Seller-facing message for a blocked manual advance. The order-detail
- * stepper offers an explicit "Update manually" confirm that overrides it. */
-const RIDER_GATE_MESSAGE =
-	"A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
+/** Seller-facing message for a blocked manual advance, per the provider that
+ * owns the live job. The order-detail stepper offers an explicit "Update
+ * manually" confirm that overrides it. */
+function riderGateMessage(provider: "lalamove" | "delyva"): string {
+	return provider === "delyva"
+		? "A Delyva courier booking is on this order — it updates itself when the courier collects and delivers, with the tracking number attached. Open the order and use “Update manually” to move it yourself."
+		: "A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
+}
 
 // Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
 // rider picked up → shipped, completed → delivered ride the SAME path as a
@@ -3016,12 +3123,9 @@ export const updateStatus = mutation({
 		// is never gated (not a rider-managed anchor). Sits before the transition
 		// so the manual courier fields above can't land on an order a rider
 		// already owns.
-		if (
-			!overrideRiderGate &&
-			status !== "cancelled" &&
-			(await riderOwnsTransition(ctx, order, status))
-		) {
-			throw new ConvexError(RIDER_GATE_MESSAGE);
+		if (!overrideRiderGate && status !== "cancelled") {
+			const gateProvider = await riderOwnsTransition(ctx, order, status);
+			if (gateProvider) throw new ConvexError(riderGateMessage(gateProvider));
 		}
 
 		// Stamped BEFORE the transition so the buyer's page never renders a
@@ -3421,11 +3525,9 @@ export const advanceToStage = mutation({
 		// change canonical status, so isRiderManagedTransition lets them through.
 		// Checked after the collection gate, and never fires on collection orders
 		// (riderOwnsTransition rules them out by the order's frozen direction).
-		if (
-			!overrideRiderGate &&
-			(await riderOwnsTransition(ctx, order, targetStatus))
-		) {
-			throw new ConvexError(RIDER_GATE_MESSAGE);
+		if (!overrideRiderGate) {
+			const gateProvider = await riderOwnsTransition(ctx, order, targetStatus);
+			if (gateProvider) throw new ConvexError(riderGateMessage(gateProvider));
 		}
 
 		const now = Date.now();

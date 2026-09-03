@@ -164,6 +164,80 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.09.2",
+		date: "2026-09-02",
+		// Earns the modal even though 2026.09.1 shipped the day before —
+		// considered, not overlooked. Two things here are invisible otherwise: a
+		// NUMBER MOVES (an order that arrives confirmed leaves the "Confirmed"
+		// count and lands on a new "Not yet opened" row), and a seller who reads
+		// that count every morning and gets no explanation stops trusting the
+		// inbox; and "pinned only" is the THIRD position of a chip nobody taps
+		// twice on spec. Reach is barely the argument either way — `autoOpen`
+		// fires on ANY unseen notable release, so a seller who missed 2026.09.1
+		// already gets one modal carrying both. The cost falls only on sellers
+		// who opened yesterday, and an unexplained count is worse than a tap.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "See who's with you right now",
+				},
+				body: {
+					en: "Three new chips for stays and packages: Active now, Ending this week, Upcoming. A member three weeks into their month used to sit buried below next week's arrivals, because a booking lists under the day it starts — tap Active now and you get everyone currently on your books. Bookings also show where they are in their span (\"Active · 4 days left\"), on the order and on the customer's card. On every plan, like the rest of bookings.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "calendar",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Your status chips and the Filters panel are one control now",
+				},
+				body: {
+					en: "They were two separate filters sharing one name: you could tick every status under \"In progress\" in the Filters panel and watch the \"In progress\" chip stay dark. They are one control now — tap a chip and the panel shows it, and back again. The panel lists each status under the chip that counts it, so a stage you renamed yourself is easy to place. Two chips together now mean either, not both, so \"In progress\" plus \"Active now\" no longer gives you an empty list. Filtering is part of the Order Inbox, on Pro.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Tap Pinned again for a list of just your pinned orders",
+				},
+				body: {
+					en: "The Pinned chip has three positions now: pinned first, pinned only, then off. \"Only\" is the shortlist — the handful of orders you are keeping an eye on and nothing else, still narrowed by whatever else you have set. Pins show on cards at last, not only in the table: a filled pin by the customer's name and a tinted edge, so \"why is this one at the top?\" has an answer on a phone. It is a marker there — pin and unpin from the order itself or a table row. On every plan, all three positions.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Orders that arrive already confirmed are counted where they belong",
+				},
+				body: {
+					en: "An order placed straight from your storefront arrives confirmed and counted towards New — but no status you could tick would find it, so your chips and your Filters panel disagreed about the numbers. It has its own status now, \"Not yet opened\", which you can see and filter for. Expect your Confirmed count — or whatever you renamed it to — to read a little lower, with the difference on that new row. Nothing moved; it is counted in the right place. \"Awaiting approval\" is filterable at last too.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "An empty list now tells you why, and how to get back",
+				},
+				body: {
+					en: "Filter down to nothing and you used to get a blank box. In Table view the message was there all along, just rendered far off to the right of the screen where nobody would ever see it. It sits where you are looking now, names the filter that emptied the list, and carries the button that undoes it — including when the pin was the culprit, which is easy to land on by accident now that the chip cycles.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Open the table" },
+				icon: "table",
+			},
+		],
+	},
+	{
 		version: "2026.09.1",
 		date: "2026-09-01",
 		// Earns the modal: a whole new way of selling — date-range bookings with
@@ -371,7 +445,7 @@ export const RELEASES: Release[] = [
 					en: "Pin the orders you need to keep an eye on",
 				},
 				body: {
-					en: "Tap the pin on any order — on a card, a table row, or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
+					en: "Tap the pin on an order — on a table row or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
 				},
 				href: "/app/orders",
 				hrefLabel: { en: "Open orders" },
