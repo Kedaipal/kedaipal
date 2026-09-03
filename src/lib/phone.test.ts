@@ -150,11 +150,17 @@ describe("waPhoneCheckoutSchema.SG — the validator behind the +65 plate", () =
 		expect(waPhoneCheckoutSchema.SG.safeParse(input).success).toBe(false);
 	});
 
-	test("rejects with the SG copy, not the Malaysian message", () => {
+	test("rejects an MY number with copy that names BOTH sides, never a bare MY prompt", () => {
+		// Pre-z8r3fdbmc9 this pinned the generic SG line; the cross-country copy
+		// now names the mismatch too. The invariant that matters is unchanged:
+		// the message must state what THIS store takes (with its example), and
+		// must never be the plain "Enter a Malaysian…" prompt — which would read
+		// as the field asking for the number it just refused.
 		const result = waPhoneCheckoutSchema.SG.safeParse("012-345 6789");
-		expect(!result.success && result.error.issues[0].message).toBe(
-			"Enter a Singapore mobile number (e.g. 9123 4567)",
-		);
+		const message = !result.success && result.error.issues[0].message;
+		expect(message).toMatch(/looks like a Malaysian mobile/i);
+		expect(message).toContain("Singapore mobile numbers (e.g. 9123 4567)");
+		expect(message).not.toContain("Enter a Malaysian");
 	});
 });
 

@@ -1,8 +1,16 @@
 import { z } from "zod";
-import { COUNTRIES, type Country } from "../../convex/lib/country";
 import {
+	COUNTRIES,
+	type Country,
+	COUNTRY_LABELS,
+} from "../../convex/lib/country";
+import {
+	MOBILE_EXAMPLE,
+	MOBILE_KIND,
 	MOBILE_MESSAGE,
+	mobileRejectionMessage,
 	normalizeMobileDigits,
+	otherCountryMobile,
 	STORED_MOBILE_PATTERN,
 } from "../../convex/lib/slug";
 
@@ -32,13 +40,23 @@ import {
 // A Record keyed by the RETAILER's country, never a permissive both-countries
 // schema: an SG store rejects `+60` buyers with the SG message and vice versa,
 // keeping each side's typo protection as strict as when the app was MY-only.
+// Rejection copy is computed per VALUE, not fixed per schema (z8r3fdbmc9): a
+// number that cleanly matches the other supported country gets the
+// cross-country line instead of a dead-end "enter a … mobile". Acceptance and
+// output are unchanged — still the store-country pattern over the normalized
+// digits, still emitting the stored `60…`/`65…` form on success.
 function buildWaPhoneCheckoutSchema(country: Country) {
 	return z
 		.string()
-		.transform((s) => normalizeMobileDigits(s, country))
-		.pipe(
-			z.string().regex(STORED_MOBILE_PATTERN[country], MOBILE_MESSAGE[country]),
-		);
+		.superRefine((s, ctx) => {
+			if (STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country)))
+				return;
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: mobileRejectionMessage(s, country),
+			});
+		})
+		.transform((s) => normalizeMobileDigits(s, country));
 }
 
 export const waPhoneCheckoutSchema: Record<
@@ -57,14 +75,15 @@ export const waPhoneCheckoutSchema: Record<
 // normalization that never happens. The caller sends the raw text; the server
 // normalizes.
 function buildWaPhoneFormOptionalSchema(country: Country) {
-	return z
-		.string()
-		.refine(
-			(s) =>
-				s.trim().length === 0 ||
-				STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country)),
-			MOBILE_MESSAGE[country],
-		);
+	return z.string().superRefine((s, ctx) => {
+		if (s.trim().length === 0) return;
+		if (STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country)))
+			return;
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			message: mobileRejectionMessage(s, country),
+		});
+	});
 }
 
 export const waPhoneFormOptionalSchema: Record<
@@ -77,12 +96,40 @@ export const waPhoneFormOptionalSchema: Record<
 
 // (The old `SettingsWaPhoneFormValues` export had no consumer — dropped
 // rather than re-anchored onto one arm.)
+//
+// Pointed, not neutral (z8r3fdbmc9): this is the seller's own contact field on
+// the WhatsApp tab — home checklist step 1, the first field a store created on
+// the wrong country funnels into — and the seller HAS the fix in reach (the
+// country control on the Store tab). So a cross-country rejection here names
+// the fix path, where the shared checkout schema (also worn by buyer fields)
+// stays neutral.
+function buildSettingsWaPhoneSchema(country: Country) {
+	return z.object({
+		waPhone: z
+			.string()
+			.superRefine((s, ctx) => {
+				if (
+					STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country))
+				)
+					return;
+				const other = otherCountryMobile(s, country);
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: other
+						? `That looks like a ${MOBILE_KIND[other]} number. Your store country is ${COUNTRY_LABELS[country]} — change it in the Store tab, or enter a ${MOBILE_KIND[country]} number (e.g. ${MOBILE_EXAMPLE[country]})`
+						: MOBILE_MESSAGE[country],
+				});
+			})
+			.transform((s) => normalizeMobileDigits(s, country)),
+	});
+}
+
 export const settingsWaPhoneFormSchema: Record<
 	Country,
-	z.ZodObject<{ waPhone: ReturnType<typeof buildWaPhoneCheckoutSchema> }>
+	ReturnType<typeof buildSettingsWaPhoneSchema>
 > = {
-	MY: z.object({ waPhone: waPhoneCheckoutSchema.MY }),
-	SG: z.object({ waPhone: waPhoneCheckoutSchema.SG }),
+	MY: buildSettingsWaPhoneSchema("MY"),
+	SG: buildSettingsWaPhoneSchema("SG"),
 };
 
 // Notification email — empty string allowed (clears the field). When non-empty
