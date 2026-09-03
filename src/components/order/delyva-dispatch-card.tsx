@@ -106,9 +106,28 @@ export function DelyvaDispatchCard({
 	const bookable = blockReason === null;
 	const effectiveItemType = itemType ?? dispatch.defaultItemType;
 
-	// Never set up — a one-line discoverability hint, not a disabled button for
-	// a feature the seller has never heard of.
+	// Not bookable from here yet — a one-line hint, not a disabled button for
+	// a feature the seller has never heard of. Which hint depends on WHY:
+	// telling a connected seller to "connect Delyva" sends them looking for a
+	// screen they already finished, and hides the switch they actually need.
 	if (surface === "hint") {
+		if (blockReason === "disabled") {
+			return (
+				<p className="rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+					<Truck className="mr-1.5 inline size-3.5 align-[-2px]" />
+					Delyva booking is paused — turn <b>Delyva couriers</b> back on under
+					Courier booking in{" "}
+					<Link
+						to="/app/settings"
+						search={{ tab: "fulfilment" }}
+						className="font-medium text-accent hover:underline"
+					>
+						Settings → Fulfilment
+					</Link>
+					.
+				</p>
+			);
+		}
 		if (blockReason === "plan_gated") {
 			return (
 				<p className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">

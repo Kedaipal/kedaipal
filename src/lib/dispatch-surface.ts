@@ -62,6 +62,10 @@ export function delyvaSurface(
 	if (blockReason === "country_unsupported" && !job) return "none";
 	if ((blockReason === "not_delivery" || blockReason === "no_address") && !job)
 		return "none";
-	if (!dispatch.bookingEnabled && !job) return "hint";
+	// A set-up nudge belongs on orders the seller could still act on. On a
+	// delivered or cancelled order it is noise — the Lalamove posture, applied
+	// here so the two cards behave alike.
+	if (!dispatch.bookingEnabled && !job)
+		return bookableStatus(order) ? "hint" : "none";
 	return "card";
 }

@@ -47,6 +47,9 @@ const order = {
 	_id: "order1",
 	shortId: "ORD-1234",
 	deliveryMethod: "delivery",
+	// Bookable: set-up hints only render on orders the seller can still act
+	// on, so an order with no status would suppress them.
+	status: "confirmed",
 	currency: "MYR",
 	deliveryFee: 1200,
 	items: [],
@@ -518,3 +521,29 @@ describe("embedded in the dispatch hub", () => {
 		expect(root?.className).toContain("border");
 	});
 });
+
+describe("the hint names the RIGHT next step", () => {
+	// PR #247 review (LOW): a connected seller who paused booking was told to
+	// "connect Delyva" — a screen they already finished — while the switch
+	// they actually need went unmentioned.
+	it("tells a paused store to resume, not to connect", () => {
+		state.dispatch = dispatchState({
+			bookingEnabled: false,
+			blockReason: "disabled",
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain("paused");
+		expect(container.textContent).toContain("Courier booking");
+		expect(container.textContent).not.toContain("connect Delyva");
+	});
+
+	it("still tells a store that never connected to connect", () => {
+		state.dispatch = dispatchState({
+			bookingEnabled: false,
+			blockReason: "not_connected",
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain("connect Delyva");
+		expect(container.textContent).not.toContain("paused");
+	});
+})

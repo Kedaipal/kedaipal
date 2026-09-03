@@ -123,3 +123,25 @@ describe("delyvaSurface", () => {
 		).toBe("card");
 	});
 });
+
+describe("a set-up nudge only appears where it can be acted on", () => {
+	// PR #247 review: the Delyva hint fired on every order, including ones
+	// nobody can book. Lalamove never did — the two now agree.
+	it("no Delyva hint on a delivered order", () => {
+		expect(
+			delyvaSurface(
+				order({ status: "delivered" }),
+				delyva({ bookingEnabled: false }),
+			),
+		).toBe("none");
+	});
+
+	it("…and none from Lalamove either", () => {
+		expect(
+			lalamoveSurface(
+				order({ status: "delivered" }),
+				lalamove({ blockReason: "booking_disabled" }),
+			),
+		).toBe("none");
+	});
+});

@@ -383,6 +383,17 @@ covers both. The gate's wording, the cancel/delete warnings that point at the
 dispatch card by name, and the `deliveryJobFailed` email (all three locales)
 follow the provider that actually owns the job.
 
+**Every hint names the RIGHT next step** (PR #247 review). A one-line nudge
+replaces the card whenever booking isn't armed, and *which* nudge depends on
+why: `not_connected` → connect in Integrations, `disabled` → the store paused
+it, so resume it under Fulfilment → Courier booking, `plan_gated` → the Pro
+pitch. Sending an already-connected seller to a connect screen hides the one
+switch they need. The same sweep split Lalamove's `booking_disabled`, which
+had meant *either* "toggle off" *or* "no pickup address on the store" — one of
+those two fixes was always the wrong advice, so `no_business_address` is now
+its own reason. A nudge also only renders on an order the seller can still
+act on; on a delivered order it is noise.
+
 **Discoverability** (the CLAUDE.md rule): the settings card explains the
 feature before it is connected, the order card shows a one-line hint linking to
 Settings when Delyva was never set up (rather than a disabled button for a

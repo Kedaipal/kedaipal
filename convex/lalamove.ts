@@ -622,6 +622,7 @@ export type DispatchBlock =
 	| "bad_status"
 	| "job_active"
 	| "booking_disabled"
+	| "no_business_address"
 	| "plan_gated"
 	| "no_credentials"
 	| "no_coords"
@@ -650,8 +651,11 @@ function dispatchBlockReason(args: {
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
 	if (activeJob) return "job_active";
-	if (!retailer.deliveryBooking?.enabled || !retailer.businessAddress)
-		return "booking_disabled";
+	if (!retailer.deliveryBooking?.enabled) return "booking_disabled";
+	// Split out of `booking_disabled` (PR #247 review): a store with rider
+	// booking already ON but no pickup address was told to switch a toggle
+	// that was on — a dead end, and the actual fix lives on another tab.
+	if (!retailer.businessAddress) return "no_business_address";
 	if (!planOk) return "plan_gated";
 	if (!credentials) return "no_credentials";
 	if (
