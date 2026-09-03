@@ -112,6 +112,7 @@ import {
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 	summarizeCartWeight,
+	storablePendingReason,
 } from "./lib/delivery";
 import {
 	CHECKOUT_QUOTE_MAX_AGE_MS,
@@ -210,6 +211,10 @@ function blockedDeliveryMessage(
 		unquotable:
 			"We couldn't price delivery to that address right now — please try again",
 		out_of_range: "That address is outside this store's delivery area",
+		// Cold chain (z8r3fdbvdy): the ADDRESS is fine, so the sentence must not
+		// point at it — this is the store's to arrange.
+		no_cold_service:
+			"This store can't ship chilled or frozen items to that address right now — message them to arrange it",
 		no_state: "Add a delivery address so we can calculate the delivery fee",
 		unserved_state: state
 			? `This store doesn't deliver to ${state}`
@@ -1135,7 +1140,9 @@ export const create = mutation({
 		// subtotal (flat free-above threshold), so it runs after the item loop.
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
-		let deliveryFeePendingReason: DeliveryQuoteReason | undefined;
+		// Typed as the STORABLE subset, so a reason that can't be persisted can't
+		// silently reach the insert (see storablePendingReason).
+		let deliveryFeePendingReason: Doc<"orders">["deliveryFeePendingReason"];
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
 			const liveQuote = await loadCheckoutDeliveryQuote(
@@ -1153,7 +1160,7 @@ export const create = mutation({
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
-			deliveryFeePendingReason = resolved.pendingReason;
+			deliveryFeePendingReason = storablePendingReason(resolved.pendingReason);
 		}
 		// Frozen trip direction (86eyg0n8e): stamped from the store's live
 		// collection-service setting so buyer surfaces (tracking labels, WA
@@ -3840,7 +3847,7 @@ export const updateDeliveryAddress = mutation({
 			deliveryFeePending: resolved.pending || undefined,
 			// Re-freeze (or clear) the reason with the flag — a re-price that
 			// resolves to a fee must not leave a stale explanation behind.
-			deliveryFeePendingReason: resolved.pendingReason,
+			deliveryFeePendingReason: storablePendingReason(resolved.pendingReason),
 			subtotal,
 			total,
 			updatedAt: now,

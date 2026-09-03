@@ -100,6 +100,8 @@ export function AddressEditDialog({
 		),
 	).data;
 	const isLiveMode = deliveryQuote?.kind === "live";
+	const providerAware =
+		deliveryQuote?.kind === "live" && deliveryQuote.providerAware;
 
 	const form = useAppForm({
 		defaultValues: toFormValues(currentAddress),
@@ -158,6 +160,7 @@ export function AddressEditDialog({
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode && open,
+		providerAware,
 		retailerId,
 		latitude: hasCoords ? latNum : undefined,
 		longitude: hasCoords ? lngNum : undefined,
@@ -171,6 +174,14 @@ export function AddressEditDialog({
 			]
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
+		},
+		getAddressParts: () => {
+			const v = form.store.state.values;
+			return {
+				city: v.city?.trim() || undefined,
+				state: displayAddressState(v) || undefined,
+				postcode: v.postcode?.trim() || undefined,
+			};
 		},
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
@@ -269,6 +280,17 @@ export function AddressEditDialog({
 										{collectsFromCustomer ? "collection" : "delivery"} rider
 										service doesn&apos;t cover it. Pick an address closer to the
 										store, or message the store to sort it out.
+									</p>
+								) : liveQuote.state === "no_cold_service" ? (
+									// The address is fine — the store has no cold courier. Do
+									// not tell them to pick a different address.
+									<p
+										role="alert"
+										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+									>
+										This store can&apos;t ship chilled or frozen items to this
+										address right now. Message them on WhatsApp to arrange
+										delivery.
 									</p>
 								) : liveQuote.state === "store_unavailable" ? (
 									// Seller-side breakage — retrying can't help the buyer.

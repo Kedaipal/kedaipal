@@ -1,9 +1,8 @@
 # Live courier price at checkout (z8r3fdbvdy)
 
-**Status: sellers can turn it on; the checkout client is the last piece.** The
-`live` charge mode is selectable in Settings → Fulfilment and stored stores
-migrate to it, but the storefront still calls the single-provider action, so
-buyers are priced the old way until the final slice lands.
+**Status: complete, pending a local test round.** Sellers can pick the mode,
+stored stores migrate to it, and buyers are priced across every armed
+provider.
 
 Reference: [`delivery-lalamove.md`](./delivery-lalamove.md) ·
 [`delivery-delyva.md`](./delivery-delyva.md) · ticket
@@ -121,7 +120,35 @@ leak already did — a store with one armed provider has one bidder and prices
 identically either way. Idempotent. The old literal stays valid (and shows as
 selected) so an unmigrated row is never "nothing picked".
 
-## Still to build
+## Checkout
 
-**Checkout** — point the client hook at `liveQuote.quoteForCheckout` and write
-buyer copy for the new `no_cold_service` status.
+**The store's mode decides which action prices it**, handed to the client on
+the reactive `delivery.quote` result as `providerAware` — never inferred.
+A `"live"` store goes through `liveQuote.quoteForCheckout`; a not-yet-migrated
+`"lalamove"` store keeps the single-provider action. So **a deploy alone never
+changes what anyone is charged** — only the migration does, which is the whole
+point of doing it as widen → migrate → narrow.
+
+All three buyer surfaces share the hook and therefore agree: the checkout
+sheet, the claim-link checkout, and the tracking page's address-edit dialog.
+A claim link pricing the same cart differently from the storefront would be
+its own bug.
+
+**`no_cold_service` is its own buyer state**, not folded into "too far". The
+address is fine, so the copy must not send anyone editing it — it says the
+store can't ship chilled or frozen here right now and points at WhatsApp
+(and pickup, where the store offers it). Folding it into `out_of_range` would
+have had buyers rewriting a perfectly good address forever. All three
+surfaces render it; two of them would otherwise have fallen through to a
+spinner that never resolves.
+
+**It can never be stored.** A cold-chain block refuses checkout rather than
+landing the order fee-pending — a frozen cart must not quietly become "the
+seller will confirm the charge later" — so `storablePendingReason()` strips it
+at the three order-creating call sites.
+
+**Delyva's inputs ride along**: the written city/state/postcode (it prices on
+the postcode, not the map pin) and the cart lines (the server re-reads each
+variant's weight itself). Coordinates stay required for both modes, because
+the redemption check at order create is coordinate-based and one replay
+control covering both providers beats two.

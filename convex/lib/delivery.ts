@@ -237,7 +237,25 @@ export type DeliveryQuoteReason =
 	| "unserved_state"
 	| "over_bands"
 	| "missing_weights"
-	| "custom_item";
+	| "custom_item"
+	/** Live pricing (z8r3fdbvdy): the cart needs a cold chain and no armed
+	 * courier carries one. The ADDRESS is fine — distinct from out_of_range so
+	 * the copy never sends the buyer editing something that isn't the problem,
+	 * and riders are never substituted (no temperature guarantee). */
+	| "no_cold_service";
+
+/**
+ * The STORED pending reason is narrower than the resolver's union: a
+ * cold-chain block refuses checkout rather than landing the order fee-pending
+ * (a frozen cart must never quietly become "seller will confirm the charge"),
+ * so `no_cold_service` can never be persisted. One converter, so the three
+ * order-creating call sites can't disagree about that.
+ */
+export function storablePendingReason(
+	reason: DeliveryQuoteReason | undefined,
+): Exclude<DeliveryQuoteReason, "no_cold_service"> | undefined {
+	return reason === "no_cold_service" ? undefined : reason;
+}
 
 /**
  * Resolution result. "free" carries an optional reason so the storefront can
