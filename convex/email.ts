@@ -162,8 +162,11 @@ export const notifyDeliveryJobFailed = internalAction({
 	args: {
 		orderId: v.id("orders"),
 		reason: v.optional(v.string()),
+		// Which booking provider failed (86eyjpv6z). Absent = "lalamove", so
+		// pre-Delyva scheduled sends keep rendering unchanged.
+		provider: v.optional(v.union(v.literal("lalamove"), v.literal("delyva"))),
 	},
-	handler: async (ctx, { orderId, reason }): Promise<void> => {
+	handler: async (ctx, { orderId, reason, provider }): Promise<void> => {
 		let meta: {
 			shortId: string;
 			itemCount: number;
@@ -200,6 +203,7 @@ export const notifyDeliveryJobFailed = internalAction({
 				storeName: meta.storeName,
 				dashboardUrl,
 				jobFailureReason: reason,
+				deliveryProvider: provider,
 			},
 		);
 		try {
