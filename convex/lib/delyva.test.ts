@@ -8,6 +8,7 @@ import {
 	buildDelyvaHeaders,
 	buildInstantQuoteBody,
 	classifyDelyvaFailure,
+	countActiveDelyvaServices,
 	computeDelyvaWebhookSignature,
 	decryptDelyvaCredentials,
 	delyvaAmountToSen,
@@ -475,3 +476,34 @@ describe("webhook subscription events", () => {
 		]);
 	});
 });
+
+describe("countActiveDelyvaServices", () => {
+	// An empty quote has two causes and only one is the seller's to fix; this
+	// is how they're told apart (Zaki's SG account, 3 Sep).
+	test("counts only the switched-on services", () => {
+		expect(
+			countActiveDelyvaServices({
+				data: [
+					{ code: "NDDX", status: 1 },
+					{ code: "G-T1", status: 0 },
+					{ code: "SDD", status: 1 },
+				],
+			}),
+		).toBe(2);
+	});
+
+	test("returns 0 for an account with nothing connected", () => {
+		expect(countActiveDelyvaServices({ data: [] })).toBe(0);
+	});
+
+	test("returns 0 when every service is switched off", () => {
+		expect(countActiveDelyvaServices({ data: [{ status: 0 }] })).toBe(0);
+	});
+
+	// "We couldn't tell" must never render as an accusation.
+	test("returns null for a malformed response", () => {
+		expect(countActiveDelyvaServices({})).toBeNull();
+		expect(countActiveDelyvaServices({ data: "nope" })).toBeNull();
+		expect(countActiveDelyvaServices(null)).toBeNull();
+	});
+})

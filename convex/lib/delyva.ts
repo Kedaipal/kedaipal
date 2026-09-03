@@ -170,6 +170,30 @@ export type DelyvaService = {
  * answer ("no courier takes this parcel to this address") — only a shape
  * surprise throws. Services arrive in provider order; callers sort by price.
  */
+/**
+ * How many couriers this Delyva ACCOUNT has switched on, from `GET /service`.
+ *
+ * A quote that comes back with no services has two very different causes, and
+ * the seller can only fix one of them: either no courier serves this
+ * particular parcel/route, or the account has no couriers connected at all —
+ * the state every fresh DelyvaNow account starts in, and what a seller hits
+ * when their market's providers were never enabled for them (Zaki's SG
+ * account, 3 Sep: an empty Service Providers panel and therefore an empty
+ * quote for every address he tried). Blaming the address in that state sends
+ * them hunting the wrong variable.
+ *
+ * `status: 1` is active; anything else is switched off. A malformed response
+ * yields `null` — "we couldn't tell", which the caller renders as the
+ * cautious generic copy rather than a wrong accusation.
+ */
+export function countActiveDelyvaServices(json: unknown): number | null {
+	const data = (json as { data?: unknown })?.data;
+	if (!Array.isArray(data)) return null;
+	return data.filter(
+		(entry) => (entry as { status?: unknown } | null)?.status === 1,
+	).length;
+}
+
 export function parseInstantQuoteResponse(json: unknown): DelyvaService[] {
 	const data = (json as { data?: { services?: unknown } })?.data;
 	if (!data || typeof data !== "object") {

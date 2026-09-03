@@ -547,3 +547,44 @@ describe("the hint names the RIGHT next step", () => {
 		expect(container.textContent).not.toContain("paused");
 	});
 })
+
+describe("an empty courier list says WHICH kind of empty", () => {
+	// Zaki's SG account, 3 Sep: no couriers connected, so every address he
+	// tried quoted nothing — while the card blamed the address, sending him
+	// re-typing addresses instead of switching a courier on.
+	async function quoteEmpty(accountHasNoCouriers?: boolean) {
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			services: [],
+			weightKg: 2.5,
+			itemType: "CHILLED",
+			buyerPaidFee: 1200,
+			accountHasNoCouriers,
+		});
+		state.actions.set(NAME.prepare, prepare);
+		const view = render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		await waitFor(() => expect(prepare).toHaveBeenCalled());
+		return view;
+	}
+
+	it("names the account when nothing is switched on — and clears the address of blame", async () => {
+		const { container } = await quoteEmpty(true);
+		expect(container.textContent).toContain(
+			"no couriers switched on yet",
+		);
+		expect(container.textContent).toContain("isn't about this order's address");
+		expect(container.textContent).not.toContain("No courier can take a");
+	});
+
+	it("still blames the route when the account HAS couriers", async () => {
+		const { container } = await quoteEmpty(false);
+		expect(container.textContent).toContain("No courier can take a");
+		expect(container.textContent).not.toContain("no couriers switched on yet");
+	});
+
+	it("falls back to the generic wording when the lookup couldn't tell", async () => {
+		const { container } = await quoteEmpty(undefined);
+		expect(container.textContent).toContain("No courier can take a");
+	});
+})

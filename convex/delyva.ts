@@ -40,6 +40,7 @@ import {
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
 	parseCompanyResponse,
+	countActiveDelyvaServices,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -1139,6 +1140,12 @@ export const prepareBooking = action({
 				weightKg: number;
 				itemType: DelyvaItemType;
 				buyerPaidFee: number;
+				/** Only set when `services` is empty: whether the ACCOUNT has any
+				 * courier switched on at all. true = nothing is connected, so no
+				 * address would ever quote; false = the account has couriers, none
+				 * of which covers this shipment. undefined = the extra lookup
+				 * failed, so the card stays with its generic wording. */
+				accountHasNoCouriers?: boolean;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
@@ -1186,12 +1193,30 @@ export const prepareBooking = action({
 			const services = parseInstantQuoteResponse(response).sort(
 				(a, b) => a.price - b.price,
 			);
+			// An empty list is ambiguous — "no courier for THIS parcel" and "this
+			// account has no couriers at all" look identical here, and only the
+			// second is something the seller can go and fix. One extra GET, on
+			// the empty path only, tells them apart. It must never turn a
+			// successful quote into a failure, so a throw just leaves the flag
+			// unset and the card keeps its generic wording.
+			let accountHasNoCouriers: boolean | undefined;
+			if (services.length === 0) {
+				try {
+					const active = countActiveDelyvaServices(
+						await callDelyva(context.credentials, "GET", "/service"),
+					);
+					accountHasNoCouriers = active === null ? undefined : active === 0;
+				} catch {
+					accountHasNoCouriers = undefined;
+				}
+			}
 			return {
 				ok: true,
 				services,
 				weightKg: weight.kg,
 				itemType,
 				buyerPaidFee: context.buyerPaidFee,
+				accountHasNoCouriers,
 			};
 		} catch (err) {
 			console.warn("[delyva] dispatch quote failed", {

@@ -71,6 +71,10 @@ export function DelyvaDispatchCard({
 	const [itemType, setItemType] = useState<DelyvaItemType | null>(null);
 	const [weightInput, setWeightInput] = useState("");
 	const [services, setServices] = useState<DelyvaService[] | null>(null);
+	/** Set with an empty `services` list: the account has no courier switched
+	 * on at all, so no address would quote. Distinguishes "you have nothing
+	 * connected" from "nobody covers this route". */
+	const [noCouriersOnAccount, setNoCouriersOnAccount] = useState(false);
 	const [selectedCode, setSelectedCode] = useState<string | null>(null);
 	const [quoting, setQuoting] = useState(false);
 	const [booking, setBooking] = useState(false);
@@ -172,6 +176,7 @@ export function DelyvaDispatchCard({
 				return;
 			}
 			setServices(result.services);
+			setNoCouriersOnAccount(result.accountHasNoCouriers === true);
 			// Cheapest pre-selected — the list arrives price-sorted from the server.
 			setSelectedCode(result.services[0]?.code ?? null);
 		} catch (err) {
@@ -473,6 +478,33 @@ export function DelyvaDispatchCard({
 								</>
 							)}
 						</Button>
+					) : services.length === 0 && noCouriersOnAccount ? (
+						/* The account itself has no courier switched on — every address
+						   would come back empty, so blaming this one would send the
+						   seller re-typing addresses forever (Zaki's SG account, 3 Sep:
+						   an empty Service Providers panel). Name the real cause. */
+						<div className="flex flex-col items-start gap-1.5 rounded-xl border border-dashed border-border px-3 py-3.5">
+							<p className="text-sm text-muted-foreground">
+								<span className="font-medium text-foreground">
+									Your Delyva account has no couriers switched on yet.
+								</span>{" "}
+								Nothing can be quoted until at least one is active — this
+								isn&apos;t about this order&apos;s address.
+							</p>
+							<p className="text-sm text-muted-foreground">
+								Open <b>Delyva → Settings → Integrations</b> to connect a
+								courier you already have an account with, or ask Delyva support
+								to enable their courier partners for your account. Meanwhile,
+								arrange delivery yourself and add the tracking number below.
+							</p>
+							<button
+								type="button"
+								className="min-h-9 text-xs font-medium text-accent underline-offset-2 hover:underline"
+								onClick={() => setServices(null)}
+							>
+								Start over
+							</button>
+						</div>
 					) : services.length === 0 ? (
 						<div className="flex flex-col items-start gap-1.5 rounded-xl border border-dashed border-border px-3 py-3.5">
 							<p className="text-sm text-muted-foreground">

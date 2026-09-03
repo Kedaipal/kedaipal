@@ -383,6 +383,27 @@ covers both. The gate's wording, the cancel/delete warnings that point at the
 dispatch card by name, and the `deliveryJobFailed` email (all three locales)
 follow the provider that actually owns the job.
 
+**An empty courier list says WHICH kind of empty.** A quote with no services
+has two causes that look identical on the wire, and the seller can only fix
+one: no courier covers this parcel/route, or **the account has no courier
+switched on at all**. The second is where every fresh DelyvaNow account
+starts — its Service Providers panel is empty until Delyva enables their
+market's partners or the seller connects their own courier contract — so a
+brand-new account quotes nothing for every address (Zaki's live SG account,
+3 Sep). Blaming the address there sends the seller re-typing addresses
+forever. So when `instantQuote` returns zero services, `prepareBooking` makes
+ONE extra `GET /service` call (empty path only, never on a successful quote)
+and counts `status: 1` entries via `countActiveDelyvaServices`; zero means
+the account is empty and the card says so, pointing at Delyva's own
+Integrations screen instead of at this order. A failed or malformed lookup
+leaves the flag unset and the generic route wording stands — "we couldn't
+tell" must never render as an accusation.
+
+Note this is also the seller-facing half of the cold-chain finding: services
+carry a per-entry `itemType` acceptance list, so a company with couriers but
+none accepting CHILLED/FROZEN quotes nothing for cold orders while parcels
+work fine.
+
 **Every hint names the RIGHT next step** (PR #247 review). A one-line nudge
 replaces the card whenever booking isn't armed, and *which* nudge depends on
 why: `not_connected` → connect in Integrations, `disabled` → the store paused
