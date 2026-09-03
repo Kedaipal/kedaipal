@@ -733,6 +733,7 @@ function DeliveryChargeSection({
 	currency: string;
 }) {
 	const updateSettings = useUpdateSettings();
+	const actAsRetailerId = useActAsRetailerId();
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
 	// Flat-mode drafts (RM display strings; sen on the wire).
 	const [flatFee, setFlatFee] = useState(
@@ -779,6 +780,20 @@ function DeliveryChargeSection({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
+	// Live pricing quotes whatever is ARMED, so the mode needs at least one
+	// armed provider — a connected-but-paused Delyva doesn't bid, and picking
+	// the mode with nothing behind it would block every checkout.
+	const delyvaSettings = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const delyvaArmed =
+		delyvaSettings?.connected === true && delyvaSettings.enabled === true;
+	// One tile covers both live modes: "lalamove" is the pre-migration
+	// spelling of the same choice, so a store still on it shows as selected
+	// rather than as nothing-picked.
+	const liveModeSelected = mode === "live" || mode === "lalamove";
+	const storedLiveMode =
+		config?.mode === "live" || config?.mode === "lalamove";
 
 	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
 	// weight-zone / Lalamove) don't render and the server refuses storing them
@@ -901,11 +916,11 @@ function DeliveryChargeSection({
 				onOutOfBands,
 				onUnpriceable,
 			};
-		} else if (mode === "lalamove") {
-			// Live provider quote (86eyb5hrf) — `onUnquotable` is vestigial (strict
-			// since 27 Jul: no quote, no order; the sanitizer normalizes stored
-			// rows to "block"). Mirrors the server gates so the failure is a
-			// helpful message, not a thrown save.
+		} else if (mode === "live" || mode === "lalamove") {
+			// Live provider quote (86eyb5hrf, provider-aware since z8r3fdbvdy) —
+			// `onUnquotable` is vestigial (strict since 27 Jul: no quote, no
+			// order; the sanitizer normalizes stored rows to "block"). Mirrors the
+			// server gates so the failure is a helpful message, not a thrown save.
 			if (!effectiveAddress) {
 				setError(
 					collectionMode
@@ -914,16 +929,18 @@ function DeliveryChargeSection({
 				);
 				return;
 			}
-			if (!hasStoredKey) {
+			// At least ONE provider must be connectable, or every checkout would
+			// block. Which one doesn't matter — the mode prices whatever is armed.
+			if (!hasStoredKey && !delyvaArmed) {
 				setError(
-					"Connect Lalamove under Settings → Integrations first — live quotes run on your own API keys.",
+					"Connect Lalamove or Delyva under Settings → Integrations first — live prices run on your own accounts.",
 				);
 				return;
 			}
-			nextConfig =
-				config?.mode === "lalamove"
-					? config
-					: { mode: "lalamove", onUnquotable: "block" };
+			nextConfig = {
+				mode: "live" as const,
+				onUnquotable: "block" as const,
+			};
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -956,7 +973,7 @@ function DeliveryChargeSection({
 			// riders armed beside Delyva. Keys never ride this save — they live in
 			// Settings → Integrations.
 			const bookingPatch =
-				mode === "lalamove"
+				(mode === "live" || mode === "lalamove") && hasStoredKey
 					? {
 							deliveryBooking: {
 								enabled: true,
@@ -977,8 +994,8 @@ function DeliveryChargeSection({
 			toast.success(
 				mode === "free"
 					? "Delivery charge turned off — delivery is free."
-					: mode === "lalamove"
-						? "Lalamove delivery is on — book riders from any confirmed delivery order."
+					: mode === "live" || mode === "lalamove"
+						? "Live courier pricing is on — buyers pay the real price for their address."
 						: "Delivery charge saved.",
 			);
 		} catch (err) {
@@ -994,9 +1011,12 @@ function DeliveryChargeSection({
 				title="Delivery charge"
 				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
 			/>
-			{/* 2×2 grid, Lalamove FIRST (86eyb5hrf) — it's a pricing choice like
-			    the others, but the promoted one: branded with the official
-			    wordmark so every tier SEES rider delivery exists. For a locked
+			{/* 2×2 grid, live pricing FIRST (86eyb5hrf) — it's a pricing choice
+			    like the others, but the promoted one: it carries the providers'
+			    own wordmarks so every tier SEES that real courier pricing
+			    exists. Both marks, because since z8r3fdbvdy the mode prices
+			    across every armed provider — a Lalamove-only tile would say
+			    the wrong thing to a store that ships parcels. For a locked
 			    Starter it stays full-colour with a Pro chip + upgrade line
 			    (disabled-with-reason, not a washed-out ghost). SG stores see
 			    only Free + Flat (SG-lite) — the reason line below the grid
@@ -1005,30 +1025,39 @@ function DeliveryChargeSection({
 				{myOnlyModesHidden ? null : (
 					<button
 						type="button"
-						onClick={() => setMode("lalamove")}
-						disabled={lalamoveLocked && config?.mode !== "lalamove"}
-						aria-pressed={mode === "lalamove"}
+						onClick={() => setMode("live")}
+						disabled={lalamoveLocked && !storedLiveMode}
+						aria-pressed={liveModeSelected}
 						className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-							mode === "lalamove"
+							liveModeSelected
 								? "border-accent bg-accent/5"
 								: "border-border bg-card hover:border-accent/40"
-						} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+						} ${lalamoveLocked && !storedLiveMode ? "cursor-not-allowed" : ""}`}
 					>
 						<span className="flex items-center gap-1.5">
+							<span className="text-sm font-medium">Live courier price</span>
+							{lalamoveLocked ? <ProBadge /> : null}
+						</span>
+						<span className="flex items-center gap-2">
 							<AppImage
 								src="/img/lalamove-logo.svg"
 								alt="Lalamove"
-								aspect="h-4 w-auto"
+								aspect="h-3.5 w-auto"
 								fill={false}
 							/>
-							{lalamoveLocked ? <ProBadge /> : null}
+							<AppImage
+								src="/img/delyva-logo.png"
+								alt="Delyva"
+								aspect="h-2.5 w-auto"
+								fill={false}
+							/>
 						</span>
 						<span className="text-xs text-muted-foreground">
-							{lalamoveLocked && config?.mode !== "lalamove"
-								? "Rider delivery — upgrade to Pro to turn on"
-								: "Live rider price, one-tap booking"}
+							{lalamoveLocked && !storedLiveMode
+								? "Real courier prices — upgrade to Pro to turn on"
+								: "Real price per address"}
 						</span>
-						<ModeRadioDot active={mode === "lalamove"} />
+						<ModeRadioDot active={liveModeSelected} />
 					</button>
 				)}
 				<ModeButton
@@ -1081,23 +1110,88 @@ function DeliveryChargeSection({
 				</p>
 			) : null}
 
-			{mode === "lalamove" ? (
+			{liveModeSelected ? (
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
-						Buyers pay the real Lalamove price for their address at checkout,
-						and you book the rider in one tap from the order — which then marks
-						itself Shipped and puts the rider&apos;s live tracking on the
-						buyer&apos;s order page, automatically. There&apos;s{" "}
-						<b>no delivery area to set</b>, and{" "}
+						Buyers pay the real courier price for their address at checkout,
+						and you book the trip in one tap from the order — which then marks
+						itself Shipped and puts tracking on the buyer&apos;s order page,
+						automatically. There&apos;s <b>no delivery area to set</b>, and{" "}
 						<b>buyers always see the price before ordering</b> (an address
-						Lalamove can&apos;t price can&apos;t check out, so you never work
-						out a delivery charge yourself). Runs entirely on{" "}
-						<b>your own Lalamove account</b>; Kedaipal never books or pays on
+						nobody can price can&apos;t check out, so you never work out a
+						delivery charge yourself). Runs entirely on{" "}
+						<b>your own courier accounts</b>; Kedaipal never books or pays on
 						your behalf.
 					</p>
+
+					{/* WHO will be asked, and what happens when they disagree. Two
+					    armed providers is not an edge case — it is the reason this
+					    mode exists — and a seller who doesn't know both are quoted
+					    can't explain their own checkout prices to a buyer. */}
+					<div className="flex flex-col gap-1.5 rounded-lg border border-input px-3 py-2.5">
+						<span className="text-xs font-medium">Priced by</span>
+						{hasStoredKey || delyvaArmed ? (
+							<>
+								<ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+									{hasStoredKey ? (
+										<li>
+											<b>Lalamove riders</b> — same-day, around your city.
+										</li>
+									) : null}
+									{delyvaArmed ? (
+										<li>
+											<b>Delyva couriers</b> — nationwide parcels, cheapest
+											service quoted.
+										</li>
+									) : null}
+								</ul>
+								{hasStoredKey && delyvaArmed ? (
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										Both are quoted and the buyer pays the{" "}
+										<b>higher of the two</b>, so whichever you book afterwards,
+										what you collected covers it — book the cheaper one and the
+										difference is yours to keep.
+									</p>
+								) : (
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										Arm the other under <b>Courier booking</b> below and both
+										get quoted, with the buyer paying the higher — so
+										whichever you book, the fee covers it.
+									</p>
+								)}
+							</>
+						) : (
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								Nothing is connected yet, so no price can be worked out and
+								delivery checkout would be refused. Connect Lalamove or Delyva
+								under <b>Settings → Integrations</b> first.
+							</p>
+						)}
+						{delyvaArmed &&
+						delyvaSettings?.defaultItemType &&
+						delyvaSettings.defaultItemType !== "PARCEL" ? (
+							/* A cold default is priced as cold, and Delyva quotes
+							   nothing when the account carries no cold-chain service —
+							   which blocks every delivery checkout. Never something to
+							   discover as orders quietly stopping. */
+							<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+								Your Delyva parcel type is{" "}
+								<b>{delyvaSettings.defaultItemType === "FROZEN" ? "Frozen" : "Chilled"}</b>
+								, so checkout asks for a cold-chain price. If your Delyva
+								account has no cold-chain service switched on, no price comes
+								back and <b>delivery checkout is refused</b> — riders are never
+								substituted, because they carry no temperature guarantee. Ask
+								Delyva to enable one, or set the parcel type to Parcel under
+								Settings → Integrations.
+							</p>
+						) : null}
+					</div>
 					{/* Coverage education (27 Jul, measured live): city-zone limits are
 					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
-					    the vehicle picker below must not read as a range picker. */}
+					    the vehicle picker below must not read as a range picker. Shown
+					    only when riders actually bid — a parcel-only store has no city
+					    zone to learn about. */}
+					{hasStoredKey ? (
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 						<b>Lalamove&apos;s own coverage still applies:</b> riders serve the
 						city zone around your pickup address (e.g. Klang Valley), so a buyer
@@ -1107,19 +1201,29 @@ function DeliveryChargeSection({
 						Lalamove to Melaka). Vehicle choice doesn&apos;t change this: bike
 						and car cover the <b>same area</b> — the difference is parcel size
 						and price. Keep self-collect on as the fallback for far buyers.
+						{delyvaArmed ? (
+							<>
+								{" "}
+								Beyond that zone your <b>Delyva</b> couriers still quote, so
+								checkout keeps working — as a parcel, not a rider.
+							</>
+						) : null}
 					</p>
+					) : null}
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Lalamove delivery is a Pro feature. Your setup still applies to
-							new orders — upgrade in Settings → Billing to change it, or switch
-							to Free / Flat fee (always allowed).
+							Live courier pricing is a Pro feature. Your setup still applies
+							to new orders — upgrade in Settings → Billing to change it, or
+							switch to Free / Flat fee (always allowed).
 						</p>
 					) : null}
 
 					{/* 1 · Pickup point — one editor, in the Business address card
 					    above. It used to be duplicated here and in radius mode,
 					    which is how a Singapore store ended up with no way to set
-					    one at all (86eyqgujv). */}
+					    one at all (86eyqgujv). Riders need the exact pin; Delyva
+					    collects from its own pickup address in Integrations. */}
+					{hasStoredKey ? (
 					<BusinessAddressReference
 						address={businessAddress}
 						present={
@@ -1133,8 +1237,10 @@ function DeliveryChargeSection({
 								: "Set your business address first — it's the exact point riders are sent to."
 						}
 					/>
+					) : null}
 
-					{/* 2 · Vehicle */}
+					{/* 2 · Vehicle — a rider setting, so it follows the rider. */}
+					{hasStoredKey ? (
 					<div className="flex flex-col gap-1.5">
 						<span className="text-xs font-medium text-muted-foreground">
 							Default vehicle
@@ -1160,6 +1266,7 @@ function DeliveryChargeSection({
 							dialog.
 						</p>
 					</div>
+					) : null}
 
 					{/* 3 · Connection status — the keys themselves moved to Settings →
 					    Integrations (2 Sep IA rework). This row answers "is my account
@@ -1708,14 +1815,12 @@ function DeliveryChargeSection({
 				disabled={
 					saving ||
 					(mode === "radius" && radiusLocked && config?.mode === "radius") ||
-					(mode === "lalamove" && lalamoveLocked && config?.mode === "lalamove")
+					(liveModeSelected && lalamoveLocked && storedLiveMode)
 				}
 				isLoading={saving}
 				className="h-11 self-start"
 			>
-				{mode === "lalamove"
-					? "Save Lalamove delivery"
-					: "Save delivery charge"}
+				{liveModeSelected ? "Save live pricing" : "Save delivery charge"}
 			</Button>
 		</div>
 	);

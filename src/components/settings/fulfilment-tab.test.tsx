@@ -215,9 +215,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 	}
 
 	function saveLalamoveCard() {
-		fireEvent.click(
-			screen.getByRole("button", { name: "Save Lalamove delivery" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
 	}
 
 	it("turning the toggle ON saves deliveryDirection: 'collection'", async () => {
@@ -583,3 +581,128 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 		expect(screen.getByText(/uses a Malaysia-only mode/)).toBeTruthy();
 	});
 });
+
+describe("live courier pricing (z8r3fdbvdy)", () => {
+	let updateSettings: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		updateSettings = vi.fn().mockResolvedValue({ ok: true });
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => ({
+			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
+			isPending: false,
+		})) as never);
+		vi.mocked(useMutation).mockImplementation(((
+			ref: FunctionReference<"mutation">,
+		) =>
+			getFunctionName(ref) === NAME.updateSettings
+				? updateSettings
+				: vi.fn().mockResolvedValue(undefined)) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	// The mode used to be Lalamove's. It now prices across every armed
+	// provider, so the tile, the copy and the saved value all had to stop
+	// naming one of them.
+	function renderLive(
+		over: {
+			config?: { mode: "live" | "lalamove"; onUnquotable: "block" } | undefined;
+			hasKeys?: boolean;
+		} = {},
+	) {
+		return render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="MY"
+					currency="MYR"
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={over.config}
+					businessAddress={{
+						label: "HQ",
+						latitude: 3.1,
+						longitude: 101.6,
+					}}
+					deliveryBooking={
+						over.hasKeys === false
+							? undefined
+							: {
+									enabled: true,
+									vehicleType: "MOTORCYCLE",
+									hasCredentials: true,
+									promptBookOnPacked: false,
+									deliveryDirection: "standard",
+									apiKeyHint: "abcd",
+								}
+					}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>,
+		);
+	}
+
+	it("saves the provider-aware mode, not the Lalamove one", async () => {
+		renderLive();
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
+		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+		expect(updateSettings.mock.calls[0][0].deliveryConfig).toEqual({
+			mode: "live",
+			onUnquotable: "block",
+		});
+	});
+
+	it("a store still on the pre-migration mode shows as selected", () => {
+		renderLive({ config: { mode: "lalamove", onUnquotable: "block" } });
+		expect(
+			screen
+				.getByRole("button", { name: /live courier price/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("offers exactly one live-pricing tile — the mode grid, nothing else", () => {
+		renderLive();
+		expect(
+			screen.getAllByRole("button", { name: /live courier price/i }),
+		).toHaveLength(1);
+	});
+
+	it("names both providers on the tile — not just the rider one", () => {
+		const { container } = renderLive();
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		expect(container.querySelector('img[alt="Delyva"]')).toBeTruthy();
+		expect(container.querySelector('img[alt="Lalamove"]')).toBeTruthy();
+	});
+
+	it("says what will be quoted, and refuses when nothing is connected", () => {
+		const { container } = renderLive({ hasKeys: false });
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		expect(container.textContent).toContain("Nothing is connected yet");
+		expect(container.textContent).toContain("Settings → Integrations");
+	});
+
+	it("hides the rider-only controls when no rider bids", () => {
+		const { container } = renderLive({ hasKeys: false });
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		// The vehicle picker is a Lalamove setting — meaningless for a
+		// parcel-only store, and it used to render regardless.
+		expect(container.textContent).not.toContain("Default vehicle");
+	});
+
+	it("keeps the rider controls when Lalamove is connected", () => {
+		const { container } = renderLive();
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		expect(container.textContent).toContain("Default vehicle");
+	});
+})

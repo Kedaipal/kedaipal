@@ -334,6 +334,13 @@ const deliveryConfigValidator = v.union(
 		mode: v.literal("lalamove"),
 		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 	}),
+	// Provider-aware live pricing (z8r3fdbvdy) — the mode sellers can now
+	// pick; "lalamove" above survives only until stored rows are migrated
+	// (migrations:migrateLalamoveModeToLive).
+	v.object({
+		mode: v.literal("live"),
+		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+	}),
 );
 
 // Lalamove booking config (86eyb5hrf). `null` clears; enabling requires a

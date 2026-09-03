@@ -1,9 +1,9 @@
 # Live courier price at checkout (z8r3fdbvdy)
 
-**Status: backend engine landed, not yet reachable by a seller.** The `live`
-charge mode exists and works end to end on the server, but no settings switch
-offers it and the checkout client still calls the single-provider action. Two
-slices remain — see the bottom.
+**Status: sellers can turn it on; the checkout client is the last piece.** The
+`live` charge mode is selectable in Settings → Fulfilment and stored stores
+migrate to it, but the storefront still calls the single-provider action, so
+buyers are priced the old way until the final slice lands.
 
 Reference: [`delivery-lalamove.md`](./delivery-lalamove.md) ·
 [`delivery-delyva.md`](./delivery-delyva.md) · ticket
@@ -89,11 +89,39 @@ The quote row is consumed at create, so the order keeps the evidence:
 `deliverySnapshot.quoteProvider`, `.quoteServiceName` and `.quotesConsidered`
 (every bid, winner included) answer "why was I charged RM5.70" months later.
 
+## Settings
+
+**The tile is no longer Lalamove's.** It carries both wordmarks, because the
+mode prices across every armed provider and a rider-branded tile says the
+wrong thing to a store that ships parcels. It stays the promoted, first tile
+for the reason it always was: every tier should SEE that real courier pricing
+exists.
+
+Under it, a **"Priced by"** block states who will actually be asked and what
+happens when they disagree — two armed providers is not an edge case, it is
+the reason the mode exists, and a seller who doesn't know both are quoted
+can't explain their own checkout prices to a buyer. With one provider armed it
+says how to add the other; with none it says checkout would be refused and
+points at Integrations.
+
+**Rider-only controls follow the rider.** The vehicle picker, the pickup-pin
+reference and the city-zone coverage note render only when Lalamove is
+connected — they are meaningless to a parcel-only store, and they used to
+render regardless because the mode was Lalamove's.
+
+**The cold-chain constraint is stated, not discovered.** A store whose Delyva
+parcel type is Chilled or Frozen sees an amber note: checkout asks for a
+cold-chain price, and if the account has no cold-chain service, no price comes
+back and delivery checkout is refused — riders are never substituted. A seller
+must never learn that from orders quietly stopping.
+
+**Migration:** `migrations:migrateLalamoveModeToLive` flips stored
+`mode: "lalamove"` rows. Safe on every store, because it only bites where the
+leak already did — a store with one armed provider has one bidder and prices
+identically either way. Idempotent. The old literal stays valid (and shows as
+selected) so an unmigrated row is never "nothing picked".
+
 ## Still to build
 
-1. **Settings** — the charge-mode switch, migrating stored `mode: "lalamove"`
-   rows to `live`, and the seller-facing warning when a cold-default store's
-   Delyva account has no cold-chain service (its checkout blocks, and the
-   seller must not discover that as orders silently stopping).
-2. **Checkout** — point the client hook at `liveQuote.quoteForCheckout`, and
-   write buyer copy for the new `no_cold_service` status.
+**Checkout** — point the client hook at `liveQuote.quoteForCheckout` and write
+buyer copy for the new `no_cold_service` status.
