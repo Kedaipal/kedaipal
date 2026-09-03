@@ -162,11 +162,24 @@ export function riderBookingAllowed(country: Country): boolean {
  */
 export const COUNTRY_DELYVA_BOOKING: Record<Country, boolean> = {
 	MY: true,
-	// Singapore needs this MORE than Malaysia does (z8r3fdbqmc): SG stores have
-	// no Lalamove (COUNTRY_RIDER_BOOKING.SG = false) and only HitPay for
-	// payments, so without Delyva they have no courier automation at all.
-	// Delyva's API takes SG addresses unchanged — verified 2 Sep 2026: a
-	// country:"SG" quote with a 6-digit postal code returns a well-formed 200.
+	// SG is supported because the API takes SG addresses unchanged — verified
+	// 2 Sep 2026: a country:"SG" quote with a 6-digit postal code returns a
+	// well-formed 200.
+	//
+	// It is NOT, however, "the only courier automation an SG store can have" —
+	// the original justification here, now known to be wrong on both halves
+	// (corrected 4 Sep):
+	//   · Lalamove DOES serve Singapore (Market: "SG"); our own
+	//     COUNTRY_RIDER_BOOKING.SG gate is what hides it, not their coverage.
+	//     Un-hardcoding the MY market is ticket z8r3fdch3r — and since Lalamove
+	//     is intra-city and in Singapore the city IS the country, it would
+	//     cover every SG→SG delivery.
+	//   · Delyva SG is bring-your-own-courier in practice: the tenant is real
+	//     (sg.delyva.app, +65) but ships an EMPTY service catalogue, there is
+	//     no SG sandbox, and delyva.com/sg now redirects away. An SG store can
+	//     connect it and quote nothing.
+	// So this stays true — it costs nothing and works for a seller who brings
+	// their own courier — but no SG launch should depend on it.
 	SG: true,
 };
 
