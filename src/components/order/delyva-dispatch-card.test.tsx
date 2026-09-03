@@ -588,3 +588,81 @@ describe("an empty courier list says WHICH kind of empty", () => {
 		expect(container.textContent).toContain("No courier can take a");
 	});
 })
+
+describe("cold chain gets its own diagnosis", () => {
+	// Chilled/frozen is the ICP's core need, and it fails identically to an
+	// unserviceable address because Delyva filters item types server-side.
+	// The server re-quotes as a parcel to tell them apart (3 Sep).
+	async function quoteEmptyCold(coldChainUnavailable?: boolean) {
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			services: [],
+			weightKg: 2.5,
+			itemType: "CHILLED",
+			buyerPaidFee: 1200,
+			accountHasNoCouriers: false,
+			coldChainUnavailable,
+		});
+		state.actions.set(NAME.prepare, prepare);
+		const view = render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		await waitFor(() => expect(prepare).toHaveBeenCalled());
+		return view;
+	}
+
+	it("clears the address of blame when the route quotes fine as a parcel", async () => {
+		const { container } = await quoteEmptyCold(true);
+		expect(container.textContent).toContain(
+			"None of the couriers on your Delyva account carries",
+		);
+		expect(container.textContent).toContain("isn't the address or the weight");
+		expect(container.textContent).toContain("Ask Delyva to enable a cold-chain");
+		expect(container.textContent).not.toContain("No courier can take a");
+	});
+
+	it("keeps the route wording when a parcel wouldn't quote either", async () => {
+		const { container } = await quoteEmptyCold(false);
+		expect(container.textContent).toContain("No courier can take a");
+		expect(container.textContent).not.toContain("None of the couriers on your");
+	});
+});
+
+describe("cross-currency quotes are never presented as comparable", () => {
+	// A Delyva account from another market prices in ITS currency — a
+	// Malaysian sandbox account quoting a Singapore store (Zaki, 3 Sep). Then
+	// "buyer paid S$6.00" beside "RM 0.10" is a margin call out of thin air.
+	it("says so when the courier bills in a different currency", async () => {
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			services: [{ ...SERVICES[0], currency: "MYR" }],
+			weightKg: 1,
+			itemType: "PARCEL",
+			buyerPaidFee: 600,
+		});
+		state.actions.set(NAME.prepare, prepare);
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, currency: "SGD" } as Doc<"orders">}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		await waitFor(() => expect(prepare).toHaveBeenCalled());
+		expect(container.textContent).toContain("aren't directly comparable");
+	});
+
+	it("shows the plain comparison when both are the same currency", async () => {
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			services: SERVICES,
+			weightKg: 1,
+			itemType: "CHILLED",
+			buyerPaidFee: 1200,
+		});
+		state.actions.set(NAME.prepare, prepare);
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		await waitFor(() => expect(prepare).toHaveBeenCalled());
+		expect(container.textContent).toContain("Buyer paid");
+		expect(container.textContent).not.toContain("aren't directly comparable");
+	});
+})

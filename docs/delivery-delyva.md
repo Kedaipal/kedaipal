@@ -420,10 +420,27 @@ Integrations screen instead of at this order. A failed or malformed lookup
 leaves the flag unset and the generic route wording stands — "we couldn't
 tell" must never render as an accusation.
 
-Note this is also the seller-facing half of the cold-chain finding: services
-carry a per-entry `itemType` acceptance list, so a company with couriers but
-none accepting CHILLED/FROZEN quotes nothing for cold orders while parcels
-work fine.
+**Cold chain gets its own diagnosis**, because it fails in a way that reads
+as an address problem and it is the ICP's whole reason for being here.
+Delyva filters item types SERVER-side — measured on the same KL route:
+`PARCEL` → 3 services (accepting `FOOD`, `PACKAGE`, `PARCEL`), `CHILLED` → 0,
+`FROZEN` → 0 — so a chilled quote on an account with no cold-chain service is
+byte-identical to an unserviceable address. **We never filter by item type
+ourselves**: the request carries `itemType` and the card renders every
+service that comes back, so an empty cold list is always Delyva's answer, not
+our filtering. To tell the two apart, an empty CHILLED/FROZEN quote re-runs
+the SAME route as `PARCEL` (quotes are free, empty path only): couriers there
+means the route is fine and the gap is the cold chain — a thing Delyva
+support can switch on — and the card says exactly that instead of blaming the
+address.
+
+**Cross-currency quotes are never presented as comparable.** Prices come from
+the Delyva COMPANY, so a Malaysian account quoting a Singapore store returns
+MYR against an SGD order (Zaki's sandbox setup, 3 Sep — legitimate while
+testing, and impossible once a store holds its own market's key). "Buyer paid
+S$6.00" beside "RM 0.10" is a margin call out of thin air, so when any quoted
+currency differs from the order's the line says which currency the quote is
+in and that the two aren't directly comparable.
 
 **Every hint names the RIGHT next step** (PR #247 review). A one-line nudge
 replaces the card whenever booking isn't armed, and *which* nudge depends on

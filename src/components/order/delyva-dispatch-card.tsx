@@ -75,6 +75,9 @@ export function DelyvaDispatchCard({
 	 * on at all, so no address would quote. Distinguishes "you have nothing
 	 * connected" from "nobody covers this route". */
 	const [noCouriersOnAccount, setNoCouriersOnAccount] = useState(false);
+	/** Set with an empty list on a chilled/frozen quote: the same route quotes
+	 * fine as an ordinary parcel, so the gap is cold chain on the account. */
+	const [coldChainGap, setColdChainGap] = useState(false);
 	const [selectedCode, setSelectedCode] = useState<string | null>(null);
 	const [quoting, setQuoting] = useState(false);
 	const [booking, setBooking] = useState(false);
@@ -177,6 +180,7 @@ export function DelyvaDispatchCard({
 			}
 			setServices(result.services);
 			setNoCouriersOnAccount(result.accountHasNoCouriers === true);
+			setColdChainGap(result.coldChainUnavailable === true);
 			// Cheapest pre-selected — the list arrives price-sorted from the server.
 			setSelectedCode(result.services[0]?.code ?? null);
 		} catch (err) {
@@ -505,6 +509,34 @@ export function DelyvaDispatchCard({
 								Start over
 							</button>
 						</div>
+					) : services.length === 0 && coldChainGap ? (
+						/* The same route quotes fine as a parcel, so nothing is wrong
+						   with the address — this account simply has no cold-chain
+						   service. Delyva filters item types server-side, so the two
+						   are indistinguishable without asking twice. */
+						<div className="flex flex-col items-start gap-1.5 rounded-xl border border-dashed border-border px-3 py-3.5">
+							<p className="text-sm text-muted-foreground">
+								<span className="font-medium text-foreground">
+									None of the couriers on your Delyva account carries{" "}
+									{effectiveItemType.toLowerCase()} parcels.
+								</span>{" "}
+								This same route quotes fine as an ordinary parcel, so it
+								isn&apos;t the address or the weight.
+							</p>
+							<p className="text-sm text-muted-foreground">
+								Ask Delyva to enable a cold-chain service on your account —
+								then re-quote here. If these goods aren&apos;t
+								temperature-sensitive after all, switch the parcel type to{" "}
+								<b>Parcel</b> above.
+							</p>
+							<button
+								type="button"
+								className="min-h-9 text-xs font-medium text-accent underline-offset-2 hover:underline"
+								onClick={() => setServices(null)}
+							>
+								Start over
+							</button>
+						</div>
 					) : services.length === 0 ? (
 						<div className="flex flex-col items-start gap-1.5 rounded-xl border border-dashed border-border px-3 py-3.5">
 							<p className="text-sm text-muted-foreground">
@@ -541,8 +573,21 @@ export function DelyvaDispatchCard({
 									Choose a courier
 								</span>
 								<span className="text-[11px] text-muted-foreground">
-									Buyer paid{" "}
-									{formatPrice(order.deliveryFee ?? 0, order.currency)}
+									{/* The comparison only means something in one currency.
+									    A Delyva account belonging to another market prices in
+									    ITS currency (a Malaysian account quotes MYR for a
+									    Singapore store), and "buyer paid S$6.00" next to
+									    "RM 0.10" invites a margin call out of thin air. */}
+									{services.some((s) => s.currency !== order.currency) ? (
+										<>Quoted in {services[0]?.currency} — buyer paid{" "}
+										{formatPrice(order.deliveryFee ?? 0, order.currency)}, so
+										these prices aren&apos;t directly comparable</>
+									) : (
+										<>
+											Buyer paid{" "}
+											{formatPrice(order.deliveryFee ?? 0, order.currency)}
+										</>
+									)}
 								</span>
 							</div>
 							{services.map((service, index) => {

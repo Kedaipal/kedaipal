@@ -1146,6 +1146,11 @@ export const prepareBooking = action({
 				 * of which covers this shipment. undefined = the extra lookup
 				 * failed, so the card stays with its generic wording. */
 				accountHasNoCouriers?: boolean;
+				/** Only set when a CHILLED/FROZEN quote came back empty: true means
+				 * the identical route quotes fine as an ordinary parcel, so this is
+				 * a cold-chain gap on the Delyva account rather than anything about
+				 * the address. undefined = we couldn't tell. */
+				coldChainUnavailable?: boolean;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
@@ -1164,10 +1169,7 @@ export const prepareBooking = action({
 			return { ok: false, reason: "no_weight", message: weight.message };
 		const itemType = args.itemType ?? context.defaultItemType;
 		try {
-			const response = await callDelyva(
-				context.credentials,
-				"POST",
-				"/service/instantQuote",
+			const quoteBody = (forItemType: DelyvaItemType) =>
 				buildInstantQuoteBody({
 					customerId: context.customerId,
 					origin: {
@@ -1187,8 +1189,13 @@ export const prepareBooking = action({
 						country: context.destination.country,
 					},
 					weightKg: weight.kg,
-					itemType,
-				}),
+					itemType: forItemType,
+				});
+			const response = await callDelyva(
+				context.credentials,
+				"POST",
+				"/service/instantQuote",
+				quoteBody(itemType),
 			);
 			const services = parseInstantQuoteResponse(response).sort(
 				(a, b) => a.price - b.price,
@@ -1200,6 +1207,7 @@ export const prepareBooking = action({
 			// successful quote into a failure, so a throw just leaves the flag
 			// unset and the card keeps its generic wording.
 			let accountHasNoCouriers: boolean | undefined;
+			let coldChainUnavailable: boolean | undefined;
 			if (services.length === 0) {
 				try {
 					const active = countActiveDelyvaServices(
@@ -1209,6 +1217,30 @@ export const prepareBooking = action({
 				} catch {
 					accountHasNoCouriers = undefined;
 				}
+				// Cold chain is the ICP's whole reason for being here (frozen and
+				// kuih sellers), and it fails in a way that reads as an address
+				// problem: Delyva filters by item type SERVER-side, so a chilled
+				// quote on an account with no cold-chain service returns exactly
+				// what an out-of-range address returns — nothing. Re-quoting the
+				// same route as an ordinary parcel separates them: couriers here
+				// means the route is fine and the gap is the cold chain, which is
+				// a thing Delyva support can switch on. Quotes cost nothing, and
+				// this only runs on the already-empty path.
+				if (itemType !== "PARCEL" && accountHasNoCouriers !== true) {
+					try {
+						const asParcel = parseInstantQuoteResponse(
+							await callDelyva(
+								context.credentials,
+								"POST",
+								"/service/instantQuote",
+								quoteBody("PARCEL"),
+							),
+						);
+						coldChainUnavailable = asParcel.length > 0;
+					} catch {
+						coldChainUnavailable = undefined;
+					}
+				}
 			}
 			return {
 				ok: true,
@@ -1217,6 +1249,7 @@ export const prepareBooking = action({
 				itemType,
 				buyerPaidFee: context.buyerPaidFee,
 				accountHasNoCouriers,
+				coldChainUnavailable,
 			};
 		} catch (err) {
 			console.warn("[delyva] dispatch quote failed", {
