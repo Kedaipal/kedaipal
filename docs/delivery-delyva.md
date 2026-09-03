@@ -251,6 +251,40 @@ whenever a needed account isn't connected, and `riderOnlyStore` (not
 `bookingEnabled`) now drives the "no parcels ever leave this store" surfaces,
 since a weight-priced store can legitimately arm riders too.
 
+## Getting an account per country (and why demo is Malaysia-only)
+
+**Country is a property of the Delyva COMPANY (tenant), not of the account or
+the address you type.** Delyva runs one tenant per market on a wildcard
+domain — `my.delyva.app` (+60), `sg.delyva.app` (+65), `ph.`, `id.` — plus
+`demo.delyva.app`, which is itself a **Malaysian** company (`GET /company`
+returns `code: "demo"`, `country: "MY"`, a Setapak KL address). A hostname
+with no company behind it renders "Company not found.", so the tenant list is
+verifiable from outside.
+
+That explains the trap (Zaki, 3 Sep): signing up a *second* demo account with
+an SG phone and an SG address still creates a customer **under the Malaysian
+Demo company**, so the wallet tops up in MYR, the dashboard offers no country
+switch (there is no customer-level country to switch), and an SG→SG quote
+comes back with `services: []` — no error, just nothing, because the company's
+service providers only cover Malaysia. The same key quoting MY→MY returns
+three services in MYR. IP/geolocation has nothing to do with it.
+
+**To test Singapore, the seller (or we) needs a key issued by the SG tenant:**
+sign up at `https://sg.delyva.app/customer/signup`. Nothing in our integration
+is host-aware — `api.delyva.app` is the single API host and the access token
+carries the company — so an SG key needs no code change, and our demo
+detection correctly reports it LIVE (`code` is not `"demo"`).
+
+**Quoting is free.** `POST /service/instantQuote` spends nothing and works on
+a zero-balance wallet (that is how the MY demo account quoted before it was
+topped up); only `POST /order/process` draws credit. So connect → quote →
+courier list can be verified end-to-end on a fresh SG account without paying
+anything; only the final booking needs a top-up, in SGD.
+
+There is no SG demo/sandbox tenant under any obvious name (`demosg`,
+`sgdemo`, `demo-sg` all answer "Company not found."). If a sandbox is wanted
+for SG it has to come from Delyva support.
+
 ## Seller UI
 
 Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the
