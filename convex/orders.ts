@@ -305,6 +305,9 @@ export function resolveDeliveryForOrder(
 				quotationId: quote.quotationId,
 				vehicleType: quote.vehicleType,
 				quotedAt: quote.quotedAt,
+				quoteProvider: quote.quoteProvider,
+				quoteServiceName: quote.quoteServiceName,
+				quotesConsidered: quote.quotesConsidered,
 			},
 			pending: false,
 		};

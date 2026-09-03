@@ -96,22 +96,29 @@ async function callLalamove(
 // ---------------------------------------------------------------------------
 
 /** Everything the quote action needs about the retailer, in one read. */
+/** What a live Lalamove quote needs from the store. */
+export type LalamoveQuoteContext = {
+	origin: { latitude: number; longitude: number; label: string };
+	vehicleType: string;
+	booking: { apiKey?: string; apiSecret?: string };
+	deliveryDirection: "standard" | "collection";
+};
+
 export const getQuoteContext = internalQuery({
 	args: { retailerId: v.id("retailers") },
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{
-		origin: { latitude: number; longitude: number; label: string };
-		vehicleType: string;
-		booking: { apiKey?: string; apiSecret?: string };
-		deliveryDirection: "standard" | "collection";
-	} | null> => {
+	): Promise<LalamoveQuoteContext | null> => {
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return null;
-		// Live quoting only exists under pricing mode "lalamove" — every other
-		// mode prices via the pure resolver with no network involved.
-		if (retailer.deliveryConfig?.mode !== "lalamove") return null;
+		// Live quoting exists under the provider-aware "live" mode and its
+		// single-provider ancestor "lalamove" — every other mode prices via the
+		// pure resolver with no network involved.
+		const liveMode =
+			retailer.deliveryConfig?.mode === "lalamove" ||
+			retailer.deliveryConfig?.mode === "live";
+		if (!liveMode) return null;
 		const origin = retailer.businessAddress;
 		if (!origin) return null; // enable gate should prevent this — fail soft
 		return {
@@ -134,9 +141,24 @@ export const getQuoteContext = internalQuery({
 export const saveCheckoutQuote = internalMutation({
 	args: {
 		retailerId: v.id("retailers"),
-		quotationId: v.string(),
+		provider: v.optional(
+			v.union(v.literal("lalamove"), v.literal("delyva")),
+		),
+		quotationId: v.optional(v.string()),
 		fee: v.number(),
-		vehicleType: v.string(),
+		currency: v.optional(v.string()),
+		vehicleType: v.optional(v.string()),
+		serviceCode: v.optional(v.string()),
+		serviceName: v.optional(v.string()),
+		considered: v.optional(
+			v.array(
+				v.object({
+					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					fee: v.number(),
+					currency: v.string(),
+				}),
+			),
+		),
 		latitude: v.number(),
 		longitude: v.number(),
 	},
@@ -206,9 +228,68 @@ export const quoteForCheckout = action({
 			retailerId: args.retailerId,
 		});
 		if (!context) return { status: "store_unavailable" };
-		const credentials = resolveLalamoveCredentials(context.booking);
-		if (!credentials) return { status: "store_unavailable" };
+		const quote = await fetchLalamoveQuote({
+			context,
+			retailerId: args.retailerId,
+			latitude: args.latitude,
+			longitude: args.longitude,
+			address: args.address,
+			fulfilmentDate: args.fulfilmentDate,
+			fulfilmentTimeMinutes: args.fulfilmentTimeMinutes,
+		});
+		if (quote.status !== "quoted") return { status: quote.status };
+		const quoteId: Id<"deliveryQuotes"> = await ctx.runMutation(
+			internal.lalamove.saveCheckoutQuote,
+			{
+				retailerId: args.retailerId,
+				provider: "lalamove",
+				quotationId: quote.quotationId,
+				fee: quote.fee,
+				currency: quote.currency,
+				vehicleType: quote.vehicleType,
+				latitude: args.latitude,
+				longitude: args.longitude,
+			},
+		);
+		return { status: "quoted", quoteId, fee: quote.fee };
+	},
+});
 
+/** One provider's answer, shaped for the cross-provider rule
+ * (convex/lib/liveQuote.ts). */
+export type LalamoveCheckoutQuote =
+	| {
+			status: "quoted";
+			fee: number;
+			currency: string;
+			quotationId: string;
+			vehicleType: string;
+	  }
+	| { status: "out_of_range" | "store_unavailable" | "unavailable" };
+
+/**
+ * Fetch a live Lalamove price WITHOUT recording it (z8r3fdbvdy).
+ *
+ * Extracted from `quoteForCheckout` so the provider-aware live-pricing action
+ * can ask both providers and record only the winner — a second copy of this
+ * would drift on the first scheduling or classification change, and this
+ * function decides what a buyer pays.
+ *
+ * Rate limiting and the deliveryQuotes row stay with the CALLERS: one quote
+ * may lose the comparison and must not leave a redeemable row behind.
+ */
+export async function fetchLalamoveQuote(args: {
+	context: LalamoveQuoteContext;
+	retailerId: Id<"retailers">;
+	latitude: number;
+	longitude: number;
+	address: string;
+	fulfilmentDate?: number;
+	fulfilmentTimeMinutes?: number;
+}): Promise<LalamoveCheckoutQuote> {
+	const { context } = args;
+	const credentials = resolveLalamoveCredentials(context.booking);
+	if (!credentials) return { status: "store_unavailable" };
 		try {
 			// Pre-order pricing: a future fulfilment day is quoted as a SCHEDULED
 			// pickup at noon MYT on that day (the hour barely moves the price;
@@ -262,18 +343,13 @@ export const quoteForCheckout = action({
 				}),
 			);
 			const parsed = parseQuotationResponse(response);
-			const quoteId: Id<"deliveryQuotes"> = await ctx.runMutation(
-				internal.lalamove.saveCheckoutQuote,
-				{
-					retailerId: args.retailerId,
-					quotationId: parsed.quotationId,
-					fee: parsed.priceTotal,
-					vehicleType: context.vehicleType,
-					latitude: args.latitude,
-					longitude: args.longitude,
-				},
-			);
-			return { status: "quoted", quoteId, fee: parsed.priceTotal };
+			return {
+				status: "quoted",
+				fee: parsed.priceTotal,
+				currency: parsed.currency,
+				quotationId: parsed.quotationId,
+				vehicleType: context.vehicleType,
+			};
 		} catch (err) {
 			// Three buyer stories, three copies — and only ONE is retryable.
 			// See classifyQuoteFailure for the taxonomy + live measurements.
@@ -292,8 +368,9 @@ export const quoteForCheckout = action({
 			}
 			return { status };
 		}
-	},
-});
+	}
+
+
 
 // ---------------------------------------------------------------------------
 // Webhook (POST /webhook/lalamove → convex/http.ts → here)

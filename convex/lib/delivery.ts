@@ -91,6 +91,16 @@ export type DeliveryConfig =
 			onUnpriceable: "block" | "arrange";
 	  }
 	| {
+			/** Provider-aware live pricing (z8r3fdbvdy): quote every booking
+			 * provider the store has ARMED and charge the higher, so the fee
+			 * collected at checkout covers whichever tool dispatch uses. The
+			 * single-provider case is what `mode: "lalamove"` below always was —
+			 * that arm stays until stored rows migrate. */
+			mode: "live";
+			/** Vestigial for the same reason as the arm below: always "block". */
+			onUnquotable: "arrange" | "block";
+	  }
+	| {
 			mode: "lalamove";
 			/** VESTIGIAL (27 Jul 2026, Zaki): lalamove mode now ALWAYS refuses an
 			 * order without a live quote — a seller who picked Lalamove must never
@@ -115,7 +125,12 @@ export const COUNTRY_DELIVERY_MODES: Record<
 	Country,
 	ReadonlyArray<DeliveryConfig["mode"]>
 > = {
-	MY: ["flat", "radius", "weight", "lalamove"],
+	MY: ["flat", "radius", "weight", "lalamove", "live"],
+	// SG keeps flat only for now: "live" needs a provider that can actually
+	// quote there, and neither can today — Lalamove is gated to the MY market
+	// (z8r3fdch3r) and Delyva SG ships an empty catalogue. Adding it here
+	// before one of those lands would sell SG sellers a mode that blocks
+	// every checkout.
 	SG: ["flat"],
 };
 
@@ -184,6 +199,7 @@ export const DELIVERY_MODE_LABELS: Record<DeliveryConfig["mode"], string> = {
 	radius: "distance-based",
 	weight: "weight-zone",
 	lalamove: "Lalamove live-quote",
+	live: "live courier price",
 };
 
 export type Coordinates = { latitude: number; longitude: number };
@@ -223,13 +239,21 @@ export type DeliveryQuote =
 	| {
 			kind: "fee";
 			fee: number;
-			mode: "flat" | "radius" | "weight" | "lalamove";
+			mode: "flat" | "radius" | "weight" | "lalamove" | "live";
 			distanceKm?: number;
 			bandMaxKm?: number;
 			/** Weight-mode audit trail (mode "weight" only). */
 			zoneName?: string;
 			chargeableKg?: number;
 			bandMaxKg?: number;
+			/** Live modes: which provider set the price, and everyone who bid. */
+			quoteProvider?: "lalamove" | "delyva";
+			quoteServiceName?: string;
+			quotesConsidered?: Array<{
+				provider: "lalamove" | "delyva";
+				fee: number;
+				currency: string;
+			}>;
 			/** Provider-quote audit trail (mode "lalamove" only) — frozen onto the
 			 * order snapshot; dispatch always re-quotes, so never a booking input. */
 			quotationId?: string;
@@ -369,7 +393,11 @@ export function resolveDeliveryQuote(args: {
 		args;
 	if (!config) return { kind: "free" };
 
-	if (config.mode === "lalamove") {
+	// Both live modes resolve identically here: by the time a quote row exists
+	// the cross-provider comparison has already been made (chooseLiveQuote),
+	// so this layer only freezes the winning fee. Keeping them one branch is
+	// what makes "live" a true superset rather than a parallel code path.
+	if (config.mode === "lalamove" || config.mode === "live") {
 		if (liveQuote) {
 			// A zero-fee provider quote doesn't exist in practice; treat 0 as
 			// free rather than storing a zero-fee snapshot (one spelling of free).
@@ -377,10 +405,13 @@ export function resolveDeliveryQuote(args: {
 			return {
 				kind: "fee",
 				fee: liveQuote.fee,
-				mode: "lalamove",
+				mode: config.mode,
 				quotationId: liveQuote.quotationId,
 				vehicleType: liveQuote.vehicleType,
 				quotedAt: liveQuote.quotedAt,
+				quoteProvider: liveQuote.provider,
+				quoteServiceName: liveQuote.serviceName,
+				quotesConsidered: liveQuote.considered,
 			};
 		}
 		// No live quote → ALWAYS refuse (27 Jul, Zaki — `onUnquotable` ignored):
@@ -495,11 +526,11 @@ function assertFeeSen(raw: number, label: string, min: number): number {
  * of 0 is rejected rather than stored.
  */
 export function sanitizeDeliveryConfig(raw: DeliveryConfig): DeliveryConfig {
-	if (raw.mode === "lalamove") {
+	if (raw.mode === "lalamove" || raw.mode === "live") {
 		// Nothing numeric to normalize — the fee is always provider-quoted live.
 		// `onUnquotable` is vestigial (always-block behavior); normalize stored
 		// rows to "block" on save so the data reads truthfully.
-		return { mode: "lalamove", onUnquotable: "block" };
+		return { mode: raw.mode, onUnquotable: "block" };
 	}
 	if (raw.mode === "flat") {
 		const fee = assertFeeSen(raw.fee, "Delivery fee", 1);

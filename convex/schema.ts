@@ -356,6 +356,18 @@ export default defineSchema({
 				// be fetched, checkout/address-edit is REFUSED (strict since
 				// 27 Jul — the buyer always sees the real rider price, the seller
 				// never calculates a charge).
+				// Provider-aware live pricing (z8r3fdbvdy): quotes EVERY booking
+				// provider the store has armed and charges the higher, so the
+				// collected fee covers whichever tool dispatch actually uses.
+				// Supersedes `mode: "lalamove"`, which survives as the
+				// single-provider ancestor until stored rows are migrated —
+				// widen → migrate → narrow.
+				v.object({
+					mode: v.literal("live"),
+					// Same posture as the mode below: behaviour is always "block".
+					// A live-priced store must never hand the seller fee homework.
+					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+				}),
 				v.object({
 					mode: v.literal("lalamove"),
 					// VESTIGIAL (27 Jul): behavior is always "block" — the resolver
@@ -1337,6 +1349,11 @@ export default defineSchema({
 					// RE-quotes (Lalamove honours quotes 5 min), so these are a
 					// paper trail, never booking inputs.
 					v.literal("lalamove"),
+					// Provider-aware live quote (z8r3fdbvdy) — same paper-trail
+					// posture, plus `quoteProvider`/`quotesConsidered` below, which
+					// answer "why was I charged this" once more than one provider
+					// could have set the price.
+					v.literal("live"),
 					// Weight/zone rate card (86eyeea1n).
 					v.literal("weight"),
 				),
@@ -1348,10 +1365,29 @@ export default defineSchema({
 				zoneName: v.optional(v.string()),
 				chargeableKg: v.optional(v.number()),
 				bandMaxKg: v.optional(v.number()),
-				// Provider-quote audit trail (mode "lalamove" only).
+				// Provider-quote audit trail (live modes only).
 				quotationId: v.optional(v.string()),
 				vehicleType: v.optional(v.string()),
 				quotedAt: v.optional(v.number()),
+				// Which provider's price the buyer actually paid, and every quote
+				// that competed for it (mode "live"). Absent on "lalamove" rows —
+				// there was only ever one bidder.
+				quoteProvider: v.optional(
+					v.union(v.literal("lalamove"), v.literal("delyva")),
+				),
+				quoteServiceName: v.optional(v.string()),
+				quotesConsidered: v.optional(
+					v.array(
+						v.object({
+							provider: v.union(
+								v.literal("lalamove"),
+								v.literal("delyva"),
+							),
+							fee: v.number(),
+							currency: v.string(),
+						}),
+					),
+				),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap

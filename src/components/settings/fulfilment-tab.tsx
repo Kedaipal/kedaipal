@@ -584,7 +584,10 @@ export function FulfilmentTab({
 
 // --- Delivery charge (86extzdr8) --------------------------------------------
 
-type ChargeMode = "free" | "flat" | "radius" | "weight" | "lalamove";
+// "live" is stored but not yet offered as a radio (z8r3fdbvdy ships the
+// engine before the switch) — the type accepts it so a store already on it
+// can't crash this tab.
+type ChargeMode = "free" | "flat" | "radius" | "weight" | "lalamove" | "live";
 
 type BandDraft = { maxKm: string; fee: string };
 
