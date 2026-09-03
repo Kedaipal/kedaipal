@@ -1805,11 +1805,42 @@ export default defineSchema({
 	// creation-time index, and `by_retailer` serves the account-deletion cascade.
 	deliveryQuotes: defineTable({
 		retailerId: v.id("retailers"),
+		// Which provider's price the buyer is being charged (z8r3fdbvdy).
+		// OPTIONAL while pre-existing rows exist: absent = "lalamove", the only
+		// provider that could mint a row before live pricing became
+		// provider-aware. Rows are transient (consumed at create, purged daily),
+		// so this narrows to required on its own within a day of deploy —
+		// widen → migrate → narrow, with the migration being the clock.
+		provider: v.optional(
+			v.union(v.literal("lalamove"), v.literal("delyva")),
+		),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
-		quotationId: v.string(),
+		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
+		// prices are indicative and never expire; dispatch re-prices anyway).
+		quotationId: v.optional(v.string()),
 		// Buyer-paid fee (sen) after RM→sen conversion.
 		fee: v.number(),
-		vehicleType: v.string(),
+		// The currency the fee is in — recorded rather than assumed, because a
+		// provider account belonging to another market prices in ITS currency
+		// and such a quote must never be charged (chooseLiveQuote drops it).
+		currency: v.optional(v.string()),
+		// Lalamove only.
+		vehicleType: v.optional(v.string()),
+		// Delyva only: which service in its returned list set this price.
+		serviceCode: v.optional(v.string()),
+		serviceName: v.optional(v.string()),
+		// Every quote that competed, winner included — the audit trail for
+		// "why was I charged RM5.70" months later. Copied onto the order's
+		// deliverySnapshot at create, since this row is consumed there.
+		considered: v.optional(
+			v.array(
+				v.object({
+					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					fee: v.number(),
+					currency: v.string(),
+				}),
+			),
+		),
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).

@@ -243,8 +243,23 @@ export type DeliveryQuote =
  * action — resolveDeliveryQuote only TRUSTS it, it never fetches. */
 export type LiveProviderQuote = {
 	fee: number;
-	quotationId: string;
-	vehicleType: string;
+	/** Which provider's price this is (z8r3fdbvdy). Absent on rows minted
+	 * before live pricing became provider-aware — those are Lalamove's. */
+	provider?: "lalamove" | "delyva";
+	/** Lalamove binds its price to a 5-minute quotation id; Delyva's prices
+	 * are indicative and carry none, so both audit fields are optional. */
+	quotationId?: string;
+	vehicleType?: string;
+	/** Delyva only: which service in its list set the price. */
+	serviceCode?: string;
+	serviceName?: string;
+	/** Every quote that competed, winner included — the "why was I charged
+	 * this" trail, frozen onto the order at create. */
+	considered?: Array<{
+		provider: "lalamove" | "delyva";
+		fee: number;
+		currency: string;
+	}>;
 	quotedAt: number;
 };
 

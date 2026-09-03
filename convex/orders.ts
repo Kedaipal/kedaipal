@@ -344,8 +344,14 @@ export async function loadCheckoutDeliveryQuote(
 	await ctx.db.delete(row._id);
 	return {
 		fee: row.fee,
+		// Absent on rows minted before live pricing became provider-aware —
+		// Lalamove was the only thing that could have written one.
+		provider: row.provider ?? "lalamove",
 		quotationId: row.quotationId,
 		vehicleType: row.vehicleType,
+		serviceCode: row.serviceCode,
+		serviceName: row.serviceName,
+		considered: row.considered,
 		quotedAt: row.quotedAt,
 	};
 }
