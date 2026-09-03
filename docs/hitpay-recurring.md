@@ -151,6 +151,30 @@ recurring/charge events) — the salt shown there is `HITPAY_BILLING_SALT`.
   monthly charges — at exhaustion the charge fails into normal dunning and
   the seller re-authorises).
 
+## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
+
+The 30% founding price survives a subscription lapse of up to **3 months**
+(`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and NEW bills are
+at list price. The **rank + badge never revert** (existing rule) — only the
+pricing is forfeited. One rule for every automated issuer
+(`foundingPricingApplies`): cron renewals, `subscribeSelf`, the auto-renewal
+setup display amount and the pre-charge notice all resolve it identically —
+the check keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a
+claimed member's never-cleared `foundingIntent` flag deliberately cannot
+bypass it (unclaimed intent = the first conversion, no lapse to measure, so
+it always qualifies). The **admin issue form keeps its explicit founding
+checkbox** — Arif's judgment can override in either direction.
+
+Never enforced silently: the founding ribbon states the condition, and a
+lapsed member's plan picker explains why prices read standard
+(`billingGatewayAvailable.foundingPricing` / `foundingPricingLapsed` — the
+picker must use the server-resolved flag, never client-side `foundingIntent`,
+or a lapsed member would SEE the discount while being BILLED list).
+
+At go-live this needs nothing: the current founding cohort is active (inside
+the window) so they keep renewing at their price automatically; everyone else
+already bills at list.
+
 ## Invariants preserved
 
 - **`subscriptions.updatedAt` is the past_due flip moment** (founder report).

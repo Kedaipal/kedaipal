@@ -27,6 +27,7 @@ import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	type BillingCycle,
+	foundingPricingApplies,
 	isPlanSelectable,
 	type Plan,
 	planPrice,
@@ -536,9 +537,17 @@ export const subscribeSelf = mutation({
 				`You already have a pending invoice (${existingPending.invoiceNumber}) — pay that one, or contact us to change it.`,
 			);
 
-		// A founding-intent store (Arif's onboard link) gets its promised 30%
-		// on Pro; everyone else pays list. The rank itself claims at settle.
-		const founding = sub.foundingIntent === true && plan === "pro";
+		// Founding pricing: an unclaimed onboard promise always gets it; a
+		// CLAIMED member keeps it only within the 3-month lapse window
+		// (foundingPricingApplies — rank/badge stay either way). Everyone else
+		// pays list. The rank itself claims at settle.
+		const founding = foundingPricingApplies({
+			plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now: Date.now(),
+		});
 		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: retailer._id,
@@ -627,9 +636,16 @@ export const internalIssueRenewalInvoice = internalMutation({
 		const retailer = await ctx.db.get(sub.retailerId);
 		if (!retailer) return { issued: false, autoCharge: false };
 
-		const founding =
-			retailer.isFoundingMember === true &&
-			(sub.plan === "pro" || sub.plan === "scale");
+		// Founding pricing honours the 3-month lapse window (cron renewals fire
+		// right at period end, so an ACTIVE member is virtually always inside
+		// it — the check is here for uniformity with subscribeSelf).
+		const founding = foundingPricingApplies({
+			plan: sub.plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now,
+		});
 		const invoices = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))

@@ -266,6 +266,42 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 /** Founding cohort size — first 10 paying Pro retailers. */
 export const FOUNDING_MEMBER_LIMIT = 10;
 
+/**
+ * Founding-price retention window (Zaki, 3 Sep 2026): the 30% founding price
+ * survives a subscription lapse of up to 3 months; sit unpaid longer and NEW
+ * bills are at list price. The rank + badge never revert (existing rule —
+ * `isFoundingMember` is permanent); only the *pricing* is forfeited. Surfaced
+ * on the billing tab's founding ribbon and the plan picker — never enforced
+ * silently.
+ */
+export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
+
+/**
+ * Whether a NEW invoice (renewal or self-serve) bills at the founding price.
+ * One rule for every automated issuer — the admin issue form keeps its
+ * explicit founding checkbox (Arif's judgment can override either way).
+ *
+ * Order matters: a CLAIMED member is judged on the lapse window even though
+ * their `foundingIntent` flag is never cleared after the claim — intent alone
+ * only covers the unclaimed first conversion, which has no lapse to measure.
+ * `paidThrough` is the subscription's `currentPeriodEnd` (undefined = never
+ * had a paid period → fail toward the promise).
+ */
+export function foundingPricingApplies(args: {
+	plan: Plan;
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	paidThrough: number | undefined;
+	now: number;
+}): boolean {
+	if (args.plan !== "pro" && args.plan !== "scale") return false;
+	if (args.isFoundingMember) {
+		if (args.paidThrough === undefined) return true;
+		return args.now - args.paidThrough <= FOUNDING_PRICE_LAPSE_MS;
+	}
+	return args.foundingIntent;
+}
+
 /** Caps to denormalize onto a subscription for a plan. Resolves `Infinity` to a
  * large sentinel so it survives Convex's number storage + JSON. */
 export function capsForPlan(plan: Plan): PlanCaps {

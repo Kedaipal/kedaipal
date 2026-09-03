@@ -50,6 +50,7 @@ import {
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	foundingPricingApplies,
 	planPrice,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -87,6 +88,12 @@ function billingPageUrl(extra?: string): string {
  * methods. Presence booleans only — credentials never leave the server. The
  * billing tab hides Pay-now / auto-renewal / the self-serve plan picker when
  * this says off, so the manual-only world renders exactly as before.
+ *
+ * `foundingPricing` is the server-resolved answer the plan picker MUST use
+ * for its Pro price — reading `foundingIntent` client-side would show a
+ * lapsed founding member the discount while `subscribeSelf` bills list
+ * (the silent price divergence this field exists to prevent);
+ * `foundingPricingLapsed` powers the one-line explanation instead.
  */
 export const billingGatewayAvailable = query({
 	args: {},
@@ -97,6 +104,8 @@ export const billingGatewayAvailable = query({
 		autoRenew: boolean;
 		methods: string[];
 		currency: BillingCurrency;
+		foundingPricing: boolean;
+		foundingPricingLapsed: boolean;
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
@@ -105,13 +114,30 @@ export const billingGatewayAvailable = query({
 			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 			.first();
 		if (!retailer) return null;
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
 		const available = billingCredentials() !== null;
 		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const foundingShaped =
+			retailer.isFoundingMember === true || sub?.foundingIntent === true;
+		const foundingPricing =
+			sub !== null &&
+			foundingPricingApplies({
+				plan: "pro", // the picker's founding-priced tier
+				isFoundingMember: retailer.isFoundingMember === true,
+				foundingIntent: sub.foundingIntent === true,
+				paidThrough: sub.currentPeriodEnd,
+				now: Date.now(),
+			});
 		return {
 			payNow: available,
 			autoRenew: available,
 			methods: AUTO_RENEW_METHODS[currency],
 			currency,
+			foundingPricing,
+			foundingPricingLapsed: foundingShaped && !foundingPricing,
 		};
 	},
 });
@@ -469,8 +495,15 @@ export const autoRenewSetupContext = internalQuery({
 			currency: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"],
 			plan: sub.plan,
 			comped: sub.comped === true,
-			founding:
-				retailer.isFoundingMember === true || sub.foundingIntent === true,
+			// Display amount on HitPay's page mirrors what the next bill will
+			// actually be — founding pricing honours the 3-month lapse window.
+			founding: foundingPricingApplies({
+				plan: sub.plan,
+				isFoundingMember: retailer.isFoundingMember === true,
+				foundingIntent: sub.foundingIntent === true,
+				paidThrough: sub.currentPeriodEnd,
+				now: Date.now(),
+			}),
 			attached: sub.autoRenew !== undefined,
 			existingSetup: sub.autoRenewSetup ?? null,
 			existingSessionId: sub.autoRenewSessionId,

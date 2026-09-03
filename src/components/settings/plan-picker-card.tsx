@@ -37,11 +37,20 @@ export function PlanPickerCard({
 	sub,
 	currency,
 	renewing,
+	foundingPricing,
+	foundingPricingLapsed,
 }: {
 	sub: SubscriptionView;
 	currency: BillingCurrency;
 	/** past_due / cancelled ⇒ "renew" framing instead of "choose". */
 	renewing: boolean;
+	/** SERVER-resolved (billingGatewayAvailable) — never derived client-side
+	 * from foundingIntent, which would show a lapsed founding member a
+	 * discount the server won't bill. */
+	foundingPricing: boolean;
+	/** Founding-shaped store whose 3-month lapse window passed — explain why
+	 * the price reads standard instead of leaving them to wonder. */
+	foundingPricingLapsed: boolean;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
@@ -52,7 +61,7 @@ export function PlanPickerCard({
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const [busy, setBusy] = useState(false);
 
-	const founding = sub.foundingIntent === true;
+	const founding = foundingPricing;
 
 	const submit = async () => {
 		setBusy(true);
@@ -88,6 +97,13 @@ export function PlanPickerCard({
 					Pick a plan to get your invoice — pay it online and your plan
 					activates straight away.
 				</p>
+				{foundingPricingLapsed ? (
+					<p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+						Your Founding Member rank is yours for good, but the founding
+						price lapses after 3 months without an active subscription — so
+						these are the standard prices. Questions? Message us.
+					</p>
+				) : null}
 			</div>
 
 			{/* Cycle toggle — annual leads with its actual hook (2 months free). */}

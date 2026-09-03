@@ -22,6 +22,7 @@ import type { Locale } from "./lib/emailCopy";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	foundingPricingApplies,
 	planPrice,
 } from "./lib/plans";
 
@@ -451,9 +452,13 @@ export const getAutoRenewEmailContext = internalQuery({
 			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
 				? lastPaid.currency
 				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
-		const founding =
-			retailer.isFoundingMember === true &&
-			(sub.plan === "pro" || sub.plan === "scale");
+		const founding = foundingPricingApplies({
+			plan: sub.plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now: Date.now(),
+		});
 		const amount = planPrice(sub.plan, sub.billingCycle, founding, currency);
 		return {
 			notifyEmail: retailer.notifyEmail,

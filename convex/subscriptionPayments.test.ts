@@ -201,6 +201,75 @@ describe("subscribeSelf", () => {
 		expect(invoice?.foundingDiscount).toBe(45000);
 	});
 
+	test("a founding member lapsed >3 months bills at LIST price — and is told why (86eyb6z4r follow-up)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_flap", "flap-store");
+		// A claimed founding member (rank stamped, intent never cleared) whose
+		// paid period ended 4 months ago.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				isFoundingMember: true,
+				foundingMemberRank: 3,
+			});
+			await ctx.db.patch(subId, {
+				status: "past_due" as const,
+				foundingIntent: true,
+				currentPeriodEnd: Date.now() - 120 * 86400000,
+			});
+		});
+		const asUser = t.withIdentity({ subject: "u_flap" });
+		// The picker's server-resolved flags say: no founding price, and here's why.
+		const gateway = await asUser.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{},
+		);
+		expect(gateway).toMatchObject({
+			foundingPricing: false,
+			foundingPricingLapsed: true,
+		});
+		const { invoiceId } = await asUser.mutation(api.invoices.subscribeSelf, {
+			plan: "pro",
+			billingCycle: "monthly",
+		});
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.total).toBe(14900); // list, not 10400
+		expect(invoice?.foundingDiscount).toBeUndefined();
+	});
+
+	test("a founding member inside the 3-month window still renews at the founding price", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_fok", "fok-store");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				isFoundingMember: true,
+				foundingMemberRank: 4,
+			});
+			await ctx.db.patch(subId, {
+				status: "past_due" as const,
+				foundingIntent: true,
+				currentPeriodEnd: Date.now() - 30 * 86400000,
+			});
+		});
+		const asUser = t.withIdentity({ subject: "u_fok" });
+		const gateway = await asUser.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{},
+		);
+		expect(gateway).toMatchObject({
+			foundingPricing: true,
+			foundingPricingLapsed: false,
+		});
+		const { invoiceId } = await asUser.mutation(api.invoices.subscribeSelf, {
+			plan: "pro",
+			billingCycle: "monthly",
+		});
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.total).toBe(10400);
+		expect(invoice?.foundingDiscount).toBe(4500);
+	});
+
 	test("refuses a second pending invoice, comped accounts, and active subs", async () => {
 		const t = setup();
 		const { subId } = await seedRetailer(t, "u_guard", "guard-store");

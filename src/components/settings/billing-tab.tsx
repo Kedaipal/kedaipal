@@ -160,8 +160,10 @@ export function BillingTab({
 							Founding Member #{retailer.foundingMemberRank} of 10
 						</p>
 						<p className="text-xs text-amber-800/80 dark:text-amber-300/80">
-							Your 30% lifetime discount is locked in — thank you for backing
-							Kedaipal early.
+							Your 30% discount is locked in — thank you for backing Kedaipal
+							early. It stays yours as long as your subscription doesn't lapse
+							for more than 3 months; your rank and badge are permanent either
+							way.
 						</p>
 					</div>
 				</div>
@@ -413,6 +415,8 @@ export function BillingTab({
 						sub={sub}
 						currency={gateway.currency}
 						renewing={sub.status !== "trialing"}
+						foundingPricing={gateway.foundingPricing}
+						foundingPricingLapsed={gateway.foundingPricingLapsed}
 					/>
 				) : (
 					<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">

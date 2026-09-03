@@ -6,6 +6,8 @@ import {
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	FOUNDING_MONTHLY_PRICES,
+	FOUNDING_PRICE_LAPSE_MS,
+	foundingPricingApplies,
 	isPlanSelectable,
 	isUnlimited,
 	PLAN_MONTHLY_PRICE,
@@ -189,5 +191,64 @@ describe("plans — gating helpers", () => {
 		expect(isUnlimited(UNLIMITED)).toBe(true);
 		expect(isUnlimited(2000)).toBe(false);
 		expect(isUnlimited(500)).toBe(false);
+	});
+});
+
+describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const base = {
+		plan: "pro" as const,
+		isFoundingMember: true,
+		foundingIntent: true, // never cleared after the claim — must not bypass the window
+		now: NOW,
+	};
+
+	test("claimed member inside the window keeps the founding price", () => {
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW - 89 * DAY }),
+		).toBe(true);
+		// The renewal-cron case: paid through the future (active).
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW + 30 * DAY }),
+		).toBe(true);
+	});
+
+	test("claimed member lapsed past 3 months bills at list — intent flag can't rescue it", () => {
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW - 91 * DAY }),
+		).toBe(false);
+		expect(FOUNDING_PRICE_LAPSE_MS).toBe(90 * DAY);
+	});
+
+	test("unclaimed onboard intent always qualifies (no lapse to measure)", () => {
+		expect(
+			foundingPricingApplies({
+				...base,
+				isFoundingMember: false,
+				paidThrough: undefined,
+			}),
+		).toBe(true);
+	});
+
+	test("a claimed member with no paid period fails toward the promise", () => {
+		expect(foundingPricingApplies({ ...base, paidThrough: undefined })).toBe(
+			true,
+		);
+	});
+
+	test("only founding-priced tiers qualify; plain stores never do", () => {
+		expect(
+			foundingPricingApplies({ ...base, plan: "starter", paidThrough: undefined }),
+		).toBe(false);
+		expect(
+			foundingPricingApplies({
+				plan: "pro",
+				isFoundingMember: false,
+				foundingIntent: false,
+				paidThrough: NOW - DAY,
+				now: NOW,
+			}),
+		).toBe(false);
 	});
 });
