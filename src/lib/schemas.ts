@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { postcodeRule } from "../../convex/lib/address";
 import { COUNTRIES, type Country } from "../../convex/lib/country";
 import {
 	MOBILE_MESSAGE,
@@ -167,7 +168,9 @@ const myStrictAddressSchema = z.object({
 		.min(2, "City must be at least 2 characters")
 		.max(60, "City must be at most 60 characters"),
 	state: z.enum(MY_STATES, { error: () => "Select a state" }),
-	postcode: z.string().regex(/^\d{5}$/, "Postcode must be 5 digits"),
+	postcode: z
+		.string()
+		.regex(postcodeRule("MY").pattern, postcodeRule("MY").error),
 	notes: addressNotesSchema,
 	mapsUrl: addressMapsUrlSchema,
 });
@@ -182,7 +185,9 @@ const sgStrictAddressSchema = z.object({
 	line2: addressLine2Schema,
 	city: z.string(),
 	state: z.string(),
-	postcode: z.string().regex(/^\d{6}$/, "Postal code must be 6 digits"),
+	postcode: z
+		.string()
+		.regex(postcodeRule("SG").pattern, postcodeRule("SG").error),
 	notes: addressNotesSchema,
 	mapsUrl: addressMapsUrlSchema,
 });

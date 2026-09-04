@@ -8,6 +8,7 @@ import {
 	buildDelyvaHeaders,
 	buildInstantQuoteBody,
 	classifyDelyvaFailure,
+	countActiveDelyvaServices,
 	computeDelyvaWebhookSignature,
 	decryptDelyvaCredentials,
 	delyvaAmountToSen,
@@ -16,6 +17,7 @@ import {
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
 	parseDelyvaWebhookEvent,
+	parseCompanyResponse,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -475,3 +477,59 @@ describe("webhook subscription events", () => {
 		]);
 	});
 });
+
+describe("countActiveDelyvaServices", () => {
+	// An empty quote has two causes and only one is the seller's to fix; this
+	// is how they're told apart (Zaki's SG account, 3 Sep).
+	test("counts only the switched-on services", () => {
+		expect(
+			countActiveDelyvaServices({
+				data: [
+					{ code: "NDDX", status: 1 },
+					{ code: "G-T1", status: 0 },
+					{ code: "SDD", status: 1 },
+				],
+			}),
+		).toBe(2);
+	});
+
+	test("returns 0 for an account with nothing connected", () => {
+		expect(countActiveDelyvaServices({ data: [] })).toBe(0);
+	});
+
+	test("returns 0 when every service is switched off", () => {
+		expect(countActiveDelyvaServices({ data: [{ status: 0 }] })).toBe(0);
+	});
+
+	// "We couldn't tell" must never render as an accusation.
+	test("returns null for a malformed response", () => {
+		expect(countActiveDelyvaServices({})).toBeNull();
+		expect(countActiveDelyvaServices({ data: "nope" })).toBeNull();
+		expect(countActiveDelyvaServices(null)).toBeNull();
+	});
+})
+
+describe("parseCompanyResponse — the sandbox tenant counts as test too", () => {
+	// Delyva's own developer guide sends integrators to trydx.delyva.app
+	// ("try express"). Badging that LIVE would be the 86eypncfy failure: a
+	// simulated booking that looks real until no courier turns up.
+	test("flags the trydx sandbox by company code", () => {
+		expect(parseCompanyResponse({ data: { code: "trydx" } }).isDemo).toBe(true);
+	});
+
+	test("…and by website, if the company was renamed", () => {
+		expect(
+			parseCompanyResponse({
+				data: { code: "try-express", websiteUrl: "https://trydx.delyva.app" },
+			}).isDemo,
+		).toBe(true);
+	});
+
+	test("a real market tenant stays live", () => {
+		expect(
+			parseCompanyResponse({
+				data: { code: "sg", websiteUrl: "https://sg.delyva.app" },
+			}).isDemo,
+		).toBe(false);
+	});
+})

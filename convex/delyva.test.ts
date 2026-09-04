@@ -509,3 +509,276 @@ describe("getDispatchState", () => {
 		expect(state?.weightIssue).toBe("missing_weights");
 	});
 });
+
+describe("Singapore stores (z8r3fdbqmc)", () => {
+	// SG has no Lalamove at all, so Delyva is that market's only courier
+	// automation — the country gate and the address rules have to hold here,
+	// not just in Malaysia.
+	async function seedSgRetailer(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				country: "SG",
+				delyva: {
+					enabled: true,
+					apiKey: "dx-test-key",
+					apiSecret: "dx-test-secret",
+					apiKeyHint: "-key",
+					customerId: 128399,
+					defaultItemType: "PARCEL",
+					pickupAddress: {
+						address1: "10 Bayfront Ave",
+						city: "Singapore",
+						state: "Singapore",
+						postcode: "018956",
+					},
+					connectedAt: Date.now(),
+					webhooksSubscribedAt: Date.now(),
+				},
+			});
+		});
+		return retailer;
+	}
+
+	test("booking is allowed in SG — the gate is per provider, not inherited", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.countryAllowed).toBe(true);
+		expect(view.connected).toBe(true);
+	});
+
+	test("accepts a 6-digit SG postal code", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.delyva.updateSettings, {
+			retailerId: retailer._id,
+			pickupAddress: {
+				address1: "1 Raffles Place",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "048616",
+			},
+		});
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.pickupAddress?.postcode).toBe("048616");
+	});
+
+	test("refuses a 5-digit code on an SG store — the MY rule must not leak", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		await expect(
+			asUser.mutation(api.delyva.updateSettings, {
+				retailerId: retailer._id,
+				pickupAddress: {
+					address1: "1 Raffles Place",
+					city: "Singapore",
+					state: "Singapore",
+					postcode: "04861",
+				},
+			}),
+		).rejects.toThrow(/6-digit postal code/i);
+	});
+
+	test("refuses a 6-digit code on a MY store — and the reverse", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		await expect(
+			asUser.mutation(api.delyva.updateSettings, {
+				retailerId: retailer._id,
+				pickupAddress: {
+					address1: "12 Jalan Ampang",
+					city: "Kuala Lumpur",
+					state: "Kuala Lumpur",
+					postcode: "504501",
+				},
+			}),
+		).rejects.toThrow(/5-digit postcode/i);
+	});
+
+	test("stamps SG on both waypoints — an MY literal would quote nothing", async () => {
+		const t = setup();
+		const retailer = await seedSgRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "1 Raffles Place",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "048616",
+			},
+		});
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const context = await t
+			.withIdentity({ subject: USER })
+			.query(internal.delyva.getDispatchContext, { shortId });
+		expect(context.ok).toBe(true);
+		if (!context.ok) return;
+		expect(context.origin.country).toBe("SG");
+		expect(context.destination.country).toBe("SG");
+	});
+});
+
+describe("providers coexist; the order's booking slot arbitrates (Zaki, 2 Sep)", () => {
+	// The revised model: a store may arm Lalamove riders AND Delyva couriers
+	// and pick per order. What stays strict is the per-ORDER invariant — one
+	// active job across both providers — plus the money fact that makes the
+	// whole thing safe: the buyer's fee was collected at checkout, before any
+	// booking existed.
+	async function withLalamovePricing(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) {
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
+				businessAddress: {
+					label: "12 Jalan Ampang, KL",
+					latitude: 3.15,
+					longitude: 101.7,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "pk_test_key",
+					apiSecret: "sk_test_secret",
+				},
+			});
+		});
+	}
+
+	test("Delyva stays bookable under Lalamove live-quote pricing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t); // delyva enabled by the seed
+		await withLalamovePricing(t, retailer._id);
+		const orderId = await seedOrder(t, retailer._id);
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const state = await t
+			.withIdentity({ subject: USER })
+			.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.blockReason).toBeNull();
+		expect(state?.bookingEnabled).toBe(true);
+	});
+
+	test("switching pricing to lalamove no longer needs Delyva paused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t); // delyva enabled
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				businessAddress: {
+					label: "12 Jalan Ampang, KL",
+					latitude: 3.15,
+					longitude: 101.7,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "pk_test_key",
+					apiSecret: "sk_test_secret",
+				},
+			});
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
+		});
+		const row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.deliveryConfig?.mode).toBe("lalamove");
+		expect(row?.delyva?.enabled).toBe(true); // untouched — never auto-paused
+	});
+
+	test("an active LALAMOVE job still blocks a Delyva booking on that order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			provider: "lalamove",
+			providerOrderId: "LLM-77",
+			status: "ongoing",
+		});
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const state = await t
+			.withIdentity({ subject: USER })
+			.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.blockReason).toBe("job_active");
+	});
+});
+
+describe("pickup address import (profile → settings)", () => {
+	// The connect action reads the seller's Delyva PROFILE address and hands
+	// it to storeConnection so nobody retypes what Delyva already knows —
+	// but only fill-if-unset: an address the seller saved here was possibly a
+	// deliberate correction of what Delyva holds, and a reconnect must never
+	// clobber it.
+	const imported = {
+		address1: "55 Jln Eco Majestic",
+		address2: "7/1D",
+		city: "Semenyih",
+		state: "Selangor",
+		postcode: "43500",
+	};
+
+	test("fills an empty pickup address at connect", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			const doc = await ctx.db.get(retailer._id);
+			if (!doc?.delyva) throw new Error("seed missing delyva");
+			await ctx.db.patch(retailer._id, {
+				delyva: { ...doc.delyva, pickupAddress: undefined },
+			});
+		});
+		await t.mutation(internal.delyva.storeConnection, {
+			retailerId: retailer._id,
+			apiKey: "enc.v1.rotated",
+			apiKeyHint: "ated",
+			customerId: 128399,
+			importedPickupAddress: imported,
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.pickupAddress?.address1).toBe("55 Jln Eco Majestic");
+		expect(view.pickupAddress?.postcode).toBe("43500");
+	});
+
+	test("never overwrites an address the seller already saved", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t); // seeds 12 Jalan Ampang
+		await t.mutation(internal.delyva.storeConnection, {
+			retailerId: retailer._id,
+			apiKey: "enc.v1.rotated",
+			apiKeyHint: "ated",
+			customerId: 128399,
+			importedPickupAddress: imported,
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		const view = await asUser.query(api.delyva.getSettings, {
+			retailerId: retailer._id,
+		});
+		expect(view.pickupAddress?.address1).toBe("12 Jalan Ampang");
+		expect(view.pickupAddress?.postcode).toBe("50450");
+	});
+
+	test("getDispatchState renders the stored address as a one-line summary", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const asUser = t.withIdentity({ subject: USER });
+		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.pickupSummary).toBe("12 Jalan Ampang, 50450 Kuala Lumpur");
+	});
+});

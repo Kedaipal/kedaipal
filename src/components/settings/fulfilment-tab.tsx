@@ -31,6 +31,7 @@ import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
 	deliveryModeAllowed,
+	riderBookingAllowed,
 } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
@@ -57,7 +58,6 @@ import {
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
-import { clientEnv } from "../../lib/env";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -81,6 +81,7 @@ import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import { CourierBookingSection } from "./courier-booking-section";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
@@ -422,6 +423,20 @@ export function FulfilmentTab({
 						canUseLalamove={hasFeature(subscription, "delivery")}
 					/>
 				</div>
+
+				{/* Second question inside the same card: the charge above decides
+				    what the BUYER pays; this decides how parcels physically leave.
+				    Independent toggles, not a radio — a seller may arm riders AND
+				    couriers and pick per order. Accounts are wired up under
+				    Settings → Integrations. 86eyjpv6z. */}
+				<div className="border-t border-border pt-4">
+					<CourierBookingSection
+						deliveryBooking={deliveryBooking}
+						chargeMode={deliveryConfig?.mode}
+						canUse={hasFeature(subscription, "delivery")}
+						riderBookingAvailable={riderBookingAllowed(country)}
+					/>
+				</div>
 			</Card>
 
 			{/* Directly after Delivery, and before Pickup, because that is what it
@@ -743,15 +758,12 @@ function DeliveryChargeSection({
 	const [onUnpriceable, setOnUnpriceable] = useState<"block" | "arrange">(
 		config?.mode === "weight" ? config.onUnpriceable : "arrange",
 	);
-	// Lalamove drafts (mode "lalamove" only). Blank key inputs mean "keep the
-	// stored pair" (server: undefined = no change); `editingKeys` swaps the
-	// stored-key summary row for fresh inputs (key rotation).
+	// Lalamove drafts (mode "lalamove" only). Keys live in Settings →
+	// Integrations since the 2 Sep IA rework — this section only reads the
+	// connection summary and refuses to save live-quote pricing without one.
 	const [vehicleType, setVehicleType] = useState<"MOTORCYCLE" | "CAR">(
 		deliveryBooking?.vehicleType ?? "MOTORCYCLE",
 	);
-	const [apiKey, setApiKey] = useState("");
-	const [apiSecret, setApiSecret] = useState("");
-	const [editingKeys, setEditingKeys] = useState(false);
 	const [promptBook, setPromptBook] = useState(
 		deliveryBooking?.promptBookOnPacked ?? false,
 	);
@@ -764,7 +776,6 @@ function DeliveryChargeSection({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
-	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 
 	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
 	// weight-zone / Lalamove) don't render and the server refuses storing them
@@ -900,13 +911,11 @@ function DeliveryChargeSection({
 				);
 				return;
 			}
-			if (!hasStoredKey || editingKeys) {
-				if (!typedBothKeys) {
-					setError(
-						"Paste both your Lalamove API key and API secret — tap “How to set up” if you don't have them yet.",
-					);
-					return;
-				}
+			if (!hasStoredKey) {
+				setError(
+					"Connect Lalamove under Settings → Integrations first — live quotes run on your own API keys.",
+				);
+				return;
 			}
 			nextConfig =
 				config?.mode === "lalamove"
@@ -937,11 +946,12 @@ function DeliveryChargeSection({
 		}
 		setSaving(true);
 		try {
-			// Lalamove is enabled/disabled as part of the pricing choice — one
-			// save, one mental model. Switching AWAY also turns booking off (the
-			// server refuses a dangling live-quote config otherwise); the stored
-			// keys stay, so switching back later is instant.
-			const wasLalamove = deliveryBooking?.enabled === true;
+			// Live-quote pricing implies rider booking (the checkout quote runs on
+			// those credentials), so picking it arms booking too. Switching AWAY no
+			// longer disarms it (2 Sep IA rework): rider booking is its own toggle
+			// under Courier booking below, and a weight-priced store may keep
+			// riders armed beside Delyva. Keys never ride this save — they live in
+			// Settings → Integrations.
 			const bookingPatch =
 				mode === "lalamove"
 					? {
@@ -954,21 +964,9 @@ function DeliveryChargeSection({
 								deliveryDirection: collectionMode
 									? ("collection" as const)
 									: ("standard" as const),
-								apiKey: apiKey.trim() || undefined,
-								apiSecret: apiSecret.trim() || undefined,
 							},
 						}
-					: wasLalamove
-						? {
-								// Direction is deliberately omitted here — the server keeps
-								// the stored value, so switching pricing away and back never
-								// resets a collection store to standard.
-								deliveryBooking: {
-									enabled: false,
-									vehicleType,
-								},
-							}
-						: {};
+					: {};
 			await updateSettings({
 				deliveryConfig: nextConfig,
 				...bookingPatch,
@@ -980,9 +978,6 @@ function DeliveryChargeSection({
 						? "Lalamove delivery is on — book riders from any confirmed delivery order."
 						: "Delivery charge saved.",
 			);
-			setApiKey("");
-			setApiSecret("");
-			setEditingKeys(false);
 		} catch (err) {
 			setError(convexErrorMessage(err));
 		} finally {
@@ -1163,171 +1158,70 @@ function DeliveryChargeSection({
 						</p>
 					</div>
 
-					{/* 3 · The seller's own API keys (BYO-only) */}
-					<div className="flex flex-col gap-2">
-						<div className="flex items-center justify-between">
-							<span className="text-xs font-medium text-muted-foreground">
-								Your Lalamove account (API key)
-							</span>
-							<a
-								href="/guides/lalamove-setup.html"
-								target="_blank"
-								rel="noopener noreferrer"
-								className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
-							>
-								How to set up <ExternalLink className="size-3" />
-							</a>
-						</div>
-						{hasStoredKey && !editingKeys ? (
-							<div className="flex flex-col gap-2">
-								<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
-									<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-										Key ending{" "}
-										<span className="font-mono">
-											…{deliveryBooking?.apiKeyHint}
-										</span>{" "}
-										stored
-										{deliveryBooking?.env === "sandbox" ? (
-											<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-												Test keys
-											</span>
-										) : deliveryBooking?.env === "production" ? (
-											<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-												Live
-											</span>
-										) : null}
+					{/* 3 · Connection status — the keys themselves moved to Settings →
+					    Integrations (2 Sep IA rework). This row answers "is my account
+					    wired up?" and hands the seller straight to where it's managed;
+					    the env badge stays HERE too because this is a point of spend
+					    (86eypncfy: a sandbox key that looks live costs real money). */}
+					<div className="flex flex-col gap-1.5">
+						<span className="text-xs font-medium text-muted-foreground">
+							Your Lalamove account
+						</span>
+						{hasStoredKey ? (
+							<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
+								<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+									Connected — key ending{" "}
+									<span className="font-mono">
+										…{deliveryBooking?.apiKeyHint}
 									</span>
-									<button
-										type="button"
-										onClick={() => setEditingKeys(true)}
-										className="text-xs font-medium text-accent hover:underline"
-									>
-										Replace
-									</button>
-								</div>
-								{/* Say what the badge COSTS, not just what it is — a seller
-								    who doesn't know how sandbox differs from live reads a
-								    neutral "Test keys" chip as harmless (86eypncfy). */}
-								{deliveryBooking?.env === "sandbox" ? (
-									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-										<span>
-											<span className="font-medium">
-												No real rider will be dispatched.
-											</span>{" "}
-											Sandbox keys (
-											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
-												pk_test_
-											</code>
-											) book simulated trips and quote your buyers test prices,
-											and the sandbox wallet can&apos;t be topped up with real
-											money. Replace them with your live{" "}
-											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
-												pk_prod_
-											</code>{" "}
-											pair when you&apos;re ready to take real orders.
+									{deliveryBooking?.env === "sandbox" ? (
+										<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+											Test keys
 										</span>
-									</p>
-								) : null}
+									) : deliveryBooking?.env === "production" ? (
+										<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
+											Live
+										</span>
+									) : null}
+								</span>
+								<Link
+									to="/app/settings"
+									search={{ tab: "integrations" }}
+									className="text-xs font-medium text-accent hover:underline"
+								>
+									Manage
+								</Link>
 							</div>
 						) : (
-							<div className="flex flex-col gap-2">
-								{/* Plain text inputs with a CSS mask on the secret — NOT
-								    type="password", so Chrome never mistakes this for a
-								    login form and autofills saved credentials into it. */}
-								<Input
-									type="text"
-									name="lalamove-api-key"
-									autoComplete="off"
-									data-1p-ignore
-									data-lpignore="true"
-									data-form-type="other"
-									value={apiKey}
-									disabled={lalamoveLocked}
-									onChange={(e) => setApiKey(e.target.value)}
-									placeholder="API key (pk_…)"
-									className="h-11 font-mono text-sm"
-								/>
-								<Input
-									type="text"
-									name="lalamove-api-secret"
-									autoComplete="off"
-									data-1p-ignore
-									data-lpignore="true"
-									data-form-type="other"
-									value={apiSecret}
-									disabled={lalamoveLocked}
-									onChange={(e) => setApiSecret(e.target.value)}
-									placeholder="API secret (sk_…)"
-									className="h-11 font-mono text-sm"
-									style={
-										apiSecret.length > 0
-											? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
-											: undefined
-									}
-								/>
-								{hasStoredKey && editingKeys ? (
-									<button
-										type="button"
-										onClick={() => {
-											setEditingKeys(false);
-											setApiKey("");
-											setApiSecret("");
-										}}
-										className="self-start text-xs font-medium text-muted-foreground hover:underline"
-									>
-										Keep the stored key instead
-									</button>
-								) : null}
-							</div>
+							<p className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+								Not connected yet —{" "}
+								<Link
+									to="/app/settings"
+									search={{ tab: "integrations" }}
+									className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
+								>
+									connect Lalamove in Integrations{" "}
+									<ExternalLink className="size-3" />
+								</Link>{" "}
+								before saving. Live quotes run on your own API keys.
+							</p>
 						)}
-						<p className="text-xs text-muted-foreground">
-							From the Lalamove Partner Portal (partnerportal.lalamove.com) →
-							Developers tab. You pay Lalamove directly from your own prepaid
-							wallet — Kedaipal never books or pays on your behalf. Your key
-							stays saved if you switch pricing methods, so switching back is
-							instant.
-						</p>
+						{deliveryBooking?.env === "sandbox" ? (
+							<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+								<span>
+									<span className="font-medium">
+										No real rider will be dispatched.
+									</span>{" "}
+									These are sandbox keys — bookings are simulated and buyers
+									are quoted test prices. Swap in your live keys under
+									Integrations before telling buyers.
+								</span>
+							</p>
+						) : null}
 					</div>
 
-					{/* 4 · Webhook — each seller registers OUR endpoint in THEIR
-					    Partner Portal; without it bookings still work but the
-					    shipped/delivered updates stop being automatic. */}
-					{hasStoredKey ? (
-						<div className="flex flex-col gap-1.5">
-							<span className="text-xs font-medium text-muted-foreground">
-								One more step: your Lalamove webhook
-							</span>
-							<div className="flex items-center gap-2">
-								<code className="min-w-0 flex-1 truncate rounded-lg border border-input bg-muted/40 px-3 py-2.5 font-mono text-xs">
-									{lalamoveWebhookUrl()}
-								</code>
-								<Button
-									type="button"
-									variant="outline"
-									className="h-10 shrink-0 px-3 text-xs"
-									onClick={() => {
-										navigator.clipboard
-											.writeText(lalamoveWebhookUrl())
-											.then(() => toast.success("Webhook link copied"))
-											.catch(() =>
-												toast.error("Couldn't copy — select and copy manually"),
-											);
-									}}
-								>
-									Copy
-								</Button>
-							</div>
-							<p className="text-xs text-muted-foreground">
-								Paste this in your Lalamove Partner Portal → Developers →
-								Webhook URL (choose version 3). It powers the automatic Shipped
-								and Delivered updates, and the live tracking on the buyer&apos;s
-								order page — step 5 in the guide.
-							</p>
-						</div>
-					) : null}
-
-					{/* 5 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
+					{/* 4 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
 					    riders collect FROM the customer's address and drop off at the
 					    business address. Sits ABOVE prompt-on-packed because it changes
 					    what the whole feature does, not just when it prompts. */}
@@ -1372,7 +1266,7 @@ function DeliveryChargeSection({
 						</div>
 					</div>
 
-					{/* 6 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
+					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
 					    marking a paid, due-today order Packed pops the confirm dialog
 					    with today's price, so the seller always sees the cost + taps
 					    to spend. */}
@@ -2908,12 +2802,3 @@ function LocationListSkeleton() {
 	);
 }
 
-// --- Lalamove rider booking (86eyb5hrf) --------------------------------------
-
-/** The deployment's Lalamove webhook endpoint — Convex HTTP actions live on
- * the `.convex.site` twin of the client's `.convex.cloud` URL. Surfaced in
- * the card so BYO sellers can paste it into their own Partner Portal. */
-function lalamoveWebhookUrl(): string {
-	const convexUrl = clientEnv.VITE_CONVEX_URL ?? "";
-	return `${convexUrl.replace(".convex.cloud", ".convex.site")}/webhook/lalamove`;
-}

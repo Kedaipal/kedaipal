@@ -24,11 +24,13 @@ const BLOCK_COPY: Record<DispatchBlock, string> = {
 		"A rider can only be booked while the order is confirmed or packed.",
 	job_active: "A rider is already booked on this order.",
 	booking_disabled:
-		"Lalamove isn't your delivery method right now — choose it under Settings → Fulfilment → Delivery charge.",
+		"Lalamove rider booking is off — turn it on under Settings → Fulfilment → Courier booking.",
+	no_business_address:
+		"Add your store's pickup address under Settings → Fulfilment — riders need somewhere to collect from.",
 	plan_gated:
 		"Lalamove booking is a Pro feature. Upgrade to book riders in one tap.",
 	no_credentials:
-		"Your Lalamove API key is missing — add it under Settings → Fulfilment → Delivery charge → Lalamove.",
+		"Your Lalamove API key is missing — add it under Settings → Integrations → Lalamove.",
 	no_coords:
 		"This address has no map pin, so a rider can't be routed to it. Ask the buyer to re-pick their address from the suggestions on their tracking page, or update it for them.",
 	no_buyer_phone:

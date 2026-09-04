@@ -50,10 +50,51 @@ separate account registered at `demo.delyva.app`. The ticket's
 "infer env from key prefix" AC is void; a key is just a key.
 
 Gates: connect/enable is **Pro-gated** via `PLAN_FEATURES.delivery` (the same
-flag as Lalamove booking; admin act-as bypasses for white-glove), and
-**Malaysia-only** via `delyvaBookingAllowed` (`convex/lib/delivery.ts`) —
-its own table, never derived from pricing modes. Disconnect/disable is never
-gated (downgrade never traps).
+flag as Lalamove booking; admin act-as bypasses for white-glove), and country
+is checked via `delyvaBookingAllowed` (`convex/lib/delivery.ts`) — its own
+table, never derived from pricing modes. Disconnect/disable is never gated
+(downgrade never traps).
+
+## Malaysia and Singapore (z8r3fdbqmc)
+
+Delyva serves **both** countries, and this is the one place the two booking
+providers disagree: Lalamove is Malaysia-only, Delyva is not. Deriving either
+gate from the other — or from `COUNTRY_DELIVERY_MODES` — would have made that
+impossible to express, which is why each provider owns its own table.
+
+**Singapore needs this more than Malaysia does.** SG stores have no Lalamove
+(`COUNTRY_RIDER_BOOKING.SG = false`) and only HitPay for payments, so before
+this they had *no* courier automation at all — every parcel arranged by hand
+with the tracking number typed in. Delyva is that market's whole answer.
+
+What is country-shaped, and where it comes from:
+
+- **Postal codes.** MY is 5 digits and called a *postcode*; SG is 6 and called
+  a *postal code*. Both the pickup-address form and its server validator read
+  **`postcodeRule(country)`** from `convex/lib/address.ts`, which already owned
+  the rule — the feature first shipped with a hardcoded `/^\d{5}$/` on both
+  sides, which silently made it Malaysia-shaped. Anything that asks a seller
+  for a postcode should ask that helper. (`src/lib/schemas.ts` still keeps its
+  own copies for the zod form schemas — pre-existing, worth folding in later.)
+- **The state tier.** Singapore has none: the island is both the city and the
+  "state", and the server arm enforces the `SG_STATE_LABEL` literal on both
+  fields. So the SG form renders **neither** a state dropdown nor a city input
+  — a dropdown with one option is not a choice — and `saveAddress` supplies the
+  literal. `parseGoogleAddress` already returns it when handed `country`.
+- **The country on the wire.** `getDispatchContext` stamps the store's country
+  on both waypoints and `formatBuyerAddress` takes it as an argument. It was
+  hardcoded `"MY"`, which on a Singapore parcel is exactly how a quote comes
+  back empty with no error to explain it.
+- **Coverage copy.** The cold-chain line no longer claims "West Malaysia only";
+  it says cold-chain couriers cover less ground than ordinary parcels and to
+  check with Delyva, which is true in both markets.
+
+**Verified 2 Sep 2026:** a quote with `country: "SG"`, `state: "Singapore"` and
+a 6-digit postal code returns a well-formed HTTP 200 — the payload shape needs
+no change. It returned zero services only because the probing account is a
+Malaysian demo account with no SG couriers enabled. **What is NOT verified is
+that a real SG account returns real SG couriers** — that needs an SG Delyva
+account, and it is the SG twin of the cold-chain gap below.
 
 ## Schema
 
@@ -171,6 +212,256 @@ pickup activation pending), `no_service`, `unknown`. Booking failures email
 the seller through the same `notifyDeliveryJobFailed` template, now
 provider-aware in all three locales.
 
+## Settings IA — Integrations vs Fulfilment (2 Sep, Zaki)
+
+The first cut shipped a **one-automated-provider-at-a-time** rule (Lalamove OR
+Delyva, mutually exclusive). Zaki's test round overturned it, and the revised
+reasoning is recorded here because the first version *sounded* right:
+
+**The mutual exclusion solved a money-safety problem that doesn't exist.** The
+buyer's delivery fee is collected at checkout, before any booking is made —
+which tool sends the parcel afterwards changes nothing the buyer paid, only
+the seller's margin, and the dispatch card shows "buyer paid X" beside every
+courier price at the moment of choice. So the rule is now:
+
+- **Charge mode** (Fulfilment → Delivery charge) answers "what does the buyer
+  pay". Lalamove live-quote remains one of those modes; Delyva never is.
+- **Courier booking** (Fulfilment → Courier booking) is **independent
+  toggles**, not a radio — a seller may arm Lalamove riders AND Delyva
+  couriers and pick per order (rider across town today, parcel across the
+  country tomorrow). Arranging your own courier is the ever-present baseline,
+  not an option. Each unconnected provider's toggle is disabled-with-reason
+  plus a link to Integrations.
+- **One coupling survives**: Lalamove live-quote pricing implies rider booking
+  (the checkout quote runs on those credentials), so under that charge mode
+  the rider toggle is locked on with the reason shown. Switching pricing AWAY
+  no longer disarms rider booking — it's the seller's toggle now.
+- Per ORDER, the **one-active-job reservation** (cross-provider) is what
+  arbitrates: both cards may render, whichever books first takes the slot and
+  the other card shows `job_active`.
+
+**Settings → Integrations** (new tab) is one home for third-party ACCOUNTS —
+Lalamove keys (with the 86eypncfy env badge + webhook row), the Delyva
+account card (connect, pickup address, parcel type, webhook health), and the
+HitPay card (moved from Payments; its country-switch checklist deep-link
+retargeted). Keys are pasted once and rotated rarely; behavioural switches
+are day-to-day — mixing the two is how the Fulfilment tab ended up carrying
+credential forms inside a pricing section. Fulfilment/Payments link here
+whenever a needed account isn't connected, and `riderOnlyStore` (not
+`bookingEnabled`) now drives the "no parcels ever leave this store" surfaces,
+since a weight-priced store can legitimately arm riders too.
+
+## Getting an account per country (and why demo is Malaysia-only)
+
+**Country is a property of the Delyva COMPANY (tenant), not of the account or
+the address you type.** Delyva runs one tenant per market on a wildcard
+domain — `my.delyva.app` (+60), `sg.delyva.app` (+65), `ph.`, `id.` — plus
+`demo.delyva.app`, which is itself a **Malaysian** company (`GET /company`
+returns `code: "demo"`, `country: "MY"`, a Setapak KL address). A hostname
+with no company behind it renders "Company not found.", so the tenant list is
+verifiable from outside.
+
+That explains the trap (Zaki, 3 Sep): signing up a *second* demo account with
+an SG phone and an SG address still creates a customer **under the Malaysian
+Demo company**, so the wallet tops up in MYR, the dashboard offers no country
+switch (there is no customer-level country to switch), and an SG→SG quote
+comes back with `services: []` — no error, just nothing, because the company's
+service providers only cover Malaysia. The same key quoting MY→MY returns
+three services in MYR. IP/geolocation has nothing to do with it.
+
+**Test tenants, and why both are Malaysian.** Delyva's own developer guide
+names a sandbox portal at `trydx.delyva.app` ("try express") alongside
+`demo.delyva.app` — and BOTH sign up at +60. There is no Singapore test
+tenant under any name we could find, so an SG account is necessarily a live
+one. `parseCompanyResponse` therefore treats `trydx` as non-production too
+(code or website): the guide sends integrators there, and badging a sandbox
+LIVE is the 86eypncfy failure exactly — a simulated booking looks real right
+up until no courier arrives.
+
+**Singapore looks dormant, not merely empty** (3 Sep): `delyva.com/sg/`
+302-redirects to the global country chooser while `/my/` serves a full
+product page, and a fresh SG account has an empty Service Providers panel.
+The tenant is real (`sg.delyva.app` renders +65, the account connects, all
+three webhooks register) but no courier is behind it. **If Delyva confirms
+there are no SG partners to enable, the whole surface retires from SG stores
+with a one-line change** — `COUNTRY_DELYVA_BOOKING.SG = false` in
+`convex/lib/delivery.ts`: the settings toggle hides (`countryAllowed`) and
+`delyvaSurface` returns `"none"` on `country_unsupported`, so no seller is
+offered a courier we can't deliver.
+
+**To test Singapore, the seller (or we) needs a key issued by the SG tenant:**
+sign up at `https://sg.delyva.app/customer/signup`. Nothing in our integration
+is host-aware — `api.delyva.app` is the single API host and the access token
+carries the company — so an SG key needs no code change, and our demo
+detection correctly reports it LIVE (`code` is not `"demo"`).
+
+**Quoting is free.** `POST /service/instantQuote` spends nothing and works on
+a zero-balance wallet (that is how the MY demo account quoted before it was
+topped up); only `POST /order/process` draws credit. So connect → quote →
+courier list can be verified end-to-end on a fresh SG account without paying
+anything; only the final booking needs a top-up, in SGD.
+
+There is no SG demo/sandbox tenant under any obvious name (`demosg`,
+`sgdemo`, `demo-sg` all answer "Company not found."), and the two real test
+tenants (`demo`, `trydx`) are both Malaysian. If a sandbox is wanted for SG
+it has to come from Delyva support.
+
+## Seller UI
+
+Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the
+store's existing delivery charge (flat / weight-zone) at checkout and get the
+tracking number on `/track/<token>` and in the shipped WhatsApp, through the
+manual-courier pipeline that already existed. Decided 27 Aug, and it matches
+where the market landed: Shopee removed buyer courier choice in 2020 and
+assigns it now, Lazada/TikTok Shop show a tier rather than a brand, and
+Shopify has the buyer pick a merchant-configured *rate* while the merchant
+buys the label afterwards. It also protects the seller's margin, because the
+booking spends **their** Delyva credit — the dispatch card shows what the
+buyer paid right beside each courier's real price.
+
+**Settings → Fulfilment → Delyva courier** (`src/components/settings/delyva-card.tsx`),
+placed between the delivery *charge* card and the despatch *label* card —
+the order the seller thinks in: what the buyer pays → how the parcel leaves →
+the paper that goes on it. Booking is orthogonal to pricing (a flat-fee store
+can still book couriers), so it is its own card, never a delivery-charge mode.
+Unlike its HitPay sibling this card owns its own reads and actions rather than
+taking a summary + `onSave`: Delyva has its own Convex namespace, so threading
+four actions and a mutation through the tab would be five more props for no
+gain. Act-as is honoured the way `useUpdateSettings` does it. It carries: the
+one-key connect (with the "one key is all we need" line, because every other
+integration asks for two), the connected proof (**account name** + key hint —
+so a seller can see they pasted the *right* account's key), pause/replace/
+disconnect, the structured pickup address with the 5-digit-postcode rule
+mirrored from the server (**pre-filled at connect from the seller's Delyva
+profile** — `GET /customer` already holds it, so `storeConnection` imports it
+fill-if-unset; an address the seller saved here is never overwritten, since a
+reconnect must not clobber a deliberate correction), the default parcel-type
+tiles, the **cold-chain
+activation note** (shown only for a chilled/frozen default — the single most
+likely reason a frozen seller's first booking fails), and a **webhook-retry
+warning** when `webhooksSubscribedAt` is unset, since a silent subscription
+failure otherwise shows up only as orders that mysteriously stop updating.
+
+**Order detail → Dispatch hub** (`src/components/order/dispatch-hub.tsx`):
+when BOTH providers have a card to show on this order, a segmented switch
+renders ONE provider's card at a time — two full cards stacked two spend
+buttons a scroll apart, and a mis-tap books a rider when the seller meant a
+courier. The switch is **grouped into the card it drives** — one bordered
+shell, tabs sitting on top of the pane they swap, cards rendering `embedded`
+(no chrome of their own) inside it; a segmented control floating above a
+separate card read as two unrelated things.
+
+"Has a card" is `src/lib/dispatch-surface.ts`, the SAME predicate the cards
+use for their own early returns — the hub cannot be allowed to offer a tab a
+card then declines to fill. That was a real blank pane: on a *delivered*
+order carrying a cancelled Delyva booking, Delyva had history to show while
+Lalamove had no job and a delivered order isn't bookable, so its card
+returned null under a tab that promised something. The predicate is
+tri-state, because a never-set-up provider's dashed discoverability **hint**
+is a nudge, not a dispatch surface: `"none" | "hint" | "card"`, and only
+`"card"` on both sides builds a tab strip.
+
+The switch is a view control (localStorage, never server state); the
+default follows the facts: a provider with a live job fronts (its card holds
+tracking/cancel, and the other tab wears a live-booking dot), then the last
+choice on this device, then rider-first for a live-quote store. While one
+provider holds the active job, fronting the OTHER tab shows a **notice**
+("A Delyva courier is already on this order — one booking at a time…") with a
+jump back to the booking — the cards null themselves out under `job_active`,
+and an empty pane reads as broken. Single-provider stores bypass the hub
+entirely and see exactly what they saw before.
+
+**Order detail → Delyva Courier** (`src/components/order/delyva-dispatch-card.tsx`) —
+each card hides itself when its own provider isn't set up, so nobody sees two.
+The picker is **inline on the card, not in a modal** — the deliberate
+divergence from `BookDeliveryCard`. Lalamove returns one price bound to a
+5-minute quotation id, so its flow is a modal with a countdown; Delyva returns
+a list whose prices are indicative and never expire, so the task is a
+comparison, and on a phone a scrollable courier list inside a scrollable
+dialog is the worse of the two. Above the flow sits a one-line **"Collecting from <address> · Edit"** —
+the imported profile address is prefill, not truth (live probe: Delyva held
+43500 Semenyih where the seller had corrected to 43700 Beranang), so the
+first booking doubles as the address check, with the fix one tap away in
+Integrations. Flow: weight (seeded from the order, always
+editable) → parcel-type pills (store default, per-order override; changing
+either drops stale prices) → **Get courier prices** → the list, cheapest
+pre-selected with the CTA repeating the choice and its price → book. Booked
+state shows the courier, the AWB with one-tap copy, the cost, a tracking link
+and cancel. A failed booking on an order that can no longer be booked (delivered,
+cancelled) shows the failure **as history** — the amber banner plus the
+disabled-with-reason line — rather than a "Try again" the server would
+refuse. A booking failure on a still-bookable order renders **in place, not
+as a toast** (the
+86eypncfy lesson: the seller is coming back from a top-up and the reason must
+still be on screen), with the picker intact so retrying is one tap.
+
+**Copy that had to become provider-aware:** the client-side manual-advance gate
+in `app.orders.$shortId.tsx` now subscribes to `api.delyva.getDispatchState`
+alongside the Lalamove one and treats an active job from **either** provider as
+"someone else owns this order's status" — without it the UI would offer a
+manual *Shipped* the server then refuses, since `riderOwnsTransition` already
+covers both. The gate's wording, the cancel/delete warnings that point at the
+dispatch card by name, and the `deliveryJobFailed` email (all three locales)
+follow the provider that actually owns the job.
+
+**An empty courier list says WHICH kind of empty.** A quote with no services
+has two causes that look identical on the wire, and the seller can only fix
+one: no courier covers this parcel/route, or **the account has no courier
+switched on at all**. The second is where every fresh DelyvaNow account
+starts — its Service Providers panel is empty until Delyva enables their
+market's partners or the seller connects their own courier contract — so a
+brand-new account quotes nothing for every address (Zaki's live SG account,
+3 Sep). Blaming the address there sends the seller re-typing addresses
+forever. So when `instantQuote` returns zero services, `prepareBooking` makes
+ONE extra `GET /service` call (empty path only, never on a successful quote)
+and counts `status: 1` entries via `countActiveDelyvaServices`; zero means
+the account is empty and the card says so, pointing at Delyva's own
+Integrations screen instead of at this order. A failed or malformed lookup
+leaves the flag unset and the generic route wording stands — "we couldn't
+tell" must never render as an accusation.
+
+**Cold chain gets its own diagnosis**, because it fails in a way that reads
+as an address problem and it is the ICP's whole reason for being here.
+Delyva filters item types SERVER-side — measured on the same KL route:
+`PARCEL` → 3 services (accepting `FOOD`, `PACKAGE`, `PARCEL`), `CHILLED` → 0,
+`FROZEN` → 0 — so a chilled quote on an account with no cold-chain service is
+byte-identical to an unserviceable address. **We never filter by item type
+ourselves**: the request carries `itemType` and the card renders every
+service that comes back, so an empty cold list is always Delyva's answer, not
+our filtering. To tell the two apart, an empty CHILLED/FROZEN quote re-runs
+the SAME route as `PARCEL` (quotes are free, empty path only): couriers there
+means the route is fine and the gap is the cold chain — a thing Delyva
+support can switch on — and the card says exactly that instead of blaming the
+address.
+
+**Cross-currency quotes are never presented as comparable.** Prices come from
+the Delyva COMPANY, so a Malaysian account quoting a Singapore store returns
+MYR against an SGD order (Zaki's sandbox setup, 3 Sep — legitimate while
+testing, and impossible once a store holds its own market's key). "Buyer paid
+S$6.00" beside "RM 0.10" is a margin call out of thin air, so when any quoted
+currency differs from the order's the line says which currency the quote is
+in and that the two aren't directly comparable.
+
+**Every hint names the RIGHT next step** (PR #247 review). A one-line nudge
+replaces the card whenever booking isn't armed, and *which* nudge depends on
+why: `not_connected` → connect in Integrations, `disabled` → the store paused
+it, so resume it under Fulfilment → Courier booking, `plan_gated` → the Pro
+pitch. Sending an already-connected seller to a connect screen hides the one
+switch they need. The same sweep split Lalamove's `booking_disabled`, which
+had meant *either* "toggle off" *or* "no pickup address on the store" — one of
+those two fixes was always the wrong advice, so `no_business_address` is now
+its own reason. A nudge also only renders on an order the seller can still
+act on; on a delivered order it is noise.
+
+**Discoverability** (the CLAUDE.md rule): the settings card explains the
+feature before it is connected, the order card shows a one-line hint linking to
+Settings when Delyva was never set up (rather than a disabled button for a
+feature the seller has never heard of), and
+`public/guides/delyva-setup.html` is the print-ready vendor walkthrough —
+account → credit → cold-chain activation → API key → paste → one real test —
+linked from the settings card, the `hitpay-setup.html` / `lalamove-setup.html`
+precedent.
+
 ## Testing
 
 - `convex/lib/delyva.test.ts` — pure client mechanics; fixtures are payloads
@@ -180,6 +471,12 @@ provider-aware in all three locales.
   out-of-order / order transitions / AWB fill-if-unset mirroring, the
   cross-provider reservation invariant, webhook correlation by
   `(provider, providerOrderId)`.
+- `src/components/order/delyva-dispatch-card.test.tsx` — the picker flow plus
+  every state that must not be a dead end: no couriers, an unweighable cart, a
+  failed booking, each blocked reason.
+- `src/components/settings/delyva-card.test.tsx` — one-key connect, the Pro
+  gate (and that it never traps a downgraded seller), the postcode rule, the
+  missing-address and unregistered-webhook warnings.
 - Manual E2E: register a **demo account** at `demo.delyva.app` (same API
   host; the "sandbox" is just a separate account) and use their webhook
   simulator at `dx-integration-sandbox.pages.dev` to fire status updates.
@@ -188,10 +485,22 @@ provider-aware in all three locales.
 
 ## Open / follow-ups
 
-- **PR2 (frontend)**: Settings → Fulfilment Delyva card (single-key connect,
-  pickup address, parcel-type default) + order-detail dispatch card (service
-  picker; mockups approved 27 Aug). Backend queries (`getSettings`,
-  `getDispatchState`) already serve it.
+- **Visual check of the two dashboard cards** — they sit behind Clerk, so the
+  render→look→iterate pass needs a signed-in session; behaviour is covered by
+  the two component suites meanwhile.
+- **Per-item parcel type** — ClickUp `86eyrmv1j` (backlog). Today the type is a
+  store default with a per-order override (option 1, decided 27 Aug). Delyva's
+  `itemType` applies to the **shipment**, not the line item, so even per-item
+  flags must resolve to one value ("coldest wins"); build it when a genuinely
+  mixed-temperature seller exists, as one optional variant field plus a
+  derivation in `getDispatchContext` — the same pills UI, smarter
+  pre-selection.
+- **Live Delyva rates at checkout** — a new *pricing* mode (the Lalamove
+  live-quote parallel), deliberately out of scope: buyer pricing stays
+  weight-band. Its own ticket if weight bands prove too coarse.
+- **An SG Delyva account** — needed to confirm a real Singapore account
+  returns Singapore couriers, and to sanity-check SGD pricing end to end
+  before the SG pilot (z8r3fdbqmc).
 - **Cold-chain quote verification on a real account** — the `CHILLED`
   itemType is confirmed in Delyva's plugin and API enum, but the demo
   account returns no cold-chain services; verify pricing + the activation
