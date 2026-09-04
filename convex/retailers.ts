@@ -220,7 +220,7 @@ import {
 	type CountrySetupItem,
 	resolveCountrySetup,
 } from "./lib/countrySetup";
-import { inferLalamoveEnv, resolveLalamoveCredentials } from "./lib/lalamove";
+import { hasLalamoveCredentials, inferLalamoveEnv } from "./lib/lalamove";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -334,6 +334,13 @@ const deliveryConfigValidator = v.union(
 		mode: v.literal("lalamove"),
 		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 	}),
+	// Provider-aware live pricing (z8r3fdbvdy) — the mode sellers can now
+	// pick; "lalamove" above survives only until stored rows are migrated
+	// (migrations:migrateLalamoveModeToLive).
+	v.object({
+		mode: v.literal("live"),
+		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+	}),
 );
 
 // Lalamove booking config (86eyb5hrf). `null` clears; enabling requires a
@@ -397,7 +404,7 @@ function summarizeDeliveryBooking(
 	return {
 		enabled: booking.enabled,
 		vehicleType: booking.vehicleType,
-		hasCredentials: resolveLalamoveCredentials(booking) !== null,
+		hasCredentials: hasLalamoveCredentials(booking),
 		promptBookOnPacked: booking.promptBookOnPacked === true,
 		deliveryDirection: booking.deliveryDirection ?? "standard",
 		// Stored hint first (86eyn25gk — the key may be ciphertext); slicing is
@@ -1731,7 +1738,7 @@ export const updateSettings = mutation({
 					DEFAULT_COUNTRY;
 				if (!deliveryModeAllowed(effectiveCountry, clean.mode)) {
 					throw new ConvexError(
-						"Distance, weight-zone and Lalamove pricing are Malaysia-only for now — Singapore stores can use Free or a Flat fee.",
+						"Distance and weight-zone pricing are Malaysia-only for now — Singapore stores can use Free, a Flat fee, or Live courier price.",
 					);
 				}
 				if (clean.mode === "radius") {
@@ -1871,7 +1878,7 @@ export const updateSettings = mutation({
 						DEFAULT_COUNTRY;
 					if (!riderBookingAllowed(effectiveCountry)) {
 						throw new ConvexError(
-							"Lalamove rider booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+							"Lalamove rider booking isn't available for your store's country yet — arrange your own courier and record the tracking number on the order.",
 						);
 					}
 					const effectiveAddress =
@@ -1885,7 +1892,7 @@ export const updateSettings = mutation({
 					}
 					// BYO-only: the seller's own key pair is required — Kedaipal has
 					// no Lalamove account and never books on a seller's behalf.
-					if (!resolveLalamoveCredentials(clean)) {
+					if (!hasLalamoveCredentials(clean)) {
 						throw new ConvexError(
 							"Add your Lalamove API key and secret to enable delivery booking.",
 						);

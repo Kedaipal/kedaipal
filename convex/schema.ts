@@ -356,6 +356,18 @@ export default defineSchema({
 				// be fetched, checkout/address-edit is REFUSED (strict since
 				// 27 Jul — the buyer always sees the real rider price, the seller
 				// never calculates a charge).
+				// Provider-aware live pricing (z8r3fdbvdy): quotes EVERY booking
+				// provider the store has armed and charges the higher, so the
+				// collected fee covers whichever tool dispatch actually uses.
+				// Supersedes `mode: "lalamove"`, which survives as the
+				// single-provider ancestor until stored rows are migrated —
+				// widen → migrate → narrow.
+				v.object({
+					mode: v.literal("live"),
+					// Same posture as the mode below: behaviour is always "block".
+					// A live-priced store must never hand the seller fee homework.
+					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+				}),
 				v.object({
 					mode: v.literal("lalamove"),
 					// VESTIGIAL (27 Jul): behavior is always "block" — the resolver
@@ -1337,6 +1349,11 @@ export default defineSchema({
 					// RE-quotes (Lalamove honours quotes 5 min), so these are a
 					// paper trail, never booking inputs.
 					v.literal("lalamove"),
+					// Provider-aware live quote (z8r3fdbvdy) — same paper-trail
+					// posture, plus `quoteProvider`/`quotesConsidered` below, which
+					// answer "why was I charged this" once more than one provider
+					// could have set the price.
+					v.literal("live"),
 					// Weight/zone rate card (86eyeea1n).
 					v.literal("weight"),
 				),
@@ -1348,10 +1365,29 @@ export default defineSchema({
 				zoneName: v.optional(v.string()),
 				chargeableKg: v.optional(v.number()),
 				bandMaxKg: v.optional(v.number()),
-				// Provider-quote audit trail (mode "lalamove" only).
+				// Provider-quote audit trail (live modes only).
 				quotationId: v.optional(v.string()),
 				vehicleType: v.optional(v.string()),
 				quotedAt: v.optional(v.number()),
+				// Which provider's price the buyer actually paid, and every quote
+				// that competed for it (mode "live"). Absent on "lalamove" rows —
+				// there was only ever one bidder.
+				quoteProvider: v.optional(
+					v.union(v.literal("lalamove"), v.literal("delyva")),
+				),
+				quoteServiceName: v.optional(v.string()),
+				quotesConsidered: v.optional(
+					v.array(
+						v.object({
+							provider: v.union(
+								v.literal("lalamove"),
+								v.literal("delyva"),
+							),
+							fee: v.number(),
+							currency: v.string(),
+						}),
+					),
+				),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -1805,11 +1841,42 @@ export default defineSchema({
 	// creation-time index, and `by_retailer` serves the account-deletion cascade.
 	deliveryQuotes: defineTable({
 		retailerId: v.id("retailers"),
+		// Which provider's price the buyer is being charged (z8r3fdbvdy).
+		// OPTIONAL while pre-existing rows exist: absent = "lalamove", the only
+		// provider that could mint a row before live pricing became
+		// provider-aware. Rows are transient (consumed at create, purged daily),
+		// so this narrows to required on its own within a day of deploy —
+		// widen → migrate → narrow, with the migration being the clock.
+		provider: v.optional(
+			v.union(v.literal("lalamove"), v.literal("delyva")),
+		),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
-		quotationId: v.string(),
+		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
+		// prices are indicative and never expire; dispatch re-prices anyway).
+		quotationId: v.optional(v.string()),
 		// Buyer-paid fee (sen) after RM→sen conversion.
 		fee: v.number(),
-		vehicleType: v.string(),
+		// The currency the fee is in — recorded rather than assumed, because a
+		// provider account belonging to another market prices in ITS currency
+		// and such a quote must never be charged (chooseLiveQuote drops it).
+		currency: v.optional(v.string()),
+		// Lalamove only.
+		vehicleType: v.optional(v.string()),
+		// Delyva only: which service in its returned list set this price.
+		serviceCode: v.optional(v.string()),
+		serviceName: v.optional(v.string()),
+		// Every quote that competed, winner included — the audit trail for
+		// "why was I charged RM5.70" months later. Copied onto the order's
+		// deliverySnapshot at create, since this row is consumed there.
+		considered: v.optional(
+			v.array(
+				v.object({
+					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					fee: v.number(),
+					currency: v.string(),
+				}),
+			),
+		),
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).

@@ -425,6 +425,7 @@ export function ClaimCheckoutPage({
 	const isLiveMode = rawQuote?.kind === "live";
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode,
+		providerAware: rawQuote?.kind === "live" && rawQuote.providerAware,
 		retailerId,
 		latitude: hasCoords ? latNum : undefined,
 		longitude: hasCoords ? lngNum : undefined,
@@ -438,6 +439,14 @@ export function ClaimCheckoutPage({
 			]
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
+		},
+		getAddressParts: () => {
+			const a = form.store.state.values.address;
+			return {
+				city: a.city?.trim() || undefined,
+				state: displayAddressState(a) || undefined,
+				postcode: a.postcode?.trim() || undefined,
+			};
 		},
 		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
 		fulfilmentTimeMinutes: watchedTimeMinutes,
@@ -459,6 +468,8 @@ export function ClaimCheckoutPage({
 				return { kind: "blocked", reason: "out_of_range" };
 			case "store_unavailable":
 				return { kind: "blocked", reason: "store_unavailable" };
+			case "no_cold_service":
+				return { kind: "blocked", reason: "no_cold_service" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -473,7 +484,8 @@ export function ClaimCheckoutPage({
 		(quoteForDelivery.reason === "no_coords" ||
 			quoteForDelivery.reason === "unquotable" ||
 			quoteForDelivery.reason === "out_of_range" ||
-			quoteForDelivery.reason === "store_unavailable");
+			quoteForDelivery.reason === "store_unavailable" ||
+			quoteForDelivery.reason === "no_cold_service");
 	const allowManualAddressEntry =
 		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 

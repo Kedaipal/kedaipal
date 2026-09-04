@@ -31,7 +31,9 @@ import {
 	riderDrivesOrderStatus,
 	signLalamoveRequest,
 	toLalamoveCoordinates,
-	toLalamoveMyPhone,
+	hasLalamoveCredentials,
+	lalamoveMarketForCountry,
+	toLalamoveContactPhone,
 	toLalamovePhone,
 } from "./lalamove";
 
@@ -64,7 +66,11 @@ describe("request signing", () => {
 
 	test("buildLalamoveHeaders assembles the hmac Authorization + market", async () => {
 		const headers = await buildLalamoveHeaders({
-			credentials: { apiKey: "pk_test_k", apiSecret: "sk_test_s" },
+			credentials: {
+				apiKey: "pk_test_k",
+				apiSecret: "sk_test_s",
+				market: "MY",
+			},
 			method: "POST",
 			path: "/v3/orders",
 			body: "{}",
@@ -81,21 +87,37 @@ describe("request signing", () => {
 describe("resolveLalamoveCredentials", () => {
 	test("the seller's key pair resolves; env comes from the key prefix", () => {
 		expect(
-			resolveLalamoveCredentials({ apiKey: "pk_test_abc", apiSecret: "sk_x" }),
-		).toEqual({ apiKey: "pk_test_abc", apiSecret: "sk_x", env: "sandbox" });
+			resolveLalamoveCredentials(
+				{ apiKey: "pk_test_abc", apiSecret: "sk_x" },
+				"MY",
+			),
+		).toEqual({
+			apiKey: "pk_test_abc",
+			apiSecret: "sk_x",
+			env: "sandbox",
+			market: "MY",
+		});
 		expect(
-			resolveLalamoveCredentials({ apiKey: "pk_prod_abc", apiSecret: "sk_x" }),
-		).toEqual({ apiKey: "pk_prod_abc", apiSecret: "sk_x", env: "production" });
+			resolveLalamoveCredentials(
+				{ apiKey: "pk_prod_abc", apiSecret: "sk_x" },
+				"MY",
+			),
+		).toEqual({
+			apiKey: "pk_prod_abc",
+			apiSecret: "sk_x",
+			env: "production",
+			market: "MY",
+		});
 	});
 
 	test("half a credential or nothing → null (BYO-only, fail closed)", () => {
 		// updateSettings refuses storing half a credential, so this state is a
 		// defensive branch — documented behaviour: never sign with a mismatched
 		// pair, and there is NO platform fallback to fall through to.
-		expect(resolveLalamoveCredentials({ apiKey: "pk_test_only" })).toBeNull();
-		expect(resolveLalamoveCredentials({ apiSecret: "sk_only" })).toBeNull();
-		expect(resolveLalamoveCredentials(undefined)).toBeNull();
-		expect(resolveLalamoveCredentials({})).toBeNull();
+		expect(resolveLalamoveCredentials({ apiKey: "pk_test_only" }, "MY")).toBeNull();
+		expect(resolveLalamoveCredentials({ apiSecret: "sk_only" }, "MY")).toBeNull();
+		expect(resolveLalamoveCredentials(undefined, "MY")).toBeNull();
+		expect(resolveLalamoveCredentials({}, "MY")).toBeNull();
 	});
 
 	test("inferLalamoveEnv: pk_test_ → sandbox, anything else → production", () => {
@@ -407,36 +429,67 @@ describe("status + webhook helpers", () => {
 	});
 });
 
-describe("toLalamoveMyPhone", () => {
+describe("toLalamoveContactPhone", () => {
+	// This function used to be MY-only, and its old test carried an explicit
+	// warning: "a future 'accept 65 everywhere' sweep that touches this
+	// function breaks real bookings". That warning still stands and is
+	// honoured here — SG numbers are accepted in the SG MARKET, and remain
+	// rejected in the MY one. Lalamove validates the area code per market, so
+	// loosening it globally would 422 real Malaysian bookings.
 	test("accepts MY numbers in stored-digit and formatted shapes", () => {
-		expect(toLalamoveMyPhone("60123456789")).toBe("+60123456789");
-		expect(toLalamoveMyPhone("+60 12-345 6789")).toBe("+60123456789");
-		expect(toLalamoveMyPhone("601112345678")).toBe("+601112345678");
+		expect(toLalamoveContactPhone("60123456789", "MY")).toBe("+60123456789");
+		expect(toLalamoveContactPhone("+60 12-345 6789", "MY")).toBe(
+			"+60123456789",
+		);
+		expect(toLalamoveContactPhone("601112345678", "MY")).toBe("+601112345678");
 	});
 
-	test("rejects non-MY area codes (the +65 buyer that 422'd in testing)", () => {
-		expect(toLalamoveMyPhone("6581815321")).toBeNull();
-		expect(toLalamoveMyPhone("+6581815321")).toBeNull();
-		expect(toLalamoveMyPhone("14155551234")).toBeNull();
+	test("accepts SG numbers in the SG market", () => {
+		expect(toLalamoveContactPhone("6581815321", "SG")).toBe("+6581815321");
+		expect(toLalamoveContactPhone("+65 8181 5321", "SG")).toBe("+6581815321");
 	});
 
-	test("SG-lite (86eynw28q) must NOT loosen this: a stored SG number stays null", () => {
-		// Deliberate, not an oversight — Lalamove validates the area code per
-		// market (this integration is Lalamove MALAYSIA), so a +65 contact 422s
-		// the booking. Returning null routes dispatch to its fallback: the
-		// seller's own +60 number as rider contact, buyer number in the rider
-		// remarks. A future "accept 65 everywhere" sweep that touches this
-		// function breaks real bookings.
-		expect(toLalamoveMyPhone("6581234567")).toBeNull();
+	test("the +65 buyer still 422s a MALAYSIAN booking — unchanged", () => {
+		// The case that was measured in testing. Returning null routes dispatch
+		// to its fallback: the seller's own number as rider contact, the buyer's
+		// in the remarks.
+		expect(toLalamoveContactPhone("6581815321", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("+6581815321", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("14155551234", "MY")).toBeNull();
+	});
+
+	test("…and the mirror case: a +60 number is foreign in Singapore", () => {
+		// The Johor cross-border buyer, in the other direction. It only became
+		// reachable when SG got riders, and it must fail the same way.
+		expect(toLalamoveContactPhone("60123456789", "SG")).toBeNull();
+	});
+
+	test("SG length is exact — 65 plus eight digits, no more", () => {
+		expect(toLalamoveContactPhone("658181532", "SG")).toBeNull();
+		expect(toLalamoveContactPhone("65818153210", "SG")).toBeNull();
 	});
 
 	test("rejects junk: empty, undefined, too short/long", () => {
-		expect(toLalamoveMyPhone(undefined)).toBeNull();
-		expect(toLalamoveMyPhone("")).toBeNull();
-		expect(toLalamoveMyPhone("60123")).toBeNull();
-		expect(toLalamoveMyPhone("6012345678901234")).toBeNull();
+		expect(toLalamoveContactPhone(undefined, "MY")).toBeNull();
+		expect(toLalamoveContactPhone("", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("60123", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("6012345678901234", "MY")).toBeNull();
 		// "60" prefix but the number is actually a landline-length stub
-		expect(toLalamoveMyPhone("603123")).toBeNull();
+		expect(toLalamoveContactPhone("603123", "MY")).toBeNull();
+	});
+});
+
+describe("lalamoveMarketForCountry", () => {
+	test("maps the store's country to its market", () => {
+		expect(lalamoveMarketForCountry("MY")).toBe("MY");
+		expect(lalamoveMarketForCountry("SG")).toBe("SG");
+	});
+
+	test("an unknown or missing country falls back to MY, never to nothing", () => {
+		// A request with no Market header is rejected outright, so the fallback
+		// has to be a real market. MY is the one every existing store is in.
+		expect(lalamoveMarketForCountry(undefined)).toBe("MY");
+		expect(lalamoveMarketForCountry("ID")).toBe("MY");
 	});
 });
 
@@ -563,10 +616,13 @@ describe("decryptLalamoveCredentials (86eyn25gk)", () => {
 			btoa("0123456789abcdef0123456789abcdef"),
 		);
 		try {
-			const stored = resolveLalamoveCredentials({
-				apiKey: await encryptSecret("pk_test_abc"),
-				apiSecret: await encryptSecret("sk_test_abc"),
-			});
+			const stored = resolveLalamoveCredentials(
+				{
+					apiKey: await encryptSecret("pk_test_abc"),
+					apiSecret: await encryptSecret("sk_test_abc"),
+				},
+				"MY",
+			);
 			expect(stored).not.toBeNull();
 			expect(stored?.env).toBe("production");
 			const live = await decryptLalamoveCredentials(stored!);
@@ -574,6 +630,7 @@ describe("decryptLalamoveCredentials (86eyn25gk)", () => {
 				apiKey: "pk_test_abc",
 				apiSecret: "sk_test_abc",
 				env: "sandbox",
+				market: "MY",
 			});
 		} finally {
 			vi.unstubAllEnvs();
@@ -585,8 +642,10 @@ describe("decryptLalamoveCredentials (86eyn25gk)", () => {
 			apiKey: "pk_test_x",
 			apiSecret: "sk_x",
 			env: "sandbox",
+			market: "MY",
 		});
 		expect(live).toEqual({
+			market: "MY",
 			apiKey: "pk_test_x",
 			apiSecret: "sk_x",
 			env: "sandbox",
@@ -647,3 +706,55 @@ describe("resolveDispatchSchedule — seller pickup-time override (86eyp5qd1)", 
 		});
 	});
 });
+
+describe("the Market header follows the store, not the module (z8r3fdch3r)", () => {
+	// The constant this replaces is what hid Lalamove from Singapore sellers:
+	// Lalamove serves SG, our integration didn't. A request carrying the wrong
+	// market prices and dispatches in the wrong country.
+	test("an SG store's credentials sign SG requests", async () => {
+		const headers = await buildLalamoveHeaders({
+			credentials: {
+				apiKey: "pk_test_k",
+				apiSecret: "sk_test_s",
+				market: "SG",
+			},
+			method: "POST",
+			path: "/v3/quotations",
+			body: "{}",
+			timestamp: 1234,
+			requestId: "rid-sg",
+		});
+		expect(headers.Market).toBe("SG");
+	});
+
+	test("the market rides on the credentials, resolved from the store", () => {
+		const sg = resolveLalamoveCredentials(
+			{ apiKey: "pk_test_abc", apiSecret: "sk_x" },
+			"SG",
+		);
+		expect(sg?.market).toBe("SG");
+		const my = resolveLalamoveCredentials(
+			{ apiKey: "pk_test_abc", apiSecret: "sk_x" },
+			"MY",
+		);
+		expect(my?.market).toBe("MY");
+	});
+
+	test("decryption preserves the market — it comes from the store, not the key", async () => {
+		const live = await decryptLalamoveCredentials({
+			apiKey: "pk_test_x",
+			apiSecret: "sk_x",
+			env: "sandbox",
+			market: "SG",
+		});
+		expect(live.market).toBe("SG");
+	});
+
+	test("hasLalamoveCredentials answers 'connected?' without inventing a country", () => {
+		expect(
+			hasLalamoveCredentials({ apiKey: "pk_test_a", apiSecret: "sk_b" }),
+		).toBe(true);
+		expect(hasLalamoveCredentials({ apiKey: "pk_test_a" })).toBe(false);
+		expect(hasLalamoveCredentials(undefined)).toBe(false);
+	});
+})

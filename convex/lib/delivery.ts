@@ -91,6 +91,16 @@ export type DeliveryConfig =
 			onUnpriceable: "block" | "arrange";
 	  }
 	| {
+			/** Provider-aware live pricing (z8r3fdbvdy): quote every booking
+			 * provider the store has ARMED and charge the higher, so the fee
+			 * collected at checkout covers whichever tool dispatch uses. The
+			 * single-provider case is what `mode: "lalamove"` below always was —
+			 * that arm stays until stored rows migrate. */
+			mode: "live";
+			/** Vestigial for the same reason as the arm below: always "block". */
+			onUnquotable: "arrange" | "block";
+	  }
+	| {
 			mode: "lalamove";
 			/** VESTIGIAL (27 Jul 2026, Zaki): lalamove mode now ALWAYS refuses an
 			 * order without a live quote — a seller who picked Lalamove must never
@@ -105,7 +115,8 @@ export type DeliveryConfig =
  * Delivery pricing modes a store COUNTRY may use (SG-lite, 86eynw29u).
  * "Free" is spelled as no config, so it's implicitly allowed everywhere.
  * SG stores are flat-fee-only for now: radius/weight zone geography and the
- * Lalamove integration (`LALAMOVE_MARKET = "MY"`) are all Malaysia-shaped, so
+ * Lalamove integration (whose market gate is COUNTRY_RIDER_BOOKING) are all
+ * Malaysia-shaped today, so
  * storing one of those modes on an SG store would strand every order as
  * fee-pending or block checkout outright. One author for three enforcement
  * points: `retailers.updateSettings` (the write gate), `orders.create`'s
@@ -115,8 +126,13 @@ export const COUNTRY_DELIVERY_MODES: Record<
 	Country,
 	ReadonlyArray<DeliveryConfig["mode"]>
 > = {
-	MY: ["flat", "radius", "weight", "lalamove"],
-	SG: ["flat"],
+	MY: ["flat", "radius", "weight", "lalamove", "live"],
+	// SG: "live" arrived with Lalamove SG (z8r3fdch3r) — riders cover every
+	// SG→SG address, so live pricing has a provider that can actually quote.
+	// Distance and weight-zone stay MY-only (their zone geography is
+	// Malaysia-shaped), and the legacy "lalamove" literal is deliberately
+	// absent: SG stores were never on it, so nothing exists to migrate.
+	SG: ["flat", "live"],
 };
 
 export function deliveryModeAllowed(
@@ -134,9 +150,18 @@ export function deliveryModeAllowed(
  * still dispatch riders — the `pricing ⊥ booking` rule). Derive one from the
  * other and the next country's decision gets made silently by a mode list.
  *
- * It happens to encode the SAME market fact — our integration is hardcoded to
- * Lalamove Malaysia (`LALAMOVE_MARKET = "MY"`, and `toLalamoveMyPhone` rejects
- * a +65 number outright) — but it is enforced in a different place: the
+ * SG went TRUE with z8r3fdch3r. The blockers were ours, and each was closed
+ * with evidence, not hope: the Market header now follows the store
+ * (`lalamoveMarketForCountry`), `toLalamoveContactPhone` accepts each
+ * market's own numbers, SGD's one-decimal amounts already parse correctly,
+ * SG shares UTC+8 so the MYT helpers hold, and our two hardcoded
+ * serviceTypes (MOTORCYCLE, CAR) appear verbatim in Lalamove's own published
+ * SG catalogue (developers.lalamove.com specialRequests SG sheet — SG's full
+ * set is MOTORCYCLE/CAR/MINIVAN/MPV/VAN/TRUCK330/TRUCK550). What remains
+ * unproven is only a live end-to-end run on an SG key, and every failure on
+ * that path already surfaces with named reasons rather than dead ends.
+ *
+ * It is enforced in a different place from the mode list: the
  * country-switch guard in `retailers.updateSettings`. Without it an MY store on
  * FLAT pricing with booking on switched to SG cleanly and kept Book-a-rider and
  * prompt-book-on-packed armed, so every quote failed at the point of spend
@@ -145,7 +170,7 @@ export function deliveryModeAllowed(
  */
 export const COUNTRY_RIDER_BOOKING: Record<Country, boolean> = {
 	MY: true,
-	SG: false,
+	SG: true,
 };
 
 export function riderBookingAllowed(country: Country): boolean {
@@ -197,6 +222,7 @@ export const DELIVERY_MODE_LABELS: Record<DeliveryConfig["mode"], string> = {
 	radius: "distance-based",
 	weight: "weight-zone",
 	lalamove: "Lalamove live-quote",
+	live: "live courier price",
 };
 
 export type Coordinates = { latitude: number; longitude: number };
@@ -221,7 +247,25 @@ export type DeliveryQuoteReason =
 	| "unserved_state"
 	| "over_bands"
 	| "missing_weights"
-	| "custom_item";
+	| "custom_item"
+	/** Live pricing (z8r3fdbvdy): the cart needs a cold chain and no armed
+	 * courier carries one. The ADDRESS is fine — distinct from out_of_range so
+	 * the copy never sends the buyer editing something that isn't the problem,
+	 * and riders are never substituted (no temperature guarantee). */
+	| "no_cold_service";
+
+/**
+ * The STORED pending reason is narrower than the resolver's union: a
+ * cold-chain block refuses checkout rather than landing the order fee-pending
+ * (a frozen cart must never quietly become "seller will confirm the charge"),
+ * so `no_cold_service` can never be persisted. One converter, so the three
+ * order-creating call sites can't disagree about that.
+ */
+export function storablePendingReason(
+	reason: DeliveryQuoteReason | undefined,
+): Exclude<DeliveryQuoteReason, "no_cold_service"> | undefined {
+	return reason === "no_cold_service" ? undefined : reason;
+}
 
 /**
  * Resolution result. "free" carries an optional reason so the storefront can
@@ -236,13 +280,21 @@ export type DeliveryQuote =
 	| {
 			kind: "fee";
 			fee: number;
-			mode: "flat" | "radius" | "weight" | "lalamove";
+			mode: "flat" | "radius" | "weight" | "lalamove" | "live";
 			distanceKm?: number;
 			bandMaxKm?: number;
 			/** Weight-mode audit trail (mode "weight" only). */
 			zoneName?: string;
 			chargeableKg?: number;
 			bandMaxKg?: number;
+			/** Live modes: which provider set the price, and everyone who bid. */
+			quoteProvider?: "lalamove" | "delyva";
+			quoteServiceName?: string;
+			quotesConsidered?: Array<{
+				provider: "lalamove" | "delyva";
+				fee: number;
+				currency: string;
+			}>;
 			/** Provider-quote audit trail (mode "lalamove" only) — frozen onto the
 			 * order snapshot; dispatch always re-quotes, so never a booking input. */
 			quotationId?: string;
@@ -256,8 +308,23 @@ export type DeliveryQuote =
  * action — resolveDeliveryQuote only TRUSTS it, it never fetches. */
 export type LiveProviderQuote = {
 	fee: number;
-	quotationId: string;
-	vehicleType: string;
+	/** Which provider's price this is (z8r3fdbvdy). Absent on rows minted
+	 * before live pricing became provider-aware — those are Lalamove's. */
+	provider?: "lalamove" | "delyva";
+	/** Lalamove binds its price to a 5-minute quotation id; Delyva's prices
+	 * are indicative and carry none, so both audit fields are optional. */
+	quotationId?: string;
+	vehicleType?: string;
+	/** Delyva only: which service in its list set the price. */
+	serviceCode?: string;
+	serviceName?: string;
+	/** Every quote that competed, winner included — the "why was I charged
+	 * this" trail, frozen onto the order at create. */
+	considered?: Array<{
+		provider: "lalamove" | "delyva";
+		fee: number;
+		currency: string;
+	}>;
 	quotedAt: number;
 };
 
@@ -367,7 +434,11 @@ export function resolveDeliveryQuote(args: {
 		args;
 	if (!config) return { kind: "free" };
 
-	if (config.mode === "lalamove") {
+	// Both live modes resolve identically here: by the time a quote row exists
+	// the cross-provider comparison has already been made (chooseLiveQuote),
+	// so this layer only freezes the winning fee. Keeping them one branch is
+	// what makes "live" a true superset rather than a parallel code path.
+	if (config.mode === "lalamove" || config.mode === "live") {
 		if (liveQuote) {
 			// A zero-fee provider quote doesn't exist in practice; treat 0 as
 			// free rather than storing a zero-fee snapshot (one spelling of free).
@@ -375,10 +446,13 @@ export function resolveDeliveryQuote(args: {
 			return {
 				kind: "fee",
 				fee: liveQuote.fee,
-				mode: "lalamove",
+				mode: config.mode,
 				quotationId: liveQuote.quotationId,
 				vehicleType: liveQuote.vehicleType,
 				quotedAt: liveQuote.quotedAt,
+				quoteProvider: liveQuote.provider,
+				quoteServiceName: liveQuote.serviceName,
+				quotesConsidered: liveQuote.considered,
 			};
 		}
 		// No live quote → ALWAYS refuse (27 Jul, Zaki — `onUnquotable` ignored):
@@ -493,11 +567,11 @@ function assertFeeSen(raw: number, label: string, min: number): number {
  * of 0 is rejected rather than stored.
  */
 export function sanitizeDeliveryConfig(raw: DeliveryConfig): DeliveryConfig {
-	if (raw.mode === "lalamove") {
+	if (raw.mode === "lalamove" || raw.mode === "live") {
 		// Nothing numeric to normalize — the fee is always provider-quoted live.
 		// `onUnquotable` is vestigial (always-block behavior); normalize stored
 		// rows to "block" on save so the data reads truthfully.
-		return { mode: "lalamove", onUnquotable: "block" };
+		return { mode: raw.mode, onUnquotable: "block" };
 	}
 	if (raw.mode === "flat") {
 		const fee = assertFeeSen(raw.fee, "Delivery fee", 1);

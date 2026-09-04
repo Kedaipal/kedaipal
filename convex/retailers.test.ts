@@ -2029,13 +2029,26 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 				deliveryConfig: weightConfig,
 			}),
 		).rejects.toThrow(/Malaysia-only/);
-		// Lalamove must hit the COUNTRY refusal, not "turn on booking first" —
-		// the booking-credentials chase is a dead path for an SG seller.
+		// The legacy single-provider "lalamove" literal stays refused for SG —
+		// no SG store was ever on it, so there is nothing to migrate and no
+		// reason to accept new rows of a superseded mode.
 		await expect(
 			asSg.mutation(api.retailers.updateSettings, {
 				deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
 			}),
 		).rejects.toThrow(/Malaysia-only/);
+	});
+
+	test("an SG store CAN store live courier pricing (z8r3fdch3r)", async () => {
+		// Lalamove SG riders opened the gate: live pricing has a provider that
+		// can genuinely quote every SG→SG address, so the mode is earned.
+		const t = setup();
+		const asSg = await seedSg(t, "sg-live-mode");
+		await asSg.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "live", onUnquotable: "block" },
+		});
+		const mine = await asSg.query(api.retailers.getMyRetailer);
+		expect(mine?.deliveryConfig?.mode).toBe("live");
 	});
 
 	test("flipping to SG KEEPS an MY-only config — it is listed, not destroyed (86eyqgujv)", async () => {

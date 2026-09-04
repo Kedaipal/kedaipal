@@ -727,6 +727,8 @@ export function CheckoutPage({
 	const isLiveMode = rawQuote?.kind === "live";
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode,
+		// The STORE's mode decides which action prices it — never inferred here.
+		providerAware: rawQuote?.kind === "live" && rawQuote.providerAware,
 		retailerId,
 		latitude: hasCoords ? latNum : undefined,
 		longitude: hasCoords ? lngNum : undefined,
@@ -741,6 +743,21 @@ export function CheckoutPage({
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
 		},
+		// Delyva prices on the written postcode rather than the map pin, so the
+		// structured parts ride along; Lalamove ignores them.
+		getAddressParts: () => {
+			const a = form.store.state.values.address;
+			return {
+				city: a.city?.trim() || undefined,
+				state: displayAddressState(a) || undefined,
+				postcode: a.postcode?.trim() || undefined,
+			};
+		},
+		// Which lines are in the cart — the server re-reads their weights.
+		items: cart.items.map((item) => ({
+			variantId: item.variantId,
+			quantity: item.quantity,
+		})),
 		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
 		fulfilmentTimeMinutes: watchedTimeMinutes,
 	});
@@ -771,6 +788,11 @@ export function CheckoutPage({
 			// but the fix is the STORE's, so the copy points there.
 			case "store_unavailable":
 				return { kind: "blocked", reason: "store_unavailable" };
+			// Cold chain: the address is fine and retrying won't help — only the
+			// STORE can fix it, so it gets its own reason rather than borrowing
+			// "too far", which would send the buyer editing a good address.
+			case "no_cold_service":
+				return { kind: "blocked", reason: "no_cold_service" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -802,7 +824,8 @@ export function CheckoutPage({
 		(quoteForDelivery.reason === "no_coords" ||
 			quoteForDelivery.reason === "unquotable" ||
 			quoteForDelivery.reason === "out_of_range" ||
-			quoteForDelivery.reason === "store_unavailable");
+			quoteForDelivery.reason === "store_unavailable" ||
+			quoteForDelivery.reason === "no_cold_service");
 	const allowManualAddressEntry =
 		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 
@@ -1052,6 +1075,15 @@ export function CheckoutPage({
 														? " Pickup is still available."
 														: ""
 												}`;
+									case "no_cold_service":
+										// Temperature-controlled goods with no cold courier
+										// available. Never blame the address, and never imply a
+										// retry — the seller has to arrange it.
+										return `${storeName} can't ship chilled or frozen items to this address right now.${
+											selfCollectAvailable
+												? " Pickup is still available, or message"
+												: " Message"
+										} ${storeName} to arrange delivery.`;
 									case "store_unavailable":
 										// Seller-side breakage — not the buyer's fault, not
 										// fixable by retrying. Give them the two real ways out.

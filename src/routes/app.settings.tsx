@@ -45,7 +45,6 @@ import {
 	DELIVERY_MODE_LABELS,
 	type DeliveryConfig,
 	deliveryModeAllowed,
-	riderBookingAllowed,
 } from "../../convex/lib/delivery";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
@@ -2591,9 +2590,10 @@ function CountryForm({
 									`your ${DELIVERY_MODE_LABELS[deliveryConfig.mode]} delivery pricing stops quoting (it's kept, and works again if you switch back)`,
 								]
 							: []),
-						...(deliveryBooking?.enabled === true &&
-						!riderBookingAllowed(picked)
-							? ["Lalamove booking goes quiet (your API keys are kept)"]
+						...(deliveryBooking?.enabled === true
+							? [
+									"your Lalamove keys stop working — they belong to this market, and riders in the new one need keys created for it",
+								]
 							: []),
 						...(staleNumber(picked, waPhone)
 							? ["your store's WhatsApp number stays a foreign number"]
