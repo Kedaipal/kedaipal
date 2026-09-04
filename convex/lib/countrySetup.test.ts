@@ -53,9 +53,11 @@ describe("resolveCountrySetup", () => {
 			}),
 		);
 		expect(items.map((i) => i.key)).toEqual([
+			// delivery_booking is money-severity since z8r3fdch3r: wrong-market
+			// keys fail at the point of SPEND, which outranks a cosmetic address.
 			"payment_methods",
-			"business_address",
 			"delivery_booking",
+			"business_address",
 			"wa_phone",
 		]);
 		expect(hasMoneyRisk(items)).toBe(true);
@@ -121,7 +123,10 @@ describe("resolveCountrySetup", () => {
 
 	test("an MY store that switched BACK sees MY rules, not SG ones", () => {
 		// The module reads the CURRENT country, so a round trip home clears
-		// everything that only failed because the store was abroad.
+		// everything that only failed because the store was abroad — EXCEPT the
+		// Lalamove-keys row (z8r3fdch3r): keys are per market and we can't see
+		// which market a stored key belongs to, so any switch raises it and the
+		// seller confirms. It is ackable for exactly that reason.
 		const items = resolveCountrySetup(
 			input({
 				country: "MY",
@@ -131,7 +136,18 @@ describe("resolveCountrySetup", () => {
 				businessAddress: { country: "MY" },
 			}),
 		);
-		expect(items).toEqual([]);
+		expect(items.map((i) => i.key)).toEqual(["delivery_booking"]);
+		const acked = resolveCountrySetup(
+			input({
+				country: "MY",
+				deliveryConfigMode: "weight",
+				deliveryBookingEnabled: true,
+				waPhone: "60123456789",
+				businessAddress: { country: "MY" },
+				acked: ["delivery_booking"],
+			}),
+		);
+		expect(acked).toEqual([]);
 	});
 });
 
@@ -160,10 +176,9 @@ describe("acknowledgement can never hide a fact", () => {
 				acked: ["business_address", "delivery_booking", "wa_phone"],
 			}),
 		);
-		expect(items.map((i) => i.key)).toEqual([
-			"business_address",
-			"delivery_booking",
-		]);
+		// delivery_booking became ackable with z8r3fdch3r (we can't verify a
+		// key's market), so the tick retires it; the stamped address survives.
+		expect(items.map((i) => i.key)).toEqual(["business_address"]);
 	});
 
 	test("ackableKeys never offers a verifiable key to the ack mutation", () => {
@@ -174,7 +189,9 @@ describe("acknowledgement can never hide a fact", () => {
 				deliveryBookingEnabled: true,
 			}),
 		);
-		expect(ackableKeys(items)).toEqual(["payment_methods"]);
+		// delivery_booking is ackable now (z8r3fdch3r) — key market is the
+		// seller's knowledge, not ours; the stamped address stays off the list.
+		expect(ackableKeys(items)).toEqual(["payment_methods", "delivery_booking"]);
 	});
 
 	test("money risk is gone once the money rows are confirmed", () => {

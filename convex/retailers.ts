@@ -220,7 +220,7 @@ import {
 	type CountrySetupItem,
 	resolveCountrySetup,
 } from "./lib/countrySetup";
-import { inferLalamoveEnv, resolveLalamoveCredentials } from "./lib/lalamove";
+import { hasLalamoveCredentials, inferLalamoveEnv } from "./lib/lalamove";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -397,7 +397,7 @@ function summarizeDeliveryBooking(
 	return {
 		enabled: booking.enabled,
 		vehicleType: booking.vehicleType,
-		hasCredentials: resolveLalamoveCredentials(booking) !== null,
+		hasCredentials: hasLalamoveCredentials(booking),
 		promptBookOnPacked: booking.promptBookOnPacked === true,
 		deliveryDirection: booking.deliveryDirection ?? "standard",
 		// Stored hint first (86eyn25gk — the key may be ciphertext); slicing is
@@ -1871,7 +1871,7 @@ export const updateSettings = mutation({
 						DEFAULT_COUNTRY;
 					if (!riderBookingAllowed(effectiveCountry)) {
 						throw new ConvexError(
-							"Lalamove rider booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+							"Lalamove rider booking isn't available for your store's country yet — arrange your own courier and record the tracking number on the order.",
 						);
 					}
 					const effectiveAddress =
@@ -1885,7 +1885,7 @@ export const updateSettings = mutation({
 					}
 					// BYO-only: the seller's own key pair is required — Kedaipal has
 					// no Lalamove account and never books on a seller's behalf.
-					if (!resolveLalamoveCredentials(clean)) {
+					if (!hasLalamoveCredentials(clean)) {
 						throw new ConvexError(
 							"Add your Lalamove API key and secret to enable delivery booking.",
 						);
