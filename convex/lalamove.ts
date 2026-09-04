@@ -903,7 +903,7 @@ function friendlyBookingError(
 			case "quote_expired":
 				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
 			case "bad_phone":
-				return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+				return "Lalamove rejected a contact phone number — riders need a local mobile number for your store's country (+60 in Malaysia, +65 in Singapore). Check your WhatsApp number in Settings → Store.";
 			case "out_of_range":
 				return "Lalamove doesn't serve this drop-off address. The order needs to go out another way.";
 		}

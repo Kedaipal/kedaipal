@@ -36,7 +36,7 @@ const BLOCK_COPY: Record<DispatchBlock, string> = {
 	no_buyer_phone:
 		"This order has no buyer WhatsApp number for the rider to contact.",
 	no_seller_phone:
-		"Add a Malaysian (+60) WhatsApp number in Settings → Store first — Lalamove riders need a local pickup contact.",
+		"Add a local WhatsApp number for your store's country in Settings → Store first (+60 in Malaysia, +65 in Singapore) — Lalamove riders need a local pickup contact.",
 };
 
 /** Generic line for a reason outside the `DispatchBlock` union — the booking

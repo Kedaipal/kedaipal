@@ -931,23 +931,46 @@ exists in both directions.
   (`NOON_MYT_OFFSET_MS`, `mytMidnightFromYmd`) are already correct for SG
   despite their names.
 
-### Why the gate is still OFF
+### The gate is OPEN (`COUNTRY_RIDER_BOOKING.SG = true`)
 
-`COUNTRY_RIDER_BOOKING.SG` remains `false`. The reason has changed shape: it
-is no longer "the integration is hardcoded to Malaysia" — that is fixed — it
-is simply **unverified**. Two things must happen first:
+Every blocker was closed with evidence rather than a sandbox run, because no
+SG sandbox account could be created (4 Sep, Zaki) and the ticket's whole point
+is SG vendors using their live keys:
 
-1. **Service types.** Our union is `MOTORCYCLE | CAR`, from the MY catalogue.
-   Lalamove explicitly says not to hardcode these — query `GET /v3/cities`
-   with `Market: SG` and use what it returns, re-checking periodically. Needs
-   an SG-market key.
-2. **A sandbox run** on an SG key: quote → book → webhook, end to end.
+- **Service types**: Lalamove's own published SG catalogue
+  (developers.lalamove.com, `specialRequests_Key_Update_2023_SG.pdf`) lists
+  SG's API serviceTypes as `MOTORCYCLE`, `CAR`, `MINIVAN`, `MPV`, `VAN`,
+  `TRUCK330`, `TRUCK550` — **both of ours appear verbatim**, so the hardcoded
+  union cannot 422 an SG quote. (SG's Courier tier IS `MOTORCYCLE` in the
+  API even though the app calls it "Courier".)
+- **Money**: SGD's one-decimal amounts already parse (`"10.5"` → 1050).
+- **Phones**: `toLalamoveContactPhone` accepts +65 in the SG market.
+- **Timezone**: SG is UTC+8 — the MYT helpers hold.
+- **Failure posture**: an SG store with a wrong setup gets a NAMED reason at
+  every step (`no_seller_phone`, `out_of_range`, the market-neutral
+  `bad_phone` copy), never a dead end — so a live-first vendor run degrades
+  to a clear message, not a mystery.
 
-When it flips, sweep the surfaces that branch on it: `riderOnlyStore`, the
-Courier-booking toggle row (hidden entirely for SG today), the dispatch card's
-`country_unsupported` posture, and `dispatchBlockReason`'s country-first
-branch. `COUNTRY_DELIVERY_MODES.SG` can then also gain `"live"` (that literal
-lives in z8r3fdbvdy).
+What the flip changed on each surface: the Courier-booking row renders for SG
+(same toggle as MY), `updateSettings` accepts enabling booking on an SG store,
+`dispatchBlockReason` proceeds past the country check, and `bookingEnabled` /
+`riderOnlyStore` read true where earned. Copy that named Malaysia
+(`no_seller_phone`, the `bad_phone` booking failure, the SG mode-grid line)
+is market-neutral now.
+
+**Cross-market keys are the one new hazard.** Lalamove issues API keys per
+market app, so a store that switches country keeps booking armed while its
+stored keys belong to the old market — quotes then fail at the point of use.
+The country-switch checklist's `delivery_booking` item now covers exactly
+this (money severity, ACKABLE — we cannot see which market a stored key was
+created for, so the seller confirms), and the switch dialog warns in the same
+sentence.
+
+**Still genuinely unverified: one live SG booking end to end.** The first SG
+vendor run is the verification. If anything surprises, it will surface as a
+named quote/booking failure on their dispatch card — collect the message and
+it locates the layer immediately. `COUNTRY_DELIVERY_MODES.SG` gaining
+`"live"` pricing waits for z8r3fdbvdy to merge (one line there).
 
 ## Sandbox E2E — verified 21 Jul 2026
 

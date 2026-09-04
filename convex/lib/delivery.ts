@@ -135,14 +135,16 @@ export function deliveryModeAllowed(
  * still dispatch riders — the `pricing ⊥ booking` rule). Derive one from the
  * other and the next country's decision gets made silently by a mode list.
  *
- * SG is FALSE for a reason that has changed shape (z8r3fdch3r). It used to be
- * "our integration is hardcoded to Malaysia" — a module constant for the
- * market and a phone helper that rejected +65 outright. Both are gone: the
- * market now travels with the store (`lalamoveMarketForCountry`) and
- * `toLalamoveContactPhone` accepts each market's own numbers. What is left is
- * simply UNVERIFIED — no SG sandbox run has proven a quote, a booking and a
- * webhook end to end, and the service-type catalogue is still the MY one. Flip
- * this the day that run passes, not before.
+ * SG went TRUE with z8r3fdch3r. The blockers were ours, and each was closed
+ * with evidence, not hope: the Market header now follows the store
+ * (`lalamoveMarketForCountry`), `toLalamoveContactPhone` accepts each
+ * market's own numbers, SGD's one-decimal amounts already parse correctly,
+ * SG shares UTC+8 so the MYT helpers hold, and our two hardcoded
+ * serviceTypes (MOTORCYCLE, CAR) appear verbatim in Lalamove's own published
+ * SG catalogue (developers.lalamove.com specialRequests SG sheet — SG's full
+ * set is MOTORCYCLE/CAR/MINIVAN/MPV/VAN/TRUCK330/TRUCK550). What remains
+ * unproven is only a live end-to-end run on an SG key, and every failure on
+ * that path already surfaces with named reasons rather than dead ends.
  *
  * It is enforced in a different place from the mode list: the
  * country-switch guard in `retailers.updateSettings`. Without it an MY store on
@@ -153,7 +155,7 @@ export function deliveryModeAllowed(
  */
 export const COUNTRY_RIDER_BOOKING: Record<Country, boolean> = {
 	MY: true,
-	SG: false,
+	SG: true,
 };
 
 export function riderBookingAllowed(country: Country): boolean {

@@ -1871,7 +1871,7 @@ export const updateSettings = mutation({
 						DEFAULT_COUNTRY;
 					if (!riderBookingAllowed(effectiveCountry)) {
 						throw new ConvexError(
-							"Lalamove rider booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+							"Lalamove rider booking isn't available for your store's country yet — arrange your own courier and record the tracking number on the order.",
 						);
 					}
 					const effectiveAddress =

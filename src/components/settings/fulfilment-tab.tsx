@@ -1066,8 +1066,9 @@ function DeliveryChargeSection({
 			</div>
 			{myOnlyModesHidden ? (
 				<p className="text-xs text-muted-foreground">
-					Distance, weight-zone and Lalamove pricing are Malaysia-only for now —
-					Singapore stores deliver free or at a flat fee.
+					Distance, weight-zone and live Lalamove pricing are Malaysia-only for
+					now — Singapore stores deliver free or at a flat fee. Rider{" "}
+					<b>booking</b> still works: turn it on under Courier booking below.
 				</p>
 			) : null}
 			{storedModeUnavailable ? (
