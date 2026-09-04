@@ -191,6 +191,111 @@ starts once payment lands, never at issue time. Founding members
 auto-get their lifetime discount: the issue form detects `isFoundingMember` and force-applies
 (and locks) the founding toggle, so Arif can't accidentally bill them full price on a renewal.
 
+## Annual billing — the in-app offer (Sep 2026)
+
+Annual is **10 months charged, 12 received** (`ANNUAL_MONTHS_CHARGED`), framed to
+sellers as **"2 months free"** and never as a percentage. Every annual number on
+every surface comes from **`annualQuote(plan, founding, currency)`** in
+`convex/lib/plans.ts` — `annualTotal` *is* `planPrice(plan, "annual", …)`, pinned
+by a test, because the two used to disagree (see `docs/pricing.md`).
+
+**Why annual is sold here and not on `/pricing`.** Manual billing has no
+self-serve checkout, so a public annual price is a dead-end CTA — the standing
+reason `SHOW_ANNUAL_TOGGLE` stays `false`. But a *year* is a single bank
+transfer, which is exactly what these rails already do well: one annual seller
+costs one billing event a year instead of twelve. So the offer lives in the
+seller's own **Settings → Billing**, as a prefilled WhatsApp message like every
+other billing action in that tab.
+
+### Who is offered it (`src/lib/annual-billing.ts`)
+
+`resolveAnnualOffer` is a pure ladder, first match wins. The **order is
+load-bearing** and each rung is a unit test:
+
+| # | Condition | State |
+| --- | --- | --- |
+| 1 | Admin on their own store | `hidden` |
+| 2 | No subscription row | `hidden` |
+| 3 | `comped` | `hidden` |
+| 4 | A **pending invoice already `annual`** | `pendingAnnual` |
+| 5 | `subscription.billingCycle === "annual"` | `onAnnual` |
+| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro only**) | `hidden` |
+| 7 | `status !== "active"` | `hidden` |
+| 8 | Fewer than `ANNUAL_MIN_PAID_INVOICES` (**2**) paid invoices | `hidden` |
+| 9 | Pending monthly invoice due in `< ANNUAL_SWAP_MIN_DAYS` (**4**) | `switchDeferred` |
+| 10 | Pending monthly invoice | `switchInstead` |
+| 11 | — | `offer` |
+
+Three of those rungs exist because of a specific failure:
+
+- **Rung 4 before everything.** `issueInvoice` deliberately never touches the
+  subscription, so a seller who accepted yesterday still reads
+  `billingCycle: "monthly"` for the whole 14-day window. Without this rung the
+  card keeps selling what they just bought, they ask again, and `issueInvoice`
+  throws *"already has a pending invoice"* at the admin.
+- **Rung 5 before the plan gate.** A seller already billed annually is told so on
+  **any** plan. Hiding a true fact about their own billing because their tier is
+  off-list is a lie by omission.
+- **Rung 6 is Pro only.** Starter is excluded by owner decision (a year upfront
+  contradicts start-when-you-sell). **Scale is excluded because `issueInvoice`
+  throws on it** — offering it would reproduce in-app the dead-end CTA we refuse
+  to ship publicly. Add `"scale"` in the same change that makes Scale
+  purchasable (`z8r3fday24`). A Starter seller is still *told* annual exists, and
+  *why not on Starter*, in the Starter → Pro nudge.
+
+Currency comes from the seller's **own most recent paid invoice**, never visitor
+geo — they have already told us what we bill them in, and a VPN must not
+re-price a subscription. Founding members are quoted `annualQuote(plan, true, …)`,
+i.e. 10 × their discounted rate.
+
+### The swap runbook (rung 9/10)
+
+An open invoice is the **best** moment to sell a year, not a blocker: nothing has
+been collected, so switching costs the seller nothing. `issueInvoice` refuses a
+second pending invoice, so the swap is **void-then-reissue**:
+
+1. The seller messages from the card. The prefilled text carries the invoice
+   number and their own words *"I haven't paid it yet"*.
+2. **Confirm in chat that nothing has been transferred** before voiding.
+3. Void the monthly invoice, then issue the annual one (founding toggle ticked
+   if their message says *"at my Founding Member rate"*).
+
+**Why the 4-day floor.** Voiding leaves a window with no pending invoice, and the
+daily cron flips an active seller to `past_due` — soft-locking their dashboard —
+both when a pending invoice passes its due date **and when the period lapses with
+nothing pending**. Close to the due date the swap could therefore lock the
+account of the seller most willing to pay us. Inside four days the card degrades
+to `switchDeferred`, states the reason, and asks them to pay the current invoice
+as normal.
+
+If a swap cannot be completed before the due date, tell the seller to pay the
+monthly invoice and switch at the next renewal.
+
+### Credit, not refund
+
+There is **no proration anywhere in the codebase** and no credit-balance field.
+The card states, above the CTA: a year already paid isn't refunded in cash; if
+they change plan or stop part-way, the unused months are credited to the new plan
+or the next invoice. That is deliberately scoped to something a human can honour
+by hand at the next issue — it never quantifies, because any arithmetic would
+imply a calculation the system cannot perform.
+
+### Known gaps this offer depends on
+
+- **The annual renewal chase does not exist.** `internalDailyBillingStatus` logs
+  a `console.info` three days before `currentPeriodEnd` — no email, no admin
+  surface. For a once-a-year four-figure renewal that log line is the entire
+  mechanism, and a missed one silently soft-locks the seller. The `onAnnual` card
+  therefore states the period end as a **fact** and deliberately promises no
+  reminder. Ship a 30-day annual renewal notice before this matters.
+- **No atomic swap.** Void-then-issue is two mutations with a gap between them.
+  An `invoices.switchInvoiceToAnnual` (needing `issueInvoiceInner` extracted so
+  the single-pending guard can be bypassed for exactly one path) would close it.
+- The admin issue form previews the **amount** and now the **coverage**, but the
+  invoice PDF still prints a period computed at *issue* time while entitlement
+  runs from *mark-paid* — on a year-long commitment the paper can be off by up to
+  the 14-day grace.
+
 ## Deferred / known gaps (manual-sub era — revisit for auto-sub)
 
 - **No cancellation flow.** The `cancelled` status exists but nothing reaches it; a churning

@@ -348,6 +348,7 @@ export const listPending = query({
 			dueDate: number;
 			createdAt: number;
 			plan: Plan;
+			billingCycle: BillingCycle;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -372,6 +373,12 @@ export const listPending = query({
 				dueDate: inv.dueDate,
 				createdAt: inv.createdAt,
 				plan: (inv.plan ?? sub?.plan ?? "pro") as Plan,
+				// Without this the admin console shows an annual and a monthly
+				// pending invoice identically except for the amount — while markPaid
+				// grants 365 days off this invisible field.
+				billingCycle: (inv.billingCycle ??
+					sub?.billingCycle ??
+					"monthly") as BillingCycle,
 			});
 		}
 		return rows;
