@@ -1738,7 +1738,7 @@ export const updateSettings = mutation({
 					DEFAULT_COUNTRY;
 				if (!deliveryModeAllowed(effectiveCountry, clean.mode)) {
 					throw new ConvexError(
-						"Distance, weight-zone and Lalamove pricing are Malaysia-only for now — Singapore stores can use Free or a Flat fee.",
+						"Distance and weight-zone pricing are Malaysia-only for now — Singapore stores can use Free, a Flat fee, or Live courier price.",
 					);
 				}
 				if (clean.mode === "radius") {

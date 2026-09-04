@@ -76,11 +76,15 @@ that is reported as a store-side gap, never as something the buyer can fix.
 
 ## Country posture
 
-`live` is **MY-only** for now. Neither provider can quote in Singapore today —
-Lalamove is gated to the MY market ([z8r3fdch3r](https://app.clickup.com/t/z8r3fdch3r))
-and Delyva SG ships an empty catalogue — so offering the mode there would sell
-SG sellers a switch that blocks every checkout. Adding SG to
-`COUNTRY_DELIVERY_MODES` is a one-line change the moment either lands.
+`live` works in **both markets**. It was MY-only for one day — "no provider
+can quote in SG" — until Lalamove SG opened
+([z8r3fdch3r](https://app.clickup.com/t/z8r3fdch3r)): riders cover every
+SG→SG address, so the justification died and `COUNTRY_DELIVERY_MODES.SG`
+gained `"live"`. Distance and weight-zone stay MY-only (their zone maps are
+Malaysia-shaped), and the legacy `"lalamove"` literal stays refused for SG —
+no SG store was ever on it, so there is nothing to migrate. An SG store's
+Delyva side simply never bids while its catalogue is empty; Lalamove prices
+alone, which is the single-provider case the rule already handles.
 
 ## Audit trail
 

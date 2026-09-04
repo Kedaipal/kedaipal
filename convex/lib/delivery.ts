@@ -127,12 +127,12 @@ export const COUNTRY_DELIVERY_MODES: Record<
 	ReadonlyArray<DeliveryConfig["mode"]>
 > = {
 	MY: ["flat", "radius", "weight", "lalamove", "live"],
-	// SG keeps flat only for now: "live" needs a provider that can actually
-	// quote there, and neither can today — Lalamove is gated to the MY market
-	// (z8r3fdch3r) and Delyva SG ships an empty catalogue. Adding it here
-	// before one of those lands would sell SG sellers a mode that blocks
-	// every checkout.
-	SG: ["flat"],
+	// SG: "live" arrived with Lalamove SG (z8r3fdch3r) — riders cover every
+	// SG→SG address, so live pricing has a provider that can actually quote.
+	// Distance and weight-zone stay MY-only (their zone geography is
+	// Malaysia-shaped), and the legacy "lalamove" literal is deliberately
+	// absent: SG stores were never on it, so nothing exists to migrate.
+	SG: ["flat", "live"],
 };
 
 export function deliveryModeAllowed(

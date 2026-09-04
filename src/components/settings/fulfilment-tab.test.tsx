@@ -460,15 +460,19 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 		);
 	}
 
-	it("an SG store sees only Free + Flat, with the reason on screen", () => {
+	it("an SG store sees Live + Free + Flat, with the MY-only pair explained", () => {
+		// Live pricing arrived with Lalamove SG (z8r3fdch3r) — only the
+		// geography-shaped modes stay Malaysian.
 		renderTab("SG");
+		expect(
+			screen.getByRole("button", { name: /live courier price/i }),
+		).toBeTruthy();
 		expect(screen.getByRole("button", { name: /Free/ })).toBeTruthy();
 		expect(screen.getByRole("button", { name: /Flat fee/ })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /By distance/ })).toBeNull();
 		expect(
 			screen.queryByRole("button", { name: /By weight & zone/ }),
 		).toBeNull();
-		expect(screen.queryByAltText("Lalamove")).toBeNull();
 		// The missing cards are explained, never a mystery.
 		expect(screen.getByText(/Malaysia-only for now/)).toBeTruthy();
 	});

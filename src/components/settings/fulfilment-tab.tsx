@@ -800,6 +800,10 @@ function DeliveryChargeSection({
 	// (convex/lib/delivery.ts COUNTRY_DELIVERY_MODES). The one-line reason
 	// below the grid says so, so the missing cards are never a mystery.
 	const myOnlyModesHidden = !deliveryModeAllowed(country, "radius");
+	// Gated separately from the MY-only pair: live pricing follows the
+	// booking providers (SG has Lalamove riders since z8r3fdch3r), while
+	// distance/weight-zone follow Malaysian geography.
+	const liveModeAvailable = deliveryModeAllowed(country, "live");
 	// Defensive: a stored MY-only mode on an SG store (pre-guard data) has no
 	// card to select — name the situation instead of showing nothing picked.
 	const storedModeUnavailable =
@@ -1019,10 +1023,10 @@ function DeliveryChargeSection({
 			    the wrong thing to a store that ships parcels. For a locked
 			    Starter it stays full-colour with a Pro chip + upgrade line
 			    (disabled-with-reason, not a washed-out ghost). SG stores see
-			    only Free + Flat (SG-lite) — the reason line below the grid
-			    names why the other modes are absent. */}
+			    Live + Free + Flat — distance and weight-zone stay MY-only, and
+			    the reason line below the grid names why. */}
 			<div className="grid grid-cols-2 gap-2">
-				{myOnlyModesHidden ? null : (
+				{!liveModeAvailable ? null : (
 					<button
 						type="button"
 						onClick={() => setMode("live")}
@@ -1098,9 +1102,9 @@ function DeliveryChargeSection({
 			</div>
 			{myOnlyModesHidden ? (
 				<p className="text-xs text-muted-foreground">
-					Distance, weight-zone and live Lalamove pricing are Malaysia-only for
-					now — Singapore stores deliver free or at a flat fee. Rider{" "}
-					<b>booking</b> still works: turn it on under Courier booking below.
+					Distance and weight-zone pricing are Malaysia-only for now — their
+					zone maps are Malaysia-shaped. Live courier price, Free and Flat all
+					work in Singapore.
 				</p>
 			) : null}
 			{storedModeUnavailable ? (
