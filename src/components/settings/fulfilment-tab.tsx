@@ -689,6 +689,81 @@ function ModeButton({
  * pick-one semantics visible at a glance. Decorative only: the button itself
  * carries aria-pressed.
  */
+/** One provider line in the live-mode "Priced by" block: logo, name, a
+ * five-word detail, and a STATUS CHIP instead of a paragraph. The chip is the
+ * whole point — connection state used to live in a separate Lalamove-only
+ * section a screen away, where its test-keys banner could show on a store
+ * with no Lalamove keys while a Delyva demo got no warning at all. */
+function ProviderPricingRow({
+	logo,
+	logoHeight,
+	name,
+	detail,
+	status,
+}: {
+	logo: string;
+	logoHeight: string;
+	name: string;
+	detail: string;
+	status: "live" | "test" | "connected" | "paused" | "off";
+}) {
+	const chip = {
+		live: {
+			label: "Live",
+			cls: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
+		},
+		test: {
+			label: "Test keys",
+			cls: "bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200",
+		},
+		connected: {
+			label: "Connected",
+			cls: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
+		},
+		paused: {
+			label: "Paused",
+			cls: "bg-muted text-muted-foreground",
+		},
+		off: {
+			label: "Not connected",
+			cls: "bg-muted text-muted-foreground",
+		},
+	}[status];
+	return (
+		<div className="flex items-center justify-between gap-3">
+			<span className="flex min-w-0 items-center gap-2">
+				<AppImage
+					src={logo}
+					alt=""
+					aspect={`${logoHeight} w-auto`}
+					fill={false}
+					className="shrink-0"
+				/>
+				<span className="truncate text-sm">
+					{name}{" "}
+					<span className="hidden text-xs text-muted-foreground sm:inline">
+						· {detail}
+					</span>
+				</span>
+			</span>
+			<span className="flex shrink-0 items-center gap-2">
+				<span
+					className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${chip.cls}`}
+				>
+					{chip.label}
+				</span>
+				<Link
+					to="/app/settings"
+					search={{ tab: "integrations" }}
+					className="text-xs font-medium text-accent hover:underline"
+				>
+					{status === "off" ? "Connect" : "Manage"}
+				</Link>
+			</span>
+		</div>
+	);
+}
+
 function ModeRadioDot({ active }: { active: boolean }) {
 	return (
 		<span
@@ -1118,60 +1193,96 @@ function DeliveryChargeSection({
 			{liveModeSelected ? (
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
-						Buyers pay the real courier price for their address at checkout,
-						and you book the trip in one tap from the order — which then marks
-						itself Shipped and puts tracking on the buyer&apos;s order page,
-						automatically. There&apos;s <b>no delivery area to set</b>, and{" "}
-						<b>buyers always see the price before ordering</b> (an address
-						nobody can price can&apos;t check out, so you never work out a
-						delivery charge yourself). Runs entirely on{" "}
-						<b>your own courier accounts</b>; Kedaipal never books or pays on
-						your behalf.
+						Buyers pay the <b>real courier price</b> for their address — an
+						address nobody can price can&apos;t check out, so you never work
+						out a charge yourself. Runs on your own courier accounts.
 					</p>
 
 					{/* WHO will be asked, and what happens when they disagree. Two
 					    armed providers is not an edge case — it is the reason this
 					    mode exists — and a seller who doesn't know both are quoted
 					    can't explain their own checkout prices to a buyer. */}
-					<div className="flex flex-col gap-1.5 rounded-lg border border-input px-3 py-2.5">
+					<div className="flex flex-col gap-2 rounded-xl border border-input p-3">
 						<span className="text-xs font-medium">Priced by</span>
-						{hasStoredKey || delyvaArmed ? (
-							<>
-								<ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-									{hasStoredKey ? (
-										<li>
-											<b>Lalamove riders</b> — same-day, around your city.
-										</li>
-									) : null}
-									{delyvaArmed ? (
-										<li>
-											<b>Delyva couriers</b> — nationwide parcels, cheapest
-											service quoted.
-										</li>
-									) : null}
-								</ul>
-								{hasStoredKey && delyvaArmed ? (
-									<p className="text-xs leading-relaxed text-muted-foreground">
-										Both are quoted and the buyer pays the{" "}
-										<b>higher of the two</b>, so whichever you book afterwards,
-										what you collected covers it — book the cheaper one and the
-										difference is yours to keep.
-									</p>
-								) : (
-									<p className="text-xs leading-relaxed text-muted-foreground">
-										Arm the other under <b>Courier booking</b> below and both
-										get quoted, with the buyer paying the higher — so
-										whichever you book, the fee covers it.
-									</p>
-								)}
-							</>
-						) : (
-							<p className="text-xs leading-relaxed text-muted-foreground">
-								Nothing is connected yet, so no price can be worked out and
-								delivery checkout would be refused. Connect Lalamove or Delyva
-								under <b>Settings → Integrations</b> first.
+						<ProviderPricingRow
+							logo="/img/lalamove-logo.svg"
+							logoHeight="h-3.5"
+							name="Riders"
+							detail="Same-day, around your city"
+							status={
+								hasStoredKey
+									? deliveryBooking?.env === "sandbox"
+										? "test"
+										: deliveryBooking?.env === "production"
+											? "live"
+											: "connected"
+									: "off"
+							}
+						/>
+						<ProviderPricingRow
+							logo="/img/delyva-logo.png"
+							logoHeight="h-2.5"
+							name="Couriers"
+							detail="Nationwide parcels, cheapest service"
+							status={
+								delyvaArmed
+									? delyvaSettings?.isDemo
+										? "test"
+										: "live"
+									: delyvaSettings?.connected
+										? "paused"
+										: "off"
+							}
+						/>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{hasStoredKey && delyvaArmed ? (
+								<>
+									Both get quoted and the buyer pays the <b>higher</b> — book
+									the cheaper one and the difference is yours.
+								</>
+							) : hasStoredKey || delyvaArmed ? (
+								<>
+									One provider quotes today. Arm the other under{" "}
+									<b>Courier booking</b> below and the buyer pays the higher of
+									the two.
+								</>
+							) : (
+								<>
+									Nothing can quote yet, so delivery checkout would be refused
+									— connect a provider in{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Integrations
+									</Link>{" "}
+									first.
+								</>
+							)}
+						</p>
+						{/* ONE test-mode note, owned by whichever provider is actually
+						    in test — the old version was a Lalamove-only banner that
+						    could show on a store with no Lalamove keys at all, while a
+						    Delyva demo account got no warning here (Zaki, 4 Sep). */}
+						{(hasStoredKey && deliveryBooking?.env === "sandbox") ||
+						(delyvaArmed && delyvaSettings?.isDemo) ? (
+							<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+								<span>
+									<b>Test mode</b> — bookings simulate and buyers see test
+									prices. Swap live keys in{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium underline underline-offset-2"
+									>
+										Integrations
+									</Link>{" "}
+									before telling buyers.
+								</span>
 							</p>
-						)}
+						) : null}
 						{delyvaArmed &&
 						delyvaSettings?.defaultItemType &&
 						delyvaSettings.defaultItemType !== "PARCEL" ? (
@@ -1180,14 +1291,12 @@ function DeliveryChargeSection({
 							   which blocks every delivery checkout. Never something to
 							   discover as orders quietly stopping. */
 							<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-								Your Delyva parcel type is{" "}
+								Parcel type is{" "}
 								<b>{delyvaSettings.defaultItemType === "FROZEN" ? "Frozen" : "Chilled"}</b>
-								, so checkout asks for a cold-chain price. If your Delyva
-								account has no cold-chain service switched on, no price comes
-								back and <b>delivery checkout is refused</b> — riders are never
-								substituted, because they carry no temperature guarantee. Ask
-								Delyva to enable one, or set the parcel type to Parcel under
-								Settings → Integrations.
+								, so only a cold-chain courier can price checkout — riders are
+								never substituted. No cold service on your Delyva account ={" "}
+								<b>delivery checkout refused</b>. Fix: ask Delyva to enable
+								one, or set the type to Parcel in Integrations.
 							</p>
 						) : null}
 					</div>
@@ -1197,23 +1306,14 @@ function DeliveryChargeSection({
 					    only when riders actually bid — a parcel-only store has no city
 					    zone to learn about. */}
 					{hasStoredKey ? (
-					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						<b>Lalamove&apos;s own coverage still applies:</b> riders serve the
-						city zone around your pickup address (e.g. Klang Valley), so a buyer
-						too far outside it sees <i>&quot;this address is too far&quot;</i>{" "}
-						and can&apos;t choose delivery — roughly 40–70&nbsp;km depending on
-						direction, and never across zones (a Klang Valley store can&apos;t
-						Lalamove to Melaka). Vehicle choice doesn&apos;t change this: bike
-						and car cover the <b>same area</b> — the difference is parcel size
-						and price. Keep self-collect on as the fallback for far buyers.
-						{delyvaArmed ? (
-							<>
-								{" "}
-								Beyond that zone your <b>Delyva</b> couriers still quote, so
-								checkout keeps working — as a parcel, not a rider.
-							</>
-						) : null}
-					</p>
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+							<b>Riders serve your city zone only</b> (~40–70&nbsp;km, never
+							cross-zone) — a buyer beyond it sees &quot;too far&quot; and
+							can&apos;t pick delivery.{" "}
+							{delyvaArmed
+								? "Beyond the zone your Delyva couriers still quote, so checkout keeps working — as a parcel."
+								: "Keep self-collect on as the fallback for far buyers."}
+						</p>
 					) : null}
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -1272,69 +1372,6 @@ function DeliveryChargeSection({
 						</p>
 					</div>
 					) : null}
-
-					{/* 3 · Connection status — the keys themselves moved to Settings →
-					    Integrations (2 Sep IA rework). This row answers "is my account
-					    wired up?" and hands the seller straight to where it's managed;
-					    the env badge stays HERE too because this is a point of spend
-					    (86eypncfy: a sandbox key that looks live costs real money). */}
-					<div className="flex flex-col gap-1.5">
-						<span className="text-xs font-medium text-muted-foreground">
-							Your Lalamove account
-						</span>
-						{hasStoredKey ? (
-							<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
-								<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-									Connected — key ending{" "}
-									<span className="font-mono">
-										…{deliveryBooking?.apiKeyHint}
-									</span>
-									{deliveryBooking?.env === "sandbox" ? (
-										<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-											Test keys
-										</span>
-									) : deliveryBooking?.env === "production" ? (
-										<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-											Live
-										</span>
-									) : null}
-								</span>
-								<Link
-									to="/app/settings"
-									search={{ tab: "integrations" }}
-									className="text-xs font-medium text-accent hover:underline"
-								>
-									Manage
-								</Link>
-							</div>
-						) : (
-							<p className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-								Not connected yet —{" "}
-								<Link
-									to="/app/settings"
-									search={{ tab: "integrations" }}
-									className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
-								>
-									connect Lalamove in Integrations{" "}
-									<ExternalLink className="size-3" />
-								</Link>{" "}
-								before saving. Live quotes run on your own API keys.
-							</p>
-						)}
-						{deliveryBooking?.env === "sandbox" ? (
-							<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-								<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-								<span>
-									<span className="font-medium">
-										No real rider will be dispatched.
-									</span>{" "}
-									These are sandbox keys — bookings are simulated and buyers
-									are quoted test prices. Swap in your live keys under
-									Integrations before telling buyers.
-								</span>
-							</p>
-						) : null}
-					</div>
 
 					{/* 4 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
 					    riders collect FROM the customer's address and drop off at the

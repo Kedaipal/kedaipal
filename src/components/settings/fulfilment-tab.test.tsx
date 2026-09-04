@@ -692,8 +692,27 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 	it("says what will be quoted, and refuses when nothing is connected", () => {
 		const { container } = renderLive({ hasKeys: false });
 		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
-		expect(container.textContent).toContain("Nothing is connected yet");
-		expect(container.textContent).toContain("Settings → Integrations");
+		expect(container.textContent).toContain("Nothing can quote yet");
+		expect(container.textContent).toContain("Integrations");
+	});
+
+	it("shows a status chip per provider, not a Lalamove-only section", () => {
+		const { container } = renderLive({ hasKeys: false });
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		// Both providers get a row and a chip even when unarmed — connection
+		// state was previously a Lalamove-only section a screen away.
+		expect(container.textContent).toContain("Riders");
+		expect(container.textContent).toContain("Couriers");
+		expect(screen.getAllByText("Not connected").length).toBe(2);
+	});
+
+	it("never shows the test-mode note for a store with NO Lalamove keys (Zaki's bug)", () => {
+		// The old banner keyed off env === "sandbox" alone, so a keyless row
+		// with a stale env stamp warned about Lalamove test keys on a store
+		// that only had Delyva.
+		const { container } = renderLive({ hasKeys: false });
+		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		expect(container.textContent).not.toContain("Test mode");
 	});
 
 	it("hides the rider-only controls when no rider bids", () => {
