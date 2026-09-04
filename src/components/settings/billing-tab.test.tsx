@@ -225,3 +225,197 @@ describe("BillingTab pending invoice — how to pay", () => {
 		expect(screen.queryByText("DuitNow")).toBeNull();
 	});
 });
+
+/**
+ * Annual billing (src/lib/annual-billing.ts). The eligibility ladder is unit
+ * tested there; these cover the WIRING — that the tab feeds the resolver the
+ * right seller and renders the state it gets back.
+ */
+describe("BillingTab annual billing", () => {
+	/** An active Pro seller — the default fixture is past_due, which is hidden. */
+	function activePro(overrides: Record<string, unknown> = {}) {
+		return retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				features: { crm: true, orderInbox: true, chargeablePickup: true },
+				active: true,
+				frozen: false,
+				...overrides,
+			},
+		} as never);
+	}
+
+	const settled = [
+		{ _id: "i1", status: "paid", currency: "MYR", total: 14900, invoiceNumber: "INV-1" },
+		{ _id: "i2", status: "paid", currency: "MYR", total: 14900, invoiceNumber: "INV-2" },
+	];
+
+	it("offers the year to a proven, active Pro seller", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText(/Pay for the year, get 2 months free/)).toBeTruthy();
+		// The real invoice total — RM1,490, not the RM650 the pricing page used
+		// to derive from a rounded effective monthly.
+		expect(screen.getByText(/RM\s*1,490\.00/)).toBeTruthy();
+		expect(screen.getByText(/Save RM\s*298\.00/)).toBeTruthy();
+		expect(screen.getByText("Switch to annual billing")).toBeTruthy();
+	});
+
+	it("puts the store, plan and exact amount in the WhatsApp message", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		const href = waLinks().find((l) => l.includes("annual"));
+		expect(href).toBeTruthy();
+		const text = decodeURIComponent(href ?? "");
+		expect(text).toContain("/openmarket");
+		expect(text).toContain("Pro");
+		expect(text).toContain("1,490.00");
+		expect(text).toContain("12 months");
+	});
+
+	it("states the refund position before the seller commits", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText(/isn't refunded in cash/)).toBeTruthy();
+	});
+
+	it("hides from a seller with only one settled invoice", () => {
+		mockQueries({ isAdmin: false, invoices: [settled[0]] });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+	it("hides while past due — the renew card is the urgent thing", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={retailer()} />); // fixture is past_due
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+	it("hides from an admin on their own store", () => {
+		mockQueries({ isAdmin: true, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+	it("tells an annual seller they're on annual, and stops selling", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(
+			<BillingTab
+				retailer={activePro({
+					billingCycle: "annual",
+					currentPeriodEnd: Date.UTC(2027, 2, 12),
+				})}
+			/>,
+		);
+		expect(screen.getByText("You're on annual billing")).toBeTruthy();
+		// Locale-independent — the runner's default locale decides the date shape
+		// ("12 Mar 2027" vs "Mar 12, 2027"), so assert the year, not the order.
+		expect(screen.getByText(/Your current year runs to .*2027/)).toBeTruthy();
+		expect(screen.queryByText("Switch to annual billing")).toBeNull();
+	});
+
+	it("offers the swap while an invoice is still open, not after", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				...settled,
+				{
+					_id: "i3",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-3",
+					billingCycle: "monthly",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText("Pay for the year instead?")).toBeTruthy();
+		expect(screen.getByText("Ask for an annual invoice")).toBeTruthy();
+		const href = waLinks().find((l) => l.includes("annual"));
+		const swap = decodeURIComponent(href ?? "");
+		expect(swap).toContain("cancel that invoice");
+		// The invoice number the operator must void, and the seller's own
+		// assertion that nothing has been transferred yet.
+		expect(swap).toContain("INV-3");
+		expect(swap).toContain("haven't paid it yet");
+	});
+
+	it("quotes an SGD seller in SGD", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: settled.map((i) => ({ ...i, currency: "SGD" })),
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText(/S\$\s*590\.00/)).toBeTruthy();
+		expect(screen.queryByText(/RM\s*1,490\.00/)).toBeNull();
+	});
+
+	it("tells a Starter that Pro can be billed yearly", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro({ plan: "starter" })} />);
+		// The offer itself is Pro+, but the tier must still learn it exists.
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.getByText(/billed annually, with two months free/)).toBeTruthy();
+		// The constraint is explained, not left as an unexplained absence.
+		expect(screen.getByText(/We don't offer annual on Starter/)).toBeTruthy();
+	});
+
+	it("stops selling once an annual invoice is already waiting", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				...settled,
+				{
+					_id: "i4",
+					status: "pending",
+					currency: "MYR",
+					billingCycle: "annual",
+					total: 149000,
+					invoiceNumber: "INV-4",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText("Your annual invoice is ready")).toBeTruthy();
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
+	});
+
+	it("defers the swap when the open invoice is nearly due", () => {
+		// Voiding this close to the due date can land the seller in past_due —
+		// the daily cron locks an active seller with no pending invoice.
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				...settled,
+				{
+					_id: "i5",
+					status: "pending",
+					currency: "MYR",
+					billingCycle: "monthly",
+					total: 14900,
+					invoiceNumber: "INV-5",
+					dueDate: Date.now() + 2 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText("Moving to annual billing")).toBeTruthy();
+		expect(screen.getByText(/too soon to swap it safely/)).toBeTruthy();
+		expect(screen.getByText("Ask for annual next cycle")).toBeTruthy();
+		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
+	});
+
+	it("hides from Scale, which cannot be invoiced at all yet", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro({ plan: "scale" })} />);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+});

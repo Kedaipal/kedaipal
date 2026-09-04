@@ -69,7 +69,13 @@ describe("pricing copy stays aligned with the flat multi-outlet Scale", () => {
 	 * placeholder and the surface derives it from the resolved currency.
 	 */
 	it("names no currency — every amount arrives as a placeholder", () => {
-		const forbidden = /\bRM\s?\d|S\$\s?\d|\bMYR\b|\bSGD\b/;
+		// The character class is `[\d{]`, not `\d`, because the first version of
+		// this guard only looked for a symbol glued to a DIGIT — and the one key
+		// that broke the rule glued it to the PLACEHOLDER instead:
+		// "Billed RM{total}/yr". `RM{` is not `RM\d`, so the guard read clean
+		// while the annual line quoted ringgit to a Singaporean. A symbol in
+		// front of `{` is exactly as wrong as one in front of `79`.
+		const forbidden = /\bRM\s?[\d{]|S\$\s?[\d{]|\bMYR\b|\bSGD\b/;
 		const offenders: string[] = [];
 		for (const [locale, catalog] of catalogs) {
 			for (const [key, value] of pricingEntries(catalog)) {

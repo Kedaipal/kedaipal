@@ -91,8 +91,15 @@ export const getInvoiceForEmail = internalQuery({
 			currency: invoice.currency,
 			dueDate: invoice.dueDate,
 			status: invoice.status,
-			plan: sub?.plan ?? "pro",
-			billingCycle: sub?.billingCycle ?? "monthly",
+			// From the INVOICE first, falling back to the sub — the same precedence
+			// markPaid uses. `issueInvoice` deliberately never touches the
+			// subscription (the seller's tier must not move before they pay), and
+			// every sub is created "monthly" at signup, so reading the sub here made
+			// the first annual invoice email "Pro · Monthly" beside a ten-times
+			// amount while its own attached PDF said "Annual Subscription". Same bug
+			// mislabelled a Starter invoice issued to a store still trialing on Pro.
+			plan: invoice.plan ?? sub?.plan ?? "pro",
+			billingCycle: invoice.billingCycle ?? sub?.billingCycle ?? "monthly",
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",

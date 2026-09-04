@@ -14,8 +14,9 @@ import {
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
-import { formatPrice } from "../../lib/format";
+import { formatPrice, formatShortDate } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import {
 	ORDER_CAP_WARN_RATIO,
@@ -23,19 +24,12 @@ import {
 	trialDaysLeft,
 } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
+import { AnnualBillingCard } from "./annual-billing-card";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
 >;
-
-function formatDate(ms: number): string {
-	return new Date(ms).toLocaleDateString(undefined, {
-		day: "numeric",
-		month: "short",
-		year: "numeric",
-	});
-}
 
 /** Retailer-facing billing dashboard (Settings → Billing). Current plan + status,
  * the pending invoice + how to pay (Kedaipal's bank/DuitNow/QR), Founding ribbon,
@@ -62,6 +56,19 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 	const history = invoices.filter((i) => i.status !== "pending");
 	const now = Date.now();
 
+	// Annual billing is offered here rather than on /pricing: manual billing has
+	// no self-serve checkout, so a public annual price would be a dead-end CTA,
+	// while a year paid by one transfer is exactly what these rails already do
+	// well. See src/lib/annual-billing.ts + docs/pricing.md.
+	const isFounding = retailer.isFoundingMember === true;
+	const annualOffer = resolveAnnualOffer({
+		subscription: sub,
+		invoices,
+		now,
+		founding: isFounding,
+		adminOwnAccount,
+	});
+
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
@@ -73,7 +80,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 		if (sub.status === "past_due") return "Past due";
 		if (sub.status === "cancelled") return "Cancelled";
 		if (sub.currentPeriodEnd)
-			return `Active · expires ${formatDate(sub.currentPeriodEnd)}`;
+			return `Active · expires ${formatShortDate(sub.currentPeriodEnd)}`;
 		return "Active";
 	})();
 
@@ -210,9 +217,15 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
 						<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+							{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
+							    only), so the constraint is explained here rather than left as
+							    an unexplained absence — "why can't I?" is exactly the question
+							    a silent gap produces. */}
 							<p className="text-xs text-muted-foreground">
 								Want 500 orders/month, the customer database and the order
-								inbox? Move up to Pro.
+								inbox? Move up to Pro — which can also be billed annually, with
+								two months free. We don't offer annual on Starter: you shouldn't
+								pay a year upfront before the shop has proven itself.
 							</p>
 							<a
 								href={buildWaContactLink(
@@ -231,6 +244,16 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 				</section>
 			)}
 
+			{/* Annual billing — a plan decision, so it sits with the plan and above
+			    the payment mechanics. Renders nothing for a seller it doesn't
+			    apply to (see resolveAnnualOffer). */}
+			<AnnualBillingCard
+				state={annualOffer}
+				slug={retailer.slug}
+				supportWa={supportWa}
+				founding={isFounding}
+			/>
+
 			{/* Pending invoice + how to pay */}
 			{pending ? (
 				<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -247,7 +270,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							<p className="text-xs text-muted-foreground">Invoice</p>
 							<p className="font-mono text-sm">{pending.invoiceNumber}</p>
 							<p className="mt-1 text-xs text-muted-foreground">
-								Due {formatDate(pending.dueDate)}
+								Due {formatShortDate(pending.dueDate)}
 							</p>
 							<InvoiceDownloadButton
 								invoiceId={pending._id}
@@ -386,9 +409,9 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 									<span className="font-mono">{inv.invoiceNumber}</span>
 									<span className="ml-2 text-xs text-muted-foreground">
 										{inv.markedPaidAt
-											? formatDate(inv.markedPaidAt)
+											? formatShortDate(inv.markedPaidAt)
 											: inv.voidedAt
-												? formatDate(inv.voidedAt)
+												? formatShortDate(inv.voidedAt)
 												: ""}
 									</span>
 								</div>
