@@ -105,7 +105,8 @@ export type DeliveryConfig =
  * Delivery pricing modes a store COUNTRY may use (SG-lite, 86eynw29u).
  * "Free" is spelled as no config, so it's implicitly allowed everywhere.
  * SG stores are flat-fee-only for now: radius/weight zone geography and the
- * Lalamove integration (`LALAMOVE_MARKET = "MY"`) are all Malaysia-shaped, so
+ * Lalamove integration (whose market gate is COUNTRY_RIDER_BOOKING) are all
+ * Malaysia-shaped today, so
  * storing one of those modes on an SG store would strand every order as
  * fee-pending or block checkout outright. One author for three enforcement
  * points: `retailers.updateSettings` (the write gate), `orders.create`'s
@@ -134,9 +135,16 @@ export function deliveryModeAllowed(
  * still dispatch riders — the `pricing ⊥ booking` rule). Derive one from the
  * other and the next country's decision gets made silently by a mode list.
  *
- * It happens to encode the SAME market fact — our integration is hardcoded to
- * Lalamove Malaysia (`LALAMOVE_MARKET = "MY"`, and `toLalamoveMyPhone` rejects
- * a +65 number outright) — but it is enforced in a different place: the
+ * SG is FALSE for a reason that has changed shape (z8r3fdch3r). It used to be
+ * "our integration is hardcoded to Malaysia" — a module constant for the
+ * market and a phone helper that rejected +65 outright. Both are gone: the
+ * market now travels with the store (`lalamoveMarketForCountry`) and
+ * `toLalamoveContactPhone` accepts each market's own numbers. What is left is
+ * simply UNVERIFIED — no SG sandbox run has proven a quote, a booking and a
+ * webhook end to end, and the service-type catalogue is still the MY one. Flip
+ * this the day that run passes, not before.
+ *
+ * It is enforced in a different place from the mode list: the
  * country-switch guard in `retailers.updateSettings`. Without it an MY store on
  * FLAT pricing with booking on switched to SG cleanly and kept Book-a-rider and
  * prompt-book-on-packed armed, so every quote failed at the point of spend

@@ -41,16 +41,46 @@ export const LALAMOVE_BASE_URL: Record<LalamoveEnv, string> = {
 	production: "https://rest.lalamove.com",
 };
 
-/** All Kedaipal sellers are MY — market is a constant until a second country. */
-export const LALAMOVE_MARKET = "MY";
+/**
+ * Which Lalamove market a request belongs to (z8r3fdch3r).
+ *
+ * Lalamove segments its REST API by a `Market` header, and the market decides
+ * coverage, currency, service types and the phone country code — so it is a
+ * property of the STORE, never a module constant. It was one until Kedaipal
+ * had a second country, and that constant is what hid Lalamove from Singapore
+ * sellers: Lalamove serves SG perfectly well, our integration didn't.
+ *
+ * Kept as its own type rather than reusing `Country` because the two answer
+ * different questions — a country we sell in is not automatically a market
+ * Lalamove operates in, and `COUNTRY_RIDER_BOOKING` is where that judgement
+ * lives.
+ */
+export type LalamoveMarket = "MY" | "SG";
 
-/** Vehicle types we surface (the MY catalog has more; these cover the ICP). */
+export const DEFAULT_LALAMOVE_MARKET: LalamoveMarket = "MY";
+
+/** Store country → Lalamove market. Only markets we've verified end to end
+ * appear here; anything else has no rider booking (`COUNTRY_RIDER_BOOKING`). */
+export function lalamoveMarketForCountry(
+	country: string | undefined,
+): LalamoveMarket {
+	return country === "SG" ? "SG" : DEFAULT_LALAMOVE_MARKET;
+}
+
+/** Vehicle types we surface (each market's catalog has more; these cover the
+ * ICP and exist in both MY and SG). */
 export type LalamoveVehicleType = "MOTORCYCLE" | "CAR";
 
 export type LalamoveCredentials = {
 	apiKey: string;
 	apiSecret: string;
 	env: LalamoveEnv;
+	/** The store's market, stamped onto every request's `Market` header.
+	 * Rides on the credentials because every call site already carries them —
+	 * threading a second argument through ten signatures would have been ten
+	 * chances to forget one, and a forgotten market silently prices the wrong
+	 * country. */
+	market: LalamoveMarket;
 };
 
 /**
@@ -62,13 +92,35 @@ export type LalamoveCredentials = {
  * derived from Lalamove's own key prefix (`pk_test_…` → sandbox, anything
  * else → production), so a key can never be pointed at the wrong API host.
  */
+/**
+ * Is a usable key pair stored at all? Separate from `resolveLalamoveCredentials`
+ * because it answers a different question — "has this seller connected
+ * Lalamove", which has nothing to do with which market they sell in. Callers
+ * that only need this must not be made to invent a country.
+ */
+export function hasLalamoveCredentials(
+	booking: { apiKey?: string; apiSecret?: string } | undefined,
+): boolean {
+	return (
+		!!booking?.apiKey?.trim() && !!booking?.apiSecret?.trim()
+	);
+}
+
 export function resolveLalamoveCredentials(
 	booking: { apiKey?: string; apiSecret?: string } | undefined,
+	/** The STORE's country. Required on purpose — a default would let a new
+	 * call site quietly bill a Singapore store against the Malaysian market. */
+	country: string | undefined,
 ): LalamoveCredentials | null {
 	const apiKey = booking?.apiKey?.trim();
 	const apiSecret = booking?.apiSecret?.trim();
-	if (!apiKey || !apiSecret) return null;
-	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+	if (!hasLalamoveCredentials(booking) || !apiKey || !apiSecret) return null;
+	return {
+		apiKey,
+		apiSecret,
+		env: inferLalamoveEnv(apiKey),
+		market: lalamoveMarketForCountry(country),
+	};
 }
 
 /** Decrypt-at-use (86eyn25gk): stored values may be ciphertext, so `env`
@@ -81,7 +133,14 @@ export async function decryptLalamoveCredentials(
 ): Promise<LalamoveCredentials> {
 	const apiKey = await decryptSecret(credentials.apiKey);
 	const apiSecret = await decryptSecret(credentials.apiSecret);
-	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+	// Market survives decryption — it comes from the store, not the key, so
+	// re-deriving it here would be re-deriving it from nothing.
+	return {
+		apiKey,
+		apiSecret,
+		env: inferLalamoveEnv(apiKey),
+		market: credentials.market,
+	};
 }
 
 /** Sandbox vs production straight from the key prefix — Lalamove issues
@@ -132,7 +191,7 @@ export async function signLalamoveRequest(args: {
  * Lalamove's side — pass something stable per logical attempt.
  */
 export async function buildLalamoveHeaders(args: {
-	credentials: Pick<LalamoveCredentials, "apiKey" | "apiSecret">;
+	credentials: Pick<LalamoveCredentials, "apiKey" | "apiSecret" | "market">;
 	method: string;
 	path: string;
 	body: string;
@@ -148,7 +207,7 @@ export async function buildLalamoveHeaders(args: {
 	});
 	return {
 		Authorization: `hmac ${args.credentials.apiKey}:${args.timestamp}:${signature}`,
-		Market: LALAMOVE_MARKET,
+		Market: args.credentials.market,
 		"Request-ID": args.requestId,
 		"Content-Type": "application/json",
 	};
@@ -189,18 +248,39 @@ export function toLalamovePhone(waPhone: string): string {
 	return `+${digits}`;
 }
 
+/** What each market will accept as a contact number, in stored bare-digit
+ * form. Lengths INCLUDE the country code. */
+const MARKET_PHONE: Record<
+	LalamoveMarket,
+	{ prefix: string; minDigits: number; maxDigits: number }
+> = {
+	// MY mobiles are 60 + 9–11 digits.
+	MY: { prefix: "60", minDigits: 11, maxDigits: 13 },
+	// SG mobiles are 65 + exactly 8.
+	SG: { prefix: "65", minDigits: 10, maxDigits: 10 },
+};
+
 /**
- * Normalize a stored WhatsApp number to a Lalamove-MY-acceptable E.164 phone,
- * or null when it isn't Malaysian. Lalamove validates the AREA CODE per
- * market — a +65 (SG) buyer on a JB store is a real case and returns null
- * here, so dispatch can fall back to the seller's own number as the rider
- * contact instead of a 422 at booking time. MY mobiles are 60 + 9–11 digits.
+ * Normalize a stored WhatsApp number to an E.164 phone the given market will
+ * accept, or null when it belongs to another country.
+ *
+ * Lalamove validates the AREA CODE per market, so a number from the wrong
+ * country is a 422 at booking time rather than a soft failure — returning
+ * null lets dispatch fall back to the seller's own number as the rider
+ * contact instead. A +65 buyer on a Johor store was always a real case; a +60
+ * buyer on a Singapore store now is too, and the old MY-only helper would
+ * have accepted exactly the wrong one of those.
  */
-export function toLalamoveMyPhone(waPhone: string | undefined): string | null {
+export function toLalamoveContactPhone(
+	waPhone: string | undefined,
+	market: LalamoveMarket,
+): string | null {
 	if (!waPhone) return null;
 	const digits = waPhone.replace(/\D/g, "");
-	if (!digits.startsWith("60")) return null;
-	if (digits.length < 11 || digits.length > 13) return null;
+	const rule = MARKET_PHONE[market];
+	if (!digits.startsWith(rule.prefix)) return null;
+	if (digits.length < rule.minDigits || digits.length > rule.maxDigits)
+		return null;
 	return `+${digits}`;
 }
 
