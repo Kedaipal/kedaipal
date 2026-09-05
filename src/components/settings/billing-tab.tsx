@@ -434,10 +434,23 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 												? "Cancelled"
 												: inv.status}
 									</span>
-									{/* No receipt for a voided (cancelled-in-error) invoice. */}
+									{/* No documents for a voided (cancelled-in-error) invoice.
+									    A PAID invoice carries two: the bill (kept for the
+									    seller's records) and the payment receipt — proof of
+									    payment for their books (z8r3fdcrzj). */}
 									{inv.status !== "void" ? (
 										<InvoiceDownloadButton
 											invoiceId={inv._id}
+											label=""
+											size="icon"
+											variant="ghost"
+											className="size-8"
+										/>
+									) : null}
+									{inv.status === "paid" ? (
+										<InvoiceDownloadButton
+											invoiceId={inv._id}
+											kind="receipt"
 											label=""
 											size="icon"
 											variant="ghost"

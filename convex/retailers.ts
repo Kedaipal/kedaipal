@@ -478,6 +478,70 @@ const businessAddressValidator = v.object({
 	placeId: v.optional(v.string()),
 });
 
+// Legal identity printed on buyer invoices/receipts (z8r3fdcrzj). Every field
+// optional — sellers publish exactly the fields they choose. Distinct from
+// businessAddress above: this is paper-only display data the seller typed FOR
+// buyers, that one is a private geo origin.
+const businessIdentityValidator = v.object({
+	legalName: v.optional(v.string()),
+	registrationNumber: v.optional(v.string()),
+	address: v.optional(v.string()),
+	contact: v.optional(v.string()),
+	taxNumber: v.optional(v.string()),
+});
+
+type BusinessIdentity = {
+	legalName?: string;
+	registrationNumber?: string;
+	address?: string;
+	contact?: string;
+	taxNumber?: string;
+};
+
+// Single-line fields cap at 120 (longest plausible legal name), the multiline
+// address at 300 (the businessAddress label precedent) — these print inside a
+// half-page PDF column, so anything longer is noise, not data.
+const IDENTITY_LINE_MAX = 120;
+const IDENTITY_ADDRESS_MAX = 300;
+
+/** Trim/cap the seller-typed identity block; an all-blank save collapses to
+ * undefined so no empty shell object lingers on the row. */
+function sanitizeBusinessIdentity(
+	raw: BusinessIdentity,
+): BusinessIdentity | undefined {
+	const line = (value: string | undefined, label: string): string | undefined => {
+		const trimmed = value?.trim();
+		if (!trimmed) return undefined;
+		if (trimmed.length > IDENTITY_LINE_MAX) {
+			throw new ConvexError(
+				`${label} must be at most ${IDENTITY_LINE_MAX} characters`,
+			);
+		}
+		return trimmed;
+	};
+	// Normalize the address per line so a stray blank line doesn't print a gap.
+	const address = raw.address
+		?.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0)
+		.join("\n");
+	if (address && address.length > IDENTITY_ADDRESS_MAX) {
+		throw new ConvexError(
+			`Business address must be at most ${IDENTITY_ADDRESS_MAX} characters`,
+		);
+	}
+	const identity: BusinessIdentity = {
+		legalName: line(raw.legalName, "Registered name"),
+		registrationNumber: line(raw.registrationNumber, "Registration number"),
+		address: address && address.length > 0 ? address : undefined,
+		contact: line(raw.contact, "Billing contact"),
+		taxNumber: line(raw.taxNumber, "Tax number"),
+	};
+	return Object.values(identity).some((f) => f !== undefined)
+		? identity
+		: undefined;
+}
+
 type BusinessAddress = {
 	label: string;
 	latitude: number;
@@ -701,6 +765,11 @@ type RetailerPublic = {
 	// resolved fee from the `delivery.quote` query instead.
 	deliveryConfig?: DeliveryConfig;
 	businessAddress?: BusinessAddress;
+	// Legal identity for buyer invoices/receipts (z8r3fdcrzj). OWNER-only in
+	// the sense that only the settings read carries it, but unlike
+	// businessAddress it is seller-published display data — it reaches buyers
+	// inside the PDFs they download, never via the storefront payload.
+	businessIdentity?: BusinessIdentity;
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
@@ -875,6 +944,7 @@ async function buildRetailerPublic(
 		offerDelivery: row.offerDelivery,
 		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
 		businessAddress: row.businessAddress,
+		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
@@ -1403,6 +1473,10 @@ export const updateSettings = mutation({
 		// Business address (radius-mode origin). `null` clears — rejected while
 		// a radius config still depends on it; undefined = no change.
 		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
+		// Legal identity for buyer invoices/receipts (z8r3fdcrzj). `null` (or an
+		// all-blank object) clears; undefined = no change. All-tier — an invoice
+		// a finance department accepts is baseline selling, not an upsell.
+		businessIdentity: v.optional(v.union(businessIdentityValidator, v.null())),
 		// Lalamove booking (86eyb5hrf). `null` clears (un-gated — downgrade never
 		// traps); enabling requires business address + resolvable credentials and
 		// is Pro-gated. Undefined = no change.
@@ -1479,6 +1553,7 @@ export const updateSettings = mutation({
 			offerDelivery: boolean;
 			deliveryConfig: DeliveryConfig | undefined;
 			businessAddress: BusinessAddress | undefined;
+			businessIdentity: BusinessIdentity | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
 			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
@@ -1707,6 +1782,14 @@ export const updateSettings = mutation({
 						DEFAULT_COUNTRY,
 				);
 			}
+		}
+		if (args.businessIdentity !== undefined) {
+			// sanitize collapses an all-blank object to undefined, so "cleared
+			// every field and saved" behaves exactly like an explicit null.
+			patch.businessIdentity =
+				args.businessIdentity === null
+					? undefined
+					: sanitizeBusinessIdentity(args.businessIdentity);
 		}
 		if (args.deliveryConfig !== undefined) {
 			if (args.deliveryConfig === null) {

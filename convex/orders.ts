@@ -51,6 +51,7 @@ import {
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import { assertWithinOpeningHours } from "./lib/openingHours";
+import { orderDocumentTitle } from "./lib/orderDocument";
 import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
 	countBookedPerNight,
@@ -1657,6 +1658,11 @@ export const receiptPdfInputs = internalQuery({
 				order,
 				storeName: retailer?.storeName ?? "",
 				paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
+				// Legal identity for the "From" block (z8r3fdcrzj). Seller-typed
+				// specifically for buyer documents — NEVER swap in businessAddress
+				// here (that's the private delivery origin, often a home).
+				businessIdentity: retailer?.businessIdentity,
+				country: retailer?.country,
 			}),
 		};
 	},
@@ -1686,7 +1692,7 @@ export const generateReceiptPdf = action({
 			bytes.byteOffset + bytes.byteLength,
 		) as ArrayBuffer;
 		// An unpaid order is an invoice, a settled one a receipt (see buildOrderReceiptPdf).
-		const prefix = inputs.data.paid ? "Receipt" : "Invoice";
+		const prefix = orderDocumentTitle(inputs.data.paid);
 		return { pdf, filename: `${prefix}-${inputs.shortId}.pdf` };
 	},
 });

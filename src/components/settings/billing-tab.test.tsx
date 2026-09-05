@@ -419,3 +419,50 @@ describe("BillingTab annual billing", () => {
 	});
 
 });
+
+/**
+ * Invoice history documents (z8r3fdcrzj): a PAID row carries two — the frozen
+ * bill and its payment receipt; a VOID row carries neither.
+ */
+describe("BillingTab invoice history documents", () => {
+	const history = [
+		{
+			_id: "p1",
+			status: "paid",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-PAID",
+			createdAt: Date.UTC(2026, 7, 1),
+		},
+		{
+			_id: "v1",
+			status: "void",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-VOID",
+			createdAt: Date.UTC(2026, 6, 1),
+		},
+	];
+
+	it("offers invoice + receipt on a paid row, nothing on a void row", () => {
+		mockQueries({ isAdmin: false, invoices: history });
+		render(<BillingTab retailer={retailer()} />);
+		expect(
+			screen.getAllByRole("button", { name: /download invoice pdf/i }),
+		).toHaveLength(1);
+		expect(
+			screen.getAllByRole("button", { name: /download receipt pdf/i }),
+		).toHaveLength(1);
+	});
+
+	it("offers no receipt while the invoice is still pending", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [{ ...history[0], _id: "p2", status: "pending" as const }],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(
+			screen.queryByRole("button", { name: /download receipt pdf/i }),
+		).toBeNull();
+	});
+});

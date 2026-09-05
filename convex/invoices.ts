@@ -148,6 +148,16 @@ export const markPaid = mutation({
 			{ invoiceId, firstTime },
 		);
 
+		// 5) Render + store the payment RECEIPT (z8r3fdcrzj) — a second frozen
+		// document beside the invoice blob, proof of payment for the seller's
+		// books. Scheduled (not inline) for the same reason as the invoice PDF:
+		// rendering doesn't belong in the settle transaction.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.invoices.generateInvoiceReceiptPdf,
+			{ invoiceId },
+		);
+
 		return { rank };
 	},
 });
@@ -541,5 +551,120 @@ export const getOrCreateInvoicePdfUrl = action({
 		// Authorized but not yet rendered → generate, then resolve the URL.
 		await ctx.runAction(internal.invoices.generateInvoicePdf, { invoiceId });
 		return ctx.runQuery(api.invoices.getInvoicePdfUrl, { invoiceId });
+	},
+});
+
+// --- Payment receipt PDF (z8r3fdcrzj) --------------------------------------
+// A PAID invoice gets a second frozen document: the receipt ("Amount paid",
+// green Paid pill, no payment instructions). Never an overwrite of the invoice
+// blob — that one is the bill the seller was sent, and both are theirs to keep.
+// Same pipeline shape as the invoice PDF: inputs query → internal render action
+// (idempotent) → attach mutation → ownership-checked URL query → on-demand
+// action for rows paid before this shipped.
+
+/** Read-only inputs for the receipt render. `eligible` is false for anything
+ * not paid — pending must never grow a receipt, and a voided row (cancelled in
+ * error) has nothing to prove. */
+export const receiptPdfInputs = internalQuery({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (
+		ctx,
+		{ invoiceId },
+	): Promise<{
+		alreadyRendered: boolean;
+		eligible: boolean;
+		data: SubscriptionInvoiceData;
+	} | null> => {
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) return null;
+		const retailer = await ctx.db.get(invoice.retailerId);
+		if (!retailer) return null;
+		return {
+			alreadyRendered: invoice.receiptPdfStorageId !== undefined,
+			eligible:
+				invoice.status === "paid" && invoice.markedPaidAt !== undefined,
+			data: invoiceToSubscriptionData({
+				invoice,
+				retailer: {
+					storeName: retailer.storeName,
+					waPhone: retailer.waPhone,
+					slug: retailer.slug,
+				},
+				// The receipt face needs no billingConfig — payment instructions
+				// are exactly what a receipt must NOT print.
+				billingConfig: null,
+				asReceipt: true,
+			}),
+		};
+	},
+});
+
+/** Stamp the rendered receipt blob onto the invoice (attachPdf's sibling). */
+export const attachReceiptPdf = internalMutation({
+	args: { invoiceId: v.id("invoices"), storageId: v.id("_storage") },
+	handler: async (ctx, { invoiceId, storageId }): Promise<void> => {
+		await ctx.db.patch(invoiceId, { receiptPdfStorageId: storageId });
+	},
+});
+
+/** Render + store a paid invoice's receipt. Scheduled from markPaid; safe to
+ * re-run (skips when one exists) and a no-op for anything not paid, so a stray
+ * schedule can never mint a receipt for a pending or voided invoice. */
+export const generateInvoiceReceiptPdf = internalAction({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<void> => {
+		const inputs = await ctx.runQuery(internal.invoices.receiptPdfInputs, {
+			invoiceId,
+		});
+		if (!inputs || inputs.alreadyRendered || !inputs.eligible) return;
+		const bytes = await buildSubscriptionInvoicePdf(inputs.data);
+		const buffer = bytes.buffer.slice(
+			bytes.byteOffset,
+			bytes.byteOffset + bytes.byteLength,
+		) as ArrayBuffer;
+		const storageId = await ctx.storage.store(
+			new Blob([buffer], { type: "application/pdf" }),
+		);
+		await ctx.runMutation(internal.invoices.attachReceiptPdf, {
+			invoiceId,
+			storageId,
+		});
+	},
+});
+
+/** Signed URL for a paid invoice's receipt — same ownership gate as
+ * getInvoicePdfUrl (owning retailer or admin). Null while unrendered or for an
+ * unpaid/voided invoice (the UI only offers the button on paid rows). */
+export const getInvoiceReceiptPdfUrl = query({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<string | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) return null;
+		const retailer = await ctx.db.get(invoice.retailerId);
+		const ownsIt = retailer?.userId === identity.subject;
+		if (!ownsIt && !(await isAdmin(ctx))) throw new ConvexError("Forbidden");
+		if (!invoice.receiptPdfStorageId) return null;
+		return ctx.storage.getUrl(invoice.receiptPdfStorageId);
+	},
+});
+
+/** Download entry point for the receipt: returns the signed URL, rendering on
+ * demand for invoices paid before this shipped. Ownership is enforced by the
+ * URL query BEFORE any generation (getOrCreateInvoicePdfUrl's posture), and
+ * the generator itself refuses anything not paid, so an unpaid invoice can
+ * never be coaxed into producing a receipt. */
+export const getOrCreateInvoiceReceiptPdfUrl = action({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<string | null> => {
+		const existing = await ctx.runQuery(api.invoices.getInvoiceReceiptPdfUrl, {
+			invoiceId,
+		});
+		if (existing) return existing;
+		await ctx.runAction(internal.invoices.generateInvoiceReceiptPdf, {
+			invoiceId,
+		});
+		return ctx.runQuery(api.invoices.getInvoiceReceiptPdfUrl, { invoiceId });
 	},
 });

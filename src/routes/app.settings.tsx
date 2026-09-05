@@ -67,8 +67,8 @@ import { BillingTab } from "../components/settings/billing-tab";
 import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
-import { NotificationsCard } from "../components/settings/notifications-card";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
+import { NotificationsCard } from "../components/settings/notifications-card";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -719,6 +719,15 @@ function SettingsRoute() {
 							/>
 						</Card>
 						<Card>
+							<BusinessIdentityForm
+								current={retailer.businessIdentity}
+								country={retailer.country}
+								onSave={(businessIdentity) =>
+									updateSettings({ businessIdentity })
+								}
+							/>
+						</Card>
+						<Card>
 							<NotificationsCard />
 						</Card>
 						{/* Notification surfaces live together: browser (above), WhatsApp,
@@ -884,8 +893,8 @@ function SettingsRoute() {
 							>
 								Settings → Integrations
 							</button>
-							 — connect your account there; buyers keep seeing Pay now on
-							their orders as before.
+							— connect your account there; buyers keep seeing Pay now on their
+							orders as before.
 						</p>
 						{/* Says plainly that nothing chases the buyer automatically, and
 						    names the one manual tool that exists — so the behaviour is
@@ -1072,6 +1081,173 @@ function StoreNameForm({
 				className={SAVE_BTN_CLASS}
 			>
 				{saving ? "Saving…" : "Save name"}
+			</Button>
+		</form>
+	);
+}
+
+/**
+ * Legal/billing identity printed in the "From" block of the invoices and
+ * receipts buyers download (z8r3fdcrzj). Every field optional and explicitly
+ * buyer-visible — deliberately NOT reusing the fulfilment business address,
+ * which is a private geo origin (often the seller's home).
+ */
+function BusinessIdentityForm({
+	current,
+	country,
+	onSave,
+}: {
+	current:
+		| {
+				legalName?: string;
+				registrationNumber?: string;
+				address?: string;
+				contact?: string;
+				taxNumber?: string;
+		  }
+		| undefined;
+	country: string;
+	onSave: (
+		businessIdentity: {
+			legalName?: string;
+			registrationNumber?: string;
+			address?: string;
+			contact?: string;
+			taxNumber?: string;
+		} | null,
+	) => Promise<unknown>;
+}) {
+	const [legalName, setLegalName] = useState(current?.legalName ?? "");
+	const [registrationNumber, setRegistrationNumber] = useState(
+		current?.registrationNumber ?? "",
+	);
+	const [address, setAddress] = useState(current?.address ?? "");
+	const [contact, setContact] = useState(current?.contact ?? "");
+	const [taxNumber, setTaxNumber] = useState(current?.taxNumber ?? "");
+	const [saving, setSaving] = useState(false);
+
+	// The registration number is CALLED different things per market; the value
+	// prints verbatim (mirrors convex/lib/pdf/document.ts REGISTRATION_LABEL).
+	const regLabel = country === "SG" ? "UEN" : "SSM registration number";
+
+	const fields = [
+		[legalName, current?.legalName],
+		[registrationNumber, current?.registrationNumber],
+		[address, current?.address],
+		[contact, current?.contact],
+		[taxNumber, current?.taxNumber],
+	] as const;
+	const dirty = fields.some(
+		([value, saved]) => value.trim() !== (saved ?? "").trim(),
+	);
+	const allBlank = fields.every(([value]) => value.trim().length === 0);
+
+	async function handleSubmit(e: FormEvent) {
+		e.preventDefault();
+		if (!dirty) return;
+		setSaving(true);
+		try {
+			// All-blank saves as an explicit clear, so no empty shell lingers.
+			await onSave(
+				allBlank
+					? null
+					: {
+							legalName: legalName.trim() || undefined,
+							registrationNumber: registrationNumber.trim() || undefined,
+							address: address.trim() || undefined,
+							contact: contact.trim() || undefined,
+							taxNumber: taxNumber.trim() || undefined,
+						},
+			);
+			toast.success(
+				allBlank ? "Business details cleared." : "Business details updated.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	const fieldLabel = "text-xs font-medium text-muted-foreground";
+
+	return (
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<SectionHeading
+				title="Business details"
+				description="Printed in the “From” section of the invoices and receipts your customers download — what a company's finance team needs to accept your invoice. Only the fields you fill in appear; leave everything blank to show just your store name."
+			/>
+			<div className="flex flex-col gap-3">
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Registered business name</span>
+					<Input
+						type="text"
+						value={legalName}
+						onChange={(e) => setLegalName(e.target.value)}
+						placeholder="e.g. Hermoolah Enterprise"
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>{regLabel}</span>
+					<Input
+						type="text"
+						value={registrationNumber}
+						onChange={(e) => setRegistrationNumber(e.target.value)}
+						placeholder={
+							country === "SG"
+								? "e.g. 202412345K"
+								: "e.g. 202403123456 (1234567-X)"
+						}
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Business address</span>
+					<textarea
+						value={address}
+						onChange={(e) => setAddress(e.target.value)}
+						placeholder={"e.g. 12, Jalan Contoh 3/4\n40000 Shah Alam, Selangor"}
+						rows={3}
+						maxLength={300}
+						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					/>
+					<span className="text-xs text-muted-foreground">
+						Shown to customers on their documents — use an address you're happy
+						to publish, not necessarily where you work from.
+					</span>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Billing contact (phone or email)</span>
+					<Input
+						type="text"
+						value={contact}
+						onChange={(e) => setContact(e.target.value)}
+						placeholder="e.g. billing@hermoolah.com"
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Tax registration number (optional)</span>
+					<Input
+						type="text"
+						value={taxNumber}
+						onChange={(e) => setTaxNumber(e.target.value)}
+						placeholder="e.g. SST no."
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+			</div>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
+				{saving ? "Saving…" : "Save business details"}
 			</Button>
 		</form>
 	);
