@@ -2670,3 +2670,136 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 		expect(await asA.query(api.retailers.countrySetup, {})).toBeNull();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Business identity — the legal block on buyer invoices/receipts (z8r3fdcrzj)
+// ---------------------------------------------------------------------------
+
+describe("retailers businessIdentity", () => {
+	test("saves trimmed fields onto the owner payload", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: {
+				legalName: "  Hermoolah Enterprise  ",
+				registrationNumber: "202403123456",
+				address: "12, Jalan Contoh 3/4\n\n  40000 Shah Alam  \n",
+				contact: "billing@hermoolah.com",
+			},
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessIdentity).toEqual({
+			legalName: "Hermoolah Enterprise",
+			registrationNumber: "202403123456",
+			// Per-line trim + blank-line drop, so no gap ever prints.
+			address: "12, Jalan Contoh 3/4\n40000 Shah Alam",
+			contact: "billing@hermoolah.com",
+		});
+	});
+
+	test("null clears, and an ALL-BLANK object collapses to cleared too", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-clear");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "Bearcamp PLT" },
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: null,
+		});
+		let me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessIdentity).toBeUndefined();
+
+		// The "cleared every field and hit save" path must behave identically —
+		// no empty shell object left on the row.
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "Bearcamp PLT" },
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "  ", address: "\n \n" },
+		});
+		me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessIdentity).toBeUndefined();
+	});
+
+	test("rejects over-long fields", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-caps");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessIdentity: { legalName: "x".repeat(121) },
+			}),
+		).rejects.toThrow(/at most 120/);
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessIdentity: { address: "x".repeat(301) },
+			}),
+		).rejects.toThrow(/at most 300/);
+	});
+
+	test("NEVER appears in the public by-slug storefront payload", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-private");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: {
+				legalName: "Hermoolah Enterprise",
+				address: "12, Jalan Contoh 3/4",
+			},
+		});
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "identity-private",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		// The identity block reaches buyers only inside the PDFs their tracking
+		// token unlocks — the storefront payload must not leak it (nor the
+		// private geo businessAddress, pinned here as a canary).
+		expect(
+			(result.retailer as Record<string, unknown>).businessIdentity,
+		).toBeUndefined();
+		expect(
+			(result.retailer as Record<string, unknown>).businessAddress,
+		).toBeUndefined();
+	});
+
+	test("prints on the buyer document via receiptPdfInputs", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-pdf");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "Hermoolah Enterprise" },
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		if (!me) throw new Error("no retailer");
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: me._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			variants: [{ optionValues: [], price: 5000, onHand: 5 }],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: me._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		// The buyer path: token-keyed, unauthenticated (resolveSharedOrder).
+		const token = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.trackingToken ?? "__none__";
+		});
+		const res = await t.query(internal.orders.receiptPdfInputs, { token });
+		expect(res?.data.sellerLines).toEqual(["Hermoolah Enterprise"]);
+	});
+});

@@ -413,13 +413,18 @@ export async function buildOrderReceiptPdf(
 		fill: paid ? GREEN : AMBER,
 	});
 
-	// Two parties / meta.
+	// Two parties / meta. The "From" column carries the seller's legal identity
+	// under the trading name (z8r3fdcrzj) — pre-composed lines, empty for stores
+	// that haven't filled it in, so their layout is unchanged.
 	const colW = CONTENT_W / 2 - 12;
 	const leftBottom = detailBlock(
 		d,
 		MARGIN,
 		"From",
-		[{ text: data.storeName, strong: true }],
+		[
+			{ text: data.storeName, strong: true },
+			...data.sellerLines.map((text) => ({ text })),
+		],
 		y,
 		colW,
 	);
@@ -566,7 +571,18 @@ export async function buildSubscriptionInvoicePdf(
 	const d = await newDoc();
 	const { page, font, bold } = d;
 
-	let y = header(d, "Invoice", data.invoiceNumber);
+	// One builder, two faces (the buildOrderReceiptPdf pattern): `data.paid` is
+	// set only by the receipt render (invoiceToSubscriptionData asReceipt), which
+	// titles the document "Receipt", stamps the green pill, swaps "Due" for
+	// "Paid", relabels the total bar and drops the payment card. The invoice
+	// blob frozen at issue never carries `paid`, so it stays a bill forever.
+	const paid = data.paid;
+	let y = header(
+		d,
+		paid ? "Receipt" : "Invoice",
+		data.invoiceNumber,
+		paid ? { label: "Paid", fill: GREEN } : undefined,
+	);
 
 	// Parties.
 	const colW = CONTENT_W / 2 - 12;
@@ -589,20 +605,22 @@ export async function buildSubscriptionInvoicePdf(
 	);
 	y = Math.min(leftBottom, rightBottom) - 10;
 
-	// Dates strip.
-	draw(
-		page,
-		font,
-		[
-			`Invoice date: ${formatDocDate(data.issuedAt)}`,
-			`Due: ${formatDocDate(data.dueDate)}`,
-			`Period: ${formatDocDate(data.periodStart)} - ${formatDocDate(data.periodEnd)}`,
-		].join("     "),
-		MARGIN,
-		y,
-		9,
-		SLATE,
+	// Dates strip. A receipt answers "when was this paid (and how)", not "when
+	// is it due" — the due date died the moment the payment landed.
+	const dateBits = [`Invoice date: ${formatDocDate(data.issuedAt)}`];
+	if (paid) {
+		dateBits.push(
+			paid.methodLabel
+				? `Paid: ${formatDocDate(paid.paidAt)} (${paid.methodLabel})`
+				: `Paid: ${formatDocDate(paid.paidAt)}`,
+		);
+	} else {
+		dateBits.push(`Due: ${formatDocDate(data.dueDate)}`);
+	}
+	dateBits.push(
+		`Period: ${formatDocDate(data.periodStart)} - ${formatDocDate(data.periodEnd)}`,
 	);
+	draw(page, font, dateBits.join("     "), MARGIN, y, 9, SLATE);
 	y -= 24;
 
 	// Line-item table.
@@ -639,8 +657,15 @@ export async function buildSubscriptionInvoicePdf(
 		});
 		y -= 18;
 	}
-	y = totalBar(d, "Total due", formatMoney(data.total, data.currency), y);
+	y = totalBar(
+		d,
+		paid ? "Amount paid" : "Total due",
+		formatMoney(data.total, data.currency),
+		y,
+	);
 
+	// The receipt face never renders a payment card — issuerBank is already
+	// emptied by the mapper, and paymentCard draws nothing for an empty list.
 	y = paymentCard(d, "Payment instructions", data.issuerBank, y);
 
 	// A cross-border (non-MYR) invoice carries no payment card — the MY rails in
@@ -648,9 +673,11 @@ export async function buildSubscriptionInvoicePdf(
 	// "any account above".
 	footer(
 		d,
-		data.issuerBank.length > 0
-			? `Please transfer to any account above and use ${data.invoiceNumber} as your payment reference.`
-			: `We'll confirm payment details with you on WhatsApp — quote ${data.invoiceNumber} as your payment reference.`,
+		paid
+			? `Payment received — thank you. Keep this receipt for your records (ref ${data.invoiceNumber}).`
+			: data.issuerBank.length > 0
+				? `Please transfer to any account above and use ${data.invoiceNumber} as your payment reference.`
+				: `We'll confirm payment details with you on WhatsApp — quote ${data.invoiceNumber} as your payment reference.`,
 	);
 	return d.doc.save();
 }

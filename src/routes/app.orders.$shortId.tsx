@@ -4,10 +4,10 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
 import {
 	ArrowLeft,
-	CalendarRange,
 	ArrowRight,
 	BadgeCheck,
 	Ban,
+	CalendarRange,
 	Check,
 	CheckCircle2,
 	ChevronDown,
@@ -32,27 +32,18 @@ import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
-import { describeBookingSpan } from "../lib/booking-dates";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
 	formatFulfilmentTime,
 } from "../../convex/lib/fulfilmentDate";
 import {
-	BookingRequestCard,
-	BookingResolutionNote,
-} from "../components/order/booking-request-card";
-import {
-	OrderItemLine,
-	type OrderBookingSpan,
-} from "../components/order/order-item-line";
-import { SecurityDepositCard } from "../components/order/security-deposit-card";
-import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import {
 	COUNTRY_PAYMENT_METHODS,
 	type OrderPaymentMethod,
@@ -69,13 +60,22 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import {
+	BookingRequestCard,
+	BookingResolutionNote,
+} from "../components/order/booking-request-card";
 import { DispatchHub } from "../components/order/dispatch-hub";
+import {
+	type OrderBookingSpan,
+	OrderItemLine,
+} from "../components/order/order-item-line";
 import {
 	canPrintLabel,
 	PrintLabelButton,
 } from "../components/order/print-label-button";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
+import { SecurityDepositCard } from "../components/order/security-deposit-card";
 import {
 	MarkShippedDialog,
 	type ShipmentFields,
@@ -103,6 +103,7 @@ import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
+import { describeBookingSpan } from "../lib/booking-dates";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
@@ -450,7 +451,7 @@ function OrderDetailRoute() {
 					dispatchInfo?.job
 						? dispatchInfo.job.deliveryDirection === "collection"
 						: dispatchInfo?.deliveryDirection === "collection"
-			  )
+				)
 			? "Lalamove Collection"
 			: "Lalamove Delivery";
 	// A rider is mid-trip with this order: manual shipped/delivered advances are
@@ -754,7 +755,7 @@ function OrderDetailRoute() {
 						) : null}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
-							label="Download receipt"
+							paid={isOrderDocPaid(order.paymentStatus)}
 						/>
 					</>
 				}
@@ -818,188 +819,188 @@ function OrderDetailRoute() {
 			    out, the settled outcome after, refund context on a paid cancel. */}
 			<SecurityDepositCard order={order} />
 			{order.status === "booking_requested" ? null : (
-			<OrderProgressStepper
-				stages={stages}
-				currentIndex={currentIdx}
-				cancelled={order.status === "cancelled"}
-				action={
-					nextStage ? (
-						(() => {
-							// Advancing into production (packed or later) is blocked while
-							// the mockup gate is closed — mirrors the server.
-							const blocked =
-								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed") &&
-								mockupGated;
-							// A live rider booking with a working webhook drives shipped
-							// (pickup) and delivered (drop-off) on its own — the manual
-							// advance is disabled-with-reason, with a confirm-gated escape
-							// below so a dead webhook never strands the order.
-							const riderManaged =
-								!blocked &&
-								riderHandlingTrip &&
-								isRiderManagedTransition(nextStage.anchor, order.status);
-							// Collection: the goods aren't with the seller yet, so no production
-							// stage can be true. Never overlaps riderManaged (that one is off on
-							// collection orders) — same order the server checks them in.
-							const collectionPending =
-								!blocked &&
-								awaitingCollection &&
-								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
-							// Delyva ships parcels, Lalamove sends riders — the copy has
-							// to name what the seller actually booked (86eyjpv6z).
-							const riderMoment = hasActiveDelyvaBooking
-								? nextStage.anchor === "delivered"
-									? "the courier delivers it"
-									: "the courier collects it"
-								: nextStage.anchor === "delivered"
-									? "the rider drops off"
-									: "the rider picks up";
-							// First move out of pending into a confirmed-anchored stage
-							// keeps the familiar "Confirm Order" verb; everything else
-							// reads "Mark as {stage}".
-							const advanceLabel =
-								order.status === "pending" && nextStage.anchor === "confirmed"
-									? "Confirm Order"
-									: `Mark as ${stageLabel(nextStage, "en")}`;
-							return (
-								<div className="flex flex-col gap-2">
-									<button
-										type="button"
-										onClick={() => {
-											// Marking a delivery order shipped is THE moment the
-											// seller decides how it goes out, so prompt first: a
-											// parcel seller for courier + tracking (optional; it lands
-											// on the buyer's order page), a rider vendor for the
-											// booking they may not have made yet. Skipped when
-											// tracking is already attached AND when a rider booking
-											// is active (belt-and-braces: booking mirrors its
-											// shareLink onto carrierTrackingUrl, but a booked order
-											// must never be re-prompted even if that link is
-											// missing). Webhook-driven orders never reach here at
-											// all — the button is disabled. Collection stores skip
-											// the prompt entirely: their rider trip is buyer→store
-											// (booked from the Collection card at confirm time), so
-											// offering "book a rider" at the shipped moment would
-											// dispatch ANOTHER collection — the return leg is its
-											// own order (86eyg0n8e, Leg 2 out of scope).
-											if (
-												nextStage.anchor === "shipped" &&
-												order.deliveryMethod === "delivery" &&
-												!collectionService &&
-												!hasActiveRiderBooking &&
-												!order.trackingNo &&
-												!order.carrierTrackingUrl
-											) {
-												// A rider vendor who CAN book goes straight to the
-												// booking modal on the card below — the same one
-												// prompt-on-packed opens, with the live price,
-												// vehicle switch and variance. An intermediate
-												// "how is this going out?" prompt in front of it
-												// was pure chrome for them. The parcel form (and
-												// the blocked-reason copy, which the booking modal
-												// can't show because there's nothing to quote)
-												// still belong to MarkShippedDialog.
+				<OrderProgressStepper
+					stages={stages}
+					currentIndex={currentIdx}
+					cancelled={order.status === "cancelled"}
+					action={
+						nextStage ? (
+							(() => {
+								// Advancing into production (packed or later) is blocked while
+								// the mockup gate is closed — mirrors the server.
+								const blocked =
+									anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed") &&
+									mockupGated;
+								// A live rider booking with a working webhook drives shipped
+								// (pickup) and delivered (drop-off) on its own — the manual
+								// advance is disabled-with-reason, with a confirm-gated escape
+								// below so a dead webhook never strands the order.
+								const riderManaged =
+									!blocked &&
+									riderHandlingTrip &&
+									isRiderManagedTransition(nextStage.anchor, order.status);
+								// Collection: the goods aren't with the seller yet, so no production
+								// stage can be true. Never overlaps riderManaged (that one is off on
+								// collection orders) — same order the server checks them in.
+								const collectionPending =
+									!blocked &&
+									awaitingCollection &&
+									anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
+								// Delyva ships parcels, Lalamove sends riders — the copy has
+								// to name what the seller actually booked (86eyjpv6z).
+								const riderMoment = hasActiveDelyvaBooking
+									? nextStage.anchor === "delivered"
+										? "the courier delivers it"
+										: "the courier collects it"
+									: nextStage.anchor === "delivered"
+										? "the rider drops off"
+										: "the rider picks up";
+								// First move out of pending into a confirmed-anchored stage
+								// keeps the familiar "Confirm Order" verb; everything else
+								// reads "Mark as {stage}".
+								const advanceLabel =
+									order.status === "pending" && nextStage.anchor === "confirmed"
+										? "Confirm Order"
+										: `Mark as ${stageLabel(nextStage, "en")}`;
+								return (
+									<div className="flex flex-col gap-2">
+										<button
+											type="button"
+											onClick={() => {
+												// Marking a delivery order shipped is THE moment the
+												// seller decides how it goes out, so prompt first: a
+												// parcel seller for courier + tracking (optional; it lands
+												// on the buyer's order page), a rider vendor for the
+												// booking they may not have made yet. Skipped when
+												// tracking is already attached AND when a rider booking
+												// is active (belt-and-braces: booking mirrors its
+												// shareLink onto carrierTrackingUrl, but a booked order
+												// must never be re-prompted even if that link is
+												// missing). Webhook-driven orders never reach here at
+												// all — the button is disabled. Collection stores skip
+												// the prompt entirely: their rider trip is buyer→store
+												// (booked from the Collection card at confirm time), so
+												// offering "book a rider" at the shipped moment would
+												// dispatch ANOTHER collection — the return leg is its
+												// own order (86eyg0n8e, Leg 2 out of scope).
 												if (
-													lalamoveVendor &&
-													dispatchInfo?.blockReason === null
+													nextStage.anchor === "shipped" &&
+													order.deliveryMethod === "delivery" &&
+													!collectionService &&
+													!hasActiveRiderBooking &&
+													!order.trackingNo &&
+													!order.carrierTrackingUrl
 												) {
-													setBookRequestToken((t) => t + 1);
+													// A rider vendor who CAN book goes straight to the
+													// booking modal on the card below — the same one
+													// prompt-on-packed opens, with the live price,
+													// vehicle switch and variance. An intermediate
+													// "how is this going out?" prompt in front of it
+													// was pure chrome for them. The parcel form (and
+													// the blocked-reason copy, which the booking modal
+													// can't show because there's nothing to quote)
+													// still belong to MarkShippedDialog.
+													if (
+														lalamoveVendor &&
+														dispatchInfo?.blockReason === null
+													) {
+														setBookRequestToken((t) => t + 1);
+														return;
+													}
+													setShipDialogOpen(true);
 													return;
 												}
-												setShipDialogOpen(true);
-												return;
+												void handleAdvance(nextStage.id).catch(() => {});
+											}}
+											disabled={
+												pending !== null ||
+												blocked ||
+												riderManaged ||
+												collectionPending
 											}
-											void handleAdvance(nextStage.id).catch(() => {});
-										}}
-										disabled={
-											pending !== null ||
-											blocked ||
-											riderManaged ||
-											collectionPending
-										}
-										className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
-									>
-										{pending === nextStage.id ? (
-											"Updating…"
-										) : blocked ? (
-											`${advanceLabel} — awaiting mockup`
-										) : collectionPending ? (
-											`${advanceLabel} — awaiting collection`
-										) : riderManaged ? (
-											`${advanceLabel} — automatic`
-										) : (
-											<>
-												{advanceLabel}
-												<ArrowRight className="size-4.5" />
-											</>
-										)}
-									</button>
-									{collectionPending ? (
-										<p className="text-xs leading-relaxed text-muted-foreground">
-											This order is still with your customer — send a rider to
-											collect it, and you can move it on once the items are with
-											you.{" "}
-											<button
-												type="button"
-												onClick={() => setConfirmCollectedOpen(true)}
-												disabled={pending !== null}
-												className="font-medium underline underline-offset-2"
-											>
-												I already have the items
-											</button>{" "}
-											if you collected them yourself.
-										</p>
-									) : riderManaged ? (
-										<p className="text-xs leading-relaxed text-muted-foreground">
-											{riderWebhookReporting ? (
-												<>
-													{hasActiveDelyvaBooking
-														? "A Delyva courier booking is on this order"
-														: "A Lalamove rider is on this order"}{" "}
-													— it moves to <b>{stageLabel(nextStage, "en")}</b> on
-													its own when {riderMoment}.
-												</>
+											className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
+										>
+											{pending === nextStage.id ? (
+												"Updating…"
+											) : blocked ? (
+												`${advanceLabel} — awaiting mockup`
+											) : collectionPending ? (
+												`${advanceLabel} — awaiting collection`
+											) : riderManaged ? (
+												`${advanceLabel} — automatic`
 											) : (
 												<>
-													{hasActiveDelyvaBooking
-														? "A Delyva courier is booked for this order"
-														: "A Lalamove rider is booked for this order"}{" "}
-													— it moves to <b>{stageLabel(nextStage, "en")}</b> on
-													its own once {riderMoment}, as long as your{" "}
-													{hasActiveDelyvaBooking ? "Delyva" : "Lalamove"}{" "}
-													webhook is set up.
+													{advanceLabel}
+													<ArrowRight className="size-4.5" />
 												</>
-											)}{" "}
-											<button
-												type="button"
-												onClick={() => setConfirmManualAdvanceOpen(true)}
-												disabled={pending !== null}
-												className="font-medium underline underline-offset-2"
-											>
-												Update manually
-											</button>{" "}
-											{riderWebhookReporting
-												? "if the automatic update didn't arrive."
-												: "to move it yourself instead."}
-										</p>
-									) : null}
-									{/* The buyer gets ONE WhatsApp per order (the confirmation),
+											)}
+										</button>
+										{collectionPending ? (
+											<p className="text-xs leading-relaxed text-muted-foreground">
+												This order is still with your customer — send a rider to
+												collect it, and you can move it on once the items are
+												with you.{" "}
+												<button
+													type="button"
+													onClick={() => setConfirmCollectedOpen(true)}
+													disabled={pending !== null}
+													className="font-medium underline underline-offset-2"
+												>
+													I already have the items
+												</button>{" "}
+												if you collected them yourself.
+											</p>
+										) : riderManaged ? (
+											<p className="text-xs leading-relaxed text-muted-foreground">
+												{riderWebhookReporting ? (
+													<>
+														{hasActiveDelyvaBooking
+															? "A Delyva courier booking is on this order"
+															: "A Lalamove rider is on this order"}{" "}
+														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
+														on its own when {riderMoment}.
+													</>
+												) : (
+													<>
+														{hasActiveDelyvaBooking
+															? "A Delyva courier is booked for this order"
+															: "A Lalamove rider is booked for this order"}{" "}
+														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
+														on its own once {riderMoment}, as long as your{" "}
+														{hasActiveDelyvaBooking ? "Delyva" : "Lalamove"}{" "}
+														webhook is set up.
+													</>
+												)}{" "}
+												<button
+													type="button"
+													onClick={() => setConfirmManualAdvanceOpen(true)}
+													disabled={pending !== null}
+													className="font-medium underline underline-offset-2"
+												>
+													Update manually
+												</button>{" "}
+												{riderWebhookReporting
+													? "if the automatic update didn't arrive."
+													: "to move it yourself instead."}
+											</p>
+										) : null}
+										{/* The buyer gets ONE WhatsApp per order (the confirmation),
 									    so a status move is silent on their phone — say so where
 									    the seller taps, or they'll assume it was sent. */}
-									<p className="text-xs leading-relaxed text-muted-foreground">
-										Moving the order along updates the buyer&apos;s order page —
-										it doesn&apos;t send them a WhatsApp.
-									</p>
-								</div>
-							);
-						})()
-					) : order.status === "delivered" ? (
-						<p className="text-sm font-medium text-accent-emphasis">
-							Completed — nothing left to do 🎉
-						</p>
-					) : undefined
-				}
-			/>
+										<p className="text-xs leading-relaxed text-muted-foreground">
+											Moving the order along updates the buyer&apos;s order page
+											— it doesn&apos;t send them a WhatsApp.
+										</p>
+									</div>
+								);
+							})()
+						) : order.status === "delivered" ? (
+							<p className="text-sm font-medium text-accent-emphasis">
+								Completed — nothing left to do 🎉
+							</p>
+						) : undefined
+					}
+				/>
 			)}
 
 			{/* Confirmation push failed (86eyf1rck). Amber like the payment claim: it
@@ -1963,7 +1964,7 @@ function OrderDetailRoute() {
 						) : null}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
-							label="Download receipt"
+							paid={isOrderDocPaid(order.paymentStatus)}
 							variant="ghost"
 							size="default"
 							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"

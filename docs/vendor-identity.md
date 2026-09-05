@@ -58,6 +58,16 @@ taken email, and `createRetailer` blocks a second store per login.
 (Note: customers are keyed by `(retailerId, customer waPhone)` — a *different*
 number from the retailer's own `waPhone`. Don't conflate the two.)
 
+## `businessIdentity` — display data, not an identity key
+
+`retailers.businessIdentity` (z8r3fdcrzj) carries the seller's *legal* identity
+— registered name, SSM/UEN, billing address — purely for printing on the
+invoices/receipts buyers download. It is **not** unique, **not** validated
+against SSM, and plays no part in ownership or auth; the identity keys above
+are unchanged. It's also deliberately separate from `businessAddress` (the
+private delivery-pricing origin): this block is seller-published, that one must
+never leak. See [`invoices-receipts.md`](./invoices-receipts.md).
+
 ## The open fork — multi-brand vendors
 
 Some F&B sellers run multiple brands (a cake brand *and* a frozen-food brand).

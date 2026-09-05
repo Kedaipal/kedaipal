@@ -301,6 +301,37 @@ export default defineSchema({
 				country: v.optional(countryValidator),
 			}),
 		),
+		// Legal/billing identity printed in the "From" block of the invoices and
+		// receipts BUYERS download (z8r3fdcrzj) — the seller's registered entity,
+		// SSM/UEN number, and a billing address, so a corporate customer's finance
+		// department will accept the document. DELIBERATELY separate from
+		// `businessAddress` above: that field is a geo origin captured for
+		// delivery pricing and is owner-only because many sellers run from home.
+		// Every field here is typed by the seller with in-UI copy stating it
+		// appears on buyer documents — publishing is the point, and opting in is
+		// per-field. Never added to the by-slug storefront payload; it reaches a
+		// buyer only inside a PDF their tracking token already unlocks. All
+		// fields optional; an all-blank save stores undefined (no empty shells).
+		// See docs/invoices-receipts.md.
+		businessIdentity: v.optional(
+			v.object({
+				// Registered entity name, when it differs from the trading name
+				// ("Hermoolah Enterprise" vs "Hermoolah").
+				legalName: v.optional(v.string()),
+				// SSM registration (MY) / UEN (SG) — the label is chosen by the
+				// store's country at render time, the value is stored verbatim.
+				registrationNumber: v.optional(v.string()),
+				// Multiline billing address, exactly as the seller wants it
+				// printed (newline-separated). NOT geocoded, NOT the delivery
+				// origin — paper only.
+				address: v.optional(v.string()),
+				// Billing-query contact (phone or email), printed as typed.
+				contact: v.optional(v.string()),
+				// Tax registration (e.g. SST) — printed string only, no tax
+				// behaviour attached (compliance is tracked separately).
+				taxNumber: v.optional(v.string()),
+			}),
+		),
 		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
 		// behaviour, no migration). "flat" = one fee per delivery order with an
 		// optional free-above-subtotal threshold (all-tier). "radius" = distance
@@ -2218,6 +2249,14 @@ export default defineSchema({
 		// asynchronously just after issue by invoices.generateInvoicePdf (and absent
 		// on rows issued before this field). See docs/invoices-receipts.md.
 		pdfStorageId: v.optional(v.id("_storage")),
+		// The RECEIPT for this invoice once it's paid (z8r3fdcrzj) — a second
+		// frozen document, never an overwrite of `pdfStorageId`: the invoice blob
+		// is the bill the seller received (kept for their records), the receipt is
+		// the proof of payment ("Amount paid", no payment instructions). Rendered
+		// asynchronously by invoices.generateInvoiceReceiptPdf, scheduled from
+		// markPaid (and on demand for rows paid before this shipped). Absent on
+		// unpaid/void invoices — a void row never gets one.
+		receiptPdfStorageId: v.optional(v.id("_storage")),
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])

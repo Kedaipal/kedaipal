@@ -41,10 +41,11 @@ import {
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
+import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import {
-	OrderItemLine,
 	type OrderBookingSpan,
+	OrderItemLine,
 } from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
@@ -1619,7 +1620,8 @@ function TrackingRoute() {
 				    order, no delivery/email needed. */}
 				<ReceiptDownloadButton
 					token={token}
-					label="Download receipt (PDF)"
+					paid={isOrderDocPaid(order.paymentStatus)}
+					pdfHint
 					variant="outline"
 					className="w-full"
 				/>

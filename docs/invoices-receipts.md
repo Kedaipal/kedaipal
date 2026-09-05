@@ -137,6 +137,34 @@ and a footer nudging the `ORD-XXXX` payment reference). The download filename
 matches (`Receipt-…` / `Invoice-…`). No separate invoice builder or table — the
 pay-later counter case reuses this.
 
+**The predicate + nouns live in ONE module** — `convex/lib/orderDocument.ts`
+(`isOrderDocPaid`, `orderDocumentNoun`, `orderDocumentTitle`), imported by the
+mapper, the filename, `ReceiptDownloadButton` and the counter Done-screen
+actions (`z8r3fdcrzj`). Before that, all three download buttons hardcoded
+"Download receipt" while the PDF titled itself "Invoice", so the invoice face —
+the thing a seller chasing a corporate payment needs — was effectively
+undiscoverable. **Every button label now derives from `paid`**: an unpaid order
+offers "Download invoice" everywhere (seller order detail, mobile action sheet,
+buyer tracking page — the buyer's copy is what they forward to whoever pays for
+them).
+
+**Seller legal identity on the "From" block (`z8r3fdcrzj`):**
+`retailers.businessIdentity` — registered name, SSM/UEN (label picked by store
+country via `REGISTRATION_LABEL`), a multiline billing address, tax number, and
+a billing contact — prints under the store name on BOTH faces
+(`businessIdentityToLines`). Every field optional; all-blank renders the legacy
+one-line block byte-identically. Captured in **Settings → Store → Business
+details** (directly under Business name — it's the legal half of store
+identity), with copy stating outright that the fields appear on buyer
+documents. **Deliberately NOT `retailers.businessAddress`** — that field is the
+private radius-mode geo origin (often the seller's home, owner-only by schema
+comment); this one is typed by the seller specifically to be published. It is
+never added to the by-slug storefront payload (a test pins this) — it reaches a
+buyer only inside a PDF their tracking token already unlocks. Because the order
+document is generated on demand, identity saved *after* an order was placed
+appears on that order's future downloads too — intended (the buyer document is
+not a frozen financial record), same posture as a store rename.
+
 Backend:
 - **A:** `orders.generateReceiptPdf` (public action) → returns PDF bytes +
   filename. Authorized through the same `resolveSharedOrder` seam as `orders.get`:
@@ -159,6 +187,22 @@ Backend:
   `issueInvoice`) renders + stores the blob; idempotent (skips if one exists).
   `invoices.getInvoicePdfUrl` returns an ownership-checked signed URL (owning
   retailer **or** admin; `null` while still rendering).
+- **B (paid receipt, `z8r3fdcrzj`):** marking an invoice paid schedules
+  `invoices.generateInvoiceReceiptPdf`, which renders the SAME builder's
+  **receipt face** ("Receipt" title, green Paid pill, `Paid: <date> (<method>)`
+  in the dates strip, an **"Amount paid"** bar, NO payment-instructions card, a
+  thank-you footer) into a **second** blob, `invoices.receiptPdfStorageId` —
+  never an overwrite of the frozen invoice blob, which remains the bill the
+  seller was sent. The face is **explicit opt-in**
+  (`invoiceToSubscriptionData({ asReceipt: true })`), never derived from row
+  status, so the legacy on-demand *invoice* render of an already-paid row still
+  produces an invoice. `getInvoiceReceiptPdfUrl` /
+  `getOrCreateInvoiceReceiptPdfUrl` mirror the invoice pair (same ownership
+  gate; on-demand covers rows paid before this shipped); the generator refuses
+  anything not `paid`, so pending/void rows can never mint one. Surfaced as a
+  second icon button on **paid** rows of the billing tab's invoice history.
+  (The admin console's invoice list is pending-only, so it has nowhere to show
+  a receipt — admins reach one via act-as if ever needed.)
 - **CSV:** `orders.exportOrders` (**action**) — same filter args as
   `searchOrders` (via the shared predicate), or an explicit `orderIds` selection.
   Unlike the reactive inbox (capped at a 1000-doc scan), the export **paginates
@@ -200,14 +244,27 @@ seconds before the async render lands, rather than failing silently.
 
 ## Schema
 
-One additive optional field (`convex/schema.ts`, dev-only widen, no backfill):
+Additive optional fields only (`convex/schema.ts`, dev-only widen, no backfill):
 
 ```ts
 // invoices
 pdfStorageId: v.optional(v.id("_storage")),
+receiptPdfStorageId: v.optional(v.id("_storage")), // paid receipt (z8r3fdcrzj)
+
+// retailers — legal identity for buyer documents (z8r3fdcrzj)
+businessIdentity: v.optional(v.object({
+	legalName: v.optional(v.string()),
+	registrationNumber: v.optional(v.string()), // SSM (MY) / UEN (SG)
+	address: v.optional(v.string()), // multiline, paper-only
+	contact: v.optional(v.string()),
+	taxNumber: v.optional(v.string()), // printed string, no tax behaviour
+})),
 ```
 
 ## Out of scope (tracked separately)
 
 Email delivery of invoices/receipts; a dedicated invoice-list UI; payment
-reconciliation; SST/tax compliance.
+reconciliation; SST/tax compliance (LHDN MyInvois e-Invoice included —
+`businessIdentity.taxNumber` is a printed string with no behaviour); sequential
+per-retailer invoice numbering on buyer documents (they reference `ORD-XXXX`;
+a gapless series is a compliance feature to build alongside tax).
