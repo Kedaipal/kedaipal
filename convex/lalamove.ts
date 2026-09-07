@@ -39,7 +39,7 @@ import {
 	resolveLalamoveCredentials,
 	classifyBookingFailure,
 	resolveScheduleAt,
-	toLalamoveMyPhone,
+	toLalamoveContactPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
 import { DEFAULT_COUNTRY } from "./lib/country";
@@ -96,22 +96,39 @@ async function callLalamove(
 // ---------------------------------------------------------------------------
 
 /** Everything the quote action needs about the retailer, in one read. */
+/** What a live Lalamove quote needs from the store. */
+export type LalamoveQuoteContext = {
+	origin: { latitude: number; longitude: number; label: string };
+	vehicleType: string;
+	booking: { apiKey?: string; apiSecret?: string };
+	/** The store's country — decides the Lalamove market the quote is priced
+	 * in (z8r3fdch3r), so it travels with the context into the fetch. */
+	country: string | undefined;
+	/** Store is on the provider-aware "live" mode (PR #253 review): the
+	 * legacy public action must then REFUSE to mint a row — a Lalamove-only
+	 * price on a live store bypasses charge-the-higher, and on a cold store
+	 * it would price a frozen cart as a rider trip. Only liveQuote's
+	 * orchestrator may quote such a store (it reads this context internally,
+	 * where the flag is simply ignored). */
+	providerAware: boolean;
+	deliveryDirection: "standard" | "collection";
+};
+
 export const getQuoteContext = internalQuery({
 	args: { retailerId: v.id("retailers") },
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{
-		origin: { latitude: number; longitude: number; label: string };
-		vehicleType: string;
-		booking: { apiKey?: string; apiSecret?: string };
-		deliveryDirection: "standard" | "collection";
-	} | null> => {
+	): Promise<LalamoveQuoteContext | null> => {
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return null;
-		// Live quoting only exists under pricing mode "lalamove" — every other
-		// mode prices via the pure resolver with no network involved.
-		if (retailer.deliveryConfig?.mode !== "lalamove") return null;
+		// Live quoting exists under the provider-aware "live" mode and its
+		// single-provider ancestor "lalamove" — every other mode prices via the
+		// pure resolver with no network involved.
+		const liveMode =
+			retailer.deliveryConfig?.mode === "lalamove" ||
+			retailer.deliveryConfig?.mode === "live";
+		if (!liveMode) return null;
 		const origin = retailer.businessAddress;
 		if (!origin) return null; // enable gate should prevent this — fail soft
 		return {
@@ -125,6 +142,8 @@ export const getQuoteContext = internalQuery({
 				apiKey: retailer.deliveryBooking?.apiKey,
 				apiSecret: retailer.deliveryBooking?.apiSecret,
 			},
+			country: retailer.country,
+			providerAware: retailer.deliveryConfig?.mode === "live",
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
 		};
@@ -134,9 +153,32 @@ export const getQuoteContext = internalQuery({
 export const saveCheckoutQuote = internalMutation({
 	args: {
 		retailerId: v.id("retailers"),
-		quotationId: v.string(),
+		provider: v.optional(
+			v.union(v.literal("lalamove"), v.literal("delyva")),
+		),
+		quotationId: v.optional(v.string()),
 		fee: v.number(),
-		vehicleType: v.string(),
+		currency: v.optional(v.string()),
+		vehicleType: v.optional(v.string()),
+		serviceCode: v.optional(v.string()),
+		serviceName: v.optional(v.string()),
+		considered: v.optional(
+			v.array(
+				v.object({
+					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					fee: v.number(),
+					currency: v.string(),
+				}),
+			),
+		),
+		lines: v.optional(
+			v.array(
+				v.object({
+					variantId: v.id("productVariants"),
+					quantity: v.number(),
+				}),
+			),
+		),
 		latitude: v.number(),
 		longitude: v.number(),
 	},
@@ -206,9 +248,79 @@ export const quoteForCheckout = action({
 			retailerId: args.retailerId,
 		});
 		if (!context) return { status: "store_unavailable" };
-		const credentials = resolveLalamoveCredentials(context.booking);
-		if (!credentials) return { status: "store_unavailable" };
+		// A provider-aware store is priced ONLY by liveQuote.quoteForCheckout.
+		// Serving it here would mint a redeemable Lalamove-only row — an
+		// adversarial buyer's way around charge-the-higher, and a rider price
+		// for a frozen cart on a cold store. "unavailable" is retryable copy:
+		// the one honest caller is a stale pre-deploy bundle, and its buyer
+		// recovers on reload (the reactive query re-routes fresh bundles the
+		// moment the migration flips the mode, so this window is minutes).
+		if (context.providerAware) return { status: "unavailable" };
+		const quote = await fetchLalamoveQuote({
+			context,
+			retailerId: args.retailerId,
+			latitude: args.latitude,
+			longitude: args.longitude,
+			address: args.address,
+			fulfilmentDate: args.fulfilmentDate,
+			fulfilmentTimeMinutes: args.fulfilmentTimeMinutes,
+		});
+		if (quote.status !== "quoted") return { status: quote.status };
+		const quoteId: Id<"deliveryQuotes"> = await ctx.runMutation(
+			internal.lalamove.saveCheckoutQuote,
+			{
+				retailerId: args.retailerId,
+				provider: "lalamove",
+				quotationId: quote.quotationId,
+				fee: quote.fee,
+				currency: quote.currency,
+				vehicleType: quote.vehicleType,
+				latitude: args.latitude,
+				longitude: args.longitude,
+			},
+		);
+		return { status: "quoted", quoteId, fee: quote.fee };
+	},
+});
 
+/** One provider's answer, shaped for the cross-provider rule
+ * (convex/lib/liveQuote.ts). */
+export type LalamoveCheckoutQuote =
+	| {
+			status: "quoted";
+			fee: number;
+			currency: string;
+			quotationId: string;
+			vehicleType: string;
+	  }
+	| { status: "out_of_range" | "store_unavailable" | "unavailable" };
+
+/**
+ * Fetch a live Lalamove price WITHOUT recording it (z8r3fdbvdy).
+ *
+ * Extracted from `quoteForCheckout` so the provider-aware live-pricing action
+ * can ask both providers and record only the winner — a second copy of this
+ * would drift on the first scheduling or classification change, and this
+ * function decides what a buyer pays.
+ *
+ * Rate limiting and the deliveryQuotes row stay with the CALLERS: one quote
+ * may lose the comparison and must not leave a redeemable row behind.
+ */
+export async function fetchLalamoveQuote(args: {
+	context: LalamoveQuoteContext;
+	retailerId: Id<"retailers">;
+	latitude: number;
+	longitude: number;
+	address: string;
+	fulfilmentDate?: number;
+	fulfilmentTimeMinutes?: number;
+}): Promise<LalamoveCheckoutQuote> {
+	const { context } = args;
+	const credentials = resolveLalamoveCredentials(
+		context.booking,
+		context.country,
+	);
+	if (!credentials) return { status: "store_unavailable" };
 		try {
 			// Pre-order pricing: a future fulfilment day is quoted as a SCHEDULED
 			// pickup at noon MYT on that day (the hour barely moves the price;
@@ -249,6 +361,7 @@ export const quoteForCheckout = action({
 				"/v3/quotations",
 				buildQuotationBody({
 					serviceType: context.vehicleType,
+					market: credentials.market,
 					scheduleAt,
 					// Collection service quotes the trip the rider will actually
 					// drive (buyer → store); route prices aren't guaranteed
@@ -262,18 +375,13 @@ export const quoteForCheckout = action({
 				}),
 			);
 			const parsed = parseQuotationResponse(response);
-			const quoteId: Id<"deliveryQuotes"> = await ctx.runMutation(
-				internal.lalamove.saveCheckoutQuote,
-				{
-					retailerId: args.retailerId,
-					quotationId: parsed.quotationId,
-					fee: parsed.priceTotal,
-					vehicleType: context.vehicleType,
-					latitude: args.latitude,
-					longitude: args.longitude,
-				},
-			);
-			return { status: "quoted", quoteId, fee: parsed.priceTotal };
+			return {
+				status: "quoted",
+				fee: parsed.priceTotal,
+				currency: parsed.currency,
+				quotationId: parsed.quotationId,
+				vehicleType: context.vehicleType,
+			};
 		} catch (err) {
 			// Three buyer stories, three copies — and only ONE is retryable.
 			// See classifyQuoteFailure for the taxonomy + live measurements.
@@ -292,8 +400,9 @@ export const quoteForCheckout = action({
 			}
 			return { status };
 		}
-	},
-});
+	}
+
+
 
 // ---------------------------------------------------------------------------
 // Webhook (POST /webhook/lalamove → convex/http.ts → here)
@@ -622,6 +731,7 @@ export type DispatchBlock =
 	| "bad_status"
 	| "job_active"
 	| "booking_disabled"
+	| "no_business_address"
 	| "plan_gated"
 	| "no_credentials"
 	| "no_coords"
@@ -650,8 +760,11 @@ function dispatchBlockReason(args: {
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
 	if (activeJob) return "job_active";
-	if (!retailer.deliveryBooking?.enabled || !retailer.businessAddress)
-		return "booking_disabled";
+	if (!retailer.deliveryBooking?.enabled) return "booking_disabled";
+	// Split out of `booking_disabled` (PR #247 review): a store with rider
+	// booking already ON but no pickup address was told to switch a toggle
+	// that was on — a dead end, and the actual fix lives on another tab.
+	if (!retailer.businessAddress) return "no_business_address";
 	if (!planOk) return "plan_gated";
 	if (!credentials) return "no_credentials";
 	if (
@@ -660,10 +773,12 @@ function dispatchBlockReason(args: {
 	)
 		return "no_coords";
 	if (!order.customer.waPhone) return "no_buyer_phone";
-	// Lalamove MY validates the rider-contact AREA CODE: the seller's number
-	// must be Malaysian (a non-MY buyer number is tolerated — dispatch falls
-	// back to the seller as the rider contact; see getDispatchContext).
-	if (!toLalamoveMyPhone(retailer.waPhone)) return "no_seller_phone";
+	// Lalamove validates the rider-contact AREA CODE per market: the seller's
+	// number must belong to the store's own market (a foreign buyer number is
+	// tolerated — dispatch falls back to the seller as the rider contact; see
+	// getDispatchContext).
+	if (!toLalamoveContactPhone(retailer.waPhone, credentials.market))
+		return "no_seller_phone";
 	return null;
 }
 
@@ -737,6 +852,7 @@ async function dispatchContextForOrder(
 
 	const credentials = resolveLalamoveCredentials(
 		retailer.deliveryBooking as BookingConfig | undefined,
+		retailer.country,
 	);
 
 	const blocked = dispatchBlockReason({
@@ -752,16 +868,23 @@ async function dispatchContextForOrder(
 
 	const address = order.deliveryAddress!;
 	const businessAddress = retailer.businessAddress!;
-	// Lalamove MY rejects non-Malaysian phones (422 on +65 etc. — a real JB
-	// cross-border-buyer case). The rider contact falls back to the SELLER
-	// when the buyer's number isn't MY, with the buyer's actual number
+	// Lalamove rejects a phone from outside the request's market (422 on a
+	// +65 number in MY, and now on a +60 number in SG — the JB cross-border
+	// buyer, in both directions). The rider contact falls back to the SELLER
+	// when the buyer's number is foreign, with the buyer's actual number
 	// carried in remarks so the rider can still reach them via the seller.
-	const sellerPhone = toLalamoveMyPhone(retailer.waPhone);
+	const sellerPhone = toLalamoveContactPhone(
+		retailer.waPhone,
+		credentials.market,
+	);
 	if (!sellerPhone) return { ok: false, reason: "no_seller_phone" };
-	const buyerMyPhone = toLalamoveMyPhone(order.customer.waPhone);
+	const buyerLocalPhone = toLalamoveContactPhone(
+		order.customer.waPhone,
+		credentials.market,
+	);
 	const remarksParts = [
 		order.shortId,
-		buyerMyPhone
+		buyerLocalPhone
 			? undefined
 			: `Buyer WhatsApp: ${toLalamovePhone(order.customer.waPhone!)}`,
 		order.deliveryAddress?.notes,
@@ -781,7 +904,7 @@ async function dispatchContextForOrder(
 	const storeContact = { name: retailer.storeName, phone: sellerPhone };
 	const buyerContact = {
 		name: order.customer.name ?? "Customer",
-		phone: buyerMyPhone ?? sellerPhone,
+		phone: buyerLocalPhone ?? sellerPhone,
 	};
 	// Collection service (86eyg0n8e): the whole trip reverses — rider collects
 	// at the BUYER's address (buyer becomes the sender contact, same +60
@@ -808,7 +931,7 @@ async function dispatchContextForOrder(
 			...(collection ? storeContact : buyerContact),
 			remarks,
 		},
-		buyerContactFallback: buyerMyPhone === null,
+		buyerContactFallback: buyerLocalPhone === null,
 		env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
@@ -882,7 +1005,7 @@ function friendlyBookingError(
 			case "quote_expired":
 				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
 			case "bad_phone":
-				return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
+				return "Lalamove rejected a contact phone number — riders need a local mobile number for your store's country (+60 in Malaysia, +65 in Singapore). Check your WhatsApp number in Settings → Store.";
 			case "out_of_range":
 				return "Lalamove doesn't serve this drop-off address. The order needs to go out another way.";
 		}
@@ -974,6 +1097,7 @@ export const prepareBooking = action({
 				"/v3/quotations",
 				buildQuotationBody({
 					serviceType: vehicleType,
+					market: context.credentials.market,
 					scheduleAt: scheduledFor,
 					stops: [
 						{
@@ -1319,6 +1443,7 @@ export const getPodContext = internalQuery({
 		const retailer = await ctx.db.get(job.retailerId);
 		const credentials = resolveLalamoveCredentials(
 			retailer?.deliveryBooking as BookingConfig | undefined,
+			retailer?.country,
 		);
 		if (!credentials) return null; // keys removed post-booking — no proof, no drama
 		return {
@@ -1544,6 +1669,7 @@ export const getCancelContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		const credentials = resolveLalamoveCredentials(
 			retailer?.deliveryBooking as BookingConfig | undefined,
+			retailer?.country,
 		);
 		if (!credentials) return null;
 		return {
@@ -1614,13 +1740,19 @@ export const getDeliveryJob = query({
 		/** Seller's opt-in "prompt me to book when I mark packed" preference —
 		 * the card auto-opens the confirm dialog on the packed transition. */
 		promptBookOnPacked: boolean;
-		/** Rider dispatch IS this vendor's delivery method. Settings couples this
-		 * 1:1 with the "Lalamove" delivery-charge choice (picking it enables
-		 * booking, switching away disables it), so it answers the seller-facing
-		 * question "do I send riders or parcels?" — and the dashboard drops every
-		 * manual parcel-courier surface when it's true (86eyff02p). Distinct from
-		 * `blockReason === null`, which is about THIS order being bookable now. */
+		/** Rider booking is armed for this store (credentials + the Courier
+		 * booking toggle). Since multi-provider (2 Sep, Zaki) this NO LONGER
+		 * means "rider is the only way out" — a store can run rider booking
+		 * beside Delyva parcels; see `riderOnlyStore` for that question. */
 		bookingEnabled: boolean;
+		/** Rider dispatch IS this vendor's delivery method: the delivery CHARGE
+		 * is Lalamove live quotes, so every checkout was priced (and gated) as a
+		 * rider trip and no parcel ever leaves this store. This is what drops
+		 * the manual parcel-courier surfaces (86eyff02p) — it used to key off
+		 * `bookingEnabled`, which was equivalent while Settings coupled booking
+		 * 1:1 to the pricing mode, and stopped being equivalent the day a
+		 * weight-priced store could arm riders too. */
+		riderOnlyStore: boolean;
 		/** The STORE's current direction (86eyg0n8e) — what booking from this
 		 * card would do right now, so it drives the button/dialog wording and
 		 * the manual-advance gate. What a past trip actually did lives on
@@ -1655,6 +1787,7 @@ export const getDeliveryJob = query({
 
 		const credentials = resolveLalamoveCredentials(
 			retailer.deliveryBooking as BookingConfig | undefined,
+			retailer.country,
 		);
 		const identity = await ctx.auth.getUserIdentity();
 		const actingAsAdmin =
@@ -1693,6 +1826,9 @@ export const getDeliveryJob = query({
 			// mark-shipped prompt keys off this to decide rider-vs-courier.
 			bookingEnabled:
 				retailer.deliveryBooking?.enabled === true &&
+				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			riderOnlyStore:
+				retailer.deliveryConfig?.mode === "lalamove" &&
 				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
@@ -1789,6 +1925,7 @@ export const devProbeScheduleAt = internalAction({
 					"/v3/quotations",
 					buildQuotationBody({
 						serviceType: "MOTORCYCLE",
+						market: probe.credentials.market,
 						scheduleAt: at,
 						stops: [
 							{
@@ -1835,6 +1972,7 @@ export const getProbeContext = internalQuery({
 			if (!r?.businessAddress) continue;
 			const credentials = resolveLalamoveCredentials(
 				r.deliveryBooking as BookingConfig | undefined,
+				r.country,
 			);
 			if (!credentials) continue;
 			return {

@@ -10,6 +10,7 @@
 // Money is stored in MINOR units (sen) everywhere — see src/lib/format.ts — so
 // every amount here is sen and `formatMoney` divides by 100.
 
+import { isOrderDocPaid } from "../orderDocument";
 import { printable } from "./latin1";
 
 // Malaysia is UTC+8 with no DST, so a fixed offset renders the correct calendar
@@ -76,6 +77,12 @@ export type PaymentBlock = {
 
 export type OrderReceiptData = {
 	storeName: string;
+	// Extra "From" lines under the store name — the seller's legal identity
+	// (registered name, SSM/UEN, billing address, contact), pre-composed by
+	// orderToReceiptData from retailers.businessIdentity so the renderer stays a
+	// dumb line-drawer. Empty = the block is just the store name (unchanged
+	// legacy output). See z8r3fdcrzj.
+	sellerLines: string[];
 	orderShortId: string;
 	orderDate: number; // createdAt
 	paidDate?: number; // paymentReceivedAt, when settled
@@ -126,6 +133,13 @@ export type SubscriptionInvoiceData = {
 	total: number; // sen
 	currency: string;
 	issuerBank: PaymentBlock[];
+	// Present ONLY on the receipt face (z8r3fdcrzj): the same builder then
+	// titles itself "Receipt", stamps a green Paid pill, relabels the total bar
+	// "Amount paid", and drops the payment-instructions card. Set exclusively by
+	// invoiceToSubscriptionData({ asReceipt: true }) — never inferred from the
+	// invoice row's status, so re-rendering a paid invoice's INVOICE blob (the
+	// legacy on-demand path) still produces the bill the seller was sent.
+	paid?: { paidAt: number; methodLabel?: string };
 };
 
 // --- Pure mappers (Doc -> view-model) --------------------------------------
@@ -163,6 +177,51 @@ type PaymentMethodForReceipt = {
 	bankAccountNumber?: string;
 	note?: string;
 };
+
+/** The seller-typed legal identity block (retailers.businessIdentity). */
+export type BusinessIdentityForReceipt = {
+	legalName?: string;
+	registrationNumber?: string;
+	address?: string;
+	contact?: string;
+	taxNumber?: string;
+};
+
+// What the registration number is CALLED in each market — the value prints
+// verbatim, only the label localizes ("SSM no." reads wrong on a Singapore
+// invoice and vice versa). Falls back to a neutral label for future countries.
+const REGISTRATION_LABEL: Record<string, string> = {
+	MY: "SSM no.",
+	SG: "UEN",
+};
+
+/**
+ * Flatten the seller's legal identity into printable "From" lines, in fixed
+ * order: legal name, registration, address lines, tax number, contact. Fields
+ * the seller left blank (or that WinAnsi can't draw — `printable`) simply don't
+ * emit, so an untouched store keeps its one-line "From" block byte-identical.
+ */
+export function businessIdentityToLines(
+	identity: BusinessIdentityForReceipt | undefined,
+	country: string,
+): string[] {
+	if (!identity) return [];
+	const lines: string[] = [];
+	const push = (s: string | undefined) => {
+		const p = printable(s);
+		if (p) lines.push(p);
+	};
+	push(identity.legalName);
+	const reg = printable(identity.registrationNumber);
+	if (reg) lines.push(`${REGISTRATION_LABEL[country] ?? "Reg. no."} ${reg}`);
+	// The address is stored as the seller typed it — one printed line per
+	// typed line, blank lines dropped.
+	for (const line of identity.address?.split("\n") ?? []) push(line);
+	const tax = printable(identity.taxNumber);
+	if (tax) lines.push(`Tax no. ${tax}`);
+	push(identity.contact);
+	return lines;
+}
 
 const PAYMENT_STATUS_LABEL: Record<string, string> = {
 	unpaid: "Awaiting payment",
@@ -208,15 +267,25 @@ export function orderToReceiptData(args: {
 	order: OrderForReceipt;
 	storeName: string;
 	paymentMethods: PaymentMethodForReceipt[];
+	// Legal identity block for the "From" column + the country that names its
+	// registration label. Optional so every existing caller (and store) renders
+	// exactly as before.
+	businessIdentity?: BusinessIdentityForReceipt;
+	country?: string;
 }): OrderReceiptData {
 	const { order, storeName, paymentMethods } = args;
 	const status = order.paymentStatus ?? "unpaid";
+	const paid = isOrderDocPaid(status);
 	return {
 		storeName,
+		sellerLines: businessIdentityToLines(
+			args.businessIdentity,
+			args.country ?? "MY",
+		),
 		orderShortId: order.shortId,
 		orderDate: order.createdAt,
-		paidDate: status === "received" ? order.paymentReceivedAt : undefined,
-		paid: status === "received",
+		paidDate: paid ? order.paymentReceivedAt : undefined,
+		paid,
 		paymentStatusLabel: PAYMENT_STATUS_LABEL[status] ?? "Awaiting payment",
 		// Clamped BEFORE the emptiness test, not after: a name the page can't draw
 		// is non-empty here and blank on paper, so testing the raw string leaves a
@@ -266,6 +335,18 @@ type InvoiceForPdf = {
 	periodEnd: number;
 	dueDate: number;
 	createdAt: number;
+	// Payment facts (set by markPaid) — consumed only when the caller asks for
+	// the receipt face; the invoice face ignores them (see SubscriptionInvoiceData.paid).
+	markedPaidAt?: number;
+	paymentMethod?: string;
+};
+
+// Pretty labels for the freeform paymentMethod strings markPaid records; an
+// unmapped value prints verbatim (it was admin-typed for a human anyway).
+const PAYMENT_METHOD_DISPLAY: Record<string, string> = {
+	duitnow: "DuitNow",
+	bank_transfer: "Bank transfer",
+	manual: "Manual payment",
 };
 
 type RetailerForInvoice = {
@@ -326,9 +407,25 @@ export function invoiceToSubscriptionData(args: {
 	invoice: InvoiceForPdf;
 	retailer: RetailerForInvoice;
 	billingConfig: BillingConfigForInvoice | null | undefined;
+	// Receipt face (z8r3fdcrzj): include the payment facts and drop the payment
+	// card — you don't tell someone how to pay a thing they've paid. EXPLICIT
+	// opt-in rather than derived from invoice status, so the frozen invoice blob
+	// can still be (re)rendered as an invoice after payment.
+	asReceipt?: boolean;
 }): SubscriptionInvoiceData {
 	const { invoice, retailer, billingConfig } = args;
+	const paid =
+		args.asReceipt && invoice.markedPaidAt !== undefined
+			? {
+					paidAt: invoice.markedPaidAt,
+					methodLabel: invoice.paymentMethod
+						? (PAYMENT_METHOD_DISPLAY[invoice.paymentMethod] ??
+							invoice.paymentMethod)
+						: undefined,
+				}
+			: undefined;
 	return {
+		paid,
 		invoiceNumber: invoice.invoiceNumber,
 		billedToName: retailer.storeName,
 		billedToContact: retailer.waPhone?.trim() || `kedaipal.com/${retailer.slug}`,
@@ -344,7 +441,10 @@ export function invoiceToSubscriptionData(args: {
 		// The billingConfig rails (MY bank + DuitNow) can only settle MYR — a
 		// non-MYR (cross-border) invoice prints no payment card, and the footer
 		// swaps to a "we'll confirm payment details on WhatsApp" note instead.
+		// A receipt never carries payment instructions at all.
 		issuerBank:
-			invoice.currency === "MYR" ? billingConfigToBlocks(billingConfig) : [],
+			!paid && invoice.currency === "MYR"
+				? billingConfigToBlocks(billingConfig)
+				: [],
 	};
 }

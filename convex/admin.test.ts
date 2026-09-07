@@ -269,6 +269,20 @@ describe("admin console reads", () => {
 		).rejects.toThrow(/Not authorized/);
 	});
 
+	test("listSellersForAdmin carries signupSource so acquisition is checkable in the console", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { signupSource: "spotlight-thg" });
+		});
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupSource).toBe(
+			"spotlight-thg",
+		);
+	});
+
 	test("listSellersForAdmin flags admin-owned stores via ownerIsAdmin", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);

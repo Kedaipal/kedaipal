@@ -155,6 +155,14 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 					</div>
 					<span className="truncate font-mono text-xs text-muted-foreground">
 						/{seller.slug}
+						{seller.signupSource ? (
+							// Acquisition tag the signup arrived with (z8r3fdd1v0) —
+							// verbatim, these are Kedaipal's own `?src=` tags. Absent =
+							// direct/untagged, so nothing renders for the common case.
+							<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px]">
+								via {seller.signupSource}
+							</span>
+						) : null}
 					</span>
 					<div className="mt-0.5 flex items-center gap-2">
 						{seller.ownerIsAdmin ? (

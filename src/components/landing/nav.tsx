@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "../../../convex/lib/locale";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
+import { trackSignupCta } from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { getLocale, locales, setLocale } from "../../paraglide/runtime";
@@ -136,7 +137,11 @@ function NavAuthCta() {
 				size="lg"
 				className="tap-target hidden rounded-full px-5 md:inline-flex"
 			>
-				<Link to="/sign-up/$" params={{ _splat: "" }}>
+				<Link
+					to="/sign-up/$"
+					params={{ _splat: "" }}
+					onClick={() => trackSignupCta("nav")}
+				>
 					{m.nav_start_free()}
 				</Link>
 			</Button>
@@ -162,7 +167,14 @@ function MobileMenuAuthCta({ onClose }: { onClose: () => void }) {
 	return (
 		<>
 			<Button asChild size="lg" className="h-12 w-full rounded-full">
-				<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
+				<Link
+					to="/sign-up/$"
+					params={{ _splat: "" }}
+					onClick={() => {
+						trackSignupCta("nav-mobile");
+						onClose();
+					}}
+				>
 					{m.nav_start_free()}
 				</Link>
 			</Button>

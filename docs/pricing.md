@@ -198,12 +198,12 @@ All reseller-band copy, the band table, and its i18n keys were **removed** (the 
 
 Presentation rules:
 
-- **Annual billing is hidden** (`SHOW_ANNUAL_TOGGLE = false` in `pricing.tsx`).
-  There are no recurring-billing rails behind an annual price yet (HitPay
-  recurring `86eyb6z4r` unbuilt) and a permanent visible % discount undercuts the
-  flat-price posture (Arif, 28 Jul + 9 Aug 2026). Monthly is the only cycle. Flip
-  the constant to re-expose the toggle; if reinstated, frame the saving as
-  "2 months free", never a percentage.
+- **The public annual toggle stays hidden** (`SHOW_ANNUAL_TOGGLE = false` in
+  `pricing.tsx`). There are no recurring-billing rails behind a public annual
+  price (HitPay recurring `86eyb6z4r` unbuilt), so it would be a dead-end CTA,
+  and a permanent visible % discount undercuts the flat-price posture (Arif,
+  28 Jul + 9 Aug 2026). Monthly is the only **advertised** cycle. Annual is sold
+  in-app instead — see [Annual billing](#annual-billing) below.
 - Scale is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
   (trials are Pro-only), on both the full page and the teaser.
 - **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
@@ -246,6 +246,54 @@ Presentation rules:
 - Founding is generic across plans: `FOUNDING_MONTHLY_PRICE` covers pro (RM104) +
   scale (RM209), 30% lifetime — not hardcoded to Pro. **Retired for new signups
   30 Aug 2026**; the constants remain only so existing members keep their rate.
+
+## Annual billing
+
+**10 months charged, 12 received.** Always "2 months free", never a percentage —
+a standing % badge reads as a markdown on a flat price (Arif, 28 Jul + 9 Aug
+2026).
+
+`annualQuote(plan, founding, currency)` in `convex/lib/plans.ts` is the **single
+author** of every annual number: `monthly`, `annualTotal`, `effectiveMonthly`,
+`saving`, `monthsFree`. `annualTotal` *is* `planPrice(plan, "annual", …)`, pinned
+by a test.
+
+| Tier | MYR/yr | Effective/mo | Saves | SGD/yr | Effective/mo | Saves |
+| --- | --- | --- | --- | --- | --- | --- |
+| Starter | RM790 | RM65.84 | RM158 | S$290 | S$24.17 | S$58 |
+| Pro | RM1,490 | RM124.17 | RM298 | S$590 | S$49.17 | S$118 |
+| Scale | RM2,990 | RM249.17 | RM598 | S$1,190 | S$99.17 | S$238 |
+
+(Scale moves with the pricing reset — RM399/S$149 → RM3,990/S$1,490 — when
+`z8r3fday24` lands. The table derives, so it needs no edit here.)
+
+**One helper because the surfaces disagreed.** `/pricing` computed its yearly
+total as `floor(monthly × 10 / 12) × 10` — a year priced at 8.33 months — so a
+Starter card advertised **RM650/yr against an RM790 invoice**, under-quoting
+every tier by RM140–500 / S$50–200. Two definitions of "annual", 17% apart, on
+the same product. That code was behind the hidden toggle, so nobody had seen it;
+it would have shipped the day the flag flipped.
+
+Two more defects fixed in the same pass, both in that dead code:
+
+- `pricingpage_billed_annual` read **"Billed RM{total}/yr"** in all three
+  locales. It slipped past `pricing-copy.test.ts` because the guard was
+  `/\bRM\s?\d/` and `RM{` is not `RM` + a digit. The guard is now
+  `/\bRM\s?[\d{]/` — a symbol glued to a *placeholder* is exactly as wrong as
+  one glued to `79`, and this is the third time a currency was spelled into
+  `pricing_*` copy.
+- A **`-17%`** badge sat on the toggle, four lines below the comment forbidding
+  percentages. It now reads `pricingpage_annual_badge` ("2 months free").
+
+`effectiveMonthly` rounds **up**: `Math.round` understated it (MYR Starter
+6,583 × 12 = 78,996 against a 79,000 charge), and a seller multiplying the small
+number by twelve must never land under the bill. Same
+strictly-true-beats-tightest rule as `starterPricePerDay`.
+
+**Where annual is actually sold:** the seller's Settings → Billing tab, to
+proven payers on Pro, as a prefilled WhatsApp message. The eligibility ladder,
+the swap runbook and the credit-not-refund policy live in
+[`manual-subscription.md`](./manual-subscription.md#annual-billing--the-in-app-offer-sep-2026).
 
 ## Enterprise — hidden
 

@@ -928,3 +928,90 @@ describe("soft-lock gating", () => {
 		void asUser; // (asUser unused beyond the gate proof above)
 	});
 });
+
+/**
+ * Server-side `subscribe_paid` key event (z8r3fdd1v1): every markPaid
+ * schedules the GA4 Measurement Protocol send fire-and-forget, carrying the
+ * retailer's stored acquisition tag so subscription revenue segments by
+ * channel. Fake timers hold the scheduled job so we can inspect its args.
+ */
+async function subscribePaidJobs(
+	t: ReturnType<typeof setup>,
+): Promise<Array<Record<string, unknown>>> {
+	const jobs = await t.run((ctx) =>
+		ctx.db.system.query("_scheduled_functions").collect(),
+	);
+	return jobs
+		.filter((j) => j.name.includes("sendKeyEvent"))
+		.map((j) => j.args[0] as Record<string, unknown>);
+}
+
+describe("invoices.markPaid — subscribe_paid key event (z8r3fdd1v1)", () => {
+	test("markPaid schedules subscribe_paid with src, revenue, and first_time", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "ga1", "ga-store-1");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				signupSource: "referral-ganu",
+				gaClientId: "111.222",
+			});
+		});
+		const billedPlan = (await getSubFor(t, retailerId))?.plan;
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+
+		const jobs = await subscribePaidJobs(t);
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0]).toMatchObject({
+			event: "subscribe_paid",
+			retailerId,
+			src: "referral-ganu",
+			gaClientId: "111.222",
+			params: {
+				plan: billedPlan,
+				cycle: "monthly",
+				first_time: true,
+				// Invoice total is minor units (10400 sen) — GA4 value is major.
+				value: 104,
+				currency: "MYR",
+			},
+		});
+	});
+
+	test("a renewal fires subscribe_paid with first_time false", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "ga2", "ga-store-2");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+
+		// Second cycle: a fresh pending invoice for the now-active subscription.
+		const renewalId = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no sub");
+			const now = Date.now();
+			const month = 30 * 24 * 60 * 60 * 1000;
+			return ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: sub._id,
+				invoiceNumber: "INV-RENEW-ga2",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + month,
+				dueDate: now + 14 * 24 * 60 * 60 * 1000,
+				status: "pending",
+				createdAt: now,
+			});
+		});
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: renewalId });
+
+		const jobs = await subscribePaidJobs(t);
+		expect(jobs).toHaveLength(2);
+		const renewal = jobs[1] as { params?: Record<string, unknown> };
+		expect(renewal.params?.first_time).toBe(false);
+		expect(renewal.params?.value).toBe(149);
+	});
+});

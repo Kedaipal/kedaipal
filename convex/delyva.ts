@@ -14,6 +14,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
+	internalAction,
 	internalMutation,
 	internalQuery,
 	mutation,
@@ -38,13 +39,17 @@ import {
 	isFailedDeliveryAttempt,
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
+	parseCompanyResponse,
+	countActiveDelyvaServices,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
 } from "./lib/delyva";
 import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
+import { isColdItemType } from "./lib/liveQuote";
+import { DEFAULT_COUNTRY, type Country } from "./lib/country";
 import {
 	type CartWeightItem,
 	delyvaBookingAllowed,
@@ -113,6 +118,20 @@ async function callDelyvaWithKey(
 	return text ? JSON.parse(text) : {};
 }
 
+const itemTypeValidator = v.union(
+	v.literal("PARCEL"),
+	v.literal("CHILLED"),
+	v.literal("FROZEN"),
+);
+
+const pickupAddressValidator = v.object({
+	address1: v.string(),
+	address2: v.optional(v.string()),
+	city: v.string(),
+	state: v.string(),
+	postcode: v.string(),
+});
+
 // ---------------------------------------------------------------------------
 // Connect / disconnect / settings
 // ---------------------------------------------------------------------------
@@ -143,15 +162,22 @@ export const getConnectContext = internalQuery({
 		{ retailerId },
 	): Promise<
 		| { ok: false; message: string }
-		| { ok: true; retailerId: Id<"retailers">; actingAsAdmin: boolean }
+		| {
+				ok: true;
+				retailerId: Id<"retailers">;
+				actingAsAdmin: boolean;
+				country: Country;
+		  }
 	> => {
 		const access = await resolveStoreAccess(ctx, retailerId);
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
 		if (!delyvaBookingAllowed(country)) {
 			return {
 				ok: false,
+				// Both MY and SG are served now (z8r3fdbqmc), so this is the guard
+				// for a country we haven't opened yet — worded without naming one.
 				message:
-					"Delyva courier booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+					"Delyva courier booking isn't available in your store's country yet — arrange your own courier and record the tracking number on the order.",
 			};
 		}
 		if (!access.actingAsAdmin) {
@@ -164,6 +190,7 @@ export const getConnectContext = internalQuery({
 			ok: true,
 			retailerId: access.retailer._id,
 			actingAsAdmin: access.actingAsAdmin,
+			country,
 		};
 	},
 });
@@ -179,6 +206,13 @@ export const storeConnection = internalMutation({
 		customerId: v.number(),
 		companyId: v.optional(v.string()),
 		accountName: v.optional(v.string()),
+		isDemo: v.optional(v.boolean()),
+		companyCode: v.optional(v.string()),
+		// The pickup address on the seller's Delyva PROFILE, imported at
+		// connect so the seller doesn't retype what Delyva already knows.
+		// Fill-if-unset only: an address the seller already saved here wins —
+		// they may have deliberately corrected what Delyva holds.
+		importedPickupAddress: v.optional(pickupAddressValidator),
 	},
 	handler: async (ctx, args) => {
 		const retailer = await ctx.db.get(args.retailerId);
@@ -195,9 +229,11 @@ export const storeConnection = internalMutation({
 				customerId: args.customerId,
 				companyId: args.companyId,
 				accountName: args.accountName,
+				isDemo: args.isDemo,
+				companyCode: args.companyCode,
 				// Pickup address + parcel-type default survive a key rotation.
 				defaultItemType: prev?.defaultItemType,
-				pickupAddress: prev?.pickupAddress,
+				pickupAddress: prev?.pickupAddress ?? args.importedPickupAddress,
 				connectedAt: prev?.connectedAt ?? Date.now(),
 				// Re-stamped by markWebhooksSubscribed once the subscribe pass
 				// after this save succeeds; a rotation resets it honestly.
@@ -261,7 +297,12 @@ export const connect = action({
 		args,
 	): Promise<
 		| { ok: false; message: string }
-		| { ok: true; accountName?: string; webhooksSubscribed: boolean }
+		| {
+				ok: true;
+				accountName?: string;
+				webhooksSubscribed: boolean;
+				isDemo?: boolean;
+		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getConnectContext, {
 			retailerId: args.retailerId,
@@ -276,6 +317,17 @@ export const connect = action({
 		let companyId: string | undefined;
 		let customerId: number | undefined;
 		let accountName: string | undefined;
+		let isDemo: boolean | undefined;
+		let companyCode: string | undefined;
+		let importedPickupAddress:
+			| {
+					address1: string;
+					address2?: string;
+					city: string;
+					state: string;
+					postcode: string;
+			  }
+			| undefined;
 		try {
 			const user = (await callDelyvaWithKey(apiKey, "GET", "/user")) as {
 				data?: { apiSecret?: unknown; companyId?: unknown; name?: unknown };
@@ -289,7 +341,16 @@ export const connect = action({
 					? user.data.companyId
 					: undefined;
 			const customer = (await callDelyvaWithKey(apiKey, "GET", "/customer")) as {
-				data?: { id?: unknown; name?: unknown };
+				data?: {
+					id?: unknown;
+					name?: unknown;
+					unitNo?: unknown;
+					address1?: unknown;
+					address2?: unknown;
+					city?: unknown;
+					state?: unknown;
+					postcode?: unknown;
+				};
 			};
 			customerId =
 				typeof customer.data?.id === "number" ? customer.data.id : undefined;
@@ -297,6 +358,65 @@ export const connect = action({
 				typeof customer.data?.name === "string" && customer.data.name
 					? customer.data.name
 					: undefined;
+			// The profile's pickup address, imported so the seller doesn't retype
+			// what Delyva already knows (verified live: unitNo/address1/address2
+			// are split on their side — recompose into our address1 + unit line).
+			// PREFILL, not truth: it stays editable, and an address the seller
+			// already saved with us always wins (storeConnection fill-if-unset) —
+			// a real account was seen holding a stale postcode.
+			const str = (v: unknown) =>
+				typeof v === "string" && v.trim() ? v.trim() : undefined;
+			const profile = customer.data ?? {};
+			const line1 = [str(profile.unitNo), str(profile.address1)]
+				.filter(Boolean)
+				.join(" ");
+			const profilePostcode = str(profile.postcode);
+			const rule = postcodeRule(context.country);
+			if (line1 && profilePostcode && rule.pattern.test(profilePostcode)) {
+				importedPickupAddress =
+					context.country === "SG"
+						? {
+								address1: line1,
+								address2: str(profile.address2),
+								city: SG_STATE_LABEL,
+								state: SG_STATE_LABEL,
+								postcode: profilePostcode,
+							}
+						: str(profile.city) && str(profile.state)
+							? {
+									address1: line1,
+									address2: str(profile.address2),
+									// biome-ignore lint/style/noNonNullAssertion: guarded above
+									city: str(profile.city)!,
+									// biome-ignore lint/style/noNonNullAssertion: guarded above
+									state: str(profile.state)!,
+									postcode: profilePostcode,
+								}
+							: undefined;
+			}
+			// Which Delyva WORLD this key lives in. Their demo environment
+			// shares the production API host and issues no key prefix, so the
+			// company record is the only tell — `code: "demo"` /
+			// `websiteUrl: demo.delyva.app`. Non-fatal: an unreadable company
+			// leaves `isDemo` unset, which every surface renders as "unknown"
+			// rather than a false all-clear.
+			if (companyId) {
+				try {
+					const company = parseCompanyResponse(
+						await callDelyvaWithKey(
+							apiKey,
+							"GET",
+							`/company/${encodeURIComponent(companyId)}`,
+						),
+					);
+					isDemo = company.isDemo;
+					companyCode = company.code;
+				} catch (err) {
+					console.warn("[delyva] company lookup failed — env unknown", {
+						message: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
 		} catch (err) {
 			if (err instanceof DelyvaApiError && err.status === 401) {
 				return {
@@ -330,6 +450,9 @@ export const connect = action({
 			customerId,
 			companyId,
 			accountName,
+			isDemo,
+			companyCode,
+			importedPickupAddress,
 		});
 
 		// Webhooks: best-effort — a subscribe failure must not fail the connect
@@ -354,7 +477,7 @@ export const connect = action({
 				});
 			}
 		}
-		return { ok: true, accountName, webhooksSubscribed };
+		return { ok: true, accountName, webhooksSubscribed, isDemo };
 	},
 });
 
@@ -403,17 +526,137 @@ export const getAccountContext = internalQuery({
 		retailerId: Id<"retailers">;
 		credentials: DelyvaCredentials;
 		actingAsAdmin: boolean;
+		companyId?: string;
+		/** True when the demo-vs-live lookup never ran for this row (connected
+		 * before detection existed, or the lookup failed) — the signal that
+		 * refreshEnvironment has something to heal. */
+		environmentUnknown: boolean;
 	} | null> => {
 		const access = await resolveStoreAccess(ctx, retailerId);
-		const credentials = resolveDelyvaCredentials(
-			access.retailer.delyva as DelyvaConfig | undefined,
-		);
+		const config = access.retailer.delyva as DelyvaConfig | undefined;
+		const credentials = resolveDelyvaCredentials(config);
 		if (!credentials) return null;
 		return {
 			retailerId: access.retailer._id,
 			credentials,
 			actingAsAdmin: access.actingAsAdmin,
+			companyId: config?.companyId,
+			environmentUnknown: config?.isDemo === undefined,
 		};
+	},
+});
+
+export const stampEnvironment = internalMutation({
+	args: {
+		retailerId: v.id("retailers"),
+		isDemo: v.boolean(),
+		companyCode: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const retailer = await ctx.db.get(args.retailerId);
+		const config = retailer?.delyva as DelyvaConfig | undefined;
+		// Only heal a still-unstamped row — a later reconnect's fresh stamp must
+		// never be overwritten by a slow in-flight lookup.
+		if (!retailer || !config || config.isDemo !== undefined) return;
+		await ctx.db.patch(args.retailerId, {
+			delyva: {
+				...config,
+				isDemo: args.isDemo,
+				companyCode: args.companyCode,
+			},
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Lazily stamp demo-vs-live on a connection made BEFORE detection existed
+ * (isDemo undefined renders as "unknown" — honest, but it hides the one
+ * warning that matters on a demo key). Fired once by the settings card on
+ * mount and piggybacked on prepareBooking, so every legacy row heals on the
+ * next visit to either surface. Failure is silent: the row simply stays
+ * unknown until a retry.
+ */
+export const getEnvironmentHealContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		credentials: DelyvaCredentials;
+		companyId: string;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		const config = retailer?.delyva as DelyvaConfig | undefined;
+		const credentials = resolveDelyvaCredentials(config);
+		if (!credentials || !config?.companyId || config.isDemo !== undefined)
+			return null;
+		return { credentials, companyId: config.companyId };
+	},
+});
+
+/** The scheduled twin of refreshEnvironment — runs with no user identity
+ * (prepareBooking schedules it), so it resolves the retailer directly. */
+export const refreshEnvironmentBySystem = internalAction({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const target = await ctx.runQuery(
+			internal.delyva.getEnvironmentHealContext,
+			{ retailerId },
+		);
+		if (!target) return;
+		try {
+			const live = await decryptDelyvaCredentials(target.credentials);
+			const company = parseCompanyResponse(
+				await callDelyvaWithKey(
+					live.apiKey,
+					"GET",
+					`/company/${encodeURIComponent(target.companyId)}`,
+				),
+			);
+			await ctx.runMutation(internal.delyva.stampEnvironment, {
+				retailerId,
+				isDemo: company.isDemo,
+				companyCode: company.code,
+			});
+		} catch (err) {
+			console.warn("[delyva] scheduled environment refresh failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
+	},
+});
+
+export const refreshEnvironment = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (ctx, args): Promise<{ ok: boolean }> => {
+		const target = await ctx.runQuery(internal.delyva.getAccountContext, {
+			retailerId: args.retailerId,
+		});
+		if (!target || !target.environmentUnknown || !target.companyId) {
+			return { ok: false };
+		}
+		try {
+			const live = await decryptDelyvaCredentials(target.credentials);
+			const company = parseCompanyResponse(
+				await callDelyvaWithKey(
+					live.apiKey,
+					"GET",
+					`/company/${encodeURIComponent(target.companyId)}`,
+				),
+			);
+			await ctx.runMutation(internal.delyva.stampEnvironment, {
+				retailerId: target.retailerId,
+				isDemo: company.isDemo,
+				companyCode: company.code,
+			});
+			return { ok: true };
+		} catch (err) {
+			console.warn("[delyva] environment refresh failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return { ok: false };
+		}
 	},
 });
 
@@ -480,20 +723,6 @@ export const disconnect = action({
 	},
 });
 
-const itemTypeValidator = v.union(
-	v.literal("PARCEL"),
-	v.literal("CHILLED"),
-	v.literal("FROZEN"),
-);
-
-const pickupAddressValidator = v.object({
-	address1: v.string(),
-	address2: v.optional(v.string()),
-	city: v.string(),
-	state: v.string(),
-	postcode: v.string(),
-});
-
 /** Non-credential Delyva settings (settings card): pause/resume, the store's
  * parcel-type default, the structured pickup address. Credentials only ever
  * move through connect/disconnect. */
@@ -528,15 +757,22 @@ export const updateSettings = mutation({
 							state: args.pickupAddress.state.trim(),
 							postcode: args.pickupAddress.postcode.trim(),
 						};
+		// The postcode rule is the store country's, taken from the one place that
+		// owns it (convex/lib/address.ts) — Singapore's postal codes are SIX
+		// digits, and a hardcoded 5 here is what made this feature MY-shaped.
+		const country = access.retailer.country ?? DEFAULT_COUNTRY;
+		const postcode = postcodeRule(country);
 		if (
 			pickupAddress &&
 			(!pickupAddress.address1 ||
 				!pickupAddress.city ||
 				!pickupAddress.state ||
-				!/^\d{5}$/.test(pickupAddress.postcode))
+				!postcode.pattern.test(pickupAddress.postcode))
 		) {
 			throw new ConvexError(
-				"The pickup address needs a street address, city, state and a 5-digit postcode.",
+				country === "SG"
+					? "The pickup address needs a street address, city and a 6-digit postal code."
+					: "The pickup address needs a street address, city, state and a 5-digit postcode.",
 			);
 		}
 		await ctx.db.patch(access.retailer._id, {
@@ -564,6 +800,11 @@ export type DelyvaSummary = {
 	enabled: boolean;
 	apiKeyHint?: string;
 	accountName?: string;
+	/** True = the key belongs to Delyva's DEMO environment (play money, no
+	 * courier ever dispatched). Undefined = connected before we looked, or the
+	 * lookup failed — render as "unknown", never as live. */
+	isDemo?: boolean;
+	companyCode?: string;
 	defaultItemType: DelyvaItemType;
 	pickupAddress?: {
 		address1: string;
@@ -588,6 +829,8 @@ export const getSettings = query({
 			enabled: config?.enabled === true,
 			apiKeyHint: config?.apiKeyHint,
 			accountName: config?.accountName,
+			isDemo: config?.isDemo,
+			companyCode: config?.companyCode,
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
 			pickupAddress: config?.pickupAddress,
 			connectedAt: config?.connectedAt,
@@ -621,6 +864,7 @@ export const WEIGHT_OVERRIDE_MAX_KG = 1_000;
 
 function formatBuyerAddress(
 	address: NonNullable<Doc<"orders">["deliveryAddress"]>,
+	country: Country,
 ): DelyvaAddress {
 	return {
 		address1: address.line1,
@@ -628,7 +872,10 @@ function formatBuyerAddress(
 		city: address.city,
 		state: address.state,
 		postcode: address.postcode,
-		country: "MY",
+		// The store's country, never a literal — Delyva takes SG addresses
+		// unchanged (verified 2 Sep 2026) and an "MY" stamp on a Singapore
+		// parcel is how a quote silently returns nothing.
+		country,
 	};
 }
 
@@ -680,6 +927,9 @@ type DelyvaDispatchContext =
 			buyerPaidFee: number;
 			currency: string;
 			note?: string;
+			/** The demo-vs-live lookup never ran for this row — prepareBooking
+			 * schedules the heal so the badge appears without a reconnect. */
+			environmentUnknown: boolean;
 	  };
 
 function dispatchBlockReason(args: {
@@ -754,7 +1004,8 @@ export const getDispatchContext = internalQuery({
 			return { ok: false, reason: "not_connected" }; // restated for types
 
 		const weight = await resolveOrderWeightKg(ctx, order);
-		const buyerAddress = formatBuyerAddress(order.deliveryAddress);
+		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+		const buyerAddress = formatBuyerAddress(order.deliveryAddress, storeCountry);
 		const buyerPhone = (order.customer.waPhone ?? "").replace(/\D/g, "");
 		const sellerPhone = (retailer.waPhone ?? "").replace(/\D/g, "");
 		const inventory: DelyvaInventoryLine[] = await Promise.all(
@@ -785,7 +1036,7 @@ export const getDispatchContext = internalQuery({
 			customerId: credentials.customerId,
 			origin: {
 				...config.pickupAddress,
-				country: "MY",
+				country: storeCountry,
 				name: retailer.storeName,
 				phone: sellerPhone,
 				email: retailer.notifyEmail || undefined,
@@ -802,6 +1053,7 @@ export const getDispatchContext = internalQuery({
 			buyerPaidFee: order.deliveryFee ?? 0,
 			currency: order.currency,
 			note: noteParts.length ? noteParts.join(" · ") : undefined,
+			environmentUnknown: config.isDemo === undefined,
 		};
 	},
 });
@@ -889,21 +1141,36 @@ export const prepareBooking = action({
 				weightKg: number;
 				itemType: DelyvaItemType;
 				buyerPaidFee: number;
+				/** Only set when `services` is empty: whether the ACCOUNT has any
+				 * courier switched on at all. true = nothing is connected, so no
+				 * address would ever quote; false = the account has couriers, none
+				 * of which covers this shipment. undefined = the extra lookup
+				 * failed, so the card stays with its generic wording. */
+				accountHasNoCouriers?: boolean;
+				/** Only set when a CHILLED/FROZEN quote came back empty: true means
+				 * the identical route quotes fine as an ordinary parcel, so this is
+				 * a cold-chain gap on the Delyva account rather than anything about
+				 * the address. undefined = we couldn't tell. */
+				coldChainUnavailable?: boolean;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
 			shortId: args.shortId,
 		});
 		if (!context.ok) return context;
+		// Heal an un-stamped demo/live badge in passing (see refreshEnvironment)
+		// — scheduled, so a slow company lookup never delays the quote.
+		if (context.environmentUnknown) {
+			await ctx.scheduler.runAfter(0, internal.delyva.refreshEnvironmentBySystem, {
+				retailerId: context.retailerId,
+			});
+		}
 		const weight = resolveWeightKg(context, args.weightKgOverride);
 		if (!weight.ok)
 			return { ok: false, reason: "no_weight", message: weight.message };
 		const itemType = args.itemType ?? context.defaultItemType;
 		try {
-			const response = await callDelyva(
-				context.credentials,
-				"POST",
-				"/service/instantQuote",
+			const quoteBody = (forItemType: DelyvaItemType) =>
 				buildInstantQuoteBody({
 					customerId: context.customerId,
 					origin: {
@@ -923,18 +1190,67 @@ export const prepareBooking = action({
 						country: context.destination.country,
 					},
 					weightKg: weight.kg,
-					itemType,
-				}),
+					itemType: forItemType,
+				});
+			const response = await callDelyva(
+				context.credentials,
+				"POST",
+				"/service/instantQuote",
+				quoteBody(itemType),
 			);
 			const services = parseInstantQuoteResponse(response).sort(
 				(a, b) => a.price - b.price,
 			);
+			// An empty list is ambiguous — "no courier for THIS parcel" and "this
+			// account has no couriers at all" look identical here, and only the
+			// second is something the seller can go and fix. One extra GET, on
+			// the empty path only, tells them apart. It must never turn a
+			// successful quote into a failure, so a throw just leaves the flag
+			// unset and the card keeps its generic wording.
+			let accountHasNoCouriers: boolean | undefined;
+			let coldChainUnavailable: boolean | undefined;
+			if (services.length === 0) {
+				try {
+					const active = countActiveDelyvaServices(
+						await callDelyva(context.credentials, "GET", "/service"),
+					);
+					accountHasNoCouriers = active === null ? undefined : active === 0;
+				} catch {
+					accountHasNoCouriers = undefined;
+				}
+				// Cold chain is the ICP's whole reason for being here (frozen and
+				// kuih sellers), and it fails in a way that reads as an address
+				// problem: Delyva filters by item type SERVER-side, so a chilled
+				// quote on an account with no cold-chain service returns exactly
+				// what an out-of-range address returns — nothing. Re-quoting the
+				// same route as an ordinary parcel separates them: couriers here
+				// means the route is fine and the gap is the cold chain, which is
+				// a thing Delyva support can switch on. Quotes cost nothing, and
+				// this only runs on the already-empty path.
+				if (itemType !== "PARCEL" && accountHasNoCouriers !== true) {
+					try {
+						const asParcel = parseInstantQuoteResponse(
+							await callDelyva(
+								context.credentials,
+								"POST",
+								"/service/instantQuote",
+								quoteBody("PARCEL"),
+							),
+						);
+						coldChainUnavailable = asParcel.length > 0;
+					} catch {
+						coldChainUnavailable = undefined;
+					}
+				}
+			}
 			return {
 				ok: true,
 				services,
 				weightKg: weight.kg,
 				itemType,
 				buyerPaidFee: context.buyerPaidFee,
+				accountHasNoCouriers,
+				coldChainUnavailable,
 			};
 		} catch (err) {
 			console.warn("[delyva] dispatch quote failed", {
@@ -1484,6 +1800,15 @@ export const getDispatchState = query({
 		/** The store has a working, enabled Delyva connection. */
 		bookingEnabled: boolean;
 		defaultItemType: DelyvaItemType;
+		/** One-line render of the stored pickup address ("55 Jln Eco Majestic,
+		 * 43700 Beranang") — the dispatch card shows it before the first quote
+		 * so a stale imported address is caught at the moment it matters. */
+		pickupSummary?: string;
+		/** Demo account (86eyjpv6z): a booking from this card dispatches no
+		 * courier and spends no real credit. Said out loud at the point of
+		 * spend, the Lalamove sandbox-banner posture (86eypncfy). Undefined =
+		 * un-stamped row — rendered as nothing, never as a false all-clear. */
+		isDemo?: boolean;
 		/** Auto-resolved cart weight (kg); null = the dialog must ask. */
 		computedWeightKg: number | null;
 		weightIssue: "custom_item" | "missing_weights" | null;
@@ -1546,8 +1871,122 @@ export const getDispatchState = query({
 				config?.enabled === true &&
 				delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
+			pickupSummary: config?.pickupAddress
+				? [
+						config.pickupAddress.address1,
+						`${config.pickupAddress.postcode} ${config.pickupAddress.city}`,
+					].join(", ")
+				: undefined,
+			isDemo: config?.isDemo,
 			computedWeightKg: weight.kind === "ok" ? weight.kg : null,
 			weightIssue: weight.kind === "ok" ? null : weight.kind,
 		};
 	},
 });
+
+// ---------------------------------------------------------------------------
+// Checkout pricing (z8r3fdbvdy) — a live Delyva price for the buyer's address
+// ---------------------------------------------------------------------------
+
+/** What a live Delyva checkout quote needs from the store. */
+export type DelyvaCheckoutContext = {
+	credentials: DelyvaCredentials;
+	customerId: number;
+	origin: DelyvaAddress;
+	/** Store default parcel type — the cart's type until per-item temperature
+	 * flags land (86eyrmv1j). See cartItemType in lib/liveQuote. */
+	itemType: DelyvaItemType;
+};
+
+/** One provider's answer, shaped for the cross-provider rule. */
+export type DelyvaCheckoutQuote =
+	| {
+			status: "quoted";
+			fee: number;
+			currency: string;
+			serviceCode: string;
+			serviceName: string;
+	  }
+	| {
+			status:
+				| "out_of_range"
+				| "no_cold_service"
+				| "store_unavailable"
+				| "unavailable";
+	  };
+
+/**
+ * Fetch Delyva's cheapest service for this address WITHOUT recording it.
+ *
+ * Cheapest, because that is the price the seller will actually pay: the
+ * dispatch card pre-selects the cheapest service too, so the fee collected
+ * at checkout and the one offered at dispatch describe the same choice. (If
+ * a seller habitually books a dearer courier they under-collect by the
+ * difference — the argument for a per-store "preferred courier" setting
+ * later, deliberately not v1.)
+ *
+ * An EMPTY service list is ambiguous in exactly the way it is at dispatch,
+ * so it is disambiguated the same way — by asking what the account holds.
+ * Nothing connected is the seller's problem, not the buyer's address, and
+ * saying "no courier serves your address" to someone whose address is fine
+ * sends them editing it forever.
+ */
+export async function fetchDelyvaCheckoutQuote(args: {
+	context: DelyvaCheckoutContext;
+	destination: DelyvaAddress;
+	weightKg: number;
+}): Promise<DelyvaCheckoutQuote> {
+	const { context, destination, weightKg } = args;
+	if (!Number.isFinite(weightKg) || weightKg <= 0) {
+		// No usable cart weight (a product with no parcel weight, or a custom
+		// line). Delyva prices by weight, so it can't bid — and that is the
+		// STORE's gap to close, never something the buyer can act on.
+		return { status: "store_unavailable" };
+	}
+	try {
+		const services = parseInstantQuoteResponse(
+			await callDelyva(
+				context.credentials,
+				"POST",
+				"/service/instantQuote",
+				buildInstantQuoteBody({
+					customerId: context.customerId,
+					origin: context.origin,
+					destination,
+					weightKg,
+					itemType: context.itemType,
+				}),
+			),
+		).sort((a, b) => a.price - b.price);
+
+		const cheapest = services[0];
+		if (cheapest) {
+			return {
+				status: "quoted",
+				fee: cheapest.price,
+				currency: cheapest.currency,
+				serviceCode: cheapest.code,
+				serviceName: cheapest.name,
+			};
+		}
+
+		// Empty. Which kind of empty decides what the buyer is told.
+		try {
+			const active = countActiveDelyvaServices(
+				await callDelyva(context.credentials, "GET", "/service"),
+			);
+			if (active === 0) return { status: "store_unavailable" };
+			if (active !== null && isColdItemType(context.itemType))
+				return { status: "no_cold_service" };
+			if (active !== null) return { status: "out_of_range" };
+		} catch {
+			// Fall through — we couldn't tell, so we don't guess.
+		}
+		return { status: "unavailable" };
+	} catch (err) {
+		console.warn("[delyva] checkout quote failed", {
+			message: err instanceof Error ? err.message : String(err),
+		});
+		return { status: "unavailable" };
+	}
+}

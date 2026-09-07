@@ -9,6 +9,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type SubscriptionView = {
 	plan: "starter" | "pro" | "scale";
 	status: "trialing" | "active" | "past_due" | "cancelled";
+	/** Optional on the mirror (the server always sends it) so a payload rendered
+	 * from an older cache degrades to "monthly" rather than throwing. */
+	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
 	trialEndsAt?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };

@@ -64,7 +64,10 @@ import {
 } from "./lib/order";
 import type { OpeningHours } from "./lib/openingHours";
 import { assertWithinOpeningHours } from "./lib/openingHours";
-import { summarizeCartWeight } from "./lib/delivery";
+import {
+	storablePendingReason,
+	summarizeCartWeight,
+} from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { variantLabel } from "./lib/variant";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
@@ -800,6 +803,7 @@ export const commit = mutation({
 				claim.retailerId,
 				args.deliveryQuoteId,
 				sanitizedAddress,
+				claim.lines,
 			);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
@@ -810,7 +814,7 @@ export const commit = mutation({
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
-			deliveryFeePendingReason = resolved.pendingReason;
+			deliveryFeePendingReason = storablePendingReason(resolved.pendingReason);
 		}
 		const deliveryDirection =
 			args.deliveryMethod === "delivery" &&

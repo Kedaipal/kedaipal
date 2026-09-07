@@ -425,3 +425,181 @@ describe("orderToReceiptData — pickup fee", () => {
 		expect(zero.pickupFee).toBeUndefined();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Payment receipt for a paid subscription invoice (z8r3fdcrzj)
+// ---------------------------------------------------------------------------
+
+describe("invoices payment receipt (z8r3fdcrzj)", () => {
+	/** Seed retailer + a subscription invoice. `paid: true` stamps the payment
+	 * facts directly (mirrors a row settled by markPaid — or one paid before
+	 * this feature shipped, which is exactly the legacy on-demand case). */
+	async function seedInvoiceRow(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		opts: { paid?: boolean } = {},
+	) {
+		const asUser = t.withIdentity({ subject: userId });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: `Store ${userId}`,
+			slug: `store-${userId.replace(/[^a-z0-9]/g, "")}`,
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const invoiceId = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			const now = Date.now();
+			return ctx.db.insert("invoices", {
+				retailerId: retailer._id,
+				subscriptionId: sub._id,
+				invoiceNumber: `INV-RCPT-${userId}`,
+				plan: "pro",
+				billingCycle: "monthly",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86_400_000,
+				dueDate: now + 14 * 86_400_000,
+				status: opts.paid ? "paid" : "pending",
+				markedPaidAt: opts.paid ? now : undefined,
+				paymentMethod: opts.paid ? "duitnow" : undefined,
+				createdAt: now,
+			});
+		});
+		return { retailerId: retailer._id, invoiceId };
+	}
+
+	test("generateInvoiceReceiptPdf stores a receipt for a paid invoice and is idempotent", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A, { paid: true });
+
+		await t.action(internal.invoices.generateInvoiceReceiptPdf, { invoiceId });
+		const firstId = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.receiptPdfStorageId,
+		);
+		expect(firstId).toBeDefined();
+
+		await t.action(internal.invoices.generateInvoiceReceiptPdf, { invoiceId });
+		const secondId = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.receiptPdfStorageId,
+		);
+		expect(secondId).toBe(firstId);
+	});
+
+	test("a PENDING invoice never grows a receipt — even when the render is invoked directly", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A);
+		await t.action(internal.invoices.generateInvoiceReceiptPdf, { invoiceId });
+		const stored = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.receiptPdfStorageId,
+		);
+		expect(stored == null).toBe(true);
+	});
+
+	test("a VOID invoice never grows a receipt", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, {
+				status: "void",
+				voidedAt: Date.now(),
+				voidedBy: ADMIN,
+			});
+		});
+		await t.action(internal.invoices.generateInvoiceReceiptPdf, { invoiceId });
+		const stored = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.receiptPdfStorageId,
+		);
+		expect(stored == null).toBe(true);
+	});
+
+	test("the receipt does NOT overwrite the frozen invoice blob", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A, { paid: true });
+		await t.action(internal.invoices.generateInvoicePdf, { invoiceId });
+		const invoiceBlob = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.pdfStorageId,
+		);
+		await t.action(internal.invoices.generateInvoiceReceiptPdf, { invoiceId });
+		const after = await t.run(async (ctx) => await ctx.db.get(invoiceId));
+		expect(after?.pdfStorageId).toBe(invoiceBlob);
+		expect(after?.receiptPdfStorageId).toBeDefined();
+		expect(after?.receiptPdfStorageId).not.toBe(invoiceBlob);
+	});
+
+	test("getInvoiceReceiptPdfUrl: owner + admin allowed, others forbidden, null before render", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A, { paid: true });
+		await seedRetailer(t, USER_B);
+
+		const before = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.invoices.getInvoiceReceiptPdfUrl, { invoiceId });
+		expect(before).toBeNull();
+
+		await t.action(internal.invoices.generateInvoiceReceiptPdf, { invoiceId });
+
+		const ownerUrl = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.invoices.getInvoiceReceiptPdfUrl, { invoiceId });
+		expect(typeof ownerUrl).toBe("string");
+		const adminUrl = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.invoices.getInvoiceReceiptPdfUrl, { invoiceId });
+		expect(typeof adminUrl).toBe("string");
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.query(api.invoices.getInvoiceReceiptPdfUrl, { invoiceId }),
+		).rejects.toThrow(/forbidden/i);
+	});
+
+	test("getOrCreateInvoiceReceiptPdfUrl renders on demand for a LEGACY paid invoice", async () => {
+		const t = setup();
+		// Paid row with no receipt blob — exactly an invoice settled before this
+		// feature shipped.
+		const { invoiceId } = await seedInvoiceRow(t, USER_A, { paid: true });
+		const url = await t
+			.withIdentity({ subject: USER_A })
+			.action(api.invoices.getOrCreateInvoiceReceiptPdfUrl, { invoiceId });
+		expect(typeof url).toBe("string");
+		const stored = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.receiptPdfStorageId,
+		);
+		expect(stored).toBeDefined();
+	});
+
+	test("getOrCreateInvoiceReceiptPdfUrl on a PENDING invoice returns null and mints nothing", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A);
+		const url = await t
+			.withIdentity({ subject: USER_A })
+			.action(api.invoices.getOrCreateInvoiceReceiptPdfUrl, { invoiceId });
+		expect(url).toBeNull();
+		const stored = await t.run(
+			async (ctx) => (await ctx.db.get(invoiceId))?.receiptPdfStorageId,
+		);
+		expect(stored == null).toBe(true);
+	});
+
+	test("markPaid schedules the receipt render", async () => {
+		const t = setup();
+		const { invoiceId } = await seedInvoiceRow(t, USER_A);
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId, paymentMethod: "duitnow" });
+		// Assert the schedule itself (system table) rather than flushing every
+		// scheduled action — markPaid also queues emails/WhatsApp we don't want
+		// running here.
+		const scheduled = await t.run(async (ctx) => {
+			const rows = await ctx.db.system.query("_scheduled_functions").collect();
+			return rows.map((r) => r.name);
+		});
+		expect(scheduled).toContain("invoices:generateInvoiceReceiptPdf");
+	});
+});

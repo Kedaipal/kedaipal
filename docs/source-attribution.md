@@ -4,10 +4,11 @@ ClickUp `86eyq0eq9` ([TikTok Live] Storefront source attribution). The seller's
 "orders from TikTok" stat: any storefront visit arriving with `?src=`
 (fallback `utm_source`) carries that tag through the session and onto the
 order it produces, and Insights shows a per-source order/revenue breakdown.
-This is the **seller's** funnel measurement — distinct from `86eye3eyp`
-(Kedaipal's own CAC ledger) and from the `storefront_badge` tag on the
-powered-by link, which targets the kedaipal.com marketing site and never
-reaches a storefront.
+This is the **seller's** funnel measurement — distinct from Kedaipal's own
+seller-acquisition attribution (`z8r3fdd1v0`, the `powered-by` tag on the
+badge link plus the marketing-route `?src=` capture that lands on
+`retailers.signupSource` — see [`docs/analytics.md`](./analytics.md)), which
+targets the kedaipal.com marketing site and never reaches a storefront.
 
 ## The one author: `convex/lib/attribution.ts`
 
@@ -180,7 +181,9 @@ one place the builder lives.
 | `awb` | despatch-label QR (`convex/awb.ts` `storeUrlFor`) |
 | any preset / free-form | Home's tagged share links, or a seller's own hand-written tag |
 
-(`storefront_badge` is NOT in this system — it tags kedaipal.com itself.)
+(`powered-by` — the badge's tag, renamed from `storefront_badge` in
+`z8r3fdd1v0` — is NOT in this system: it tags kedaipal.com itself and lands
+on `retailers.signupSource`, not on any order.)
 
 ## Edge cases
 

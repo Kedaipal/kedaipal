@@ -55,6 +55,11 @@ export type AdminSellerRow = {
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
+	/** Marketing tag the seller signed up with (`retailers.signupSource`,
+	 * z8r3fdd1v0). Absent = untagged/direct. Rendered verbatim — these are
+	 * Kedaipal's own acquisition tags (`powered-by`, `spotlight-<member>`, …),
+	 * not the buyer-side labels. */
+	signupSource?: string;
 	createdAt: number;
 };
 
@@ -87,6 +92,7 @@ export const listSellersForAdmin = query({
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				signupSource: r.signupSource,
 				createdAt: r._creationTime,
 			});
 		}

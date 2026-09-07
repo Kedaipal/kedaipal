@@ -186,6 +186,8 @@ import {
 	sanitizeAwbConfig,
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
+import { sanitizeAttributionSource } from "./lib/attribution";
+import { isValidGaClientId } from "./lib/ga4";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
@@ -220,7 +222,7 @@ import {
 	type CountrySetupItem,
 	resolveCountrySetup,
 } from "./lib/countrySetup";
-import { inferLalamoveEnv, resolveLalamoveCredentials } from "./lib/lalamove";
+import { hasLalamoveCredentials, inferLalamoveEnv } from "./lib/lalamove";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -334,6 +336,13 @@ const deliveryConfigValidator = v.union(
 		mode: v.literal("lalamove"),
 		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 	}),
+	// Provider-aware live pricing (z8r3fdbvdy) — the mode sellers can now
+	// pick; "lalamove" above survives only until stored rows are migrated
+	// (migrations:migrateLalamoveModeToLive).
+	v.object({
+		mode: v.literal("live"),
+		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+	}),
 );
 
 // Lalamove booking config (86eyb5hrf). `null` clears; enabling requires a
@@ -397,7 +406,7 @@ function summarizeDeliveryBooking(
 	return {
 		enabled: booking.enabled,
 		vehicleType: booking.vehicleType,
-		hasCredentials: resolveLalamoveCredentials(booking) !== null,
+		hasCredentials: hasLalamoveCredentials(booking),
 		promptBookOnPacked: booking.promptBookOnPacked === true,
 		deliveryDirection: booking.deliveryDirection ?? "standard",
 		// Stored hint first (86eyn25gk — the key may be ciphertext); slicing is
@@ -477,6 +486,70 @@ const businessAddressValidator = v.object({
 	longitude: v.number(),
 	placeId: v.optional(v.string()),
 });
+
+// Legal identity printed on buyer invoices/receipts (z8r3fdcrzj). Every field
+// optional — sellers publish exactly the fields they choose. Distinct from
+// businessAddress above: this is paper-only display data the seller typed FOR
+// buyers, that one is a private geo origin.
+const businessIdentityValidator = v.object({
+	legalName: v.optional(v.string()),
+	registrationNumber: v.optional(v.string()),
+	address: v.optional(v.string()),
+	contact: v.optional(v.string()),
+	taxNumber: v.optional(v.string()),
+});
+
+type BusinessIdentity = {
+	legalName?: string;
+	registrationNumber?: string;
+	address?: string;
+	contact?: string;
+	taxNumber?: string;
+};
+
+// Single-line fields cap at 120 (longest plausible legal name), the multiline
+// address at 300 (the businessAddress label precedent) — these print inside a
+// half-page PDF column, so anything longer is noise, not data.
+const IDENTITY_LINE_MAX = 120;
+const IDENTITY_ADDRESS_MAX = 300;
+
+/** Trim/cap the seller-typed identity block; an all-blank save collapses to
+ * undefined so no empty shell object lingers on the row. */
+function sanitizeBusinessIdentity(
+	raw: BusinessIdentity,
+): BusinessIdentity | undefined {
+	const line = (value: string | undefined, label: string): string | undefined => {
+		const trimmed = value?.trim();
+		if (!trimmed) return undefined;
+		if (trimmed.length > IDENTITY_LINE_MAX) {
+			throw new ConvexError(
+				`${label} must be at most ${IDENTITY_LINE_MAX} characters`,
+			);
+		}
+		return trimmed;
+	};
+	// Normalize the address per line so a stray blank line doesn't print a gap.
+	const address = raw.address
+		?.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0)
+		.join("\n");
+	if (address && address.length > IDENTITY_ADDRESS_MAX) {
+		throw new ConvexError(
+			`Business address must be at most ${IDENTITY_ADDRESS_MAX} characters`,
+		);
+	}
+	const identity: BusinessIdentity = {
+		legalName: line(raw.legalName, "Registered name"),
+		registrationNumber: line(raw.registrationNumber, "Registration number"),
+		address: address && address.length > 0 ? address : undefined,
+		contact: line(raw.contact, "Billing contact"),
+		taxNumber: line(raw.taxNumber, "Tax number"),
+	};
+	return Object.values(identity).some((f) => f !== undefined)
+		? identity
+		: undefined;
+}
 
 type BusinessAddress = {
 	label: string;
@@ -701,6 +774,11 @@ type RetailerPublic = {
 	// resolved fee from the `delivery.quote` query instead.
 	deliveryConfig?: DeliveryConfig;
 	businessAddress?: BusinessAddress;
+	// Legal identity for buyer invoices/receipts (z8r3fdcrzj). OWNER-only in
+	// the sense that only the settings read carries it, but unlike
+	// businessAddress it is seller-published display data — it reaches buyers
+	// inside the PDFs they download, never via the storefront payload.
+	businessIdentity?: BusinessIdentity;
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
@@ -875,6 +953,7 @@ async function buildRetailerPublic(
 		offerDelivery: row.offerDelivery,
 		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
 		businessAddress: row.businessAddress,
+		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
@@ -1235,6 +1314,15 @@ export const createRetailer = mutation({
 		// plan still only starts at admin mark-paid. The real rank gate is mark-paid +
 		// the 10-slot cap, so this is not a privileged arg in v1. See docs/manual-subscription.md.
 		intent: v.optional(v.union(v.literal("public"), v.literal("founding"))),
+		// Marketing tag the seller's session arrived with (z8r3fdd1v0) — carried
+		// from the marketing routes via sessionStorage (see
+		// src/lib/marketing-attribution.ts). Re-sanitized here: the client value
+		// is a hint, never trusted verbatim.
+		signupSource: v.optional(v.string()),
+		// GA4 client id from the seller's `_ga` cookie (z8r3fdd1v1), so the
+		// server-side key events stitch to their client-side funnel. A hint like
+		// signupSource: validated here (wire format only), dropped otherwise.
+		gaClientId: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -1293,6 +1381,16 @@ export const createRetailer = mutation({
 			await ctx.db.delete(historyRow._id);
 		}
 
+		// Absent/blank → undefined (untagged), present-but-garbage → "other" —
+		// identical semantics to orders.attributionSource.
+		const signupSource = sanitizeAttributionSource(args.signupSource);
+		// Wire-format check only — a malformed value is dropped (unlike
+		// signupSource's "other" bucket: a garbage client id has no signal value).
+		const gaClientId =
+			args.gaClientId !== undefined && isValidGaClientId(args.gaClientId)
+				? args.gaClientId
+				: undefined;
+
 		const now = Date.now();
 		// Consent is implied: the onboarding UI gates submission on a required,
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
@@ -1308,6 +1406,8 @@ export const createRetailer = mutation({
 			// theirs at create and orders refuse a currency mismatch.
 			currency: COUNTRY_CURRENCY[country],
 			...(args.country !== undefined ? { country: args.country } : {}),
+			...(signupSource !== undefined ? { signupSource } : {}),
+			...(gaClientId !== undefined ? { gaClientId } : {}),
 			channel: "whatsapp",
 			// Default self-collect ON so new retailers discover the pickup feature
 			// in the onboarding checklist. They can toggle it off from Settings →
@@ -1403,6 +1503,10 @@ export const updateSettings = mutation({
 		// Business address (radius-mode origin). `null` clears — rejected while
 		// a radius config still depends on it; undefined = no change.
 		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
+		// Legal identity for buyer invoices/receipts (z8r3fdcrzj). `null` (or an
+		// all-blank object) clears; undefined = no change. All-tier — an invoice
+		// a finance department accepts is baseline selling, not an upsell.
+		businessIdentity: v.optional(v.union(businessIdentityValidator, v.null())),
 		// Lalamove booking (86eyb5hrf). `null` clears (un-gated — downgrade never
 		// traps); enabling requires business address + resolvable credentials and
 		// is Pro-gated. Undefined = no change.
@@ -1479,6 +1583,7 @@ export const updateSettings = mutation({
 			offerDelivery: boolean;
 			deliveryConfig: DeliveryConfig | undefined;
 			businessAddress: BusinessAddress | undefined;
+			businessIdentity: BusinessIdentity | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
 			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
@@ -1708,6 +1813,14 @@ export const updateSettings = mutation({
 				);
 			}
 		}
+		if (args.businessIdentity !== undefined) {
+			// sanitize collapses an all-blank object to undefined, so "cleared
+			// every field and saved" behaves exactly like an explicit null.
+			patch.businessIdentity =
+				args.businessIdentity === null
+					? undefined
+					: sanitizeBusinessIdentity(args.businessIdentity);
+		}
 		if (args.deliveryConfig !== undefined) {
 			if (args.deliveryConfig === null) {
 				// Clearing (back to free delivery) is always allowed — a downgraded
@@ -1731,7 +1844,7 @@ export const updateSettings = mutation({
 					DEFAULT_COUNTRY;
 				if (!deliveryModeAllowed(effectiveCountry, clean.mode)) {
 					throw new ConvexError(
-						"Distance, weight-zone and Lalamove pricing are Malaysia-only for now — Singapore stores can use Free or a Flat fee.",
+						"Distance and weight-zone pricing are Malaysia-only for now — Singapore stores can use Free, a Flat fee, or Live courier price.",
 					);
 				}
 				if (clean.mode === "radius") {
@@ -1871,7 +1984,7 @@ export const updateSettings = mutation({
 						DEFAULT_COUNTRY;
 					if (!riderBookingAllowed(effectiveCountry)) {
 						throw new ConvexError(
-							"Lalamove rider booking is Malaysia-only for now — Singapore stores arrange their own courier and record the tracking number on the order.",
+							"Lalamove rider booking isn't available for your store's country yet — arrange your own courier and record the tracking number on the order.",
 						);
 					}
 					const effectiveAddress =
@@ -1885,7 +1998,7 @@ export const updateSettings = mutation({
 					}
 					// BYO-only: the seller's own key pair is required — Kedaipal has
 					// no Lalamove account and never books on a seller's behalf.
-					if (!resolveLalamoveCredentials(clean)) {
+					if (!hasLalamoveCredentials(clean)) {
 						throw new ConvexError(
 							"Add your Lalamove API key and secret to enable delivery booking.",
 						);

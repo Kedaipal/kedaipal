@@ -27,6 +27,8 @@ import {
 	type Country,
 } from "../../convex/lib/country";
 import {
+	ANNUAL_MONTHS_RECEIVED,
+	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
 	planPrice,
@@ -597,6 +599,10 @@ function IssueInvoiceForm() {
 	// Derived amount (single source of truth from convex/lib/plans).
 	const total = planPrice(effectivePlan, cycle, founding, currency);
 	const base = planPrice(effectivePlan, cycle, false, currency);
+	// What an annual invoice actually buys the seller. Shown to the operator
+	// because "RM 1,490.00" alone doesn't say whether it covers ten months or
+	// twelve — and this form is where an annual switch is honoured by hand.
+	const annual = annualQuote(effectivePlan, founding, currency);
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -770,6 +776,13 @@ function IssueInvoiceForm() {
 							{formatPrice(base - total, currency)} founding discount
 						</p>
 					) : null}
+					{cycle === "annual" ? (
+						<p className="text-xs text-muted-foreground">
+							Covers {ANNUAL_MONTHS_RECEIVED} months ·{" "}
+							{formatPrice(annual.saving, currency)} saved (2 months free) ·{" "}
+							{formatPrice(annual.effectiveMonthly, currency)}/mo effective
+						</p>
+					) : null}
 				</div>
 				<Button
 					type="button"
@@ -866,6 +879,14 @@ function PendingInvoices() {
 									<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium uppercase text-accent">
 										{inv.plan}
 									</span>
+									{/* Marking this paid grants 365 days instead of 30. Without
+									    the pill an annual and a monthly pending invoice look
+									    identical apart from the amount. */}
+									{inv.billingCycle === "annual" ? (
+										<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium uppercase text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+											Annual
+										</span>
+									) : null}
 								</div>
 								<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
 									<span className="font-mono">{inv.invoiceNumber}</span>

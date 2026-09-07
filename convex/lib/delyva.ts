@@ -170,6 +170,30 @@ export type DelyvaService = {
  * answer ("no courier takes this parcel to this address") — only a shape
  * surprise throws. Services arrive in provider order; callers sort by price.
  */
+/**
+ * How many couriers this Delyva ACCOUNT has switched on, from `GET /service`.
+ *
+ * A quote that comes back with no services has two very different causes, and
+ * the seller can only fix one of them: either no courier serves this
+ * particular parcel/route, or the account has no couriers connected at all —
+ * the state every fresh DelyvaNow account starts in, and what a seller hits
+ * when their market's providers were never enabled for them (Zaki's SG
+ * account, 3 Sep: an empty Service Providers panel and therefore an empty
+ * quote for every address he tried). Blaming the address in that state sends
+ * them hunting the wrong variable.
+ *
+ * `status: 1` is active; anything else is switched off. A malformed response
+ * yields `null` — "we couldn't tell", which the caller renders as the
+ * cautious generic copy rather than a wrong accusation.
+ */
+export function countActiveDelyvaServices(json: unknown): number | null {
+	const data = (json as { data?: unknown })?.data;
+	if (!Array.isArray(data)) return null;
+	return data.filter(
+		(entry) => (entry as { status?: unknown } | null)?.status === 1,
+	).length;
+}
+
 export function parseInstantQuoteResponse(json: unknown): DelyvaService[] {
 	const data = (json as { data?: { services?: unknown } })?.data;
 	if (!data || typeof data !== "object") {
@@ -364,6 +388,47 @@ export function parseOrderResponse(json: unknown): ParsedDelyvaOrder {
 		statusCode:
 			typeof record.statusCode === "number" ? record.statusCode : undefined,
 	};
+}
+
+export type DelyvaCompany = {
+	/** Delyva's company code — `"demo"` for their shared demo environment. */
+	code?: string;
+	name?: string;
+	websiteUrl?: string;
+	/** True when this company IS the demo environment: play-money credit, no
+	 * courier ever dispatched. Delyva issues no key prefix and runs one API
+	 * host, so this is the only signal that distinguishes a test account. */
+	isDemo: boolean;
+};
+
+/** Parse `GET /company/{id}`. Note the payload is NOT `{data: …}`-wrapped
+ * (verified live 2 Sep 2026) — unlike most of their API — so tolerate both. */
+export function parseCompanyResponse(json: unknown): DelyvaCompany {
+	const raw =
+		(json as { data?: Record<string, unknown> })?.data ??
+		(json as Record<string, unknown>);
+	const record = (raw ?? {}) as Record<string, unknown>;
+	const code = typeof record.code === "string" ? record.code : undefined;
+	const name = typeof record.name === "string" ? record.name : undefined;
+	const websiteUrl =
+		typeof record.websiteUrl === "string" ? record.websiteUrl : undefined;
+	// Two independent tells per tenant, either one is enough: a rename of the
+	// company shouldn't silently turn a test account into a "live" one.
+	//
+	// `demo` is the one the seller-facing guide points at; `trydx` ("try
+	// express") is the SANDBOX tenant Delyva's own developer guide sends
+	// integrators to, found 3 Sep. Missing it would have been the 86eypncfy
+	// bug exactly: a sandbox booking is indistinguishable from a real one
+	// right up until no courier ever arrives, and we'd have badged it LIVE —
+	// a false all-clear is worse than no badge at all.
+	const host = (websiteUrl ?? "").toLowerCase();
+	const slug = code?.toLowerCase();
+	const isDemo =
+		slug === "demo" ||
+		slug === "trydx" ||
+		host.includes("demo.delyva.app") ||
+		host.includes("trydx.delyva.app");
+	return { code, name, websiteUrl, isDemo };
 }
 
 /**

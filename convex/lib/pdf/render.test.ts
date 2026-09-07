@@ -19,6 +19,7 @@ function isPdf(bytes: Uint8Array): boolean {
 
 const receipt: OrderReceiptData = {
 	storeName: "Sweet Co",
+	sellerLines: [],
 	orderShortId: "ORD-1234",
 	orderDate: Date.UTC(2026, 5, 29, 16, 0, 0),
 	paid: true,
@@ -55,6 +56,33 @@ const invoice: SubscriptionInvoiceData = {
 	currency: "MYR",
 	issuerBank: [{ label: "Bank transfer", lines: ["Maybank", "1234567890"] }],
 };
+
+describe("buildOrderReceiptPdf — seller identity block (z8r3fdcrzj)", () => {
+	test("renders with legal-identity From lines", async () => {
+		const bytes = await buildOrderReceiptPdf({
+			...receipt,
+			sellerLines: [
+				"Hermoolah Enterprise",
+				"SSM no. 202403123456",
+				"12, Jalan Contoh 3/4",
+				"40000 Shah Alam, Selangor",
+				"billing@hermoolah.com",
+			],
+		});
+		expect(isPdf(bytes)).toBe(true);
+	});
+});
+
+describe("buildSubscriptionInvoicePdf — receipt face (z8r3fdcrzj)", () => {
+	test("renders the paid face (no payment card, Amount paid bar)", async () => {
+		const bytes = await buildSubscriptionInvoicePdf({
+			...invoice,
+			issuerBank: [],
+			paid: { paidAt: Date.UTC(2026, 8, 6), methodLabel: "DuitNow" },
+		});
+		expect(isPdf(bytes)).toBe(true);
+	});
+});
 
 describe("buildOrderReceiptPdf", () => {
 	test("produces non-empty PDF bytes", async () => {

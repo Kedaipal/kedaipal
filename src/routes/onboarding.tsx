@@ -32,8 +32,11 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { useLandingRegion } from "../hooks/useLandingRegion";
+import { useOnboardingStart } from "../hooks/useOnboardingStart";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import { readGaClientId, trackEvent } from "../lib/ga-events";
+import { readMarketingSource } from "../lib/marketing-attribution";
 import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
@@ -101,6 +104,11 @@ function OnboardingForm() {
 	// number for review, and tell the client what's going on.
 	const prefill = search.prefill;
 	const assisted = Boolean(prefill);
+
+	// GA4 funnel (z8r3fdd1v0): fires onboarding_start only once the query says
+	// "no store yet" — an already-onboarded seller landing here gets redirected
+	// below and must not count as a funnel entry.
+	useOnboardingStart(retailer);
 
 	const [storeName, setStoreName] = useState(prefill?.store ?? "");
 	const [slug, setSlug] = useState(prefill?.slug ?? "");
@@ -186,6 +194,12 @@ function OnboardingForm() {
 		}
 		setSubmitting(true);
 		try {
+			// The tag the session arrived with (marketing routes / powered-by
+			// badge) — the server re-sanitizes, this is only a hint.
+			const signupSource = readMarketingSource();
+			// GA client id, so server-side key events (first_order/subscribe_paid)
+			// stitch to this browser's funnel — validated server-side, hint only.
+			const gaClientId = readGaClientId();
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
@@ -194,7 +208,12 @@ function OnboardingForm() {
 				// Founding-10: starts on the normal 14-day trial; the discounted Pro
 				// plan begins once Arif marks their founding invoice paid.
 				...(prefill?.founding ? { intent: "founding" as const } : {}),
+				...(signupSource !== undefined ? { signupSource } : {}),
+				...(gaClientId !== undefined ? { gaClientId } : {}),
 			});
+			// The funnel's terminal key event — after the mutation succeeds, so a
+			// slug collision or validation error can't inflate conversions.
+			trackEvent("store_created");
 			navigate({ to: "/app" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
