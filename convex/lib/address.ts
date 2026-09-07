@@ -74,6 +74,32 @@ const POSTCODE_RULES: Record<Country, { pattern: RegExp; error: string }> = {
 	SG: { pattern: /^\d{6}$/, error: "Postal code must be 6 digits" },
 };
 
+/**
+ * The postcode rule for a country — exported so no caller has to keep its own
+ * copy of the digit count. The Delyva pickup-address form and its server
+ * validator both went in with a hardcoded `/^\d{5}$/`, which silently made
+ * that feature Malaysia-shaped; anything asking a seller for a postcode should
+ * ask THIS (86eyjpv6z / z8r3fdbqmc).
+ *
+ * `digits` is the length the pattern enforces — forms need it for `maxLength`
+ * so a Singapore postal code isn't truncated to five characters as it's typed.
+ * `label` is what the country actually calls it: Malaysia says "postcode",
+ * Singapore says "postal code".
+ */
+export function postcodeRule(country: Country): {
+	pattern: RegExp;
+	error: string;
+	digits: number;
+	label: string;
+} {
+	const rule = POSTCODE_RULES[country];
+	return {
+		...rule,
+		digits: country === "SG" ? 6 : 5,
+		label: country === "SG" ? "Postal code" : "Postcode",
+	};
+}
+
 const LINE1_MIN = 3;
 const LINE1_MAX = 120;
 const LINE2_MAX = 120;

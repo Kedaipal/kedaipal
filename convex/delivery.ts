@@ -45,7 +45,13 @@ export type PublicDeliveryQuote =
 	// picks an address, and no quote = no order (strict since 27 Jul: the buyer
 	// always sees the real rider price; unquotable/pin-less addresses can't
 	// submit).
-	| { kind: "live" };
+	// `providerAware` says WHICH action fetches the real fee: the
+	// provider-aware `liveQuote.quoteForCheckout` (mode "live", quotes every
+	// armed provider and charges the higher) or the single-provider
+	// `lalamove.quoteForCheckout` (mode "lalamove", pre-migration). The client
+	// can't infer it — both modes look identical from here — and calling the
+	// wrong one would price a store by rules it hasn't been moved to yet.
+	| { kind: "live"; providerAware: boolean };
 
 export const quote = query({
 	args: {
@@ -89,8 +95,14 @@ export const quote = query({
 		) {
 			return { kind: "blocked", reason: "store_unavailable" };
 		}
-		if (retailer.deliveryConfig?.mode === "lalamove") {
-			return { kind: "live" };
+		if (
+			retailer.deliveryConfig?.mode === "lalamove" ||
+			retailer.deliveryConfig?.mode === "live"
+		) {
+			return {
+				kind: "live",
+				providerAware: retailer.deliveryConfig.mode === "live",
+			};
 		}
 		const destination =
 			args.latitude !== undefined &&

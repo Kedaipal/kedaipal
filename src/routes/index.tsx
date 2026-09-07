@@ -13,6 +13,7 @@ import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { RealSellers } from "../components/landing/real-sellers";
 import { VideoDemo } from "../components/landing/video-demo";
+import { useMarketingLanding } from "../hooks/useMarketingLanding";
 
 /**
  * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
@@ -188,6 +189,8 @@ export const Route = createFileRoute("/")({
 });
 
 function Landing() {
+	// GA4 funnel entry (z8r3fdd1v0): capture ?src= + fire land_marketing.
+	useMarketingLanding();
 	return (
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />

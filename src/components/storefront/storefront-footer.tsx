@@ -11,9 +11,11 @@ import { AppImage } from "../ui/app-image";
  * of the "Powered by Kedaipal" line on WhatsApp order confirmations. No retailer
  * toggle: universal or the loop doesn't compound.
  *
- * The `?src=storefront_badge` tag is the repo's reserved PostHog attribution
- * convention (same as the poster QR `?src=` links) so the click path this badge
- * creates is measurable. Opens in a new tab so the buyer never loses the store.
+ * The `?src=powered-by` tag follows the seller-acquisition naming convention
+ * (z8r3fdd1v0, src/lib/marketing-attribution.ts): the landing page captures it
+ * and it rides the GA4 funnel all the way onto `retailers.signupSource`, so
+ * "sellers acquired via other sellers' storefronts" is measurable. Opens in a
+ * new tab so the buyer never loses the store.
  */
 export function StorefrontFooter() {
 	return (
@@ -36,7 +38,7 @@ export function StorefrontFooter() {
 		>
 			<div className="flex justify-center">
 				<a
-					href="https://kedaipal.com?src=storefront_badge"
+					href="https://kedaipal.com?src=powered-by"
 					target="_blank"
 					rel="noopener noreferrer"
 					aria-label="Powered by Kedaipal"

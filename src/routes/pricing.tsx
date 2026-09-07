@@ -4,9 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Minus, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import {
+	type AnnualQuote,
+	annualQuote,
 	type BillingCurrency,
 	BILLING_CURRENCY_FOR_COUNTRY,
 	OUTLET_ADDON_MONTHLY_PRICES,
@@ -28,8 +30,10 @@ import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
 import { useLandingRegion } from "../hooks/useLandingRegion";
+import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
+import { trackEvent, trackSignupCta } from "../lib/ga-events";
 import { resolveTierCta } from "../lib/pricing-cta";
 import type { SubscriptionView } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -125,11 +129,24 @@ function monthlyPrice(id: Plan, currency: BillingCurrency): number {
 	return PLAN_MONTHLY_PRICES[currency][id] / 100;
 }
 
-/** Annual cycle's effective per-month price (10 months paid / 12 received,
- * floored) — derived, so it can't drift from PLAN_MONTHLY_PRICES the way the
- * old hardcoded 65/124/249 literals could. */
+/**
+ * The annual cycle's money, straight from `annualQuote` — the same helper the
+ * seller's Settings → Billing offer and `planPrice` read.
+ *
+ * This page used to do the arithmetic itself, and got it wrong in a way that
+ * only showed up on the line nobody could see: the yearly TOTAL was the
+ * rounded effective monthly × 10, i.e. a year priced at 8.33 months. Starter
+ * advertised RM650/yr against an invoice of RM790. Headline and total now come
+ * from one object so they cannot describe different offers.
+ */
+function annualPricing(id: Plan, currency: BillingCurrency): AnnualQuote {
+	return annualQuote(id, false, currency);
+}
+
+/** Whole-unit effective per-month price for the card headline — floored to keep
+ * the integer shape every other price on this page has. */
 function annualMonthlyPrice(id: Plan, currency: BillingCurrency): number {
-	return Math.floor((monthlyPrice(id, currency) * 10) / 12);
+	return Math.floor(annualPricing(id, currency).effectiveMonthly / 100);
 }
 
 type FeatureValue = boolean | string;
@@ -493,7 +510,7 @@ function TierCard({
 			{cycle === "annual" && (
 				<p className="mt-0.5 text-xs text-accent">
 					{m.pricingpage_billed_annual({
-						total: annualMonthlyPrice(tier.id, currency) * 10,
+						total: `${symbol}${annualPricing(tier.id, currency).annualTotal / 100}`,
 					})}
 				</p>
 			)}
@@ -598,7 +615,11 @@ function TierCard({
 						variant={tier.popular ? "default" : "outline"}
 					>
 						{cta === "trial" ? (
-							<Link to="/sign-up/$" params={{ _splat: "" }}>
+							<Link
+								to="/sign-up/$"
+								params={{ _splat: "" }}
+								onClick={() => trackSignupCta(`pricing-card-${tier.id}`)}
+							>
 								{tier.cta} <ArrowRight className="size-4" />
 							</Link>
 						) : cta === "dashboard" ? (
@@ -634,6 +655,12 @@ function TierCard({
 }
 
 function PricingPage() {
+	// GA4 funnel (z8r3fdd1v0): capture ?src= + land_marketing, then the
+	// pricing-specific step — every pricing view counts, unlike the landing.
+	useMarketingLanding();
+	useEffect(() => {
+		trackEvent("view_pricing");
+	}, []);
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const { isLoaded, isSignedIn } = useAuth();
 	// Only signed-in sellers need their plan; skip the query for visitors. A
@@ -715,8 +742,11 @@ function PricingPage() {
 									)}
 								>
 									{m.pricingpage_toggle_annual()}
-									<span className="absolute -right-1 -top-2 rotate-3 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
-										-17%
+									{/* Never a percentage — the saving is "2 months free"
+									    (Arif, 28 Jul + 9 Aug 2026). A standing % badge reads
+									    as a markdown on a flat price. */}
+									<span className="absolute -right-2 -top-2.5 whitespace-nowrap rounded-full bg-accent px-2 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+										{m.pricingpage_annual_badge()}
 									</span>
 								</button>
 							</div>
@@ -959,6 +989,7 @@ function PricingPage() {
 								to="/sign-up/$"
 								params={{ _splat: "" }}
 								className={ctaPillClass("accent")}
+								onClick={() => trackSignupCta("pricing-bottom")}
 							>
 								{m.pricingpage_cta_trial_btn()}{" "}
 								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />

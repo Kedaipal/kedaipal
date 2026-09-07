@@ -41,9 +41,19 @@ error, never a silent MY fallback (the `Locale` posture).
 
 ### Where it's settable
 
-- **Onboarding** (`/onboarding`): a Malaysia/Singapore picker, default MY.
-  Deliberately BEFORE the store exists — see "currency is born from the
-  country" below.
+- **Onboarding** (`/onboarding`): a Malaysia/Singapore picker. Deliberately
+  BEFORE the store exists — see "currency is born from the country" below.
+  **Self-serve seeds from the pricing pages' own region resolution**
+  (`useLandingRegion`: stored `RegionToggle` pick → Cloudflare geo →
+  device time zone → MY, z8r3fdbmc9) instead of a bare MY default — the
+  seller who was just reading S$ pricing must not be handed Malaysia at the
+  moment currency binds to the store. The picker stays visible (a wrong
+  guess costs one tap), and an explicit pick writes the same region cookie
+  so the marketing surfaces keep quoting the chosen currency. **Assisted
+  invites bypass the guess**: the token is admin-curated, and an absent
+  country in it MEANS Malaysia (only the non-default country rides the
+  token), so an old MY invite never gets re-litigated by the client's
+  device.
 - **Admin invite links** (`admin billing → Onboard a client`): a country
   toggle rides the prefill token (`country: "SG"` only when SG — old links
   stay valid), so an SG client's form opens pre-set.
@@ -244,6 +254,37 @@ verified to re-validate nothing.
   M7 — both updated).
 - Counter manual bind stays **loose and plate-less** (cashiers key foreign
   numbers); its helper copy + placeholder are country-aware records.
+
+### Cross-country rejection copy — `z8r3fdbmc9`
+
+Cross-country numbers stay **rejected** (the no-sniffing rule above is about
+acceptance and is untouched), but the rejection now says what it saw. One
+author, `mobileRejectionMessage` in `convex/lib/slug.ts`: when the refused
+digits cleanly match the OTHER supported country (`otherCountryMobile` —
+detection for copy, never for acceptance), the message becomes the
+cross-country line; otherwise it stays the per-country `MOBILE_MESSAGE`. The
+server validator and every client schema route through it, so the two sides
+can't drift.
+
+Three copy tiers, by what fix the reader can reach:
+
+- **Neutral** (the shared schemas — buyer checkout, track repair, alerts
+  card, pickup manager field): *"That looks like a Singapore mobile number
+  (+65) — this store takes Malaysian mobile numbers (e.g. 012-345 6789)"*.
+  No fix path, because the same schema serves buyers who can't change the
+  store's country.
+- **Settings contact card** (`settingsWaPhoneFormSchema`, pointed): names
+  the Store tab. This is home-checklist step 1 — the first field a store
+  created on the wrong country funnels into, so the copy names the cause
+  ("your store country is Malaysia") and both ways out.
+- **Onboarding assisted phone** (pointed, client-side pre-submit): "switch
+  Country above" — the picker is on the same screen. Inline error under the
+  plate (clears on typing or a country flip), not a toast.
+
+`MOBILE_KIND` ("Malaysian mobile" — not derivable from `COUNTRY_LABELS`) and
+`MOBILE_EXAMPLE` moved into `convex/lib/slug.ts` as the one author; the
+alerts card's local copy of the kind record was folded in. A test pins that
+every example the copy shows is accepted by its own validator.
 
 ### Switching an existing store's country — `86eyqgujv`
 

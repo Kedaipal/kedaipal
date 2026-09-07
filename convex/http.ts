@@ -9,6 +9,10 @@ import {
 	HITPAY_PROVIDER_LABEL,
 	verifyHitpayWebhook,
 } from "./lib/hitpay";
+import {
+	parseDelyvaWebhookEvent,
+	verifyDelyvaWebhook,
+} from "./lib/delyva";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
@@ -244,6 +248,85 @@ http.route({
 			eventType: envelope.eventType,
 			data: envelope.data,
 			eventTimestamp: envelope.timestamp,
+		});
+		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
+ * Delyva courier webhook (86eyjpv6z, docs/delivery-delyva.md). Registered
+ * automatically at connect (POST /webhook per event) — the seller does no
+ * portal setup. Same trust posture as the Lalamove route:
+ *  - events that match no job of ours → 200 ack + ignore (bookings the
+ *    seller made outside Kedaipal; we can't verify them and don't act);
+ *  - a matching job with no stored secret → 500 fail closed;
+ *  - bad signature (`X-Delyvax-Hmac-SHA256`, base64 HMAC-SHA256 of the raw
+ *    body with the account's apiSecret) → 401;
+ *  - signed but wrong customerId for the job's retailer → 200 + log (defense
+ *    in depth; never act on someone else's order).
+ * Idempotency + out-of-order handling live in delyva.applyWebhookEvent.
+ */
+http.route({
+	path: "/webhook/delyva",
+	method: "POST",
+	handler: httpAction(async (ctx, req) => {
+		const rawBody = await req.text();
+		const event = parseDelyvaWebhookEvent(rawBody);
+		if (!event) {
+			// Subscription pings / non-order payloads: ack so Delyva keeps the
+			// URL healthy.
+			console.log("Delyva webhook: non-order body, acking", {
+				bytes: rawBody.length,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		const context = await ctx.runQuery(internal.delyva.getWebhookContext, {
+			delyvaOrderId: event.delyvaOrderId,
+		});
+		if (!context) {
+			console.log("Delyva webhook: no matching delivery job, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+				statusCode: event.statusCode,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		if (!context.apiSecret) {
+			// A job we placed but no secret to verify with — credentials were
+			// removed after booking. Fail closed (WhatsApp-route posture).
+			console.error("Delyva webhook rejected: no verifying secret stored", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("server misconfigured", { status: 500 });
+		}
+		const valid = await verifyDelyvaWebhook({
+			rawBody,
+			// Stored secrets are encrypted at rest (86eyn25gk); the signature is
+			// always over the plaintext secret.
+			apiSecret: await decryptSecret(context.apiSecret),
+			signatureHeader: req.headers.get("X-Delyvax-Hmac-SHA256"),
+		});
+		if (!valid) {
+			console.warn("Delyva webhook rejected: invalid signature", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("invalid signature", { status: 401 });
+		}
+		if (
+			event.customerId !== undefined &&
+			context.customerId !== null &&
+			event.customerId !== context.customerId
+		) {
+			console.warn("Delyva webhook: customerId mismatch, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		await ctx.runMutation(internal.delyva.applyWebhookEvent, {
+			jobId: context.jobId,
+			statusCode: event.statusCode,
+			consignmentNo: event.consignmentNo,
+			statusText: event.statusText,
+			eventAt: event.eventAt ?? Date.now(),
 		});
 		return new Response("ok", { status: 200 });
 	}),

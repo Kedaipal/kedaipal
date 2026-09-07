@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	checkoutFormSchemaFor,
+	settingsWaPhoneFormSchema,
 	strictAddressSchemaFor,
 	waPhoneCheckoutSchema,
+	waPhoneFormOptionalSchema,
 } from "./schemas";
 
 // Built from convex/lib/slug.ts's own patterns + normalizer, then requires the
@@ -208,5 +210,75 @@ describe("waPhoneCheckoutSchema.SG (86eynw28q)", () => {
 				);
 			}
 		}
+	});
+});
+
+// Cross-country rejection copy (z8r3fdbmc9): a number that cleanly matches the
+// OTHER supported country is still rejected, but the message names the
+// mismatch instead of restating the format. The store on the wrong country —
+// a missed onboarding default — is the case this exists for.
+describe("cross-country rejection copy rides the phone schemas", () => {
+	it("MY checkout arm names an SG number instead of a dead end", () => {
+		const result = waPhoneCheckoutSchema.MY.safeParse("+65 9123 4567");
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error.issues[0].message).toMatch(
+				/looks like a Singapore mobile/i,
+			);
+		}
+	});
+
+	it("SG checkout arm names an MY number", () => {
+		const result = waPhoneCheckoutSchema.SG.safeParse("012-345 6789");
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error.issues[0].message).toMatch(
+				/looks like a Malaysian mobile/i,
+			);
+		}
+	});
+
+	it("acceptance and output are untouched — a valid number still normalizes", () => {
+		expect(waPhoneCheckoutSchema.MY.parse("012-345 6789")).toBe("60123456789");
+		expect(waPhoneCheckoutSchema.SG.parse("9123 4567")).toBe("6591234567");
+	});
+
+	it("optional form arm: blank passes, a cross-country number names itself", () => {
+		expect(waPhoneFormOptionalSchema.MY.safeParse("").success).toBe(true);
+		expect(waPhoneFormOptionalSchema.MY.safeParse("  ").success).toBe(true);
+		const result = waPhoneFormOptionalSchema.MY.safeParse("9123 4567");
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error.issues[0].message).toMatch(
+				/looks like a Singapore mobile/i,
+			);
+		}
+	});
+
+	it("settings arm points at the fix path — the Store tab", () => {
+		const result = settingsWaPhoneFormSchema.MY.safeParse({
+			waPhone: "+65 9123 4567",
+		});
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			const message = result.error.issues[0].message;
+			expect(message).toMatch(/looks like a Singapore mobile/i);
+			expect(message).toMatch(/store country is Malaysia/i);
+			expect(message).toMatch(/Store tab/);
+		}
+	});
+
+	it("settings arm keeps the generic line for junk and still normalizes valid input", () => {
+		const junk = settingsWaPhoneFormSchema.SG.safeParse({ waPhone: "12345" });
+		expect(junk.success).toBe(false);
+		if (!junk.success) {
+			expect(junk.error.issues[0].message).toContain(
+				"Singapore mobile number",
+			);
+			expect(junk.error.issues[0].message).not.toMatch(/Store tab/);
+		}
+		expect(
+			settingsWaPhoneFormSchema.SG.parse({ waPhone: "9123 4567" }).waPhone,
+		).toBe("6591234567");
 	});
 });

@@ -152,6 +152,12 @@ export function featuresForPlan(plan: Plan): PlanFeatures {
 export type BillingCurrency = "MYR" | "SGD";
 export const BILLING_CURRENCIES: BillingCurrency[] = ["MYR", "SGD"];
 
+/** Fallback when nothing else has said which currency to bill in. Named here
+ * rather than spelled at each call site: `src/lib/currency-literals.test.ts`
+ * fails on a currency literal anywhere in `src/**`, and an allowlist entry
+ * would license every FUTURE hardcoded "RM" in that file too. */
+export const DEFAULT_BILLING_CURRENCY: BillingCurrency = "MYR";
+
 /**
  * Which currency Kedaipal invoices a seller in, by the country they're in.
  *
@@ -243,8 +249,17 @@ export function starterPricePerDay(currency: BillingCurrency): number {
 	return Math.floor(PLAN_MONTHLY_PRICES[currency].starter / 100 / 30) + 1;
 }
 
-// Annual billing = 10 months paid, 12 received (~17% off), per CLAUDE.md.
+// Annual billing = 10 months paid, 12 received. Framed to sellers as "2 months
+// free", never as a percentage (Arif, 28 Jul + 9 Aug 2026) — a standing
+// discount quoted as a % undercuts the flat-price posture the tiers are sold on.
 export const ANNUAL_MONTHS_CHARGED = 10;
+
+/** Months of service a seller receives for one annual payment. */
+export const ANNUAL_MONTHS_RECEIVED = 12;
+
+/** Months received free on the annual cycle — derived, so the "2 months free"
+ * claim can never contradict what `planPrice` actually charges. */
+export const ANNUAL_MONTHS_FREE = ANNUAL_MONTHS_RECEIVED - ANNUAL_MONTHS_CHARGED;
 
 /** Plan price for a billing cycle (minor units). Annual = monthly × 10. */
 export function planPrice(
@@ -258,6 +273,50 @@ export function planPrice(
 			? FOUNDING_MONTHLY_PRICES[currency][plan]
 			: PLAN_MONTHLY_PRICES[currency][plan];
 	return cycle === "annual" ? monthly * ANNUAL_MONTHS_CHARGED : monthly;
+}
+
+/**
+ * Every money fact a surface needs to quote the annual cycle, in MINOR units.
+ *
+ * One author, because the surfaces disagreed. `/pricing` derived its yearly
+ * total from the ROUNDED effective monthly — `floor(monthly x 10 / 12) x 10` —
+ * so a Starter card advertised RM650/yr against an invoice that `planPrice`
+ * puts at RM790. Two definitions of "annual", 17% apart, on the same product.
+ * Anything that shows an annual number now reads it from here.
+ */
+export type AnnualQuote = {
+	/** Monthly price for this plan + currency (what 1 month costs today). */
+	monthly: number;
+	/** What the seller is actually invoiced for the year. Identical to
+	 * `planPrice(plan, "annual", founding, currency)` — that is the contract. */
+	annualTotal: number;
+	/** Cost per month spread across the 12 months RECEIVED. Display only, never
+	 * billed — and rounded UP, so `effectiveMonthly × 12` is never less than the
+	 * amount actually charged. `Math.round` understated it (MYR Starter: 6,583 ×
+	 * 12 = 78,996 against a 79,000 charge), which is the same
+	 * strictly-true-beats-tightest rule `starterPricePerDay` documents. */
+	effectiveMonthly: number;
+	/** 12 monthly invoices minus the annual total — the seller's saving. */
+	saving: number;
+	/** Months received free (mirrors ANNUAL_MONTHS_FREE; carried on the quote so
+	 * a caller never has to import both). */
+	monthsFree: number;
+};
+
+export function annualQuote(
+	plan: Plan,
+	founding = false,
+	currency: BillingCurrency = "MYR",
+): AnnualQuote {
+	const monthly = planPrice(plan, "monthly", founding, currency);
+	const annualTotal = planPrice(plan, "annual", founding, currency);
+	return {
+		monthly,
+		annualTotal,
+		effectiveMonthly: Math.ceil(annualTotal / ANNUAL_MONTHS_RECEIVED),
+		saving: monthly * ANNUAL_MONTHS_RECEIVED - annualTotal,
+		monthsFree: ANNUAL_MONTHS_FREE,
+	};
 }
 
 export const TRIAL_DAYS = 14;

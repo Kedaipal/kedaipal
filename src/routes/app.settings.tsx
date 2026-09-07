@@ -13,6 +13,7 @@ import {
 	Landmark,
 	MapPinned,
 	MessageCircle,
+	Plug,
 	Plus,
 	QrCode,
 	ReceiptText,
@@ -44,7 +45,6 @@ import {
 	DELIVERY_MODE_LABELS,
 	type DeliveryConfig,
 	deliveryModeAllowed,
-	riderBookingAllowed,
 } from "../../convex/lib/delivery";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
@@ -66,8 +66,8 @@ import { BillingTab } from "../components/settings/billing-tab";
 import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
+import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
-import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -86,6 +86,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import {
+	type CardTarget,
 	type FixHighlight,
 	highlightFor,
 	highlightRingClass,
@@ -111,6 +112,11 @@ import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
+import {
+	isSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+	type SpotlightKey,
+} from "../lib/spotlight";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -144,6 +150,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
+	| "integrations"
 	| "bookings"
 	| "order-status";
 
@@ -192,6 +199,15 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Delivery & self-collect options",
 		icon: <MapPinned className="size-4" />,
 	},
+	// Third-party ACCOUNTS (Lalamove, Delyva, HitPay): keys, connection
+	// health, per-service details. The behaviour those accounts power stays
+	// under Fulfilment / Payments, which link here when nothing is connected.
+	{
+		id: "integrations",
+		label: "Integrations",
+		description: "Lalamove, Delyva & HitPay accounts",
+		icon: <Plug className="size-4" />,
+	},
 	// Booking stores only (filtered out of both navs otherwise) — the Google
 	// Calendar feed lives here, beside the other how-you-sell surfaces.
 	{
@@ -221,7 +237,14 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: ["whatsapp", "payments", "fulfilment", "bookings", "order-status"],
+		tabs: [
+			"whatsapp",
+			"payments",
+			"fulfilment",
+			"integrations",
+			"bookings",
+			"order-status",
+		],
 	},
 ];
 
@@ -296,7 +319,7 @@ export const Route = createFileRoute("/app/settings")({
 	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { tab?: SettingsTab; fix?: CountrySetupItemKey } => {
+	): { tab?: SettingsTab; fix?: CountrySetupItemKey; spot?: SpotlightKey } => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
@@ -305,14 +328,20 @@ export const Route = createFileRoute("/app/settings")({
 		// to and ring (86eyqgujv). Validated against the known keys so a
 		// hand-typed value can't ring an arbitrary element.
 		const fix =
-			typeof search.fix === "string" && search.fix in SETTINGS_ANCHOR
+			typeof search.fix === "string" &&
+			Object.hasOwn(SETTINGS_ANCHOR, search.fix)
 				? (search.fix as CountrySetupItemKey)
 				: undefined;
+		// `spot` is a What's-new note's deep link: the same scroll-and-ring, in
+		// the brand mint (src/lib/spotlight.ts). Same posture — a key from the
+		// registry, never a raw element id.
+		const spot = isSpotlightKey(search.spot) ? search.spot : undefined;
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
 				: undefined,
 			...(fix ? { fix } : {}),
+			...(spot ? { spot } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -387,7 +416,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix } = Route.useSearch();
+	const { tab, fix, spot } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -415,23 +444,27 @@ function SettingsRoute() {
 
 	const availability = useSlugAvailability(newSlug);
 
-	// Deep link from the post-switch checklist (86eyqgujv): scroll to the card
-	// that actually fixes the row and ring it, instead of dropping the seller at
-	// the top of a long tab to hunt for it.
-	const fixAnchor = fix ? SETTINGS_ANCHOR[fix] : undefined;
-	const fixTarget = fix
+	// Deep link to one card: scroll to it and ring it, instead of dropping the
+	// seller at the top of a long tab to hunt for it. Two senders, one shape —
+	// the post-switch checklist (`?fix=`, 86eyqgujv: red/amber, something to
+	// fix) and a What's-new note (`?spot=`: mint, something to look at). A
+	// `fix` wins when both are present; it is the one that has a problem in it.
+	const cardTarget: CardTarget | undefined = fix
 		? { anchor: SETTINGS_ANCHOR[fix], highlight: highlightFor(VERIFIABLE[fix]) }
-		: undefined;
-	/** Ring this card when it's the one the checklist sent the seller to. */
+		: spot
+			? { anchor: SPOTLIGHT_ANCHOR[spot].anchor, highlight: "spotlight" }
+			: undefined;
+	const targetAnchor = cardTarget?.anchor;
+	/** Ring this card when it's the one the deep link sent the seller to. */
 	const ringFor = (anchor: string): FixHighlight | undefined =>
-		fixTarget?.anchor === anchor ? fixTarget.highlight : undefined;
+		cardTarget?.anchor === anchor ? cardTarget.highlight : undefined;
 	useEffect(() => {
-		if (!fixAnchor) return;
+		if (!targetAnchor) return;
 		// The tab body mounts in this same commit, so the target doesn't exist
 		// until after paint — wait a frame rather than racing it.
-		const frame = requestAnimationFrame(() => scrollToAnchor(fixAnchor));
+		const frame = requestAnimationFrame(() => scrollToAnchor(targetAnchor));
 		return () => cancelAnimationFrame(frame);
-	}, [fixAnchor]);
+	}, [targetAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
 
@@ -700,6 +733,18 @@ function SettingsRoute() {
 								onSave={(storeName) => updateSettings({ storeName })}
 							/>
 						</Card>
+						<Card
+							id={SPOTLIGHT_ANCHOR.business_details.anchor}
+							highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
+						>
+							<BusinessIdentityForm
+								current={retailer.businessIdentity}
+								country={retailer.country}
+								onSave={(businessIdentity) =>
+									updateSettings({ businessIdentity })
+								}
+							/>
+						</Card>
 						<Card>
 							<NotificationsCard />
 						</Card>
@@ -757,7 +802,10 @@ function SettingsRoute() {
 								}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SPOTLIGHT_ANCHOR.store_country.anchor}
+							highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
+						>
 							<CountryForm
 								current={retailer.country}
 								currency={retailer.currency}
@@ -785,7 +833,9 @@ function SettingsRoute() {
 					</div>
 				) : null}
 
-				{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
+				{activeTab === "billing" ? (
+					<BillingTab retailer={retailer} target={cardTarget} />
+				) : null}
 
 				{activeTab === "whatsapp" ? (
 					<div className="flex flex-col gap-6 pt-2">
@@ -851,20 +901,25 @@ function SettingsRoute() {
 						>
 							<PaymentMethodsForm
 								current={retailer.paymentMethods ?? []}
+								country={retailer.country}
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 							/>
 						</Card>
-						<Card
-							id={SETTINGS_ANCHOR.hitpay}
-							highlight={ringFor(SETTINGS_ANCHOR.hitpay)}
-						>
-							<OnlinePaymentsCard
-								hitpay={retailer.hitpay}
-								canUse={hasFeature(retailer.subscription, "onlinePayments")}
-								country={retailer.country}
-								onSave={(patch) => updateSettings(patch)}
-							/>
-						</Card>
+						{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
+						    one home for every third-party account. The pointer keeps the
+						    old home from reading as "online payments are gone". */}
+						<p className="px-1 text-xs text-muted-foreground">
+							Online payments (HitPay) moved to{" "}
+							<button
+								type="button"
+								onClick={() => navigate({ search: { tab: "integrations" } })}
+								className="font-medium text-accent hover:underline"
+							>
+								Settings → Integrations
+							</button>
+							— connect your account there; buyers keep seeing Pay now on their
+							orders as before.
+						</p>
 						{/* Says plainly that nothing chases the buyer automatically, and
 						    names the one manual tool that exists — so the behaviour is
 						    discoverable without a seller assuming a nudge went out that
@@ -882,7 +937,7 @@ function SettingsRoute() {
 
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
-						fix={fixTarget}
+						target={cardTarget}
 						currency={retailer.currency}
 						retailerId={retailer._id}
 						country={retailer.country}
@@ -896,6 +951,18 @@ function SettingsRoute() {
 						minOrderValue={retailer.minOrderValue}
 						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}
+					/>
+				) : null}
+
+				{activeTab === "integrations" ? (
+					<IntegrationsTab
+						target={cardTarget}
+						retailerId={retailer._id}
+						country={retailer.country}
+						deliveryBooking={retailer.deliveryBooking}
+						hitpay={retailer.hitpay}
+						subscription={retailer.subscription}
+						onSave={updateSettings}
 					/>
 				) : null}
 
@@ -1039,6 +1106,173 @@ function StoreNameForm({
 				className={SAVE_BTN_CLASS}
 			>
 				{saving ? "Saving…" : "Save name"}
+			</Button>
+		</form>
+	);
+}
+
+/**
+ * Legal/billing identity printed in the "From" block of the invoices and
+ * receipts buyers download (z8r3fdcrzj). Every field optional and explicitly
+ * buyer-visible — deliberately NOT reusing the fulfilment business address,
+ * which is a private geo origin (often the seller's home).
+ */
+function BusinessIdentityForm({
+	current,
+	country,
+	onSave,
+}: {
+	current:
+		| {
+				legalName?: string;
+				registrationNumber?: string;
+				address?: string;
+				contact?: string;
+				taxNumber?: string;
+		  }
+		| undefined;
+	country: string;
+	onSave: (
+		businessIdentity: {
+			legalName?: string;
+			registrationNumber?: string;
+			address?: string;
+			contact?: string;
+			taxNumber?: string;
+		} | null,
+	) => Promise<unknown>;
+}) {
+	const [legalName, setLegalName] = useState(current?.legalName ?? "");
+	const [registrationNumber, setRegistrationNumber] = useState(
+		current?.registrationNumber ?? "",
+	);
+	const [address, setAddress] = useState(current?.address ?? "");
+	const [contact, setContact] = useState(current?.contact ?? "");
+	const [taxNumber, setTaxNumber] = useState(current?.taxNumber ?? "");
+	const [saving, setSaving] = useState(false);
+
+	// The registration number is CALLED different things per market; the value
+	// prints verbatim (mirrors convex/lib/pdf/document.ts REGISTRATION_LABEL).
+	const regLabel = country === "SG" ? "UEN" : "SSM registration number";
+
+	const fields = [
+		[legalName, current?.legalName],
+		[registrationNumber, current?.registrationNumber],
+		[address, current?.address],
+		[contact, current?.contact],
+		[taxNumber, current?.taxNumber],
+	] as const;
+	const dirty = fields.some(
+		([value, saved]) => value.trim() !== (saved ?? "").trim(),
+	);
+	const allBlank = fields.every(([value]) => value.trim().length === 0);
+
+	async function handleSubmit(e: FormEvent) {
+		e.preventDefault();
+		if (!dirty) return;
+		setSaving(true);
+		try {
+			// All-blank saves as an explicit clear, so no empty shell lingers.
+			await onSave(
+				allBlank
+					? null
+					: {
+							legalName: legalName.trim() || undefined,
+							registrationNumber: registrationNumber.trim() || undefined,
+							address: address.trim() || undefined,
+							contact: contact.trim() || undefined,
+							taxNumber: taxNumber.trim() || undefined,
+						},
+			);
+			toast.success(
+				allBlank ? "Business details cleared." : "Business details updated.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	const fieldLabel = "text-xs font-medium text-muted-foreground";
+
+	return (
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<SectionHeading
+				title="Business details"
+				description="Printed in the “From” section of the invoices and receipts your customers download — what a company's finance team needs to accept your invoice. Only the fields you fill in appear; leave everything blank to show just your store name."
+			/>
+			<div className="flex flex-col gap-3">
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Registered business name</span>
+					<Input
+						type="text"
+						value={legalName}
+						onChange={(e) => setLegalName(e.target.value)}
+						placeholder="e.g. Hermoolah Enterprise"
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>{regLabel}</span>
+					<Input
+						type="text"
+						value={registrationNumber}
+						onChange={(e) => setRegistrationNumber(e.target.value)}
+						placeholder={
+							country === "SG"
+								? "e.g. 202412345K"
+								: "e.g. 202403123456 (1234567-X)"
+						}
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Business address</span>
+					<textarea
+						value={address}
+						onChange={(e) => setAddress(e.target.value)}
+						placeholder={"e.g. 12, Jalan Contoh 3/4\n40000 Shah Alam, Selangor"}
+						rows={3}
+						maxLength={300}
+						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					/>
+					<span className="text-xs text-muted-foreground">
+						Shown to customers on their documents — use an address you're happy
+						to publish, not necessarily where you work from.
+					</span>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Billing contact (phone or email)</span>
+					<Input
+						type="text"
+						value={contact}
+						onChange={(e) => setContact(e.target.value)}
+						placeholder="e.g. billing@hermoolah.com"
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+				<label className="flex flex-col gap-1.5">
+					<span className={fieldLabel}>Tax registration number (optional)</span>
+					<Input
+						type="text"
+						value={taxNumber}
+						onChange={(e) => setTaxNumber(e.target.value)}
+						placeholder="e.g. SST no."
+						maxLength={120}
+						variant="field"
+					/>
+				</label>
+			</div>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
+				{saving ? "Saving…" : "Save business details"}
 			</Button>
 		</form>
 	);
@@ -1436,8 +1670,25 @@ function newDraft(type: "bank" | "qr"): MethodDraft {
 	};
 }
 
+// Placeholder examples per store country (z8r3fdbmc9) — "Maybank / DuitNow /
+// Sdn Bhd" on a Singapore store reads as someone else's app. Examples only;
+// the fields stay free text.
+const BANK_PLACEHOLDER: Record<Country, string> = {
+	MY: "Maybank",
+	SG: "DBS",
+};
+const QR_LABEL_PLACEHOLDER: Record<Country, string> = {
+	MY: "DuitNow QR",
+	SG: "PayNow QR",
+};
+const HOLDER_PLACEHOLDER: Record<Country, string> = {
+	MY: "Your Business Sdn Bhd",
+	SG: "Your Business Pte Ltd",
+};
+
 function PaymentMethodsForm({
 	current,
+	country,
 	onSave,
 }: {
 	current: Array<{
@@ -1450,6 +1701,8 @@ function PaymentMethodsForm({
 		qrImageUrl?: string;
 		note?: string;
 	}>;
+	/** Store country — picks the placeholder examples above. */
+	country: Country;
 	onSave: (methods: PaymentMethodWire[]) => Promise<unknown>;
 }) {
 	const generateQrUploadUrl = useMutation(
@@ -1675,7 +1928,11 @@ function PaymentMethodsForm({
 						type="text"
 						value={m.label}
 						onChange={(e) => update(m._key, { label: e.target.value })}
-						placeholder={m.type === "bank" ? "Maybank" : "DuitNow QR"}
+						placeholder={
+							m.type === "bank"
+								? BANK_PLACEHOLDER[country]
+								: QR_LABEL_PLACEHOLDER[country]
+						}
 						maxLength={60}
 						variant="field"
 					/>
@@ -1689,7 +1946,7 @@ function PaymentMethodsForm({
 								type="text"
 								value={m.bankName}
 								onChange={(e) => update(m._key, { bankName: e.target.value })}
-								placeholder="Maybank"
+								placeholder={BANK_PLACEHOLDER[country]}
 								maxLength={120}
 								variant="field"
 							/>
@@ -1702,7 +1959,7 @@ function PaymentMethodsForm({
 								onChange={(e) =>
 									update(m._key, { bankAccountName: e.target.value })
 								}
-								placeholder="Your Business Sdn Bhd"
+								placeholder={HOLDER_PLACEHOLDER[country]}
 								maxLength={120}
 								variant="field"
 							/>
@@ -2558,9 +2815,10 @@ function CountryForm({
 									`your ${DELIVERY_MODE_LABELS[deliveryConfig.mode]} delivery pricing stops quoting (it's kept, and works again if you switch back)`,
 								]
 							: []),
-						...(deliveryBooking?.enabled === true &&
-						!riderBookingAllowed(picked)
-							? ["Lalamove booking goes quiet (your API keys are kept)"]
+						...(deliveryBooking?.enabled === true
+							? [
+									"your Lalamove keys stop working — they belong to this market, and riders in the new one need keys created for it",
+								]
 							: []),
 						...(staleNumber(picked, waPhone)
 							? ["your store's WhatsApp number stays a foreign number"]

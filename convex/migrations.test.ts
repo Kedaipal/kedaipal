@@ -414,3 +414,68 @@ describe("backfillOrderCategoryNames", () => {
 		expect(modern?.items[0].categoryNames).toEqual([]);
 	});
 });
+
+describe("migrateLalamoveModeToLive (z8r3fdbvdy)", () => {
+	// The old mode priced with ONE provider while dispatch could use another.
+	// Migrating is safe because it only bites where the leak already did: a
+	// store with a single armed provider prices identically either way.
+	async function seedRetailer(
+		t: ReturnType<typeof setup>,
+		mode: "lalamove" | "live" | "flat",
+		slug: string,
+	) {
+		return t.run(async (ctx) => {
+			const now = Date.now();
+			return ctx.db.insert("retailers", {
+				userId: `user_${slug}`,
+				storeName: slug,
+				slug,
+				channel: "whatsapp",
+				createdAt: now,
+				updatedAt: now,
+				deliveryConfig:
+					mode === "flat"
+						? { mode: "flat", fee: 500 }
+						: { mode, onUnquotable: "block" },
+			});
+		});
+	}
+
+	test("flips a stored lalamove mode to live", async () => {
+		const t = setup();
+		const id = await seedRetailer(t, "lalamove", "old-mode");
+		const result = await t.mutation(
+			internal.migrations.migrateLalamoveModeToLive,
+			{},
+		);
+		expect(result.migrated).toBe(1);
+		const after = await t.run(async (ctx) => ctx.db.get(id));
+		expect(after?.deliveryConfig).toEqual({
+			mode: "live",
+			onUnquotable: "block",
+		});
+	});
+
+	test("leaves every other pricing mode alone", async () => {
+		const t = setup();
+		const flat = await seedRetailer(t, "flat", "flat-store");
+		const result = await t.mutation(
+			internal.migrations.migrateLalamoveModeToLive,
+			{},
+		);
+		expect(result.migrated).toBe(0);
+		const after = await t.run(async (ctx) => ctx.db.get(flat));
+		expect(after?.deliveryConfig?.mode).toBe("flat");
+	});
+
+	test("is idempotent — a second run migrates nothing", async () => {
+		const t = setup();
+		await seedRetailer(t, "lalamove", "twice");
+		await t.mutation(internal.migrations.migrateLalamoveModeToLive, {});
+		const second = await t.mutation(
+			internal.migrations.migrateLalamoveModeToLive,
+			{},
+		);
+		expect(second.migrated).toBe(0);
+	});
+})

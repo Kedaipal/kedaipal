@@ -1,10 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useRef } from "react";
 import { z } from "zod";
 
 import { CostCalculator } from "#/components/cost/cost-calculator";
 import { Footer } from "#/components/landing/footer";
 import { Nav } from "#/components/landing/nav";
+import { useMarketingLanding } from "#/hooks/useMarketingLanding";
 import type { CostInputs } from "#/lib/calculator";
+import { trackEvent } from "#/lib/ga-events";
 
 const SEO_TITLE = "What is WhatsApp-only ordering costing you? — Kedaipal";
 const SEO_DESC =
@@ -52,8 +55,15 @@ export const Route = createFileRoute("/cost")({
 });
 
 function CostPage() {
+	// GA4 funnel (z8r3fdd1v0): capture ?src= + land_marketing on mount.
+	useMarketingLanding();
 	const search = Route.useSearch();
 	const navigate = Route.useNavigate();
+	// `calc_used` fires on the FIRST input change only — `syncToUrl` is the one
+	// choke point every slider/stepper interaction funnels through (it never
+	// runs on mount, only from user edits), so touching the calculator at all
+	// counts once per visit.
+	const calcUsedFired = useRef(false);
 
 	// Only the params the link actually carried. Anything absent is left for the
 	// calculator to fill from the detected region's defaults, and clamping to
@@ -67,6 +77,10 @@ function CostPage() {
 	};
 
 	const syncToUrl = (inputs: CostInputs) => {
+		if (!calcUsedFired.current) {
+			calcUsedFired.current = true;
+			trackEvent("calc_used");
+		}
 		navigate({
 			search: {
 				w: inputs.ordersPerWeek,

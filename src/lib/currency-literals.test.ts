@@ -34,12 +34,21 @@ const SRC = join(__dirname, "..");
 /**
  * Surfaces that legitimately name a currency.
  *
- * Everything here prices KEDAIPAL'S OWN subscription, which really is billed
- * in MYR regardless of which country the seller's shop is in — the landing
- * page, the pricing table, the cost calculator, the billing tab and the admin
- * console (where an operator picks the currency explicitly). Confusing the two
- * is the actual hazard: "0% cut" is Kedaipal's subscription posture, never a
- * statement about the seller's own prices.
+ * Everything here prices KEDAIPAL'S OWN subscription — the landing page, the
+ * pricing table, the cost calculator, the billing tab and the admin console
+ * (where an operator picks the currency explicitly). Confusing the two is the
+ * actual hazard: "0% cut" is Kedaipal's subscription posture, never a statement
+ * about the seller's own prices.
+ *
+ * Note this is NOT "always MYR" any more, whatever this comment used to say:
+ * Kedaipal invoices Singaporean sellers in SGD, the billing tab renders those
+ * invoices, and the annual card quotes SGD yearly totals. These surfaces name a
+ * currency because they name KEDAIPAL'S, resolved from `BillingCurrency`.
+ *
+ * Prefer NOT extending this list. `src/lib/annual-billing.ts` needed a default
+ * currency and took `DEFAULT_BILLING_CURRENCY` from `convex/lib/plans.ts`
+ * instead of an entry here — an allowlist entry licenses every future literal
+ * in that file, not just the one you were thinking of.
  *
  * `format.ts` and the `convex/lib` currency/country tables are the definitions
  * themselves — they are where the strings are allowed to live.

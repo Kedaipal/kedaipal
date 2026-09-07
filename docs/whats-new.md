@@ -86,6 +86,29 @@ worse than no entry at all. Keep them apart.
    `to="/app/settings?tab=store"` renders the same `href` as the
    `search={{ tab: "store" }}` form used elsewhere in the app; the panel takes
    the string form because a release entry is data, not JSX.
+
+   **Land on the card, not the tab — `spotlightHref`.** When the feature is
+   one card on a settings tab, write `href: spotlightHref("delyva")`
+   ([`src/lib/spotlight.ts`](../src/lib/spotlight.ts)). It renders
+   `/app/settings?tab=integrations&spot=delyva`: the route scrolls to that
+   card and rings it in the brand mint with a short pulse, so "Connect
+   Delyva" lands on the Delyva card rather than the top of a six-card tab.
+   It is the same scroll-and-ring the post-switch checklist uses via
+   `?fix=` (red/amber, something to fix); `spot` is the same machinery in
+   the invitation colour, because nothing is wrong with a card that is
+   merely new. A `fix` wins if both are present.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Delyva connect | `spotlightHref("delyva")` | `/app/settings?tab=integrations` |
+   | Annual billing | `spotlightHref("annual_billing")` | `/app/settings?tab=billing` |
+
+   Adding a key: give the card an `id={SPOTLIGHT_ANCHOR.<key>.anchor}` and
+   thread `highlight` to it (every settings tab takes a `target: CardTarget`
+   prop for this), then add the row. `spotlight.test.ts` fails if the tab
+   doesn't exist or no card renders the anchor, and `releases.test.ts` fails
+   on a `?spot=` that isn't a key or sits on the wrong tab. Reduced-motion
+   users get the static ring without the pulse.
 5. Set `notable: true` only if the change alters how the seller works.
 6. **Declare the `kind`** — see below. Required, so this is a compile error.
 7. **Most releases earn no entry at all.** An empty release is simply absent

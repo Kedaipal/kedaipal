@@ -18,8 +18,11 @@ describe("StorefrontFooter", () => {
 	it("links to the marketing site with the attribution tag, in a new tab", () => {
 		const { container } = render(<StorefrontFooter />);
 		const link = container.querySelector("a");
+		// `powered-by` is the seller-acquisition naming convention (z8r3fdd1v0,
+		// src/lib/marketing-attribution.ts) — renamed from the never-consumed
+		// `storefront_badge` when the GA4 funnel became its first consumer.
 		expect(link?.getAttribute("href")).toBe(
-			"https://kedaipal.com?src=storefront_badge",
+			"https://kedaipal.com?src=powered-by",
 		);
 		expect(link?.getAttribute("target")).toBe("_blank");
 		// Never leak the opener when leaving the retailer's store.

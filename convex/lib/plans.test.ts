@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
 	ANNUAL_MONTHS_CHARGED,
+	ANNUAL_MONTHS_FREE,
+	ANNUAL_MONTHS_RECEIVED,
+	annualQuote,
 	BILLING_CURRENCIES,
 	capsForPlan,
 	featuresForPlan,
@@ -76,6 +79,14 @@ describe("plans — pricing", () => {
 	test("annual = monthly × 10 (10 months paid, 12 received)", () => {
 		expect(ANNUAL_MONTHS_CHARGED).toBe(10);
 		expect(planPrice("pro", "annual")).toBe(14900 * 10);
+	});
+
+	test("2 months free is derived, not asserted", () => {
+		expect(ANNUAL_MONTHS_RECEIVED).toBe(12);
+		expect(ANNUAL_MONTHS_FREE).toBe(2);
+		expect(ANNUAL_MONTHS_CHARGED + ANNUAL_MONTHS_FREE).toBe(
+			ANNUAL_MONTHS_RECEIVED,
+		);
 	});
 
 	test("founding applies the discounted monthly to pro/scale only", () => {
@@ -189,5 +200,96 @@ describe("plans — gating helpers", () => {
 		expect(isUnlimited(UNLIMITED)).toBe(true);
 		expect(isUnlimited(2000)).toBe(false);
 		expect(isUnlimited(500)).toBe(false);
+	});
+});
+
+describe("plans — annualQuote", () => {
+	/**
+	 * The regression this type exists for: `/pricing` used to render its yearly
+	 * total as `floor(monthly × 10 / 12) × 10`, which quotes a year at 8.33
+	 * months of list price. Every tier under-quoted by two months of the
+	 * ROUNDING error on top of the real discount.
+	 */
+	test("annualTotal IS planPrice(annual) — the two can never diverge", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of PLANS) {
+				for (const founding of [false, true]) {
+					expect(annualQuote(plan, founding, currency).annualTotal).toBe(
+						planPrice(plan, "annual", founding, currency),
+					);
+				}
+			}
+		}
+	});
+
+	test("the old page arithmetic is NOT what we charge", () => {
+		const q = annualQuote("starter");
+		const oldPageTotal = Math.floor((7900 / 100) * 10 / 12) * 10 * 100;
+		expect(oldPageTotal).toBe(65_000); // RM650 — what the card used to say
+		expect(q.annualTotal).toBe(79_000); // RM790 — what the invoice says
+		expect(q.annualTotal).toBeGreaterThan(oldPageTotal);
+	});
+
+	test("saving is exactly the free months, in every currency and plan", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of PLANS) {
+				const q = annualQuote(plan, false, currency);
+				expect(q.saving).toBe(q.monthly * ANNUAL_MONTHS_FREE);
+				expect(q.monthsFree).toBe(ANNUAL_MONTHS_FREE);
+				// 12 monthly invoices vs one annual one.
+				expect(q.monthly * 12 - q.annualTotal).toBe(q.saving);
+			}
+		}
+	});
+
+	test("MYR headline numbers", () => {
+		expect(annualQuote("starter")).toEqual({
+			monthly: 7900,
+			annualTotal: 79_000,
+			effectiveMonthly: 6584, // RM65.84 — rounded UP; 6583 × 12 < 79,000
+			saving: 15_800, // RM158 = 2 × RM79
+			monthsFree: 2,
+		});
+		expect(annualQuote("pro")).toEqual({
+			monthly: 14_900,
+			annualTotal: 149_000,
+			effectiveMonthly: 12_417, // RM124.17 (149,000 / 12 = 12,416.6…)
+			saving: 29_800,
+			monthsFree: 2,
+		});
+	});
+
+	test("SGD headline numbers", () => {
+		expect(annualQuote("pro", false, "SGD")).toEqual({
+			monthly: 5900,
+			annualTotal: 59_000,
+			effectiveMonthly: 4917, // S$49.17 (59,000 / 12 = 4,916.6…)
+			saving: 11_800,
+			monthsFree: 2,
+		});
+	});
+
+	test("a Founding member's annual is 10 × their discounted rate", () => {
+		const q = annualQuote("pro", true);
+		expect(q.monthly).toBe(FOUNDING_MONTHLY_PRICE.pro);
+		expect(q.annualTotal).toBe(FOUNDING_MONTHLY_PRICE.pro * 10);
+		expect(q.saving).toBe(FOUNDING_MONTHLY_PRICE.pro * 2);
+		// Never quotes a founding member the standard-price saving.
+		expect(q.saving).toBeLessThan(annualQuote("pro", false).saving);
+	});
+
+	test("effectiveMonthly never understates the year — 12 × it covers the bill", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of PLANS) {
+				for (const founding of [false, true]) {
+					const q = annualQuote(plan, founding, currency);
+					// The whole point: a seller multiplying the small number by 12 must
+					// never arrive under what we will invoice them.
+					expect(q.effectiveMonthly * 12).toBeGreaterThanOrEqual(q.annualTotal);
+					// …and it is still visibly cheaper than paying monthly.
+					expect(q.effectiveMonthly).toBeLessThan(q.monthly);
+				}
+			}
+		}
 	});
 });
