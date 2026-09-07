@@ -2,20 +2,43 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted so the vi.mock factories below can reference them safely.
-const { initializeMock, eventMock, envState } = vi.hoisted(() => ({
+const {
+	initializeMock,
+	eventMock,
+	clarityInitMock,
+	clarityEventMock,
+	envState,
+} = vi.hoisted(() => ({
 	initializeMock: vi.fn(),
 	eventMock: vi.fn(),
-	envState: { measurementId: undefined as string | undefined },
+	clarityInitMock: vi.fn(),
+	clarityEventMock: vi.fn(),
+	envState: {
+		measurementId: undefined as string | undefined,
+		clarityProjectId: undefined as string | undefined,
+	},
 }));
 
 vi.mock("react-ga4", () => ({
 	default: { initialize: initializeMock, event: eventMock, send: vi.fn() },
 }));
 
+vi.mock("@microsoft/clarity", () => ({
+	default: {
+		init: clarityInitMock,
+		event: clarityEventMock,
+		upgrade: vi.fn(),
+		setTag: vi.fn(),
+	},
+}));
+
 vi.mock("./env", () => ({
 	clientEnv: {
 		get VITE_GA_MEASUREMENT_ID() {
 			return envState.measurementId;
+		},
+		get VITE_CLARITY_PROJECT_ID() {
+			return envState.clarityProjectId;
 		},
 	},
 }));
@@ -35,7 +58,10 @@ beforeEach(() => {
 	vi.resetModules();
 	initializeMock.mockClear();
 	eventMock.mockClear();
+	clarityInitMock.mockClear();
+	clarityEventMock.mockClear();
 	envState.measurementId = undefined;
+	envState.clarityProjectId = undefined;
 	sessionStorage.clear();
 	setPath("/");
 });
@@ -98,6 +124,29 @@ describe("trackEvent", () => {
 		expect(eventMock).toHaveBeenCalledWith("land_marketing", {
 			src: "explicit",
 		});
+	});
+
+	it("mirrors every event to Clarity even when GA is unset", async () => {
+		envState.clarityProjectId = "abc123test";
+		const { trackEvent } = await loadGaEvents();
+
+		trackEvent("cta_signup_click", { placement: "hero" });
+
+		expect(clarityInitMock).toHaveBeenCalledWith("abc123test");
+		expect(clarityEventMock).toHaveBeenCalledWith("cta_signup_click");
+		expect(initializeMock).not.toHaveBeenCalled();
+		expect(eventMock).not.toHaveBeenCalled();
+	});
+
+	it("still reaches GA when Clarity is unset", async () => {
+		envState.measurementId = "G-TEST123";
+		const { trackEvent } = await loadGaEvents();
+
+		trackEvent("view_pricing");
+
+		expect(eventMock).toHaveBeenCalledWith("view_pricing", {});
+		expect(clarityInitMock).not.toHaveBeenCalled();
+		expect(clarityEventMock).not.toHaveBeenCalled();
 	});
 
 	it("never throws when the GA library does — analytics must not break the page", async () => {

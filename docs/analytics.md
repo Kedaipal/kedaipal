@@ -9,7 +9,7 @@ never pollute the production analytics.
 | Tool                  | What it's for                          | Package         | Hook                                                 | Env var                   |
 | --------------------- | -------------------------------------- | --------------- | ---------------------------------------------------- | ------------------------- |
 | Google Analytics 4    | Pageviews, traffic, acquisition        | `react-ga4`     | [`useGoogleAnalytics`](../src/hooks/useGoogleAnalytics.ts) | `VITE_GA_MEASUREMENT_ID`  |
-| Microsoft Clarity     | Session replays + heatmaps (UX/friction) | `@microsoft/clarity` | [`useClarity`](../src/hooks/useClarity.ts)      | `VITE_CLARITY_PROJECT_ID` |
+| Microsoft Clarity     | Session replays + heatmaps (UX/friction), funnel Smart events | `@microsoft/clarity` | [`useClarity`](../src/hooks/useClarity.ts)      | `VITE_CLARITY_PROJECT_ID` |
 
 Both hooks are called in `RootDocument` ([`src/routes/__root.tsx`](../src/routes/__root.tsx)),
 so analytics load on every route (storefront + `/app`) **except the
@@ -29,22 +29,28 @@ sessions by seller or plan.
 
 ## How it works
 
-`useClarity` initializes Clarity exactly once per page load:
+`useClarity` initializes Clarity exactly once per page load through
+`ensureClarityInitialized` in
+[`src/lib/clarity-events.ts`](../src/lib/clarity-events.ts):
 
 ```ts
 const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
-if (!projectId || clarityInitialized) return;
-if (isCapabilityTokenPath(pathname)) return;
-Clarity.init(projectId);
+if (!projectId) return false;
+if (isCapabilityTokenPath(pathname)) return false;
+if (!clarityInitialized) { Clarity.init(projectId); clarityInitialized = true; }
+return true;
 ```
 
 Unlike GA — where `useGoogleAnalytics` fires a pageview on every pathname change
 — Clarity needs no per-navigation call: after `init` it hooks the History API
 and tracks SPA route changes itself. The pathname is read only to decide whether
 booting is allowed at all. The module-level `clarityInitialized` guard mirrors
-GA's `gaInitialized`, so a remount can't double-boot it (the test covers
-unmount → remount specifically; a plain re-render passes with or without the
-guard, so it proves nothing).
+GA's `gaInitialized` and lives in the events module for the same reason GA's
+lives in `ga-events.ts`, not the hook: child-route effects run before the root
+document's effect, so a route firing `land_marketing` on mount must be able to
+boot the library itself. The guard means a remount can't double-boot it (the
+hook test covers unmount → remount specifically; a plain re-render passes with
+or without the guard, so it proves nothing).
 
 ## GA4 funnel events + seller-acquisition `src` (z8r3fdd1v0)
 
@@ -85,6 +91,54 @@ sanitize and store verbatim.
 `store_created` as **key events** (Admin → Events → toggle "Mark as key
 event") so funnel/conversion reports treat them as conversions. Events appear
 in DebugView immediately; standard reports lag ~24h.
+
+## Clarity Smart events + the weekly review ritual (z8r3fdd1v2)
+
+GA4 says *where* the funnel leaks; Clarity says *why* (the recording). To make
+the two line up, **`trackEvent` is the funnel's single emitter and fans out to
+both providers**: GA4 gets the event + params as above, and
+[`trackClarityEvent`](../src/lib/clarity-events.ts) mirrors the bare event
+name as a Clarity **Smart event** — the same six names, so a session that
+shows `cta_signup_click` in GA is filterable by `cta_signup_click` in the
+Clarity Recordings view. Each provider is gated on its own env var, so an
+unset GA never silences Clarity or vice-versa; call sites know nothing about
+providers.
+
+Two extras ride the mirror:
+
+- **`Clarity.upgrade("signup-cta")` on `cta_signup_click`.** Clarity
+  prioritises upgraded sessions for full recording, so the exact sessions the
+  ritual below wants to watch are never sampled away.
+- **`Clarity.setTag("src", <tag>)`** when the session arrived with a marketing
+  `src` (same capture as GA, `marketing-attribution.ts`), so recordings and
+  heatmaps segment by acquisition channel the way the GA funnel does.
+
+The mirror inherits the capability-token gate (Privacy §1) and the
+never-throws posture: every Clarity API call is `window.clarity(...)`, which
+does not exist until `init` injected the script, so an unbooted call would
+throw — the boot check and the `try/catch` are both load-bearing.
+
+### Weekly review ritual
+
+**Owner: Arif. Cadence: weekly, Monday.** Done criterion per review: one
+landing-page change picked and handed to Kris. Kill criterion: two consecutive
+reviews that yield nothing → drop to fortnightly and say so here.
+
+1. **Heatmaps** — [Clarity](https://clarity.microsoft.com) project
+   `xoduz9wjl5` → Heatmaps → `/` then `/pricing`, click + scroll maps, last
+   7 days. Note where the fold lands relative to the primary CTA and any
+   dead-click cluster (clicks on things that aren't links).
+2. **Recordings** — Recordings → Filters → *Smart events* →
+   `cta_signup_click`. Skip any session whose event list also shows
+   `onboarding_start` (they got through). Sort the rest by rage clicks, then
+   dead clicks, then duration; watch the 3 worst and write one line each:
+   what they tried, where it broke.
+3. **Hand-off** — post the lines and the one change picked as a comment on the
+   ticket and on the landing-page pass task for Kris.
+
+Smart events appear in the Filters list within minutes of the first click after
+a deploy; Clarity's own auto-detected events (rage/dead/quick-back) need no
+code.
 
 ## Server-side key events (z8r3fdd1v1)
 
@@ -165,8 +219,9 @@ repo rather than behind a dashboard toggle:
 ### 1. Capability-token routes never reach either provider
 
 [`isCapabilityTokenPath`](../src/lib/analytics-privacy.ts) is the single
-predicate both hooks share: `useClarity` refuses to boot on them, and
-`useGoogleAnalytics` neither initializes nor sends a pageview there. Masking
+predicate both providers share: `useClarity` refuses to boot on them,
+`useGoogleAnalytics` neither initializes nor sends a pageview there, and the
+funnel emitters (`trackEvent` / `trackClarityEvent`) no-op there too. Masking
 governs DOM content, not the **observed page address**, and these URLs *are*
 the secret:
 
