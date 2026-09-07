@@ -48,6 +48,7 @@ import {
 import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
+import { isColdItemType } from "./lib/liveQuote";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
 import {
 	type CartWeightItem,
@@ -1882,3 +1883,110 @@ export const getDispatchState = query({
 		};
 	},
 });
+
+// ---------------------------------------------------------------------------
+// Checkout pricing (z8r3fdbvdy) — a live Delyva price for the buyer's address
+// ---------------------------------------------------------------------------
+
+/** What a live Delyva checkout quote needs from the store. */
+export type DelyvaCheckoutContext = {
+	credentials: DelyvaCredentials;
+	customerId: number;
+	origin: DelyvaAddress;
+	/** Store default parcel type — the cart's type until per-item temperature
+	 * flags land (86eyrmv1j). See cartItemType in lib/liveQuote. */
+	itemType: DelyvaItemType;
+};
+
+/** One provider's answer, shaped for the cross-provider rule. */
+export type DelyvaCheckoutQuote =
+	| {
+			status: "quoted";
+			fee: number;
+			currency: string;
+			serviceCode: string;
+			serviceName: string;
+	  }
+	| {
+			status:
+				| "out_of_range"
+				| "no_cold_service"
+				| "store_unavailable"
+				| "unavailable";
+	  };
+
+/**
+ * Fetch Delyva's cheapest service for this address WITHOUT recording it.
+ *
+ * Cheapest, because that is the price the seller will actually pay: the
+ * dispatch card pre-selects the cheapest service too, so the fee collected
+ * at checkout and the one offered at dispatch describe the same choice. (If
+ * a seller habitually books a dearer courier they under-collect by the
+ * difference — the argument for a per-store "preferred courier" setting
+ * later, deliberately not v1.)
+ *
+ * An EMPTY service list is ambiguous in exactly the way it is at dispatch,
+ * so it is disambiguated the same way — by asking what the account holds.
+ * Nothing connected is the seller's problem, not the buyer's address, and
+ * saying "no courier serves your address" to someone whose address is fine
+ * sends them editing it forever.
+ */
+export async function fetchDelyvaCheckoutQuote(args: {
+	context: DelyvaCheckoutContext;
+	destination: DelyvaAddress;
+	weightKg: number;
+}): Promise<DelyvaCheckoutQuote> {
+	const { context, destination, weightKg } = args;
+	if (!Number.isFinite(weightKg) || weightKg <= 0) {
+		// No usable cart weight (a product with no parcel weight, or a custom
+		// line). Delyva prices by weight, so it can't bid — and that is the
+		// STORE's gap to close, never something the buyer can act on.
+		return { status: "store_unavailable" };
+	}
+	try {
+		const services = parseInstantQuoteResponse(
+			await callDelyva(
+				context.credentials,
+				"POST",
+				"/service/instantQuote",
+				buildInstantQuoteBody({
+					customerId: context.customerId,
+					origin: context.origin,
+					destination,
+					weightKg,
+					itemType: context.itemType,
+				}),
+			),
+		).sort((a, b) => a.price - b.price);
+
+		const cheapest = services[0];
+		if (cheapest) {
+			return {
+				status: "quoted",
+				fee: cheapest.price,
+				currency: cheapest.currency,
+				serviceCode: cheapest.code,
+				serviceName: cheapest.name,
+			};
+		}
+
+		// Empty. Which kind of empty decides what the buyer is told.
+		try {
+			const active = countActiveDelyvaServices(
+				await callDelyva(context.credentials, "GET", "/service"),
+			);
+			if (active === 0) return { status: "store_unavailable" };
+			if (active !== null && isColdItemType(context.itemType))
+				return { status: "no_cold_service" };
+			if (active !== null) return { status: "out_of_range" };
+		} catch {
+			// Fall through — we couldn't tell, so we don't guess.
+		}
+		return { status: "unavailable" };
+	} catch (err) {
+		console.warn("[delyva] checkout quote failed", {
+			message: err instanceof Error ? err.message : String(err),
+		});
+		return { status: "unavailable" };
+	}
+}

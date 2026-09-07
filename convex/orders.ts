@@ -113,7 +113,9 @@ import {
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 	summarizeCartWeight,
+	storablePendingReason,
 } from "./lib/delivery";
+import { sameQuotedLines } from "./lib/liveQuote";
 import {
 	CHECKOUT_QUOTE_MAX_AGE_MS,
 	isActiveJobStatus,
@@ -211,6 +213,10 @@ function blockedDeliveryMessage(
 		unquotable:
 			"We couldn't price delivery to that address right now — please try again",
 		out_of_range: "That address is outside this store's delivery area",
+		// Cold chain (z8r3fdbvdy): the ADDRESS is fine, so the sentence must not
+		// point at it — this is the store's to arrange.
+		no_cold_service:
+			"This store can't ship chilled or frozen items to that address right now — message them to arrange it",
 		no_state: "Add a delivery address so we can calculate the delivery fee",
 		unserved_state: state
 			? `This store doesn't deliver to ${state}`
@@ -306,6 +312,9 @@ export function resolveDeliveryForOrder(
 				quotationId: quote.quotationId,
 				vehicleType: quote.vehicleType,
 				quotedAt: quote.quotedAt,
+				quoteProvider: quote.quoteProvider,
+				quoteServiceName: quote.quoteServiceName,
+				quotesConsidered: quote.quotesConsidered,
 			},
 			pending: false,
 		};
@@ -327,11 +336,18 @@ export async function loadCheckoutDeliveryQuote(
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
 	address: { latitude?: number; longitude?: number } | undefined,
+	/** The ORDER's line items, for cart-bound rows (PR #253 review): a
+	 * provider-aware quote priced a specific cart's weight, so redeeming it
+	 * against different lines would let a light quote pay for a heavy cart.
+	 * Legacy rows carry no lines (rider prices ignore the cart) and skip it. */
+	orderLines?: ReadonlyArray<{ variantId?: string; quantity: number }>,
 ): Promise<LiveProviderQuote | undefined> {
 	if (!quoteId) return undefined;
 	const row = await ctx.db.get(quoteId);
 	if (!row || row.retailerId !== retailerId) return undefined;
 	if (Date.now() - row.quotedAt > CHECKOUT_QUOTE_MAX_AGE_MS) return undefined;
+	if (row.lines !== undefined && !sameQuotedLines(row.lines, orderLines ?? []))
+		return undefined;
 	const COORD_TOLERANCE = 1e-4; // ≈11 m
 	if (
 		address?.latitude === undefined ||
@@ -345,8 +361,14 @@ export async function loadCheckoutDeliveryQuote(
 	await ctx.db.delete(row._id);
 	return {
 		fee: row.fee,
+		// Absent on rows minted before live pricing became provider-aware —
+		// Lalamove was the only thing that could have written one.
+		provider: row.provider ?? "lalamove",
 		quotationId: row.quotationId,
 		vehicleType: row.vehicleType,
+		serviceCode: row.serviceCode,
+		serviceName: row.serviceName,
+		considered: row.considered,
 		quotedAt: row.quotedAt,
 	};
 }
@@ -1127,7 +1149,9 @@ export const create = mutation({
 		// subtotal (flat free-above threshold), so it runs after the item loop.
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
-		let deliveryFeePendingReason: DeliveryQuoteReason | undefined;
+		// Typed as the STORABLE subset, so a reason that can't be persisted can't
+		// silently reach the insert (see storablePendingReason).
+		let deliveryFeePendingReason: Doc<"orders">["deliveryFeePendingReason"];
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
 			const liveQuote = await loadCheckoutDeliveryQuote(
@@ -1135,6 +1159,7 @@ export const create = mutation({
 				retailer._id,
 				args.deliveryQuoteId,
 				sanitizedAddress,
+				snapshotItems,
 			);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
@@ -1145,7 +1170,7 @@ export const create = mutation({
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
-			deliveryFeePendingReason = resolved.pendingReason;
+			deliveryFeePendingReason = storablePendingReason(resolved.pendingReason);
 		}
 		// Frozen trip direction (86eyg0n8e): stamped from the store's live
 		// collection-service setting so buyer surfaces (tracking labels, WA
@@ -3785,6 +3810,7 @@ export const updateDeliveryAddress = mutation({
 			order.retailerId,
 			deliveryQuoteId,
 			sanitized,
+			order.items,
 		);
 		// Weight-mode re-price (86eyeea1n) weighs the ORDER's frozen lines against
 		// live variant weights — a state change can move the order to another
@@ -3837,7 +3863,7 @@ export const updateDeliveryAddress = mutation({
 			deliveryFeePending: resolved.pending || undefined,
 			// Re-freeze (or clear) the reason with the flag — a re-price that
 			// resolves to a fee must not leave a stale explanation behind.
-			deliveryFeePendingReason: resolved.pendingReason,
+			deliveryFeePendingReason: storablePendingReason(resolved.pendingReason),
 			subtotal,
 			total,
 			updatedAt: now,

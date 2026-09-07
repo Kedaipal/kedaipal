@@ -70,6 +70,7 @@ import type * as lib_insights from "../lib/insights.js";
 import type * as lib_lalamove from "../lib/lalamove.js";
 import type * as lib_lalamoveSignature from "../lib/lalamoveSignature.js";
 import type * as lib_legal from "../lib/legal.js";
+import type * as lib_liveQuote from "../lib/liveQuote.js";
 import type * as lib_locale from "../lib/locale.js";
 import type * as lib_logRedaction from "../lib/logRedaction.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
@@ -113,6 +114,7 @@ import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
 import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
 import type * as lib_whatsappWebhook from "../lib/whatsappWebhook.js";
+import type * as liveQuote from "../liveQuote.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
 import type * as orderClaims from "../orderClaims.js";
@@ -197,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   "lib/lalamove": typeof lib_lalamove;
   "lib/lalamoveSignature": typeof lib_lalamoveSignature;
   "lib/legal": typeof lib_legal;
+  "lib/liveQuote": typeof lib_liveQuote;
   "lib/locale": typeof lib_locale;
   "lib/logRedaction": typeof lib_logRedaction;
   "lib/mapsUrl": typeof lib_mapsUrl;
@@ -240,6 +243,7 @@ declare const fullApi: ApiFromModules<{
   "lib/whatsappCopy": typeof lib_whatsappCopy;
   "lib/whatsappSignature": typeof lib_whatsappSignature;
   "lib/whatsappWebhook": typeof lib_whatsappWebhook;
+  liveQuote: typeof liveQuote;
   migrations: typeof migrations;
   notifications: typeof notifications;
   orderClaims: typeof orderClaims;
@@ -283,5 +287,138 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+  rateLimiter: {
+    lib: {
+      checkRateLimit: FunctionReference<
+        "query",
+        "internal",
+        {
+          config:
+            | {
+                capacity?: number;
+                kind: "token bucket";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: null;
+              }
+            | {
+                capacity?: number;
+                kind: "fixed window";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: number;
+              };
+          count?: number;
+          key?: string;
+          name: string;
+          reserve?: boolean;
+          throws?: boolean;
+        },
+        { ok: true; retryAfter?: number } | { ok: false; retryAfter: number }
+      >;
+      clearAll: FunctionReference<
+        "mutation",
+        "internal",
+        { before?: number },
+        null
+      >;
+      getServerTime: FunctionReference<"mutation", "internal", {}, number>;
+      getValue: FunctionReference<
+        "query",
+        "internal",
+        {
+          config:
+            | {
+                capacity?: number;
+                kind: "token bucket";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: null;
+              }
+            | {
+                capacity?: number;
+                kind: "fixed window";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: number;
+              };
+          key?: string;
+          name: string;
+          sampleShards?: number;
+        },
+        {
+          config:
+            | {
+                capacity?: number;
+                kind: "token bucket";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: null;
+              }
+            | {
+                capacity?: number;
+                kind: "fixed window";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: number;
+              };
+          shard: number;
+          ts: number;
+          value: number;
+        }
+      >;
+      rateLimit: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          config:
+            | {
+                capacity?: number;
+                kind: "token bucket";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: null;
+              }
+            | {
+                capacity?: number;
+                kind: "fixed window";
+                maxReserved?: number;
+                period: number;
+                rate: number;
+                shards?: number;
+                start?: number;
+              };
+          count?: number;
+          key?: string;
+          name: string;
+          reserve?: boolean;
+          throws?: boolean;
+        },
+        { ok: true; retryAfter?: number } | { ok: false; retryAfter: number }
+      >;
+      resetRateLimit: FunctionReference<
+        "mutation",
+        "internal",
+        { key?: string; name: string },
+        null
+      >;
+    };
+    time: {
+      getServerTime: FunctionReference<"mutation", "internal", {}, number>;
+    };
+  };
 };

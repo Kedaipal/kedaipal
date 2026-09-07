@@ -62,6 +62,15 @@ export function CourierBookingSection({
 	const lalamovePricing = chargeMode === "lalamove";
 	const delyvaConnected = delyva?.connected === true;
 	const delyvaCountryOk = delyva ? delyva.countryAllowed : true;
+	// Provider-aware live pricing (z8r3fdbvdy) quotes exactly what these
+	// toggles say, so vendors pick their providers freely — EXCEPT the last
+	// one standing: switching it off would make every delivery checkout
+	// refuse. Disabled-with-reason, never a silent no-op (Zaki, 6 Sep).
+	const livePricing = chargeMode === "live";
+	const lalamoveArmed = deliveryBooking?.enabled === true;
+	const delyvaArmed = delyvaConnected && delyva?.enabled === true;
+	const lalamoveIsLastBidder = livePricing && lalamoveArmed && !delyvaArmed;
+	const delyvaIsLastBidder = livePricing && delyvaArmed && !lalamoveArmed;
 
 	async function run(fn: () => Promise<unknown>, message: string) {
 		setBusy(true);
@@ -105,9 +114,11 @@ export function CourierBookingSection({
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 							{lalamovePricing
 								? "On — your delivery charge runs on Lalamove live quotes, so rider booking comes with it. Switch the charge mode above to change this."
-								: lalamoveConnected
-									? "Same-day riders across your city. Book from any confirmed delivery order."
-									: null}
+								: lalamoveIsLastBidder
+									? "On — the only service pricing your live delivery charge right now. Turn on Delyva too, or switch the charge mode above, to switch this off."
+									: lalamoveConnected
+										? "Same-day riders across your city. Book from any confirmed delivery order."
+										: null}
 							{!lalamovePricing && !lalamoveConnected ? (
 								<>
 									Same-day riders across your city.{" "}
@@ -129,6 +140,7 @@ export function CourierBookingSection({
 						disabled={
 							busy ||
 							lalamovePricing ||
+							lalamoveIsLastBidder ||
 							!lalamoveConnected ||
 							(!canUse && deliveryBooking?.enabled !== true)
 						}
@@ -170,7 +182,20 @@ export function CourierBookingSection({
 							) : null}
 						</p>
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-							{delyvaConnected ? (
+							{delyvaIsLastBidder ? (
+								<>
+									On — the only service pricing your live delivery charge right
+									now. Turn on Lalamove too, or switch the charge mode above,
+									to switch this off.{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Manage account
+									</Link>
+								</>
+							) : delyvaConnected ? (
 								<>
 									Nationwide + cold-chain parcels (J&amp;T, DHL, Ninja…). Pick
 									the courier and price per order.{" "}
@@ -202,6 +227,7 @@ export function CourierBookingSection({
 						on={delyva?.enabled === true}
 						disabled={
 							busy ||
+							delyvaIsLastBidder ||
 							!delyvaConnected ||
 							(!canUse && delyva?.enabled !== true)
 						}

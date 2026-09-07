@@ -1498,6 +1498,7 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				country={order.retailerCountry}
 				subtotal={order.subtotal}
+				orderItems={order.items}
 				currency={order.currency}
 				fulfilmentDate={order.fulfilmentDate}
 				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}

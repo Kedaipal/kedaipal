@@ -199,3 +199,63 @@ describe("plan + country gates", () => {
 		expect(container.textContent).toContain("Demo");
 	});
 });
+
+describe("live pricing: vendors choose providers, the last bidder is guarded", () => {
+	// z8r3fdbvdy quotes exactly what these toggles say. So under charge mode
+	// "live" both stay free to flip — except the only armed one, whose
+	// switch-off would refuse every delivery checkout (Zaki, 6 Sep).
+	it("both armed → both toggles stay enabled", () => {
+		state.delyva = delyva({ enabled: true });
+		render(
+			section({
+				chargeMode: "live",
+				deliveryBooking: lalamove({ enabled: true }),
+			}),
+		);
+		expect(
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
+		).toBe(false);
+		expect(
+			screen.getByRole("switch", { name: /delyva courier/i }).hasAttribute("disabled"),
+		).toBe(false);
+	});
+
+	it("Lalamove as the only bidder is disabled WITH the reason", () => {
+		state.delyva = delyva({ enabled: false });
+		const { container } = render(
+			section({
+				chargeMode: "live",
+				deliveryBooking: lalamove({ enabled: true }),
+			}),
+		);
+		expect(
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
+		).toBe(true);
+		expect(container.textContent).toContain(
+			"the only service pricing your live delivery charge",
+		);
+	});
+
+	it("Delyva as the only bidder is guarded the same way", () => {
+		state.delyva = delyva({ enabled: true });
+		render(
+			section({
+				chargeMode: "live",
+				deliveryBooking: lalamove({ enabled: false }),
+			}),
+		);
+		expect(
+			screen.getByRole("switch", { name: /delyva courier/i }).hasAttribute("disabled"),
+		).toBe(true);
+		expect(
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
+		).toBe(false);
+	});
+
+	it("legacy lalamove pricing keeps its hard lock — unchanged", () => {
+		render(section({ chargeMode: "lalamove" }));
+		expect(
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
+		).toBe(true);
+	});
+})

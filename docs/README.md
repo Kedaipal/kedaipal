@@ -24,6 +24,9 @@ How the product actually works. Read in this order.
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
 | [fulfilment.md](./fulfilment.md) | Delivery + self-collect as optional, symmetric methods: per-method toggles, the working-method invariant, multi-location pickup library, frozen snapshot lifecycle, WhatsApp confirm composition. |
+| [delivery-live-pricing.md](./delivery-live-pricing.md) | **What the buyer pays for delivery when a store books couriers live:** the provider-aware rule (quote every armed provider, charge the higher), why min-pricing was rejected, cold-cart handling, and the cross-currency guard. |
+| [delivery-lalamove.md](./delivery-lalamove.md) | Intra-city rider booking: live checkout quotes, the confirm-and-dispatch flow, webhook-driven status, and the disabled-with-reason taxonomy. |
+| [delivery-delyva.md](./delivery-delyva.md) | Nationwide parcel + cold-chain courier booking: one-key connect, the service picker, webhooks, demo/sandbox detection, and the per-country tenancy facts. |
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
