@@ -1,14 +1,20 @@
 import ReactGA from "react-ga4";
 import { extractGaClientId } from "../../convex/lib/ga4";
 import { isCapabilityTokenPath } from "./analytics-privacy";
+import { trackClarityEvent } from "./clarity-events";
 import { clientEnv } from "./env";
 import { readMarketingSource } from "./marketing-attribution";
 
 /**
- * GA4 custom events for the acquisition funnel (z8r3fdd1v0):
+ * Custom events for the acquisition funnel (z8r3fdd1v0):
  * `land_marketing` → `view_pricing`/`calc_used` → `cta_signup_click` →
  * `onboarding_start` → `store_created`. Event catalog + which are marked as
  * key events in the GA4 UI: docs/analytics.md.
+ *
+ * `trackEvent` is the funnel's SINGLE emitter: it fans out to GA4 (here) and
+ * to Microsoft Clarity as Smart events (`clarity-events.ts`, z8r3fdd1v2),
+ * each provider gated independently on its own env var so an unset GA never
+ * silences Clarity or vice-versa. Call sites know nothing about providers.
  *
  * One shared "GA is booted" flag lives here — `useGoogleAnalytics` (pageviews)
  * and `trackEvent` (custom events) both go through `ensureGaInitialized`, so
@@ -52,11 +58,12 @@ export function ensureGaInitialized(pathname: string): boolean {
 }
 
 /**
- * Fire a GA4 custom event. The captured marketing `src` (if any) is attached
- * to EVERY event so the funnel stays segmentable by source end to end; an
- * explicit `src` in `params` out-ranks the stored one. No-ops without a
- * measurement ID and on capability-token paths; never throws — analytics
- * must never break the page.
+ * Fire a funnel event to every provider. Clarity gets the bare name (its own
+ * gate + `src` tag live in `trackClarityEvent`); GA4 gets the name plus
+ * params, with the captured marketing `src` (if any) attached to EVERY event
+ * so the funnel stays segmentable by source end to end — an explicit `src` in
+ * `params` out-ranks the stored one. GA no-ops without a measurement ID and on
+ * capability-token paths; never throws — analytics must never break the page.
  */
 export function trackEvent(
 	name: FunnelEvent,
@@ -64,6 +71,7 @@ export function trackEvent(
 ): void {
 	try {
 		if (typeof window === "undefined") return;
+		trackClarityEvent(name);
 		if (!ensureGaInitialized(window.location.pathname)) return;
 		const src = readMarketingSource();
 		ReactGA.event(name, { ...(src ? { src } : {}), ...params });
