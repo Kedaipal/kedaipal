@@ -52,6 +52,7 @@ import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
+	type CardTarget,
 	type FixHighlight,
 	highlightRingClass,
 	SETTINGS_ANCHOR,
@@ -109,11 +110,11 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
-	/** Deep-link target from the post-switch checklist: the anchor to scroll to
-	 * and how loudly to ring it (86eyqgujv). Undefined on a normal visit — the
-	 * ring is contextual to having asked to fix something, never a permanent
-	 * red border on a field we only want checked. */
-	fix?: { anchor: string; highlight: FixHighlight };
+	/** Deep-link target: the anchor to scroll to and how loudly to ring it —
+	 * red/amber from the post-switch checklist (86eyqgujv), mint from a
+	 * What's-new note (`?spot=`). Undefined on a normal visit: the ring is
+	 * contextual to having been sent here, never a permanent border. */
+	target?: CardTarget;
 	/** Storefront currency — every money input on this tab wears its symbol.
 	 * Threaded rather than assumed: an SG store's delivery, pickup-fee and
 	 * minimum-order fields quoted "RM" before this (86eyqgujv). */
@@ -220,7 +221,7 @@ function MoneyPrefix({ currency }: { currency: string }) {
 
 export function FulfilmentTab({
 	retailerId,
-	fix,
+	target,
 	currency,
 	country,
 	offerSelfCollect,
@@ -238,10 +239,10 @@ export function FulfilmentTab({
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
 	const updateSettings = useUpdateSettings();
-	/** Ring this card when it's the one the post-switch checklist sent the
-	 * seller to (86eyqgujv). Undefined on a normal visit. */
+	/** Ring this card when it's the one the deep link sent the seller to.
+	 * Undefined on a normal visit. */
 	const ring = (anchor: string): FixHighlight | undefined =>
-		fix?.anchor === anchor ? fix.highlight : undefined;
+		target?.anchor === anchor ? target.highlight : undefined;
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
@@ -871,8 +872,7 @@ function DeliveryChargeSection({
 	// spelling of the same choice, so a store still on it shows as selected
 	// rather than as nothing-picked.
 	const liveModeSelected = mode === "live" || mode === "lalamove";
-	const storedLiveMode =
-		config?.mode === "live" || config?.mode === "lalamove";
+	const storedLiveMode = config?.mode === "live" || config?.mode === "lalamove";
 
 	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
 	// weight-zone / Lalamove) don't render and the server refuses storing them
@@ -1210,8 +1210,8 @@ function DeliveryChargeSection({
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Buyers pay the <b>real courier price</b> for their address — an
-						address nobody can price can&apos;t check out, so you never work
-						out a charge yourself. Runs on your own courier accounts.
+						address nobody can price can&apos;t check out, so you never work out
+						a charge yourself. Runs on your own courier accounts.
 					</p>
 
 					{/* WHO will be asked, and what happens when they disagree. Two
@@ -1266,8 +1266,8 @@ function DeliveryChargeSection({
 								</>
 							) : (
 								<>
-									Nothing can quote yet, so delivery checkout would be refused
-									— connect a provider in{" "}
+									Nothing can quote yet, so delivery checkout would be refused —
+									connect a provider in{" "}
 									<Link
 										to="/app/settings"
 										search={{ tab: "integrations" }}
@@ -1310,11 +1310,15 @@ function DeliveryChargeSection({
 							   discover as orders quietly stopping. */
 							<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								Parcel type is{" "}
-								<b>{delyvaSettings.defaultItemType === "FROZEN" ? "Frozen" : "Chilled"}</b>
+								<b>
+									{delyvaSettings.defaultItemType === "FROZEN"
+										? "Frozen"
+										: "Chilled"}
+								</b>
 								, so only a cold-chain courier can price checkout — riders are
 								never substituted. No cold service on your Delyva account ={" "}
-								<b>delivery checkout refused</b>. Fix: ask Delyva to enable
-								one, or set the type to Parcel in Integrations.
+								<b>delivery checkout refused</b>. Fix: ask Delyva to enable one,
+								or set the type to Parcel in Integrations.
 							</p>
 						) : null}
 					</div>
@@ -1335,9 +1339,9 @@ function DeliveryChargeSection({
 					) : null}
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Live courier pricing is a Pro feature. Your setup still applies
-							to new orders — upgrade in Settings → Billing to change it, or
-							switch to Free / Flat fee (always allowed).
+							Live courier pricing is a Pro feature. Your setup still applies to
+							new orders — upgrade in Settings → Billing to change it, or switch
+							to Free / Flat fee (always allowed).
 						</p>
 					) : null}
 
@@ -1347,48 +1351,48 @@ function DeliveryChargeSection({
 					    one at all (86eyqgujv). Riders need the exact pin; Delyva
 					    collects from its own pickup address in Integrations. */}
 					{hasStoredKey ? (
-					<BusinessAddressReference
-						address={businessAddress}
-						present={
-							collectionMode
-								? "Riders bring collected orders to"
-								: "Riders collect from"
-						}
-						missing={
-							collectionMode
-								? "Set your business address first — it's where riders bring collected orders."
-								: "Set your business address first — it's the exact point riders are sent to."
-						}
-					/>
+						<BusinessAddressReference
+							address={businessAddress}
+							present={
+								collectionMode
+									? "Riders bring collected orders to"
+									: "Riders collect from"
+							}
+							missing={
+								collectionMode
+									? "Set your business address first — it's where riders bring collected orders."
+									: "Set your business address first — it's the exact point riders are sent to."
+							}
+						/>
 					) : null}
 
 					{/* 2 · Vehicle — a rider setting, so it follows the rider. */}
 					{hasStoredKey ? (
-					<div className="flex flex-col gap-1.5">
-						<span className="text-xs font-medium text-muted-foreground">
-							Default vehicle
-						</span>
-						<div className="grid grid-cols-2 gap-2">
-							<ModeButton
-								active={vehicleType === "MOTORCYCLE"}
-								disabled={lalamoveLocked}
-								onClick={() => setVehicleType("MOTORCYCLE")}
-								title="Motorcycle"
-								subtitle="Most orders, cheapest"
-							/>
-							<ModeButton
-								active={vehicleType === "CAR"}
-								disabled={lalamoveLocked}
-								onClick={() => setVehicleType("CAR")}
-								title="Car"
-								subtitle="Bulky / fragile"
-							/>
+						<div className="flex flex-col gap-1.5">
+							<span className="text-xs font-medium text-muted-foreground">
+								Default vehicle
+							</span>
+							<div className="grid grid-cols-2 gap-2">
+								<ModeButton
+									active={vehicleType === "MOTORCYCLE"}
+									disabled={lalamoveLocked}
+									onClick={() => setVehicleType("MOTORCYCLE")}
+									title="Motorcycle"
+									subtitle="Most orders, cheapest"
+								/>
+								<ModeButton
+									active={vehicleType === "CAR"}
+									disabled={lalamoveLocked}
+									onClick={() => setVehicleType("CAR")}
+									title="Car"
+									subtitle="Bulky / fragile"
+								/>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Just the default — you can switch vehicle per order in the
+								booking dialog.
+							</p>
 						</div>
-						<p className="text-xs text-muted-foreground">
-							Just the default — you can switch vehicle per order in the booking
-							dialog.
-						</p>
-					</div>
 					) : null}
 
 					{/* 4 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
@@ -2969,4 +2973,3 @@ function LocationListSkeleton() {
 		</ul>
 	);
 }
-

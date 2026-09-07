@@ -545,7 +545,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					retailerId={SELLER_ID as never}
 					country="SG"
 					currency="SGD"
-					fix={{
+					target={{
 						anchor: SETTINGS_ANCHOR.business_address,
 						highlight: "error",
 					}}

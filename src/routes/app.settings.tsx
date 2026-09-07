@@ -86,6 +86,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import {
+	type CardTarget,
 	type FixHighlight,
 	highlightFor,
 	highlightRingClass,
@@ -111,6 +112,11 @@ import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
+import {
+	isSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+	type SpotlightKey,
+} from "../lib/spotlight";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -313,7 +319,7 @@ export const Route = createFileRoute("/app/settings")({
 	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { tab?: SettingsTab; fix?: CountrySetupItemKey } => {
+	): { tab?: SettingsTab; fix?: CountrySetupItemKey; spot?: SpotlightKey } => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
@@ -322,14 +328,20 @@ export const Route = createFileRoute("/app/settings")({
 		// to and ring (86eyqgujv). Validated against the known keys so a
 		// hand-typed value can't ring an arbitrary element.
 		const fix =
-			typeof search.fix === "string" && search.fix in SETTINGS_ANCHOR
+			typeof search.fix === "string" &&
+			Object.hasOwn(SETTINGS_ANCHOR, search.fix)
 				? (search.fix as CountrySetupItemKey)
 				: undefined;
+		// `spot` is a What's-new note's deep link: the same scroll-and-ring, in
+		// the brand mint (src/lib/spotlight.ts). Same posture — a key from the
+		// registry, never a raw element id.
+		const spot = isSpotlightKey(search.spot) ? search.spot : undefined;
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
 				: undefined,
 			...(fix ? { fix } : {}),
+			...(spot ? { spot } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -404,7 +416,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix } = Route.useSearch();
+	const { tab, fix, spot } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -432,23 +444,27 @@ function SettingsRoute() {
 
 	const availability = useSlugAvailability(newSlug);
 
-	// Deep link from the post-switch checklist (86eyqgujv): scroll to the card
-	// that actually fixes the row and ring it, instead of dropping the seller at
-	// the top of a long tab to hunt for it.
-	const fixAnchor = fix ? SETTINGS_ANCHOR[fix] : undefined;
-	const fixTarget = fix
+	// Deep link to one card: scroll to it and ring it, instead of dropping the
+	// seller at the top of a long tab to hunt for it. Two senders, one shape —
+	// the post-switch checklist (`?fix=`, 86eyqgujv: red/amber, something to
+	// fix) and a What's-new note (`?spot=`: mint, something to look at). A
+	// `fix` wins when both are present; it is the one that has a problem in it.
+	const cardTarget: CardTarget | undefined = fix
 		? { anchor: SETTINGS_ANCHOR[fix], highlight: highlightFor(VERIFIABLE[fix]) }
-		: undefined;
-	/** Ring this card when it's the one the checklist sent the seller to. */
+		: spot
+			? { anchor: SPOTLIGHT_ANCHOR[spot].anchor, highlight: "spotlight" }
+			: undefined;
+	const targetAnchor = cardTarget?.anchor;
+	/** Ring this card when it's the one the deep link sent the seller to. */
 	const ringFor = (anchor: string): FixHighlight | undefined =>
-		fixTarget?.anchor === anchor ? fixTarget.highlight : undefined;
+		cardTarget?.anchor === anchor ? cardTarget.highlight : undefined;
 	useEffect(() => {
-		if (!fixAnchor) return;
+		if (!targetAnchor) return;
 		// The tab body mounts in this same commit, so the target doesn't exist
 		// until after paint — wait a frame rather than racing it.
-		const frame = requestAnimationFrame(() => scrollToAnchor(fixAnchor));
+		const frame = requestAnimationFrame(() => scrollToAnchor(targetAnchor));
 		return () => cancelAnimationFrame(frame);
-	}, [fixAnchor]);
+	}, [targetAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
 
@@ -717,7 +733,10 @@ function SettingsRoute() {
 								onSave={(storeName) => updateSettings({ storeName })}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SPOTLIGHT_ANCHOR.business_details.anchor}
+							highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
+						>
 							<BusinessIdentityForm
 								current={retailer.businessIdentity}
 								country={retailer.country}
@@ -783,7 +802,10 @@ function SettingsRoute() {
 								}
 							/>
 						</Card>
-						<Card>
+						<Card
+							id={SPOTLIGHT_ANCHOR.store_country.anchor}
+							highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
+						>
 							<CountryForm
 								current={retailer.country}
 								currency={retailer.currency}
@@ -811,7 +833,9 @@ function SettingsRoute() {
 					</div>
 				) : null}
 
-				{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
+				{activeTab === "billing" ? (
+					<BillingTab retailer={retailer} target={cardTarget} />
+				) : null}
 
 				{activeTab === "whatsapp" ? (
 					<div className="flex flex-col gap-6 pt-2">
@@ -913,7 +937,7 @@ function SettingsRoute() {
 
 				{activeTab === "fulfilment" ? (
 					<FulfilmentTab
-						fix={fixTarget}
+						target={cardTarget}
 						currency={retailer.currency}
 						retailerId={retailer._id}
 						country={retailer.country}
@@ -932,6 +956,7 @@ function SettingsRoute() {
 
 				{activeTab === "integrations" ? (
 					<IntegrationsTab
+						target={cardTarget}
 						retailerId={retailer._id}
 						country={retailer.country}
 						deliveryBooking={retailer.deliveryBooking}

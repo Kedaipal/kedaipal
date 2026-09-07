@@ -99,12 +99,36 @@
 	animation: kp-kenburns 14s ease-in-out infinite alternate;
 }
 
+/* Spotlight glow for a card a What's-new note deep-linked to (docs/whats-new.md).
+   Three soft mint pulses of an outer halo, then it settles into the plain
+   ring. The animation owns box-shadow while it runs, which would ERASE the
+   card's `ring-2 ring-accent/40` for those seconds — so the first layer here
+   is that same 2px ring, and the resting state after the last pulse is
+   identical to the animated one's first layer. */
+@keyframes kp-spotlight {
+	0%,
+	100% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 40%, transparent),
+			0 0 0 2px color-mix(in oklab, var(--accent) 45%, transparent);
+	}
+	50% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 40%, transparent),
+			0 0 0 14px color-mix(in oklab, var(--accent) 0%, transparent);
+	}
+}
+@utility animate-kp-spotlight {
+	animation: kp-spotlight 1.6s ease-out 3;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.animate-kp-marquee,
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
 	.animate-kp-kenburns,
-	.animate-kp-highlight-sweep {
+	.animate-kp-highlight-sweep,
+	.animate-kp-spotlight {
 		animation: none;
 	}
 }

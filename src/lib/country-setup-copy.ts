@@ -192,7 +192,15 @@ export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
  * is Malaysian, so ringing it red would be asserting something we don't know.
  * Those get amber: "check this", not "this is broken".
  */
-export type FixHighlight = "error" | "check";
+export type FixHighlight = "error" | "check" | "spotlight";
+
+/**
+ * A card a deep link sent the seller to: which anchor, and how to ring it.
+ * The one shape every settings tab accepts, whoever the sender is — the
+ * post-switch checklist (`?fix=`, error/check) or a What's-new note
+ * (`?spot=`, spotlight). See `src/lib/spotlight.ts`.
+ */
+export type CardTarget = { anchor: string; highlight: FixHighlight };
 
 export function highlightFor(verifiable: boolean): FixHighlight {
 	return verifiable ? "error" : "check";
@@ -208,6 +216,15 @@ export function highlightRingClass(
 	}
 	if (highlight === "check") {
 		return "border-amber-400 ring-2 ring-amber-400/25 dark:border-amber-500";
+	}
+	if (highlight === "spotlight") {
+		// "Here's the thing we were talking about" — the brand mint, because a
+		// What's-new note is an invitation, not a complaint. Nothing is wrong
+		// with the card, so it must never borrow red or amber. The pulse
+		// (`animate-kp-spotlight`) draws the eye once and settles; it is
+		// switched off under prefers-reduced-motion in styles.css, leaving the
+		// static ring.
+		return "border-accent-emphasis ring-2 ring-accent/40 animate-kp-spotlight dark:border-accent";
 	}
 	return "border-input";
 }

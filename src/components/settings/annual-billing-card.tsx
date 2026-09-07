@@ -1,6 +1,15 @@
-import { CalendarCheck, CalendarClock, ExternalLink, FileClock } from "lucide-react";
+import {
+	CalendarCheck,
+	CalendarClock,
+	ExternalLink,
+	FileClock,
+} from "lucide-react";
 import type { AnnualOfferState } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
+import {
+	type FixHighlight,
+	highlightRingClass,
+} from "../../lib/country-setup-copy";
 import { formatPrice, formatShortDate } from "../../lib/format";
 import { PLAN_LABEL } from "../../lib/subscription";
 import { Button } from "../ui/button";
@@ -12,21 +21,35 @@ function monthsFreeLabel(months: number): string {
 	return `${months} month${months === 1 ? "" : "s"} free`;
 }
 
-const SECTION =
-	"flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6";
+/** The card frame. Its border is handed to `highlightRingClass` so a deep link
+ * (`?spot=annual_billing`, src/lib/spotlight.ts) can ring whichever state is
+ * rendered; undefined = the plain `border-input` every sibling wears. */
+function sectionClass(highlight: FixHighlight | undefined): string {
+	return `flex flex-col gap-3 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`;
+}
+
+/** Anchor + ring, shared by every rendered state so the deep link lands
+ * whichever one the seller is in. */
+type CardFrame = { id?: string; highlight?: FixHighlight };
 
 /** A plain note in the same frame as its siblings — no tint, no badge. */
 function NoteCard({
 	icon,
 	title,
 	children,
-}: {
+	id,
+	highlight,
+}: CardFrame & {
 	icon: React.ReactNode;
 	title: string;
 	children: React.ReactNode;
 }) {
 	return (
-		<section className="flex items-start gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex items-start gap-3 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			{icon}
 			<div>
 				<p className="text-sm font-medium">{title}</p>
@@ -60,7 +83,9 @@ export function AnnualBillingCard({
 	slug,
 	supportWa,
 	founding = false,
-}: {
+	id,
+	highlight,
+}: CardFrame & {
 	state: AnnualOfferState;
 	slug: string;
 	/** Always a string — `useSupportWaNumber` falls back to the built-in default
@@ -77,6 +102,8 @@ export function AnnualBillingCard({
 	if (state.kind === "pendingAnnual") {
 		return (
 			<NoteCard
+				id={id}
+				highlight={highlight}
 				icon={
 					<FileClock className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
 				}
@@ -84,14 +111,14 @@ export function AnnualBillingCard({
 			>
 				{state.invoiceNumber ? (
 					<>
-						Invoice{" "}
-						<span className="font-mono">{state.invoiceNumber}</span> below covers
-						the next 12 months. Your year starts the day we receive it.
+						Invoice <span className="font-mono">{state.invoiceNumber}</span>{" "}
+						below covers the next 12 months. Your year starts the day we receive
+						it.
 					</>
 				) : (
 					<>
-						The invoice below covers the next 12 months. Your year starts the day
-						we receive it.
+						The invoice below covers the next 12 months. Your year starts the
+						day we receive it.
 					</>
 				)}
 			</NoteCard>
@@ -106,6 +133,8 @@ export function AnnualBillingCard({
 	if (state.kind === "onAnnual") {
 		return (
 			<NoteCard
+				id={id}
+				highlight={highlight}
 				icon={
 					<CalendarCheck className="mt-0.5 size-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
 				}
@@ -148,7 +177,11 @@ export function AnnualBillingCard({
 				: "Switch to annual billing";
 
 	return (
-		<section className={SECTION}>
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={sectionClass(highlight)}
+		>
 			<div className="flex items-start gap-3">
 				<CalendarClock className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
 				<div>
