@@ -296,6 +296,15 @@ the window means a crashed cascade, and re-running the purge is the recovery
 deliberately NOT in any prod checklist — never set it there; the prod
 deny-list exists precisely for the day someone does.
 
+**Expected log noise:** if any session still has the purged store's dashboard
+open, the moment the retailer row goes you'll see a burst of uncaught
+`Retailer not found` / `No store found for this account` query errors — live
+subscriptions re-running against a store that no longer exists and hitting the
+`requireRetailerAccess` guard, which is doing its job. One burst, then the
+client sees `getMyRetailer` go null and lands on onboarding. Deliberately NOT
+fail-softed: silencing it would weaken the access seam across every dashboard
+query for a few seconds of dev log noise.
+
 **Trap found on first use:** the erasure cascade itself had a latent crash —
 two phases paginate and Convex allows one `.paginate()` per mutation, so a
 small tenant stalled mid-erase. Fixed in the driver (see
