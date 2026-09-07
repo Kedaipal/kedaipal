@@ -283,6 +283,20 @@ the mutation re-checks). The purge is audited via `logDestructiveAdminAction`
 rule), and the audit row outlives the tenant because the cascade retains
 `adminAuditLog` by decision.
 
+**In-flight lock:** the purge stamps `retailers.purgeStartedAt` before
+scheduling the cascade. While it's set (and younger than the 10-minute retry
+window), the directory row shows "Purging…" with Manage and the trash both
+disabled, `startActAsSession` refuses the store, and a second purge is
+rejected — no session can touch a store mid-erase. The stamp is never cleared
+on success (the row itself is the cascade's final delete); a stamp older than
+the window means a crashed cascade, and re-running the purge is the recovery
+(every phase is idempotent).
+
 **Env:** `DEV_STORE_PURGE_ENABLED` is set on the dev deployment only. It is
 deliberately NOT in any prod checklist — never set it there; the prod
 deny-list exists precisely for the day someone does.
+
+**Trap found on first use:** the erasure cascade itself had a latent crash —
+two phases paginate and Convex allows one `.paginate()` per mutation, so a
+small tenant stalled mid-erase. Fixed in the driver (see
+`docs/account-deletion.md`, "one paginate per invocation").

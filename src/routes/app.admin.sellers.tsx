@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import {
 	Award,
 	ChevronRight,
+	Loader2,
 	ShieldCheck,
 	ShieldX,
 	Store,
@@ -148,8 +149,14 @@ function SellerCard({
 	const startActAsSession = useMutation(api.admin.startActAsSession);
 	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
 	const [purgeOpen, setPurgeOpen] = useState(false);
+	// Server truth (`purging` rides the directory row, so every admin session
+	// locks) OR the just-clicked local echo, which bridges the moment before
+	// the reactive query refreshes.
+	const [localPurging, setLocalPurging] = useState(false);
+	const purging = seller.purging || localPurging;
 
 	function manage() {
+		if (purging) return;
 		// Start the act-as session, then open the vendor's dashboard. From here the
 		// session holds across all navigation + CRUD until the admin Exits.
 		setActAs(seller._id);
@@ -165,6 +172,7 @@ function SellerCard({
 				retailerId: seller._id,
 				confirmSlug: seller.slug,
 			});
+			setLocalPurging(true);
 			// The cascade is async — the row vanishes from this list when the
 			// retailer doc goes in its final phase, usually within seconds.
 			toast.success(
@@ -180,11 +188,12 @@ function SellerCard({
 	return (
 		// The purge control sits BESIDE the row, not inside it — the whole row is
 		// already the "Manage" button, and a button can't nest a button.
-		<li className="flex items-stretch gap-2">
+		<li className="flex items-center gap-1.5">
 			<button
 				type="button"
 				onClick={manage}
-				className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm"
+				disabled={purging}
+				className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm disabled:pointer-events-none disabled:opacity-60"
 			>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
 					<div className="flex items-center gap-2">
@@ -239,21 +248,35 @@ function SellerCard({
 						)}
 					</div>
 				</div>
-				<span className="flex shrink-0 items-center gap-1 rounded-lg bg-accent/10 px-3 py-2 text-sm font-semibold text-accent">
-					Manage
-					<ChevronRight className="size-4" />
-				</span>
+				{purging ? (
+					<span className="flex shrink-0 items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-muted-foreground">
+						<Loader2 className="size-4 animate-spin" />
+						Purging…
+					</span>
+				) : (
+					<span className="flex shrink-0 items-center gap-1 rounded-lg bg-accent/10 px-3 py-2 text-sm font-semibold text-accent">
+						Manage
+						<ChevronRight className="size-4" />
+					</span>
+				)}
 			</button>
 			{purgeEnabled ? (
 				<>
+					{/* Quiet until hovered — a rare dev tool shouldn't shout red down
+					    the whole directory. Compact square, centered on the row. */}
 					<button
 						type="button"
 						onClick={() => setPurgeOpen(true)}
+						disabled={purging}
 						title="Purge store (dev only)"
 						aria-label={`Purge ${seller.storeName} (dev only)`}
-						className="flex min-w-11 shrink-0 items-center justify-center rounded-2xl border border-destructive/30 px-3 text-destructive transition-colors hover:border-destructive hover:bg-destructive/10"
+						className="flex size-11 shrink-0 items-center justify-center self-center rounded-xl text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40"
 					>
-						<Trash2 className="size-4" />
+						{purging ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<Trash2 className="size-4" />
+						)}
 					</button>
 					<ConfirmDialog
 						open={purgeOpen}

@@ -195,6 +195,7 @@ import {
 	DELETION_PHASES,
 	type DeletionPhase,
 	deletionPhaseValidator,
+	PAGINATED_PHASES,
 	runDeletionPhase,
 } from "./lib/accountDeletion";
 import {
@@ -2863,8 +2864,30 @@ export const deleteUser = internalMutation({
 		let cursor: string | null = args.cursor ?? null;
 		let budget = DELETE_USER_BATCH;
 		let processedTotal = 0;
+		// Convex allows ONE `.paginate()` per mutation invocation. Two of the
+		// phases paginate, so once one has run in THIS invocation, entering
+		// another paginated phase must go through a scheduled continuation — on a
+		// small tenant the old loop rolled from `slugHistory` straight into
+		// `optOuts` and the second paginate threw, aborting the invocation
+		// (rolling back its deletes) and stalling the cascade with no
+		// continuation scheduled. See PAGINATED_PHASES in lib/accountDeletion.ts.
+		let ranPaginatedPhase = false;
 
 		while (true) {
+			if (PAGINATED_PHASES.has(phase) && ranPaginatedPhase) {
+				await ctx.scheduler.runAfter(0, internal.retailers.deleteUser, {
+					userId,
+					phase,
+				});
+				return {
+					deleted: true,
+					retailerId: retailer._id,
+					done: false,
+					phase,
+					processed: processedTotal,
+				};
+			}
+			if (PAGINATED_PHASES.has(phase)) ranPaginatedPhase = true;
 			const result = await runDeletionPhase(ctx, retailer, phase, budget, cursor);
 			processedTotal += result.processed;
 			budget -= result.processed;

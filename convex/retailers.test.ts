@@ -866,6 +866,12 @@ describe("retailers deleteUser (internal cascade)", () => {
 	}
 
 	test("purges retailer + all owned rows and storage files", async () => {
+		// Even a small tenant now spans invocations: the driver hands off to a
+		// scheduled continuation between the two `.paginate()` phases (Convex
+		// allows one paginated query per mutation — see PAGINATED_PHASES), so
+		// the cascade must be drained, not awaited once. Fake timers BEFORE
+		// setup(), per the gotcha on the multi-batch test below.
+		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "del-me");
 
@@ -873,6 +879,8 @@ describe("retailers deleteUser (internal cascade)", () => {
 			userId: USER_A,
 		});
 		expect(result.deleted).toBe(true);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
 
 		await t.run(async (ctx) => {
 			expect(await ctx.db.get(ids.retailerId)).toBeNull();
@@ -904,11 +912,14 @@ describe("retailers deleteUser (internal cascade)", () => {
 	});
 
 	test("does not touch another user's tenant", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const aIds = await seedFullTenant(t, USER_A, "tenant-a");
 		const bIds = await seedFullTenant(t, USER_B, "tenant-b");
 
 		await t.mutation(internal.retailers.deleteUser, { userId: USER_A });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
 
 		await t.run(async (ctx) => {
 			// A is gone…
@@ -932,6 +943,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 	 * order blob kinds (the account cascade used to free only the proof).
 	 */
 	test("erases every previously-orphaned table, keeps the two retained by decision", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "orphan-sweep");
 
@@ -1053,8 +1065,13 @@ describe("retailers deleteUser (internal cascade)", () => {
 		});
 		expect(result.deleted).toBe(true);
 		if (!result.deleted) throw new Error("expected the tenant to be deleted");
-		// A small tenant fits one batch, so the cascade finishes in-invocation.
-		expect(result.done).toBe(true);
+		// Even a small tenant no longer finishes in ONE invocation: the driver
+		// hands off between the two `.paginate()` phases (one paginated query
+		// per mutation — PAGINATED_PHASES), so completion means draining the
+		// scheduled continuations.
+		expect(result.done).toBe(false);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
 
 		await t.run(async (ctx) => {
 			// Previously orphaned — now all gone.

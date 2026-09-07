@@ -65,6 +65,9 @@ export type AdminSellerRow = {
 	 * not the buyer-side labels. */
 	signupSource?: string;
 	createdAt: number;
+	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
+	 * the row (no Manage, no second purge) until it disappears. */
+	purging: boolean;
 };
 
 /**
@@ -98,6 +101,7 @@ export const listSellersForAdmin = query({
 				plan: sub?.plan,
 				signupSource: r.signupSource,
 				createdAt: r._creationTime,
+				purging: r.purgeStartedAt !== undefined,
 			});
 		}
 		rows.sort((a, b) => {
@@ -159,6 +163,11 @@ export const startActAsSession = mutation({
 		const adminUserId = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return; // stale id — the client redirect handles it
+		// A purge cascade is mid-flight — entering the store now would race the
+		// deletes and could even write an orphan row (the cascade doc's warning).
+		if (retailer.purgeStartedAt !== undefined) {
+			throw new ConvexError("This store is being purged — hands off until it finishes.");
+		}
 		await ctx.db.insert("adminAuditLog", {
 			adminUserId,
 			retailerId,
@@ -314,6 +323,11 @@ export const purgeExpiredAdminAudit = internalMutation({
  * checked against `CONVEX_CLOUD_URL`, which Convex sets on every deployment. */
 const PROD_DEPLOYMENT_NAME = "peaceful-falcon-152";
 
+/** How long a `purgeStartedAt` stamp locks the store before a re-purge is
+ * allowed. The cascade normally finishes in seconds; a stamp older than this
+ * means it crashed, and re-running (idempotent phases) is the recovery. */
+const PURGE_RETRY_AFTER_MS = 10 * 60 * 1000;
+
 /**
  * Whether the dev-only store purge is armed on THIS deployment. Two
  * independent, fail-closed guards, because the action is total erasure:
@@ -388,6 +402,17 @@ export const purgeStoreForAdmin = mutation({
 		if (args.confirmSlug.trim().toLowerCase() !== retailer.slug) {
 			throw new ConvexError("Slug confirmation doesn't match this store.");
 		}
+		// One cascade at a time. A stamp INSIDE the window means it's still
+		// running (normal case: seconds); one OLDER than the window means a
+		// crashed cascade, and re-running is the recovery path — every phase is
+		// idempotent, so re-scheduling just resumes the erase.
+		if (
+			retailer.purgeStartedAt !== undefined &&
+			Date.now() - retailer.purgeStartedAt < PURGE_RETRY_AFTER_MS
+		) {
+			throw new ConvexError("A purge is already running for this store.");
+		}
+		await ctx.db.patch(retailer._id, { purgeStartedAt: Date.now() });
 		await logDestructiveAdminAction(
 			ctx,
 			{

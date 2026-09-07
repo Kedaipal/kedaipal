@@ -469,6 +469,52 @@ describe("dev-only store purge", () => {
 		}
 	});
 
+	test("a running purge locks the store — no second purge, no act-as entry, and the directory says so", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const admin = t.withIdentity({ subject: ADMIN });
+		await admin.mutation(api.admin.purgeStoreForAdmin, {
+			retailerId: retailer._id,
+			confirmSlug: retailer.slug,
+		});
+		// Scheduled cascade NOT driven — the store sits mid-purge.
+		await expect(
+			admin.mutation(api.admin.purgeStoreForAdmin, {
+				retailerId: retailer._id,
+				confirmSlug: retailer.slug,
+			}),
+		).rejects.toThrow(/already running/);
+		await expect(
+			admin.mutation(api.admin.startActAsSession, {
+				retailerId: retailer._id,
+			}),
+		).rejects.toThrow(/being purged/);
+		const rows = await admin.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r._id === retailer._id)?.purging).toBe(true);
+	});
+
+	test("a stale purge stamp (crashed cascade) can be re-run — the recovery path", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		// Simulate a cascade that died 11 minutes ago, past PURGE_RETRY_AFTER_MS.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				purgeStartedAt: Date.now() - 11 * 60 * 1000,
+			});
+		});
+		await t.withIdentity({ subject: ADMIN }).mutation(
+			api.admin.purgeStoreForAdmin,
+			{ retailerId: retailer._id, confirmSlug: retailer.slug },
+		);
+		// Re-armed: the stamp is fresh again.
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			expect(
+				Date.now() - (row?.purgeStartedAt ?? 0),
+			).toBeLessThan(60 * 1000);
+		});
+	});
+
 	test("purge erases the tenant, spares bystanders, audits itself, and frees the login for onboarding", async () => {
 		vi.useFakeTimers();
 		try {
