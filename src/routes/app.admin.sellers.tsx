@@ -2,14 +2,24 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Award, ChevronRight, ShieldCheck, ShieldX, Store } from "lucide-react";
+import {
+	Award,
+	ChevronRight,
+	ShieldCheck,
+	ShieldX,
+	Store,
+	Trash2,
+} from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
 import { PageHeader } from "../components/dashboard/page-header";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
+import { convexErrorMessage } from "../lib/format";
 
 export const Route = createFileRoute("/app/admin/sellers")({
 	component: AdminSellersRoute,
@@ -45,6 +55,10 @@ function AdminSellersRoute() {
 
 function AdminSellersContent() {
 	const sellers = useQuery(convexQuery(api.admin.listSellersForAdmin, {})).data;
+	// Dev deployments only (z8r3fdbmc9) — the server re-checks, this just keeps
+	// a control that would always refuse off the prod screen entirely.
+	const purgeEnabled =
+		useQuery(convexQuery(api.admin.devStorePurgeEnabled, {})).data === true;
 	const [term, setTerm] = useState("");
 
 	const filtered =
@@ -106,7 +120,7 @@ function AdminSellersContent() {
 			) : (
 				<ul className="flex flex-col gap-2">
 					{filtered.map((s) => (
-						<SellerCard key={s._id} seller={s} />
+						<SellerCard key={s._id} seller={s} purgeEnabled={purgeEnabled} />
 					))}
 				</ul>
 			)}
@@ -121,11 +135,19 @@ const STATUS_STYLES: Record<string, string> = {
 	cancelled: "bg-muted text-muted-foreground",
 };
 
-function SellerCard({ seller }: { seller: AdminSellerRow }) {
+function SellerCard({
+	seller,
+	purgeEnabled,
+}: {
+	seller: AdminSellerRow;
+	purgeEnabled: boolean;
+}) {
 	const status = seller.subscriptionStatus;
 	const navigate = useNavigate();
 	const { setActAs } = useActAs();
 	const startActAsSession = useMutation(api.admin.startActAsSession);
+	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
+	const [purgeOpen, setPurgeOpen] = useState(false);
 
 	function manage() {
 		// Start the act-as session, then open the vendor's dashboard. From here the
@@ -137,12 +159,32 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 		navigate({ to: "/app" });
 	}
 
+	async function confirmPurge() {
+		try {
+			const result = await purgeStore({
+				retailerId: seller._id,
+				confirmSlug: seller.slug,
+			});
+			// The cascade is async — the row vanishes from this list when the
+			// retailer doc goes in its final phase, usually within seconds.
+			toast.success(
+				`Purging ${result.storeName} — the row disappears once the erase finishes, then that login onboards fresh.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			// Re-throw so the dialog stays open behind the error toast.
+			throw err;
+		}
+	}
+
 	return (
-		<li>
+		// The purge control sits BESIDE the row, not inside it — the whole row is
+		// already the "Manage" button, and a button can't nest a button.
+		<li className="flex items-stretch gap-2">
 			<button
 				type="button"
 				onClick={manage}
-				className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm"
+				className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm"
 			>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
 					<div className="flex items-center gap-2">
@@ -202,6 +244,37 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 					<ChevronRight className="size-4" />
 				</span>
 			</button>
+			{purgeEnabled ? (
+				<>
+					<button
+						type="button"
+						onClick={() => setPurgeOpen(true)}
+						title="Purge store (dev only)"
+						aria-label={`Purge ${seller.storeName} (dev only)`}
+						className="flex min-w-11 shrink-0 items-center justify-center rounded-2xl border border-destructive/30 px-3 text-destructive transition-colors hover:border-destructive hover:bg-destructive/10"
+					>
+						<Trash2 className="size-4" />
+					</button>
+					<ConfirmDialog
+						open={purgeOpen}
+						onOpenChange={setPurgeOpen}
+						destructive
+						title={`Purge ${seller.storeName}?`}
+						description={
+							<>
+								Dev-only test reset. Erases <strong>everything</strong> this
+								store owns — products, orders, customers, settings, images —
+								and the store itself, exactly like the account-deletion
+								cascade. The owner's login survives, so opening /onboarding
+								afterwards starts a fresh store. This cannot be undone.
+							</>
+						}
+						confirmPhrase={seller.slug}
+						confirmLabel="Purge store"
+						onConfirm={confirmPurge}
+					/>
+				</>
+			) : null}
 		</li>
 	);
 }
