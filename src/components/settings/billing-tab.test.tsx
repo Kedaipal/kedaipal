@@ -249,14 +249,28 @@ describe("BillingTab annual billing", () => {
 	}
 
 	const settled = [
-		{ _id: "i1", status: "paid", currency: "MYR", total: 14900, invoiceNumber: "INV-1" },
-		{ _id: "i2", status: "paid", currency: "MYR", total: 14900, invoiceNumber: "INV-2" },
+		{
+			_id: "i1",
+			status: "paid",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-1",
+		},
+		{
+			_id: "i2",
+			status: "paid",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-2",
+		},
 	];
 
 	it("offers the year to a proven, active Pro seller", () => {
 		mockQueries({ isAdmin: false, invoices: settled });
 		render(<BillingTab retailer={activePro()} />);
-		expect(screen.getByText(/Pay for the year, get 2 months free/)).toBeTruthy();
+		expect(
+			screen.getByText(/Pay for the year, get 2 months free/),
+		).toBeTruthy();
 		// The real invoice total — RM1,490, not the RM650 the pricing page used
 		// to derive from a rounded effective monthly.
 		expect(screen.getByText(/RM\s*1,490\.00/)).toBeTruthy();
@@ -360,7 +374,9 @@ describe("BillingTab annual billing", () => {
 		render(<BillingTab retailer={activePro({ plan: "starter" })} />);
 		// The offer itself is Pro+, but the tier must still learn it exists.
 		expect(screen.queryByText(/Pay for the year/)).toBeNull();
-		expect(screen.getByText(/billed annually, with two months free/)).toBeTruthy();
+		expect(
+			screen.getByText(/billed annually, with two months free/),
+		).toBeTruthy();
 		// The constraint is explained, not left as an unexplained absence.
 		expect(screen.getByText(/We don't offer annual on Starter/)).toBeTruthy();
 	});
@@ -417,7 +433,6 @@ describe("BillingTab annual billing", () => {
 		render(<BillingTab retailer={activePro({ plan: "scale" })} />);
 		expect(screen.queryByText(/Pay for the year/)).toBeNull();
 	});
-
 });
 
 /**
@@ -453,6 +468,21 @@ describe("BillingTab invoice history documents", () => {
 		expect(
 			screen.getAllByRole("button", { name: /download receipt pdf/i }),
 		).toHaveLength(1);
+	});
+
+	it("a spotlight target rings the history card, and only that card", () => {
+		// `spotlightHref("invoice_history")` — the "Download a receipt" note.
+		mockQueries({ isAdmin: false, invoices: history });
+		const { container } = render(
+			<BillingTab
+				retailer={retailer()}
+				target={{ anchor: "settings-invoice-history", highlight: "spotlight" }}
+			/>,
+		);
+		const ringed = container.querySelectorAll("[data-fix-highlight]");
+		expect(ringed).toHaveLength(1);
+		expect(ringed[0]?.id).toBe("settings-invoice-history");
+		expect(ringed[0]?.className).toMatch(/ring-accent/);
 	});
 
 	it("offers no receipt while the invoice is still pending", () => {

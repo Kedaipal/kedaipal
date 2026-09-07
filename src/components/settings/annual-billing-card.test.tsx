@@ -68,9 +68,7 @@ describe("AnnualBillingCard — the number on screen is the number on the invoic
 	it.each(
 		ANNUAL_OFFER_PLANS.flatMap((plan) =>
 			BILLING_CURRENCIES.flatMap((currency) =>
-				[false, true].map(
-					(founding) => [plan, currency, founding] as const,
-				),
+				[false, true].map((founding) => [plan, currency, founding] as const),
 			),
 		),
 	)("%s / %s / founding=%s quotes planPrice exactly", (plan, currency, founding) => {
@@ -262,5 +260,48 @@ describe("AnnualBillingCard — states", () => {
 		expect(screen.getByText(/too soon to swap it safely/)).toBeTruthy();
 		expect(screen.getByText(/pay it as normal/)).toBeTruthy();
 		expect(waText()).toContain("from the next one");
+	});
+});
+
+describe("AnnualBillingCard — deep-link anchor", () => {
+	// A What's-new note links `spotlightHref("annual_billing")`. Whichever
+	// state the seller is in must carry the id, or the link scrolls nowhere.
+	function renderAnchored(s: AnnualOfferState) {
+		return render(
+			<AnnualBillingCard
+				id="settings-annual-billing"
+				highlight="spotlight"
+				state={s}
+				slug="openmarket"
+				supportWa={WA}
+			/>,
+		);
+	}
+
+	it("the offer state carries the anchor and the mint ring", () => {
+		const { container } = renderAnchored(state());
+		const el = container.querySelector("#settings-annual-billing");
+		expect(el).not.toBeNull();
+		expect(el?.getAttribute("data-fix-highlight")).toBe("spotlight");
+		expect(el?.className).toMatch(/ring-accent/);
+	});
+
+	it("a note state (already on annual) carries the same anchor", () => {
+		const { container } = renderAnchored(
+			state({
+				subscription: {
+					plan: "pro",
+					status: "active",
+					billingCycle: "annual",
+				},
+			}),
+		);
+		expect(container.querySelector("#settings-annual-billing")).not.toBeNull();
+	});
+
+	it("no highlight means the plain frame — never a resting glow", () => {
+		const { container } = renderCard(state());
+		expect(container.querySelector("[data-fix-highlight]")).toBeNull();
+		expect(container.firstElementChild?.className).toMatch(/border-input/);
 	});
 });

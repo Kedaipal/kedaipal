@@ -16,8 +16,14 @@ import { isUnlimited } from "../../../convex/lib/plans";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
+import {
+	type CardTarget,
+	type FixHighlight,
+	highlightRingClass,
+} from "../../lib/country-setup-copy";
 import { formatPrice, formatShortDate } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
 	ORDER_CAP_WARN_RATIO,
 	PLAN_LABEL,
@@ -34,8 +40,17 @@ type Retailer = NonNullable<
 /** Retailer-facing billing dashboard (Settings → Billing). Current plan + status,
  * the pending invoice + how to pay (Kedaipal's bank/DuitNow/QR), Founding ribbon,
  * and invoice history. See docs/manual-subscription.md. */
-export function BillingTab({ retailer }: { retailer: Retailer }) {
+export function BillingTab({
+	retailer,
+	target,
+}: {
+	retailer: Retailer;
+	/** Deep-link target — which card to ring, and how (see FulfilmentTab). */
+	target?: CardTarget;
+}) {
 	const sub = retailer.subscription;
+	const ring = (anchor: string): FixHighlight | undefined =>
+		target?.anchor === anchor ? target.highlight : undefined;
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
 	const invoices =
 		useQuery(convexQuery(api.invoices.myInvoices, {})).data ?? [];
@@ -248,6 +263,8 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 			    the payment mechanics. Renders nothing for a seller it doesn't
 			    apply to (see resolveAnnualOffer). */}
 			<AnnualBillingCard
+				id={SPOTLIGHT_ANCHOR.annual_billing.anchor}
+				highlight={ring(SPOTLIGHT_ANCHOR.annual_billing.anchor)}
 				state={annualOffer}
 				slug={retailer.slug}
 				supportWa={supportWa}
@@ -395,7 +412,13 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 
 			{/* History */}
 			{history.length > 0 ? (
-				<section className="flex flex-col gap-2 rounded-2xl border border-input bg-background p-5 lg:p-6">
+				<section
+					id={SPOTLIGHT_ANCHOR.invoice_history.anchor}
+					data-fix-highlight={
+						ring(SPOTLIGHT_ANCHOR.invoice_history.anchor) ?? undefined
+					}
+					className={`flex flex-col gap-2 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(ring(SPOTLIGHT_ANCHOR.invoice_history.anchor))}`}
+				>
 					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 						Invoice history
 					</p>

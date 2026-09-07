@@ -7,6 +7,11 @@ import type { Release } from "../content/releases";
 import { RELEASE_KIND_LABELS, RELEASES } from "../content/releases";
 import { isCalendarVersion } from "./app-version";
 import { localized, resolveWhatsNew } from "./releases";
+import {
+	isSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+	type SpotlightKey,
+} from "./spotlight";
 
 function release(version: string, notable = false): Release {
 	return {
@@ -307,6 +312,28 @@ describe("the shipped RELEASES content", () => {
 					tabs.includes(tab),
 					`${e.href} names tab "${tab}", which is not one of: ${tabs.join(", ")}`,
 				).toBe(true);
+			}
+		}
+	});
+
+	test("every `?spot=` deep link is a registry key, on that key's own tab", () => {
+		// A spotlight that names a key nothing renders scrolls nowhere and rings
+		// nothing; one paired with the wrong tab rings nothing on the wrong
+		// page. `spotlightHref` builds both halves from one key, so a note
+		// written with it can't get here — this guards the one typed by hand.
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				const params = new URLSearchParams(e.href?.split("?")[1] ?? "");
+				const spot = params.get("spot");
+				if (spot === null) continue;
+				expect(
+					isSpotlightKey(spot),
+					`${e.href}: "${spot}" is not a spotlight key`,
+				).toBe(true);
+				expect(
+					params.get("tab"),
+					`${e.href}: spot "${spot}" lives on the ${SPOTLIGHT_ANCHOR[spot as SpotlightKey].tab} tab`,
+				).toBe(SPOTLIGHT_ANCHOR[spot as SpotlightKey].tab);
 			}
 		}
 	});
