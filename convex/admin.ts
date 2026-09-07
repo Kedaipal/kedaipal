@@ -9,7 +9,7 @@
 // (products/orders/customers/retailers/pickupLocations/counterCheckout), with
 // `logAdminAction` stamping an `adminAuditLog` row on each admin-on-behalf write.
 
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -18,7 +18,11 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
-import { adminUserIds, requireAdmin } from "./lib/auth";
+import {
+	adminUserIds,
+	logDestructiveAdminAction,
+	requireAdmin,
+} from "./lib/auth";
 import {
 	BUSINESS_REPORT_ORDER_SCAN_CAP,
 	type BusinessReport,
@@ -61,6 +65,9 @@ export type AdminSellerRow = {
 	 * not the buyer-side labels. */
 	signupSource?: string;
 	createdAt: number;
+	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
+	 * the row (no Manage, no second purge) until it disappears. */
+	purging: boolean;
 };
 
 /**
@@ -94,6 +101,7 @@ export const listSellersForAdmin = query({
 				plan: sub?.plan,
 				signupSource: r.signupSource,
 				createdAt: r._creationTime,
+				purging: r.purgeStartedAt !== undefined,
 			});
 		}
 		rows.sort((a, b) => {
@@ -155,6 +163,11 @@ export const startActAsSession = mutation({
 		const adminUserId = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return; // stale id — the client redirect handles it
+		// A purge cascade is mid-flight — entering the store now would race the
+		// deletes and could even write an orphan row (the cascade doc's warning).
+		if (retailer.purgeStartedAt !== undefined) {
+			throw new ConvexError("This store is being purged — hands off until it finishes.");
+		}
 		await ctx.db.insert("adminAuditLog", {
 			adminUserId,
 			retailerId,
@@ -301,5 +314,118 @@ export const purgeExpiredAdminAudit = internalMutation({
 		if (page.length === LOG_PURGE_PAGE_SIZE) {
 			await ctx.scheduler.runAfter(0, internal.admin.purgeExpiredAdminAudit, {});
 		}
+	},
+});
+
+// ── Dev-only store purge (z8r3fdbmc9) ────────────────────────────────────────
+
+/** The production Convex deployment. A hard deny-list for dev-only tooling —
+ * checked against `CONVEX_CLOUD_URL`, which Convex sets on every deployment. */
+const PROD_DEPLOYMENT_NAME = "peaceful-falcon-152";
+
+/** How long a `purgeStartedAt` stamp locks the store before a re-purge is
+ * allowed. The cascade normally finishes in seconds; a stamp older than this
+ * means it crashed, and re-running (idempotent phases) is the recovery. */
+const PURGE_RETRY_AFTER_MS = 10 * 60 * 1000;
+
+/**
+ * Whether the dev-only store purge is armed on THIS deployment. Two
+ * independent, fail-closed guards, because the action is total erasure:
+ *
+ *  1. A hard deny on the production deployment — even a fat-fingered
+ *     `DEV_STORE_PURGE_ENABLED` set on prod must not arm it.
+ *  2. An explicit opt-in env flag, which prod simply never sets. Absent,
+ *     empty, or any value but "true"/"1" reads as OFF — including on a
+ *     deployment we can't identify.
+ *
+ * Exported for tests (each guard is mutation-tested on its own).
+ */
+export function devStorePurgeAllowed(): boolean {
+	if ((process.env.CONVEX_CLOUD_URL ?? "").includes(PROD_DEPLOYMENT_NAME)) {
+		return false;
+	}
+	const flag = process.env.DEV_STORE_PURGE_ENABLED;
+	return flag === "true" || flag === "1";
+}
+
+/**
+ * Whether the sellers directory should render the purge control. Cosmetic —
+ * `purgeStoreForAdmin` re-checks server-side — but querying it keeps the
+ * button honest instead of rendering a control that always refuses on prod.
+ */
+export const devStorePurgeEnabled = query({
+	args: {},
+	handler: async (ctx): Promise<boolean> => {
+		await requireAdmin(ctx);
+		return devStorePurgeAllowed();
+	},
+});
+
+/**
+ * DEV-ONLY: erase a store back to nothing so its Clerk account onboards fresh.
+ *
+ * Reuses the PDPA erasure cascade wholesale (`internal.retailers.deleteUser` →
+ * `runDeletionPhase`, every phase, self-chaining) rather than a second sweep
+ * that would drift on the next table. The Clerk USER is untouched — that's the
+ * point: after the cascade, `getMyRetailer` returns null and `/onboarding`
+ * treats the login as brand-new. Erasure is asynchronous (the cascade batches
+ * itself through the scheduler), so the directory row disappears a moment
+ * after the call returns, not synchronously.
+ *
+ * Guards, in order: admin allowlist → the two-guard dev gate above → the
+ * caller must echo the store's SLUG (proves the click matched the row — the
+ * same typed-phrase contract the confirm dialog enforces client-side). The
+ * audit row goes through `logDestructiveAdminAction` (recorded even for an
+ * admin's own store — 86eyhz189's rule for irreversible erasures) and survives
+ * the cascade, which retains `adminAuditLog` by decision.
+ */
+export const purgeStoreForAdmin = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		/** The store's slug, echoed back — a wrong-row misfire guard. */
+		confirmSlug: v.string(),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ storeName: string; ownerUserId: string }> => {
+		const adminUserId = await requireAdmin(ctx);
+		if (!devStorePurgeAllowed()) {
+			throw new ConvexError(
+				"Store purge is a dev-deployment tool and is disabled here.",
+			);
+		}
+		const retailer = await ctx.db.get(args.retailerId);
+		if (!retailer) {
+			throw new ConvexError("Store not found — already purged?");
+		}
+		if (args.confirmSlug.trim().toLowerCase() !== retailer.slug) {
+			throw new ConvexError("Slug confirmation doesn't match this store.");
+		}
+		// One cascade at a time. A stamp INSIDE the window means it's still
+		// running (normal case: seconds); one OLDER than the window means a
+		// crashed cascade, and re-running is the recovery path — every phase is
+		// idempotent, so re-scheduling just resumes the erase.
+		if (
+			retailer.purgeStartedAt !== undefined &&
+			Date.now() - retailer.purgeStartedAt < PURGE_RETRY_AFTER_MS
+		) {
+			throw new ConvexError("A purge is already running for this store.");
+		}
+		await ctx.db.patch(retailer._id, { purgeStartedAt: Date.now() });
+		await logDestructiveAdminAction(
+			ctx,
+			{
+				retailer,
+				actingAsAdmin: retailer.userId !== adminUserId,
+				userId: adminUserId,
+			},
+			"admin.purgeStore",
+			retailer._id,
+		);
+		await ctx.scheduler.runAfter(0, internal.retailers.deleteUser, {
+			userId: retailer.userId,
+		});
+		return { storeName: retailer.storeName, ownerUserId: retailer.userId };
 	},
 });

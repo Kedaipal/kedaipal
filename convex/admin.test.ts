@@ -1,9 +1,10 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { devStorePurgeAllowed } from "./admin";
 import schema from "./schema";
 
 // Admin Console act-as (ClickUp 86ey25er1). Proves the owner-OR-admin access
@@ -382,5 +383,187 @@ describe("counter checkout act-as", () => {
 			.query(api.counterCheckout.listOpenSessions, { retailerId: retailer._id });
 		expect(open.length).toBe(1);
 		expect(open[0]?.origin).toBe("store_qr");
+	});
+});
+
+// Dev-only store purge (z8r3fdbmc9) — the admin test-reset that reuses the
+// PDPA erasure cascade. The gate is mutation-tested guard by guard: the env
+// flag fails closed, and the prod deny-list beats even a set flag.
+describe("dev-only store purge", () => {
+	let prevPurgeFlag: string | undefined;
+	beforeAll(() => {
+		prevPurgeFlag = process.env.DEV_STORE_PURGE_ENABLED;
+		process.env.DEV_STORE_PURGE_ENABLED = "true";
+	});
+	afterAll(() => {
+		if (prevPurgeFlag === undefined) delete process.env.DEV_STORE_PURGE_ENABLED;
+		else process.env.DEV_STORE_PURGE_ENABLED = prevPurgeFlag;
+	});
+
+	test("devStorePurgeAllowed fails closed without the exact opt-in flag", () => {
+		const prev = process.env.DEV_STORE_PURGE_ENABLED;
+		try {
+			delete process.env.DEV_STORE_PURGE_ENABLED;
+			expect(devStorePurgeAllowed()).toBe(false);
+			process.env.DEV_STORE_PURGE_ENABLED = "";
+			expect(devStorePurgeAllowed()).toBe(false);
+			process.env.DEV_STORE_PURGE_ENABLED = "yes";
+			expect(devStorePurgeAllowed()).toBe(false);
+			process.env.DEV_STORE_PURGE_ENABLED = "true";
+			expect(devStorePurgeAllowed()).toBe(true);
+			process.env.DEV_STORE_PURGE_ENABLED = "1";
+			expect(devStorePurgeAllowed()).toBe(true);
+		} finally {
+			if (prev === undefined) delete process.env.DEV_STORE_PURGE_ENABLED;
+			else process.env.DEV_STORE_PURGE_ENABLED = prev;
+		}
+	});
+
+	test("the prod deployment is denied even with the flag set", () => {
+		const prev = process.env.CONVEX_CLOUD_URL;
+		try {
+			process.env.CONVEX_CLOUD_URL =
+				"https://peaceful-falcon-152.convex.cloud";
+			expect(devStorePurgeAllowed()).toBe(false);
+		} finally {
+			if (prev === undefined) delete process.env.CONVEX_CLOUD_URL;
+			else process.env.CONVEX_CLOUD_URL = prev;
+		}
+	});
+
+	test("non-admins cannot purge; a wrong slug echo is refused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await expect(
+			t.withIdentity({ subject: STRANGER }).mutation(
+				api.admin.purgeStoreForAdmin,
+				{ retailerId: retailer._id, confirmSlug: retailer.slug },
+			),
+		).rejects.toThrow(/Not authorized/);
+		await expect(
+			t.withIdentity({ subject: ADMIN }).mutation(
+				api.admin.purgeStoreForAdmin,
+				{ retailerId: retailer._id, confirmSlug: "some-other-store" },
+			),
+		).rejects.toThrow(/doesn't match/);
+		// Neither attempt touched the store.
+		await t.run(async (ctx) => {
+			expect(await ctx.db.get(retailer._id)).not.toBeNull();
+		});
+	});
+
+	test("refused outright when the flag is off — the gate, mutation-proofed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const prev = process.env.DEV_STORE_PURGE_ENABLED;
+		try {
+			delete process.env.DEV_STORE_PURGE_ENABLED;
+			await expect(
+				t.withIdentity({ subject: ADMIN }).mutation(
+					api.admin.purgeStoreForAdmin,
+					{ retailerId: retailer._id, confirmSlug: retailer.slug },
+				),
+			).rejects.toThrow(/dev-deployment/);
+		} finally {
+			process.env.DEV_STORE_PURGE_ENABLED = prev;
+		}
+	});
+
+	test("a running purge locks the store — no second purge, no act-as entry, and the directory says so", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const admin = t.withIdentity({ subject: ADMIN });
+		await admin.mutation(api.admin.purgeStoreForAdmin, {
+			retailerId: retailer._id,
+			confirmSlug: retailer.slug,
+		});
+		// Scheduled cascade NOT driven — the store sits mid-purge.
+		await expect(
+			admin.mutation(api.admin.purgeStoreForAdmin, {
+				retailerId: retailer._id,
+				confirmSlug: retailer.slug,
+			}),
+		).rejects.toThrow(/already running/);
+		await expect(
+			admin.mutation(api.admin.startActAsSession, {
+				retailerId: retailer._id,
+			}),
+		).rejects.toThrow(/being purged/);
+		const rows = await admin.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r._id === retailer._id)?.purging).toBe(true);
+	});
+
+	test("a stale purge stamp (crashed cascade) can be re-run — the recovery path", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		// Simulate a cascade that died 11 minutes ago, past PURGE_RETRY_AFTER_MS.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				purgeStartedAt: Date.now() - 11 * 60 * 1000,
+			});
+		});
+		await t.withIdentity({ subject: ADMIN }).mutation(
+			api.admin.purgeStoreForAdmin,
+			{ retailerId: retailer._id, confirmSlug: retailer.slug },
+		);
+		// Re-armed: the stamp is fresh again.
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			expect(
+				Date.now() - (row?.purgeStartedAt ?? 0),
+			).toBeLessThan(60 * 1000);
+		});
+	});
+
+	test("purge erases the tenant, spares bystanders, audits itself, and frees the login for onboarding", async () => {
+		vi.useFakeTimers();
+		try {
+			const t = setup();
+			const victim = await seedRetailer(t, OWNER);
+			const bystander = await seedRetailer(t, STRANGER);
+			await t
+				.withIdentity({ subject: OWNER })
+				.mutation(api.products.create, baseProduct(victim._id));
+			await t
+				.withIdentity({ subject: STRANGER })
+				.mutation(api.products.create, baseProduct(bystander._id));
+
+			await t.withIdentity({ subject: ADMIN }).mutation(
+				api.admin.purgeStoreForAdmin,
+				{ retailerId: victim._id, confirmSlug: victim.slug },
+			);
+			// The cascade self-chains through the scheduler — drive it to the end.
+			await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+			await t.run(async (ctx) => {
+				expect(await ctx.db.get(victim._id)).toBeNull();
+				const products = await ctx.db.query("products").collect();
+				// Only the bystander's catalog survives.
+				expect(products.length).toBe(1);
+				expect(products[0]?.retailerId).toBe(bystander._id);
+				expect(await ctx.db.get(bystander._id)).not.toBeNull();
+				// The destructive action is audited, and the audit row outlives the
+				// tenant (adminAuditLog is retained by the cascade, by decision).
+				const audit = await ctx.db.query("adminAuditLog").collect();
+				expect(
+					audit.some(
+						(row) =>
+							row.action === "admin.purgeStore" &&
+							row.retailerId === victim._id &&
+							row.adminUserId === ADMIN,
+					),
+				).toBe(true);
+			});
+
+			// The whole point: the owner's login now has no store, so /onboarding
+			// treats it as a fresh account.
+			expect(
+				await t
+					.withIdentity({ subject: OWNER })
+					.query(api.retailers.getMyRetailer),
+			).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

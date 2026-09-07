@@ -92,6 +92,14 @@ export default defineSchema({
 		// address is a fact and is never retired by a tick. Cleared on every
 		// switch (a new move re-opens every question).
 		countrySetupAcked: v.optional(v.array(v.string())),
+		// DEV-ONLY store purge in flight (z8r3fdbmc9): stamped by
+		// admin.purgeStoreForAdmin the moment the erasure cascade is scheduled,
+		// so every admin session locks the row (no act-as, no double purge)
+		// while the deletion self-chains. Never cleared on success — the row
+		// itself is the cascade's final delete. A stamp older than the retry
+		// window means a crashed cascade; the purge may then be re-run (every
+		// phase is idempotent).
+		purgeStartedAt: v.optional(v.number()),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),

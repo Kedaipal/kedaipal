@@ -877,6 +877,7 @@ function SettingsRoute() {
 						>
 							<PaymentMethodsForm
 								current={retailer.paymentMethods ?? []}
+								country={retailer.country}
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 							/>
 						</Card>
@@ -1644,8 +1645,25 @@ function newDraft(type: "bank" | "qr"): MethodDraft {
 	};
 }
 
+// Placeholder examples per store country (z8r3fdbmc9) — "Maybank / DuitNow /
+// Sdn Bhd" on a Singapore store reads as someone else's app. Examples only;
+// the fields stay free text.
+const BANK_PLACEHOLDER: Record<Country, string> = {
+	MY: "Maybank",
+	SG: "DBS",
+};
+const QR_LABEL_PLACEHOLDER: Record<Country, string> = {
+	MY: "DuitNow QR",
+	SG: "PayNow QR",
+};
+const HOLDER_PLACEHOLDER: Record<Country, string> = {
+	MY: "Your Business Sdn Bhd",
+	SG: "Your Business Pte Ltd",
+};
+
 function PaymentMethodsForm({
 	current,
+	country,
 	onSave,
 }: {
 	current: Array<{
@@ -1658,6 +1676,8 @@ function PaymentMethodsForm({
 		qrImageUrl?: string;
 		note?: string;
 	}>;
+	/** Store country — picks the placeholder examples above. */
+	country: Country;
 	onSave: (methods: PaymentMethodWire[]) => Promise<unknown>;
 }) {
 	const generateQrUploadUrl = useMutation(
@@ -1883,7 +1903,11 @@ function PaymentMethodsForm({
 						type="text"
 						value={m.label}
 						onChange={(e) => update(m._key, { label: e.target.value })}
-						placeholder={m.type === "bank" ? "Maybank" : "DuitNow QR"}
+						placeholder={
+							m.type === "bank"
+								? BANK_PLACEHOLDER[country]
+								: QR_LABEL_PLACEHOLDER[country]
+						}
 						maxLength={60}
 						variant="field"
 					/>
@@ -1897,7 +1921,7 @@ function PaymentMethodsForm({
 								type="text"
 								value={m.bankName}
 								onChange={(e) => update(m._key, { bankName: e.target.value })}
-								placeholder="Maybank"
+								placeholder={BANK_PLACEHOLDER[country]}
 								maxLength={120}
 								variant="field"
 							/>
@@ -1910,7 +1934,7 @@ function PaymentMethodsForm({
 								onChange={(e) =>
 									update(m._key, { bankAccountName: e.target.value })
 								}
-								placeholder="Your Business Sdn Bhd"
+								placeholder={HOLDER_PLACEHOLDER[country]}
 								maxLength={120}
 								variant="field"
 							/>
