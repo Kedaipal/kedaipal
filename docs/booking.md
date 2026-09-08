@@ -1221,6 +1221,44 @@ clears both, dedupe, the refusal sweep. Frontend: `order-item-line`,
 `product-wizard-booking` (default Fri + Sat, the picker adds Sunday, the
 package hides + drops the pair, an empty night set is refused at its step).
 
+### A split line names its OWN nights (8 Sep)
+
+The first cut printed the WHOLE stay on both lines — a Thu→Sat booking read
+"1 weekday night × RM 40 · 17 Sep → 19 Sep" and "1 weekend night × RM 50 ·
+17 Sep → 19 Sep". Each line looked priced for the entire stay, and neither
+said which night was the expensive one (Zaki, 8 Sep).
+
+The obvious fix — give each line its own range, "17 → 18" and "18 → 19" —
+is right for that order and **wrong for the feature's own headline case**. A
+Thu→Mon stay charges the weekday rate for the Thursday *and* the Sunday, with
+the weekend nights between them: the set is **not contiguous**, so no range is
+true of that line. Ranges also collide with the vocabulary already in use — a
+"–" between two nights reads like the check-in → check-out arrow, which would
+make two nights look like one.
+
+So a split line **lists its nights**: "2 weekday nights × RM 40.00 · Thu 24
+Sep, Sun 27 Sep". Individual nights are honest on every stay, contiguous or
+not. `describeNights` caps at three named nights and then counts the rest
+("Tue 1 Sep, Wed 2 Sep +3 more nights") so a 30-night stay's weekday line
+can't run away with the sub-line; `formatNight` drops the year and the comma
+(the card above already states the stay, and commas separate the nights).
+
+**This needed a new frozen order field**, against the ticket's "no new order
+fields" line — flagged rather than smuggled. That line was about the MONEY,
+which genuinely needs nothing new: the two lines carry the counts and the
+rates. Locating those nights inside the span is a different question, and two
+lines reading "1 weekday night" and "1 weekend night" cannot answer it.
+**`orders.bookingWeekendDays`** freezes the night set at request, exactly the
+`bookingPackaged` precedent (a display-only snapshot, so a seller moving their
+weekend to Sundays tomorrow never relocates the nights a placed booking was
+charged for). The frozen `variantLabel` names the same set in prose for the
+CSV and the PDF; this is that set, machine-readable.
+
+**`partitionNights`** is the one author — `splitNightsByRate` now derives its
+counts from it, so a line's count and the dates printed beside it cannot
+disagree. A booking placed before this field existed falls back to the stay
+span rather than printing nothing.
+
 ### Booking surfaces stopped speaking delivery (8 Sep)
 
 Zaki's first test order surfaced a **Shipment tracking** card on a campsite

@@ -1271,6 +1271,19 @@ export default defineSchema({
 		// re-describe a placed booking (the securityDeposit posture). The span
 		// itself lives in bookingCheckIn/Out; this only records the SHAPE.
 		bookingPackaged: v.optional(v.boolean()),
+		// Which NIGHTS this stay was sold as weekend nights (S13) — weekday
+		// indexes, 0 = Sun. Set only when a weekend rate actually applied, so
+		// absent means "one rate every night" (and every pre-S13 booking).
+		//
+		// Frozen for the same reason `bookingPackaged` is: the seller can change
+		// the listing's weekend days tomorrow, and a placed booking must keep
+		// describing the deal that was struck. The two order LINES already carry
+		// the counts and the rates, which is what the money needs; this is what
+		// the DISPLAY needs — it is the only way to say WHICH nights the weekend
+		// line charged for, since the counts alone can't locate them in the span.
+		// The frozen `variantLabel` ("Weekend nights (Fri & Sat)") names the same
+		// set in prose for the CSV and the PDF; this is that set, machine-readable.
+		bookingWeekendDays: v.optional(v.array(v.number())),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets

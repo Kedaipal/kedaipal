@@ -360,6 +360,7 @@ function OrderDetailRoute() {
 					checkIn: order.bookingCheckIn,
 					checkOut: order.bookingCheckOut,
 					packaged: order.bookingPackaged === true,
+					weekendDays: order.bookingWeekendDays,
 				}
 			: undefined;
 	const orderId = order?._id;

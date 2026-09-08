@@ -10,6 +10,7 @@ import {
 	maxPackageQuantity,
 	nightsBetween,
 	normalizePackageQuantity,
+	partitionNights,
 	resolveBookingRange,
 	splitNightsByRate,
 	staysOverlap,
@@ -267,5 +268,56 @@ describe("splitNightsByRate (S13 weekend rate)", () => {
 				packageLength: 4,
 			}),
 		).toEqual({ weekdayNights: 4, weekendNights: 0 });
+	});
+});
+
+describe("partitionNights (S13 — which nights, not just how many)", () => {
+	const myt = (y: number, m: number, d: number) =>
+		Date.UTC(y, m - 1, d) - MYT_OFFSET_MS;
+	const THU_10_SEP = myt(2026, 9, 10);
+	const MON_14_SEP = myt(2026, 9, 14);
+	const friSat = [5, 6];
+
+	it("locates each rate's nights inside the span", () => {
+		// Thu→Mon sleeps Thu 10, Fri 11, Sat 12, Sun 13.
+		const { weekday, weekend } = partitionNights(
+			THU_10_SEP,
+			MON_14_SEP,
+			friSat,
+		);
+		expect(weekday).toEqual([THU_10_SEP, myt(2026, 9, 13)]);
+		expect(weekend).toEqual([myt(2026, 9, 11), myt(2026, 9, 12)]);
+	});
+
+	it("a weekday set is NOT contiguous — the reason lines name nights, not a range", () => {
+		// Thu and Sun, with the weekend between them: no "X → Y" is true of
+		// that line, which is why the sub-line lists nights instead.
+		const { weekday } = partitionNights(THU_10_SEP, MON_14_SEP, friSat);
+		expect(weekday).toHaveLength(2);
+		expect(weekday[1] - weekday[0]).toBe(3 * DAY_MS);
+	});
+
+	it("no weekend days = every night is a weekday night", () => {
+		for (const days of [undefined, []]) {
+			const { weekday, weekend } = partitionNights(
+				THU_10_SEP,
+				MON_14_SEP,
+				days,
+			);
+			expect(weekday).toHaveLength(4);
+			expect(weekend).toHaveLength(0);
+		}
+	});
+
+	it("is the one author behind splitNightsByRate's counts", () => {
+		const booking = { weekendPrice: 12_000, weekendDays: friSat };
+		const counts = splitNightsByRate(THU_10_SEP, MON_14_SEP, booking);
+		const { weekday, weekend } = partitionNights(
+			THU_10_SEP,
+			MON_14_SEP,
+			friSat,
+		);
+		expect(counts.weekdayNights).toBe(weekday.length);
+		expect(counts.weekendNights).toBe(weekend.length);
 	});
 });

@@ -17,12 +17,20 @@
 // SAME module that wrote it (`bookingNightKind`), so the sub-line can say
 // "2 weekend nights × RM 120.00" and the title row needn't repeat the label.
 
-import { DAY_MS, formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
+import { partitionNights } from "../../../convex/lib/bookingAvailability";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+} from "../../../convex/lib/fulfilmentDate";
 import {
 	type BookingNightKind,
 	bookingNightKind,
 } from "../../../convex/lib/productKind";
-import { describeBookingSpan } from "../../lib/booking-dates";
+import {
+	describeBookingSpan,
+	describeNights,
+	formatNight,
+} from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 
@@ -32,6 +40,10 @@ export type OrderBookingSpan = {
 	checkOut: number;
 	/** Fixed-length package (S7) — a validity window, not a stay. */
 	packaged: boolean;
+	/** Frozen weekend night set (S13, `orders.bookingWeekendDays`). Lets a
+	 * split line name ITS OWN nights instead of repeating the whole stay.
+	 * Absent on a single-rate booking and on every pre-S13 one. */
+	weekendDays?: readonly number[];
 };
 
 export function OrderItemLine({
@@ -130,5 +142,35 @@ function bookingLineDetail(
 			? quantity
 			: Math.round((booking.checkOut - booking.checkIn) / DAY_MS);
 	const noun = nightKind ? `${nightKind} night` : "night";
-	return `${nights} ${noun}${nights === 1 ? "" : "s"} × ${formatPrice(unitPrice, currency)} · ${span}`;
+	const count = `${nights} ${noun}${nights === 1 ? "" : "s"} × ${formatPrice(unitPrice, currency)}`;
+	// A split line names ITS OWN nights. Printing the whole stay on both lines
+	// (as this did at first) said "Thu 17 → Sat 19" twice over, once beside
+	// RM 40 and once beside RM 50, so each line looked priced for the entire
+	// stay — and neither said which night was the expensive one.
+	const own = ownNights(booking, nightKind);
+	if (own !== null) return `${count} · ${describeNights(own, formatNight)}`;
+	// One line for the whole stay (no weekend rate, or a pre-S13 booking with
+	// no frozen night set): the span IS this line's span, so it still reads.
+	return `${count} · ${span}`;
+}
+
+/**
+ * The nights THIS line charged for, or null when the line covers the whole
+ * stay (nothing to narrow) or the order predates the frozen night set.
+ */
+function ownNights(
+	booking: OrderBookingSpan,
+	nightKind: BookingNightKind | undefined,
+): number[] | null {
+	if (nightKind === undefined || booking.weekendDays === undefined) return null;
+	const { weekday, weekend } = partitionNights(
+		booking.checkIn,
+		booking.checkOut,
+		booking.weekendDays,
+	);
+	const own = nightKind === "weekend" ? weekend : weekday;
+	// A set that came out empty means the frozen days no longer describe this
+	// span (only reachable if a row were edited by hand) — fall back rather
+	// than print a line with no nights at all.
+	return own.length > 0 ? own : null;
 }

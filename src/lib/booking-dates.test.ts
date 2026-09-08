@@ -10,6 +10,8 @@ import {
 	bookingPriceSuffix,
 	bookingSpanNoun,
 	describeBookingSpan,
+	describeNights,
+	formatNight,
 	nextBookingSelection,
 	packageCountLabel,
 	packageEnd,
@@ -234,5 +236,46 @@ describe("weekendRateSuffix (S13)", () => {
 				packageLength: 30,
 			}),
 		).toBeNull();
+	});
+});
+
+describe("naming a split line's nights (S13)", () => {
+	it("formats one night compactly — no year, no comma", () => {
+		// The year would be noise under a card that already states the stay,
+		// and a comma would collide with the separator between nights.
+		expect(formatNight(day(0))).toBe("Tue 1 Sep");
+		expect(formatNight(day(3))).toBe("Fri 4 Sep");
+	});
+
+	it("lists the nights a rate charged for", () => {
+		expect(describeNights([day(0)], formatNight)).toBe("Tue 1 Sep");
+		expect(describeNights([day(3), day(4)], formatNight)).toBe(
+			"Fri 4 Sep, Sat 5 Sep",
+		);
+	});
+
+	it("lists non-contiguous nights, which a range could never say", () => {
+		// A Thu→Mon stay's weekday nights are the Thursday AND the Sunday.
+		expect(describeNights([day(2), day(5)], formatNight)).toBe(
+			"Thu 3 Sep, Sun 6 Sep",
+		);
+	});
+
+	it("counts the rest once a long stay would run away with the line", () => {
+		const many = [day(0), day(1), day(2), day(3), day(4)];
+		expect(describeNights(many, formatNight)).toBe(
+			"Tue 1 Sep, Wed 2 Sep +3 more nights",
+		);
+		expect(describeNights(many.slice(0, 4), formatNight)).toBe(
+			"Tue 1 Sep, Wed 2 Sep +2 more nights",
+		);
+		// Exactly at the cap, everything is still named.
+		expect(describeNights(many.slice(0, 3), formatNight)).toBe(
+			"Tue 1 Sep, Wed 2 Sep, Thu 3 Sep",
+		);
+	});
+
+	it("says nothing for no nights", () => {
+		expect(describeNights([], formatNight)).toBe("");
 	});
 });

@@ -473,6 +473,7 @@ function TrackingRoute() {
 					checkIn: order.bookingCheckIn,
 					checkOut: order.bookingCheckOut,
 					packaged: isBookingPackage,
+					weekendDays: order.bookingWeekendDays,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";

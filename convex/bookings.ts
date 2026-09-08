@@ -445,6 +445,14 @@ export const requestBooking = mutation({
 			// Frozen shape (S7) — a later listing edit never re-describes this
 			// order, and every money/date surface reads the span correctly.
 			bookingPackaged: isPackageListing ? true : undefined,
+			// Frozen alongside the two lines it explains (S13): the counts say
+			// how many nights each rate charged, this says which ones they were.
+			// Only when the rate actually applied — a package and a single-rate
+			// listing both leave it unset.
+			bookingWeekendDays:
+				!isPackageListing && product.booking?.weekendPrice !== undefined
+					? product.booking.weekendDays
+					: undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for

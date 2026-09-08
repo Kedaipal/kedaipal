@@ -370,22 +370,47 @@ export function splitNightsByRate(
 	checkOut: number,
 	booking: BookingRateConfig | undefined,
 ): { weekdayNights: number; weekendNights: number } {
-	const nights = eachNight(checkIn, checkOut);
 	const isPackage = (booking?.packageLength ?? 0) > 0;
-	const weekendDays = booking?.weekendDays;
-	if (
-		isPackage ||
-		booking?.weekendPrice === undefined ||
-		weekendDays === undefined ||
-		weekendDays.length === 0
-	) {
-		return { weekdayNights: nights.length, weekendNights: 0 };
+	const { weekday, weekend } = partitionNights(
+		checkIn,
+		checkOut,
+		isPackage || booking?.weekendPrice === undefined
+			? undefined
+			: booking?.weekendDays,
+	);
+	return { weekdayNights: weekday.length, weekendNights: weekend.length };
+}
+
+/**
+ * The same split, as the NIGHTS themselves rather than their counts — the one
+ * author both readings come from, so a line's count and the dates printed
+ * beside it can never disagree.
+ *
+ * The counts answer "why is my bill RM 110?"; the nights answer the question
+ * that follows it, "which night was the expensive one?". An order can only ask
+ * the second because it freezes `bookingWeekendDays`: two lines reading
+ * "1 weekday night" and "1 weekend night" locate nothing inside a span on
+ * their own.
+ *
+ * `weekendDays` absent or empty = every night is a weekday night, which is
+ * exactly how a listing with no weekend rate (and every pre-S13 booking) reads.
+ */
+export function partitionNights(
+	checkIn: number,
+	checkOut: number,
+	weekendDays: readonly number[] | undefined,
+): { weekday: number[]; weekend: number[] } {
+	const nights = eachNight(checkIn, checkOut);
+	if (weekendDays === undefined || weekendDays.length === 0) {
+		return { weekday: nights, weekend: [] };
 	}
-	const weekend = new Set(weekendDays);
-	const weekendNights = nights.filter((night) =>
-		weekend.has(weekdayIndexMyt(night)),
-	).length;
-	return { weekdayNights: nights.length - weekendNights, weekendNights };
+	const isWeekend = new Set(weekendDays);
+	const weekday: number[] = [];
+	const weekend: number[] = [];
+	for (const night of nights) {
+		(isWeekend.has(weekdayIndexMyt(night)) ? weekend : weekday).push(night);
+	}
+	return { weekday, weekend };
 }
 
 /**

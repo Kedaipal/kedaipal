@@ -710,6 +710,52 @@ describe("weekend / weekday rates (S13)", () => {
 		expect(order.bookingCheckOut).toBe(thu + 4 * DAY_MS);
 	});
 
+	test("the weekend NIGHT SET is frozen too — the lines say how many, this says which", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			weekendPrice: 12_000,
+		});
+		const thu = nextWeekday(4, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: thu,
+			checkOut: thu + 4 * DAY_MS,
+			customer: guest(7),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingWeekendDays).toEqual([5, 6]);
+
+		// Frozen: moving the listing's weekend to Sundays never relocates the
+		// nights a placed booking was charged for.
+		await asOwner.mutation(api.products.update, {
+			productId,
+			booking: {
+				capacityPerNight: undefined,
+				weekendPrice: 12_000,
+				weekendDays: [0],
+			},
+		});
+		const after = await asOwner.query(api.orders.get, { shortId });
+		expect(after?.bookingWeekendDays).toEqual([5, 6]);
+	});
+
+	test("a listing with no weekend rate freezes no night set", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+		});
+		const thu = nextWeekday(4, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: thu,
+			checkOut: thu + 2 * DAY_MS,
+			customer: guest(8),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingWeekendDays).toBeUndefined();
+	});
+
 	test("the rates are frozen — a later listing edit never re-prices a placed stay", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
 			capacity: null,
