@@ -240,12 +240,6 @@ const ENVIRONMENT = [
 	"whatsapp",
 ] as const;
 
-/**
- * Brand spellings that the prefix rule below does not catch (it matches the
- * joined form only). Kept tiny on purpose — brand protection is the PREFIX.
- */
-const BRAND = ["kedai-pal"] as const;
-
 export const RESERVED_SLUG_GROUPS = {
 	LIVE_ROUTES,
 	PUBLIC_FOLDERS,
@@ -255,16 +249,32 @@ export const RESERVED_SLUG_GROUPS = {
 	PRODUCT,
 	GENERIC,
 	ENVIRONMENT,
-	BRAND,
 } as const;
 
 /**
- * Every slug that STARTS with one of these is refused, not just the exact
- * word: `kedaipal-official`, `kedaipal-support`, `kedaipalhq` are all handles
- * an impersonator would pick, and a buyer reading `kedaipal.com/kedaipal-support`
- * has no way to tell it is not us.
+ * The brand, as the bare token a handle or a name is reduced to before the
+ * check: lowercase, every non-alphanumeric stripped. That one normalisation
+ * catches `kedai-pal`, `Kedai Pal`, `K.E.D.A.I.P.A.L` and `KEDAIPAL` with a
+ * single rule instead of a hand-listed set of spellings.
  */
-export const RESERVED_SLUG_PREFIXES: readonly string[] = ["kedaipal"];
+const BRAND_TOKEN = "kedaipal";
+
+/**
+ * Does this text carry the brand ANYWHERE inside it? Substring, not prefix —
+ * `official-kedaipal` and `the-kedaipal-store` read as us to a buyer just as
+ * `kedaipal-support` does, and buyers do not parse URL structure. The shared
+ * WABA makes this stricter than a normal SaaS would need: every message a
+ * buyer receives comes from Kedaipal's own number with the store name in the
+ * body, so a store carrying our brand collapses "Kedaipal, on behalf of X"
+ * into "this is Kedaipal". No legitimate seller names their business after
+ * their order tool, so the rule costs nothing (owner call, 8 Sep 2026).
+ * Applied to the SLUG (here) and the STORE NAME (`assertValidStoreName`) —
+ * the name is the stronger vector, since it is what renders in every
+ * WhatsApp message and on the storefront header.
+ */
+export function containsBrand(text: string): boolean {
+	return text.toLowerCase().replace(/[^a-z0-9]/g, "").includes(BRAND_TOKEN);
+}
 
 /** The flat set — what the validators actually test against. */
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set(
@@ -279,8 +289,7 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set(
  * have rejected the uppercase form already.
  */
 export function isReservedSlug(slug: string): boolean {
-	if (RESERVED_SLUGS.has(slug)) return true;
-	return RESERVED_SLUG_PREFIXES.some((prefix) => slug.startsWith(prefix));
+	return RESERVED_SLUGS.has(slug) || containsBrand(slug);
 }
 
 /**
@@ -293,3 +302,12 @@ export function isReservedSlug(slug: string): boolean {
  */
 export const RESERVED_SLUG_MESSAGE =
 	"Reserved by Kedaipal — pick another slug";
+
+/**
+ * The store-name rejection — same posture as the slug copy: says WHO owns the
+ * word and what to do, and reads identically inline under the field (client
+ * pre-check) and in the save error (server), so the seller never sees two
+ * different sentences for one rule.
+ */
+export const BRAND_NAME_MESSAGE =
+	"“Kedaipal” is our name — please leave it out of your store name";

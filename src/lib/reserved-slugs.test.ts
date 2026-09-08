@@ -3,10 +3,10 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+	containsBrand,
 	isReservedSlug,
 	RESERVED_SLUG_GROUPS,
 	RESERVED_SLUG_MESSAGE,
-	RESERVED_SLUG_PREFIXES,
 	RESERVED_SLUGS,
 } from "../../convex/lib/reservedSlugs";
 import { assertValidSlug } from "../../convex/lib/slug";
@@ -125,35 +125,53 @@ describe("the list itself stays honest", () => {
 		expect(dupes).toEqual([]);
 	});
 
-	test("no exact entry is redundant with a prefix", () => {
+	test("no exact entry carries the brand — containsBrand already covers it", () => {
 		for (const entry of RESERVED_SLUGS) {
-			for (const prefix of RESERVED_SLUG_PREFIXES) {
-				expect(
-					entry.startsWith(prefix),
-					`"${entry}" is already covered by prefix "${prefix}"`,
-				).toBe(false);
-			}
+			expect(
+				containsBrand(entry),
+				`"${entry}" is already refused by the brand rule`,
+			).toBe(false);
 		}
 	});
 });
 
-describe("the brand prefix", () => {
-	test("refuses the brand and anything that leads with it", () => {
+describe("the brand rule — anywhere in the text, however it is spelled", () => {
+	test("refuses the brand as prefix, suffix or infix", () => {
 		for (const s of [
 			"kedaipal",
 			"kedaipal-official",
-			"kedaipal-support",
+			"official-kedaipal",
+			"the-kedaipal-store",
 			"kedaipalhq",
+			"my-kedaipal-store",
 		]) {
 			expect(isReservedSlug(s), s).toBe(true);
 		}
 	});
 
-	test("does not refuse a store that merely contains the brand", () => {
-		// "my-kedaipal-store" is a fan, not an impersonator — the URL reads as
-		// theirs, and a wider rule would refuse legitimate shop names.
-		expect(isReservedSlug("my-kedaipal-store")).toBe(false);
-		expect(isReservedSlug("kedai-runcit")).toBe(false);
+	test("separators and case do not hide it", () => {
+		// One normalisation (lowercase, strip non-alphanumerics) instead of a
+		// hand-listed set of spellings — so `kedai-pal` needs no entry.
+		for (const s of [
+			"kedai-pal",
+			"Kedai Pal",
+			"K.E.D.A.I.P.A.L",
+			"KEDAIPAL",
+			"kedai_pal",
+		]) {
+			expect(containsBrand(s), s).toBe(true);
+		}
+	});
+
+	test("does not refuse the ordinary Malay word for shop", () => {
+		for (const s of [
+			"kedai-runcit",
+			"kedai-ali",
+			"pal-mart",
+			"kedai-pals-friend",
+		]) {
+			expect(isReservedSlug(s), s).toBe(s === "kedai-pals-friend");
+		}
 	});
 });
 

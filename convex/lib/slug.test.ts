@@ -1,10 +1,12 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
 import { COUNTRIES } from "./country";
+import { BRAND_NAME_MESSAGE } from "./reservedSlugs";
 import {
 	assertValidMobileForCountry,
 	assertValidMyMobile,
 	assertValidMyWaPhone,
+	assertValidStoreName,
 	assertValidWaPhone,
 	assertValidWaPhoneForCountry,
 	MOBILE_EXAMPLE,
@@ -245,5 +247,28 @@ describe("cross-country rejection copy (z8r3fdbmc9)", () => {
 				assertValidMobileForCountry(MOBILE_EXAMPLE[country], country),
 			).not.toThrow();
 		}
+	});
+});
+
+describe("assertValidStoreName — the brand rule on the name buyers read", () => {
+	test("accepts an ordinary business name, trimmed", () => {
+		expect(assertValidStoreName("  Kedai Runcit Ali ")).toBe("Kedai Runcit Ali");
+	});
+
+	test("refuses the brand anywhere in the name, however spelled", () => {
+		for (const name of [
+			"Kedaipal Support",
+			"Official Kedaipal",
+			"Kedai Pal",
+			"KEDAIPAL",
+			"kedai-pal store",
+		]) {
+			expect(() => assertValidStoreName(name), name).toThrow(BRAND_NAME_MESSAGE);
+		}
+	});
+
+	test("length rules still apply before the brand rule", () => {
+		expect(() => assertValidStoreName("K")).toThrow(/at least 2/);
+		expect(() => assertValidStoreName("a".repeat(61))).toThrow(/at most 60/);
 	});
 });

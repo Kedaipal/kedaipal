@@ -54,7 +54,7 @@ whichever side catches it: *"Reserved by Kedaipal — pick another slug"*.
 | Dashboard / buyer nouns | `orders`, `products`, `billing`, `checkout`, `pay`, `invoice` | curated |
 | Generic tenant words | `store`, `shop`, `seller`, `vendor`, `official`, `verified` | curated |
 | Environments + bug literals | `demo`, `staging`, `sandbox`, `null`, `undefined` | curated |
-| Brand **prefix** | anything starting `kedaipal` (`kedaipal-support`, `kedaipalhq`) | `RESERVED_SLUG_PREFIXES` |
+| Brand, **anywhere** in the text | `kedaipal-support`, `official-kedaipal`, `kedai-pal`, `Kedai Pal` | `containsBrand` — lowercase, strip non-alphanumerics, substring |
 
 **Machine-checked, not remembered.** `src/lib/reserved-slugs.test.ts` scans
 `src/routes/` and `public/` and fails the gate when a top-level segment is not
@@ -65,8 +65,19 @@ list for months protecting nothing. Dotted files (`sitemap.xml`, `robots.txt`)
 and TanStack's `_server` are therefore deliberately **not** listed — the shape
 check rejects them first, and a test pins that.
 
-**Not fenced, on purpose:** words that merely *contain* the brand
-(`my-kedaipal-store` is a fan, not an impersonator); category and product slugs
+**The brand rule also guards the store name.** `assertValidStoreName` (server)
+and `validateStoreName` (client, inline under the field on onboarding, Settings →
+Store and the admin onboard form) refuse any name that contains `kedaipal` once
+lowercased and stripped of separators — a store called "Kedaipal Support" on the
+slug `abc-trading` is a stronger impersonation than any URL, because the *name*
+is what renders in every WhatsApp message and on the storefront header. Substring,
+not prefix, and no "fan" exemption: buyers do not parse URL structure, the shared
+WABA already puts Kedaipal's number on every message, and no legitimate seller
+names their business after their order tool (owner call, 8 Sep 2026). The
+ordinary Malay `kedai` is untouched. Copy is one constant per rule
+(`RESERVED_SLUG_MESSAGE`, `BRAND_NAME_MESSAGE`), imported by both sides.
+
+**Not fenced, on purpose:** category and product slugs
 (they live under `/<slug>/c/…` and `/<slug>/p/…`, so they can never collide —
 `assertValidCategorySlug` skips the list); and existing stores — the check runs
 on the **new** slug at create/rename only, so a store already on a word that

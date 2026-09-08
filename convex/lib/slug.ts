@@ -17,7 +17,12 @@
  */
 
 import { COUNTRIES, type Country, COUNTRY_DIAL_CODE } from "./country";
-import { isReservedSlug, RESERVED_SLUG_MESSAGE } from "./reservedSlugs";
+import {
+	BRAND_NAME_MESSAGE,
+	containsBrand,
+	isReservedSlug,
+	RESERVED_SLUG_MESSAGE,
+} from "./reservedSlugs";
 
 /**
  * Best-effort slugification of free text (store names, product names):
@@ -83,10 +88,24 @@ export function assertValidCategorySlug(raw: string): string {
 	return s;
 }
 
+export const STORE_NAME_MIN = 2;
+export const STORE_NAME_MAX = 60;
+
+/**
+ * The store name is what every buyer reads — WhatsApp message body, storefront
+ * header, tracking page — so it carries the same brand rule as the slug
+ * (`containsBrand`): a store called "Kedaipal Support" on the slug
+ * `abc-trading` is a stronger impersonation than any URL. Mirrors
+ * `validateStoreName` in `src/lib/slug.ts`, which gives the seller the same
+ * sentence inline before they ever submit.
+ */
 export function assertValidStoreName(raw: string): string {
 	const s = raw.trim();
-	if (s.length < 2) throw new Error("Store name must be at least 2 characters");
-	if (s.length > 60) throw new Error("Store name must be at most 60 characters");
+	if (s.length < STORE_NAME_MIN)
+		throw new Error(`Store name must be at least ${STORE_NAME_MIN} characters`);
+	if (s.length > STORE_NAME_MAX)
+		throw new Error(`Store name must be at most ${STORE_NAME_MAX} characters`);
+	if (containsBrand(s)) throw new Error(BRAND_NAME_MESSAGE);
 	return s;
 }
 

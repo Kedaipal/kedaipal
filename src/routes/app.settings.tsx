@@ -46,7 +46,7 @@ import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
 } from "../../convex/lib/delivery";
-import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
+import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
 	defaultTemplate,
@@ -112,6 +112,7 @@ import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
+import { validateStoreName } from "../lib/slug";
 import {
 	isSpotlightKey,
 	SPOTLIGHT_ANCHOR,
@@ -1066,10 +1067,14 @@ function StoreNameForm({
 	const [value, setValue] = useState(current);
 	const [saving, setSaving] = useState(false);
 	const dirty = value.trim() !== current.trim() && value.trim().length > 0;
+	// Same rule as the server save — surfaced under the field so "Save name"
+	// is disabled WITH its reason rather than failing on click.
+	const nameCheck = validateStoreName(value);
+	const issue = dirty && !nameCheck.ok ? nameCheck.message : null;
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		if (!dirty) return;
+		if (!dirty || issue) return;
 		setSaving(true);
 		try {
 			await onSave(value.trim());
@@ -1093,16 +1098,17 @@ function StoreNameForm({
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder="Your Store Name"
-					maxLength={80}
+					maxLength={STORE_NAME_MAX}
 					variant="field"
 				/>
+				{issue ? <p className="text-sm text-destructive">✗ {issue}</p> : null}
 				<span className="self-end text-xs text-muted-foreground tabular-nums">
-					{value.trim().length}/80
+					{value.trim().length}/{STORE_NAME_MAX}
 				</span>
 			</div>
 			<Button
 				type="submit"
-				disabled={!dirty || saving}
+				disabled={!dirty || saving || issue !== null}
 				className={SAVE_BTN_CLASS}
 			>
 				{saving ? "Saving…" : "Save name"}
