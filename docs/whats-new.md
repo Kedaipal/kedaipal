@@ -18,11 +18,32 @@ that a feature nobody is told about is a missing piece of UI, not a shipped one.
 
 | surface | when | why |
 | --- | --- | --- |
-| **Permanent panel** — "What's new" in the More menu (mobile) and sidebar footer (desktop) | always openable; carries a dot when something is unseen | a dismissed announcement must never become unreadable |
+| **Permanent panel** — "What's new" in the More menu (mobile) and sidebar footer (desktop) | always openable; carries a dot when something is unseen; shows the newest **five** releases, the rest behind "Show N older releases" | a dismissed announcement must never become unreadable |
 | **Modal** | opens unprompted **only** for a release marked `notable: true` | a modal on every release trains sellers to dismiss reflexively — and then the one that matters is dismissed too |
 
 Both read the same entries and the same seen-state, so the dot and the modal
 cannot disagree.
+
+### How many releases the panel shows
+
+`PANEL_RELEASE_LIMIT = 5` (`src/lib/releases.ts`). The array keeps every
+release forever — there is no separate changelog page, and the rule above says
+nothing may become unreadable — but the panel renders the newest five and folds
+the rest behind a **"Show N older releases"** button inside the scroll area.
+Every open starts folded; it is history the seller asked for once, not a
+preference.
+
+**Unseen releases are never folded.** `splitPanelReleases` stretches the cut
+to the number of unseen releases, so a seller back from a long gap (or a
+store act-as stamped with an old version) sees everything they missed without
+knowing to tap. Unseen releases are always the newest, so the unseen set is a
+prefix and the split is one slice.
+
+The whole array still ships in the dashboard bundle (~6 KB of prose per
+release). That is deliberate for now: the dashboard is Clerk-gated and not
+first-paint critical. If the file passes ~30 releases, move the older ones out
+of the bundle before adding a public changelog page — the two are separate
+decisions.
 
 ## Where things live
 
