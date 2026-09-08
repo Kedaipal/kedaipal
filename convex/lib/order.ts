@@ -37,6 +37,12 @@ export function generateTrackingToken(): string {
 	return token;
 }
 
+/** Longest short, buyer-visible reason a seller writes about an order.
+ * Shared by every path that needs one so they can't drift: declining a
+ * booking request, cancelling a booking, an ordinary cancel, and keeping part
+ * of a security deposit. */
+export const CANCELLATION_NOTE_MAX = 200;
+
 export type OrderItemPricing = {
 	price: number;
 	quantity: number;
@@ -58,6 +64,11 @@ export type OrderExtras = {
 	/** Delivery charge (minor units), frozen onto the order at create — see
 	 * orders.deliveryFee / deliverySnapshot.fee. Delivery orders only. */
 	deliveryFee?: number;
+	/** Refundable security deposit (minor units), frozen onto a BOOKING order
+	 * at request time — see orders.securityDeposit. Collected in the one
+	 * payment, returned after check-out; part of `total`, never revenue
+	 * (see revenueExcludingDeposit). */
+	securityDeposit?: number;
 };
 
 /**
@@ -79,7 +90,28 @@ export function computeOrderTotals(
 	const quote = Math.max(0, extras?.quotedAmount ?? 0);
 	const pickupFee = Math.max(0, extras?.pickupFee ?? 0);
 	const deliveryFee = Math.max(0, extras?.deliveryFee ?? 0);
-	return { subtotal, total: subtotal + quote + pickupFee + deliveryFee };
+	const securityDeposit = Math.max(0, extras?.securityDeposit ?? 0);
+	return {
+		subtotal,
+		total: subtotal + quote + pickupFee + deliveryFee + securityDeposit,
+	};
+}
+
+/**
+ * The order's REVENUE figure — `total` minus the refundable security deposit
+ * (held money the seller gives back after check-out; counting it would
+ * overstate every revenue surface and then understate it again at return).
+ * The ONE author for CRM `totalSpent` (link / cancel-decrement / move /
+ * backfill) and Insights (earned, collected, payment slices); non-booking
+ * orders have no deposit, so this is `total` verbatim for them. Recompute
+ * deltas (`total - order.total`) need no netting — the deposit is frozen, so
+ * it cancels out of any difference.
+ */
+export function revenueExcludingDeposit(order: {
+	total: number;
+	securityDeposit?: number;
+}): number {
+	return Math.max(0, order.total - (order.securityDeposit ?? 0));
 }
 
 /** The mockup fields needed to evaluate the gate — a subset of the orders doc. */

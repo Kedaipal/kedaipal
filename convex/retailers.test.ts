@@ -576,6 +576,83 @@ describe("retailers legal consent", () => {
 		expect("acceptanceIp" in (row ?? {})).toBe(false);
 	});
 
+	test("createRetailer stores the sanitized signupSource on the row", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.createRetailer, {
+			storeName: "Tagged Store",
+			slug: "tagged",
+			signupSource: "Spotlight-THG",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupSource).toBe("spotlight-thg");
+	});
+
+	test("createRetailer re-sanitizes signupSource server-side — garbage stores as 'other', never verbatim", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.createRetailer, {
+			storeName: "Tampered Store",
+			slug: "tampered",
+			signupSource: "###%%%###",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupSource).toBe("other");
+	});
+
+	test("createRetailer without signupSource leaves the field absent (= untagged)", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.createRetailer, {
+			storeName: "Untagged Store",
+			slug: "untagged",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupSource).toBeUndefined();
+	});
+
+	test("createRetailer treats a blank signupSource as absent, not 'other'", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.createRetailer, {
+			storeName: "Blank Store",
+			slug: "blank",
+			signupSource: "   ",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupSource).toBeUndefined();
+	});
+
+	test("createRetailer stores a wire-format gaClientId on the row", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.createRetailer, {
+			storeName: "Stitched Store",
+			slug: "stitched",
+			gaClientId: "123456789.987654321",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.gaClientId).toBe("123456789.987654321");
+	});
+
+	test("createRetailer drops a malformed gaClientId — never stores garbage", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.createRetailer, {
+			storeName: "Garbage Cid Store",
+			slug: "garbage-cid",
+			gaClientId: "GA1.1.not.numeric.at-all",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.gaClientId).toBeUndefined();
+	});
+
 	test("getMyRetailer exposes accepted versions", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "expose");
@@ -789,6 +866,12 @@ describe("retailers deleteUser (internal cascade)", () => {
 	}
 
 	test("purges retailer + all owned rows and storage files", async () => {
+		// Even a small tenant now spans invocations: the driver hands off to a
+		// scheduled continuation between the two `.paginate()` phases (Convex
+		// allows one paginated query per mutation — see PAGINATED_PHASES), so
+		// the cascade must be drained, not awaited once. Fake timers BEFORE
+		// setup(), per the gotcha on the multi-batch test below.
+		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "del-me");
 
@@ -796,6 +879,8 @@ describe("retailers deleteUser (internal cascade)", () => {
 			userId: USER_A,
 		});
 		expect(result.deleted).toBe(true);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
 
 		await t.run(async (ctx) => {
 			expect(await ctx.db.get(ids.retailerId)).toBeNull();
@@ -827,11 +912,14 @@ describe("retailers deleteUser (internal cascade)", () => {
 	});
 
 	test("does not touch another user's tenant", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const aIds = await seedFullTenant(t, USER_A, "tenant-a");
 		const bIds = await seedFullTenant(t, USER_B, "tenant-b");
 
 		await t.mutation(internal.retailers.deleteUser, { userId: USER_A });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
 
 		await t.run(async (ctx) => {
 			// A is gone…
@@ -855,6 +943,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 	 * order blob kinds (the account cascade used to free only the proof).
 	 */
 	test("erases every previously-orphaned table, keeps the two retained by decision", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "orphan-sweep");
 
@@ -976,8 +1065,13 @@ describe("retailers deleteUser (internal cascade)", () => {
 		});
 		expect(result.deleted).toBe(true);
 		if (!result.deleted) throw new Error("expected the tenant to be deleted");
-		// A small tenant fits one batch, so the cascade finishes in-invocation.
-		expect(result.done).toBe(true);
+		// Even a small tenant no longer finishes in ONE invocation: the driver
+		// hands off between the two `.paginate()` phases (one paginated query
+		// per mutation — PAGINATED_PHASES), so completion means draining the
+		// scheduled continuations.
+		expect(result.done).toBe(false);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
 
 		await t.run(async (ctx) => {
 			// Previously orphaned — now all gone.
@@ -1746,6 +1840,31 @@ describe("retailers.updateSettings — waPhone is a Malaysian mobile", () => {
 	});
 });
 
+/**
+ * `retailers.storeType` (booking bundle S1; spec 86eyj70z1 decision 5): the
+ * "What does your store sell?" default. Its ONLY consumer is the wizard's
+ * pre-selected kind card — setting or clearing it must never touch products.
+ */
+describe("storeType", () => {
+	test("sets, reads back, and clears via null", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: "user_storetype" });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Lembah Riverside Camp",
+			slug: "lembah-riverside",
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			storeType: "booking",
+		});
+		let retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.storeType).toBe("booking");
+
+		await asUser.mutation(api.retailers.updateSettings, { storeType: null });
+		retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.storeType).toBeUndefined();
+	});
+});
+
 describe("retailers — store opening hours (86eyp5rav)", () => {
 	/** A week open 24h everywhere, with per-weekday overrides (0 = Sunday). */
 	function weekWith(
@@ -2004,13 +2123,26 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 				deliveryConfig: weightConfig,
 			}),
 		).rejects.toThrow(/Malaysia-only/);
-		// Lalamove must hit the COUNTRY refusal, not "turn on booking first" —
-		// the booking-credentials chase is a dead path for an SG seller.
+		// The legacy single-provider "lalamove" literal stays refused for SG —
+		// no SG store was ever on it, so there is nothing to migrate and no
+		// reason to accept new rows of a superseded mode.
 		await expect(
 			asSg.mutation(api.retailers.updateSettings, {
 				deliveryConfig: { mode: "lalamove", onUnquotable: "block" },
 			}),
 		).rejects.toThrow(/Malaysia-only/);
+	});
+
+	test("an SG store CAN store live courier pricing (z8r3fdch3r)", async () => {
+		// Lalamove SG riders opened the gate: live pricing has a provider that
+		// can genuinely quote every SG→SG address, so the mode is earned.
+		const t = setup();
+		const asSg = await seedSg(t, "sg-live-mode");
+		await asSg.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "live", onUnquotable: "block" },
+		});
+		const mine = await asSg.query(api.retailers.getMyRetailer);
+		expect(mine?.deliveryConfig?.mode).toBe("live");
 	});
 
 	test("flipping to SG KEEPS an MY-only config — it is listed, not destroyed (86eyqgujv)", async () => {
@@ -2643,5 +2775,138 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 		const asA = await seed(t, USER_A, "switch-noop");
 		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
 		expect(await asA.query(api.retailers.countrySetup, {})).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Business identity — the legal block on buyer invoices/receipts (z8r3fdcrzj)
+// ---------------------------------------------------------------------------
+
+describe("retailers businessIdentity", () => {
+	test("saves trimmed fields onto the owner payload", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: {
+				legalName: "  Hermoolah Enterprise  ",
+				registrationNumber: "202403123456",
+				address: "12, Jalan Contoh 3/4\n\n  40000 Shah Alam  \n",
+				contact: "billing@hermoolah.com",
+			},
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessIdentity).toEqual({
+			legalName: "Hermoolah Enterprise",
+			registrationNumber: "202403123456",
+			// Per-line trim + blank-line drop, so no gap ever prints.
+			address: "12, Jalan Contoh 3/4\n40000 Shah Alam",
+			contact: "billing@hermoolah.com",
+		});
+	});
+
+	test("null clears, and an ALL-BLANK object collapses to cleared too", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-clear");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "Bearcamp PLT" },
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: null,
+		});
+		let me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessIdentity).toBeUndefined();
+
+		// The "cleared every field and hit save" path must behave identically —
+		// no empty shell object left on the row.
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "Bearcamp PLT" },
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "  ", address: "\n \n" },
+		});
+		me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessIdentity).toBeUndefined();
+	});
+
+	test("rejects over-long fields", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-caps");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessIdentity: { legalName: "x".repeat(121) },
+			}),
+		).rejects.toThrow(/at most 120/);
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessIdentity: { address: "x".repeat(301) },
+			}),
+		).rejects.toThrow(/at most 300/);
+	});
+
+	test("NEVER appears in the public by-slug storefront payload", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-private");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: {
+				legalName: "Hermoolah Enterprise",
+				address: "12, Jalan Contoh 3/4",
+			},
+		});
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "identity-private",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		// The identity block reaches buyers only inside the PDFs their tracking
+		// token unlocks — the storefront payload must not leak it (nor the
+		// private geo businessAddress, pinned here as a canary).
+		expect(
+			(result.retailer as Record<string, unknown>).businessIdentity,
+		).toBeUndefined();
+		expect(
+			(result.retailer as Record<string, unknown>).businessAddress,
+		).toBeUndefined();
+	});
+
+	test("prints on the buyer document via receiptPdfInputs", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "identity-pdf");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessIdentity: { legalName: "Hermoolah Enterprise" },
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		if (!me) throw new Error("no retailer");
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: me._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			variants: [{ optionValues: [], price: 5000, onHand: 5 }],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: me._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		// The buyer path: token-keyed, unauthenticated (resolveSharedOrder).
+		const token = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.trackingToken ?? "__none__";
+		});
+		const res = await t.query(internal.orders.receiptPdfInputs, { token });
+		expect(res?.data.sellerLines).toEqual(["Hermoolah Enterprise"]);
 	});
 });

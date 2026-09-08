@@ -14,19 +14,28 @@ import { LOCALES, type Locale } from "./locale";
 
 export type { Locale } from "./locale";
 
-export type DeliveryMethod = "delivery" | "self_collect";
+export type DeliveryMethod = "delivery" | "self_collect" | "booking";
 
 /** The six canonical statuses a label can be attached to. */
 export type OrderStatus =
 	| "pending"
+	// Booking kind's request state (86eyj70z1) — pre-approval, pre-payment.
+	// Not seller-customizable (deliberately absent from ORDER_STATUS_KEYS):
+	// its wording is part of the request-to-book contract, not store voice.
+	| "booking_requested"
 	| "confirmed"
 	| "packed"
 	| "shipped"
 	| "delivered"
 	| "cancelled";
 
-/** Statuses a seller can transition an order INTO (drives the action buttons). */
-export type TransitionTarget = Exclude<OrderStatus, "pending">;
+/** Statuses a seller can transition an order INTO (drives the action buttons).
+ * `booking_requested` is excluded like `pending`: orders are born into it,
+ * never moved into it — its exits are the approve/decline mutations. */
+export type TransitionTarget = Exclude<
+	OrderStatus,
+	"pending" | "booking_requested"
+>;
 
 /** Per-locale override map. Any omitted/blank key falls back to defaults. */
 export type StatusLabelMap = Partial<Record<OrderStatus, string | undefined>>;
@@ -55,6 +64,7 @@ export const STATUS_LABEL_MAX_LENGTH = 24;
 const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	en: {
 		pending: "Order Received",
+		booking_requested: "Awaiting Approval",
 		confirmed: "Confirmed",
 		packed: "Packed",
 		shipped: "On the Way",
@@ -63,6 +73,7 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	},
 	ms: {
 		pending: "Pesanan Diterima",
+		booking_requested: "Menunggu Kelulusan",
 		confirmed: "Disahkan",
 		packed: "Dibungkus",
 		shipped: "Dalam Perjalanan",
@@ -71,6 +82,7 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	},
 	zh: {
 		pending: "订单已收到",
+		booking_requested: "等待批准",
 		confirmed: "已确认",
 		packed: "已打包",
 		shipped: "配送中",
@@ -97,6 +109,47 @@ const SELF_COLLECT_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>
 		},
 	};
 
+// Booking preset — a stay's lifecycle in stay words. Only the two stages whose
+// delivery wording would lie ("On the Way"/"Delivered" for a campsite stay);
+// packed is skipped by the booking stepper entirely (S3).
+const BOOKING_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>> = {
+	en: {
+		shipped: "Checked In",
+		delivered: "Checked Out",
+	},
+	ms: {
+		shipped: "Daftar Masuk",
+		delivered: "Daftar Keluar",
+	},
+	zh: {
+		shipped: "已入住",
+		delivered: "已退房",
+	},
+};
+
+// Booking PACKAGE preset (S7) — a fixed-length membership, not a stay. A gym
+// member doesn't check in on day 1 and check out on day 30: the period starts
+// and ends, and they walk in twenty times in between. "Mark as Checked Out" on
+// a monthly membership is simply the wrong verb. "Active" is also the word S8
+// uses for the inbox bucket these orders land in, so the two line up.
+const BOOKING_PACKAGE_DEFAULTS: Record<
+	Locale,
+	Partial<Record<OrderStatus, string>>
+> = {
+	en: {
+		shipped: "Active",
+		delivered: "Ended",
+	},
+	ms: {
+		shipped: "Aktif",
+		delivered: "Tamat",
+	},
+	zh: {
+		shipped: "生效中",
+		delivered: "已结束",
+	},
+};
+
 // Buttons are imperative; labels are nouns. Most transitions render as
 // "Mark as {label}"; confirm/cancel keep dedicated system verbs so we never put
 // a bare noun like "Washing" on an action button.
@@ -116,6 +169,10 @@ export type ResolveOpts = {
 	labels?: StatusLabels;
 	deliveryMethod?: DeliveryMethod;
 	locale?: Locale;
+	/** Booking orders only — this one is a fixed-length PACKAGE (S7), so its
+	 * milestones read "Active / Ended" rather than "Checked In / Checked Out".
+	 * Comes off `orders.bookingPackaged`. */
+	bookingPackaged?: boolean;
 };
 
 /**
@@ -127,9 +184,16 @@ export function defaultStatusLabel(
 	status: OrderStatus,
 	deliveryMethod: DeliveryMethod = "delivery",
 	locale: Locale = "en",
+	bookingPackaged = false,
 ): string {
 	if (deliveryMethod === "self_collect") {
 		const preset = SELF_COLLECT_DEFAULTS[locale][status];
+		if (preset) return preset;
+	}
+	if (deliveryMethod === "booking") {
+		const preset = (
+			bookingPackaged ? BOOKING_PACKAGE_DEFAULTS : BOOKING_DEFAULTS
+		)[locale][status];
 		if (preset) return preset;
 	}
 	return BASE_DEFAULTS[locale][status];
@@ -150,7 +214,12 @@ export function resolveStatusLabel(
 	const deliveryMethod = opts.deliveryMethod ?? "delivery";
 	const override = opts.labels?.[locale]?.[status]?.trim();
 	if (override) return override;
-	return defaultStatusLabel(status, deliveryMethod, locale);
+	return defaultStatusLabel(
+		status,
+		deliveryMethod,
+		locale,
+		opts.bookingPackaged,
+	);
 }
 
 /**
@@ -243,19 +312,31 @@ export function defaultStageId(anchor: StageAnchor): string {
 export function synthesizeDefaultStages(opts: {
 	labels?: StatusLabels;
 	deliveryMethod?: DeliveryMethod;
+	bookingPackaged?: boolean;
 }): OrderStage[] {
-	return STAGE_ANCHORS.map((anchor, i) => ({
+	// A booking's default flow is Confirmed → Checked In → Checked Out (or
+	// Confirmed → Active → Ended for a fixed-length package) — "Packed" is
+	// meaningless either way, so the synthesized route skips that anchor. This is
+	// now THE route for every booking: `resolveStages` never hands one a
+	// seller's configured stages.
+	const anchors =
+		opts.deliveryMethod === "booking"
+			? STAGE_ANCHORS.filter((anchor) => anchor !== "packed")
+			: STAGE_ANCHORS;
+	return anchors.map((anchor, i) => ({
 		id: defaultStageId(anchor),
 		anchor,
 		label: {
 			en: resolveStatusLabel(anchor, {
 				labels: opts.labels,
 				deliveryMethod: opts.deliveryMethod,
+				bookingPackaged: opts.bookingPackaged,
 				locale: "en",
 			}),
 			ms: resolveStatusLabel(anchor, {
 				labels: opts.labels,
 				deliveryMethod: opts.deliveryMethod,
+				bookingPackaged: opts.bookingPackaged,
 				locale: "ms",
 			}),
 		},
@@ -266,13 +347,29 @@ export function synthesizeDefaultStages(opts: {
 /**
  * The retailer's effective ordered stage list: their configured `orderStages`
  * if any, otherwise the synthesized defaults. Always sorted by `sortOrder`.
+ *
+ * **Bookings never take configured stages.** Custom stages describe how a
+ * seller PREPARES something — "Baking → Decorating → Ready" — which is exactly
+ * why made-to-order keeps them. A stay or a membership isn't prepared; it is
+ * booked, occupied and finished, and the booking route already has the right
+ * three milestones. Without this gate the short-circuit below fired for every
+ * order the moment a seller configured anything, so a campsite booking
+ * inherited "Packed" from a cake shop's flow and the booking-aware branch in
+ * `synthesizeDefaultStages` became unreachable for exactly the sellers who had
+ * touched the setting. Surfaced to the seller in the Order stages settings
+ * card, so the exemption isn't silent.
  */
 export function resolveStages(opts: {
 	orderStages?: OrderStage[];
 	labels?: StatusLabels;
 	deliveryMethod?: DeliveryMethod;
+	bookingPackaged?: boolean;
 }): OrderStage[] {
-	if (opts.orderStages && opts.orderStages.length > 0) {
+	if (
+		opts.deliveryMethod !== "booking" &&
+		opts.orderStages &&
+		opts.orderStages.length > 0
+	) {
 		return [...opts.orderStages].sort((a, b) => a.sortOrder - b.sortOrder);
 	}
 	return synthesizeDefaultStages(opts);

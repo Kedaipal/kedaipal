@@ -43,6 +43,17 @@ crons.interval(
 	{},
 );
 
+// Booking requests the seller never answered auto-release after 24 h
+// (86eyj70z1 decision 3 — the buyer was promised "confirms within 24 hours"
+// up front, so the hold must actually die on schedule, not at the next
+// midnight). 15-min cadence keeps the worst-case overshoot ~1% of the window.
+crons.interval(
+	"expire stale booking requests",
+	{ minutes: 15 },
+	internal.bookings.expireStaleRequests,
+	{},
+);
+
 // PDPA retention: DELETE dead counter sessions (expired/cancelled) ~30 days
 // after they died — they hold buyer phone numbers, and the store QR poster
 // (86ey5m35w) increases junk-scan volume, so they must not live forever.

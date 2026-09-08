@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
+import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
@@ -32,6 +33,13 @@ interface CheckoutLoaderData {
  * page. Noindex: a checkout is transactional, not a landing surface.
  */
 export const Route = createFileRoute("/$slug_/checkout")({
+	// ?booking=<productSlug> switches this page into the booking-request flow
+	// (S2 `86eyn4kbw`): calendar + guest details instead of the cart form. The
+	// cart itself is untouched either way — a stay never enters it.
+	validateSearch: (search: Record<string, unknown>): { booking?: string } =>
+		typeof search.booking === "string" && search.booking.length > 0
+			? { booking: search.booking }
+			: {},
 	loader: async ({ params }): Promise<CheckoutLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
@@ -118,6 +126,7 @@ function CheckoutSkeleton() {
 
 function CheckoutRoute() {
 	const { slug } = Route.useParams();
+	const { booking } = Route.useSearch();
 	// A tagged link can land straight on checkout — capture here too.
 	useCaptureAttribution(slug);
 	// Live query keeps the page reactive after the SSR'd loader response —
@@ -138,6 +147,40 @@ function CheckoutRoute() {
 	// — before the buyer's items hydrate from localStorage.
 	if (!retailer || !cart.hydrated) {
 		return <CheckoutSkeleton />;
+	}
+
+	if (booking) {
+		return (
+			<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+				<StorefrontHeader retailer={retailer} asPageHeading={false} />
+				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+					<div className="flex items-center gap-3">
+						<Link
+							to="/$slug/p/$productSlug"
+							params={{ slug: retailer.slug, productSlug: booking }}
+							aria-label="Back to the listing"
+							className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
+						>
+							<ArrowLeft className="size-4" aria-hidden />
+						</Link>
+						<h1 className="font-heading text-xl font-extrabold tracking-tight">
+							Request to book
+						</h1>
+					</div>
+					<div className="mt-4">
+						<BookingCheckoutForm
+							retailerId={retailer._id}
+							storeName={retailer.storeName}
+							storeSlug={retailer.slug}
+							productSlug={booking}
+							locale={retailer.locale}
+							country={retailer.country}
+						/>
+					</div>
+				</div>
+				<StorefrontFooter />
+			</div>
+		);
 	}
 
 	return (

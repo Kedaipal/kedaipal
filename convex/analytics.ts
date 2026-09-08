@@ -68,6 +68,7 @@ function toInput(o: OrderDoc): InsightsOrderInput {
 		createdAt: o.createdAt,
 		status: o.status,
 		total: o.total,
+		securityDeposit: o.securityDeposit,
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
 		source: o.source,

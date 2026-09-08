@@ -5,11 +5,11 @@ _and_ the seller dashboard. Three independent, env-gated providers, each booted
 once from a hook mounted in the root document. All three no-op unless their key
 env var is set, so local dev and preview builds never pollute production data.
 
-| Tool | What it's for | Package | Hook | Env var |
-| --- | --- | --- | --- | --- |
-| Google Analytics 4 | Pageviews, traffic, acquisition | `react-ga4` | [`useGoogleAnalytics`](../src/hooks/useGoogleAnalytics.ts) | `VITE_GA_MEASUREMENT_ID` |
-| Microsoft Clarity | Session replays + heatmaps (UX/friction) | `@microsoft/clarity` | [`useClarity`](../src/hooks/useClarity.ts) | `VITE_CLARITY_PROJECT_ID` |
-| PostHog | Events, funnels, cohorts | `posthog-js` | [`usePostHog`](../src/hooks/usePostHog.ts) | `VITE_POSTHOG_KEY` |
+| Tool                  | What it's for                          | Package         | Hook                                                 | Env var                   |
+| --------------------- | -------------------------------------- | --------------- | ---------------------------------------------------- | ------------------------- |
+| Google Analytics 4    | Pageviews, traffic, acquisition; the seller-acquisition funnel (client events + server-side key events) | `react-ga4`     | [`useGoogleAnalytics`](../src/hooks/useGoogleAnalytics.ts) | `VITE_GA_MEASUREMENT_ID`  |
+| Microsoft Clarity     | Session replays + heatmaps (UX/friction), funnel Smart events | `@microsoft/clarity` | [`useClarity`](../src/hooks/useClarity.ts)      | `VITE_CLARITY_PROJECT_ID` |
+| PostHog               | The buyer conversion funnel — events, funnels, cohorts per store | `posthog-js`    | [`usePostHog`](../src/hooks/usePostHog.ts)          | `VITE_POSTHOG_KEY`        |
 
 All three hooks are called in `RootDocument`
 ([`src/routes/__root.tsx`](../src/routes/__root.tsx)), so analytics load on
@@ -42,6 +42,21 @@ We run three anyway, for two reasons and one inheritance:
    considered. Removing them is work plus a privacy-policy revision, not a
    saving.
 
+### Two funnels, two subjects — the split that actually holds
+
+The cleanest way to see why each tool is where it is: there are **two different
+funnels with two different subjects**, and they land on different tools.
+
+| Funnel | Subject | Steps | Tool |
+| --- | --- | --- | --- |
+| **Kedaipal's own acquisition** | the *retailer* | landing → `onboarding_start` → `store_created` → `first_order` → `subscribe_paid` | **GA4** — client events (z8r3fdd1v0) + server-side key events via Measurement Protocol (z8r3fdd1v1), mirrored into Clarity Smart events (z8r3fdd1v2) so recordings can be filtered by funnel step |
+| **Each store's buyer conversion** | the *shopper* | storefront → checkout → `order_created` → confirmed → paid | **PostHog** — `$pageview` client-side, `order_created` (and later paid) server-side, joined by `analyticsDistinctId` |
+
+GA4 gets the acquisition funnel because that is where ad attribution matters
+and where Kedaipal's CAC is measured. PostHog gets the buyer funnel because it
+is per-store, high-cardinality, and needs the cohort/funnel tooling GA4 does
+badly. Clarity sits under both as the "what did they struggle with" lens.
+
 ### What three tools actually costs
 
 Worth stating plainly, because it is not free:
@@ -55,6 +70,14 @@ Worth stating plainly, because it is not free:
   budget is already a live concern (`86eypxght`).
 - **Three dashboards, no single view.** A question spanning acquisition →
   behaviour → conversion is answered by hand across three tools.
+- **Two hand-rolled server telemetry pipes of identical shape.**
+  [`convex/ga4Events.ts`](../convex/ga4Events.ts) (GA4 Measurement Protocol)
+  and [`convex/posthog.ts`](../convex/posthog.ts) are the same pattern —
+  scheduled `internalAction`, env-gated no-op, plain `fetch`, failures
+  swallowed — pointed at two vendors. They fire from different mutations and do
+  not collide, but the duplication is real, and it is itself an argument for
+  consolidation: one PostHog seam could carry both funnels. Not done here;
+  named so nobody thinks it went unnoticed.
 
 ### The decision rule
 
@@ -63,7 +86,8 @@ happens:
 
 - **You start paying PostHog.** At that point replay and web analytics are
   included in what you already bought, and Clarity is pure duplicated
-  disclosure — drop it.
+  disclosure — drop it. Fold the GA4 server key events into the PostHog seam
+  in the same change.
 - **You stop running Google Ads (or never start).** GA4's only irreplaceable
   capability is ad attribution. Without ads it is a redundant processor, and
   dropping it removes a disclosure obligation for free.
@@ -75,11 +99,12 @@ The end state is almost certainly **PostHog alone**. This is a deliberate
 
 | Question | Tool |
 | --- | --- |
-| Where did this traffic come from? Which ad worked? | GA4 |
-| What did this buyer struggle with on the checkout page? | Clarity |
-| How many storefront visitors become paid orders? | PostHog |
-| Which stores are activating? Which features get used? | PostHog |
+| Where did this seller come from? Which ad or channel worked? | GA4 (client funnel + `src`) |
+| Which stores are activating? Who converted to a paid plan? | GA4 (`first_order`, `subscribe_paid` server key events) |
+| What did this buyer or seller struggle with on a specific screen? | Clarity (replay, filtered by Smart event) |
 | Is this page slow / is the layout broken on their phone? | Clarity |
+| How many storefront visitors become paid orders, per store? | PostHog |
+| Which product features get used, by which cohorts? | PostHog |
 
 ## Clarity — why the npm package, not a `<script>` snippet
 
@@ -93,22 +118,171 @@ sessions by seller or plan.
 
 ## Clarity — how it works
 
-`useClarity` initializes Clarity exactly once per page load:
+`useClarity` initializes Clarity exactly once per page load through
+`ensureClarityInitialized` in
+[`src/lib/clarity-events.ts`](../src/lib/clarity-events.ts):
 
 ```ts
 const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
-if (!projectId || clarityInitialized) return;
-if (isCapabilityTokenPath(pathname)) return;
-Clarity.init(projectId);
+if (!projectId) return false;
+if (isCapabilityTokenPath(pathname)) return false;
+if (!clarityInitialized) { Clarity.init(projectId); clarityInitialized = true; }
+return true;
 ```
 
 Unlike GA — where `useGoogleAnalytics` fires a pageview on every pathname change
 — Clarity needs no per-navigation call: after `init` it hooks the History API
 and tracks SPA route changes itself. The pathname is read only to decide whether
 booting is allowed at all. The module-level `clarityInitialized` guard mirrors
-GA's `gaInitialized`, so a remount can't double-boot it (the test covers
-unmount → remount specifically; a plain re-render passes with or without the
-guard, so it proves nothing).
+GA's `gaInitialized` and lives in the events module for the same reason GA's
+lives in `ga-events.ts`, not the hook: child-route effects run before the root
+document's effect, so a route firing `land_marketing` on mount must be able to
+boot the library itself. The guard means a remount can't double-boot it (the
+hook test covers unmount → remount specifically; a plain re-render passes with
+or without the guard, so it proves nothing).
+
+## GA4 funnel events + seller-acquisition `src` (z8r3fdd1v0)
+
+GA4 fires more than pageviews: the acquisition funnel emits custom events via
+[`src/lib/ga-events.ts`](../src/lib/ga-events.ts) (`trackEvent` — no-ops
+without a measurement ID and on capability-token paths, never throws). The
+init flag lives there too, shared with `useGoogleAnalytics`, so whichever
+fires first boots the library exactly once (child-route effects run before the
+root's pageview effect).
+
+| Event | Fires | Where |
+| --- | --- | --- |
+| `land_marketing` | once per page load, first marketing-route mount | `/`, `/pricing`, `/cost` via [`useMarketingLanding`](../src/hooks/useMarketingLanding.ts) |
+| `view_pricing` | every `/pricing` mount | `pricing.tsx` |
+| `calc_used` | first calculator input change per visit | `cost.tsx` (`syncToUrl` choke point) |
+| `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
+| `onboarding_start` | signed-in seller reaches the store-creation form AND the retailer query resolved to "no store yet" — an already-onboarded seller hitting `/onboarding` gets redirected, never counted | `onboarding.tsx` via [`useOnboardingStart`](../src/hooks/useOnboardingStart.ts) |
+| `store_created` | `createRetailer` succeeded (never on validation failure) | `onboarding.tsx` |
+
+**Every event auto-carries the `src` param** when the session arrived tagged:
+[`src/lib/marketing-attribution.ts`](../src/lib/marketing-attribution.ts)
+captures `?src=`/`utm_source` on the marketing routes (and `/onboarding`) into
+sessionStorage — the seller-side sibling of the buyer-side storefront capture
+(`docs/source-attribution.md`), same sanitizer, same last-touch rule, its own
+storage key. sessionStorage (not the URL) because the funnel crosses the Clerk
+sign-up redirect, which mangles multi-param queries (see `onboarding-link.ts`).
+At `createRetailer` the tag is re-sanitized server-side and stamped onto
+**`retailers.signupSource`** (absent = untagged/direct — the
+`orders.attributionSource` posture), surfaced as a "via `<tag>`" pill in the
+admin sellers directory.
+
+**Naming convention** for tags Kedaipal itself emits: `powered-by` (the
+storefront badge — renamed from `storefront_badge`), `spotlight-<member>`,
+`referral-<member>`, `tiktok-live`, `directory`, `qr-poster`. Free-form tags
+sanitize and store verbatim.
+
+**Operator step (GA4 UI, once per property):** mark `onboarding_start` and
+`store_created` as **key events** (Admin → Events → toggle "Mark as key
+event") so funnel/conversion reports treat them as conversions. Events appear
+in DebugView immediately; standard reports lag ~24h.
+
+## Clarity Smart events + the weekly review ritual (z8r3fdd1v2)
+
+GA4 says *where* the funnel leaks; Clarity says *why* (the recording). To make
+the two line up, **`trackEvent` is the funnel's single emitter and fans out to
+both providers**: GA4 gets the event + params as above, and
+[`trackClarityEvent`](../src/lib/clarity-events.ts) mirrors the bare event
+name as a Clarity **Smart event** — the same six names, so a session that
+shows `cta_signup_click` in GA is filterable by `cta_signup_click` in the
+Clarity Recordings view. Each provider is gated on its own env var, so an
+unset GA never silences Clarity or vice-versa; call sites know nothing about
+providers.
+
+Two extras ride the mirror:
+
+- **`Clarity.upgrade("signup-cta")` on `cta_signup_click`.** Clarity
+  prioritises upgraded sessions for full recording, so the exact sessions the
+  ritual below wants to watch are never sampled away.
+- **`Clarity.setTag("src", <tag>)`** when the session arrived with a marketing
+  `src` (same capture as GA, `marketing-attribution.ts`), so recordings and
+  heatmaps segment by acquisition channel the way the GA funnel does.
+
+The mirror inherits the capability-token gate (Privacy §1) and the
+never-throws posture: every Clarity API call is `window.clarity(...)`, which
+does not exist until `init` injected the script, so an unbooted call would
+throw — the boot check and the `try/catch` are both load-bearing.
+
+### Weekly review ritual
+
+**Owner: Arif. Cadence: weekly, Monday.** Done criterion per review: one
+landing-page change picked and handed to Kris. Kill criterion: two consecutive
+reviews that yield nothing → drop to fortnightly and say so here.
+
+1. **Heatmaps** — [Clarity](https://clarity.microsoft.com) project
+   `xoduz9wjl5` → Heatmaps → `/` then `/pricing`, click + scroll maps, last
+   7 days. Note where the fold lands relative to the primary CTA and any
+   dead-click cluster (clicks on things that aren't links).
+2. **Recordings** — Recordings → Filters → *Smart events* →
+   `cta_signup_click`. Skip any session whose event list also shows
+   `onboarding_start` (they got through). Sort the rest by rage clicks, then
+   dead clicks, then duration; watch the 3 worst and write one line each:
+   what they tried, where it broke.
+3. **Hand-off** — post the lines and the one change picked as a comment on the
+   ticket and on the landing-page pass task for Kris.
+
+Smart events appear in the Filters list within minutes of the first click after
+a deploy; Clarity's own auto-detected events (rage/dead/quick-back) need no
+code.
+
+## Server-side key events (z8r3fdd1v1)
+
+Activation = the retailer's first REAL order reaching confirmed, and
+subscription revenue lands at admin mark-paid — both happen in **Convex**,
+usually while the seller's browser is closed, so no client event can observe
+them. Two server events extend the funnel past `store_created` via the GA4
+**Measurement Protocol** (server → GA4 HTTPS POST):
+
+| Event | Fires | Scheduled from |
+| --- | --- | --- |
+| `first_order` | ONCE per retailer ever — the moment `retailers.activatedAt` transitions unset → set (the existing write-once activation stamp IS the dedupe guard; all 8 confirm sites go through it) | [`stampRetailerActivation`](../convex/lib/activation.ts) |
+| `subscribe_paid` | every `invoices.markPaid` — renewals too, distinguished by `first_time`; carries `plan`, `cycle`, `value` (major units) + `currency` so revenue segments by channel | [`invoices.markPaid`](../convex/invoices.ts) |
+
+Both carry the retailer's stored **`src`** (`retailers.signupSource`), so the
+whole funnel — `land_marketing → … → store_created → first_order →
+subscribe_paid` — segments by acquisition channel end to end.
+
+**Delivery contract:** mutations schedule
+[`internal.ga4Events.sendKeyEvent`](../convex/ga4Events.ts) fire-and-forget
+(`ctx.scheduler.runAfter(0, …)` — transactional, so nothing fires on
+rollback); the action no-ops without env config and swallows every network
+failure. **Analytics can never block or roll back an order or a payment.**
+The pure payload builder + server event catalog live in
+[`convex/lib/ga4.ts`](../convex/lib/ga4.ts) — a deliberately separate catalog
+from the client's `FunnelEvent` (the client module boots react-ga4 and reads
+sessionStorage; a Convex action can't import it).
+
+**Funnel stitching — `retailers.gaClientId`:** MP events only join the
+client-side journey in Funnel Exploration when they carry the SAME
+`client_id` GA assigned in the browser. The onboarding submit reads the `_ga`
+cookie (`readGaClientId` in `ga-events.ts`, parser shared with the server in
+`ga4.ts`) and `createRetailer` stores it — wire-format validated
+(`^\d+\.\d+$`), garbage dropped. When absent (ad-blocker, GA unbooted) the
+emitter falls back to a **synthetic id** derived from the retailer id:
+events still count and segment by `src`, but won't stitch to that browser's
+funnel. Known GA4 limitation either way: MP events carry no `session_id`, so
+they show in user-scoped explorations and key-event counts but can read as
+"unassigned" in some session-scoped standard reports.
+
+**Convex env vars (prod deployment — release-checklist items):**
+
+| Var | Value |
+| --- | --- |
+| `GA4_MEASUREMENT_ID` | The same `G-…` id as `VITE_GA_MEASUREMENT_ID` |
+| `GA4_MP_API_SECRET` | GA4 UI → Admin → Data streams → *stream* → Measurement Protocol API secrets → Create |
+
+Both unset (local dev, preview) → the action is a silent no-op, same posture
+as the client providers.
+
+**Operator steps (GA4 UI, once per property):** create the MP API secret
+(above), set both Convex env vars, then mark `first_order` and
+`subscribe_paid` as **key events** (Admin → Events). Verify with a test
+retailer's first confirmed order in Realtime/DebugView (server events appear
+within minutes), then check Funnel Exploration segments by `src`.
 
 ## Clarity — configuration
 
@@ -369,8 +543,9 @@ repo rather than behind a dashboard toggle:
 
 [`isCapabilityTokenPath`](../src/lib/analytics-privacy.ts) is the single
 predicate all three hooks share: `useClarity` and `usePostHog` refuse to
-boot on them, and `useGoogleAnalytics` neither initializes nor sends a
-pageview there. Masking
+boot on them, `useGoogleAnalytics` neither initializes nor sends a pageview
+there, and the funnel emitters (`trackEvent` / `trackClarityEvent`) no-op
+there too. Masking
 governs DOM content, not the **observed page address**, and these URLs *are*
 the secret:
 

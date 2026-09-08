@@ -85,6 +85,8 @@ function NewProductRoute() {
 				sortOrder: Date.now(),
 				options: values.options,
 				hidden: values.hidden,
+				kind: values.kind,
+				booking: values.booking,
 				minNoticeDays: values.minNoticeDays,
 				minQuantity: values.minQuantity,
 				variants: values.variants,
@@ -157,6 +159,7 @@ function NewProductRoute() {
 					retailerId={retailer._id}
 					categoriesLocked={categoriesLocked}
 					currency={retailer.currency}
+					defaultKind={retailer.storeType}
 					initialState={wizardReturn}
 					onSubmit={handleCreate}
 					onSkipToFullForm={openFullForm}

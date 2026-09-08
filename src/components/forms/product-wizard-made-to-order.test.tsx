@@ -22,17 +22,28 @@ vi.mock("@tanstack/react-query", () => ({
 	useQuery: () => ({ data: undefined, isPending: true }),
 }));
 
-import { ProductWizard, type WizardState } from "./product-wizard";
+import {
+	emptyWizardState,
+	ProductWizard,
+	type WizardState,
+} from "./product-wizard";
 import { emptyRow } from "./variant-editor";
 
 afterEach(cleanup);
 
-/** A named draft sitting on the unanswered type question (step 2). */
+/** A named draft sitting on the unanswered type question (step 2).
+ *
+ * Built ON `emptyWizardState()` — the old `as WizardState` cast hid the
+ * booking fields it omitted, so a derived value the component reads on every
+ * render crashed at runtime rather than failing to compile. */
 function atTypeStep(overrides: Partial<WizardState> = {}): WizardState {
 	return {
+		...emptyWizardState(),
 		name: "Custom cake",
 		description: "",
 		images: [],
+		kindCard: "physical",
+		capacityPerNight: "1",
 		shape: null,
 		editor: { options: [], rows: [emptyRow([])], customLine: null },
 		fulfilmentAnswered: false,
@@ -41,7 +52,7 @@ function atTypeStep(overrides: Partial<WizardState> = {}): WizardState {
 		minQuantity: "",
 		minNoticeDays: "",
 		...overrides,
-	} as WizardState;
+	};
 }
 
 function renderWizard(state: WizardState) {
@@ -83,11 +94,13 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		expect(screen.getByText(/no choices and no stock to set up/i)).toBeTruthy();
 	});
 
-	it("counts four steps, not five — Preparation is dropped", () => {
+	it("drops Preparation from the walked count", () => {
+		// Kind-first (86eyj70z1) put step 0 ahead of everything: the default
+		// route is six steps, made-to-order five.
 		renderWizard(atTypeStep());
-		expect(screen.getByText("Step 2 of 5")).toBeTruthy();
+		expect(screen.getByText("Step 3 of 6")).toBeTruthy();
 		pickMadeToOrder();
-		expect(screen.getByText("Step 2 of 4")).toBeTruthy();
+		expect(screen.getByText("Step 3 of 5")).toBeTruthy();
 	});
 
 	it("releases the type when the seller changes their mind", () => {
@@ -111,8 +124,8 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		).toBe("false");
 		// The type's explainer belongs to the type, not the step.
 		expect(screen.queryByText(/no choices and no stock to set up/i)).toBeNull();
-		// …and the five-step route is back, Preparation included.
-		expect(screen.getByText("Step 2 of 5")).toBeTruthy();
+		// …and the full route is back, Preparation included.
+		expect(screen.getByText("Step 3 of 6")).toBeTruthy();
 	});
 
 	it("goes straight from Price to Review, and never demands an amount", () => {
@@ -127,7 +140,7 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		// A blank price must not block Continue the way it does for every other
 		// type — this is the whole point of the ticket item.
 		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
-		expect(screen.getByText("Step 4 of 4")).toBeTruthy();
+		expect(screen.getByText("Step 5 of 5")).toBeTruthy();
 		// …and step 4 is REVIEW, not "How do you prepare orders?".
 		expect(screen.queryByText(/how do you prepare orders/i)).toBeNull();
 		expect(

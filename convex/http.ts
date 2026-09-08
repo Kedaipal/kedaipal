@@ -9,6 +9,10 @@ import {
 	HITPAY_PROVIDER_LABEL,
 	verifyHitpayWebhook,
 } from "./lib/hitpay";
+import {
+	parseDelyvaWebhookEvent,
+	verifyDelyvaWebhook,
+} from "./lib/delyva";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
@@ -250,6 +254,85 @@ http.route({
 });
 
 /**
+ * Delyva courier webhook (86eyjpv6z, docs/delivery-delyva.md). Registered
+ * automatically at connect (POST /webhook per event) — the seller does no
+ * portal setup. Same trust posture as the Lalamove route:
+ *  - events that match no job of ours → 200 ack + ignore (bookings the
+ *    seller made outside Kedaipal; we can't verify them and don't act);
+ *  - a matching job with no stored secret → 500 fail closed;
+ *  - bad signature (`X-Delyvax-Hmac-SHA256`, base64 HMAC-SHA256 of the raw
+ *    body with the account's apiSecret) → 401;
+ *  - signed but wrong customerId for the job's retailer → 200 + log (defense
+ *    in depth; never act on someone else's order).
+ * Idempotency + out-of-order handling live in delyva.applyWebhookEvent.
+ */
+http.route({
+	path: "/webhook/delyva",
+	method: "POST",
+	handler: httpAction(async (ctx, req) => {
+		const rawBody = await req.text();
+		const event = parseDelyvaWebhookEvent(rawBody);
+		if (!event) {
+			// Subscription pings / non-order payloads: ack so Delyva keeps the
+			// URL healthy.
+			console.log("Delyva webhook: non-order body, acking", {
+				bytes: rawBody.length,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		const context = await ctx.runQuery(internal.delyva.getWebhookContext, {
+			delyvaOrderId: event.delyvaOrderId,
+		});
+		if (!context) {
+			console.log("Delyva webhook: no matching delivery job, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+				statusCode: event.statusCode,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		if (!context.apiSecret) {
+			// A job we placed but no secret to verify with — credentials were
+			// removed after booking. Fail closed (WhatsApp-route posture).
+			console.error("Delyva webhook rejected: no verifying secret stored", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("server misconfigured", { status: 500 });
+		}
+		const valid = await verifyDelyvaWebhook({
+			rawBody,
+			// Stored secrets are encrypted at rest (86eyn25gk); the signature is
+			// always over the plaintext secret.
+			apiSecret: await decryptSecret(context.apiSecret),
+			signatureHeader: req.headers.get("X-Delyvax-Hmac-SHA256"),
+		});
+		if (!valid) {
+			console.warn("Delyva webhook rejected: invalid signature", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("invalid signature", { status: 401 });
+		}
+		if (
+			event.customerId !== undefined &&
+			context.customerId !== null &&
+			event.customerId !== context.customerId
+		) {
+			console.warn("Delyva webhook: customerId mismatch, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		await ctx.runMutation(internal.delyva.applyWebhookEvent, {
+			jobId: context.jobId,
+			statusCode: event.statusCode,
+			consignmentNo: event.consignmentNo,
+			statusText: event.statusText,
+			eventAt: event.eventAt ?? Date.now(),
+		});
+		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
  * HitPay v1 completion webhook (86eyb6z3a, docs/hitpay-gateway.md) — the URL
  * is passed per payment request at mint time, so sellers register nothing.
  *
@@ -355,6 +438,41 @@ http.route({
 			reason: result.reason,
 		});
 		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
+ * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google
+ * (or any calendar app) polls this URL on its own schedule. The token in the
+ * path is the whole capability (/track posture); unknown tokens 404 with no
+ * detail. Read-only by construction, so a feed failure can never touch an
+ * order (locked posture).
+ */
+http.route({
+	pathPrefix: "/cal/",
+	method: "GET",
+	handler: httpAction(async (ctx, req) => {
+		const path = new URL(req.url).pathname;
+		let token = path.slice("/cal/".length);
+		if (token.endsWith(".ics")) token = token.slice(0, -".ics".length);
+		// Tokens are generated alphanumerics — anything else can't match.
+		if (!/^[A-Za-z0-9]{10,}$/.test(token)) {
+			return new Response("Not found", { status: 404 });
+		}
+		const feed = await ctx.runQuery(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) return new Response("Not found", { status: 404 });
+		return new Response(feed, {
+			status: 200,
+			headers: {
+				"Content-Type": "text/calendar; charset=utf-8",
+				// Calendar apps poll on long intervals anyway; a short shared
+				// max-age just absorbs double-fetches.
+				"Cache-Control": "private, max-age=300",
+				"Content-Disposition": 'inline; filename="kedaipal-bookings.ics"',
+			},
+		});
 	}),
 });
 

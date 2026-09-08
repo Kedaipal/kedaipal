@@ -43,8 +43,12 @@ export const MANUAL_REMINDER_CLOSE_AFTER_MS = OPEN_PAYMENT_WINDOW_DAYS * DAY_MS;
 export const MANUAL_REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export type PaymentReminderOrderFields = MockupGateFields & {
+	// booking_requested is accepted by the type but never due (the due-status
+	// check below excludes it): nothing is payable until the seller approves —
+	// the payment ask itself only exists from `confirmed` (86eyj70z1).
 	status:
 		| "pending"
+		| "booking_requested"
 		| "confirmed"
 		| "packed"
 		| "shipped"

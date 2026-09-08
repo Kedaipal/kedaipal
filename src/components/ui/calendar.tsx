@@ -30,7 +30,16 @@ export function Calendar({
 			showOutsideDays={showOutsideDays}
 			className={cn("w-fit", className)}
 			classNames={{
-				root: cn(defaults.root, "select-none"),
+				// `relative` is LOAD-BEARING, not decoration. The nav (chevrons) is
+				// `position: absolute; inset-x-0`, and react-day-picker's own
+				// stylesheet — which we deliberately don't import, theming from
+				// scratch instead — is the only thing that would otherwise make the
+				// root a containing block. Without it the chevrons resolve against
+				// whatever ancestor happens to be positioned (the BODY, on the
+				// booking checkout) and render in the page margins, so the month is
+				// unnavigable. Measured before the fix: nav x=0 w=1280 against a
+				// 510px-wide calendar.
+				root: cn(defaults.root, "relative select-none"),
 				months: cn(defaults.months, "flex flex-col gap-4"),
 				month: cn(defaults.month, "flex flex-col gap-3"),
 				month_caption: cn(

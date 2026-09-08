@@ -1,4 +1,5 @@
-import { Package, Truck } from "lucide-react";
+import {
+	CalendarRange, Package, Truck } from "lucide-react";
 import {
 	type OrderStatus,
 	statusAgeMs,
@@ -115,11 +116,20 @@ export function OrderContextBadge({
 export function DeliveryMethodIcon({
 	method,
 }: {
-	method: "delivery" | "self_collect";
+	method: "delivery" | "self_collect" | "booking";
 }) {
-	const isPickup = method === "self_collect";
-	const Icon = isPickup ? Package : Truck;
-	const label = isPickup ? "Self-collect" : "Delivery";
+	const Icon =
+		method === "self_collect"
+			? Package
+			: method === "booking"
+				? CalendarRange
+				: Truck;
+	const label =
+		method === "self_collect"
+			? "Self-collect"
+			: method === "booking"
+				? "Booking"
+				: "Delivery";
 	return (
 		<span title={label} className="text-muted-foreground/70">
 			<Icon className="size-4" aria-hidden="true" />
