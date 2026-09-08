@@ -23,6 +23,7 @@ import {
 } from "../../convex/lib/productCap";
 import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
+import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -35,7 +36,6 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { highlightRingClass } from "../lib/country-setup-copy";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
@@ -416,38 +416,15 @@ function ProductsRoute() {
 
 			{/* A What's-new deep link landed here (`?spot=`): say what the seller
 			    is looking for and where the next tap takes them. First among the
-			    sections because it is the reason they are on this page; the ring
-			    is the same spotlight the destination card will wear, so the two
-			    read as one journey. "Got it" clears the key from the URL. */}
+			    sections because it is the reason they are on this page. "Got it"
+			    clears the key from the URL. */}
 			{spot && products !== undefined ? (
-				<section
-					className={`flex flex-col gap-3 rounded-2xl bg-card p-4 sm:flex-row sm:items-center sm:justify-between ${highlightRingClass("spotlight")}`}
-				>
-					<div className="min-w-0">
-						<p className="text-sm font-semibold">
-							{PRODUCT_SPOTLIGHT[spot].title}
-						</p>
-						<p className="mt-1 text-[13px] leading-snug text-muted-foreground">
-							{spotEligible > 0
-								? PRODUCT_SPOTLIGHT[spot].body
-								: PRODUCT_SPOTLIGHT[spot].empty}
-						</p>
-					</div>
-					<div className="flex shrink-0 items-center gap-2">
-						{spotEligible === 0 && !capBlockReason ? (
-							<Button asChild className="h-11 sm:h-10">
-								<Link to="/app/products/new">+ New product</Link>
-							</Button>
-						) : null}
-						<Button
-							variant="ghost"
-							className="h-11 sm:h-10"
-							onClick={() => navigate({ to: "/app/products", search: {} })}
-						>
-							Got it
-						</Button>
-					</div>
-				</section>
+				<ProductSpotlightBanner
+					spot={spot}
+					eligibleCount={spotEligible}
+					canCreate={!capBlockReason}
+					onDismiss={() => navigate({ to: "/app/products", search: {} })}
+				/>
 			) : null}
 
 			{/* At the ceiling the disabled New button needs to say WHY, and the
