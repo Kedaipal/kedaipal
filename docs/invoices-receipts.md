@@ -106,6 +106,12 @@ Rendering (pdf-lib, runs in the default Convex runtime — no `"use node"`):
   payment card, centered footer) using the slate-900/mint palette from
   `src/styles.css`. Text is sanitized to WinAnsi (standard fonts throw on
   emoji/CJK), so a non-Latin store name degrades gracefully instead of crashing.
+  The ORDER document's last footer line is the clickable **"Powered by
+  Kedaipal"** mark (`poweredByMark` + a URI link annotation tagged
+  `?src=powered-by-receipt&store=<slug>` — `OrderReceiptData.storeSlug` exists
+  only for that link and is never printed; see
+  [`powered-by-badge.md`](./powered-by-badge.md)). The subscription invoice —
+  Kedaipal's own document — keeps the plain `kedaipal.com` line.
 - `convex/lib/pdf/logo.ts` — the Kedaipal brand lockup (`public/logo-2.png`)
   inlined as base64 so `embedPng` needs **no network fetch** (deterministic render
   inside the action). To refresh after a logo change, regenerate it:

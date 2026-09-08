@@ -96,6 +96,7 @@ import type * as lib_pdf_qr from "../lib/pdf/qr.js";
 import type * as lib_pdf_render from "../lib/pdf/render.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_popularProducts from "../lib/popularProducts.js";
+import type * as lib_poweredBy from "../lib/poweredBy.js";
 import type * as lib_productCap from "../lib/productCap.js";
 import type * as lib_productDelete from "../lib/productDelete.js";
 import type * as lib_productKind from "../lib/productKind.js";
@@ -225,6 +226,7 @@ declare const fullApi: ApiFromModules<{
   "lib/pdf/render": typeof lib_pdf_render;
   "lib/plans": typeof lib_plans;
   "lib/popularProducts": typeof lib_popularProducts;
+  "lib/poweredBy": typeof lib_poweredBy;
   "lib/productCap": typeof lib_productCap;
   "lib/productDelete": typeof lib_productDelete;
   "lib/productKind": typeof lib_productKind;

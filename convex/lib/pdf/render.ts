@@ -12,12 +12,15 @@ import {
 	PDFDocument,
 	type PDFFont,
 	type PDFImage,
+	PDFName,
 	type PDFPage,
+	PDFString,
 	rgb,
 	StandardFonts,
 } from "pdf-lib";
 import type { AwbLabelData, AwbParty } from "./awb";
 import type { AwbPaperSize } from "../awbConfig";
+import { POWERED_BY_PRINT_LINE, poweredByHref } from "../poweredBy";
 import { encodeCode128 } from "./barcode";
 import {
 	formatDocDate,
@@ -380,8 +383,14 @@ function paymentCard(
 	return yTop - h;
 }
 
-/** Footer note near the bottom margin, above a hairline. */
-function footer(d: Doc, note: string): void {
+/**
+ * Footer note near the bottom margin, above a hairline. The very last line is
+ * one of two things: the bare site name (a document Kedaipal ISSUES — the
+ * subscription invoice — doesn't say "powered by" about itself), or the
+ * "Powered by Kedaipal" mark with a clickable link (the seller's buyer
+ * documents, z8r3fdcwd0) — pass `poweredByUrl` for the latter.
+ */
+function footer(d: Doc, note: string, opts: { poweredByUrl?: string } = {}): void {
 	const { page, font, bold } = d;
 	const cx = PAGE[0] / 2;
 	const lines = wrap(font, note, 8.5, CONTENT_W);
@@ -392,7 +401,80 @@ function footer(d: Doc, note: string): void {
 		drawCenter(page, font, line, cx, y, 8.5, SLATE);
 		y -= 11;
 	}
-	drawCenter(page, bold, "kedaipal.com", cx, MARGIN + 2, 8, FAINT);
+	if (opts.poweredByUrl) poweredByMark(d, cx, MARGIN + 2, opts.poweredByUrl);
+	else drawCenter(page, bold, "kedaipal.com", cx, MARGIN + 2, 8, FAINT);
+}
+
+// The poster / web badge's mint lockup colours (store-poster.tsx,
+// storefront-footer.tsx) — on paper the mark must read as the same mark.
+const MINT_BORDER = rgb(0.725, 0.851, 0.8); // #B9D9CC
+const MINT_TEXT = rgb(0.482, 0.639, 0.58); // #7BA394
+
+/**
+ * The "Powered by Kedaipal" mark on paper — the receipt's twin of the web
+ * footer badge: a mint-outlined "POWERED BY" pill, the brand name, the site.
+ * Text, not the logo image: the letterhead already carries the lockup at the
+ * top of this page, and two logos on one sheet read as shouting. `y` is the
+ * text baseline; the mark is centred on `cx`.
+ *
+ * The whole mark is ONE link annotation. PDF viewers (every phone) honour it,
+ * so a buyer reading their receipt is a tap from kedaipal.com with the
+ * surface + store attribution intact; on paper the printed site name is the
+ * fallback.
+ */
+function poweredByMark(d: Doc, cx: number, y: number, url: string): void {
+	const { page, font, bold } = d;
+	const pillText = "POWERED BY";
+	const pillSize = 6.5;
+	const pillPadX = 6;
+	const pillH = 13;
+	const pillW = widthOf(bold, pillText, pillSize) + pillPadX * 2;
+	const brand = "Kedaipal";
+	const brandSize = 9;
+	const brandW = widthOf(bold, brand, brandSize);
+	const site = "· kedaipal.com";
+	const siteSize = 8;
+	const siteW = widthOf(font, site, siteSize);
+	const gap = 6;
+	const totalW = pillW + gap + brandW + 4 + siteW;
+	const x0 = cx - totalW / 2;
+	let x = x0;
+	// Outlined pill, no fill — the poster's mint outline, top edge at y+8.5 so
+	// the 6.5pt caps sit centred inside a 13pt capsule.
+	roundedRect(page, x, y + 8.5, pillW, pillH, pillH / 2, {
+		borderColor: MINT_BORDER,
+		borderWidth: 0.75,
+	});
+	draw(page, bold, pillText, x + pillPadX, y, pillSize, MINT_TEXT);
+	x += pillW + gap;
+	draw(page, bold, brand, x, y, brandSize, INK);
+	x += brandW + 4;
+	draw(page, font, site, x, y, siteSize, FAINT);
+	linkAnnotation(d, { x: x0 - 4, y: y - 5, w: totalW + 8, h: pillH + 6 }, url);
+}
+
+/** A clickable URI link over `rect` (PDF user space, `y` = bottom edge). */
+function linkAnnotation(
+	d: Doc,
+	rect: { x: number; y: number; w: number; h: number },
+	url: string,
+): void {
+	const { doc, page } = d;
+	const annot = doc.context.register(
+		doc.context.obj({
+			Type: "Annot",
+			Subtype: "Link",
+			Rect: [rect.x, rect.y, rect.x + rect.w, rect.y + rect.h],
+			// No visible border — the mark IS the affordance.
+			Border: [0, 0, 0],
+			// `context.obj` turns a bare string into a PDFName; a URI is a string
+			// object, so it has to be built explicitly.
+			A: { Type: "Action", S: "URI", URI: PDFString.of(url) },
+		}),
+	);
+	const existing = page.node.Annots();
+	if (existing) existing.push(annot);
+	else page.node.set(PDFName.of("Annots"), doc.context.obj([annot]));
 }
 
 // --- A: order receipt ------------------------------------------------------
@@ -559,6 +641,9 @@ export async function buildOrderReceiptPdf(
 		paid
 			? `Thank you for your purchase at ${data.storeName} via Kedaipal.`
 			: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
+		// The seller's document to their buyer → it carries the growth mark,
+		// tagged as the receipt surface and attributed to the store.
+		{ poweredByUrl: poweredByHref("receipt", data.storeSlug) },
 	);
 	return d.doc.save();
 }
@@ -722,6 +807,9 @@ const BARCODE_H = 30;
 const SENDER_H = 46;
 /** Contents lines printed before the "+ N more" summary takes over. */
 const ITEM_LINES_MAX = 3;
+// The "Powered by Kedaipal" line at the very foot of every label (z8r3fdcwd0)
+// — fixed, so every label in a stack ends the same way.
+const BRAND_LINE_H = 9;
 
 /** Embed the seller's logo, sniffing the format from its magic bytes (a stored
  * blob's declared content-type can be absent or wrong). */
@@ -1021,7 +1109,15 @@ function drawLabel(
 	const metaH = metaLines.length * 10 + 4;
 	const noteH = noteLines.length > 0 ? noteLines.length * 10 + 2 : 0;
 	const stackTop =
-		bottom + paymentH + shipmentH + metaH + noteH + itemsH + footerH + 10;
+		bottom +
+		BRAND_LINE_H +
+		paymentH +
+		shipmentH +
+		metaH +
+		noteH +
+		itemsH +
+		footerH +
+		10;
 
 	// --- Middle: the two parties, clamped to what is actually left -----------
 	const senderLayout = layoutParty(pen, data.sender, width, {
@@ -1131,8 +1227,22 @@ function drawLabel(
 		);
 	}
 	footerLines.forEach((line, i) => {
-		draw(page, font, line, x, bottom + (footerLines.length - 1 - i) * 9, 7, FAINT);
+		draw(
+			page,
+			font,
+			line,
+			x,
+			bottom + BRAND_LINE_H + (footerLines.length - 1 - i) * 9,
+			7,
+			FAINT,
+		);
 	});
+	// The very last line of every label, under the seller's own footer: the
+	// platform mark (z8r3fdcwd0). A parcel is seen by the buyer — and by the
+	// peer sellers who receive parcels all day — so it is a growth surface
+	// like the receipt; text only, since a label is stuck to a box and there
+	// is nothing to click.
+	draw(page, font, POWERED_BY_PRINT_LINE, x, bottom, 6.5, FAINT);
 }
 
 /**

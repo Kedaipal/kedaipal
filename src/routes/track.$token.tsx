@@ -53,6 +53,7 @@ import { ReceiptDownloadButton } from "../components/order/receipt-download-butt
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
@@ -304,19 +305,23 @@ function OrderNotFound() {
 	// Intentionally does NOT echo the URL token — it's a capability, and the link
 	// may simply be stale. Keep the message generic.
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-2xl font-bold">Order not found</h1>
-			<p className="text-sm text-muted-foreground">
-				This tracking link is invalid or has expired. Please use the link from
-				your WhatsApp order confirmation, or message the store for a new one.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-2xl font-bold">Order not found</h1>
+				<p className="text-sm text-muted-foreground">
+					This tracking link is invalid or has expired. Please use the link from
+					your WhatsApp order confirmation, or message the store for a new one.
+				</p>
+			</div>
+			{/* Unknown token = unknown store, so the badge carries no `store=`. */}
+			<StorefrontFooter surface="track" />
 		</main>
 	);
 }
 
 function TrackingSkeleton() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-4 pt-10">
 			<Skeleton className="h-3 w-16" />
 			<Skeleton className="mt-3 h-8 w-32" />
 			<Skeleton className="mt-1 h-4 w-44" />
@@ -364,6 +369,9 @@ function TrackingSkeleton() {
 				))}
 				<Skeleton className="h-10 w-full rounded-xl" />
 			</section>
+			{/* Rendered on the skeleton too, so the badge is in place before the
+			    order resolves instead of popping in under the content. */}
+			<StorefrontFooter surface="track" />
 		</main>
 	);
 }
@@ -632,10 +640,14 @@ function TrackingRoute() {
 	}
 
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
-			{/* Header */}
-			<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-				Kedaipal
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-4 pt-10">
+			{/* Header — the STORE's name is the eyebrow. This is the seller's order
+			    page as far as the buyer is concerned (same as the storefront, where
+			    the store brand leads); Kedaipal's own mark is the powered-by badge
+			    at the foot of the page, so the platform isn't named twice. */}
+			<p className="truncate text-xs font-semibold uppercase tracking-widest text-accent">
+				{order.storeName ||
+					(order.retailerLocale === "ms" ? "Pesanan anda" : "Your order")}
 			</p>
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
@@ -1712,6 +1724,12 @@ function TrackingRoute() {
 					{order.retailerLocale === "ms" ? "Dasar Privasi" : "Privacy Policy"}
 				</a>
 			</p>
+
+			{/* "Powered by Kedaipal" (z8r3fdcwd0) — the order page is the one buyer
+			    surface EVERY order reaches (the confirmation message's only link),
+			    so it is the badge's highest-volume home. Direct flex child of the
+			    min-h-dvh column so `mt-auto` sinks it to the bottom. */}
+			<StorefrontFooter slug={order.retailerSlug} surface="track" />
 		</main>
 	);
 }
