@@ -113,9 +113,9 @@ import {
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
 import {
-	isSpotlightKey,
+	isSettingsSpotlightKey,
 	SPOTLIGHT_ANCHOR,
-	type SpotlightKey,
+	type SettingsSpotlightKey,
 } from "../lib/spotlight";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -319,7 +319,11 @@ export const Route = createFileRoute("/app/settings")({
 	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { tab?: SettingsTab; fix?: CountrySetupItemKey; spot?: SpotlightKey } => {
+	): {
+		tab?: SettingsTab;
+		fix?: CountrySetupItemKey;
+		spot?: SettingsSpotlightKey;
+	} => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
@@ -334,8 +338,9 @@ export const Route = createFileRoute("/app/settings")({
 				: undefined;
 		// `spot` is a What's-new note's deep link: the same scroll-and-ring, in
 		// the brand mint (src/lib/spotlight.ts). Same posture — a key from the
-		// registry, never a raw element id.
-		const spot = isSpotlightKey(search.spot) ? search.spot : undefined;
+		// registry, never a raw element id — and only a key whose card is on
+		// THIS page: a product-form key pasted here would scroll nowhere.
+		const spot = isSettingsSpotlightKey(search.spot) ? search.spot : undefined;
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)

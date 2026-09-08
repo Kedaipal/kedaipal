@@ -38,10 +38,22 @@ import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { convexErrorMessage } from "../lib/format";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
+import {
+	isProductSpotlightKey,
+	type ProductSpotlightKey,
+} from "../lib/spotlight";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/products/$productId")({
+	// `spot` is a What's-new note's deep link, forwarded by the products list
+	// (src/lib/spotlight.ts): which card of the form to scroll to and ring.
+	// Validated against the product-page keys, so a hand-typed value can't
+	// ring an arbitrary element.
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { spot?: ProductSpotlightKey } =>
+		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
 	component: EditProductRoute,
 });
 
@@ -124,6 +136,7 @@ function ProductDetailSkeleton() {
 
 function EditProductRoute() {
 	const { productId } = Route.useParams();
+	const { spot } = Route.useSearch();
 	const navigate = useNavigate();
 	const retailer = useDashboardRetailer();
 	const product = useQuery(
@@ -248,6 +261,7 @@ function EditProductRoute() {
 				key={product._id}
 				retailerId={product.retailerId}
 				draftRef={formDraftRef}
+				spotlight={spot}
 				categoriesLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
