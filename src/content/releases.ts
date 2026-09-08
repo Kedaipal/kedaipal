@@ -173,12 +173,12 @@ export const RELEASES: Release[] = [
 	{
 		version: "2026.09.4",
 		date: "2026-09-08",
-		// The quiet dot, not the modal. Nothing here changes how a seller works
-		// unless they choose it: the weekend rate is a new optional field on a
-		// stay listing, and both fixes remove wrong things rather than move
-		// right ones. The one seller who asked for it (the booking anchor) is
-		// told directly; everyone else finds it on the More panel.
-		notable: false,
+		// The modal, by owner call (Zaki, 8 Sep): the weekend rate was asked for
+		// by the booking anchor seller, and a feature someone asked for should
+		// greet them on their next open rather than wait behind a dot. The
+		// entry's deep link makes the interruption worth it — one tap lands on
+		// the card, ringed. The two fixes ride along.
+		notable: true,
 		entries: [
 			{
 				kind: "feature",
