@@ -140,6 +140,130 @@ export function sanitizeSecurityDeposit(
 }
 
 /**
+ * Weekend / weekday per-night rates (S13, `z8r3fddkp8`) — the campsite and
+ * homestay pricing shape: ONE listing, ONE capacity, a second per-night rate
+ * that applies on the nights the seller names.
+ *
+ * `weekendDays` are weekday indexes (0 = Sunday .. 6 = Saturday, the
+ * `weekdayIndexMyt` convention) of the NIGHT the guest sleeps — a 12→14 Sep
+ * stay sleeps the 12th and the 13th; the check-out morning never counts. The
+ * default is Fri + Sat nights, the near-universal campsite rule; the picker
+ * covers "Fri, Sat & Sun" and "Sunday only" sites. Kept as a weekday SET (not
+ * a dated list) so a future `peakDates[]` for public holidays can sit beside
+ * it without a rename.
+ *
+ * The rate is a pricing RULE on the listing's one implicit variant — never a
+ * second variant (that would split capacity in two, the exact trap the
+ * two-listings workaround falls into). Free-range stays only: a fixed-length
+ * package has one flat price by definition.
+ */
+export const DEFAULT_WEEKEND_DAYS: readonly number[] = [5, 6];
+
+/** Ceiling on a per-night rate (sen) — RM 100,000, a fat-finger guard like
+ * the deposit's, not a product limit. */
+export const MAX_WEEKEND_PRICE = 10_000_000;
+
+/** Short weekday names, index-aligned with `weekdayIndexMyt` (0 = Sunday).
+ * Mirrors `WEEKDAY_NAMES_SHORT` in openingHours.ts — duplicated rather than
+ * imported because this module must stay dependency-free (it is imported by
+ * the wizard, the storefront and every Convex validator). */
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Validate the weekend-rate pair.
+ *
+ * - No price (undefined or 0) → BOTH unset: "no weekend rate" has exactly one
+ *   spelling (the sanitizeFee / securityDeposit posture), so days without a
+ *   price are dropped rather than stored as dead config.
+ * - A price → integer sen in (0, MAX]; days default to Fri + Sat when absent,
+ *   otherwise must be ≥1 distinct weekday index in 0..6 and never all seven
+ *   ("that's every night — set it as the base price instead"). Returned
+ *   deduped and sorted so two sellers picking the same nights store the same
+ *   array.
+ * - A fixed-length package refuses the rate outright (surfaced, never
+ *   silently ignored): its price is flat per package, so a weekend rate
+ *   would be config that describes nothing.
+ *
+ * Throws with seller-facing copy — callers surface it verbatim.
+ */
+export function sanitizeWeekendRate(
+	price: number | undefined,
+	days: readonly number[] | undefined,
+	opts: { packageLength?: number } = {},
+): { weekendPrice?: number; weekendDays?: number[] } {
+	if (price === undefined || price === 0) return {};
+	if (!Number.isInteger(price) || price < 0 || price > MAX_WEEKEND_PRICE) {
+		throw new Error("Weekend rate must be between RM 0 and RM 100,000");
+	}
+	if (opts.packageLength !== undefined && opts.packageLength > 0) {
+		throw new Error(
+			"A package has one flat price — clear the package length to price weekends differently",
+		);
+	}
+	const picked = days === undefined ? [...DEFAULT_WEEKEND_DAYS] : [...days];
+	for (const d of picked) {
+		if (!Number.isInteger(d) || d < 0 || d > 6) {
+			throw new Error("Weekend nights must be days of the week");
+		}
+	}
+	const unique = [...new Set(picked)].sort((a, b) => a - b);
+	if (unique.length === 0) {
+		throw new Error("Pick at least one night for the weekend rate");
+	}
+	if (unique.length === 7) {
+		throw new Error(
+			"That's every night — set it as the price per night instead",
+		);
+	}
+	return { weekendPrice: price, weekendDays: unique };
+}
+
+/**
+ * The ONE author of "Fri & Sat" — every surface that names the weekend
+ * nights (storefront price line, calendar legend, seller consequence line,
+ * summary strip, the frozen order line) reads this. Rendered in Mon→Sun
+ * order so "Sat & Sun" never comes out as "Sun & Sat".
+ */
+export function weekendDaysLabel(days: readonly number[]): string {
+	const order = [1, 2, 3, 4, 5, 6, 0];
+	const names = order
+		.filter((d) => days.includes(d))
+		.map((d) => WEEKDAY_SHORT[d]);
+	if (names.length === 0) return "";
+	if (names.length === 1) return names[0];
+	return `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
+}
+
+/**
+ * The frozen `variantLabel` on a booking order's two lines. Written here and
+ * read back by `bookingNightKind` in the same module, so the writer and the
+ * reader can never drift. A listing WITH a weekend rate labels even a
+ * single-kind stay ("Weekday nights") — the label answers "why did I pay
+ * RM 80 and not RM 120?" on an all-weekday stay just as much as on a mixed
+ * one. A listing without one keeps today's unlabelled line.
+ */
+export const WEEKDAY_NIGHTS_LABEL = "Weekday nights";
+const WEEKEND_NIGHTS_PREFIX = "Weekend nights";
+
+export function weekendNightsLabel(days: readonly number[]): string {
+	return `${WEEKEND_NIGHTS_PREFIX} (${weekendDaysLabel(days)})`;
+}
+
+export type BookingNightKind = "weekday" | "weekend";
+
+/** Which kind of night a frozen booking line charges for, from its label —
+ * `undefined` for a line placed before weekend rates existed or on a listing
+ * that never had one. */
+export function bookingNightKind(
+	variantLabel: string | undefined,
+): BookingNightKind | undefined {
+	if (variantLabel === undefined) return undefined;
+	if (variantLabel === WEEKDAY_NIGHTS_LABEL) return "weekday";
+	if (variantLabel.startsWith(`${WEEKEND_NIGHTS_PREFIX} (`)) return "weekend";
+	return undefined;
+}
+
+/**
  * The rendered noun for one sellable row of this kind — the vocabulary half
  * of the kind decision. Copy reads "listing" for bookings ("2 listings",
  * "Name this listing") without the stored table ever renaming.

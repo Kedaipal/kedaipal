@@ -9,8 +9,14 @@
 // adjacent — it's a weekend business); once a check-in is picked, days past
 // the reachable window disable and the first full night renders dashed —
 // selectable as the LEAVING morning only (its night isn't slept).
+//
+// Weekend nights (S13): when the listing prices some nights differently, those
+// days carry a small dot (never a fill — the fill vocabulary is taken by the
+// stay band and the unavailable state) and the legend names the rate, so a
+// guest sees WHICH nights cost more before the receipt does the arithmetic.
 
 import { useMemo } from "react";
+import { weekdayIndexMyt } from "../../../convex/lib/fulfilmentDate";
 import {
 	calendarDateFromMytEpoch,
 	canCheckIn,
@@ -30,6 +36,7 @@ export function BookingCalendar({
 	minMonth,
 	maxMonth,
 	disabled = false,
+	weekendDays,
 }: {
 	selection: BookingSelection;
 	onSelect: (day: number) => void;
@@ -44,6 +51,9 @@ export function BookingCalendar({
 	onMonthChange: (monthStart: number) => void;
 	minMonth: number;
 	maxMonth: number;
+	/** The nights that charge the weekend rate (0 = Sun), or undefined when the
+	 * listing has one rate for every night — no dots, no legend row. */
+	weekendDays?: readonly number[];
 }) {
 	const pickingCheckOut =
 		selection.checkIn !== undefined && selection.checkOut === undefined;
@@ -52,10 +62,23 @@ export function BookingCalendar({
 			? latestCheckOutFor(selection.checkIn, ctx)
 			: undefined;
 
+	const weekendSet = useMemo(
+		() => (weekendDays && weekendDays.length > 0 ? new Set(weekendDays) : null),
+		[weekendDays],
+	);
+
 	const modifiers = useMemo(() => {
 		const unavailable = [...ctx.unavailable].map(calendarDateFromMytEpoch);
 		return {
 			unavailable,
+			// Bookable weekend nights only — dotting the past would be noise.
+			weekend_night: (date: Date) => {
+				if (!weekendSet) return false;
+				const day = mytEpochFromCalendarDate(date);
+				return (
+					day >= ctx.earliestCheckIn && weekendSet.has(weekdayIndexMyt(day))
+				);
+			},
 			// The stay band. checkOut is the leaving MORNING — still shown as the
 			// range end (that's the day the guest taps), the nights logic already
 			// treats it as unslept.
@@ -81,7 +104,14 @@ export function BookingCalendar({
 					? calendarDateFromMytEpoch(checkoutCeiling)
 					: [],
 		};
-	}, [ctx.unavailable, selection.checkIn, selection.checkOut, checkoutCeiling]);
+	}, [
+		ctx.unavailable,
+		ctx.earliestCheckIn,
+		selection.checkIn,
+		selection.checkOut,
+		checkoutCeiling,
+		weekendSet,
+	]);
 
 	return (
 		<div
@@ -117,6 +147,10 @@ export function BookingCalendar({
 					"[&>button]:bg-accent/15 [&>button]:text-accent-emphasis [&>button]:font-semibold [&>button]:rounded-lg",
 				checkout_only:
 					"[&>button]:border [&>button]:border-dashed [&>button]:border-ring [&>button]:!bg-transparent [&>button]:!text-muted-foreground [&>button]:!line-through",
+				// A dot under the number. `bg-current` so it stays legible on the
+				// navy stay band (white) and on a plain day (foreground).
+				weekend_night:
+					"[&>button]:relative [&>button]:after:absolute [&>button]:after:bottom-1 [&>button]:after:left-1/2 [&>button]:after:size-1 [&>button]:after:-translate-x-1/2 [&>button]:after:rounded-full [&>button]:after:bg-current [&>button]:after:opacity-70 [&>button]:after:content-['']",
 			}}
 			disabled={(date) => {
 				const day = mytEpochFromCalendarDate(date);
@@ -143,8 +177,14 @@ export function BookingCalendar({
 	);
 }
 
-/** The legend under the calendar — states only, never the blocked/full split. */
-export function BookingCalendarLegend() {
+/** The legend under the calendar — states only, never the blocked/full split.
+ * `weekendLabel` ("Fri & Sat · RM 120/night") adds the dotted-night row when
+ * the listing prices weekend nights differently. */
+export function BookingCalendarLegend({
+	weekendLabel,
+}: {
+	weekendLabel?: string;
+} = {}) {
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
 			<span className="flex items-center gap-1.5">
@@ -159,6 +199,15 @@ export function BookingCalendarLegend() {
 				<i className="size-3.5 rounded bg-primary" aria-hidden />
 				Your stay
 			</span>
+			{weekendLabel ? (
+				<span className="flex items-center gap-1.5">
+					<i
+						className="relative size-3.5 rounded border border-border bg-card after:absolute after:bottom-px after:left-1/2 after:size-1 after:-translate-x-1/2 after:rounded-full after:bg-foreground/70 after:content-['']"
+						aria-hidden
+					/>
+					{weekendLabel}
+				</span>
+			) : null}
 		</div>
 	);
 }

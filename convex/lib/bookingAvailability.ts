@@ -25,6 +25,7 @@ import {
 	DAY_MS,
 	isMytMidnight,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "./fulfilmentDate";
 import {
 	isMonthlyUnit,
@@ -340,6 +341,76 @@ export function resolveBookingRange(
 		throw new Error("Pick your check-out date");
 	}
 	return { checkIn, checkOut };
+}
+
+/** The rate-relevant slice of a listing's booking config. */
+export type BookingRateConfig = {
+	packageLength?: number;
+	weekendPrice?: number;
+	weekendDays?: readonly number[];
+};
+
+/**
+ * How many of a stay's nights charge the weekend rate (S13, `z8r3fddkp8`).
+ * ONE author — imported by the buyer's checkout receipt AND by
+ * `requestBooking`'s line construction, so the preview and the charge can
+ * never disagree by a night.
+ *
+ * A night is the calendar day it STARTS on: a 12→14 Sep stay sleeps the 12th
+ * and 13th, so those two weekdays are read and the check-out morning (the
+ * 14th) never counts — leaving on a Sunday morning is not a Saturday-night
+ * charge. Month and year boundaries are plain 24 h steps (MYT has no DST).
+ *
+ * A listing with no weekend rate, or a fixed-length package (flat price by
+ * definition — the validators refuse the pairing, this is belt-and-braces),
+ * reports every night as weekday so callers need no special case.
+ */
+export function splitNightsByRate(
+	checkIn: number,
+	checkOut: number,
+	booking: BookingRateConfig | undefined,
+): { weekdayNights: number; weekendNights: number } {
+	const isPackage = (booking?.packageLength ?? 0) > 0;
+	const { weekday, weekend } = partitionNights(
+		checkIn,
+		checkOut,
+		isPackage || booking?.weekendPrice === undefined
+			? undefined
+			: booking?.weekendDays,
+	);
+	return { weekdayNights: weekday.length, weekendNights: weekend.length };
+}
+
+/**
+ * The same split, as the NIGHTS themselves rather than their counts — the one
+ * author both readings come from, so a line's count and the dates printed
+ * beside it can never disagree.
+ *
+ * The counts answer "why is my bill RM 110?"; the nights answer the question
+ * that follows it, "which night was the expensive one?". An order can only ask
+ * the second because it freezes `bookingWeekendDays`: two lines reading
+ * "1 weekday night" and "1 weekend night" locate nothing inside a span on
+ * their own.
+ *
+ * `weekendDays` absent or empty = every night is a weekday night, which is
+ * exactly how a listing with no weekend rate (and every pre-S13 booking) reads.
+ */
+export function partitionNights(
+	checkIn: number,
+	checkOut: number,
+	weekendDays: readonly number[] | undefined,
+): { weekday: number[]; weekend: number[] } {
+	const nights = eachNight(checkIn, checkOut);
+	if (weekendDays === undefined || weekendDays.length === 0) {
+		return { weekday: nights, weekend: [] };
+	}
+	const isWeekend = new Set(weekendDays);
+	const weekday: number[] = [];
+	const weekend: number[] = [];
+	for (const night of nights) {
+		(isWeekend.has(weekdayIndexMyt(night)) ? weekend : weekday).push(night);
+	}
+	return { weekday, weekend };
 }
 
 /**

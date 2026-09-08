@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
-import { bookingPriceSuffix } from "../../lib/booking-dates";
+import {
+	bookingPriceSuffix,
+	weekendRateSuffix,
+} from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
@@ -78,6 +81,9 @@ export function ProductPageView({
 	const instantBook = product.booking?.autoAccept === true;
 	// A fixed-length package is a single start-date pick, not a range.
 	const isPackage = (product.booking?.packageLength ?? 0) > 0;
+	// Second per-night rate (S13) — stated beside the base price, BEFORE the
+	// calendar, so the split on the receipt is never a surprise.
+	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment below.
 	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
@@ -131,6 +137,12 @@ export function ProductPageView({
 							</span>
 							<ShareLinkChip url={canonicalUrl} />
 						</div>
+						{weekendSuffix && product.booking?.weekendPrice !== undefined ? (
+							<p className="text-sm font-medium text-muted-foreground tabular-nums">
+								{formatPrice(product.booking.weekendPrice, product.currency)}
+								{weekendSuffix}
+							</p>
+						) : null}
 					</div>
 
 					{/* Description sits directly under the title, ahead of the option
