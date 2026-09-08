@@ -1,37 +1,14 @@
 import { z } from "zod";
+import {
+	isReservedSlug,
+	RESERVED_SLUG_MESSAGE,
+} from "../../convex/lib/reservedSlugs";
 
 /**
- * Reserved slugs — blocked from retailer registration. Includes route collisions
- * (`app`, `sign-in`, `sign-up`), static asset paths, and brand-sensitive words.
+ * Reserved handles live in ONE module shared with the server validator —
+ * `convex/lib/reservedSlugs.ts` — and are machine-checked against the route
+ * tree there. This file mirrors the SHAPE rules of `convex/lib/slug.ts` only.
  */
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
-	"_",
-	"about",
-	"admin",
-	"api",
-	"app",
-	"assets",
-	"blog",
-	"docs",
-	"favicon.ico",
-	"help",
-	"kedaipal",
-	"login",
-	"logout",
-	"onboarding",
-	"pricing",
-	"public",
-	"robots.txt",
-	"settings",
-	"sign-in",
-	"sign-up",
-	"signin",
-	"signup",
-	"sitemap.xml",
-	"static",
-	"support",
-	"www",
-]);
 
 /**
  * Derive a URL-safe slug from a store name.
@@ -69,8 +46,8 @@ export const slugSchema = z
 	.refine((s) => SLUG_PATTERN.test(s), {
 		message: "Use lowercase letters, numbers and single dashes",
 	})
-	.refine((s) => !RESERVED_SLUGS.has(s), {
-		message: "This slug is reserved",
+	.refine((s) => !isReservedSlug(s), {
+		message: RESERVED_SLUG_MESSAGE,
 	});
 
 /**
@@ -112,6 +89,6 @@ export function validateSlugShape(raw: string): SlugValidationResult {
 	if (s.length < SLUG_MIN) return { ok: false, reason: "tooShort" };
 	if (s.length > SLUG_MAX) return { ok: false, reason: "tooLong" };
 	if (!SLUG_PATTERN.test(s)) return { ok: false, reason: "invalid" };
-	if (RESERVED_SLUGS.has(s)) return { ok: false, reason: "reserved" };
+	if (isReservedSlug(s)) return { ok: false, reason: "reserved" };
 	return { ok: true, value: s };
 }

@@ -27,6 +27,55 @@ The store is owned by exactly one Clerk `userId`.
   **not** an identity key.
 - **`waPhone`: NOT unique** (deliberate — see below). Optional contact field.
 
+## Reserved handles — what a store can never be called
+
+A store lives at the **root** of the domain (`kedaipal.com/<slug>`), so it shares
+one namespace with every page the app serves. Any top-level path — live today or
+plausible tomorrow — is a handle a vendor must be refused, or the day we ship
+that page every buyer link to it lands on someone's shop (or the shop breaks).
+
+**One author:** [`convex/lib/reservedSlugs.ts`](../convex/lib/reservedSlugs.ts).
+The server validator (`assertValidSlug`, used by `createRetailer`, the admin
+onboard and `renameSlug`) and the client pre-check (`validateSlugShape` /
+`slugSchema`, behind the live "URL slug" hint on onboarding, Settings → Store and
+the admin onboard form) both import `isReservedSlug` + `RESERVED_SLUG_MESSAGE`
+from it, so the two sides cannot disagree and the seller reads the same sentence
+whichever side catches it: *"Reserved by Kedaipal — pick another slug"*.
+
+**What is fenced, by group** (the file comments say why each group exists):
+
+| Group | Examples | Source of truth |
+| --- | --- | --- |
+| Live routes | `app`, `track`, `claim`, `pricing`, `privacy`, `terms`, `cost` | derived from `src/routes/` on disk |
+| `public/` folders | `img`, `guides`, `poster`, `video` | derived from `public/` on disk |
+| Platform | `api`, `assets`, `admin`, `webhooks`, `status`, `www` | curated |
+| Auth aliases | `login`, `signup`, `register`, `reset-password`, `account` | curated |
+| Marketing pages we may add | `help`, `blog`, `changelog`, `partners`, `directory` | curated |
+| Dashboard / buyer nouns | `orders`, `products`, `billing`, `checkout`, `pay`, `invoice` | curated |
+| Generic tenant words | `store`, `shop`, `seller`, `vendor`, `official`, `verified` | curated |
+| Environments + bug literals | `demo`, `staging`, `sandbox`, `null`, `undefined` | curated |
+| Brand **prefix** | anything starting `kedaipal` (`kedaipal-support`, `kedaipalhq`) | `RESERVED_SLUG_PREFIXES` |
+
+**Machine-checked, not remembered.** `src/lib/reserved-slugs.test.ts` scans
+`src/routes/` and `public/` and fails the gate when a top-level segment is not
+reserved — add a route, forget the list, the build says so (with the name to
+add). It also refuses *dead* entries the slug shape could never match (a dot, an
+underscore, under 3 chars): `favicon.ico` and `_` sat in the old hand-written
+list for months protecting nothing. Dotted files (`sitemap.xml`, `robots.txt`)
+and TanStack's `_server` are therefore deliberately **not** listed — the shape
+check rejects them first, and a test pins that.
+
+**Not fenced, on purpose:** words that merely *contain* the brand
+(`my-kedaipal-store` is a fan, not an impersonator); category and product slugs
+(they live under `/<slug>/c/…` and `/<slug>/p/…`, so they can never collide —
+`assertValidCategorySlug` skips the list); and existing stores — the check runs
+on the **new** slug at create/rename only, so a store already on a word that
+later becomes reserved keeps working. No dev or prod store sat on one when the
+list was rebuilt (Sep 2026).
+
+To reserve a new word: add it to the right group in `reservedSlugs.ts`. A new
+route needs no thought at all — the test names the missing entry.
+
 ## Can the same email own multiple stores? No.
 
 Clerk allows one account per email, and we allow one store per account. So a

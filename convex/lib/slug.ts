@@ -5,7 +5,9 @@
  *
  * IMPORTANT: Keep in sync with `src/lib/slug.ts`. Both files must stay
  * byte-identical in logic — they exist separately because Convex functions
- * bundle from the `convex/` directory.
+ * bundle from the `convex/` directory. The reserved-word list is the one part
+ * that is NOT mirrored: both sides import it from `./reservedSlugs.ts`, which
+ * is machine-checked against the route tree (z8r3fddrd3).
  *
  * This module is also the ONE author of phone normalization (SG-lite,
  * 86eynw28q): the client (`src/lib/phone.ts`, `src/lib/schemas.ts`) imports
@@ -15,35 +17,7 @@
  */
 
 import { COUNTRIES, type Country, COUNTRY_DIAL_CODE } from "./country";
-
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
-	"_",
-	"about",
-	"admin",
-	"api",
-	"app",
-	"assets",
-	"blog",
-	"docs",
-	"favicon.ico",
-	"help",
-	"kedaipal",
-	"login",
-	"logout",
-	"onboarding",
-	"pricing",
-	"public",
-	"robots.txt",
-	"settings",
-	"sign-in",
-	"sign-up",
-	"signin",
-	"signup",
-	"sitemap.xml",
-	"static",
-	"support",
-	"www",
-]);
+import { isReservedSlug, RESERVED_SLUG_MESSAGE } from "./reservedSlugs";
 
 /**
  * Best-effort slugification of free text (store names, product names):
@@ -83,8 +57,8 @@ export function assertValidSlug(raw: string): string {
 	if (!SLUG_PATTERN.test(s)) {
 		throw new Error("Slug must use lowercase letters, numbers and single dashes");
 	}
-	if (RESERVED_SLUGS.has(s)) {
-		throw new Error("This slug is reserved");
+	if (isReservedSlug(s)) {
+		throw new Error(RESERVED_SLUG_MESSAGE);
 	}
 	return s;
 }
