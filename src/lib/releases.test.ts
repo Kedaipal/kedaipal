@@ -316,24 +316,38 @@ describe("the shipped RELEASES content", () => {
 		}
 	});
 
-	test("every `?spot=` deep link is a registry key, on that key's own tab", () => {
+	test("every `?spot=` deep link is a registry key, on that key's own page and tab", () => {
 		// A spotlight that names a key nothing renders scrolls nowhere and rings
-		// nothing; one paired with the wrong tab rings nothing on the wrong
-		// page. `spotlightHref` builds both halves from one key, so a note
-		// written with it can't get here — this guards the one typed by hand.
+		// nothing; one paired with the wrong tab (or the wrong page) rings
+		// nothing on the wrong page. `spotlightHref` builds both halves from one
+		// key, so a note written with it can't get here — this guards the one
+		// typed by hand.
 		for (const r of RELEASES) {
 			for (const e of r.entries) {
-				const params = new URLSearchParams(e.href?.split("?")[1] ?? "");
+				const [path, query] = (e.href ?? "").split("?");
+				const params = new URLSearchParams(query ?? "");
 				const spot = params.get("spot");
 				if (spot === null) continue;
 				expect(
 					isSpotlightKey(spot),
 					`${e.href}: "${spot}" is not a spotlight key`,
 				).toBe(true);
+				const target = SPOTLIGHT_ANCHOR[spot as SpotlightKey];
+				if (target.page === "product") {
+					// The products LIST is the first hop — never a guessed id.
+					expect(path, `${e.href}: a product spotlight lands on the list`).toBe(
+						"/app/products",
+					);
+					expect(params.get("tab")).toBeNull();
+					continue;
+				}
+				expect(path, `${e.href}: a settings spotlight lands on settings`).toBe(
+					"/app/settings",
+				);
 				expect(
 					params.get("tab"),
-					`${e.href}: spot "${spot}" lives on the ${SPOTLIGHT_ANCHOR[spot as SpotlightKey].tab} tab`,
-				).toBe(SPOTLIGHT_ANCHOR[spot as SpotlightKey].tab);
+					`${e.href}: spot "${spot}" lives on the ${target.tab} tab`,
+				).toBe(target.tab);
 			}
 		}
 	});

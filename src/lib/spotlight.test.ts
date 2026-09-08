@@ -3,10 +3,25 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { highlightRingClass, SETTINGS_ANCHOR } from "./country-setup-copy";
-import { isSpotlightKey, SPOTLIGHT_ANCHOR, spotlightHref } from "./spotlight";
+import { PRODUCT_SPOTLIGHT } from "./product-spotlight";
+import {
+	isProductSpotlightKey,
+	isSettingsSpotlightKey,
+	isSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+	spotlightHref,
+} from "./spotlight";
 
 const SETTINGS_ROUTE = join(__dirname, "../routes/app.settings.tsx");
 const SETTINGS_COMPONENTS = join(__dirname, "../components/settings");
+const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
+
+const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
+	([, t]) => t.page === "settings",
+);
+const productEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
+	([, t]) => t.page === "product",
+);
 
 describe("spotlight registry", () => {
 	test("every key's tab is a tab the settings route actually has", () => {
@@ -20,9 +35,15 @@ describe("spotlight registry", () => {
 		const tabs = [...(declared as string).matchAll(/"([a-z-]+)"/g)].map(
 			(m) => m[1],
 		);
-		for (const [key, { tab }] of Object.entries(SPOTLIGHT_ANCHOR)) {
-			expect(tabs, `${key} names tab "${tab}"`).toContain(tab);
+		for (const [key, target] of settingsEntries) {
+			if (target.page !== "settings") continue; // narrowing only
+			expect(tabs, `${key} names tab "${target.tab}"`).toContain(target.tab);
 		}
+	});
+
+	test("every page has at least one key, so both branches stay exercised", () => {
+		expect(settingsEntries.length).toBeGreaterThan(0);
+		expect(productEntries.length).toBeGreaterThan(0);
 	});
 
 	test("every anchor is rendered as a card id somewhere under settings", () => {
@@ -37,7 +58,7 @@ describe("spotlight registry", () => {
 				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
 				.map((f) => readFileSync(join(SETTINGS_COMPONENTS, f), "utf8")),
 		].join("\n");
-		for (const [key, { anchor }] of Object.entries(SPOTLIGHT_ANCHOR)) {
+		for (const [key, { anchor }] of settingsEntries) {
 			// A card the post-switch checklist already anchors keeps taking its
 			// id from SETTINGS_ANCHOR — one card, one source; the registries are
 			// asserted equal below, so either spelling proves the card exists.
@@ -52,6 +73,38 @@ describe("spotlight registry", () => {
 				`no card renders any of: ${accepted.join(" / ")}`,
 			).toBe(true);
 		}
+	});
+
+	test("every product-page anchor is rendered as a card id on the product form", () => {
+		// Same rule as the settings cards, different file: the form is the one
+		// place a product-page spotlight can land, so the anchor must be there.
+		const source = readFileSync(PRODUCT_FORM, "utf8");
+		for (const [key] of productEntries) {
+			expect(
+				source.includes(`id={SPOTLIGHT_ANCHOR.${key}.anchor}`),
+				`product-form.tsx renders no card with id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+			).toBe(true);
+		}
+	});
+
+	test("every product-page key has list copy and an eligibility rule", () => {
+		// The products list is the first hop for a product-page key: it has to
+		// say what the seller is looking for and know which rows to forward to.
+		// The Record type makes a missing row a compile error; this pins that
+		// the copy is real and the rule admits a stay and refuses a parcel.
+		for (const [key] of productEntries) {
+			const copy = PRODUCT_SPOTLIGHT[key as keyof typeof PRODUCT_SPOTLIGHT];
+			expect(copy.title.length).toBeGreaterThan(0);
+			expect(copy.body.length).toBeGreaterThan(0);
+			expect(copy.empty.length).toBeGreaterThan(0);
+		}
+		expect(PRODUCT_SPOTLIGHT.weekend_rate.applies({ kind: "booking" })).toBe(
+			true,
+		);
+		expect(PRODUCT_SPOTLIGHT.weekend_rate.applies({ kind: "physical" })).toBe(
+			false,
+		);
+		expect(PRODUCT_SPOTLIGHT.weekend_rate.applies({})).toBe(false); // legacy = physical
 	});
 
 	test("anchors shared with the post-switch checklist are the same string", () => {
@@ -72,12 +125,31 @@ describe("spotlight registry", () => {
 		);
 	});
 
+	test("a product-page key lands on the products LIST, not a guessed product", () => {
+		// The list is the first hop: a note can't know which product the
+		// seller means, so it never carries an id.
+		expect(spotlightHref("weekend_rate")).toBe(
+			"/app/products?spot=weekend_rate",
+		);
+	});
+
 	test("isSpotlightKey admits registry keys only", () => {
 		expect(isSpotlightKey("delyva")).toBe(true);
 		expect(isSpotlightKey("settings-delyva")).toBe(false); // an id, not a key
 		expect(isSpotlightKey("toString")).toBe(false); // prototype walk
 		expect(isSpotlightKey(undefined)).toBe(false);
 		expect(isSpotlightKey(42)).toBe(false);
+	});
+
+	test("each page admits only its own keys", () => {
+		// A settings key pasted onto the products list (or the reverse) must
+		// be dropped, not forwarded to a page that renders no such card.
+		expect(isSettingsSpotlightKey("delyva")).toBe(true);
+		expect(isSettingsSpotlightKey("weekend_rate")).toBe(false);
+		expect(isProductSpotlightKey("weekend_rate")).toBe(true);
+		expect(isProductSpotlightKey("delyva")).toBe(false);
+		expect(isProductSpotlightKey("toString")).toBe(false);
+		expect(isSettingsSpotlightKey(undefined)).toBe(false);
 	});
 });
 
