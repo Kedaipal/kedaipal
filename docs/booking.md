@@ -1221,6 +1221,51 @@ clears both, dedupe, the refusal sweep. Frontend: `order-item-line`,
 `product-wizard-booking` (default Fri + Sat, the picker adds Sunday, the
 package hides + drops the pair, an empty night set is refused at its step).
 
+### Booking surfaces stopped speaking delivery (8 Sep)
+
+Zaki's first test order surfaced a **Shipment tracking** card on a campsite
+stay, inviting a courier and a consignment number for a parcel that cannot
+exist. The card was not the bug — the IDIOM was. Every shipping surface asked
+**`!isSelfCollect`**: "not a pickup, so it must be a parcel". True while
+`delivery | self_collect` were the only two methods; wrong from the day
+`booking` became the third, and it swept every stay into the delivery branch.
+
+**`shipsAsParcel(method)`** now answers that question by name, in
+`src/lib/dispatch-surface.ts` — the module that already owned "what does this
+order show a dispatch provider", and which spelled `deliveryMethod !==
+"delivery"` twice itself; both now read through it. `undefined` resolves to
+`delivery` (the legacy value, and the direction that fails safe: a stray
+tracking card is recoverable, a real parcel with nowhere to put its
+consignment number is not).
+
+Fixed with it, all the same class, all on the buyer's tracking page — which
+had never been given the booking treatment the seller's page got in S3, so
+the two sides described one order differently:
+
+- **The Shipment-tracking card** (seller) and the **courier/consignment block**
+  (buyer) — gone from a stay on both sides.
+- **The dispatch hub** (seller) — both providers already declined a booking,
+  so nothing was visible, but the hub still opened two Convex subscriptions
+  per stay to ask a settled question.
+- **"Delivery" + "Delivery on 17 Sep"** (buyer) — a truck-iconed method chip
+  and the check-in date wearing a delivery label, directly under a YOUR STAY
+  card already saying "Check-in · Thu 17 Sep". Both stand down for a booking
+  rather than restate the stay in delivery words.
+- **A truck on "Checked In"** (buyer timeline) — the same self-collect-or-else
+  binary in the status icon map. Now `CalendarCheck`, which reads for both
+  booking shapes ("Checked In" for a stay, "Active" for a package) and matches
+  the `CalendarRange` the seller's page gives a booking.
+- **"2 night(s)"** (buyer) — the one place the app hedged a plural instead of
+  counting it. Malay doesn't inflect, so only the EN branch takes the count.
+
+Already correct, and confirmed so rather than assumed: the **mark-shipped
+courier prompt** (gated `deliveryMethod === "delivery"`, so "Mark as Checked
+In" never asked for a courier), **Print label** (needs a `deliveryAddress`,
+which a booking has none of), and the **delivery-address block**.
+
+`shipsAsParcel` is pinned by a test that goes red if it is restored to the
+`!isSelfCollect` meaning.
+
 ### What S13 deliberately does NOT do
 
 - **No public holidays / peak dates.** That wants a dated list, not a weekday
