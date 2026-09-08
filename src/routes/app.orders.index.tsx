@@ -1759,7 +1759,7 @@ function OrdersRoute() {
 										<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
 											{itemSummary.lines.map((it, i) => (
 												<div
-													key={it.variantId ?? `${it.productId}-${i}`}
+													key={`${it.variantId ?? it.productId}-${i}`}
 													className="flex items-center justify-between gap-3 text-[13px] leading-5"
 												>
 													<span className="min-w-0 truncate">

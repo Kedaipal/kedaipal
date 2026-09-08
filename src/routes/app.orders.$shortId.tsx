@@ -1658,7 +1658,7 @@ function OrderDetailRoute() {
 				<ul className="flex flex-col divide-y divide-border">
 					{order.items.map((item, i) => (
 						<OrderItemLine
-							key={item.variantId ?? `${item.productId}-${i}`}
+							key={`${item.variantId ?? item.productId}-${i}`}
 							name={item.name}
 							variantLabel={item.variantLabel}
 							quantity={item.quantity}

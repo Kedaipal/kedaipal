@@ -1565,7 +1565,7 @@ function TrackingRoute() {
 							: item.price;
 						return (
 							<OrderItemLine
-								key={item.variantId ?? `${item.productId}-${i}`}
+								key={`${item.variantId ?? item.productId}-${i}`}
 								name={item.name}
 								variantLabel={item.variantLabel}
 								quantity={item.quantity}
