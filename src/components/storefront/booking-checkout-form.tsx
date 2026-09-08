@@ -16,6 +16,7 @@ import { Minus, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { splitNightsByRate } from "../../../convex/lib/bookingAvailability";
 import type { Country } from "../../../convex/lib/country";
 import {
 	DAY_MS,
@@ -23,6 +24,7 @@ import {
 	todayMytMidnight,
 } from "../../../convex/lib/fulfilmentDate";
 import type { Locale } from "../../../convex/lib/locale";
+import { weekendDaysLabel } from "../../../convex/lib/productKind";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import {
 	addMytMonths,
@@ -182,6 +184,14 @@ export function BookingCheckoutForm({
 	// Instant book (S7): no approval step, so nothing on this page may promise
 	// one. The buyer books and pays straight away.
 	const instantBook = product.booking?.autoAccept === true;
+	// Weekend rate (S13) — read from the AVAILABILITY payload, the same answer
+	// the server prices against, and split through the same pure function
+	// `requestBooking` uses, so the receipt can't disagree with the charge by
+	// a night. Free-range only; a package has one flat price.
+	const weekendPrice = !isPackage ? availability.weekendPrice : undefined;
+	const weekendDays =
+		weekendPrice !== undefined ? (availability.weekendDays ?? []) : [];
+	const hasWeekendRate = weekendPrice !== undefined && weekendDays.length > 0;
 
 	// For a package the check-OUT is never stored, only derived — otherwise
 	// bumping the count from 1 to 3 would leave a stale end date sitting next to
@@ -206,11 +216,19 @@ export function BookingCheckoutForm({
 		selection.checkIn !== undefined && checkOut !== undefined
 			? Math.round((checkOut - selection.checkIn) / DAY_MS)
 			: 0;
+	const split =
+		hasWeekendRate && selection.checkIn !== undefined && checkOut !== undefined
+			? splitNightsByRate(selection.checkIn, checkOut, {
+					weekendPrice,
+					weekendDays,
+				})
+			: { weekdayNights: nights, weekendNights: 0 };
 	const stayTotal = isPackage
 		? nights > 0
 			? unitPrice * packages
 			: 0
-		: nights * unitPrice;
+		: split.weekdayNights * unitPrice +
+			split.weekendNights * (weekendPrice ?? 0);
 	const conflict =
 		!isPackage && selection.checkIn !== undefined && checkOut === undefined
 			? conflictCeiling(selection.checkIn, ctx)
@@ -283,6 +301,18 @@ export function BookingCheckoutForm({
 						{bookingPriceSuffix(packageLength, packageUnit)}
 					</span>
 				</div>
+				{hasWeekendRate && weekendPrice !== undefined ? (
+					// Both rates stated up front, before any date is picked.
+					<div className="flex items-baseline gap-1.5 text-muted-foreground">
+						<span className="min-w-0 truncate">
+							{weekendDaysLabel(weekendDays)}
+						</span>
+						<span className="flex-1 border-b-2 border-dotted border-border" />
+						<span className="font-medium">
+							{formatPrice(weekendPrice, product.currency)}/night
+						</span>
+					</div>
+				) : null}
 				{nights > 0 &&
 				selection.checkIn !== undefined &&
 				checkOut !== undefined ? (
@@ -314,6 +344,50 @@ export function BookingCheckoutForm({
 									: `${nights} night${nights === 1 ? "" : "s"}`}
 							</span>
 						</div>
+						{/* The split, itemised — exactly the two lines the order will
+						    carry, so "why is it RM 400?" is answered before the request
+						    is made. Only the kinds that occur; a stay that is all one
+						    kind still names it. */}
+						{hasWeekendRate && weekendPrice !== undefined ? (
+							<>
+								{split.weekdayNights > 0 ? (
+									<div className="flex items-baseline gap-1.5">
+										<span>
+											{split.weekdayNights}{" "}
+											{ms
+												? `malam biasa`
+												: `weekday night${split.weekdayNights === 1 ? "" : "s"}`}{" "}
+											× {formatPrice(unitPrice, product.currency)}
+										</span>
+										<span className="flex-1 border-b-2 border-dotted border-border" />
+										<span className="font-medium">
+											{formatPrice(
+												split.weekdayNights * unitPrice,
+												product.currency,
+											)}
+										</span>
+									</div>
+								) : null}
+								{split.weekendNights > 0 ? (
+									<div className="flex items-baseline gap-1.5">
+										<span>
+											{split.weekendNights}{" "}
+											{ms
+												? `malam hujung minggu`
+												: `weekend night${split.weekendNights === 1 ? "" : "s"}`}{" "}
+											× {formatPrice(weekendPrice, product.currency)}
+										</span>
+										<span className="flex-1 border-b-2 border-dotted border-border" />
+										<span className="font-medium">
+											{formatPrice(
+												split.weekendNights * weekendPrice,
+												product.currency,
+											)}
+										</span>
+									</div>
+								) : null}
+							</>
+						) : null}
 						{securityDeposit > 0 ? (
 							<div className="flex items-baseline gap-1.5">
 								<span>Security deposit (refundable)</span>
@@ -474,8 +548,15 @@ export function BookingCheckoutForm({
 					}
 					minMonth={todayMonth}
 					maxMonth={mytMonthStart(ctx.latestCheckIn)}
+					weekendDays={hasWeekendRate ? weekendDays : undefined}
 				/>
-				<BookingCalendarLegend />
+				<BookingCalendarLegend
+					weekendLabel={
+						hasWeekendRate && weekendPrice !== undefined
+							? `${weekendDaysLabel(weekendDays)} · ${formatPrice(weekendPrice, product.currency)}/night`
+							: undefined
+					}
+				/>
 				{/* How many packages. A stepper, not a calendar drag: dragging
 				    across a package boundary is ambiguous (what does 3 days mean on
 				    a 2-day package?) and drag fights scroll on mobile — the reason

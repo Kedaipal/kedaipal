@@ -103,12 +103,34 @@ worse than no entry at all. Keep them apart.
    | Delyva connect | `spotlightHref("delyva")` | `/app/settings?tab=integrations` |
    | Annual billing | `spotlightHref("annual_billing")` | `/app/settings?tab=billing` |
 
+   **A card on a product's form — two hops, same ring.** Some features live
+   on ONE product's edit form rather than a settings tab (the weekend rate on
+   a stay listing). A note can't know which product, so a registry row with
+   `page: "product"` renders `/app/products?spot=<key>`: the list shows a
+   mint-ringed banner saying what the seller is looking for (copy and
+   eligibility in [`src/lib/product-spotlight.ts`](../src/lib/product-spotlight.ts)),
+   every row the key applies to carries `spot` on to
+   `/app/products/<id>?spot=<key>`, and the form scrolls to that card and
+   rings it. Rows the key doesn't apply to (a physical product for
+   `weekend_rate`) don't forward it, so the seller is never rung on a card
+   that isn't there; with no eligible listing at all the banner says so and
+   offers "+ New product" instead of a dead end. Each page validates `spot`
+   against its own keys — a settings key pasted onto the list is dropped,
+   not forwarded.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Weekend rate | `spotlightHref("weekend_rate")` | `/app/products` |
+
    Adding a key: give the card an `id={SPOTLIGHT_ANCHOR.<key>.anchor}` and
    thread `highlight` to it (every settings tab takes a `target: CardTarget`
-   prop for this), then add the row. `spotlight.test.ts` fails if the tab
-   doesn't exist or no card renders the anchor, and `releases.test.ts` fails
-   on a `?spot=` that isn't a key or sits on the wrong tab. Reduced-motion
-   users get the static ring without the pulse.
+   prop for this; `ProductStepCard` takes `id` + `highlight`), then add the
+   row — and, for a product-page key, its `PRODUCT_SPOTLIGHT` copy (a
+   compile error until you do). `spotlight.test.ts` fails if the tab doesn't
+   exist, no card renders the anchor, or a product-page key has no list copy;
+   `releases.test.ts` fails on a `?spot=` that isn't a key, sits on the wrong
+   tab, or points a product key anywhere but the list. Reduced-motion users
+   get the static ring without the pulse.
 5. Set `notable: true` only if the change alters how the seller works.
 6. **Declare the `kind`** — see below. Required, so this is a compile error.
 7. **Most releases earn no entry at all.** An empty release is simply absent

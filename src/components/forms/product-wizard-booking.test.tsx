@@ -145,7 +145,8 @@ describe("wizard — booking kind route", () => {
 		expect(values.kind).toBe("booking");
 		expect(values.booking).toEqual({
 			capacityPerNight: 5,
-			// Package + instant book are S7 knobs this listing doesn't use.
+			// Package + instant book are S7 knobs this listing doesn't use; a
+			// blank weekend rate sends NEITHER key (S13).
 			packageLength: undefined,
 			packageUnit: undefined,
 			autoAccept: undefined,
@@ -183,6 +184,106 @@ describe("wizard — booking kind route", () => {
 			screen.getByText(/enter a whole number between 1 and/i),
 		).toBeTruthy();
 		// Still on the pricing step — the issue is addressed to its input.
+		expect(screen.getByText("Price and capacity")).toBeTruthy();
+	});
+
+	it("publishes a weekend rate on Fri + Sat by default, and the picker changes the nights (S13)", async () => {
+		const onSubmit = vi.fn<(values: ProductFormSubmitValues) => Promise<void>>(
+			async () => {},
+		);
+		renderWizard({ onSubmit });
+		pickBooking();
+		fireEvent.click(continueBtn());
+		fireEvent.change(screen.getByPlaceholderText(/riverside standard plot/i), {
+			target: { value: "Riverside Plot" },
+		});
+		fireEvent.click(continueBtn());
+		const [price, weekend] = Array.from(
+			document.querySelectorAll('input[inputmode="decimal"]'),
+		);
+		if (!price || !weekend) throw new Error("price inputs missing");
+		fireEvent.change(price, { target: { value: "80" } });
+		// The picker only appears once there's a rate to apply it to.
+		expect(screen.queryByText(/which nights charge this rate/i)).toBeNull();
+		fireEvent.change(weekend, { target: { value: "120" } });
+		expect(screen.getByText(/which nights charge this rate/i)).toBeTruthy();
+		// The consequence line says what the seller just set up.
+		expect(
+			screen.getByText("Fri and Sat nights charge RM 120, other nights RM 80."),
+		).toBeTruthy();
+		// Add Sunday.
+		fireEvent.click(screen.getByRole("button", { name: "Sunday" }));
+		expect(
+			screen.getByText(
+				"Fri, Sat and Sun nights charge RM 120, other nights RM 80.",
+			),
+		).toBeTruthy();
+		fireEvent.click(continueBtn());
+
+		expect(screen.getByText("Weekend rate")).toBeTruthy();
+		expect(screen.getByText("RM 120 on Fri, Sat & Sun nights")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /publish product/i }));
+		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		const values = onSubmit.mock.calls[0][0];
+		expect(values.booking).toMatchObject({
+			weekendPrice: 12_000,
+			weekendDays: [0, 5, 6],
+		});
+	});
+
+	it("hides the weekend rate behind a package and drops it from the payload", async () => {
+		const onSubmit = vi.fn<(values: ProductFormSubmitValues) => Promise<void>>(
+			async () => {},
+		);
+		renderWizard({ onSubmit });
+		pickBooking();
+		fireEvent.click(continueBtn());
+		fireEvent.change(screen.getByPlaceholderText(/riverside standard plot/i), {
+			target: { value: "Monthly Pass" },
+		});
+		fireEvent.click(continueBtn());
+		const [price, weekend] = Array.from(
+			document.querySelectorAll('input[inputmode="decimal"]'),
+		);
+		if (!price || !weekend) throw new Error("price inputs missing");
+		fireEvent.change(price, { target: { value: "150" } });
+		fireEvent.change(weekend, { target: { value: "120" } });
+		// Now make it a package — the weekend field gives way to its reason.
+		fireEvent.change(screen.getByPlaceholderText("e.g. 30"), {
+			target: { value: "1" },
+		});
+		expect(screen.getByText(/a package has one flat price/i)).toBeTruthy();
+		expect(
+			document.querySelectorAll('input[inputmode="decimal"]').length,
+		).toBe(2); // price + deposit; the weekend input is gone
+		fireEvent.click(continueBtn());
+		expect(screen.queryByText("Weekend rate")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /publish product/i }));
+		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		const values = onSubmit.mock.calls[0][0];
+		expect(values.booking?.packageLength).toBe(1);
+		expect(values.booking).not.toHaveProperty("weekendPrice");
+		expect(values.booking).not.toHaveProperty("weekendDays");
+	});
+
+	it("refuses a weekend rate with no nights at the step that owns it", () => {
+		renderWizard();
+		pickBooking();
+		fireEvent.click(continueBtn());
+		fireEvent.change(screen.getByPlaceholderText(/riverside standard plot/i), {
+			target: { value: "Riverside Plot" },
+		});
+		fireEvent.click(continueBtn());
+		const [price, weekend] = Array.from(
+			document.querySelectorAll('input[inputmode="decimal"]'),
+		);
+		if (!price || !weekend) throw new Error("price inputs missing");
+		fireEvent.change(price, { target: { value: "80" } });
+		fireEvent.change(weekend, { target: { value: "120" } });
+		fireEvent.click(screen.getByRole("button", { name: "Friday" }));
+		fireEvent.click(screen.getByRole("button", { name: "Saturday" }));
+		fireEvent.click(continueBtn());
+		expect(screen.getByText(/pick at least one night/i)).toBeTruthy();
 		expect(screen.getByText("Price and capacity")).toBeTruthy();
 	});
 

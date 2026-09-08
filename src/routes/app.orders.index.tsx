@@ -23,6 +23,13 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { sanitizeAttributionSource } from "../../convex/lib/attribution";
 import { resolveAwbConfig } from "../../convex/lib/awbConfig";
+import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+	describeBookingPeriod,
+	ENDING_SOON_DAYS,
+} from "../../convex/lib/bookingPeriod";
 import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
 import {
 	foldLegacyBuckets,
@@ -76,13 +83,6 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
-import {
-	BOOKING_PERIOD_CHIPS,
-	BOOKING_PERIOD_LABELS,
-	type BookingPeriod,
-	describeBookingPeriod,
-	ENDING_SOON_DAYS,
-} from "../../convex/lib/bookingPeriod";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import {
@@ -109,7 +109,14 @@ import {
 	formatOrderTimestamp,
 	formatPrice,
 } from "../lib/format";
-import { summarizeOrderCardItems } from "../lib/order-card-items";
+import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
+import {
+	statusChipSelected as chipSelected,
+	isBucketChip,
+	type StatusChipKey,
+	toggleBucketChip,
+} from "../lib/inbox-status-chips";
+import { summarizeOrderCardItems, withLineKeys } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
@@ -120,13 +127,6 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
-import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
-import {
-	isBucketChip,
-	type StatusChipKey,
-	statusChipSelected as chipSelected,
-	toggleBucketChip,
-} from "../lib/inbox-status-chips";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -1757,28 +1757,30 @@ function OrdersRoute() {
 									    up (phones keep the grouped list without the price column;
 									    the bold total above is the number that matters there). */}
 										<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
-											{itemSummary.lines.map((it, i) => (
-												<div
-													key={it.variantId ?? `${it.productId}-${i}`}
-													className="flex items-center justify-between gap-3 text-[13px] leading-5"
-												>
-													<span className="min-w-0 truncate">
-														<span className="tabular-nums text-muted-foreground">
-															{it.quantity}&times;
-														</span>{" "}
-														<span className="font-medium">{it.name}</span>
-														{it.variantLabel ? (
-															<span className="text-muted-foreground">
-																{" "}
-																&middot; {it.variantLabel}
-															</span>
-														) : null}
-													</span>
-													<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
-														{formatPrice(it.lineTotal, o.currency)}
-													</span>
-												</div>
-											))}
+											{withLineKeys(itemSummary.lines).map(
+												({ key, item: it }) => (
+													<div
+														key={key}
+														className="flex items-center justify-between gap-3 text-[13px] leading-5"
+													>
+														<span className="min-w-0 truncate">
+															<span className="tabular-nums text-muted-foreground">
+																{it.quantity}&times;
+															</span>{" "}
+															<span className="font-medium">{it.name}</span>
+															{it.variantLabel ? (
+																<span className="text-muted-foreground">
+																	{" "}
+																	&middot; {it.variantLabel}
+																</span>
+															) : null}
+														</span>
+														<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
+															{formatPrice(it.lineTotal, o.currency)}
+														</span>
+													</div>
+												),
+											)}
 											{itemSummary.moreCount > 0 ? (
 												<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
 													<span>

@@ -38,6 +38,7 @@ import {
 	normalizePackageQuantity,
 	resolveBookingRange,
 	nightsBetween,
+	splitNightsByRate,
 } from "./lib/bookingAvailability";
 import { requireCustomerName } from "./lib/customer";
 import {
@@ -52,7 +53,12 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import { logAdminAction } from "./lib/auth";
-import { effectiveKind, type PackageUnit } from "./lib/productKind";
+import {
+	effectiveKind,
+	type PackageUnit,
+	WEEKDAY_NIGHTS_LABEL,
+	weekendNightsLabel,
+} from "./lib/productKind";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
 import { DEFAULT_COUNTRY } from "./lib/country";
@@ -71,6 +77,59 @@ import { recordOrderCreated } from "./subscriptionUsage";
 
 
 const SHORT_ID_RETRIES = 3;
+
+/**
+ * The order lines for a free-range stay: one per-night line, or two when the
+ * listing prices weekend nights differently (S13). Weekday first, weekend
+ * second — the order the receipt reads them in.
+ */
+function buildStayLines(
+	product: Doc<"products">,
+	variant: Doc<"productVariants">,
+	checkIn: number,
+	checkOut: number,
+): Doc<"orders">["items"] {
+	const base = {
+		productId: product._id,
+		variantId: variant._id,
+		name: product.name,
+	};
+	const weekendPrice = product.booking?.weekendPrice;
+	const weekendDays = product.booking?.weekendDays;
+	if (weekendPrice === undefined || weekendDays === undefined) {
+		return [
+			{
+				...base,
+				variantLabel: undefined,
+				price: variant.price,
+				quantity: nightsBetween(checkIn, checkOut),
+			},
+		];
+	}
+	const { weekdayNights, weekendNights } = splitNightsByRate(
+		checkIn,
+		checkOut,
+		product.booking,
+	);
+	const lines: Doc<"orders">["items"] = [];
+	if (weekdayNights > 0) {
+		lines.push({
+			...base,
+			variantLabel: WEEKDAY_NIGHTS_LABEL,
+			price: variant.price,
+			quantity: weekdayNights,
+		});
+	}
+	if (weekendNights > 0) {
+		lines.push({
+			...base,
+			variantLabel: weekendNightsLabel(weekendDays),
+			price: weekendPrice,
+			quantity: weekendNights,
+		});
+	}
+	return lines;
+}
 
 /** Load + vet the bookable listing behind a public booking surface. */
 async function loadBookableListing(
@@ -126,6 +185,12 @@ export const availability = query({
 		 * the client so the stepper's ceiling and the mutation's clamp are the
 		 * same number — that ceiling protects the capacity scans' span bound. */
 		maxPackageQuantity: number;
+		/** Weekend per-night rate + the nights it covers (S13) — quoted with
+		 * the availability so the calendar tints weekend nights and the
+		 * receipt itemises the split without a second read. Both unset = one
+		 * rate for every night. */
+		weekendPrice?: number;
+		weekendDays?: number[];
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -161,6 +226,8 @@ export const availability = query({
 			packageLength: product.booking?.packageLength,
 			packageUnit: product.booking?.packageUnit,
 			maxPackageQuantity: maxPackageQuantity(product.booking),
+			weekendPrice: product.booking?.weekendPrice,
+			weekendDays: product.booking?.weekendDays,
 		};
 	},
 });
@@ -298,23 +365,34 @@ export const requestBooking = mutation({
 			);
 		}
 
-		const nights = nightsBetween(checkIn, checkOut);
 		// A PACKAGE is priced per package (S7) — "2 × RM 150 per month", not
 		// "RM 5 × 61 nights". A free-range stay is per-night × nights. Both ride
 		// the standard quantity math, so every money surface (totals, CSV,
 		// insights, receipts, PDF) needs zero special-casing either way — and on
 		// a package `quantity` now carries its natural meaning, the number of
 		// packages bought.
-		const items = [
-			{
-				productId: product._id,
-				variantId: variant._id,
-				name: product.name,
-				variantLabel: undefined,
-				price: variant.price,
-				quantity: isPackageListing ? packageQuantity : nights,
-			},
-		];
+		//
+		// A weekend rate (S13) splits a free-range stay into TWO lines — weekday
+		// nights at the base rate, weekend nights at the weekend rate — same
+		// productId/variantId, each `quantity` its own night count. The split is
+		// computed HERE from the listing (never taken from the client: there is
+		// no arg for it), through the same pure function the receipt previews
+		// with. Both rates are FROZEN on the lines (snapshot posture, like the
+		// deposit): a later price edit never re-describes a placed booking. A
+		// stay that is all one kind writes one line; a listing without the rate
+		// writes today's unlabelled line.
+		const items = isPackageListing
+			? [
+					{
+						productId: product._id,
+						variantId: variant._id,
+						name: product.name,
+						variantLabel: undefined,
+						price: variant.price,
+						quantity: packageQuantity,
+					},
+				]
+			: buildStayLines(product, variant, checkIn, checkOut);
 		// The refundable security deposit rides the one payment (86eyn4kee):
 		// frozen from the listing NOW (snapshot posture — a later policy edit
 		// never changes a placed booking) and folded into `total` through the
@@ -367,6 +445,14 @@ export const requestBooking = mutation({
 			// Frozen shape (S7) — a later listing edit never re-describes this
 			// order, and every money/date surface reads the span correctly.
 			bookingPackaged: isPackageListing ? true : undefined,
+			// Frozen alongside the two lines it explains (S13): the counts say
+			// how many nights each rate charged, this says which ones they were.
+			// Only when the rate actually applied — a package and a single-rate
+			// listing both leave it unset.
+			bookingWeekendDays:
+				!isPackageListing && product.booking?.weekendPrice !== undefined
+					? product.booking.weekendDays
+					: undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for

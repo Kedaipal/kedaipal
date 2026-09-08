@@ -15,6 +15,7 @@ import {
 	type FormEvent,
 	type MutableRefObject,
 	type ReactNode,
+	useEffect,
 	useLayoutEffect,
 	useState,
 } from "react";
@@ -22,17 +23,30 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
+	DEFAULT_WEEKEND_DAYS,
 	MAX_CAPACITY_PER_NIGHT,
 	type PackageUnit,
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
 import { bookingSpanNoun } from "../../lib/booking-dates";
+import {
+	type FixHighlight,
+	highlightRingClass,
+	scrollToAnchor,
+} from "../../lib/country-setup-copy";
 import { asPackageUnit } from "../../lib/package-unit";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
-import { describeProduct } from "../../lib/product-summary";
+import {
+	describeProduct,
+	weekendRateConsequence,
+} from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
+import {
+	type ProductSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+} from "../../lib/spotlight";
 import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -42,6 +56,7 @@ import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
+import { WeekdayPicker } from "./weekday-picker";
 import {
 	type CustomLineDraft,
 	reconcileForSubmit,
@@ -69,6 +84,10 @@ export interface ProductFormSubmitValues {
 		packageLength?: number;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		/** Weekend per-night rate (sen; S13) + the nights it covers. 0 clears
+		 * (server normalizes); omitted whenever a package length is set. */
+		weekendPrice?: number;
+		weekendDays?: number[];
 	};
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
@@ -134,6 +153,10 @@ export type ProductFormDraft = {
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
 	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
 	securityDeposit?: string;
+	/** Weekend per-night rate (RM, as typed; blank/absent = one rate) + the
+	 * nights it covers (S13). */
+	weekendPrice?: string;
+	weekendDays?: number[];
 	categoryIds: Id<"categories">[];
 	images: ProductImage[];
 	editor: VariantEditorState;
@@ -165,6 +188,9 @@ interface ProductFormProps {
 		/** Booking security deposit as an RM string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
+		/** Weekend per-night rate as an RM string draft + its nights (S13). */
+		weekendPrice?: string;
+		weekendDays?: number[];
 		minNoticeDays?: number;
 		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
@@ -219,6 +245,14 @@ interface ProductFormProps {
 	 * variants/options derivation when present.
 	 */
 	initialEditor?: VariantEditorState;
+	/**
+	 * A What's-new note's deep link (`?spot=`, src/lib/spotlight.ts): scroll
+	 * to the card that key names and ring it in the brand mint. The edit
+	 * route validates the key; the form only has to find the card. A key
+	 * whose card isn't rendered (a weekend-rate spotlight on a physical
+	 * product) is a no-op — nothing to ring, so nothing rings.
+	 */
+	spotlight?: ProductSpotlightKey;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -451,15 +485,27 @@ function ProductStepCard({
 	title,
 	description,
 	children,
+	id,
+	highlight,
 }: {
 	icon: ReactNode;
 	kicker: string;
 	title: string;
 	description: string;
 	children: ReactNode;
+	/** Anchor for a deep link (`SPOTLIGHT_ANCHOR.<key>.anchor`). */
+	id?: string;
+	/** Ring this card — the What's-new spotlight, same ring the settings cards wear. */
+	highlight?: FixHighlight;
 }) {
+	// `scroll-mt-24` keeps the sticky header off the card once scrolled to;
+	// the ring is a box-shadow, so `overflow-hidden` on the section (which
+	// clips the header band's corners) leaves it intact.
 	return (
-		<section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+		<section
+			id={id}
+			className={`overflow-hidden rounded-2xl border bg-card shadow-sm scroll-mt-24 ${highlight ? highlightRingClass(highlight) : "border-border"}`}
+		>
 			<div className="flex gap-3 border-b border-border bg-muted/25 px-4 py-4 lg:px-5">
 				<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-accent ring-1 ring-border">
 					{icon}
@@ -543,6 +589,8 @@ function ProductSummaryStrip({
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		weekendPrice?: string;
+		weekendDays?: readonly number[];
 	} | null;
 }) {
 	const summary = describeProduct(
@@ -636,11 +684,27 @@ export function ProductForm({
 	mode,
 	draftRef,
 	initialEditor,
+	spotlight,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
 	// handoff seeds a create with initialValues, so `mode` wins when given.
 	const isEdit = mode ? mode === "edit" : initialValues !== undefined;
+
+	// Deep link to one card (`?spot=`): scroll to it and ring it, instead of
+	// dropping the seller at the top of a long form to hunt for it. Same
+	// scroll-and-ring as `/app/settings`; the card takes its ring from
+	// `ringFor` below. Waits a frame because the card mounts in this commit.
+	const spotlightAnchor = spotlight
+		? SPOTLIGHT_ANCHOR[spotlight].anchor
+		: undefined;
+	const ringFor = (anchor: string): FixHighlight | undefined =>
+		spotlightAnchor === anchor ? "spotlight" : undefined;
+	useEffect(() => {
+		if (!spotlightAnchor) return;
+		const frame = requestAnimationFrame(() => scrollToAnchor(spotlightAnchor));
+		return () => cancelAnimationFrame(frame);
+	}, [spotlightAnchor]);
 
 	const [images, setImages] = useState<ProductImage[]>(
 		(initialValues?.imageStorageIds ?? []).map((id, i) => ({
@@ -671,6 +735,14 @@ export function ProductForm({
 	);
 	const [autoAccept, setAutoAccept] = useState(
 		initialValues?.autoAccept === true,
+	);
+	// Weekend rate (S13) — RM draft + the nights it covers. Defaults to Fri +
+	// Sat so a seller who only types the rate gets the campsite norm.
+	const [weekendDraft, setWeekendDraft] = useState(
+		initialValues?.weekendPrice ?? "",
+	);
+	const [weekendDays, setWeekendDays] = useState<number[]>(
+		initialValues?.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
 	);
 	// Draft as a string so the input can be cleared while typing; parsed at
 	// submit (blank/0 = no override).
@@ -741,7 +813,10 @@ export function ProductForm({
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
 			if (!minQtyValid) return;
-			if (isBooking && (!capacityValid || !depositValid || !packageValid))
+			if (
+				isBooking &&
+				(!capacityValid || !depositValid || !packageValid || !weekendValid)
+			)
 				return;
 
 			try {
@@ -767,6 +842,17 @@ export function ProductForm({
 									depositParsed !== null && depositParsed > 0
 										? Math.round(depositParsed * 100)
 										: 0,
+								// Free-range only: a package has one flat price, so the
+								// fields are hidden there and the pair is dropped rather
+								// than sent for the server to refuse. 0 clears.
+								weekendPrice:
+									packageTrimmed.length === 0 &&
+									weekendParsed !== null &&
+									weekendParsed > 0
+										? Math.round(weekendParsed * 100)
+										: 0,
+								weekendDays:
+									packageTrimmed.length === 0 ? weekendDays : undefined,
 							}
 						: undefined,
 					minNoticeDays:
@@ -805,6 +891,8 @@ export function ProductForm({
 			packageLength: packageDraft,
 			packageUnit,
 			autoAccept,
+			weekendPrice: weekendDraft,
+			weekendDays,
 			categoryIds,
 			images,
 			editor,
@@ -858,6 +946,29 @@ export function ProductForm({
 		depositTrimmed.length === 0 ||
 		(depositParsed !== null && depositParsed >= 0 && depositParsed <= 10_000);
 
+	// Weekend rate (S13) — blank = one rate; else a price in (0, RM 100,000]
+	// with at least one night and never all seven (mirrors
+	// sanitizeWeekendRate). Irrelevant on a package, whose fields are hidden.
+	const weekendTrimmed = weekendDraft.trim();
+	const weekendParsed =
+		weekendTrimmed.length === 0 ? null : parsePriceInput(weekendTrimmed);
+	const weekendPriceValid =
+		weekendTrimmed.length === 0 ||
+		(weekendParsed !== null && weekendParsed > 0 && weekendParsed <= 100_000);
+	const weekendDaysValid =
+		weekendTrimmed.length === 0 ||
+		(weekendDays.length >= 1 && weekendDays.length <= 6);
+	const weekendValid =
+		packageTrimmed.length > 0 || (weekendPriceValid && weekendDaysValid);
+	const weekendConsequence = weekendRateConsequence(
+		{
+			basePrice: editor.rows[0]?.price ?? "",
+			weekendPrice: weekendDraft,
+			weekendDays,
+		},
+		currency,
+	);
+
 	// Minimum order quantity — blank clears; whole number ≤ MIN_QUANTITY_MAX.
 	const minQtyTrimmed = minQty.trim();
 	const minQtyParsed = minQtyTrimmed.length === 0 ? 0 : Number(minQtyTrimmed);
@@ -901,6 +1012,8 @@ export function ProductForm({
 											capacityPerNight: capacityDraft,
 											packageLength: packageDraft,
 											autoAccept,
+											weekendPrice: weekendDraft,
+											weekendDays,
 										}
 									: null
 							}
@@ -989,6 +1102,8 @@ export function ProductForm({
 				// night, capacity beside it. The kind itself is immutable (set at
 				// create; archive + recreate is the escape hatch).
 				<ProductStepCard
+					id={SPOTLIGHT_ANCHOR.weekend_rate.anchor}
+					highlight={ringFor(SPOTLIGHT_ANCHOR.weekend_rate.anchor)}
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & capacity"
@@ -1079,6 +1194,68 @@ export function ProductForm({
 									{i.message}
 								</p>
 							))}
+					</div>
+					{/* Weekend rate (S13) — a second per-night price on the nights the
+					    seller picks. Sits right under the base price because it IS a
+					    price; hidden on a package, which has one flat price by
+					    definition, with the reason stated in its place. */}
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						{packageTrimmed.length > 0 ? (
+							<>
+								<span className="text-sm font-medium text-muted-foreground">
+									Weekend rate
+								</span>
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									A package has one flat price — clear the package length to
+									charge weekend nights differently.
+								</p>
+							</>
+						) : (
+							<>
+								<label
+									htmlFor="booking-weekend"
+									className="text-sm font-medium"
+								>
+									Weekend rate ({currency}){" "}
+									<span className="font-normal text-muted-foreground">
+										(optional)
+									</span>
+								</label>
+								<Input
+									id="booking-weekend"
+									inputMode="decimal"
+									placeholder="0.00"
+									value={weekendDraft}
+									onChange={(e) => setWeekendDraft(e.target.value)}
+									variant="field"
+									isError={!weekendPriceValid}
+									className="w-40"
+								/>
+								{!weekendPriceValid ? (
+									<p className="text-xs text-destructive">
+										Enter an amount above 0 and up to 100,000, or leave blank.
+									</p>
+								) : null}
+								{weekendTrimmed.length > 0 ? (
+									<div className="flex flex-col gap-1.5 pt-1">
+										<span className="text-xs font-medium">
+											Which nights charge this rate?
+										</span>
+										<WeekdayPicker
+											label="Weekend nights"
+											value={weekendDays}
+											onChange={setWeekendDays}
+										/>
+									</div>
+								) : null}
+								<p
+									className={`text-xs leading-relaxed ${weekendDaysValid ? "text-muted-foreground" : "text-destructive"}`}
+								>
+									{weekendConsequence ??
+										"Leave blank for one rate every night. Set it to charge more on the nights you pick — Fri and Sat by default. Guests see both rates before they pick dates."}
+								</p>
+							</>
+						)}
 					</div>
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-capacity" className="text-sm font-medium">

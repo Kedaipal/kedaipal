@@ -3,7 +3,11 @@
 // that offers a tab the card then declines to fill is a blank pane.
 import { describe, expect, it } from "vitest";
 import type { Doc } from "../../convex/_generated/dataModel";
-import { delyvaSurface, lalamoveSurface } from "./dispatch-surface";
+import {
+	delyvaSurface,
+	lalamoveSurface,
+	shipsAsParcel,
+} from "./dispatch-surface";
 
 const order = (over: Record<string, unknown> = {}) =>
 	({
@@ -143,5 +147,40 @@ describe("a set-up nudge only appears where it can be acted on", () => {
 				lalamove({ blockReason: "booking_disabled" }),
 			),
 		).toBe("none");
+	});
+});
+
+describe("shipsAsParcel", () => {
+	it("is true only for a delivery", () => {
+		expect(shipsAsParcel("delivery")).toBe(true);
+		expect(shipsAsParcel("self_collect")).toBe(false);
+	});
+
+	it("is FALSE for a booking — a stay has no parcel", () => {
+		// The reported bug (8 Sep): every shipping surface asked
+		// `!isSelfCollect`, so a campsite stay was offered a Shipment-tracking
+		// card and an "add tracking" invitation for a parcel that cannot exist.
+		expect(shipsAsParcel("booking")).toBe(false);
+	});
+
+	it("reads a legacy undefined as a delivery", () => {
+		// Orders written before the field existed are parcels. Failing to the
+		// parcel side is the safe direction: a real parcel must never lose the
+		// place its consignment number goes.
+		expect(shipsAsParcel(undefined)).toBe(true);
+	});
+});
+
+describe("no dispatch card on a booking", () => {
+	it("neither provider offers anything on a stay", () => {
+		// Both already declined a booking via `deliveryMethod !== "delivery"`;
+		// this pins that the shared predicate kept that behaviour, so the hub
+		// can guard on it without changing what the cards decide.
+		expect(lalamoveSurface(order({ deliveryMethod: "booking" }), lalamove())).toBe(
+			"none",
+		);
+		expect(delyvaSurface(order({ deliveryMethod: "booking" }), delyva())).toBe(
+			"none",
+		);
 	});
 });
