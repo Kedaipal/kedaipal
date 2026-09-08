@@ -1414,7 +1414,9 @@ function OrderDetailRoute() {
 										<p className="text-xs text-muted-foreground">
 											{onCooldown
 												? "Once per day, and only until day 14 — after that it's a conversation, not a nudge."
-												: "Sends the amount, transfer reference and their order-page link. Once per day until day 14. If the buyer has never replied on WhatsApp, Meta may not deliver it — the chat button below always works."}
+												: order.paymentReminderViaTemplate
+													? "Sends the amount, transfer reference and their order-page link as a WhatsApp notification — it lands even if the buyer has never replied. Once per day until day 14."
+													: "Sends the amount, transfer reference and their order-page link. Once per day until day 14. If the buyer has never replied on WhatsApp, Meta may not deliver it — the chat button below always works."}
 										</p>
 									</div>
 								);

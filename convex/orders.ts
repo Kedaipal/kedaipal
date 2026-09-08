@@ -148,7 +148,10 @@ import {
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidMobileForCountry } from "./lib/slug";
-import { orderConfirmTemplateName } from "./lib/whatsapp";
+import {
+	orderConfirmTemplateName,
+	paymentReminderTemplateName,
+} from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
@@ -1487,6 +1490,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 		plateNumber?: string;
 		shareLink?: string;
 	};
+	// Seller path only (z8r3fddtkh): whether this deployment sends the manual
+	// payment reminder as a Meta utility template (delivers regardless of the
+	// buyer's 24h window) or as a best-effort free-form message. The button's
+	// helper copy says which — a deployment-level fact, not order data.
+	paymentReminderViaTemplate?: boolean;
 };
 
 export const get = query({
@@ -1655,6 +1663,9 @@ export const get = query({
 				order.confirmationPushStatus !== undefined
 					? (process.env.WHATSAPP_CHECKOUT_PHONE ?? retailer?.waPhone)
 					: undefined,
+			paymentReminderViaTemplate: isBuyerRead
+				? undefined
+				: paymentReminderTemplateName() !== undefined,
 		};
 	},
 });
@@ -1778,10 +1789,12 @@ export const prepareManualReminder = internalMutation({
  * buyer the full payment message (amount + transfer ref + "Make payment" CTA
  * to their order page). Auth + eligibility + the cooldown stamp happen
  * atomically in prepareManualReminder; the actual send is best-effort through
- * the WABA `session_message` gateway (kill switch / caps / opt-outs apply, and
- * may silently not deliver outside Meta's 24h service window — the button's
- * helper says so). A blocked reason is returned WITHOUT sending, so the button
- * can explain why. See docs/payment-reminder.md.
+ * the WABA gateway (kill switch / caps / opt-outs apply) — as a utility
+ * template when `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` is set (delivers with no
+ * open service window), else free-form and liable to silently not deliver
+ * outside Meta's 24h window (the button's helper says which). A blocked
+ * reason is returned WITHOUT sending, so the button can explain why. See
+ * docs/payment-reminder.md.
  */
 export const sendPaymentReminder = action({
 	args: { shortId: v.string() },

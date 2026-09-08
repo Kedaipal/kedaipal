@@ -109,6 +109,7 @@ import type * as lib_trackingToken from "../lib/trackingToken.js";
 import type * as lib_usagePeriod from "../lib/usagePeriod.js";
 import type * as lib_variant from "../lib/variant.js";
 import type * as lib_wabaLimits from "../lib/wabaLimits.js";
+import type * as lib_wabaTemplateWebhook from "../lib/wabaTemplateWebhook.js";
 import type * as lib_wabaWebhook from "../lib/wabaWebhook.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
@@ -238,6 +239,7 @@ declare const fullApi: ApiFromModules<{
   "lib/usagePeriod": typeof lib_usagePeriod;
   "lib/variant": typeof lib_variant;
   "lib/wabaLimits": typeof lib_wabaLimits;
+  "lib/wabaTemplateWebhook": typeof lib_wabaTemplateWebhook;
   "lib/wabaWebhook": typeof lib_wabaWebhook;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;

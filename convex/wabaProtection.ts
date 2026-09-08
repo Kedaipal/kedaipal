@@ -43,8 +43,10 @@ import {
 	LOG_PURGE_PAGE_SIZE,
 	OUTBOUND_MESSAGE_LOG_RETENTION_MS,
 	WABA_HEALTH_RETENTION_MS,
+	WABA_TEMPLATE_EVENTS_RETENTION_MS,
 	mytMonthKey,
 } from "./lib/retention";
+import { configuredTemplates } from "./lib/whatsapp";
 import { assertValidMobileForCountry, normalizeWaPhone } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
 import {
@@ -790,6 +792,217 @@ export const sendWabaAlert = internalAction({
 	},
 });
 
+// ---------------------------------------------------------------------------
+// Template lifecycle — fed by Meta template webhooks (convex/http.ts), read by
+// the admin console. ClickUp z8r3fddtkh.
+// ---------------------------------------------------------------------------
+
+const templateEventKind = v.union(
+	v.literal("status"),
+	v.literal("category"),
+	v.literal("quality"),
+);
+
+/** One row per template webhook. The parser already decided `alerted`. */
+export const recordTemplateEvent = internalMutation({
+	args: {
+		kind: templateEventKind,
+		templateName: v.string(),
+		language: v.string(),
+		event: v.optional(v.string()),
+		previousCategory: v.optional(v.string()),
+		newCategory: v.optional(v.string()),
+		previousQuality: v.optional(v.string()),
+		newQuality: v.optional(v.string()),
+		reason: v.optional(v.string()),
+		alerted: v.boolean(),
+	},
+	handler: async (ctx, args): Promise<void> => {
+		await ctx.db.insert("wabaTemplateEvents", {
+			...args,
+			observedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Email ops about a template that will now fail to send or cost 6.1× more.
+ * Same recipient resolution as the health alert (ADMIN_ALERT_EMAIL, falling
+ * back to EMAIL_FROM). Never throws into the webhook handler.
+ */
+export const sendWabaTemplateAlert = internalAction({
+	args: { summary: v.string(), kind: templateEventKind },
+	handler: async (_ctx, { summary, kind }): Promise<void> => {
+		const to = process.env.ADMIN_ALERT_EMAIL ?? process.env.EMAIL_FROM;
+		console.error(`WABA TEMPLATE ALERT: ${summary}`);
+		if (!to) {
+			console.error(
+				"WABA template alert email skipped: no ADMIN_ALERT_EMAIL / EMAIL_FROM",
+			);
+			return;
+		}
+		const consequence =
+			kind === "category"
+				? "A template billed outside UTILITY costs ~6× more per send from 1 Oct 2026. Meta allows an appeal for a limited window after the change — open WhatsApp Manager → Message templates and appeal, or re-word the template so it is strictly transactional."
+				: kind === "status"
+					? "Every send that names a paused, disabled or rejected template fails outright — the buyer or seller hears nothing. Check WhatsApp Manager → Message templates for the reason and fix or re-submit the template."
+					: "A YELLOW/RED quality score is Meta's warning before it pauses the template. Review recent sends for anything that reads as marketing, and watch for complaints.";
+		const body = `A WhatsApp message template changed state.\n\n${summary}\n\n${consequence}\n\nAdmin console: /app/admin/waba`;
+		try {
+			await sendEmail(
+				to,
+				"[Kedaipal] WhatsApp template alert",
+				`<pre>${body}</pre>`,
+				body,
+			);
+		} catch (err) {
+			console.error("WABA template alert email failed", err);
+		}
+	},
+});
+
+/**
+ * The admin console's template panel: every template this deployment is
+ * configured to send (from env) joined with the newest webhook row per
+ * (name, language), so "is anything wrong with our templates?" is one
+ * glance. Templates Meta has told us about that we DON'T have configured
+ * appear too — a webhook about an unknown name is worth seeing, not hiding.
+ * Two bounded indexed reads per template; never a scan of the events table.
+ */
+export type AdminTemplateRow = {
+	templateName: string;
+	envVar?: string;
+	purpose?: string;
+	configured: boolean;
+	languages: Array<{
+		language: string;
+		status?: string;
+		category?: string;
+		quality?: string;
+		lastEvent?: {
+			kind: Doc<"wabaTemplateEvents">["kind"];
+			summary: string;
+			observedAt: number;
+			alerted: boolean;
+		};
+	}>;
+};
+
+const TEMPLATE_LANGUAGES = ["en", "ms"] as const;
+const RECENT_TEMPLATE_EVENTS_CAP = 100;
+
+function summarizeTemplateEvent(row: Doc<"wabaTemplateEvents">): string {
+	if (row.kind === "status") {
+		return `status → ${row.event ?? "?"}${row.reason ? ` — ${row.reason}` : ""}`;
+	}
+	if (row.kind === "category") {
+		return `category ${row.previousCategory ?? "?"} → ${row.newCategory ?? "?"}`;
+	}
+	return `quality ${row.previousQuality ?? "?"} → ${row.newQuality ?? "?"}`;
+}
+
+export const adminListTemplates = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{
+		rows: AdminTemplateRow[];
+		recent: Array<{
+			_id: Id<"wabaTemplateEvents">;
+			templateName: string;
+			language: string;
+			summary: string;
+			observedAt: number;
+			alerted: boolean;
+		}>;
+		/** No template webhook has ever arrived — the fields are probably not subscribed. */
+		neverReceived: boolean;
+	}> => {
+		await requireAdmin(ctx);
+		// Newest events first, bounded — also tells us which unknown template
+		// names Meta has mentioned, and whether ANY webhook has ever arrived.
+		const recentRows = await ctx.db
+			.query("wabaTemplateEvents")
+			.withIndex("by_observed")
+			.order("desc")
+			.take(RECENT_TEMPLATE_EVENTS_CAP);
+		const configured = configuredTemplates();
+		const names = new Map<string, { envVar?: string; purpose?: string }>();
+		for (const c of configured) {
+			if (c.name) names.set(c.name, { envVar: c.envVar, purpose: c.purpose });
+		}
+		for (const r of recentRows) {
+			if (!names.has(r.templateName)) names.set(r.templateName, {});
+		}
+		const rows: AdminTemplateRow[] = [];
+		for (const [templateName, meta] of names) {
+			const languages: AdminTemplateRow["languages"] = [];
+			for (const language of TEMPLATE_LANGUAGES) {
+				// Newest row of each kind for this (name, language) — three
+				// bounded indexed reads, because "current status" and "current
+				// category" are carried by DIFFERENT event kinds.
+				const history = await ctx.db
+					.query("wabaTemplateEvents")
+					.withIndex("by_template", (q) =>
+						q.eq("templateName", templateName).eq("language", language),
+					)
+					.order("desc")
+					.take(RECENT_TEMPLATE_EVENTS_CAP);
+				const latestStatus = history.find((h) => h.kind === "status");
+				const latestCategory = history.find((h) => h.kind === "category");
+				const latestQuality = history.find((h) => h.kind === "quality");
+				const last = history[0];
+				languages.push({
+					language,
+					status: latestStatus?.event,
+					category: latestCategory?.newCategory,
+					quality: latestQuality?.newQuality,
+					lastEvent: last
+						? {
+								kind: last.kind,
+								summary: summarizeTemplateEvent(last),
+								observedAt: last.observedAt,
+								alerted: last.alerted,
+							}
+						: undefined,
+				});
+			}
+			rows.push({
+				templateName,
+				envVar: meta.envVar,
+				purpose: meta.purpose,
+				configured: meta.envVar !== undefined,
+				languages,
+			});
+		}
+		// Configured-but-unset env vars: shown so the operator sees what's
+		// missing on this deployment rather than wondering why a send is silent.
+		for (const c of configured) {
+			if (!c.name) {
+				rows.push({
+					templateName: "",
+					envVar: c.envVar,
+					purpose: c.purpose,
+					configured: false,
+					languages: [],
+				});
+			}
+		}
+		return {
+			rows,
+			recent: recentRows.slice(0, 20).map((r) => ({
+				_id: r._id,
+				templateName: r.templateName,
+				language: r.language,
+				summary: summarizeTemplateEvent(r),
+				observedAt: r.observedAt,
+				alerted: r.alerted,
+			})),
+			neverReceived: recentRows.length === 0,
+		};
+	},
+});
+
 /** Notify a retailer their outbound is paused (non-transactional only). */
 export const notifyRetailerPaused = internalAction({
 	args: { retailerId: v.id("retailers"), reason: v.optional(v.string()) },
@@ -973,6 +1186,44 @@ export const purgeExpiredWabaHealth = internalMutation({
 			await ctx.scheduler.runAfter(
 				0,
 				internal.wabaProtection.purgeExpiredWabaHealth,
+				{},
+			);
+		}
+	},
+});
+
+/**
+ * Purge wabaTemplateEvents past the 90-day window — EXCEPT the newest row per
+ * (templateName, language), which is the admin console's live view of that
+ * template and may be the only row it ever gets (Meta posts on change only).
+ */
+export const purgeExpiredWabaTemplateEvents = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const cutoff = Date.now() - WABA_TEMPLATE_EVENTS_RETENTION_MS;
+		const page = await ctx.db
+			.query("wabaTemplateEvents")
+			.withIndex("by_observed", (q) => q.lt("observedAt", cutoff))
+			.take(LOG_PURGE_PAGE_SIZE);
+		let deleted = 0;
+		for (const row of page) {
+			const newest = await ctx.db
+				.query("wabaTemplateEvents")
+				.withIndex("by_template", (q) =>
+					q.eq("templateName", row.templateName).eq("language", row.language),
+				)
+				.order("desc")
+				.first();
+			if (newest?._id === row._id) continue; // that template's live state
+			await ctx.db.delete(row._id);
+			deleted++;
+		}
+		// Self-chain only while progress is being made: a page made entirely of
+		// kept live-state rows would otherwise re-schedule itself forever.
+		if (page.length === LOG_PURGE_PAGE_SIZE && deleted > 0) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.wabaProtection.purgeExpiredWabaTemplateEvents,
 				{},
 			);
 		}

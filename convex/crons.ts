@@ -125,6 +125,16 @@ crons.daily(
 	{},
 );
 
+// wabaTemplateEvents older than 90 days — the newest row PER TEMPLATE is
+// always kept (it is the admin console's live view of that template's
+// status + billing category; Meta only posts on change).
+crons.daily(
+	"purge expired waba template events",
+	{ hourUTC: 4, minuteUTC: 20 },
+	internal.wabaProtection.purgeExpiredWabaTemplateEvents,
+	{},
+);
+
 // adminAuditLog rows older than 24 months (the stated compliance window).
 crons.daily(
 	"purge expired admin audit log",

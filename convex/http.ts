@@ -19,6 +19,7 @@ import {
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
 import { redactPhone } from "./lib/logRedaction";
+import { extractWabaTemplateEvents } from "./lib/wabaTemplateWebhook";
 import { extractWabaHealthEvents } from "./lib/wabaWebhook";
 
 const http = httpRouter();
@@ -143,6 +144,35 @@ http.route({
 				await ctx.scheduler.runAfter(0, internal.wabaProtection.sendWabaAlert, {
 					summary: result.summary,
 				});
+			}
+		}
+
+		// Template lifecycle events ride the same webhook too (z8r3fddtkh):
+		// message_template_status_update / template_category_update /
+		// message_template_quality_update. Every one is persisted for the admin
+		// console; a pause/disable/rejection, a category flip OUT of utility
+		// (6.1× per send from 1 Oct 2026, with an appeal window) or a
+		// YELLOW/RED quality score pages ops the same way a health drop does.
+		for (const ev of extractWabaTemplateEvents(parsedBody)) {
+			console.warn("WABA template webhook", ev.summary);
+			await ctx.runMutation(internal.wabaProtection.recordTemplateEvent, {
+				kind: ev.kind,
+				templateName: ev.templateName,
+				language: ev.language,
+				event: ev.event,
+				previousCategory: ev.previousCategory,
+				newCategory: ev.newCategory,
+				previousQuality: ev.previousQuality,
+				newQuality: ev.newQuality,
+				reason: ev.reason,
+				alerted: ev.shouldAlert,
+			});
+			if (ev.shouldAlert) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.wabaProtection.sendWabaTemplateAlert,
+					{ summary: ev.summary, kind: ev.kind },
+				);
 			}
 		}
 
