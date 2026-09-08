@@ -22,6 +22,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
+	DEFAULT_WEEKEND_DAYS,
 	MAX_CAPACITY_PER_NIGHT,
 	type PackageUnit,
 	type ProductKind,
@@ -31,7 +32,10 @@ import { bookingSpanNoun } from "../../lib/booking-dates";
 import { asPackageUnit } from "../../lib/package-unit";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
-import { describeProduct } from "../../lib/product-summary";
+import {
+	describeProduct,
+	weekendRateConsequence,
+} from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
 import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
@@ -42,6 +46,7 @@ import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
+import { WeekdayPicker } from "./weekday-picker";
 import {
 	type CustomLineDraft,
 	reconcileForSubmit,
@@ -69,6 +74,10 @@ export interface ProductFormSubmitValues {
 		packageLength?: number;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		/** Weekend per-night rate (sen; S13) + the nights it covers. 0 clears
+		 * (server normalizes); omitted whenever a package length is set. */
+		weekendPrice?: number;
+		weekendDays?: number[];
 	};
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
@@ -134,6 +143,10 @@ export type ProductFormDraft = {
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
 	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
 	securityDeposit?: string;
+	/** Weekend per-night rate (RM, as typed; blank/absent = one rate) + the
+	 * nights it covers (S13). */
+	weekendPrice?: string;
+	weekendDays?: number[];
 	categoryIds: Id<"categories">[];
 	images: ProductImage[];
 	editor: VariantEditorState;
@@ -165,6 +178,9 @@ interface ProductFormProps {
 		/** Booking security deposit as an RM string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
+		/** Weekend per-night rate as an RM string draft + its nights (S13). */
+		weekendPrice?: string;
+		weekendDays?: number[];
 		minNoticeDays?: number;
 		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
@@ -543,6 +559,8 @@ function ProductSummaryStrip({
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		weekendPrice?: string;
+		weekendDays?: readonly number[];
 	} | null;
 }) {
 	const summary = describeProduct(
@@ -672,6 +690,14 @@ export function ProductForm({
 	const [autoAccept, setAutoAccept] = useState(
 		initialValues?.autoAccept === true,
 	);
+	// Weekend rate (S13) — RM draft + the nights it covers. Defaults to Fri +
+	// Sat so a seller who only types the rate gets the campsite norm.
+	const [weekendDraft, setWeekendDraft] = useState(
+		initialValues?.weekendPrice ?? "",
+	);
+	const [weekendDays, setWeekendDays] = useState<number[]>(
+		initialValues?.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
+	);
 	// Draft as a string so the input can be cleared while typing; parsed at
 	// submit (blank/0 = no override).
 	const [minNoticeDraft, setMinNoticeDraft] = useState(
@@ -741,7 +767,10 @@ export function ProductForm({
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
 			if (!minQtyValid) return;
-			if (isBooking && (!capacityValid || !depositValid || !packageValid))
+			if (
+				isBooking &&
+				(!capacityValid || !depositValid || !packageValid || !weekendValid)
+			)
 				return;
 
 			try {
@@ -767,6 +796,17 @@ export function ProductForm({
 									depositParsed !== null && depositParsed > 0
 										? Math.round(depositParsed * 100)
 										: 0,
+								// Free-range only: a package has one flat price, so the
+								// fields are hidden there and the pair is dropped rather
+								// than sent for the server to refuse. 0 clears.
+								weekendPrice:
+									packageTrimmed.length === 0 &&
+									weekendParsed !== null &&
+									weekendParsed > 0
+										? Math.round(weekendParsed * 100)
+										: 0,
+								weekendDays:
+									packageTrimmed.length === 0 ? weekendDays : undefined,
 							}
 						: undefined,
 					minNoticeDays:
@@ -805,6 +845,8 @@ export function ProductForm({
 			packageLength: packageDraft,
 			packageUnit,
 			autoAccept,
+			weekendPrice: weekendDraft,
+			weekendDays,
 			categoryIds,
 			images,
 			editor,
@@ -858,6 +900,29 @@ export function ProductForm({
 		depositTrimmed.length === 0 ||
 		(depositParsed !== null && depositParsed >= 0 && depositParsed <= 10_000);
 
+	// Weekend rate (S13) — blank = one rate; else a price in (0, RM 100,000]
+	// with at least one night and never all seven (mirrors
+	// sanitizeWeekendRate). Irrelevant on a package, whose fields are hidden.
+	const weekendTrimmed = weekendDraft.trim();
+	const weekendParsed =
+		weekendTrimmed.length === 0 ? null : parsePriceInput(weekendTrimmed);
+	const weekendPriceValid =
+		weekendTrimmed.length === 0 ||
+		(weekendParsed !== null && weekendParsed > 0 && weekendParsed <= 100_000);
+	const weekendDaysValid =
+		weekendTrimmed.length === 0 ||
+		(weekendDays.length >= 1 && weekendDays.length <= 6);
+	const weekendValid =
+		packageTrimmed.length > 0 || (weekendPriceValid && weekendDaysValid);
+	const weekendConsequence = weekendRateConsequence(
+		{
+			basePrice: editor.rows[0]?.price ?? "",
+			weekendPrice: weekendDraft,
+			weekendDays,
+		},
+		currency,
+	);
+
 	// Minimum order quantity — blank clears; whole number ≤ MIN_QUANTITY_MAX.
 	const minQtyTrimmed = minQty.trim();
 	const minQtyParsed = minQtyTrimmed.length === 0 ? 0 : Number(minQtyTrimmed);
@@ -901,6 +966,8 @@ export function ProductForm({
 											capacityPerNight: capacityDraft,
 											packageLength: packageDraft,
 											autoAccept,
+											weekendPrice: weekendDraft,
+											weekendDays,
 										}
 									: null
 							}
@@ -1079,6 +1146,65 @@ export function ProductForm({
 									{i.message}
 								</p>
 							))}
+					</div>
+					{/* Weekend rate (S13) — a second per-night price on the nights the
+					    seller picks. Sits right under the base price because it IS a
+					    price; hidden on a package, which has one flat price by
+					    definition, with the reason stated in its place. */}
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						{packageTrimmed.length > 0 ? (
+							<>
+								<span className="text-sm font-medium text-muted-foreground">
+									Weekend rate
+								</span>
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									A package has one flat price — clear the package length to
+									charge weekend nights differently.
+								</p>
+							</>
+						) : (
+							<>
+								<label htmlFor="booking-weekend" className="text-sm font-medium">
+									Weekend rate ({currency}){" "}
+									<span className="font-normal text-muted-foreground">
+										(optional)
+									</span>
+								</label>
+								<Input
+									id="booking-weekend"
+									inputMode="decimal"
+									placeholder="0.00"
+									value={weekendDraft}
+									onChange={(e) => setWeekendDraft(e.target.value)}
+									variant="field"
+									isError={!weekendPriceValid}
+									className="w-40"
+								/>
+								{!weekendPriceValid ? (
+									<p className="text-xs text-destructive">
+										Enter an amount above 0 and up to 100,000, or leave blank.
+									</p>
+								) : null}
+								{weekendTrimmed.length > 0 ? (
+									<div className="flex flex-col gap-1.5 pt-1">
+										<span className="text-xs font-medium">
+											Which nights charge this rate?
+										</span>
+										<WeekdayPicker
+											label="Weekend nights"
+											value={weekendDays}
+											onChange={setWeekendDays}
+										/>
+									</div>
+								) : null}
+								<p
+									className={`text-xs leading-relaxed ${weekendDaysValid ? "text-muted-foreground" : "text-destructive"}`}
+								>
+									{weekendConsequence ??
+										"Leave blank for one rate every night. Set it to charge more on the nights you pick — Fri and Sat by default. Guests see both rates before they pick dates."}
+								</p>
+							</>
+						)}
 					</div>
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-capacity" className="text-sm font-medium">
