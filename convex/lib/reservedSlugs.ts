@@ -251,12 +251,6 @@ export const RESERVED_SLUG_GROUPS = {
 	ENVIRONMENT,
 } as const;
 
-/**
- * The brand, as the bare token a handle or a name is reduced to before the
- * check: lowercase, every non-alphanumeric stripped. That one normalisation
- * catches `kedai-pal`, `Kedai Pal`, `K.E.D.A.I.P.A.L` and `KEDAIPAL` with a
- * single rule instead of a hand-listed set of spellings.
- */
 const BRAND_TOKEN = "kedaipal";
 
 /**
@@ -268,12 +262,47 @@ const BRAND_TOKEN = "kedaipal";
  * body, so a store carrying our brand collapses "Kedaipal, on behalf of X"
  * into "this is Kedaipal". No legitimate seller names their business after
  * their order tool, so the rule costs nothing (owner call, 8 Sep 2026).
- * Applied to the SLUG (here) and the STORE NAME (`assertValidStoreName`) —
- * the name is the stronger vector, since it is what renders in every
- * WhatsApp message and on the storefront header.
+ * Applied to the SLUG (`isReservedSlug`) and the STORE NAME
+ * (`assertValidStoreName`) — the name is the stronger vector, since it is
+ * what renders in every WhatsApp message and on the storefront header.
+ *
+ * Two ways to match, because the brand is two Malay-adjacent syllables:
+ *
+ * 1. **Inside one token** — `kedaipalhq`, `thekedaipal`, `kedaipal-official`.
+ * 2. **Across separators, ending on a token boundary** — `kedai-pal`,
+ *    `Kedai Pal`, `K.E.D.A.I.P.A.L`: the separator-stripped text contains the
+ *    brand AND the match ends exactly where a separator sat in the original.
+ *
+ * The boundary condition is what keeps the rule honest (PR #263 review):
+ * a plain separator-stripped substring refuses **"Kedai Paling Murah"**,
+ * "Kedai Palma" and "Kedai Palembang" — `kedai` is the market's word for
+ * shop and `paling` one of the commonest Malay adverbs — with copy telling a
+ * real seller that their shop name is our brand. In those, the match runs
+ * INTO the second word (`kedai|pal-ing`), so it never ends on a boundary and
+ * is allowed; in `Kedai Pal` the second word IS the brand's tail, the match
+ * ends on the boundary, and it is refused.
  */
 export function containsBrand(text: string): boolean {
-	return text.toLowerCase().replace(/[^a-z0-9]/g, "").includes(BRAND_TOKEN);
+	const tokens = text
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter((t) => t.length > 0);
+	if (tokens.some((t) => t.includes(BRAND_TOKEN))) return true;
+
+	const boundaries = new Set<number>();
+	let joined = "";
+	for (const t of tokens) {
+		joined += t;
+		boundaries.add(joined.length);
+	}
+	for (
+		let at = joined.indexOf(BRAND_TOKEN);
+		at !== -1;
+		at = joined.indexOf(BRAND_TOKEN, at + 1)
+	) {
+		if (boundaries.has(at + BRAND_TOKEN.length)) return true;
+	}
+	return false;
 }
 
 /** The flat set — what the validators actually test against. */

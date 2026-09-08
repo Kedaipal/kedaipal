@@ -54,7 +54,7 @@ whichever side catches it: *"Reserved by Kedaipal — pick another slug"*.
 | Dashboard / buyer nouns | `orders`, `products`, `billing`, `checkout`, `pay`, `invoice` | curated |
 | Generic tenant words | `store`, `shop`, `seller`, `vendor`, `official`, `verified` | curated |
 | Environments + bug literals | `demo`, `staging`, `sandbox`, `null`, `undefined` | curated |
-| Brand, **anywhere** in the text | `kedaipal-support`, `official-kedaipal`, `kedai-pal`, `Kedai Pal` | `containsBrand` — lowercase, strip non-alphanumerics, substring |
+| Brand, **anywhere** in the text | `kedaipal-support`, `official-kedaipal`, `kedai-pal`, `Kedai Pal` | `containsBrand` — inside one token, or across separators when the match ends on a token boundary |
 
 **Machine-checked, not remembered.** `src/lib/reserved-slugs.test.ts` scans
 `src/routes/` and `public/` and fails the gate when a top-level segment is not
@@ -67,8 +67,10 @@ check rejects them first, and a test pins that.
 
 **The brand rule also guards the store name.** `assertValidStoreName` (server)
 and `validateStoreName` (client, inline under the field on onboarding, Settings →
-Store and the admin onboard form) refuse any name that contains `kedaipal` once
-lowercased and stripped of separators — a store called "Kedaipal Support" on the
+Store and the admin onboard form) refuse any name that contains `kedaipal` inside
+one word, or spread across separators when the match ends on a word boundary
+(`Kedai Pal` refused; **`Kedai Paling Murah`, `Kedai Palma` allowed** — the
+boundary rule exists for exactly those, PR #263 review) — a store called "Kedaipal Support" on the
 slug `abc-trading` is a stronger impersonation than any URL, because the *name*
 is what renders in every WhatsApp message and on the storefront header. Substring,
 not prefix, and no "fan" exemption: buyers do not parse URL structure, the shared

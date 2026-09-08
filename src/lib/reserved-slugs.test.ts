@@ -163,14 +163,38 @@ describe("the brand rule — anywhere in the text, however it is spelled", () =>
 		}
 	});
 
-	test("does not refuse the ordinary Malay word for shop", () => {
+	test("does not refuse ordinary Malay shop names — even ones that start 'Kedai Pal…'", () => {
+		// PR #263 review: a plain separator-stripped substring refused every one
+		// of these. `kedai` is the market's word for shop; `paling` is one of
+		// the commonest Malay adverbs. The match must END on a token boundary.
 		for (const s of [
 			"kedai-runcit",
 			"kedai-ali",
 			"pal-mart",
+			"kedai-paling-murah",
+			"kedai-palma",
+			"kedai-palembang",
 			"kedai-pals-friend",
 		]) {
-			expect(isReservedSlug(s), s).toBe(s === "kedai-pals-friend");
+			expect(isReservedSlug(s), s).toBe(false);
+		}
+		for (const name of [
+			"Kedai Paling Murah",
+			"Kedai Palma",
+			"Kedai Palembang",
+		]) {
+			expect(containsBrand(name), name).toBe(false);
+		}
+	});
+
+	test("the boundary rule still refuses the brand split across separators", () => {
+		for (const s of [
+			"kedai pal store",
+			"ke dai pal",
+			"abc-kedai-pal",
+			"kedai-pal-official",
+		]) {
+			expect(containsBrand(s), s).toBe(true);
 		}
 	});
 });
