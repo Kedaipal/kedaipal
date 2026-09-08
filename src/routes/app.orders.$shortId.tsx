@@ -116,6 +116,7 @@ import {
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	displayStatusLabel,
@@ -1656,9 +1657,9 @@ function OrderDetailRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item, i) => (
+					{withLineKeys(order.items).map(({ key, item }, i) => (
 						<OrderItemLine
-							key={`${item.variantId ?? item.productId}-${i}`}
+							key={key}
 							name={item.name}
 							variantLabel={item.variantLabel}
 							quantity={item.quantity}

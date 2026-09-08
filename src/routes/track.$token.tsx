@@ -67,6 +67,7 @@ import {
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -1553,7 +1554,7 @@ function TrackingRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item, i) => {
+					{withLineKeys(order.items).map(({ key, item }, i) => {
 						// Folded quote: this single made-to-order line carries the
 						// locked custom-work price instead of its RM0 snapshot.
 						const isQuoteLine = i === quoteLineIdx;
@@ -1565,7 +1566,7 @@ function TrackingRoute() {
 							: item.price;
 						return (
 							<OrderItemLine
-								key={`${item.variantId ?? item.productId}-${i}`}
+								key={key}
 								name={item.name}
 								variantLabel={item.variantLabel}
 								quantity={item.quantity}
