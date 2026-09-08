@@ -15,6 +15,7 @@ import {
 	type FormEvent,
 	type MutableRefObject,
 	type ReactNode,
+	useEffect,
 	useLayoutEffect,
 	useState,
 } from "react";
@@ -29,6 +30,11 @@ import {
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
 import { bookingSpanNoun } from "../../lib/booking-dates";
+import {
+	type FixHighlight,
+	highlightRingClass,
+	scrollToAnchor,
+} from "../../lib/country-setup-copy";
 import { asPackageUnit } from "../../lib/package-unit";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
@@ -37,6 +43,10 @@ import {
 	weekendRateConsequence,
 } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
+import {
+	type ProductSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+} from "../../lib/spotlight";
 import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -235,6 +245,14 @@ interface ProductFormProps {
 	 * variants/options derivation when present.
 	 */
 	initialEditor?: VariantEditorState;
+	/**
+	 * A What's-new note's deep link (`?spot=`, src/lib/spotlight.ts): scroll
+	 * to the card that key names and ring it in the brand mint. The edit
+	 * route validates the key; the form only has to find the card. A key
+	 * whose card isn't rendered (a weekend-rate spotlight on a physical
+	 * product) is a no-op — nothing to ring, so nothing rings.
+	 */
+	spotlight?: ProductSpotlightKey;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -467,15 +485,27 @@ function ProductStepCard({
 	title,
 	description,
 	children,
+	id,
+	highlight,
 }: {
 	icon: ReactNode;
 	kicker: string;
 	title: string;
 	description: string;
 	children: ReactNode;
+	/** Anchor for a deep link (`SPOTLIGHT_ANCHOR.<key>.anchor`). */
+	id?: string;
+	/** Ring this card — the What's-new spotlight, same ring the settings cards wear. */
+	highlight?: FixHighlight;
 }) {
+	// `scroll-mt-24` keeps the sticky header off the card once scrolled to;
+	// the ring is a box-shadow, so `overflow-hidden` on the section (which
+	// clips the header band's corners) leaves it intact.
 	return (
-		<section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+		<section
+			id={id}
+			className={`overflow-hidden rounded-2xl border bg-card shadow-sm scroll-mt-24 ${highlight ? highlightRingClass(highlight) : "border-border"}`}
+		>
 			<div className="flex gap-3 border-b border-border bg-muted/25 px-4 py-4 lg:px-5">
 				<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-accent ring-1 ring-border">
 					{icon}
@@ -654,11 +684,27 @@ export function ProductForm({
 	mode,
 	draftRef,
 	initialEditor,
+	spotlight,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
 	// handoff seeds a create with initialValues, so `mode` wins when given.
 	const isEdit = mode ? mode === "edit" : initialValues !== undefined;
+
+	// Deep link to one card (`?spot=`): scroll to it and ring it, instead of
+	// dropping the seller at the top of a long form to hunt for it. Same
+	// scroll-and-ring as `/app/settings`; the card takes its ring from
+	// `ringFor` below. Waits a frame because the card mounts in this commit.
+	const spotlightAnchor = spotlight
+		? SPOTLIGHT_ANCHOR[spotlight].anchor
+		: undefined;
+	const ringFor = (anchor: string): FixHighlight | undefined =>
+		spotlightAnchor === anchor ? "spotlight" : undefined;
+	useEffect(() => {
+		if (!spotlightAnchor) return;
+		const frame = requestAnimationFrame(() => scrollToAnchor(spotlightAnchor));
+		return () => cancelAnimationFrame(frame);
+	}, [spotlightAnchor]);
 
 	const [images, setImages] = useState<ProductImage[]>(
 		(initialValues?.imageStorageIds ?? []).map((id, i) => ({
@@ -1056,6 +1102,8 @@ export function ProductForm({
 				// night, capacity beside it. The kind itself is immutable (set at
 				// create; archive + recreate is the escape hatch).
 				<ProductStepCard
+					id={SPOTLIGHT_ANCHOR.weekend_rate.anchor}
+					highlight={ringFor(SPOTLIGHT_ANCHOR.weekend_rate.anchor)}
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & capacity"
@@ -1164,7 +1212,10 @@ export function ProductForm({
 							</>
 						) : (
 							<>
-								<label htmlFor="booking-weekend" className="text-sm font-medium">
+								<label
+									htmlFor="booking-weekend"
+									className="text-sm font-medium"
+								>
 									Weekend rate ({currency}){" "}
 									<span className="font-normal text-muted-foreground">
 										(optional)
