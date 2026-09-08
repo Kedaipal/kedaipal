@@ -171,6 +171,52 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.09.4",
+		date: "2026-09-08",
+		// The quiet dot, not the modal. Nothing here changes how a seller works
+		// unless they choose it: the weekend rate is a new optional field on a
+		// stay listing, and both fixes remove wrong things rather than move
+		// right ones. The one seller who asked for it (the booking anchor) is
+		// told directly; everyone else finds it on the More panel.
+		notable: false,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Charge more for Friday and Saturday nights (at last)",
+				},
+				body: {
+					en: "Campsites, chalets, homestays: the weekend is worth more, and your listing could only say one price. A stay listing now takes a second per-night rate, and you pick the nights it covers — Friday and Saturday by default, Thursday too if that's your crowd. It's the night you sleep that counts, so Sunday night into Monday morning is still a Sunday. Guests see both rates before they pick dates, the pricier nights wear a dot on the calendar, and the receipt itemises weekday nights and weekend nights on their own lines so nobody has to squint at the total — your order shows the same split, nights named. Packages sit this one out: a package is one flat price, and the form says so in the rate's place. On every plan.",
+				},
+				href: spotlightHref("weekend_rate"),
+				hrefLabel: { en: "Set a weekend rate" },
+				icon: "calendar",
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A stay is not a parcel, and the app has stopped insisting",
+				},
+				body: {
+					en: 'A few corners still treated a booking like a box: a Shipment tracking card on the order, "Delivery on 17 Sep" sitting under a card that already said Check-in, a little truck beside "Checked in", and the immortal "2 night(s)". All gone, on your order page and on the guest\'s tracking page alike. Riders, couriers and tracking numbers still turn up exactly where an actual parcel is involved.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A two-night package stays a two-night package",
+				},
+				body: {
+					en: "Reopen a package listing sold in nights and it would greet you as months — and saving would make that true. The unit you chose is now the unit you get back. While we were in there: the deposit line in the listing wizard speaks your store's currency, instead of insisting on RM to Singapore sellers.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+		],
+	},
+	{
 		version: "2026.09.3",
 		date: "2026-09-07",
 		// Earns the modal on two counts. (1) Things MOVED: Lalamove keys and the
