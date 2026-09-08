@@ -2,6 +2,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DAY_MS, MYT_OFFSET_MS } from "../../../convex/lib/fulfilmentDate";
+import {
+	WEEKDAY_NIGHTS_LABEL,
+	weekendNightsLabel,
+} from "../../../convex/lib/productKind";
 import { OrderItemLine } from "./order-item-line";
 
 afterEach(cleanup);
@@ -67,6 +71,44 @@ describe("OrderItemLine", () => {
 		// Ends on the LAST USABLE day, not the exclusive check-out.
 		expect(detail.textContent).toContain("29 Sep");
 		expect(detail.textContent).not.toContain("×");
+	});
+
+	it("names the kind of night on a split stay, without repeating the label (S13)", () => {
+		// Thu 10 → Mon 14 Sep: the weekend line charges 2 of the 4 nights.
+		const thu = Date.UTC(2026, 8, 10) - MYT_OFFSET_MS;
+		line({
+			variantLabel: weekendNightsLabel([5, 6]),
+			quantity: 2,
+			unitPrice: 12_000,
+			lineTotal: 24_000,
+			booking: { checkIn: thu, checkOut: thu + 4 * DAY_MS, packaged: false },
+		});
+		const detail = screen.getByText(/2 weekend nights ×/);
+		expect(detail.textContent).toMatch(/RM\s?120\.00/);
+		expect(detail.textContent).toContain("10 Sep");
+		expect(detail.textContent).toContain("14 Sep");
+		// The frozen label is what the sub-line just said — not printed twice.
+		expect(screen.queryByText("Weekend nights (Fri & Sat)")).toBeNull();
+	});
+
+	it("singularises a one-night weekday line", () => {
+		line({
+			variantLabel: WEEKDAY_NIGHTS_LABEL,
+			quantity: 1,
+			lineTotal: 8000,
+			booking: { checkIn: day(0), checkOut: day(3), packaged: false },
+		});
+		expect(screen.getByText(/1 weekday night ×/)).toBeTruthy();
+		expect(screen.queryByText("Weekday nights")).toBeNull();
+	});
+
+	it("an ordinary variant label on a booking line still shows beside the name", () => {
+		line({
+			variantLabel: "Riverside",
+			booking: { checkIn: day(0), checkOut: day(2), packaged: false },
+		});
+		expect(screen.getByText("Riverside")).toBeTruthy();
+		expect(screen.getByText(/2 nights ×/)).toBeTruthy();
 	});
 
 	it("shows the variant label and the line total", () => {

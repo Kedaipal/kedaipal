@@ -15,6 +15,7 @@ import {
 	packageEnd,
 	packageNights,
 	type SelectionContext,
+	weekendRateSuffix,
 } from "./booking-dates";
 
 const D0 = Date.UTC(2026, 8, 1) - MYT_OFFSET_MS; // 1 Sep 2026, MYT midnight
@@ -208,5 +209,30 @@ describe("package count label (the 'How many 2 dayss?' bug)", () => {
 		expect(bookingSpanNoun(2, "night")).toBe("2 nights");
 		expect(packageEnd(0, 2, "night")).toBe(packageEnd(0, 2, "day"));
 		expect(packageEnd(0, 2, "night", 3)).toBe(packageEnd(0, 2, "day", 3));
+	});
+});
+
+describe("weekendRateSuffix (S13)", () => {
+	it("names the nights after the per-night unit", () => {
+		expect(weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [5, 6] })).toBe(
+			"/night Fri & Sat",
+		);
+		expect(
+			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [0, 5, 6] }),
+		).toBe("/night Fri, Sat & Sun");
+	});
+
+	it("is null with no rate, no nights, or on a package", () => {
+		expect(weekendRateSuffix(undefined)).toBeNull();
+		expect(weekendRateSuffix({})).toBeNull();
+		expect(weekendRateSuffix({ weekendPrice: 12_000 })).toBeNull();
+		expect(weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [] })).toBeNull();
+		expect(
+			weekendRateSuffix({
+				weekendPrice: 12_000,
+				weekendDays: [5, 6],
+				packageLength: 30,
+			}),
+		).toBeNull();
 	});
 });

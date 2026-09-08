@@ -13,6 +13,7 @@ import {
 import {
 	isMonthlyUnit,
 	type PackageUnit,
+	weekendDaysLabel,
 } from "../../convex/lib/productKind";
 
 /** The MYT-midnight epoch for the calendar day a DayPicker `Date` names.
@@ -229,6 +230,25 @@ export function bookingPriceSuffix(
 	return packageLength === 1
 		? `/${packageUnit}`
 		: `/${packageLength} ${packageUnit}s`;
+}
+
+/**
+ * What follows the WEEKEND rate on a storefront price line — "/night Fri &
+ * Sat" — so the card, the product page, the detail sheet and the calendar
+ * legend all spell the second rate the same way (S13). Returns null when the
+ * listing has no weekend rate, so callers render nothing rather than an
+ * empty suffix.
+ */
+export function weekendRateSuffix(
+	booking:
+		| { packageLength?: number; weekendPrice?: number; weekendDays?: number[] }
+		| undefined,
+): string | null {
+	if (!booking || booking.weekendPrice === undefined) return null;
+	if ((booking.packageLength ?? 0) > 0) return null;
+	const days = booking.weekendDays ?? [];
+	if (days.length === 0) return null;
+	return `/night ${weekendDaysLabel(days)}`;
 }
 
 /**

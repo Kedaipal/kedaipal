@@ -11,6 +11,7 @@ import {
 	nightsBetween,
 	normalizePackageQuantity,
 	resolveBookingRange,
+	splitNightsByRate,
 	staysOverlap,
 } from "./bookingAvailability";
 import {
@@ -18,6 +19,7 @@ import {
 	DAY_MS,
 	MYT_OFFSET_MS,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "./fulfilmentDate";
 
 const NOW = Date.UTC(2026, 7, 17, 4, 0, 0); // 17 Aug 2026 12:00 MYT
@@ -172,5 +174,98 @@ describe("multi-package terms (buying N packages in one booking)", () => {
 		expect(normalizePackageQuantity(0, monthly)).toBe(1);
 		expect(normalizePackageQuantity(-3, monthly)).toBe(1);
 		expect(normalizePackageQuantity(2.5, monthly)).toBe(1);
+	});
+});
+
+describe("splitNightsByRate (S13 weekend rate)", () => {
+	// Absolute MYT midnights, each asserted against its weekday so the fixture
+	// can't silently rot if someone edits a date.
+	const myt = (y: number, m: number, d: number) =>
+		Date.UTC(y, m - 1, d) - MYT_OFFSET_MS;
+	const THU_10_SEP = myt(2026, 9, 10);
+	const MON_14_SEP = myt(2026, 9, 14);
+	const SUN_13_SEP = myt(2026, 9, 13);
+	const THU_31_DEC = myt(2026, 12, 31);
+	const SAT_2_JAN = myt(2027, 1, 2);
+	const friSat = { weekendPrice: 12_000, weekendDays: [5, 6] };
+
+	it("fixture sanity", () => {
+		expect(weekdayIndexMyt(THU_10_SEP)).toBe(4);
+		expect(weekdayIndexMyt(SUN_13_SEP)).toBe(0);
+		expect(weekdayIndexMyt(MON_14_SEP)).toBe(1);
+		expect(weekdayIndexMyt(THU_31_DEC)).toBe(4);
+		expect(weekdayIndexMyt(SAT_2_JAN)).toBe(6);
+	});
+
+	it("a Thu→Mon stay is 2 weekday + 2 weekend nights on Fri + Sat", () => {
+		// Nights slept: Thu, Fri, Sat, Sun. The Monday morning is check-out.
+		expect(splitNightsByRate(THU_10_SEP, MON_14_SEP, friSat)).toEqual({
+			weekdayNights: 2,
+			weekendNights: 2,
+		});
+	});
+
+	it("the NIGHT's weekday counts, never the check-out morning", () => {
+		// Sunday night → Monday morning: one night, and it is a SUNDAY night.
+		expect(
+			splitNightsByRate(SUN_13_SEP, MON_14_SEP, {
+				weekendPrice: 12_000,
+				weekendDays: [0],
+			}),
+		).toEqual({ weekdayNights: 0, weekendNights: 1 });
+		// The same night under Fri + Sat is a weekday night — Monday is not
+		// slept, so it can't be counted either way.
+		expect(splitNightsByRate(SUN_13_SEP, MON_14_SEP, friSat)).toEqual({
+			weekdayNights: 1,
+			weekendNights: 0,
+		});
+	});
+
+	it("splits across a year boundary (31 Dec → 2 Jan)", () => {
+		// Thu 31 Dec (weekday) + Fri 1 Jan (weekend).
+		expect(splitNightsByRate(THU_31_DEC, SAT_2_JAN, friSat)).toEqual({
+			weekdayNights: 1,
+			weekendNights: 1,
+		});
+	});
+
+	it("splits across a month boundary and sums to the night count", () => {
+		const from = myt(2026, 10, 29); // Thu 29 Oct
+		const to = myt(2026, 11, 3); // Tue 3 Nov — 5 nights: Thu Fri Sat Sun Mon
+		expect(weekdayIndexMyt(from)).toBe(4);
+		const split = splitNightsByRate(from, to, friSat);
+		expect(split).toEqual({ weekdayNights: 3, weekendNights: 2 });
+		expect(split.weekdayNights + split.weekendNights).toBe(
+			nightsBetween(from, to),
+		);
+	});
+
+	it("all one kind reports the other as zero", () => {
+		const mon = myt(2026, 9, 7);
+		expect(splitNightsByRate(mon, THU_10_SEP, friSat)).toEqual({
+			weekdayNights: 3,
+			weekendNights: 0,
+		});
+		const fri = myt(2026, 9, 11);
+		expect(splitNightsByRate(fri, SUN_13_SEP, friSat)).toEqual({
+			weekdayNights: 0,
+			weekendNights: 2,
+		});
+	});
+
+	it("no rate, empty days, or a package → every night is a weekday night", () => {
+		expect(splitNightsByRate(THU_10_SEP, MON_14_SEP, undefined)).toEqual({
+			weekdayNights: 4,
+			weekendNights: 0,
+		});
+		expect(
+			splitNightsByRate(THU_10_SEP, MON_14_SEP, { weekendPrice: 12_000 }),
+		).toEqual({ weekdayNights: 4, weekendNights: 0 });
+		expect(
+			splitNightsByRate(THU_10_SEP, MON_14_SEP, {
+				...friSat,
+				packageLength: 4,
+			}),
+		).toEqual({ weekdayNights: 4, weekendNights: 0 });
 	});
 });

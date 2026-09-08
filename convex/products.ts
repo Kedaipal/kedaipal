@@ -25,6 +25,7 @@ import {
 	sanitizeCapacityPerNight,
 	sanitizePackageLength,
 	sanitizeSecurityDeposit,
+	sanitizeWeekendRate,
 	type PackageUnit,
 } from "./lib/productKind";
 import {
@@ -740,6 +741,10 @@ export const create = mutation({
 				),
 				// Instant book — skip the request-to-book approval step.
 				autoAccept: v.optional(v.boolean()),
+				// Weekend per-night rate (sen) + the nights it covers (S13). Unset
+				// = one rate; 0 clears. Refused on a package listing.
+				weekendPrice: v.optional(v.number()),
+				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
 		variants: v.array(variantInputValidator),
@@ -782,12 +787,18 @@ export const create = mutation({
 					packageLength?: number;
 					packageUnit?: PackageUnit;
 					autoAccept?: boolean;
+					weekendPrice?: number;
+					weekendDays?: number[];
 			  }
 			| undefined;
 		if (kind === "booking") {
 			if (!args.booking)
 				throw new ConvexError("A booking listing needs its booking settings");
 			try {
+				const packageLength = sanitizePackageLength(
+					args.booking.packageLength,
+					args.booking.packageUnit,
+				);
 				booking = {
 					// Unset capacity = unlimited (S7), not a missing value.
 					capacityPerNight: sanitizeCapacityPerNight(
@@ -796,12 +807,15 @@ export const create = mutation({
 					securityDeposit: sanitizeSecurityDeposit(
 						args.booking.securityDeposit,
 					),
-					packageLength: sanitizePackageLength(
-						args.booking.packageLength,
-						args.booking.packageUnit,
-					),
+					packageLength,
 					packageUnit: args.booking.packageUnit,
 					autoAccept: args.booking.autoAccept === true ? true : undefined,
+					// Free-range only — a package refuses the pair (S13).
+					...sanitizeWeekendRate(
+						args.booking.weekendPrice,
+						args.booking.weekendDays,
+						{ packageLength },
+					),
 				};
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -908,11 +922,11 @@ export const update = mutation({
 		// — the availability module simply stops taking new requests past it.
 		//
 		// WHOLE-OBJECT REPLACE, not a merge: sending `{ capacityPerNight: 5 }`
-		// clears `packageLength`, `packageUnit`, `autoAccept` and
-		// `securityDeposit`. Both callers (the full form and the wizard) always
-		// send every field, so this is safe today — but a future partial caller
-		// would silently wipe a seller's package and instant-book settings.
-		// Send the complete object, or change this to merge first.
+		// clears `packageLength`, `packageUnit`, `autoAccept`, `securityDeposit`
+		// and the weekend rate pair. Both callers (the full form and the wizard)
+		// always send every field, so this is safe today — but a future partial
+		// caller would silently wipe a seller's package and instant-book
+		// settings. Send the complete object, or change this to merge first.
 		booking: v.optional(
 			v.object({
 				// Unset = unlimited (S7) — a gym has no daily member cap.
@@ -930,6 +944,10 @@ export const update = mutation({
 				),
 				// Instant book — skip the request-to-book approval step.
 				autoAccept: v.optional(v.boolean()),
+				// Weekend per-night rate (sen) + the nights it covers (S13). Unset
+				// = one rate; 0 clears. Refused on a package listing.
+				weekendPrice: v.optional(v.number()),
+				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
 	},
@@ -977,6 +995,10 @@ export const update = mutation({
 					"Capacity only applies to a booking listing",
 				);
 			try {
+				const packageLength = sanitizePackageLength(
+					fields.booking.packageLength,
+					fields.booking.packageUnit,
+				);
 				updates.booking = {
 					capacityPerNight: sanitizeCapacityPerNight(
 						fields.booking.capacityPerNight,
@@ -984,12 +1006,15 @@ export const update = mutation({
 					securityDeposit: sanitizeSecurityDeposit(
 						fields.booking.securityDeposit,
 					),
-					packageLength: sanitizePackageLength(
-						fields.booking.packageLength,
-						fields.booking.packageUnit,
-					),
+					packageLength,
 					packageUnit: fields.booking.packageUnit,
 					autoAccept: fields.booking.autoAccept === true ? true : undefined,
+					// Free-range only — a package refuses the pair (S13).
+					...sanitizeWeekendRate(
+						fields.booking.weekendPrice,
+						fields.booking.weekendDays,
+						{ packageLength },
+					),
 				};
 			} catch (err) {
 				throw new ConvexError((err as Error).message);

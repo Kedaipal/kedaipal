@@ -267,7 +267,15 @@ function EditProductRoute() {
 					packageLength: product.booking?.packageLength
 						? String(product.booking.packageLength)
 						: undefined,
+					// Was never seeded — the form defaulted to "month", so a 2-NIGHT
+					// package reopened as 2 months and saved that way on the next
+					// edit. Found while adding the weekend rate (S13).
+					packageUnit: product.booking?.packageUnit,
 					autoAccept: product.booking?.autoAccept === true,
+					weekendPrice: product.booking?.weekendPrice
+						? (product.booking.weekendPrice / 100).toFixed(2)
+						: undefined,
+					weekendDays: product.booking?.weekendDays,
 					minNoticeDays: product.minNoticeDays,
 					minQuantity: product.minQuantity,
 					categoryIds,

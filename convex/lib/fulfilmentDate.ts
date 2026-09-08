@@ -72,6 +72,14 @@ export function isMytMidnight(epoch: number): boolean {
 	return Number.isInteger(epoch) && (epoch + MYT_OFFSET_MS) % DAY_MS === 0;
 }
 
+/** Weekday index (0 = Sunday .. 6 = Saturday) of a MYT-anchored epoch — the
+ * same shift + `getUTCDay()` read `formatFulfilmentDate` uses. Lives here, not
+ * in openingHours, because it is day arithmetic every MYT-day feature shares
+ * (opening hours, the booking weekend rate). */
+export function weekdayIndexMyt(epoch: number): number {
+	return new Date(epoch + MYT_OFFSET_MS).getUTCDay();
+}
+
 /**
  * Normalise a retailer's configured minimum-notice setting into a usable
  * integer in [0, MAX_NOTICE_DAYS]. Undefined → the default. 0 is allowed so

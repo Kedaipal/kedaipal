@@ -1091,6 +1091,146 @@ send every field, so it is safe today; the validator now says so, because a
 future partial caller would silently wipe a seller's package length,
 instant-book and deposit settings.
 
+## S13 — weekend / weekday per-night rates (`z8r3fddkp8`)
+
+**Sengloh (Hidden Gems'ite, Founding Member #7, the booking anchor)** charges
+a different per-night rate on weekends — the standard campsite / homestay
+price shape — and a listing carried exactly ONE per-night price. Both
+workarounds leak: two listings ("Weekday plot" / "Weekend plot") let a buyer
+book the weekday listing on a Saturday, double the capacity, need ~50 manual
+blocks a year each and can't take a Thu→Sun stay at all; a 2-night "Weekend
+package" (S7) has no must-start-on-Friday rule, so the weekend price is
+bookable on a Tuesday. The fix is a **listing-level pricing rule on the one
+implicit variant** — the same shape every other booking need took (capacity,
+package, instant book, deposit). Never a second variant: that would split
+capacity in two, the exact trap the two-listings workaround falls into.
+
+### Shape
+
+- **`products.booking.weekendPrice`** (sen, optional; unset = one rate for
+  every night — every existing row, zero migration) and
+  **`products.booking.weekendDays`** — weekday indexes of the **NIGHT the
+  guest sleeps** (0 = Sun .. 6 = Sat, the `weekdayIndexMyt` convention), deduped
+  + sorted, default **`[5, 6]` = Fri + Sat nights** (the ticket's recommended
+  default; Arif's open call only changes the constant, and the picker covers
+  "Fri, Sat & Sun" and "Sunday only" sites). Kept as a weekday SET, not a
+  dated list, so a future `peakDates[]` for public holidays can sit beside it
+  without a rename.
+- **`sanitizeWeekendRate`** (`convex/lib/productKind.ts`) is the pair's one
+  validator: no price → **both** unset (days alone are dropped — "no weekend
+  rate" has one spelling, the `securityDeposit` posture); a price → integer
+  sen in (0, RM 100,000], ≥1 night, **never all seven** ("that's every night
+  — set it as the price per night instead"). **A fixed-length package refuses
+  the pair outright** — a package is one flat price by definition, and a
+  constraint is surfaced, not silently ignored. Both forms hide the fields
+  when a package length is set and say why, and drop the pair from the
+  payload, so a seller never meets the refusal.
+- **`weekdayIndexMyt` moved** from `openingHours.ts` into `fulfilmentDate.ts`
+  (its true home — it is MYT day arithmetic every day-granular feature shares;
+  four call sites repointed). `DEFAULT_WEEKEND_DAYS`, `weekendDaysLabel()`
+  (the ONE author of "Fri & Sat", rendered Mon→Sun so "Sat & Sun" never comes
+  out backwards), `WEEKDAY_NIGHTS_LABEL` / `weekendNightsLabel()` and their
+  reader `bookingNightKind()` all live beside the sanitizer.
+
+### One pure author for the split
+
+**`splitNightsByRate(checkIn, checkOut, booking)`** in
+`convex/lib/bookingAvailability.ts`, beside `resolveBookingRange` →
+`{ weekdayNights, weekendNights }`. Imported by **the buyer's checkout
+receipt AND `requestBooking`**, so the preview and the charge cannot disagree
+by a night. A night is the calendar day it starts on — a 12→14 Sep stay
+sleeps the 12th and 13th, the check-out morning never counts (pinned: a
+Sunday night → Monday morning stay is a Sunday-night charge, and never a
+Monday one). Month and year boundaries are plain 24 h steps (no DST). A
+listing without the rate, or a package, reports every night as weekday so
+callers need no branch.
+
+### Two frozen lines, zero new money branches
+
+`requestBooking` writes **two `orders.items[]` lines** on a mixed free-range
+stay — `Weekday nights` at the base rate, `Weekend nights (Fri & Sat)` at the
+weekend rate — same `productId`/`variantId`, each `quantity` its own night
+count, weekday first. A stay that is all one kind writes ONE line, still
+labelled (the label answers "why did I pay RM 80 not RM 120?" on an
+all-weekday stay too); a listing without the rate keeps today's unlabelled
+line byte-for-byte. Both rates are **frozen on the lines** (snapshot posture,
+like the deposit — pinned: a later listing edit never re-prices a placed
+stay). There is **no client arg for the split** — nothing to tamper with; the
+server computes it from the listing. `computeOrderTotals` is untouched:
+`total = Σ lines + securityDeposit`, so totals, CSV, the receipt/invoice PDF,
+Insights and `revenueExcludingDeposit` all reconcile with no new code
+(pinned on a Thu→Mon stay with a deposit). Insights groups on
+`productId::variantId`, so both lines land in one product row.
+
+### Where each side sees it
+
+- **Storefront card, product page, detail sheet** — a second line under the
+  price: "RM 120/night Fri & Sat" (`weekendRateSuffix` in `booking-dates.ts`,
+  next to `bookingPriceSuffix`; SG stores print S$ through the same
+  `formatPrice` path).
+- **Buyer calendar** — weekend nights carry a **dot under the number** (never
+  a fill: the fill vocabulary is taken by the stay band and the unavailable
+  state), only on bookable days, `bg-current` so it survives the navy stay
+  band; the legend gains "Fri & Sat · RM 120/night". The rate and nights ride
+  the **`availability` payload**, so the calendar tints from the same answer
+  the server prices against, with no second read.
+- **Checkout receipt** — both rates stated before any date is picked, then
+  the itemised split ("2 weekday nights × RM 80" / "2 weekend nights ×
+  RM 120") above the deposit line and the total — exactly the two lines the
+  order will carry. EN/MS inline, like the rest of this form (paraglide
+  covers pre-sign-in surfaces only — the ticket's paraglide line was stale).
+- **Seller order detail + buyer tracking page** — `OrderItemLine` reads the
+  kind back from the frozen label through `bookingNightKind` and prints
+  "2 weekend nights × RM 120.00 · Thu 10 Sep → Mon 14 Sep", suppressing the
+  duplicate label in the title row. An unrecognised label (pre-S13, or an
+  ordinary variant) falls back to today's "2 nights ×" with the label shown.
+- **Seller config** — in the same booking pricing card in BOTH the wizard
+  (step 3) and the edit form, **directly under the base price because it IS a
+  price**: "Weekend rate" input; the **`WeekdayPicker`** (new shared
+  component on `FilterChip` accent, Mon→Sun, the same control Settings →
+  Fulfilment uses for "Open on") appears once a rate is typed, Fri + Sat
+  preselected; one consequence line from `weekendRateConsequence` ("Fri and
+  Sat nights charge RM 120, other nights RM 80."). Wizard review row
+  ("Weekend rate · RM 120 on Fri & Sat nights"); `describeProduct` strip
+  ("Booking · 5 spots/night · RM 80/night · RM 120 Fri & Sat").
+- **`products.update` stays a whole-object replace** — both callers send the
+  new pair with every other field (the PR #242 rule).
+
+### Fixes in passing
+
+- **The edit route never seeded `packageUnit`**, so a "2 nights" package
+  reopened in the edit form as "2 months" and would have saved that way on
+  the next edit. Seeded now.
+- The wizard's review row for the deposit hardcoded "RM" — an SG store's
+  review said RM. Now the store's currency.
+
+### S13 tests
+
+`convex/lib/productKind.test.ts` (new): the sanitizer sweep (defaults,
+dedupe/sort, no nights, every night, bad index, package pairing), the label
+author/reader round-trip. `convex/lib/bookingAvailability.test.ts`:
+`splitNightsByRate` — Thu→Mon, Sunday-night vs Monday-morning, year boundary
+(31 Dec → 2 Jan), month boundary summing to the night count, all-one-kind,
+no-rate / empty-days / package. `convex/bookings.test.ts` ("weekend / weekday
+rates (S13)"): two frozen lines reconciling with subtotal + deposit, frozen
+through a listing edit, one line for an all-weekday and an all-weekend stay,
+a Sunday-only night set, the no-rate listing unchanged, `availability`
+quoting the pair. `convex/products.test.ts`: round-trip + default days, 0
+clears both, dedupe, the refusal sweep. Frontend: `order-item-line`,
+`product-summary` (strip + consequence), `booking-dates` (suffix), and
+`product-wizard-booking` (default Fri + Sat, the picker adds Sunday, the
+package hides + drops the pair, an empty night set is refused at its step).
+
+### What S13 deliberately does NOT do
+
+- **No public holidays / peak dates.** That wants a dated list, not a weekday
+  set — ticket it when Sengloh asks; `weekendDays` is shaped so `peakDates[]`
+  can sit beside it.
+- **No weekend rate on packages**, and no "must start on Friday" rule for
+  them — a package is one flat price; the S7 scope stands.
+- **No variants on booking listings** (still deferred, see S1) — this is a
+  pricing rule on the one variant, so capacity stays per listing.
+
 ## S8 — the "Active" period lens (`86eyqxb2q`)
 
 FS Fitness's second ask: *"sit at the gym and see who has paid."* The inbox

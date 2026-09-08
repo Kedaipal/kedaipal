@@ -927,6 +927,17 @@ export default defineSchema({
 				// the parked partial-payment deposit 86eyhwb03). Optional; 0 is
 				// normalized to unset so "no deposit" has one spelling.
 				securityDeposit: v.optional(v.number()),
+				// Weekend per-night rate (sen; S13 `z8r3fddkp8`) — the campsite
+				// price shape. Unset = one rate for every night (every existing
+				// row, zero migration). Free-range stays only; a package is one
+				// flat price and refuses it. The split lands on the ORDER as two
+				// frozen lines (`items[]`), never as new order fields.
+				weekendPrice: v.optional(v.number()),
+				// Which NIGHTS the weekend rate covers — weekday indexes of the
+				// night slept (0 = Sun .. 6 = Sat, `weekdayIndexMyt`), deduped +
+				// sorted. Only present alongside `weekendPrice`; defaults to
+				// [5, 6] = Fri + Sat nights when the seller doesn't choose.
+				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).

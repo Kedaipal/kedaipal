@@ -25,6 +25,7 @@ import {
 	DAY_MS,
 	isMytMidnight,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "./fulfilmentDate";
 import {
 	isMonthlyUnit,
@@ -340,6 +341,51 @@ export function resolveBookingRange(
 		throw new Error("Pick your check-out date");
 	}
 	return { checkIn, checkOut };
+}
+
+/** The rate-relevant slice of a listing's booking config. */
+export type BookingRateConfig = {
+	packageLength?: number;
+	weekendPrice?: number;
+	weekendDays?: readonly number[];
+};
+
+/**
+ * How many of a stay's nights charge the weekend rate (S13, `z8r3fddkp8`).
+ * ONE author — imported by the buyer's checkout receipt AND by
+ * `requestBooking`'s line construction, so the preview and the charge can
+ * never disagree by a night.
+ *
+ * A night is the calendar day it STARTS on: a 12→14 Sep stay sleeps the 12th
+ * and 13th, so those two weekdays are read and the check-out morning (the
+ * 14th) never counts — leaving on a Sunday morning is not a Saturday-night
+ * charge. Month and year boundaries are plain 24 h steps (MYT has no DST).
+ *
+ * A listing with no weekend rate, or a fixed-length package (flat price by
+ * definition — the validators refuse the pairing, this is belt-and-braces),
+ * reports every night as weekday so callers need no special case.
+ */
+export function splitNightsByRate(
+	checkIn: number,
+	checkOut: number,
+	booking: BookingRateConfig | undefined,
+): { weekdayNights: number; weekendNights: number } {
+	const nights = eachNight(checkIn, checkOut);
+	const isPackage = (booking?.packageLength ?? 0) > 0;
+	const weekendDays = booking?.weekendDays;
+	if (
+		isPackage ||
+		booking?.weekendPrice === undefined ||
+		weekendDays === undefined ||
+		weekendDays.length === 0
+	) {
+		return { weekdayNights: nights.length, weekendNights: 0 };
+	}
+	const weekend = new Set(weekendDays);
+	const weekendNights = nights.filter((night) =>
+		weekend.has(weekdayIndexMyt(night)),
+	).length;
+	return { weekdayNights: nights.length - weekendNights, weekendNights };
 }
 
 /**
