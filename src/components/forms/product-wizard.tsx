@@ -21,10 +21,12 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
+	DEFAULT_WEEKEND_DAYS,
 	MAX_CAPACITY_PER_NIGHT,
 	type ProductKind,
 	packageUnitMax,
 	type PackageUnit,
+	weekendDaysLabel,
 } from "../../../convex/lib/productKind";
 import { bookingPriceSuffix, bookingSpanNoun } from "../../lib/booking-dates";
 import { asPackageUnit } from "../../lib/package-unit";
@@ -33,6 +35,7 @@ import {
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { weekendRateConsequence } from "../../lib/product-summary";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
@@ -48,6 +51,7 @@ import {
 	type ProductFormSubmitValues,
 } from "./product-form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
+import { WeekdayPicker } from "./weekday-picker";
 import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
@@ -138,6 +142,10 @@ export type WizardState = {
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
 	 * none). Collected with the payment, returned after check-out (S5). */
 	securityDeposit: string;
+	/** Booking kind only — weekend per-night rate (RM, as typed; blank = one
+	 * rate) and the nights it covers, 0 = Sunday (S13). Free range only. */
+	weekendPrice: string;
+	weekendDays: number[];
 	/** Step 2 — "What kind of product is it?" null until answered. */
 	shape: ProductShape | null;
 	/** The shared draft substrate (options + rows + custom line). */
@@ -172,6 +180,8 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		packageUnit: "month",
 		autoAccept: false,
 		securityDeposit: "",
+		weekendPrice: "",
+		weekendDays: [...DEFAULT_WEEKEND_DAYS],
 		shape: null,
 		editor: {
 			options: [],
@@ -351,6 +361,30 @@ export function wizardStepIssues(
 					field: "securityDeposit",
 					message:
 						"Enter an amount between RM 0 and RM 10,000, or leave blank.",
+				});
+			}
+		}
+		// Weekend rate (S13) — only judged on a free-range listing; a package
+		// hides the fields and never sends the pair.
+		const weekendRaw = state.weekendPrice.trim();
+		if (pkgRaw.length === 0 && weekendRaw.length > 0) {
+			const rate = parsePriceInput(weekendRaw);
+			if (rate === null || rate <= 0 || rate > 100_000) {
+				issues.push({
+					field: "weekendPrice",
+					message: "Enter an amount above 0 and up to 100,000, or leave blank.",
+				});
+			}
+			if (state.weekendDays.length === 0) {
+				issues.push({
+					field: "weekendDays",
+					message: "Pick at least one night for the weekend rate.",
+				});
+			} else if (state.weekendDays.length === 7) {
+				issues.push({
+					field: "weekendDays",
+					message:
+						"That's every night — set it as the price per night instead.",
 				});
 			}
 		}
@@ -540,6 +574,18 @@ export function buildWizardSubmitValues(
 								? Math.round(dep * 100)
 								: undefined;
 						})(),
+						// Free-range only — a package has one flat price, so the pair
+						// is dropped rather than sent for the server to refuse.
+						...(() => {
+							if (packageLengthValue !== undefined) return {};
+							const rate = parsePriceInput(state.weekendPrice.trim());
+							return rate !== null && rate > 0
+								? {
+										weekendPrice: Math.round(rate * 100),
+										weekendDays: state.weekendDays,
+									}
+								: {};
+						})(),
 					}
 				: undefined,
 		// Blank → undefined (no rule); the server normalizes 0/1 to unset.
@@ -588,6 +634,8 @@ export function wizardHandoff(state: WizardState): {
 			packageUnit: state.packageUnit,
 			autoAccept: state.autoAccept,
 			securityDeposit: state.securityDeposit,
+			weekendPrice: state.weekendPrice,
+			weekendDays: state.weekendDays,
 			categoryIds: state.categoryIds,
 			imageStorageIds: state.images.map((i) => i.id),
 			imageUrls: state.images.map((i) => i.url),
@@ -618,6 +666,8 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		packageUnit: draft.packageUnit ?? "month",
 		autoAccept: draft.autoAccept === true,
 		securityDeposit: draft.securityDeposit ?? "",
+		weekendPrice: draft.weekendPrice ?? "",
+		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
 		// the buyer picks; one never-out-of-stock, mockup-gated row = made to
 		// order; anything else = a single item.
@@ -1718,6 +1768,66 @@ export function ProductWizard({
 							/>
 						</label>
 						<IssueText message={issueFor("price:")} />
+						{/* Weekend rate (S13) — a second per-night price on the nights
+						    the seller picks. Directly under the base price because it IS
+						    a price; hidden on a package (one flat price) with the reason
+						    in its place, so the seller never wonders where it went. */}
+						{isPackageListing ? (
+							<p className="text-xs text-muted-foreground">
+								<span className="font-medium text-foreground">Weekend rate</span>{" "}
+								— a package has one flat price. Clear the package length to
+								charge weekend nights differently.
+							</p>
+						) : (
+							<div className="flex flex-col gap-1.5">
+								<label className="flex items-center gap-3 text-sm font-medium">
+									<span className="min-w-0 flex-1">
+										Weekend rate{" "}
+										<span className="font-normal text-muted-foreground">
+											(optional)
+										</span>
+									</span>
+									<span className="text-sm text-muted-foreground">
+										{currency}
+									</span>
+									<PriceInput
+										value={state.weekendPrice}
+										onChange={(v) => patch({ weekendPrice: v })}
+										className="h-11 w-28 text-right"
+										invalid={!!issueFor("weekendPrice")}
+									/>
+								</label>
+								<IssueText message={issueFor("weekendPrice")} />
+								{state.weekendPrice.trim().length > 0 ? (
+									<div className="flex flex-col gap-1.5 pt-1">
+										<span className="text-xs font-medium">
+											Which nights charge this rate?
+										</span>
+										<WeekdayPicker
+											label="Weekend nights"
+											value={state.weekendDays}
+											onChange={(days) => patch({ weekendDays: days })}
+										/>
+										<IssueText message={issueFor("weekendDays")} />
+									</div>
+								) : null}
+								{/* One voice: once Continue has flagged the night set, the
+								    issue text speaks and the consequence line steps aside. */}
+								{issueFor("weekendDays") ? null : (
+									<span className="text-xs font-normal text-muted-foreground">
+										{weekendRateConsequence(
+											{
+												basePrice: rows[0]?.price ?? "",
+												weekendPrice: state.weekendPrice,
+												weekendDays: state.weekendDays,
+											},
+											currency,
+										) ??
+											"Leave blank for one rate every night. Set it to charge more on the nights you pick — Fri and Sat by default. Guests see both rates before they pick dates."}
+									</span>
+								)}
+							</div>
+						)}
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							<span>
 								{isPackageListing
@@ -2253,11 +2363,23 @@ export function ProductWizard({
 														},
 													]
 												: []),
+											...(!isPackageListing &&
+											state.weekendPrice.trim().length > 0
+												? [
+														{
+															label: "Weekend rate",
+															value: `${currency} ${state.weekendPrice.trim()} on ${weekendDaysLabel(state.weekendDays)} nights`,
+															step: 3,
+														},
+													]
+												: []),
 											...(state.securityDeposit.trim().length > 0
 												? [
 														{
 															label: "Deposit",
-															value: `RM ${state.securityDeposit.trim()} (refundable)`,
+															// The store's currency, not a hardcoded RM — an SG
+															// store's review row said "RM" here (S13 fix-in-passing).
+															value: `${currency} ${state.securityDeposit.trim()} (refundable)`,
 															step: 3,
 														},
 													]

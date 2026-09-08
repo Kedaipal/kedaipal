@@ -23,6 +23,7 @@ import {
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
+	weekdayIndexMyt,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import {
@@ -34,7 +35,6 @@ import {
 	isOpenOnDate,
 	selectableTimeWindow,
 	WEEKDAY_NAMES,
-	weekdayIndexMyt,
 } from "../../../convex/lib/openingHours";
 import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";

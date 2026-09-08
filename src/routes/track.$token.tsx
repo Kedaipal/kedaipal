@@ -5,6 +5,7 @@ import { useAction, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	BadgeCheck,
+	CalendarCheck,
 	CalendarDays,
 	CheckCircle,
 	Clock,
@@ -59,12 +60,14 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { shipsAsParcel } from "../lib/dispatch-surface";
 import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -266,8 +269,18 @@ function getStatusConfig(
 		},
 		shipped: {
 			label: label("shipped"),
+			// The milestone this marks depends on the method, and so does its
+			// picture: a parcel leaves, a pickup order waits at the store, and a
+			// booking BEGINS — "Checked In" for a stay, "Active" for a package.
+			// A truck on a campsite check-in was the delivery default leaking
+			// through the same self_collect-or-else binary the shipping
+			// surfaces used (8 Sep). CalendarCheck reads for both booking
+			// shapes and matches the CalendarRange the seller's page already
+			// gives a booking.
 			icon:
-				method === "self_collect" ? (
+				method === "booking" ? (
+					<CalendarCheck className="size-5" />
+				) : method === "self_collect" ? (
 					<Store className="size-5" />
 				) : (
 					<Truck className="size-5" />
@@ -461,6 +474,7 @@ function TrackingRoute() {
 					checkIn: order.bookingCheckIn,
 					checkOut: order.bookingCheckOut,
 					packaged: isBookingPackage,
+					weekendDays: order.bookingWeekendDays,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -1124,14 +1138,16 @@ function TrackingRoute() {
 				</div>
 			) : null}
 
-			{/* Shipment tracking — only for delivery orders. Courier + consignment
-			    number render copyable even without a link (cold-chain couriers have
-			    no public tracking page — the buyer pastes the number into the
-			    courier's app/WhatsApp instead). The link is scheme-checked at the
+			{/* Shipment tracking — only for PARCEL orders (never a stay: there is
+			    nothing in transit, and a booking can no longer be given a courier
+			    seller-side either). Courier + consignment number render copyable
+			    even without a link (cold-chain couriers have no public tracking
+			    page — the buyer pastes the number into the courier's app/WhatsApp
+			    instead). The link is scheme-checked at the
 			    href: write-time sanitize covers new values, but rows written before
 			    it existed could hold a javascript:/data: URL, and this anchor is
 			    the one buyer-facing surface where that would execute. */}
-			{!isSelfCollect &&
+			{shipsAsParcel(deliveryMethod) &&
 			(order.courierName ||
 				order.trackingNo ||
 				isSafeTrackingUrl(order.carrierTrackingUrl)) ? (
@@ -1268,17 +1284,24 @@ function TrackingRoute() {
 							</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							{Math.round(
-								(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-							)}{" "}
-							{isBookingPackage
-								? ms
-									? "hari"
-									: "days"
-								: ms
-									? "malam"
-									: "night(s)"}{" "}
-							· {order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
+							{(() => {
+								// "2 night(s)" was the only place the app hedged its
+								// plural instead of counting — every other surface says
+								// "2 nights" / "1 night". Malay doesn't inflect, so only
+								// the EN branch takes the count.
+								const n = Math.round(
+									(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+								);
+								const unit = isBookingPackage
+									? ms
+										? "hari"
+										: `day${n === 1 ? "" : "s"}`
+									: ms
+										? "malam"
+										: `night${n === 1 ? "" : "s"}`;
+								return `${n} ${unit}`;
+							})()} ·{" "}
+							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>
 				</section>
@@ -1452,24 +1475,34 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Delivery method */}
-			<div className="mt-4 flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-sm font-medium text-muted-foreground">
-				{isSelfCollect ? (
-					<Package className="size-4" />
-				) : (
-					<Truck className="size-4" />
-				)}
-				{isSelfCollect
-					? order.pickupSnapshot?.locationType === "drop_off"
-						? "Drop-off"
-						: "Self Collect"
-					: isCollection
-						? "Collection from your address"
-						: "Delivery"}
-			</div>
+			{/* Delivery method — never on a stay. A booking has no method to
+			    report, and the fall-through printed "Delivery" with a truck icon
+			    on a campsite booking. The YOUR STAY card above is a booking's
+			    fulfilment surface, so this and the date row below both stand
+			    down rather than restate it in delivery words (8 Sep; the SELLER
+			    page has said "Booking · 2 nights · Check-in" all along, so the
+			    two sides were describing one order differently). */}
+			{isBooking ? null : (
+				<div className="mt-4 flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-sm font-medium text-muted-foreground">
+					{isSelfCollect ? (
+						<Package className="size-4" />
+					) : (
+						<Truck className="size-4" />
+					)}
+					{isSelfCollect
+						? order.pickupSnapshot?.locationType === "drop_off"
+							? "Drop-off"
+							: "Self Collect"
+						: isCollection
+							? "Collection from your address"
+							: "Delivery"}
+				</div>
+			)}
 
-			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
-			{order.fulfilmentDate !== undefined ? (
+			{/* Fulfilment date the buyer chose — reassures them the seller has it.
+			    A booking's fulfilmentDate IS its check-in, already printed above
+			    under its own word, so this would duplicate it as "Delivery on". */}
+			{!isBooking && order.fulfilmentDate !== undefined ? (
 				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
 					<CalendarDays className="size-4 text-accent" />
 					{isSelfCollect
@@ -1521,7 +1554,7 @@ function TrackingRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item, i) => {
+					{withLineKeys(order.items).map(({ key, item }, i) => {
 						// Folded quote: this single made-to-order line carries the
 						// locked custom-work price instead of its RM0 snapshot.
 						const isQuoteLine = i === quoteLineIdx;
@@ -1533,7 +1566,7 @@ function TrackingRoute() {
 							: item.price;
 						return (
 							<OrderItemLine
-								key={item.variantId ?? `${item.productId}-${i}`}
+								key={key}
 								name={item.name}
 								variantLabel={item.variantLabel}
 								quantity={item.quantity}

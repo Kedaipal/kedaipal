@@ -13,6 +13,7 @@ import {
 import {
 	isMonthlyUnit,
 	type PackageUnit,
+	weekendDaysLabel,
 } from "../../convex/lib/productKind";
 
 /** The MYT-midnight epoch for the calendar day a DayPicker `Date` names.
@@ -232,6 +233,25 @@ export function bookingPriceSuffix(
 }
 
 /**
+ * What follows the WEEKEND rate on a storefront price line — "/night Fri &
+ * Sat" — so the card, the product page, the detail sheet and the calendar
+ * legend all spell the second rate the same way (S13). Returns null when the
+ * listing has no weekend rate, so callers render nothing rather than an
+ * empty suffix.
+ */
+export function weekendRateSuffix(
+	booking:
+		| { packageLength?: number; weekendPrice?: number; weekendDays?: number[] }
+		| undefined,
+): string | null {
+	if (!booking || booking.weekendPrice === undefined) return null;
+	if ((booking.packageLength ?? 0) > 0) return null;
+	const days = booking.weekendDays ?? [];
+	if (days.length === 0) return null;
+	return `/night ${weekendDaysLabel(days)}`;
+}
+
+/**
  * The same span as a bare noun phrase ("month", "3 days") — for prose that
  * already supplies its own preposition ("one flat price per month").
  */
@@ -240,9 +260,7 @@ export function bookingSpanNoun(
 	packageUnit: PackageUnit = "day",
 ): string {
 	if (packageLength === undefined || packageLength <= 0) return "night";
-	return packageLength === 1
-		? packageUnit
-		: `${packageLength} ${packageUnit}s`;
+	return packageLength === 1 ? packageUnit : `${packageLength} ${packageUnit}s`;
 }
 
 /**
@@ -263,6 +281,66 @@ export function packageCountLabel(
 		? `${packageUnit}s`
 		: `${packageLength}-${packageUnit} packages`;
 }
+
+/** How many nights a split line names in full before it starts counting the
+ * rest. Three fits a sub-line on a phone; a 30-night stay's weekday line would
+ * otherwise print twenty-odd dates. */
+const MAX_NAMED_NIGHTS = 3;
+
+/**
+ * The nights one rate charged for, named (S13) — "Thu 17 Sep",
+ * "Fri 18 Sep, Sat 19 Sep", "Thu 17 Sep, Fri 18 Sep +3 more nights".
+ *
+ * Individual nights, never a range. A weekend rate's nights are frequently
+ * NOT contiguous — a Thu→Mon stay charges the weekday rate for the Thursday
+ * AND the Sunday — so there is no "17 → 20 Sep" that is true of that line.
+ * Naming each night is the only form that stays honest on every stay, and it
+ * sidesteps the other trap: a "–" between two nights reads like the
+ * check-in → check-out arrow used everywhere else, which would make two
+ * nights look like one.
+ *
+ * `format` is injected so this stays pure and the caller picks the style.
+ */
+export function describeNights(
+	nights: readonly number[],
+	format: (epoch: number) => string,
+): string {
+	if (nights.length === 0) return "";
+	if (nights.length <= MAX_NAMED_NIGHTS) return nights.map(format).join(", ");
+	const shown = nights
+		.slice(0, MAX_NAMED_NIGHTS - 1)
+		.map(format)
+		.join(", ");
+	const rest = nights.length - (MAX_NAMED_NIGHTS - 1);
+	return `${shown} +${rest} more night${rest === 1 ? "" : "s"}`;
+}
+
+/**
+ * One night, compact — "Thu 17 Sep". The year is deliberately dropped: these
+ * sit under a card that already states the stay's full dates, and three
+ * "Thu, 17 Sep 2026"s in one sub-line is unreadable. No comma either, because
+ * commas separate the nights from each other.
+ */
+export function formatNight(epoch: number): string {
+	const d = new Date(epoch + MYT_OFFSET_MS);
+	return `${WEEKDAY_SHORT[d.getUTCDay()]} ${d.getUTCDate()} ${MONTH_SHORT[d.getUTCMonth()]}`;
+}
+
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_SHORT = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
+];
 
 /**
  * How a placed booking's span reads on an order. A fixed-length package is a

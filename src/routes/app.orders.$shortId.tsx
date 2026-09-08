@@ -105,6 +105,7 @@ import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeBookingSpan } from "../lib/booking-dates";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
+import { shipsAsParcel } from "../lib/dispatch-surface";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -115,6 +116,7 @@ import {
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	displayStatusLabel,
@@ -359,6 +361,7 @@ function OrderDetailRoute() {
 					checkIn: order.bookingCheckIn,
 					checkOut: order.bookingCheckOut,
 					packaged: order.bookingPackaged === true,
+					weekendDays: order.bookingWeekendDays,
 				}
 			: undefined;
 	const orderId = order?._id;
@@ -581,8 +584,13 @@ function OrderDetailRoute() {
 	// or Delete (admin act-as only). Drives whether that panel has anything on
 	// desktop, where the receipt row lives in the header instead.
 	const hasDestructiveAction = !isTerminal || canHardDelete;
+	// A parcel order only — a stay has nothing to hand a courier, so the card
+	// (and its "add tracking" invitation) has no meaning on a booking. Asks
+	// what the order IS, not what it isn't: `!isSelfCollect` used to stand in
+	// for "is a parcel" and quietly swept bookings in. See shipsAsParcel.
 	const showCarrierSection =
-		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
+		shipsAsParcel(deliveryMethod) &&
+		!["pending", "cancelled"].includes(order.status);
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
@@ -1649,9 +1657,9 @@ function OrderDetailRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item, i) => (
+					{withLineKeys(order.items).map(({ key, item }, i) => (
 						<OrderItemLine
-							key={item.variantId ?? `${item.productId}-${i}`}
+							key={key}
 							name={item.name}
 							variantLabel={item.variantLabel}
 							quantity={item.quantity}
@@ -1827,11 +1835,13 @@ function OrderDetailRoute() {
 				/>
 			) : null}
 
-			{/* Dispatch (delivery orders) — the hub renders ONE provider's card at
+			{/* Dispatch (parcel orders) — the hub renders ONE provider's card at
 			    a time when both Lalamove and Delyva are armed (two stacked spend
 			    buttons invited mis-taps, 3 Sep), and falls through to the plain
-			    cards when only one provider is relevant. 86eyb5hrf + 86eyjpv6z. */}
-			{!isSelfCollect ? (
+			    cards when only one provider is relevant. 86eyb5hrf + 86eyjpv6z.
+			    Both providers already decline a non-delivery order, so this guard
+			    is about not opening two subscriptions to ask a settled question. */}
+			{shipsAsParcel(deliveryMethod) ? (
 				<DispatchHub
 					order={order}
 					bookRequestToken={bookRequestToken}

@@ -1,6 +1,7 @@
 import { CalendarRange, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { weekendRateSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
@@ -59,6 +60,8 @@ export function ProductDetailSheet({
 	const instantBook = product?.booking?.autoAccept === true;
 	const isPackage = (product?.booking?.packageLength ?? 0) > 0;
 	const securityDeposit = product?.booking?.securityDeposit ?? 0;
+	// Second per-night rate (S13) — the same author as the card and page.
+	const weekendSuffix = isBooking ? weekendRateSuffix(product?.booking) : null;
 
 	const open = product !== null;
 	if (!product) {
@@ -116,6 +119,12 @@ export function ProductDetailSheet({
 							</h2>
 							<PriceLabel value={pp.priceLabel} className="shrink-0 text-2xl" />
 						</div>
+						{weekendSuffix && product.booking?.weekendPrice !== undefined ? (
+							<p className="mt-1 text-sm font-medium text-muted-foreground tabular-nums sm:text-right">
+								{formatPrice(product.booking.weekendPrice, product.currency)}
+								{weekendSuffix}
+							</p>
+						) : null}
 
 						{isBooking ? (
 							<div className="mt-3 flex flex-col gap-2">

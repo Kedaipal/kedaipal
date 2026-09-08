@@ -18,8 +18,13 @@ import {
 	addMytCalendarMonths,
 	DAY_MS,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "./lib/fulfilmentDate";
-import type { PackageUnit } from "./lib/productKind";
+import {
+	type PackageUnit,
+	WEEKDAY_NIGHTS_LABEL,
+	weekendNightsLabel,
+} from "./lib/productKind";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -42,6 +47,8 @@ async function seedBookingStore(
 		packageLength?: number;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		weekendPrice?: number;
+		weekendDays?: number[];
 	} = {},
 ) {
 	const asOwner = t.withIdentity({ subject: USER });
@@ -65,6 +72,8 @@ async function seedBookingStore(
 			packageLength: opts.packageLength,
 			packageUnit: opts.packageUnit,
 			autoAccept: opts.autoAccept,
+			weekendPrice: opts.weekendPrice,
+			weekendDays: opts.weekendDays,
 		},
 		variants: [{ optionValues: [], price: 8000, onHand: 0 }],
 	});
@@ -651,6 +660,239 @@ describe("security deposit (S5)", () => {
 				keptAmount: 0,
 			}),
 		).rejects.toThrow(/no security deposit/i);
+	});
+});
+
+describe("weekend / weekday rates (S13)", () => {
+	/** First day at-or-after `day(minOffset)` that falls on `weekday`. */
+	function nextWeekday(weekday: number, minOffset: number): number {
+		let d = day(minOffset);
+		while (weekdayIndexMyt(d) !== weekday) d += DAY_MS;
+		return d;
+	}
+
+	test("a Thu→Mon stay lands as TWO frozen lines that reconcile with the totals", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			weekendPrice: 12_000,
+			securityDeposit: 10_000,
+		});
+		const thu = nextWeekday(4, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: thu,
+			checkOut: thu + 4 * DAY_MS, // Thu, Fri, Sat, Sun nights → Mon morning
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		expect(order.items).toHaveLength(2);
+		expect(order.items[0]).toMatchObject({
+			productId,
+			variantLabel: WEEKDAY_NIGHTS_LABEL,
+			price: 8000,
+			quantity: 2, // Thu + Sun
+		});
+		expect(order.items[1]).toMatchObject({
+			productId,
+			variantLabel: weekendNightsLabel([5, 6]),
+			price: 12_000,
+			quantity: 2, // Fri + Sat
+		});
+		// Same variant on both lines — one listing, one capacity, one product
+		// row in Insights (which groups on productId::variantId).
+		expect(order.items[0]?.variantId).toBe(order.items[1]?.variantId);
+		// computeOrderTotals untouched: total = Σ lines + deposit, zero branches.
+		expect(order.subtotal).toBe(2 * 8000 + 2 * 12_000);
+		expect(order.total).toBe(40_000 + 10_000);
+		expect(order.bookingCheckIn).toBe(thu);
+		expect(order.bookingCheckOut).toBe(thu + 4 * DAY_MS);
+	});
+
+	test("the weekend NIGHT SET is frozen too — the lines say how many, this says which", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			weekendPrice: 12_000,
+		});
+		const thu = nextWeekday(4, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: thu,
+			checkOut: thu + 4 * DAY_MS,
+			customer: guest(7),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingWeekendDays).toEqual([5, 6]);
+
+		// Frozen: moving the listing's weekend to Sundays never relocates the
+		// nights a placed booking was charged for.
+		await asOwner.mutation(api.products.update, {
+			productId,
+			booking: {
+				capacityPerNight: undefined,
+				weekendPrice: 12_000,
+				weekendDays: [0],
+			},
+		});
+		const after = await asOwner.query(api.orders.get, { shortId });
+		expect(after?.bookingWeekendDays).toEqual([5, 6]);
+	});
+
+	test("a listing with no weekend rate freezes no night set", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+		});
+		const thu = nextWeekday(4, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: thu,
+			checkOut: thu + 2 * DAY_MS,
+			customer: guest(8),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.bookingWeekendDays).toBeUndefined();
+	});
+
+	test("the rates are frozen — a later listing edit never re-prices a placed stay", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			weekendPrice: 12_000,
+		});
+		const fri = nextWeekday(5, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: fri,
+			checkOut: fri + 2 * DAY_MS,
+			customer: guest(2),
+		});
+		await asOwner.mutation(api.products.update, {
+			productId,
+			booking: {
+				capacityPerNight: undefined,
+				weekendPrice: 25_000,
+				weekendDays: [0],
+			},
+		});
+		const after = await asOwner.query(api.orders.get, { shortId });
+		expect(after?.items).toHaveLength(1);
+		expect(after?.items[0]).toMatchObject({
+			variantLabel: weekendNightsLabel([5, 6]),
+			price: 12_000,
+			quantity: 2,
+		});
+		expect(after?.total).toBe(24_000);
+	});
+
+	test("a stay that is all one kind writes ONE line, still labelled", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			weekendPrice: 12_000,
+		});
+		const mon = nextWeekday(1, 2);
+		const weekdayStay = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: mon,
+			checkOut: mon + 3 * DAY_MS, // Mon, Tue, Wed nights
+			customer: guest(3),
+		});
+		const weekday = await asOwner.query(api.orders.get, {
+			shortId: weekdayStay.shortId,
+		});
+		expect(weekday?.items).toEqual([
+			expect.objectContaining({
+				variantLabel: WEEKDAY_NIGHTS_LABEL,
+				price: 8000,
+				quantity: 3,
+			}),
+		]);
+		expect(weekday?.total).toBe(24_000);
+
+		const fri = nextWeekday(5, 2);
+		const weekendStay = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: fri,
+			checkOut: fri + 2 * DAY_MS, // Fri + Sat nights
+			customer: guest(4),
+		});
+		const weekend = await asOwner.query(api.orders.get, {
+			shortId: weekendStay.shortId,
+		});
+		expect(weekend?.items).toEqual([
+			expect.objectContaining({
+				variantLabel: weekendNightsLabel([5, 6]),
+				price: 12_000,
+				quantity: 2,
+			}),
+		]);
+		expect(weekend?.total).toBe(24_000);
+	});
+
+	test("the seller's own night set is honoured (Sunday-only weekend)", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+			weekendPrice: 15_000,
+			weekendDays: [0],
+		});
+		const sat = nextWeekday(6, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: sat,
+			checkOut: sat + 2 * DAY_MS, // Sat (weekday here) + Sun (weekend)
+			customer: guest(5),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.items.map((i) => [i.variantLabel, i.quantity, i.price])).toEqual([
+			[WEEKDAY_NIGHTS_LABEL, 1, 8000],
+			[weekendNightsLabel([0]), 1, 15_000],
+		]);
+	});
+
+	test("a listing without the rate keeps today's single unlabelled line", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: null,
+		});
+		const thu = nextWeekday(4, 2);
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: thu,
+			checkOut: thu + 4 * DAY_MS,
+			customer: guest(6),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.items).toHaveLength(1);
+		expect(order?.items[0]?.variantLabel).toBeUndefined();
+		expect(order?.items[0]?.quantity).toBe(4);
+		expect(order?.total).toBe(32_000);
+	});
+
+	test("availability quotes the rate + nights so the calendar and receipt need no second read", async () => {
+		const { t, productId } = await seedBookingStore(setup(), {
+			weekendPrice: 12_000,
+			weekendDays: [6, 5, 0],
+		});
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(10),
+		});
+		expect(window?.weekendPrice).toBe(12_000);
+		expect(window?.weekendDays).toEqual([0, 5, 6]);
+		const plain = await seedBookingStore(setup());
+		const plainWindow = await plain.t.query(api.bookings.availability, {
+			productId: plain.productId,
+			from: day(0),
+			to: day(10),
+		});
+		expect(plainWindow?.weekendPrice).toBeUndefined();
+		expect(plainWindow?.weekendDays).toBeUndefined();
 	});
 });
 
