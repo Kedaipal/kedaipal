@@ -18,10 +18,11 @@ business**, not just the orders.
   and `cancelled` are excluded from **every** figure. So an order cancelled
   after payment drops out of both earned and collected (consistent with
   `decrementAggregatesForCancel` on customers).
-- **Earned** = Σ `order.total` over revenue orders (order placed = revenue
-  recognised). Revenue anchors on `createdAt`, **not** `fulfilmentDate` (that's
-  ops, not revenue).
-- **Collected** = Σ `order.total` over revenue orders whose `paymentStatus` is
+- **Earned** = Σ `order.total` over revenue orders, **net of any refundable
+  security deposit** (see [Security deposits](#security-deposits) below;
+  order placed = revenue recognised). Revenue anchors on `createdAt`, **not**
+  `fulfilmentDate` (that's ops, not revenue).
+- **Collected** = Σ deposit-net `order.total` over revenue orders whose `paymentStatus` is
   `"received"` (money actually in hand). "Delivered ≠ paid" is the whole reason
   for the split — F&B sellers routinely deliver on credit.
 - **AOV** = earned ÷ revenue-order count.
@@ -44,7 +45,7 @@ business**, not just the orders.
   lands in the right day.
 
 Product line-revenue (Σ `price × quantity`) can differ slightly from `earned`
-(Σ `order.total`) because the order total also carries delivery fees / order-level
+(Σ deposit-net `order.total`) because the order total also carries delivery fees / order-level
 adjustments — expected, they answer different questions. Mockup-quote changes
 mutate `order.total` after creation; aggregates read current doc state, so this
 is self-correcting.
@@ -53,11 +54,47 @@ is self-correcting.
   every revenue order by `attributionBucket` — the stamped
   `orders.attributionSource` (`?src=`/`utm_source` captured at the storefront),
   else `counter` for counter-checkout orders (derived from `orders.source`,
-  never stamped), else `direct`. Rows carry **earned** revenue + order count,
-  so Σ rows === earned (this is "which funnel produced the order", not "which
-  got paid"). Labels via `sourceLabel` (`convex/lib/attribution.ts`): known
-  tags prettified (TikTok, Poster QR, Parcel label QR…), free-form seller tags
-  verbatim, garbage bucketed to `other`.
+  never stamped), else `direct`. Rows carry **earned** revenue + order count —
+  the same deposit-net figure as the KPI, never `order.total` — so Σ rows ===
+  earned on a booking store too (this is "which funnel produced the order",
+  not "which got paid"). Labels via `sourceLabel` (`convex/lib/attribution.ts`):
+  known tags prettified (TikTok, Poster QR, Parcel label QR…), free-form seller
+  tags verbatim, garbage bucketed to `other`.
+
+### Security deposits
+
+A booking order's `total` carries the refundable security deposit (booking
+S5, [`docs/booking.md`](./booking.md#s5--security-deposit-end-to-end-86eyn4kee))
+— held money the seller returns after check-out, never revenue. `reduceInsights`
+nets it out of **every** figure through the one rule `revenue = max(0, total −
+securityDeposit)` (`revenueExcludingDeposit` in `convex/lib/order.ts`, inlined
+so this module stays dependency-free): earned, the trend, collected, the
+payment slices **and the by-source rows**. The rows added `order.total` until
+`z8r3fdcw70` (booking S12), under a comment claiming Σ rows === earned — on a
+campsite running RM100–300 deposits on RM160–400 stays the Sources list summed
+to more than Revenue earned, and neither test could see it (the deposit test
+never asserted on `sources`; the by-source test had no deposit order). Both
+tests now carry the other's case.
+
+The amount netted out comes back as **`depositsHeld`** (Σ over the same
+revenue orders; both queries return it and `buildInsightsView` sums it like
+`earned`) so the page can say what it did. When it is > 0 the **Revenue
+earned** tile's sub-label reads "excl. RM X security deposits" (store currency
+via `formatPriceCompact`, the same rule as the tile's value) with the full
+sentence on hover (`DEPOSIT_EXCLUSION_HINT` in `kpi-row.tsx`: "Security
+deposits are held money returned after check-out, so they are not counted as
+revenue."). At 0 the sub-label is the usual "confirmed → delivered", so a
+store without deposits sees no change. That line exists because Seng (Hidden
+Gems'ite, Founding #7) had to ask "does the sales include security deposit?"
+— a constraint is surfaced, never enforced silently.
+
+Decided, not built here: **kept deposits stay out of revenue**
+(`securityDepositKeptAmount` is compensation, not sales — Arif, 4 Sep 2026),
+and a partial keep nets the whole deposit, not the returned remainder.
+`depositsHeld` counts a deposit whether or not it has been returned yet — it
+is "what this window excluded", not an outstanding-liability figure; that,
+plus a held / returned / kept tile, is the deposit reporting tail
+(`z8r3fdd07u`) once S5 has a month of real data.
 
 ## Backend — two queries, one page (`convex/analytics.ts`)
 
@@ -75,8 +112,9 @@ re-run the heavy scan.** So the range is split in two, merged on the client:
   trend of its own; the client places today's earned into the right bucket.
 
 The client (`src/lib/insights-view.ts` `buildInsightsView`) merges the two onto
-one contiguous trend grid, summing KPIs and merging product/payment breakdowns
-via the shared pure helpers, so client and server never diverge.
+one contiguous trend grid, summing KPIs (earned, `depositsHeld`, collected,
+order count) and merging product/payment/source breakdowns via the shared pure
+helpers, so client and server never diverge.
 
 ### Scan
 
@@ -117,7 +155,9 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 ## Frontend
 
 - Route: `src/routes/app.insights.tsx` (Pro: full page; Starter/non-Pro: teaser).
-- Components in `src/components/insights/`: `kpi-row`, `revenue-trend`,
+- Components in `src/components/insights/`: `kpi-row` (the four tiles; the
+  Revenue earned sub-label switches to the deposit exclusion when
+  `depositsHeld` > 0, see [Security deposits](#security-deposits)), `revenue-trend`,
   `top-products` (bar list + revenue/quantity toggle + thumbnails),
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
   opacity, on-brand), `source-breakdown` (bar list of `attributionBucket` rows;
@@ -165,9 +205,16 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 ## Tests
 
 - `convex/lib/insights.test.ts` — the reduce (revenue split, cancelled-after-
-  paid, pending-but-paid, product grouping, deleted-product snapshot, MYT 00:30
-  boundary, day/week bucketing, donut = collected invariant, merge helpers).
-- `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid.
+  paid, pending-but-paid, deposit netted out of every figure incl. the by-source
+  rows + `depositsHeld` (0 when the only deposit is on a non-revenue order;
+  clamped when a deposit exceeds the total), product grouping, deleted-product
+  snapshot, MYT 00:30 boundary, day/week bucketing, donut = collected
+  invariant, Σ sources = earned with a deposit order present, merge helpers).
+- `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid
+  (`depositsHeld` sums like earned and is dropped with the today payload).
+- `src/components/insights/kpi-row.test.tsx` — the Revenue earned sub-label:
+  unchanged at 0 with no deposit copy anywhere, amount + hover sentence when
+  > 0, store currency (SG), compact formatting on a large total.
 - `src/components/insights/revenue-trend.test.tsx` — the scrubber (pure
   `scrubIndex`/`bucketRange`, tap/drag selection, zero-order bucket hides the
   link, arrow-key navigation, Esc/✕ clear) on a real memory router.
