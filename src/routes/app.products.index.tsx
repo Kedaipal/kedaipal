@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
@@ -35,14 +35,20 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { highlightRingClass } from "../lib/country-setup-copy";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
 import {
 	downloadProductsCsv,
 	downloadProductsXlsx,
 	type ExportableProduct,
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
+import {
+	isProductSpotlightKey,
+	type ProductSpotlightKey,
+} from "../lib/spotlight";
 import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
 import { hasStartingPrice } from "../lib/variant";
@@ -52,6 +58,16 @@ type StatusFilter = "all" | "active" | "archived";
 type ProductListItem = FunctionReturnType<typeof api.products.listAll>[number];
 
 export const Route = createFileRoute("/app/products/")({
+	// `spot` is a What's-new note's deep link (src/lib/spotlight.ts) for a card
+	// that lives on ONE product's edit form. A note can't know which product,
+	// so it lands here: the list says what to open, and every eligible row
+	// carries the key on to the edit page, which scrolls to the card and rings
+	// it. Validated against the product-page keys, so a hand-typed value (or a
+	// settings key pasted here) is dropped rather than forwarded.
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { spot?: ProductSpotlightKey } =>
+		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
 	component: ProductsRoute,
 });
 
@@ -187,6 +203,8 @@ function CategoriesLink({
 
 function ProductsRoute() {
 	const retailer = useDashboardRetailer();
+	const { spot } = Route.useSearch();
+	const navigate = useNavigate();
 	// Client mirror of the `categories` plan gate (server is the lock) — only
 	// used to badge the Categories link; admin act-as sees through it.
 	const categoriesLocked =
@@ -231,6 +249,13 @@ function ProductsRoute() {
 		counts.all,
 		retailer?.actingAsAdmin === true,
 	);
+	// How many rows the spotlight key applies to — decides whether the banner
+	// says "open one below" or "you don't have one yet". Counted over every
+	// row, not the filtered view, so a status filter can't make it lie.
+	const spotEligible =
+		spot && products
+			? products.filter((p) => PRODUCT_SPOTLIGHT[spot].applies(p)).length
+			: 0;
 	const countsLine =
 		products === undefined
 			? "Loading…"
@@ -389,6 +414,42 @@ function ProductsRoute() {
 				</div>
 			</div>
 
+			{/* A What's-new deep link landed here (`?spot=`): say what the seller
+			    is looking for and where the next tap takes them. First among the
+			    sections because it is the reason they are on this page; the ring
+			    is the same spotlight the destination card will wear, so the two
+			    read as one journey. "Got it" clears the key from the URL. */}
+			{spot && products !== undefined ? (
+				<section
+					className={`flex flex-col gap-3 rounded-2xl bg-card p-4 sm:flex-row sm:items-center sm:justify-between ${highlightRingClass("spotlight")}`}
+				>
+					<div className="min-w-0">
+						<p className="text-sm font-semibold">
+							{PRODUCT_SPOTLIGHT[spot].title}
+						</p>
+						<p className="mt-1 text-[13px] leading-snug text-muted-foreground">
+							{spotEligible > 0
+								? PRODUCT_SPOTLIGHT[spot].body
+								: PRODUCT_SPOTLIGHT[spot].empty}
+						</p>
+					</div>
+					<div className="flex shrink-0 items-center gap-2">
+						{spotEligible === 0 && !capBlockReason ? (
+							<Button asChild className="h-11 sm:h-10">
+								<Link to="/app/products/new">+ New product</Link>
+							</Button>
+						) : null}
+						<Button
+							variant="ghost"
+							className="h-11 sm:h-10"
+							onClick={() => navigate({ to: "/app/products", search: {} })}
+						>
+							Got it
+						</Button>
+					</div>
+				</section>
+			) : null}
+
 			{/* At the ceiling the disabled New button needs to say WHY, and the
 			    reason isn't guessable: archiving looks like removal but keeps the
 			    slot, so only deleting frees one. A `title` tooltip can't carry that
@@ -470,12 +531,16 @@ function ProductsRoute() {
 					</Button>
 				</div>
 			) : canReorder ? (
-				<SortableProductGrid retailerId={retailer._id} products={filtered} />
+				<SortableProductGrid
+					retailerId={retailer._id}
+					products={filtered}
+					spot={spot}
+				/>
 			) : (
 				<ul className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 					{filtered.map((p) => (
 						<li key={p._id}>
-							<ProductCard product={p} />
+							<ProductCard product={p} spot={spot} />
 						</li>
 					))}
 				</ul>
@@ -515,10 +580,15 @@ function NewProductButton({
 function ProductCard({
 	product: p,
 	dragHandle,
+	spot,
 }: {
 	product: ProductListItem;
 	dragHandle?: ReactNode;
+	/** A What's-new deep link to forward — only rows the key applies to carry it. */
+	spot?: ProductSpotlightKey;
 }) {
+	const forwardSpot =
+		spot && PRODUCT_SPOTLIGHT[spot].applies(p) ? spot : undefined;
 	const blockOOS = p.blockWhenOutOfStock === true;
 	const outOfStock = p.active && !p.inStock;
 	const lowStock =
@@ -540,6 +610,7 @@ function ProductCard({
 		<Link
 			to="/app/products/$productId"
 			params={{ productId: p._id }}
+			search={forwardSpot ? { spot: forwardSpot } : {}}
 			className={
 				(dragHandle
 					? "flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-3"
@@ -627,9 +698,11 @@ function ProductCard({
 function SortableProductGrid({
 	retailerId,
 	products,
+	spot,
 }: {
 	retailerId: Id<"retailers">;
 	products: ProductListItem[];
+	spot?: ProductSpotlightKey;
 }) {
 	const reorder = useMutation(api.products.reorder);
 	// `products` arrives active-first (server `byActiveThenSort`). Only the active
@@ -676,7 +749,7 @@ function SortableProductGrid({
 				strategy="grid"
 				className={gridClass}
 				renderItem={(prod, handle) => (
-					<ProductCard product={prod} dragHandle={handle} />
+					<ProductCard product={prod} dragHandle={handle} spot={spot} />
 				)}
 			/>
 			{inactiveProducts.length > 0 ? (
@@ -687,7 +760,7 @@ function SortableProductGrid({
 					<ul className={gridClass}>
 						{inactiveProducts.map((p) => (
 							<li key={p._id}>
-								<ProductCard product={p} />
+								<ProductCard product={p} spot={spot} />
 							</li>
 						))}
 					</ul>
