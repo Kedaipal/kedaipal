@@ -106,12 +106,17 @@ Rendering (pdf-lib, runs in the default Convex runtime — no `"use node"`):
   payment card, centered footer) using the slate-900/mint palette from
   `src/styles.css`. Text is sanitized to WinAnsi (standard fonts throw on
   emoji/CJK), so a non-Latin store name degrades gracefully instead of crashing.
-  The ORDER document's last footer line is the clickable **"Powered by
-  Kedaipal"** mark (`poweredByMark` + a URI link annotation tagged
-  `?src=powered-by-receipt&store=<slug>` — `OrderReceiptData.storeSlug` exists
-  only for that link and is never printed; see
-  [`powered-by-badge.md`](./powered-by-badge.md)). The subscription invoice —
-  Kedaipal's own document — keeps the plain `kedaipal.com` line.
+  The ORDER document's foot is the clickable **"Powered by Kedaipal"** lockup —
+  the web footer's pill-over-wordmark, `poweredByLockup` + a URI link
+  annotation tagged `?src=powered-by-receipt&store=<slug>`;
+  `OrderReceiptData.storeSlug` exists only for that link and is never printed;
+  see [`powered-by-badge.md`](./powered-by-badge.md). The subscription
+  invoice — Kedaipal's own document — keeps the plain `kedaipal.com` line.
+- `convex/lib/pdf/lockup.ts` — the "Powered by" wordmark
+  (`public/poster/kedaipal-lockup.svg`) rasterised and inlined the same way as
+  the logo below. To refresh: render the SVG to a PNG (`qlmanage -t` on macOS
+  pads to a square — crop to the 98:21 box), then run the generator below with
+  `lockup.ts` / `KEDAIPAL_LOCKUP_PNG_*` / `kedaipalLockupPngBytes` substituted.
 - `convex/lib/pdf/logo.ts` — the Kedaipal brand lockup (`public/logo-2.png`)
   inlined as base64 so `embedPng` needs **no network fetch** (deterministic render
   inside the action). To refresh after a logo change, regenerate it:

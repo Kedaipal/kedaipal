@@ -65,12 +65,6 @@ export function poweredByHref(
 	return `${MARKETING_SITE_URL}/?${params.toString()}`;
 }
 
-/**
- * The one line the paper label prints — a despatch label is stuck to a parcel,
- * so there is nothing to click and the URL has to be read by a human.
- */
-export const POWERED_BY_PRINT_LINE = "Powered by Kedaipal · kedaipal.com";
-
 const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**

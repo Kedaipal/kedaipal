@@ -16,11 +16,12 @@ import {
 	type PDFPage,
 	PDFString,
 	rgb,
+	setCharacterSpacing,
 	StandardFonts,
 } from "pdf-lib";
 import type { AwbLabelData, AwbParty } from "./awb";
 import type { AwbPaperSize } from "../awbConfig";
-import { POWERED_BY_PRINT_LINE, poweredByHref } from "../poweredBy";
+import { poweredByHref } from "../poweredBy";
 import { encodeCode128 } from "./barcode";
 import {
 	formatDocDate,
@@ -30,6 +31,7 @@ import {
 	type SubscriptionInvoiceData,
 } from "./document";
 import { toLatin1 } from "./latin1";
+import { KEDAIPAL_LOCKUP_PNG_SIZE, kedaipalLockupPngBytes } from "./lockup";
 import { KEDAIPAL_LOGO_PNG_SIZE, kedaipalLogoPngBytes } from "./logo";
 import { encodeQr } from "./qr";
 
@@ -51,11 +53,15 @@ const GREEN_TINT = rgb(0.9, 0.97, 0.94); // total bar fill
 const AMBER = rgb(0.96, 0.62, 0.07);
 
 /** Everything the drawing helpers need. The despatch label is the SELLER's
- * document, so it draws with a `Pen` and never sees the Kedaipal lockup. */
+ * document, so it draws with a `Pen` and never sees the Kedaipal letterhead
+ * logo — the only Kedaipal mark it carries is the "Powered by" lockup every
+ * buyer surface shares. */
 type Pen = {
 	page: PDFPage;
 	font: PDFFont;
 	bold: PDFFont;
+	/** The "Powered by" wordmark (public/poster/kedaipal-lockup.svg, inlined). */
+	lockup: PDFImage;
 };
 
 type Doc = Pen & {
@@ -71,7 +77,8 @@ async function newDoc(): Promise<Doc> {
 	const font = await doc.embedFont(StandardFonts.Helvetica);
 	const bold = await doc.embedFont(StandardFonts.HelveticaBold);
 	const logo = await doc.embedPng(kedaipalLogoPngBytes());
-	return { doc, page, font, bold, logo };
+	const lockup = await doc.embedPng(kedaipalLockupPngBytes());
+	return { doc, page, font, bold, logo, lockup };
 }
 
 // --- Primitives ------------------------------------------------------------
@@ -394,15 +401,31 @@ function footer(d: Doc, note: string, opts: { poweredByUrl?: string } = {}): voi
 	const { page, font, bold } = d;
 	const cx = PAGE[0] / 2;
 	const lines = wrap(font, note, 8.5, CONTENT_W);
-	const y0 = MARGIN + 18 + (lines.length - 1) * 11;
+	// The bottom-most element decides where the note sits above it: the
+	// stacked lockup is taller than the one-line site name.
+	let noteBaseline: number;
+	if (opts.poweredByUrl) {
+		const rect = poweredByLockup(d, cx, MARGIN - 2, "document");
+		// The whole lockup is ONE link annotation. PDF viewers (every phone)
+		// honour it, so a buyer reading their receipt is a tap from kedaipal.com
+		// with the surface + store attribution intact.
+		linkAnnotation(
+			d,
+			{ x: rect.x - 6, y: rect.y - 4, w: rect.w + 12, h: rect.h + 8 },
+			opts.poweredByUrl,
+		);
+		noteBaseline = rect.y + rect.h + 12;
+	} else {
+		drawCenter(page, bold, "kedaipal.com", cx, MARGIN + 2, 8, FAINT);
+		noteBaseline = MARGIN + 18;
+	}
+	const y0 = noteBaseline + (lines.length - 1) * 11;
 	rule(page, y0 + 16);
 	let y = y0;
 	for (const line of lines) {
 		drawCenter(page, font, line, cx, y, 8.5, SLATE);
 		y -= 11;
 	}
-	if (opts.poweredByUrl) poweredByMark(d, cx, MARGIN + 2, opts.poweredByUrl);
-	else drawCenter(page, bold, "kedaipal.com", cx, MARGIN + 2, 8, FAINT);
 }
 
 // The poster / web badge's mint lockup colours (store-poster.tsx,
@@ -411,46 +434,72 @@ const MINT_BORDER = rgb(0.725, 0.851, 0.8); // #B9D9CC
 const MINT_TEXT = rgb(0.482, 0.639, 0.58); // #7BA394
 
 /**
- * The "Powered by Kedaipal" mark on paper — the receipt's twin of the web
- * footer badge: a mint-outlined "POWERED BY" pill, the brand name, the site.
- * Text, not the logo image: the letterhead already carries the lockup at the
- * top of this page, and two logos on one sheet read as shouting. `y` is the
- * text baseline; the mark is centred on `cx`.
- *
- * The whole mark is ONE link annotation. PDF viewers (every phone) honour it,
- * so a buyer reading their receipt is a tap from kedaipal.com with the
- * surface + store attribution intact; on paper the printed site name is the
- * fallback.
+ * The two sizes the "Powered by" lockup prints at. Both are the web footer's
+ * proportions (`storefront-footer.tsx`: a 10px semibold uppercase pill with
+ * 0.2em tracking, an 8px gap, a 20px-tall wordmark) scaled to the sheet —
+ * `document` for an A4 receipt, `label` for an A6 despatch label.
  */
-function poweredByMark(d: Doc, cx: number, y: number, url: string): void {
-	const { page, font, bold } = d;
+const POWERED_BY_SIZES = {
+	document: { pillText: 6.5, pillPadX: 9, pillH: 14, gap: 5, markH: 13 },
+	label: { pillText: 5, pillPadX: 7, pillH: 11, gap: 3, markH: 9 },
+} as const;
+type PoweredBySize = keyof typeof POWERED_BY_SIZES;
+
+/** Total height of the stacked lockup at a size — for layout measuring. */
+function poweredByLockupHeight(size: PoweredBySize): number {
+	const s = POWERED_BY_SIZES[size];
+	return s.pillH + s.gap + s.markH;
+}
+
+/**
+ * The "Powered by Kedaipal" lockup on paper — the SAME mark as the web footer
+ * badge and the Store QR Poster: a mint-outlined "POWERED BY" pill stacked
+ * over the Kedaipal wordmark (the poster SVG, rasterised once into
+ * `./lockup.ts`). One look everywhere a buyer meets us, so the receipt and
+ * the parcel label read as the storefront's siblings, not as a third design.
+ *
+ * Centred on `cx`, wordmark bottom edge at `yBottom`. Returns the bounding
+ * box, so a caller can hang a link annotation on it.
+ */
+function poweredByLockup(
+	pen: Pen,
+	cx: number,
+	yBottom: number,
+	size: PoweredBySize,
+): { x: number; y: number; w: number; h: number } {
+	const { page, bold, lockup } = pen;
+	const s = POWERED_BY_SIZES[size];
+	// Wordmark, aspect-correct.
+	const markW =
+		(KEDAIPAL_LOCKUP_PNG_SIZE.width / KEDAIPAL_LOCKUP_PNG_SIZE.height) *
+		s.markH;
+	page.drawImage(lockup, {
+		x: cx - markW / 2,
+		y: yBottom,
+		width: markW,
+		height: s.markH,
+	});
+	// Pill above it. The web pill tracks its caps at 0.2em; `Tc` (character
+	// spacing) is text state, so it is set for the one string and reset — a
+	// leaked Tc would space every later string on the page.
 	const pillText = "POWERED BY";
-	const pillSize = 6.5;
-	const pillPadX = 6;
-	const pillH = 13;
-	const pillW = widthOf(bold, pillText, pillSize) + pillPadX * 2;
-	const brand = "Kedaipal";
-	const brandSize = 9;
-	const brandW = widthOf(bold, brand, brandSize);
-	const site = "· kedaipal.com";
-	const siteSize = 8;
-	const siteW = widthOf(font, site, siteSize);
-	const gap = 6;
-	const totalW = pillW + gap + brandW + 4 + siteW;
-	const x0 = cx - totalW / 2;
-	let x = x0;
-	// Outlined pill, no fill — the poster's mint outline, top edge at y+8.5 so
-	// the 6.5pt caps sit centred inside a 13pt capsule.
-	roundedRect(page, x, y + 8.5, pillW, pillH, pillH / 2, {
+	const tracking = s.pillText * 0.2;
+	const inkW =
+		widthOf(bold, pillText, s.pillText) + tracking * (pillText.length - 1);
+	const pillW = inkW + s.pillPadX * 2;
+	const pillBottom = yBottom + s.markH + s.gap;
+	const pillX = cx - pillW / 2;
+	roundedRect(page, pillX, pillBottom + s.pillH, pillW, s.pillH, s.pillH / 2, {
 		borderColor: MINT_BORDER,
 		borderWidth: 0.75,
 	});
-	draw(page, bold, pillText, x + pillPadX, y, pillSize, MINT_TEXT);
-	x += pillW + gap;
-	draw(page, bold, brand, x, y, brandSize, INK);
-	x += brandW + 4;
-	draw(page, font, site, x, y, siteSize, FAINT);
-	linkAnnotation(d, { x: x0 - 4, y: y - 5, w: totalW + 8, h: pillH + 6 }, url);
+	// Caps sit ~0.72em tall; centre that in the capsule.
+	const baseline = pillBottom + (s.pillH - s.pillText * 0.72) / 2;
+	page.pushOperators(setCharacterSpacing(tracking));
+	draw(page, bold, pillText, pillX + s.pillPadX, baseline, s.pillText, MINT_TEXT);
+	page.pushOperators(setCharacterSpacing(0));
+	const w = Math.max(pillW, markW);
+	return { x: cx - w / 2, y: yBottom, w, h: poweredByLockupHeight(size) };
 }
 
 /** A clickable URI link over `rect` (PDF user space, `y` = bottom edge). */
@@ -807,9 +856,10 @@ const BARCODE_H = 30;
 const SENDER_H = 46;
 /** Contents lines printed before the "+ N more" summary takes over. */
 const ITEM_LINES_MAX = 3;
-// The "Powered by Kedaipal" line at the very foot of every label (z8r3fdcwd0)
-// — fixed, so every label in a stack ends the same way.
-const BRAND_LINE_H = 9;
+// The "Powered by Kedaipal" lockup at the very foot of every label
+// (z8r3fdcwd0) — a fixed slot in the measured stack, so every label in a run
+// ends the same way and nothing above can squeeze it out.
+const BRAND_LINE_H = poweredByLockupHeight("label") + 4;
 
 /** Embed the seller's logo, sniffing the format from its magic bytes (a stored
  * blob's declared content-type can be absent or wrong). */
@@ -1237,12 +1287,12 @@ function drawLabel(
 			FAINT,
 		);
 	});
-	// The very last line of every label, under the seller's own footer: the
-	// platform mark (z8r3fdcwd0). A parcel is seen by the buyer — and by the
-	// peer sellers who receive parcels all day — so it is a growth surface
-	// like the receipt; text only, since a label is stuck to a box and there
-	// is nothing to click.
-	draw(page, font, POWERED_BY_PRINT_LINE, x, bottom, 6.5, FAINT);
+	// The very last thing on every label, under the seller's own footer: the
+	// platform lockup (z8r3fdcwd0), centred like the web footer. A parcel is
+	// seen by the buyer — and by the peer sellers who receive parcels all day
+	// — so it is a growth surface like the receipt. No link: it's stuck to a
+	// box, the wordmark IS the search term.
+	poweredByLockup(pen, x + width / 2, bottom, "label");
 }
 
 /**
@@ -1264,6 +1314,8 @@ export async function buildAwbPdf(
 	const font = await doc.embedFont(StandardFonts.Helvetica);
 	const bold = await doc.embedFont(StandardFonts.HelveticaBold);
 	const logo = await embedSellerLogo(doc, opts.logo);
+	// One embed per document; every label's lockup references the same XObject.
+	const lockup = await doc.embedPng(kedaipalLockupPngBytes());
 
 	if (labels.length === 0) {
 		// An empty job still has to be a valid PDF: say why it is blank rather
@@ -1285,7 +1337,12 @@ export async function buildAwbPdf(
 	if (opts.paperSize === "a6") {
 		for (const label of labels) {
 			const page = doc.addPage(A6);
-			drawLabel({ page, font, bold }, { x: 0, y: 0, w: A6[0], h: A6[1] }, label, logo);
+			drawLabel(
+				{ page, font, bold, lockup },
+				{ x: 0, y: 0, w: A6[0], h: A6[1] },
+				label,
+				logo,
+			);
 		}
 		return doc.save();
 	}
@@ -1299,7 +1356,7 @@ export async function buildAwbPdf(
 	];
 	for (let i = 0; i < labels.length; i += 4) {
 		const page = doc.addPage(PAGE);
-		const pen: Pen = { page, font, bold };
+		const pen: Pen = { page, font, bold, lockup };
 		// Dashed cut guides across the whole sheet — identical on every sheet,
 		// whether it carries four labels or one.
 		page.drawLine({

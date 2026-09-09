@@ -496,17 +496,34 @@ describe("Powered by Kedaipal on paper (z8r3fdcwd0)", () => {
 		expect(await drawsText(bytes, "kedaipal.com")).toBe(true);
 	});
 
-	test("every despatch label ends with the plain-text line — nothing to click on a parcel", async () => {
+	test("every despatch label ends with the same lockup — no link, nothing to click on a parcel", async () => {
 		const bytes = await buildAwbPdf([labelBase], { paperSize: "a6" });
-		expect(await drawsText(bytes, "Powered by Kedaipal")).toBe(true);
+		expect(await drawsText(bytes, "POWERED BY")).toBe(true);
 		expect(await linkUris(bytes)).toEqual([]);
 	});
 
-	test("the line survives a label whose seller footer is already at the two-line cap", async () => {
+	test("the lockup survives a label whose seller footer is already at the two-line cap", async () => {
 		const bytes = await buildAwbPdf(
 			[{ ...labelBase, footerText: "E".repeat(120) }],
 			{ paperSize: "a6" },
 		);
-		expect(await drawsText(bytes, "Powered by Kedaipal")).toBe(true);
+		expect(await drawsText(bytes, "POWERED BY")).toBe(true);
+	});
+
+	test("the pill's tracking is reset after the lockup — no leaked Tc on the rest of the page", async () => {
+		// Every powered-by draw sets Tc for one string and puts it back to 0.
+		const bytes = await buildOrderReceiptPdf(receipt);
+		const doc = await PDFDocument.load(bytes);
+		const page = doc.getPages()[0];
+		const contents = page.node.Contents();
+		const stream =
+			contents instanceof PDFArray
+				? doc.context.lookup(contents.asArray().at(-1))
+				: contents;
+		if (!(stream instanceof PDFRawStream)) throw new Error("no content stream");
+		const body = Buffer.from(decodePDFRawStream(stream).decode()).toString("latin1");
+		const tcs = [...body.matchAll(/([\d.]+) Tc/g)].map((m) => Number(m[1]));
+		expect(tcs.length).toBeGreaterThan(0);
+		expect(tcs.at(-1)).toBe(0);
 	});
 });

@@ -76,16 +76,21 @@ never loses the page they were on; the link carries
 
 ### 2. Order receipt / invoice PDF
 
-[`convex/lib/pdf/render.ts`](../convex/lib/pdf/render.ts) `poweredByMark` — the
-last footer line on the buyer's order document (both faces, one builder — see
-[`invoices-receipts.md`](./invoices-receipts.md)): a mint-outlined
-"POWERED BY" pill, **Kedaipal**, `· kedaipal.com`. Text rather than the logo
-image, because the letterhead already carries the lockup at the top of the same
-sheet. The whole mark is a **PDF link annotation** (`linkAnnotation`) to
-`poweredByHref("receipt", storeSlug)` — every phone's PDF viewer honours it, so
-a buyer reading their receipt is one tap from kedaipal.com with the attribution
-intact; on paper the printed site name is the fallback.
-`OrderReceiptData.storeSlug` exists only for this link and is never printed.
+[`convex/lib/pdf/render.ts`](../convex/lib/pdf/render.ts) `poweredByLockup` —
+the foot of the buyer's order document (both faces, one builder — see
+[`invoices-receipts.md`](./invoices-receipts.md)) carries **the same lockup
+as the web footer**: the mint-outlined "POWERED BY" pill stacked over the
+Kedaipal wordmark, in the web badge's proportions scaled to A4
+(`POWERED_BY_SIZES.document`). The wordmark is the poster SVG rasterised once
+into [`convex/lib/pdf/lockup.ts`](../convex/lib/pdf/lockup.ts) (pdf-lib can't
+draw SVG; same inline-base64 posture as the letterhead `logo.ts`), and the
+pill's 0.2em tracking is real `Tc` character spacing, set for that one string
+and reset (a test pins the reset — a leaked `Tc` would space every later
+string on the page). The whole lockup is a **PDF link annotation**
+(`linkAnnotation`) to `poweredByHref("receipt", storeSlug)` — every phone's
+PDF viewer honours it, so a buyer reading their receipt is one tap from
+kedaipal.com with the attribution intact. `OrderReceiptData.storeSlug` exists
+only for this link and is never printed.
 
 The **subscription invoice** (Kedaipal → seller) deliberately keeps the plain
 `kedaipal.com` line: a document Kedaipal issues doesn't say "powered by" about
@@ -93,13 +98,15 @@ itself, and the ticket's scope is buyer surfaces, not the seller's billing tab.
 
 ### 3. Despatch label
 
-The last line of every label: `Powered by Kedaipal · kedaipal.com`
-(`POWERED_BY_PRINT_LINE`, 6.5pt, faint, under the seller's own footer text). A
-parcel is seen by the buyer — and by the peer sellers who receive parcels all
-day — so it's a growth surface like the receipt. Plain text only: a label is
-stuck to a box, there's nothing to click. It has a fixed `BRAND_LINE_H` in the
-label's measured bottom stack, so a long seller footer or contents list can
-never squeeze it out (see [`despatch-labels.md`](./despatch-labels.md)).
+The very last thing on every label, centred under the seller's own footer
+text: the same pill-over-wordmark lockup at label scale
+(`POWERED_BY_SIZES.label`). A parcel is seen by the buyer — and by the peer
+sellers who receive parcels all day — so it's a growth surface like the
+receipt. No link annotation: a label is stuck to a box, and the wordmark is
+the search term. It occupies a fixed `BRAND_LINE_H` slot in the label's
+measured bottom stack, so a long seller footer or contents list can never
+squeeze it out (see [`despatch-labels.md`](./despatch-labels.md)). The lockup
+PNG is embedded once per document and referenced by every label on the sheet.
 
 ### 4. WhatsApp order-confirmation line
 

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sanitizeAttributionSource } from "./attribution";
 import {
-	POWERED_BY_PRINT_LINE,
 	POWERED_BY_TAGS,
 	poweredByHref,
 	sanitizeReferrerSlug,
@@ -66,12 +65,5 @@ describe("sanitizeReferrerSlug", () => {
 		expect(sanitizeReferrerSlug("double--dash")).toBeUndefined();
 		expect(sanitizeReferrerSlug("-leading")).toBeUndefined();
 		expect(sanitizeReferrerSlug("../etc")).toBeUndefined();
-	});
-});
-
-describe("POWERED_BY_PRINT_LINE", () => {
-	test("names the site in plain text — a parcel label has nothing to click", () => {
-		expect(POWERED_BY_PRINT_LINE).toContain("kedaipal.com");
-		expect(POWERED_BY_PRINT_LINE).toMatch(/^Powered by Kedaipal/);
 	});
 });
