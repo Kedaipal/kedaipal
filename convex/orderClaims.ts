@@ -38,6 +38,7 @@ import {
 import { linkOrderToCustomer } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { stampProductsOrdered } from "./lib/productOrdered";
+import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
 import { sanitizeAttributionSource } from "./lib/attribution";
@@ -197,6 +198,9 @@ export const sendClaim = mutation({
 		if (!session) throw new ConvexError("Session not found");
 		const access = await requireRetailerAccess(ctx, session.retailerId);
 		const retailer = access.retailer;
+		// Off-Season Hold (z8r3fday24): a paused store sends no claim links.
+		if (retailer.orderingPausedAt !== undefined)
+			throw new ConvexError(orderingPausedMessage(retailer.storeName));
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open any more");
 		if (!session.waPhone)

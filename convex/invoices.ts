@@ -28,6 +28,7 @@ import {
 	type BillingCurrency,
 	type BillingCycle,
 	foundingPricingApplies,
+	HOLD_MONTHLY_PRICES,
 	isPlanSelectable,
 	type Plan,
 	planPrice,
@@ -106,15 +107,23 @@ async function settleInvoicePaid(
 	//    A settle also closes any auto-charge dunning on this subscription —
 	//    however the money arrived (auto-charge, Pay-now, bank transfer), the
 	//    invoice is resolved and retries must stop.
-	const billedPlan = (invoice.plan ?? sub.plan) as Plan;
-	const billedCycle = invoice.billingCycle ?? sub.billingCycle;
+	//    A HOLD invoice (Off-Season Hold, z8r3fday24) buys a paused period:
+	//    the row stays `on_hold` on the tier it keeps, the period rolls, and
+	//    `periodPaidBy` records what bought it — a resume mid-period reads that
+	//    to decide whether the tier bills at once.
+	const isHold = invoice.kind === "hold";
+	const billedPlan = isHold ? sub.plan : ((invoice.plan ?? sub.plan) as Plan);
+	const billedCycle = isHold
+		? sub.billingCycle
+		: (invoice.billingCycle ?? sub.billingCycle);
 	const caps = defaultCapsForPlan(billedPlan);
 	await ctx.db.patch(sub._id, {
 		plan: billedPlan,
 		billingCycle: billedCycle,
-		status: "active",
+		status: isHold ? "on_hold" : "active",
+		periodPaidBy: isHold ? "hold" : "plan",
 		currentPeriodStart: now,
-		currentPeriodEnd: nextPeriodEnd(billedCycle, now),
+		currentPeriodEnd: nextPeriodEnd(isHold ? "monthly" : billedCycle, now),
 		orderCap: caps.orderCap,
 		userCap: caps.userCap,
 		broadcastQuota: caps.broadcastQuota,
@@ -470,15 +479,21 @@ async function insertPendingInvoice(
 		 * ended the free period — picks the "your first order is in" / "your
 		 * free period has ended" email instead of the generic issued one. */
 		firstInvoice?: "first_order" | "backstop";
+		/** Off-Season Hold (z8r3fday24): a `hold` invoice bills the flat hold
+		 * price for one month — no founding discount, no annual — and `plan` is
+		 * the tier the seller resumes to. Default `plan`. */
+		kind?: "plan" | "hold";
 	},
 ): Promise<Id<"invoices">> {
-	const base = planPrice(args.plan, args.billingCycle, false, args.currency);
-	const total = planPrice(
-		args.plan,
-		args.billingCycle,
-		args.founding,
-		args.currency,
-	);
+	const kind = args.kind ?? "plan";
+	const base =
+		kind === "hold"
+			? HOLD_MONTHLY_PRICES[args.currency]
+			: planPrice(args.plan, args.billingCycle, false, args.currency);
+	const total =
+		kind === "hold"
+			? base
+			: planPrice(args.plan, args.billingCycle, args.founding, args.currency);
 	const now = Date.now();
 	// System-set pay-by deadline (issue date + grace). The subscription's billing
 	// cycle is set later at settle, so the paid tier only starts once payment lands.
@@ -489,16 +504,18 @@ async function insertPendingInvoice(
 		subscriptionId: args.subscriptionId,
 		invoiceNumber: generateInvoiceNumber(now),
 		plan: args.plan,
-		billingCycle: args.billingCycle,
+		billingCycle: kind === "hold" ? "monthly" : args.billingCycle,
 		amount: base,
-		foundingDiscount: args.founding ? base - total : undefined,
+		foundingDiscount:
+			kind === "plan" && args.founding ? base - total : undefined,
 		total,
 		currency: args.currency,
 		periodStart: now,
-		periodEnd: nextPeriodEnd(args.billingCycle, now),
+		periodEnd: nextPeriodEnd(kind === "hold" ? "monthly" : args.billingCycle, now),
 		dueDate,
 		status: "pending",
 		origin: args.origin,
+		...(kind === "hold" ? { kind } : {}),
 		createdAt: now,
 	});
 	// Mint the HitPay Pay-now link (no-op without gateway credentials; failure
@@ -804,22 +821,32 @@ export const switchPendingPlan = mutation({
  * transaction, so a double-fired cron issues nothing twice.
  */
 export const internalIssueRenewalInvoice = internalMutation({
-	args: { subscriptionId: v.id("subscriptions") },
+	args: {
+		subscriptionId: v.id("subscriptions"),
+		// Off-Season Hold (z8r3fday24): the pause/resume switch issues the NEXT
+		// bill at once regardless of the period clock — a plan bill it just
+		// voided is replaced by the hold bill, or a forfeited hold period by the
+		// tier bill. Everything else (single-pending, comped, status) still holds.
+		force: v.optional(v.boolean()),
+	},
 	handler: async (
 		ctx,
-		{ subscriptionId },
+		{ subscriptionId, force },
 	): Promise<{ issued: boolean; autoCharge: boolean }> => {
 		const sub = await ctx.db.get(subscriptionId);
 		const now = Date.now();
 		if (
 			!sub ||
-			sub.status !== "active" ||
+			(sub.status !== "active" && sub.status !== "on_hold") ||
 			sub.comped === true ||
-			sub.currentPeriodEnd === undefined ||
-			sub.currentPeriodEnd >= now
+			(!force &&
+				(sub.currentPeriodEnd === undefined || sub.currentPeriodEnd >= now))
 		) {
 			return { issued: false, autoCharge: false };
 		}
+		// A held subscription renews the HOLD, not the tier: flat price, no
+		// founding discount, monthly. The tier it resumes to rides on `plan`.
+		const kind: "plan" | "hold" = sub.status === "on_hold" ? "hold" : "plan";
 		const pending = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
@@ -855,9 +882,12 @@ export const internalIssueRenewalInvoice = internalMutation({
 			subscriptionId: sub._id,
 			plan: sub.plan,
 			billingCycle: sub.billingCycle,
-			founding,
+			founding: kind === "plan" && founding,
 			currency,
-			origin: "auto_renewal",
+			// A forced issue comes from the seller's own pause/resume tap —
+			// their choice, so it is self-serve; the cron's issues are renewals.
+			origin: force ? "self_serve" : "auto_renewal",
+			kind,
 		});
 		const autoCharge = sub.autoRenew !== undefined;
 		if (autoCharge) {
@@ -943,6 +973,8 @@ export const listPending = query({
 			createdAt: number;
 			plan: Plan;
 			origin: InvoiceOrigin;
+			/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
+			kind: "plan" | "hold";
 			hasPayNowLink: boolean;
 			autoRenew: {
 				method: string;
@@ -977,6 +1009,7 @@ export const listPending = query({
 				createdAt: inv.createdAt,
 				plan: (inv.plan ?? sub?.plan ?? "pro") as Plan,
 				origin: inv.origin ?? "admin",
+				kind: inv.kind ?? "plan",
 				hasPayNowLink: inv.gatewayPayment !== undefined,
 				autoRenew: sub?.autoRenew
 					? {

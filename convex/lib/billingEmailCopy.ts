@@ -854,3 +854,132 @@ export function renderAutoRenewEmail(
 ): RenderedEmail {
 	return autoRenewRender[locale][key](vars);
 }
+
+/**
+ * Off-Season Hold notices (z8r3fday24). `holdStarted` restates the deal the
+ * seller just took — what's paused, what stays live, the flat price, when it
+ * starts billing, and that one tap resumes — because a pause is exactly the
+ * state a seller forgets about. `holdResumed` confirms the tier is back and
+ * says whether its invoice is on its way now or waits for the paid period.
+ */
+export type HoldEmailKey = "holdStarted" | "holdResumed";
+
+export type HoldEmailVars = {
+	storeName: string;
+	billingUrl: string;
+	/** The tier the seller resumes to / resumed, e.g. "Pro". */
+	planLabel: string;
+	/** e.g. "MYR 19.00" — always from HOLD_MONTHLY_PRICES, never spelled. */
+	holdPriceFormatted: string;
+	/** Whether an invoice was issued at once (true) or billing waits for the
+	 * running paid period to end (`billsFromFormatted`). */
+	billsNow: boolean;
+	billsFromFormatted?: string;
+};
+
+const holdRender: Record<
+	Locale,
+	Record<HoldEmailKey, (v: HoldEmailVars) => RenderedEmail>
+> = {
+	en: {
+		holdStarted: (v) => {
+			const subject = "⏸ Your store is on Off-Season Hold";
+			const when = v.billsNow
+				? `Your first hold invoice (${v.holdPriceFormatted}) is on its way, with 14 days to pay.`
+				: `You're paid up until ${v.billsFromFormatted ?? "the end of your current period"} — the ${v.holdPriceFormatted}/month hold starts billing after that.`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your ${escapeHtml(v.planLabel)} plan is paused for the season.`,
+				"<strong>Paused:</strong> new orders — buyers see your store with a “seasonal break” note, not a dead link.",
+				"<strong>Still live:</strong> your storefront, catalog, buyer list, order history and editing.",
+				escapeHtml(when),
+				"When your season is back, tap <strong>Resume</strong> in Settings → Billing and your plan returns straight away.",
+			];
+			const html = wrapHtml("⏸", "Off-Season Hold is on", lines, v.billingUrl, "View billing");
+			const text = `⏸ Your store is on Off-Season Hold\nPaused: new orders. Still live: storefront, catalog, buyer list, order history, editing.\n${when}\nResume any time from Settings → Billing.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		holdResumed: (v) => {
+			const subject = `▶️ Welcome back — your ${v.planLabel} plan is on again`;
+			const when = v.billsNow
+				? `Your ${v.planLabel} invoice is on its way, with 14 days to pay — you keep full access meanwhile.`
+				: `You're already paid up until ${v.billsFromFormatted ?? "the end of your current period"}, so nothing to pay right now.`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your ${escapeHtml(v.planLabel)} plan is back and your store is taking orders again.`,
+				escapeHtml(when),
+			];
+			const html = wrapHtml("▶️", `${v.planLabel} is back on`, lines, v.billingUrl, "View billing");
+			const text = `▶️ Welcome back — your ${v.planLabel} plan is on again and your store is taking orders.\n${when}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
+	ms: {
+		holdStarted: (v) => {
+			const subject = "⏸ Kedai anda kini dalam Rehat Luar Musim";
+			const when = v.billsNow
+				? `Bil rehat pertama anda (${v.holdPriceFormatted}) sedang dihantar, dengan 14 hari untuk membayar.`
+				: `Anda sudah bayar sehingga ${v.billsFromFormatted ?? "hujung tempoh semasa"} — rehat ${v.holdPriceFormatted}/bulan mula dicaj selepas itu.`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pelan ${escapeHtml(v.planLabel)} anda dijeda untuk musim ini.`,
+				"<strong>Dijeda:</strong> pesanan baharu — pembeli nampak kedai anda dengan nota “rehat bermusim”, bukan pautan mati.",
+				"<strong>Kekal hidup:</strong> etalase, katalog, senarai pembeli, sejarah pesanan dan penyuntingan.",
+				escapeHtml(when),
+				"Bila musim anda kembali, ketik <strong>Sambung semula</strong> di Tetapan → Pengebilan dan pelan anda kembali serta-merta.",
+			];
+			const html = wrapHtml("⏸", "Rehat Luar Musim diaktifkan", lines, v.billingUrl, "Lihat pengebilan");
+			const text = `⏸ Kedai anda kini dalam Rehat Luar Musim\nDijeda: pesanan baharu. Kekal hidup: etalase, katalog, senarai pembeli, sejarah pesanan, penyuntingan.\n${when}\nSambung semula bila-bila masa dari Tetapan → Pengebilan.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		holdResumed: (v) => {
+			const subject = `▶️ Selamat kembali — pelan ${v.planLabel} anda aktif semula`;
+			const when = v.billsNow
+				? `Bil ${v.planLabel} anda sedang dihantar, dengan 14 hari untuk membayar — akses penuh kekal sementara itu.`
+				: `Anda sudah bayar sehingga ${v.billsFromFormatted ?? "hujung tempoh semasa"}, jadi tiada bayaran buat masa ini.`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pelan ${escapeHtml(v.planLabel)} anda kembali dan kedai anda menerima pesanan semula.`,
+				escapeHtml(when),
+			];
+			const html = wrapHtml("▶️", `${v.planLabel} aktif semula`, lines, v.billingUrl, "Lihat pengebilan");
+			const text = `▶️ Selamat kembali — pelan ${v.planLabel} anda aktif semula dan kedai anda menerima pesanan.\n${when}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
+	zh: {
+		holdStarted: (v) => {
+			const subject = "⏸ 您的商店已进入淡季保留";
+			const when = v.billsNow
+				? `您的第一张保留账单（${v.holdPriceFormatted}）正在发出，有 14 天付款时间。`
+				: `您已付费至 ${v.billsFromFormatted ?? "当前周期结束"} —— 之后才开始按每月 ${v.holdPriceFormatted} 计费。`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 ${escapeHtml(v.planLabel)} 方案已在本季暂停。`,
+				"<strong>已暂停：</strong>新订单 —— 买家看到的是带“淡季休息”提示的商店，而不是失效链接。",
+				"<strong>保持在线：</strong>您的商店、目录、买家名单、订单记录和编辑功能。",
+				escapeHtml(when),
+				"季节回来时，到 设置 → 账单 点击 <strong>恢复</strong>，方案立即回归。",
+			];
+			const html = wrapHtml("⏸", "淡季保留已开启", lines, v.billingUrl, "查看账单");
+			const text = `⏸ 您的商店已进入淡季保留\n已暂停：新订单。保持在线：商店、目录、买家名单、订单记录、编辑。\n${when}\n随时可在 设置 → 账单 恢复。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		holdResumed: (v) => {
+			const subject = `▶️ 欢迎回来 —— 您的 ${v.planLabel} 方案已恢复`;
+			const when = v.billsNow
+				? `您的 ${v.planLabel} 账单正在发出，有 14 天付款时间 —— 期间您仍拥有完整权限。`
+				: `您已付费至 ${v.billsFromFormatted ?? "当前周期结束"}，目前无需付款。`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 ${escapeHtml(v.planLabel)} 方案已恢复，商店重新开始接单。`,
+				escapeHtml(when),
+			];
+			const html = wrapHtml("▶️", `${v.planLabel} 已恢复`, lines, v.billingUrl, "查看账单");
+			const text = `▶️ 欢迎回来 —— 您的 ${v.planLabel} 方案已恢复，商店重新开始接单。\n${when}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
+};
+
+export function renderHoldEmail(
+	locale: Locale,
+	key: HoldEmailKey,
+	vars: HoldEmailVars,
+): RenderedEmail {
+	return holdRender[locale][key](vars);
+}
