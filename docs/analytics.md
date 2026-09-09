@@ -497,12 +497,24 @@ a stop into a bill.
 Two halves, two stores — **setting only the first gives pageviews with no server
 events, which reads as a broken funnel rather than missing config.**
 
-1. **Client (build-time):** add `VITE_POSTHOG_KEY` to the GitHub Actions **`prod`
-   environment variables**, beside `VITE_GA_MEASUREMENT_ID` and
-   `VITE_CLARITY_PROJECT_ID`. `VITE_` vars are baked at build, so this only
-   takes effect on the next deploy.
-2. **Server (Convex prod runtime):** `POSTHOG_PROJECT_KEY`, set on the
-   production deployment.
+Both are **repo variables**, and `deploy.yml` already carries the wiring —
+adding the variable is the only manual step:
+
+| Half | GitHub `prod` variable | How it reaches production |
+| --- | --- | --- |
+| Browser (`$pageview`) | `VITE_POSTHOG_KEY` | Passed to the `Build` step, baked into the bundle by Vite. Takes effect on the **next deploy** — `VITE_` vars are build-time, not runtime. |
+| Convex (`order_created`) | `POSTHOG_PROJECT_KEY` | Pushed to the prod deployment by the *Sync Convex environment variables* step. |
+
+**Adding the GitHub variable is necessary but not sufficient on its own.**
+`deploy.yml` enumerates every variable it forwards — a `VITE_` var absent from
+the `Build` step's `env:` block never reaches the bundle, and a Convex var
+absent from the `CONVEX_ENV_VARS` array never reaches the deployment. Both
+entries were added in this change; a *future* var needs the same two-place
+edit, or it silently does nothing.
+
+`POSTHOG_HOST` / `VITE_POSTHOG_HOST` are **not needed** — Kedaipal's project is
+on US Cloud, which is the default in both halves. Set them only if the project
+ever moves to EU or self-hosted.
 
 The project token is **not a secret** — it ships in the client bundle on every
 page, exactly like the Clarity project ID and the Clerk publishable key — so it
