@@ -12,6 +12,7 @@ import {
 	starterPricePerDay,
 } from "../../../convex/lib/plans";
 import { useLandingRegion } from "../../hooks/useLandingRegion";
+import { trackSignupCta } from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
@@ -262,7 +263,13 @@ export function PricingTeaser() {
 													<ArrowRight />
 												</Link>
 											) : (
-												<Link to="/sign-up/$" params={{ _splat: "" }}>
+												<Link
+													to="/sign-up/$"
+													params={{ _splat: "" }}
+													onClick={() =>
+														trackSignupCta(`pricing-teaser-${tier.id}`)
+													}
+												>
 													{m.pricing_cta()}
 													<ArrowRight />
 												</Link>

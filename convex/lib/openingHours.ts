@@ -37,12 +37,12 @@
 
 import {
 	MINUTES_PER_DAY,
-	MYT_OFFSET_MS,
 	formatFulfilmentTime,
 	hhmmFromMinutes,
 	minSelectableTimeMinutes,
 	mytMinutesOfDay,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "./fulfilmentDate";
 
 export interface DayHours {
@@ -88,11 +88,6 @@ export const WEEKDAY_NAMES_SHORT = [
 	"Sat",
 ];
 
-/** Weekday index (0 = Sunday) of a MYT-anchored epoch — the same shift +
- * `getUTCDay()` read `formatFulfilmentDate` uses. */
-export function weekdayIndexMyt(epoch: number): number {
-	return new Date(epoch + MYT_OFFSET_MS).getUTCDay();
-}
 
 /**
  * The day's window for a fulfilment date, resolving the default: unset hours

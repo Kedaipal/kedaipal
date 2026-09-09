@@ -7,7 +7,10 @@ import {
 	SlidersHorizontal,
 } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
-import { bookingPriceSuffix } from "../../lib/booking-dates";
+import {
+	bookingPriceSuffix,
+	weekendRateSuffix,
+} from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
@@ -56,6 +59,9 @@ export function ProductCard({
 	// A BOOKING listing always routes to its page too (S2): the stay is picked on
 	// a calendar, so a cart quick-add has nothing to add.
 	const isBooking = product.kind === "booking";
+	// Second per-night rate on the nights the seller named (S13) — shown
+	// under the base price so a guest knows both before opening the listing.
+	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	const hasOptions = (product.options?.length ?? 0) > 0;
 	const hasCustom = product.variants.some((v) => v.isCustom);
 	const needsDetail = hasOptions || hasCustom || isBooking;
@@ -205,6 +211,12 @@ export function ProductCard({
 						</>
 					)}
 				</p>
+				{weekendSuffix && product.booking?.weekendPrice !== undefined ? (
+					<p className="text-xs font-medium text-muted-foreground tabular-nums">
+						{formatPrice(product.booking.weekendPrice, product.currency)}
+						{weekendSuffix}
+					</p>
+				) : null}
 				{/* Running cart line — shows what the buyer has already committed for
 				    this product (updates as they add more). Only rendered once it's in
 				    the cart, so un-added tiles stay clean. The money total is dropped

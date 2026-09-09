@@ -25,6 +25,7 @@ import {
 import { isAdmin } from "./lib/auth";
 import { autoRenewMethodLabel } from "./lib/hitpayBilling";
 import {
+	type BillingCycle,
 	capsForPlan,
 	featuresForPlan,
 	type Plan,
@@ -47,6 +48,12 @@ export type SubscriptionStatus =
 export type AccessState = {
 	plan: Plan;
 	status: SubscriptionStatus;
+	/** Monthly or annual. Carried so the seller's Settings → Billing tab can tell
+	 * an annual subscriber apart from a monthly one — without it the annual offer
+	 * would keep pitching a switch to someone who already switched. Owner-only,
+	 * like the rest of this descriptor: it is never on the public storefront
+	 * payload. */
+	billingCycle: BillingCycle;
 	comped: boolean;
 	trialEndsAt?: number;
 	currentPeriodEnd?: number;
@@ -108,6 +115,11 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 		return {
 			plan: "pro",
 			status: "active",
+			// A retailer with no subscription row is comped, so no cycle is really
+			// being billed. "monthly" is the honest default: it is what every real
+			// row starts as, and it keeps the annual offer from being shown to an
+			// account that has no billing relationship at all.
+			billingCycle: "monthly",
 			comped: true,
 			caps,
 			features: featuresForPlan("pro"),
@@ -121,6 +133,7 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 	return {
 		plan: sub.plan,
 		status: sub.status,
+		billingCycle: sub.billingCycle,
 		comped,
 		trialEndsAt: sub.trialEndsAt,
 		currentPeriodEnd: sub.currentPeriodEnd,
@@ -261,13 +274,7 @@ export const current = query({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<
-		| (AccessState & {
-				billingCycle?: "monthly" | "annual";
-				createdAt?: number;
-		  })
-		| null
-	> => {
+	): Promise<(AccessState & { createdAt?: number }) | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		const retailer = await ctx.db
@@ -279,9 +286,12 @@ export const current = query({
 		// Admin on their own store → highest tier unlocked, matching the
 		// getMyRetailer embed (caller === owner here). See docs/admin-console.md.
 		const adminFullAccess = await isAdmin(ctx);
+		// `billingCycle` used to be spread on here by hand. It now rides on
+		// AccessState itself — and re-adding it would be a regression, not a
+		// duplicate: `sub?.billingCycle` is `undefined` for a missing row, which
+		// would overwrite resolveAccess's "monthly" default with nothing.
 		return {
 			...resolveAccess(sub, { adminFullAccess }),
-			billingCycle: sub?.billingCycle,
 			createdAt: sub?.createdAt,
 		};
 	},

@@ -2,10 +2,12 @@
  * Status-quo cost calculator — pure logic for the `/cost` page.
  *
  * Quantifies what WhatsApp-only ordering costs a seller per month (missed-order
- * revenue + payment-chase labour) and contrasts it against Kedaipal's Founding
- * price. See ClickUp 86exqej55 for the formula and framing.
+ * revenue + payment-chase labour) and contrasts it against Kedaipal's Pro list
+ * price. See ClickUp 86exqej55 for the formula and framing; the anchor moved
+ * from the Founding price to the Pro list price when Founding pricing was
+ * retired (30 Aug 2026 pricing reset, ClickUp z8r3fday21).
  *
- * Amounts are **major units** (e.g. 104 = RM 104.00, 41 = S$ 41.00). Rounding
+ * Amounts are **major units** (e.g. 149 = RM 149.00, 59 = S$ 59.00). Rounding
  * for display happens at the edge (the calculator UI), not here.
  *
  * Everything a currency can change is an exhaustive `Record<BillingCurrency,…>`
@@ -18,7 +20,7 @@
 import { z } from "zod";
 import {
 	type BillingCurrency,
-	FOUNDING_MONTHLY_PRICES,
+	PLAN_MONTHLY_PRICES,
 } from "../../convex/lib/plans";
 
 /** Weeks per month — task-locked constant (52 / 12). */
@@ -38,15 +40,15 @@ export const LABOR_RATE_PER_HR: Record<BillingCurrency, number> = {
 };
 
 /**
- * Founding Member monthly price — the comparison anchor, in major units.
+ * Pro list monthly price — the comparison anchor, in major units.
  *
- * Derived from `FOUNDING_MONTHLY_PRICES` (minor units) rather than restated:
- * this file used to carry its own `104`, a second copy of the Pro founding
- * price that nothing stopped from drifting.
+ * Derived from `PLAN_MONTHLY_PRICES` (minor units) rather than restated: this
+ * file used to carry its own literal, a second copy of the price that nothing
+ * stopped from drifting.
  */
-export const FOUNDING_PRICE: Record<BillingCurrency, number> = {
-	MYR: FOUNDING_MONTHLY_PRICES.MYR.pro / 100,
-	SGD: FOUNDING_MONTHLY_PRICES.SGD.pro / 100,
+export const PRO_PRICE: Record<BillingCurrency, number> = {
+	MYR: PLAN_MONTHLY_PRICES.MYR.pro / 100,
+	SGD: PLAN_MONTHLY_PRICES.SGD.pro / 100,
 };
 
 /** Default minutes spent per payment chase when the seller doesn't specify. */
@@ -107,7 +109,7 @@ export interface CostInputs {
 /**
  * Why the calculator declined to show a savings pitch:
  * - `no_missed`  — M = 0, so there's no leak to plug.
- * - `below_price`— total status-quo cost ≤ Founding price; wouldn't pay for itself yet.
+ * - `below_price`— total status-quo cost ≤ Pro price; wouldn't pay for itself yet.
  */
 export type DisqualifyReason = "no_missed" | "below_price" | null;
 
@@ -118,9 +120,9 @@ export interface CostResult {
 	chaseCost: number;
 	/** C — total status-quo cost per month. */
 	total: number;
-	/** D — monthly savings vs the Founding price; negative when disqualified. */
+	/** D — monthly savings vs the Pro price; negative when disqualified. */
 	savings: number;
-	/** total ÷ Founding price — "every RM104 covers RMx of leak". */
+	/** total ÷ Pro price — "every RM149 covers RMx of leak". */
 	ratio: number;
 	/** True when an honest disqualification message should replace the pitch. */
 	disqualified: boolean;
@@ -210,8 +212,8 @@ export function clampInputs(
  *   A. missedRevenue = M × AOV × WEEKS_PER_MONTH
  *   B. chaseCost     = (W × chaseMin / 60) × WEEKS_PER_MONTH × LABOR_RATE_PER_HR
  *   C. total         = A + B
- *   D. savings       = total − FOUNDING_PRICE
- *      ratio         = total ÷ FOUNDING_PRICE
+ *   D. savings       = total − PRO_PRICE
+ *      ratio         = total ÷ PRO_PRICE
  *
  * Disqualification (honest, not salesy):
  *   - M = 0           → `no_missed`  (takes priority; the core leak is dry)
@@ -221,7 +223,7 @@ export function computeStatusQuoCost(
 	inputs: CostInputs,
 	currency: BillingCurrency,
 ): CostResult {
-	const foundingPrice = FOUNDING_PRICE[currency];
+	const proPrice = PRO_PRICE[currency];
 	const missedRevenue = inputs.missedPerWeek * inputs.aov * WEEKS_PER_MONTH;
 	const chaseCost =
 		((inputs.ordersPerWeek * inputs.chaseMin) / 60) *
@@ -232,7 +234,7 @@ export function computeStatusQuoCost(
 	let disqualifyReason: DisqualifyReason = null;
 	if (inputs.missedPerWeek <= 0) {
 		disqualifyReason = "no_missed";
-	} else if (total <= foundingPrice) {
+	} else if (total <= proPrice) {
 		disqualifyReason = "below_price";
 	}
 
@@ -240,8 +242,8 @@ export function computeStatusQuoCost(
 		missedRevenue,
 		chaseCost,
 		total,
-		savings: total - foundingPrice,
-		ratio: total / foundingPrice,
+		savings: total - proPrice,
+		ratio: total / proPrice,
 		disqualified: disqualifyReason !== null,
 		disqualifyReason,
 	};

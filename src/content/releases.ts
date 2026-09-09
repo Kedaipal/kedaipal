@@ -1,4 +1,5 @@
 import type { Locale } from "../../convex/lib/locale";
+import { spotlightHref } from "../lib/spotlight";
 
 /**
  * Seller-facing release notes (ClickUp 86eyqgxv9) — the content shown by the
@@ -137,7 +138,13 @@ export interface ReleaseEntry {
 	title: Localized;
 	/** A sentence or two of plain-language detail. */
 	body: Localized;
-	/** In-app deep link to where the feature actually lives, e.g. `/app/settings?tab=fulfilment`. */
+	/**
+	 * In-app deep link to where the feature actually lives, e.g.
+	 * `/app/settings?tab=fulfilment`. When the feature is ONE card on a settings
+	 * tab, use `spotlightHref("<key>")` (src/lib/spotlight.ts) — it lands the
+	 * seller on that card and rings it in the brand mint, instead of the top
+	 * of the tab.
+	 */
 	href?: string;
 	/** Link text. Defaults to "Take a look" when omitted. */
 	hrefLabel?: Localized;
@@ -163,6 +170,245 @@ export interface Release {
  * entry would make "everything newer than X" return the wrong set.
  */
 export const RELEASES: Release[] = [
+	{
+		version: "2026.09.4",
+		date: "2026-09-08",
+		// The modal, by owner call (Zaki, 8 Sep): the weekend rate was asked for
+		// by the booking anchor seller, and a feature someone asked for should
+		// greet them on their next open rather than wait behind a dot. The
+		// entry's deep link makes the interruption worth it — one tap lands on
+		// the card, ringed. The two fixes ride along.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Charge more for Friday and Saturday nights (at last)",
+				},
+				body: {
+					en: "Campsites, chalets, homestays: the weekend is worth more, and your listing could only say one price. A stay listing now takes a second per-night rate, and you pick the nights it covers — Friday and Saturday by default, Thursday too if that's your crowd. It's the night you sleep that counts, so Sunday night into Monday morning is still a Sunday. Guests see both rates before they pick dates, the pricier nights wear a dot on the calendar, and the receipt itemises weekday nights and weekend nights on their own lines so nobody has to squint at the total — your order shows the same split, nights named. Packages sit this one out: a package is one flat price, and the form says so in the rate's place. On every plan.",
+				},
+				href: spotlightHref("weekend_rate"),
+				hrefLabel: { en: "Set a weekend rate" },
+				icon: "calendar",
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A stay is not a parcel, and the app has stopped insisting",
+				},
+				body: {
+					en: 'A few corners still treated a booking like a box: a Shipment tracking card on the order, "Delivery on 17 Sep" sitting under a card that already said Check-in, a little truck beside "Checked in", and the immortal "2 night(s)". All gone, on your order page and on the guest\'s tracking page alike. Riders, couriers and tracking numbers still turn up exactly where an actual parcel is involved.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A two-night package stays a two-night package",
+				},
+				body: {
+					en: "Reopen a package listing sold in nights and it would greet you as months — and saving would make that true. The unit you chose is now the unit you get back. While we were in there: the deposit line in the listing wizard speaks your store's currency, instead of insisting on RM to Singapore sellers.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+		],
+	},
+	{
+		version: "2026.09.3",
+		date: "2026-09-07",
+		// Earns the modal on two counts. (1) Things MOVED: Lalamove keys and the
+		// HitPay card left the tabs sellers learned them in for a new
+		// Integrations tab — the textbook "wait, where did that go?" moment, and
+		// a seller hunting Settings for their payment gateway is exactly who the
+		// modal exists for. (2) A NUMBER CAN MOVE for buyers: a store with both
+		// riders and Delyva armed now charges the higher of the two quotes at
+		// checkout, and a seller who can't explain their own delivery fee to a
+		// customer loses more trust than one modal costs.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Meet Delyva: nationwide couriers and cold chain, booked from the order",
+				},
+				body: {
+					en: "Riders are brilliant across town and a bit hopeless with a frozen box bound for Kuching. So: connect your Delyva account with one key (yes, one — we fetch the rest ourselves), set a pickup address and a default parcel type, and every confirmed delivery order grows a courier picker. Check the weight, see real prices with the cheapest already ticked, tap to book. The tracking number finds its way to the buyer's order page on its own. Riders and couriers can both be on at once — you pick per order. Delyva is on Pro, like rider booking.",
+				},
+				href: spotlightHref("delyva"),
+				hrefLabel: { en: "Connect Delyva" },
+				icon: "truck",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Your connected accounts moved into one tab (don't panic)",
+				},
+				body: {
+					en: "Lalamove keys used to hide inside the delivery-charge settings and HitPay lived under Payments, which made sense to exactly nobody. Lalamove, Delyva and HitPay now share a Settings → Integrations tab: keys, webhooks, which account is connected, the lot. Fulfilment keeps the behaviour — what you charge, plus a Courier booking section with one toggle per provider. Nothing was disconnected; it simply has a proper home.",
+				},
+				href: "/app/settings?tab=integrations",
+				hrefLabel: { en: "Open Integrations" },
+				icon: "settings",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Live courier pricing now asks every courier you've switched on",
+				},
+				body: {
+					en: "With riders and Delyva both on, checkout used to ask only Lalamove for a price — then you'd book Delyva at a different one and quietly eat the gap. Now every provider you've connected bids, and the buyer pays the higher quote, so whichever one you book, the fee covers it. Book the cheaper one and the difference is yours; the dispatch card shows \"buyer paid\" next to every price so it's an informed choice. With one provider on, nothing changes. Chilled or frozen carts only ask Delyva, because a rider is not a fridge. Under Delivery charges, on Pro.",
+				},
+				href: spotlightHref("delivery_charge"),
+				hrefLabel: { en: "Check your delivery charge" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Singapore stores: riders, at last",
+				},
+				body: {
+					en: "If your store is in Singapore, Lalamove rider booking is now yours too — and in a city that is also the country, a rider covers pretty much every address. Paste your Singapore Lalamove keys under Integrations, switch on Courier booking under Fulfilment, and book from any confirmed delivery order. Live courier pricing works there as well. One heads-up: Lalamove keys belong to one market, so if you ever switch your store's country you'll need a fresh pair.",
+				},
+				href: spotlightHref("lalamove"),
+				hrefLabel: { en: "Add your Lalamove keys" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Pay for a year, get two months on the house",
+				},
+				body: {
+					en: "Pro sellers with a couple of paid invoices behind them will find an annual option in Settings → Billing: pay for ten months, get twelve. One bank transfer instead of twelve reminders from us — which, frankly, we like too. Tap the card and the WhatsApp message is already written. Got a monthly invoice open? We'll swap it for the annual one before you pay, unless it's due within a few days, in which case settle that one and we'll switch you at the next renewal. Change your mind later and the unused months are credited to your next plan or invoice, never lost.",
+				},
+				href: spotlightHref("annual_billing"),
+				hrefLabel: { en: "See the annual offer" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Put your registered business on your invoices",
+				},
+				body: {
+					en: "A corporate customer's finance team wants a registered name and an SSM number on paper, not just your store name. Fill in Business details under Settings → Store — legal name, SSM or UEN, billing address, tax number, a billing contact — and it prints in the From block of every invoice and receipt you issue. Every field is optional. It appears only on those PDFs: your storefront never shows it, and it is nothing to do with the pickup address you use for delivery pricing, which stays private.",
+				},
+				href: spotlightHref("business_details"),
+				hrefLabel: { en: "Add business details" },
+				icon: "printer",
+			},
+			{
+				kind: "fix",
+				title: {
+					en: 'The button finally says "invoice" when it means invoice',
+				},
+				body: {
+					en: "An unpaid order's PDF has always been an invoice — the download button just insisted on calling it a receipt. It now reads Download invoice until the order is paid, then Download receipt, on your order page, the counter screen and the buyer's tracking page alike. So a customer whose company pays for them can forward the right document without a raised eyebrow.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "A proper receipt once you've paid us",
+				},
+				body: {
+					en: 'Your paid subscription invoices used to keep saying "Total due" forever, which is an awkward thing to hand an accountant. Every paid invoice in Settings → Billing now has a second download: a receipt with the date, the method and the amount paid — and no payment instructions. The original invoice stays exactly as it was, right beside it, so your records still match ours.',
+				},
+				href: spotlightHref("invoice_history"),
+				hrefLabel: { en: "Download a receipt" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Wrong-country phone numbers now explain themselves",
+				},
+				body: {
+					en: 'Type a +65 number into a Malaysian store (or a +60 into a Singapore one) and you used to get a flat "enter a valid mobile number". It now says what it saw — "that looks like a Singapore mobile number" — and in your Settings it points you to the Store tab, where your country lives. Singapore stores also stop hearing about DuitNow: the home checklist and the payment placeholders speak PayNow now.',
+				},
+				href: spotlightHref("store_country"),
+				hrefLabel: { en: "Check your store country" },
+			},
+		],
+	},
+	{
+		version: "2026.09.2",
+		date: "2026-09-02",
+		// Earns the modal even though 2026.09.1 shipped the day before —
+		// considered, not overlooked. Two things here are invisible otherwise: a
+		// NUMBER MOVES (an order that arrives confirmed leaves the "Confirmed"
+		// count and lands on a new "Not yet opened" row), and a seller who reads
+		// that count every morning and gets no explanation stops trusting the
+		// inbox; and "pinned only" is the THIRD position of a chip nobody taps
+		// twice on spec. Reach is barely the argument either way — `autoOpen`
+		// fires on ANY unseen notable release, so a seller who missed 2026.09.1
+		// already gets one modal carrying both. The cost falls only on sellers
+		// who opened yesterday, and an unexplained count is worse than a tap.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "See who's with you right now",
+				},
+				body: {
+					en: "Three new chips for stays and packages: Active now, Ending this week, Upcoming. A member three weeks into their month used to sit buried below next week's arrivals, because a booking lists under the day it starts — tap Active now and you get everyone currently on your books. Bookings also show where they are in their span (\"Active · 4 days left\"), on the order and on the customer's card. On every plan, like the rest of bookings.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "calendar",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Your status chips and the Filters panel are one control now",
+				},
+				body: {
+					en: 'They were two separate filters sharing one name: you could tick every status under "In progress" in the Filters panel and watch the "In progress" chip stay dark. They are one control now — tap a chip and the panel shows it, and back again. The panel lists each status under the chip that counts it, so a stage you renamed yourself is easy to place. Two chips together now mean either, not both, so "In progress" plus "Active now" no longer gives you an empty list. Filtering is part of the Order Inbox, on Pro.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Tap Pinned again for a list of just your pinned orders",
+				},
+				body: {
+					en: 'The Pinned chip has three positions now: pinned first, pinned only, then off. "Only" is the shortlist — the handful of orders you are keeping an eye on and nothing else, still narrowed by whatever else you have set. Pins show on cards at last, not only in the table: a filled pin by the customer\'s name and a tinted edge, so "why is this one at the top?" has an answer on a phone. It is a marker there — pin and unpin from the order itself or a table row. On every plan, all three positions.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Orders that arrive already confirmed are counted where they belong",
+				},
+				body: {
+					en: 'An order placed straight from your storefront arrives confirmed and counted towards New — but no status you could tick would find it, so your chips and your Filters panel disagreed about the numbers. It has its own status now, "Not yet opened", which you can see and filter for. Expect your Confirmed count — or whatever you renamed it to — to read a little lower, with the difference on that new row. Nothing moved; it is counted in the right place. "Awaiting approval" is filterable at last too.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "An empty list now tells you why, and how to get back",
+				},
+				body: {
+					en: "Filter down to nothing and you used to get a blank box. In Table view the message was there all along, just rendered far off to the right of the screen where nobody would ever see it. It sits where you are looking now, names the filter that emptied the list, and carries the button that undoes it — including when the pin was the culprit, which is easy to land on by accident now that the chip cycles.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Open the table" },
+				icon: "table",
+			},
+		],
+	},
 	{
 		version: "2026.09.1",
 		date: "2026-09-01",
@@ -191,7 +437,7 @@ export const RELEASES: Release[] = [
 					en: "A month calendar for your stays — and two taps to close dates",
 				},
 				body: {
-					en: "Once you have a booking listing, the top of your orders page gains a Calendar view: a month grid showing how many spots are taken each night, with a tap on any day listing that night's stays. Tap \"Block days…\" and then a start and an end to close a range — the whole store or one listing, with a note for yourself. Blocking only stops new requests; any stay already on those dates stays exactly where it is.",
+					en: 'Once you have a booking listing, the top of your orders page gains a Calendar view: a month grid showing how many spots are taken each night, with a tap on any day listing that night\'s stays. Tap "Block days…" and then a start and an end to close a range — the whole store or one listing, with a note for yourself. Blocking only stops new requests; any stay already on those dates stays exactly where it is.',
 				},
 				href: "/app/orders/calendar",
 				hrefLabel: { en: "Open the calendar" },
@@ -371,7 +617,7 @@ export const RELEASES: Release[] = [
 					en: "Pin the orders you need to keep an eye on",
 				},
 				body: {
-					en: "Tap the pin on any order — on a card, a table row, or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
+					en: "Tap the pin on an order — on a table row or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
 				},
 				href: "/app/orders",
 				hrefLabel: { en: "Open orders" },

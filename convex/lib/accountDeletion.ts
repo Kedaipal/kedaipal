@@ -60,6 +60,21 @@ export const DELETION_PHASES = [
 
 export type DeletionPhase = (typeof DELETION_PHASES)[number];
 
+/**
+ * Phases that read via `.paginate()`. Convex permits ONE paginated query per
+ * mutation invocation, so the driver must hand off to a scheduled continuation
+ * instead of entering a second paginated phase in the same transaction. Found
+ * the hard way (z8r3fdbmc9): on a small tenant `slugHistory` finished inside
+ * its invocation's budget, the loop rolled straight into `optOuts`, and the
+ * second `.paginate()` threw — aborting the invocation, rolling back its
+ * writes, and stalling the cascade with no continuation scheduled. convex-test
+ * does not enforce the limit, so only a real deployment surfaces this.
+ */
+export const PAGINATED_PHASES: ReadonlySet<DeletionPhase> = new Set([
+	"slugHistory",
+	"optOuts",
+]);
+
 /** Arg validator for the driver's continuation state. Built from
  * DELETION_PHASES so adding a phase can't drift the validator. */
 export const deletionPhaseValidator = v.union(

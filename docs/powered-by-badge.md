@@ -31,12 +31,16 @@ Placed after the product `<section>` and before the fixed `<CartBar>`, with
 `mt-auto` so it sinks to the bottom of the `min-h-dvh` column (bottom of the
 page on short catalogs, after the content on long ones).
 
-- Links to `https://kedaipal.com?src=storefront_badge`. The `?src=` tag is the
-  repo's attribution convention (same param the poster QR links use). NOTE:
-  this one targets the kedaipal.com **marketing site**, not a storefront, so
-  the storefront's seller-facing source attribution (`86eyq0eq9`,
+- Links to `https://kedaipal.com?src=powered-by` (renamed from the
+  never-consumed `storefront_badge` when the GA4 funnel became its first
+  consumer, `z8r3fdd1v0`). The `?src=` tag is the repo's attribution
+  convention (same param the poster QR links use). NOTE: this one targets the
+  kedaipal.com **marketing site**, not a storefront, so the storefront's
+  seller-facing source attribution (`86eyq0eq9`,
   `docs/source-attribution.md`) never sees it — it tags **Kedaipal's own**
-  acquisition (the `86eye3eyp` CAC concern), measurable once PostHog lands.
+  acquisition: the landing page captures it, it rides the GA4 funnel events,
+  and a signup stamps it onto `retailers.signupSource`
+  (`docs/analytics.md`).
 - Opens in a new tab (`target="_blank" rel="noopener noreferrer"`) so the buyer
   never loses the store they were browsing.
 - The wordmark image carries `alt="Kedaipal"` and the link an explicit

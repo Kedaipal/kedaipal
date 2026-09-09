@@ -25,6 +25,9 @@ How the product actually works. Read in this order.
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
 | [manual-subscription.md](./manual-subscription.md) → [hitpay-recurring.md](./hitpay-recurring.md) | How sellers pay **Kedaipal**: trial → invoice → settle → entitlement (manual v1 + the seam), then the automated layer — cron-issued renewals, invoice Pay-now links, self-serve subscribe, tokenised auto-renewal + dunning on Kedaipal's own HitPay account. |
 | [fulfilment.md](./fulfilment.md) | Delivery + self-collect as optional, symmetric methods: per-method toggles, the working-method invariant, multi-location pickup library, frozen snapshot lifecycle, WhatsApp confirm composition. |
+| [delivery-live-pricing.md](./delivery-live-pricing.md) | **What the buyer pays for delivery when a store books couriers live:** the provider-aware rule (quote every armed provider, charge the higher), why min-pricing was rejected, cold-cart handling, and the cross-currency guard. |
+| [delivery-lalamove.md](./delivery-lalamove.md) | Intra-city rider booking: live checkout quotes, the confirm-and-dispatch flow, webhook-driven status, and the disabled-with-reason taxonomy. |
+| [delivery-delyva.md](./delivery-delyva.md) | Nationwide parcel + cold-chain courier booking: one-key connect, the service picker, webhooks, demo/sandbox detection, and the per-country tenancy facts. |
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
@@ -40,6 +43,7 @@ How the product actually works. Read in this order.
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
+| [analytics.md](./analytics.md) | GA4 + Microsoft Clarity: env-gated boot, the `/track`/`/claim` exclusion, the funnel events (client, server-side key events, Clarity Smart-event mirror), `MASK_PII` for session replay, privacy disclosure, and the weekly heatmap/recording review ritual. |
 
 ## Roadmaps (designed / in-progress)
 

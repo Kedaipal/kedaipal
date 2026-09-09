@@ -2435,6 +2435,79 @@ describe("product kind + booking config", () => {
 		}
 	});
 
+	test("weekend rate + nights round-trip, default to Fri + Sat, and 0 clears both (S13)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5, weekendPrice: 12_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendPrice).toBe(12_000);
+		expect(listing?.booking?.weekendDays).toEqual([5, 6]);
+
+		// A custom night set is deduped + sorted on the way in.
+		await asA.mutation(api.products.update, {
+			productId,
+			booking: {
+				capacityPerNight: 5,
+				weekendPrice: 15_000,
+				weekendDays: [6, 0, 6],
+			},
+		});
+		listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendDays).toEqual([0, 6]);
+
+		// 0 clears — and clears the nights with it (one spelling for "no rate").
+		await asA.mutation(api.products.update, {
+			productId,
+			booking: { capacityPerNight: 5, weekendPrice: 0, weekendDays: [5, 6] },
+		});
+		listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendPrice).toBeUndefined();
+		expect(listing?.booking?.weekendDays).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+	});
+
+	test("weekend rate validation: no nights, every night, bad night, package pairing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const cases: Array<
+			[
+				{
+					weekendPrice?: number;
+					weekendDays?: number[];
+					packageLength?: number;
+				},
+				RegExp,
+			]
+		> = [
+			[{ weekendPrice: 12_000, weekendDays: [] }, /at least one night/],
+			[
+				{ weekendPrice: 12_000, weekendDays: [0, 1, 2, 3, 4, 5, 6] },
+				/every night/,
+			],
+			[{ weekendPrice: 12_000, weekendDays: [7] }, /days of the week/],
+			[{ weekendPrice: -1 }, /Weekend rate must be/],
+			[
+				{ weekendPrice: 12_000, packageLength: 30 },
+				/package has one flat price/,
+			],
+		];
+		for (const [booking, message] of cases) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id, { name: "Bad Plot" }),
+					kind: "booking" as const,
+					booking,
+				}),
+			).rejects.toThrow(message);
+		}
+	});
+
 	test("booking kind without its settings object is refused (capacity itself is optional since S7)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

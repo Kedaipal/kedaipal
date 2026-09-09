@@ -18,15 +18,23 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
-import { formatPrice } from "../../lib/format";
+import {
+	type CardTarget,
+	type FixHighlight,
+	highlightRingClass,
+} from "../../lib/country-setup-copy";
+import { formatPrice, formatShortDate } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
 	ORDER_CAP_WARN_RATIO,
 	PLAN_LABEL,
 	trialDaysLeft,
 } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
+import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 import { PlanPickerCard } from "./plan-picker-card";
@@ -35,31 +43,28 @@ type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
 >;
 
-function formatDate(ms: number): string {
-	return new Date(ms).toLocaleDateString(undefined, {
-		day: "numeric",
-		month: "short",
-		year: "numeric",
-	});
-}
-
 /** Retailer-facing billing dashboard (Settings → Billing). Current plan + status,
  * the pending invoice + how to pay (Pay-now link, then Kedaipal's
- * bank/DuitNow/QR), the auto-renewal card, the self-serve plan picker,
- * Founding ribbon, and invoice history. See docs/manual-subscription.md +
- * docs/hitpay-recurring.md. */
+ * bank/DuitNow/QR), the annual offer, the auto-renewal card, the self-serve
+ * plan picker, Founding ribbon, and invoice history. See
+ * docs/manual-subscription.md + docs/hitpay-recurring.md. */
 export function BillingTab({
 	retailer,
+	target,
 	billingReturn,
 	onBillingReturnHandled,
 }: {
 	retailer: Retailer;
+	/** Deep-link target — which card to ring, and how (see FulfilmentTab). */
+	target?: CardTarget;
 	/** From the URL: back from HitPay's auth page ("autorenew") or its invoice
 	 * checkout ("paid"). Undefined on a plain visit. */
 	billingReturn?: "autorenew" | "paid";
 	onBillingReturnHandled?: () => void;
 }) {
 	const sub = retailer.subscription;
+	const ring = (anchor: string): FixHighlight | undefined =>
+		target?.anchor === anchor ? target.highlight : undefined;
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
 	const invoices =
 		useQuery(convexQuery(api.invoices.myInvoices, {})).data ?? [];
@@ -110,6 +115,19 @@ export function BillingTab({
 	const history = invoices.filter((i) => i.status !== "pending");
 	const now = Date.now();
 
+	// Annual billing is offered here rather than on /pricing: manual billing has
+	// no self-serve checkout, so a public annual price would be a dead-end CTA,
+	// while a year paid by one transfer is exactly what these rails already do
+	// well. See src/lib/annual-billing.ts + docs/pricing.md.
+	const isFounding = retailer.isFoundingMember === true;
+	const annualOffer = resolveAnnualOffer({
+		subscription: sub,
+		invoices,
+		now,
+		founding: isFounding,
+		adminOwnAccount,
+	});
+
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
@@ -121,7 +139,7 @@ export function BillingTab({
 		if (sub.status === "past_due") return "Past due";
 		if (sub.status === "cancelled") return "Cancelled";
 		if (sub.currentPeriodEnd)
-			return `Active · expires ${formatDate(sub.currentPeriodEnd)}`;
+			return `Active · expires ${formatShortDate(sub.currentPeriodEnd)}`;
 		return "Active";
 	})();
 
@@ -260,9 +278,15 @@ export function BillingTab({
 					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
 						<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+							{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
+							    only), so the constraint is explained here rather than left as
+							    an unexplained absence — "why can't I?" is exactly the question
+							    a silent gap produces. */}
 							<p className="text-xs text-muted-foreground">
 								Want 500 orders/month, the customer database and the order
-								inbox? Move up to Pro.
+								inbox? Move up to Pro — which can also be billed annually, with
+								two months free. We don't offer annual on Starter: you shouldn't
+								pay a year upfront before the shop has proven itself.
 							</p>
 							<a
 								href={buildWaContactLink(
@@ -281,6 +305,18 @@ export function BillingTab({
 				</section>
 			)}
 
+			{/* Annual billing — a plan decision, so it sits with the plan and above
+			    the payment mechanics. Renders nothing for a seller it doesn't
+			    apply to (see resolveAnnualOffer). */}
+			<AnnualBillingCard
+				id={SPOTLIGHT_ANCHOR.annual_billing.anchor}
+				highlight={ring(SPOTLIGHT_ANCHOR.annual_billing.anchor)}
+				state={annualOffer}
+				slug={retailer.slug}
+				supportWa={supportWa}
+				founding={isFounding}
+			/>
+
 			{/* Pending invoice + how to pay */}
 			{pending ? (
 				<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -297,7 +333,7 @@ export function BillingTab({
 							<p className="text-xs text-muted-foreground">Invoice</p>
 							<p className="font-mono text-sm">{pending.invoiceNumber}</p>
 							<p className="mt-1 text-xs text-muted-foreground">
-								Due {formatDate(pending.dueDate)}
+								Due {formatShortDate(pending.dueDate)}
 							</p>
 							<InvoiceDownloadButton
 								invoiceId={pending._id}
@@ -463,7 +499,13 @@ export function BillingTab({
 
 			{/* History */}
 			{history.length > 0 ? (
-				<section className="flex flex-col gap-2 rounded-2xl border border-input bg-background p-5 lg:p-6">
+				<section
+					id={SPOTLIGHT_ANCHOR.invoice_history.anchor}
+					data-fix-highlight={
+						ring(SPOTLIGHT_ANCHOR.invoice_history.anchor) ?? undefined
+					}
+					className={`flex flex-col gap-2 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(ring(SPOTLIGHT_ANCHOR.invoice_history.anchor))}`}
+				>
 					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 						Invoice history
 					</p>
@@ -477,9 +519,9 @@ export function BillingTab({
 									<span className="font-mono">{inv.invoiceNumber}</span>
 									<span className="ml-2 text-xs text-muted-foreground">
 										{inv.markedPaidAt
-											? formatDate(inv.markedPaidAt)
+											? formatShortDate(inv.markedPaidAt)
 											: inv.voidedAt
-												? formatDate(inv.voidedAt)
+												? formatShortDate(inv.voidedAt)
 												: ""}
 									</span>
 								</div>
@@ -502,10 +544,23 @@ export function BillingTab({
 												? "Cancelled"
 												: inv.status}
 									</span>
-									{/* No receipt for a voided (cancelled-in-error) invoice. */}
+									{/* No documents for a voided (cancelled-in-error) invoice.
+									    A PAID invoice carries two: the bill (kept for the
+									    seller's records) and the payment receipt — proof of
+									    payment for their books (z8r3fdcrzj). */}
 									{inv.status !== "void" ? (
 										<InvoiceDownloadButton
 											invoiceId={inv._id}
+											label=""
+											size="icon"
+											variant="ghost"
+											className="size-8"
+										/>
+									) : null}
+									{inv.status === "paid" ? (
+										<InvoiceDownloadButton
+											invoiceId={inv._id}
+											kind="receipt"
 											label=""
 											size="icon"
 											variant="ghost"

@@ -29,6 +29,7 @@ import {
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
+import { lalamoveSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
@@ -90,8 +91,13 @@ export function BookDeliveryCard({
 	bookRequestToken = 0,
 	advanceWithoutRider,
 	onAdvanceBookUnavailable,
+	embedded = false,
 }: {
 	order: Doc<"orders">;
+	/** Rendered inside the dispatch hub's shell, which already draws the
+	 * border and padding around the provider switch — so the card drops its
+	 * own chrome rather than nesting a card in a card. */
+	embedded?: boolean;
 	/** Increment to request the booking flow from OUTSIDE the card — the
 	 * order stepper raises it when the seller advances a bookable Lalamove
 	 * order by hand, so they land in THIS modal (live price, vehicle switch,
@@ -274,7 +280,10 @@ export function BookDeliveryCard({
 		void handlePrepare({ fromAdvance: true });
 	}, [bookRequestToken, dispatch, order.status]);
 
-	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
+	// Whether this card renders at all is decided in one place, because the
+	// dispatch hub has to ask the same question before offering a tab.
+	const surface = lalamoveSurface(order, dispatch);
+	if (surface === "none" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
 	// TEST KEYS (86eypncfy). Not a warning we can afford to leave in Settings:
 	// a sandbox booking looks identical to a real one right up until no rider
@@ -322,7 +331,6 @@ export function BookDeliveryCard({
 	// PR exists to remove. The booking controls stay gone either way: they are
 	// gated on `!activeJob`, so an in-flight card offers tracking and cancel
 	// and nothing that spends.
-	if (blockReason === "country_unsupported" && !activeJob) return null;
 
 	const failedJob =
 		job && ["canceled", "expired", "rejected"].includes(job.status)
@@ -352,13 +360,12 @@ export function BookDeliveryCard({
 	// Seller never set Lalamove up: a quiet hint on bookable orders
 	// (discoverability without shouting at non-Lalamove sellers), nothing
 	// otherwise.
-	if (!job && blockReason === "booking_disabled") {
-		if (!bookable) return null;
+	if (surface === "hint") {
 		return (
 			<p className="rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
 				<Truck className="mr-1.5 inline size-3.5 align-[-2px]" />
-				Book Lalamove riders in one tap from here — choose <b>Lalamove</b> as
-				your delivery charge in{" "}
+				Book Lalamove riders in one tap from here — turn on{" "}
+				<b>Lalamove riders</b> under Courier booking in{" "}
 				<Link
 					to="/app/settings"
 					search={{ tab: "fulfilment" }}
@@ -370,7 +377,6 @@ export function BookDeliveryCard({
 			</p>
 		);
 	}
-	if (!job && !bookable) return null;
 
 	/** Lalamove honours a quotation for exactly 5 minutes; used as the fallback
 	 * when the provider's own `expiresAt` is absent. */
@@ -599,7 +605,13 @@ export function BookDeliveryCard({
 	const needsFreshQuote = bookingError !== null || quoteStale;
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+		<section
+			className={
+				embedded
+					? "flex flex-col gap-3"
+					: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+			}
+		>
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					{jobCollection ? "Lalamove Collection" : "Lalamove Delivery"}
@@ -625,10 +637,10 @@ export function BookDeliveryCard({
 						keys in{" "}
 						<Link
 							to="/app/settings"
-							search={{ tab: "fulfilment" }}
+							search={{ tab: "integrations" }}
 							className="font-medium underline underline-offset-2"
 						>
-							Settings → Fulfilment
+							Settings → Integrations
 						</Link>
 						.
 					</span>

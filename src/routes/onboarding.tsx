@@ -22,15 +22,26 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import {
+	MOBILE_EXAMPLE,
+	MOBILE_KIND,
+	MOBILE_MESSAGE,
+	otherCountryMobile,
+} from "../../convex/lib/slug";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { useLandingRegion } from "../hooks/useLandingRegion";
+import { useOnboardingStart } from "../hooks/useOnboardingStart";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import { readGaClientId, trackEvent } from "../lib/ga-events";
+import { readMarketingSource } from "../lib/marketing-attribution";
 import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
+import { waPhoneCheckoutSchema } from "../lib/schemas";
 import { slugify } from "../lib/slug";
 
 /**
@@ -94,15 +105,45 @@ function OnboardingForm() {
 	const prefill = search.prefill;
 	const assisted = Boolean(prefill);
 
+	// GA4 funnel (z8r3fdd1v0): fires onboarding_start only once the query says
+	// "no store yet" — an already-onboarded seller landing here gets redirected
+	// below and must not count as a funnel entry.
+	useOnboardingStart(retailer);
+
 	const [storeName, setStoreName] = useState(prefill?.store ?? "");
 	const [slug, setSlug] = useState(prefill?.slug ?? "");
 	// If a slug came in the link, treat it as hand-set so it's not re-derived.
 	const [slugEdited, setSlugEdited] = useState(Boolean(prefill?.slug));
 	const [waPhone, setWaPhone] = useState(prefill?.wa ?? "");
+	// Inline rejection for the (assisted) WhatsApp field — set on submit, not
+	// per keystroke, and cleared the moment the number or the country changes.
+	const [waPhoneError, setWaPhoneError] = useState<string | null>(null);
 	// Store country (SG-lite). Picked BEFORE the store exists because currency
 	// is born from it (SG → SGD) and products freeze their currency at create —
 	// fixing it after the catalog exists means a bulk currency switch.
-	const [country, setCountry] = useState<Country>(prefill?.country ?? "MY");
+	//
+	// The default is no longer a bare "MY" (z8r3fdbmc9): self-serve seeds from
+	// the SAME resolution the pricing pages use — the visitor's stored
+	// RegionToggle pick, else Cloudflare's geo answer, else the device time
+	// zone (`useLandingRegion`) — so a seller who was just reading S$ pricing
+	// isn't handed Malaysia at the moment currency binds to the store. The
+	// picker stays visible, so a wrong guess costs one tap, and an explicit
+	// pick here writes the same region cookie, keeping the marketing pages on
+	// the currency the seller chose. Assisted invites bypass the guess
+	// entirely: the token is admin-curated, and an ABSENT country there means
+	// Malaysia (only the non-default country rides the token — see
+	// onboarding-link.ts).
+	const [region, setRegion] = useLandingRegion();
+	const [assistedCountry, setAssistedCountry] = useState<Country>(
+		prefill?.country ?? "MY",
+	);
+	const country = assisted ? assistedCountry : region;
+	function setCountry(next: Country) {
+		if (assisted) setAssistedCountry(next);
+		else setRegion(next);
+		// The verdict on the typed number changes with the plate.
+		setWaPhoneError(null);
+	}
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 
@@ -135,9 +176,30 @@ function OnboardingForm() {
 			);
 			return;
 		}
+		const trimmedWa = waPhone.trim();
+		if (
+			trimmedWa.length > 0 &&
+			!waPhoneCheckoutSchema[country].safeParse(trimmedWa).success
+		) {
+			// Pointed copy, because the fix is on this screen: the Country picker
+			// sits one field up. Falls back to the picked country's own line when
+			// the digits match nobody.
+			const other = otherCountryMobile(trimmedWa, country);
+			setWaPhoneError(
+				other
+					? `That looks like a ${MOBILE_KIND[other]} number — switch Country above to ${COUNTRY_LABELS[other]}, or enter a ${MOBILE_KIND[country]} number (e.g. ${MOBILE_EXAMPLE[country]})`
+					: MOBILE_MESSAGE[country],
+			);
+			return;
+		}
 		setSubmitting(true);
 		try {
-			const trimmedWa = waPhone.trim();
+			// The tag the session arrived with (marketing routes / powered-by
+			// badge) — the server re-sanitizes, this is only a hint.
+			const signupSource = readMarketingSource();
+			// GA client id, so server-side key events (first_order/subscribe_paid)
+			// stitch to this browser's funnel — validated server-side, hint only.
+			const gaClientId = readGaClientId();
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
@@ -146,7 +208,12 @@ function OnboardingForm() {
 				// Founding-10: starts on the normal 14-day trial; the discounted Pro
 				// plan begins once Arif marks their founding invoice paid.
 				...(prefill?.founding ? { intent: "founding" as const } : {}),
+				...(signupSource !== undefined ? { signupSource } : {}),
+				...(gaClientId !== undefined ? { gaClientId } : {}),
 			});
+			// The funnel's terminal key event — after the mutation succeeds, so a
+			// slug collision or validation error can't inflate conversions.
+			trackEvent("store_created");
 			navigate({ to: "/app" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -270,12 +337,22 @@ function OnboardingForm() {
 						    createRetailer validates the same-call country with. */}
 						<MyPhoneInput
 							value={waPhone}
-							onChange={setWaPhone}
+							onChange={(next) => {
+								setWaPhone(next);
+								if (waPhoneError) setWaPhoneError(null);
+							}}
 							country={country}
+							isError={waPhoneError !== null}
 						/>
-						<span className="text-xs text-muted-foreground">
-							{WA_PHONE_HELP[country]}
-						</span>
+						{waPhoneError ? (
+							<span className="text-xs font-medium text-destructive">
+								{waPhoneError}
+							</span>
+						) : (
+							<span className="text-xs text-muted-foreground">
+								{WA_PHONE_HELP[country]}
+							</span>
+						)}
 					</Field>
 				) : null}
 

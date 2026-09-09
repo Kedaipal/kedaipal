@@ -35,8 +35,13 @@ export interface BulkSelectRowProps {
 	total: number;
 	/** Given the next desired state — `true` to select all, `false` to clear. */
 	onToggle: (selectAll: boolean) => void;
-	/** `master` tints the row, for a top-level "everything" control. */
-	tone?: "group" | "master";
+	/**
+	 * `master` tints the row, for a top-level "everything" control.
+	 * `subgroup` is a group NESTED inside a section that already has one of these
+	 * as its heading (the inbox's buckets inside Status) — a notch quieter, so
+	 * three levels of hierarchy don't render as three identical rows.
+	 */
+	tone?: "group" | "master" | "subgroup";
 	/** Overrides the `n/total` on the right (e.g. a hint instead). */
 	trailing?: React.ReactNode;
 	/** Screen-reader noun for what is being counted. */
@@ -73,16 +78,19 @@ export function BulkSelectRow({
 			<span
 				aria-hidden="true"
 				className={cn(
-					"flex size-[17px] shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+					"flex shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+					// A nested group's box is smaller than its section's — the size
+					// step is half of what makes the nesting readable at a glance.
+					tone === "subgroup" ? "size-[15px]" : "size-[17px]",
 					state === "none"
 						? "border-border bg-background"
 						: "border-accent bg-accent text-accent-foreground",
 				)}
 			>
 				{state === "all" ? (
-					<Check className="size-3" />
+					<Check className={tone === "subgroup" ? "size-2.5" : "size-3"} />
 				) : state === "some" ? (
-					<Minus className="size-3" />
+					<Minus className={tone === "subgroup" ? "size-2.5" : "size-3"} />
 				) : null}
 			</span>
 			<span
@@ -90,7 +98,9 @@ export function BulkSelectRow({
 					"min-w-0 flex-1 truncate",
 					tone === "master"
 						? "text-[13px] font-semibold"
-						: "text-[11px] font-bold uppercase tracking-wider text-muted-foreground",
+						: tone === "subgroup"
+							? "text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/75"
+							: "text-[11px] font-bold uppercase tracking-wider text-muted-foreground",
 				)}
 			>
 				{label}

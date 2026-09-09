@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { todayMytMidnight } from "./fulfilmentDate";
+import { BUCKET_LEAVES } from "./orderBuckets";
 import {
 	buildInboxPredicate,
 	compareInboxOrder,
 	type FilterableOrder,
+	narrowsTheInbox,
 	sortInboxOrders,
 } from "./orderInboxFilter";
 
@@ -23,12 +25,12 @@ function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
 
 describe("buildInboxPredicate — bucket", () => {
 	test("'new' matches only pending", () => {
-		const p = buildInboxPredicate({ buckets: ["new"] });
+		const p = buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new] });
 		expect(p(order({ status: "pending" }))).toBe(true);
 		expect(p(order({ status: "confirmed" }))).toBe(false);
 	});
 	test("'in_progress' spans confirmed/packed/shipped", () => {
-		const p = buildInboxPredicate({ buckets: ["in_progress"] });
+		const p = buildInboxPredicate({ statuses: [...BUCKET_LEAVES.in_progress] });
 		expect(p(order({ status: "packed" }))).toBe(true);
 		expect(p(order({ status: "delivered" }))).toBe(false);
 	});
@@ -99,19 +101,22 @@ describe("buildInboxPredicate — mockupPending", () => {
 	});
 });
 
-describe("buildInboxPredicate — buckets are MULTI (86eyrtz74)", () => {
+describe("buildInboxPredicate — the status set is MULTI (86eyrtz74)", () => {
 	test("undefined / empty means every bucket", () => {
-		for (const args of [{}, { buckets: [] }]) {
+		for (const args of [{}, { statuses: [] }]) {
 			const p = buildInboxPredicate(args);
 			expect(p(order({ status: "pending" }))).toBe(true);
 			expect(p(order({ status: "cancelled" }))).toBe(true);
 		}
 	});
 
-	test("two buckets OR together — 'everything closed' in one view", () => {
+	test("two buckets' leaves OR together — 'everything closed' in one view", () => {
 		// The ask that widened this: Completed + Cancelled at once, which the
 		// old single-value chip could never show.
-		const p = buildInboxPredicate({ buckets: ["completed", "cancelled"] });
+		const p = buildInboxPredicate({ statuses: [
+			...BUCKET_LEAVES.completed,
+			...BUCKET_LEAVES.cancelled,
+		] });
 		expect(p(order({ status: "delivered" }))).toBe(true);
 		expect(p(order({ status: "cancelled" }))).toBe(true);
 		expect(p(order({ status: "packed" }))).toBe(false);
@@ -133,7 +138,8 @@ describe("buildInboxPredicate — statuses (86eyrtz74)", () => {
 
 	test("several statuses OR together — the thing one bucket cannot express", () => {
 		// "Out of my hands but not delivered" spans two statuses inside one
-		// bucket, which is exactly why this is its own dimension.
+		// bucket, which is why the panel selects at leaf grain and not just by
+		// group.
 		const p = buildInboxPredicate({
 			statuses: ["packed", "shipped"],
 		});
@@ -143,15 +149,46 @@ describe("buildInboxPredicate — statuses (86eyrtz74)", () => {
 		expect(p(order({ status: "delivered" }))).toBe(false);
 	});
 
-	test("ANDs with the bucket rather than overriding it", () => {
-		// Bucket narrows, statuses narrow further. A status outside the bucket
-		// yields nothing — the honest intersection, not a silent union.
+	test("a group's leaves plus a leaf from another group is a UNION, never an intersection", () => {
+		// The 1-Sep rule. These used to be two ANDed fields — a chip row writing
+		// `buckets` and a panel writing `statuses` — so "In progress" + "Collected"
+		// matched NOTHING while both controls sat lit on screen. One set now, so it
+		// means what a seller reading two lit chips assumes it means.
 		const p = buildInboxPredicate({
-			buckets: ["in_progress"],
-			statuses: ["packed", "delivered"],
+			statuses: [...BUCKET_LEAVES.in_progress, "delivered"],
 		});
 		expect(p(order({ status: "packed" }))).toBe(true);
-		expect(p(order({ status: "delivered" }))).toBe(false); // completed bucket
+		expect(p(order({ status: "delivered" }))).toBe(true);
+		expect(p(order({ status: "cancelled" }))).toBe(false);
+	});
+
+	test("the unseen half of `confirmed` filters as New, not as In progress", () => {
+		// The reason leaves exist at all: this order's `status` is `confirmed`,
+		// but the inbox shows it under New, so New must match it and In progress
+		// must not. Reading `o.status` here is what made the two surfaces disagree.
+		const unseen = order({
+			status: "confirmed",
+			confirmationPushStatus: "sent",
+		});
+		expect(buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new] })(unseen)).toBe(
+			true,
+		);
+		expect(
+			buildInboxPredicate({ statuses: [...BUCKET_LEAVES.in_progress] })(unseen),
+		).toBe(false);
+
+		// Once opened it swaps sides, with no change to `status`.
+		const opened = order({
+			status: "confirmed",
+			confirmationPushStatus: "sent",
+			seenAt: 5,
+		});
+		expect(buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new] })(opened)).toBe(
+			false,
+		);
+		expect(
+			buildInboxPredicate({ statuses: [...BUCKET_LEAVES.in_progress] })(opened),
+		).toBe(true);
 	});
 });
 
@@ -403,18 +440,17 @@ describe("sortInboxOrders", () => {
 describe("buildInboxPredicate — pin privilege", () => {
 	const pinned = order({ status: "delivered", pinnedAt: 5_000 });
 
-	test("showPinned keeps a pinned order that fails the bucket", () => {
-		const p = buildInboxPredicate({ buckets: ["new"], showPinned: true });
+	test("the default mode keeps a pinned order that fails the status set", () => {
+		const p = buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new], pinMode: "top" });
 		expect(p(pinned)).toBe(true);
 	});
 
-	test("a pin outranks EVERY other filter at once, not just the bucket", () => {
+	test("a pin outranks EVERY other filter at once, not just the status set", () => {
 		const p = buildInboxPredicate({
-			buckets: ["new"],
+			statuses: [...BUCKET_LEAVES.new],
 			paymentStatuses: ["unpaid"],
 			paymentMethods: ["cash"],
 			sources: ["counter"],
-			statuses: ["delivered"],
 			categories: ["Nothing Matches This"],
 			attributionSources: ["tiktok"],
 			dateFrom: 9_000_000,
@@ -422,16 +458,21 @@ describe("buildInboxPredicate — pin privilege", () => {
 			fulfilmentWindow: "today",
 			mockupPending: true,
 			searchText: "nothing-matches-this",
-			showPinned: true,
+			pinMode: "top",
 		});
 		expect(p(pinned)).toBe(true);
 	});
 
-	test("without showPinned a pinned order is filtered like any other", () => {
-		expect(buildInboxPredicate({ buckets: ["new"] })(pinned)).toBe(false);
+	test("mode off filters a pinned order like any other", () => {
 		expect(
-			buildInboxPredicate({ buckets: ["new"], showPinned: false })(pinned),
+			buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new], pinMode: "off" })(pinned),
 		).toBe(false);
+		// …and the default is NOT off: an absent mode is "top" (the product
+		// default), which is why every production caller reaches this through
+		// `toInboxFilterArgs` — that sets the mode explicitly, so a pre-"only"
+		// client sending no `showPinned` still gets its old "off" behaviour
+		// rather than silently gaining pin privilege.
+		expect(buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new] })(pinned)).toBe(true);
 	});
 
 	test("turning the toggle off does NOT hide a pin that legitimately matches", () => {
@@ -439,13 +480,47 @@ describe("buildInboxPredicate — pin privilege", () => {
 		// switch. A pinned order inside the filter is still in the filter.
 		const matching = order({ status: "pending", pinnedAt: 5_000 });
 		expect(
-			buildInboxPredicate({ buckets: ["new"], showPinned: false })(matching),
+			buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new], pinMode: "off" })(matching),
 		).toBe(true);
 	});
 
-	test("showPinned does not smuggle in UNpinned orders", () => {
-		const p = buildInboxPredicate({ buckets: ["new"], showPinned: true });
+	test("keeping pins on top does not smuggle in UNpinned orders", () => {
+		const p = buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new], pinMode: "top" });
 		expect(p(order({ status: "delivered" }))).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// `pinMode: "only"` — the seller's pinned-only inbox (owner call, 1 Sep),
+// reached by tapping the Pinned chip a second time. It deliberately ANDs with
+// the rest of the filters rather than short-circuiting them, so the lit status
+// chips keep meaning what they say — these tests pin exactly that.
+// ---------------------------------------------------------------------------
+
+describe('buildInboxPredicate - pinMode "only"', () => {
+	test("keeps pinned orders and drops everything else", () => {
+		const p = buildInboxPredicate({ pinMode: "only" });
+		expect(p(order({ status: "delivered", pinnedAt: 5_000 }))).toBe(true);
+		expect(p(order({ status: "pending" }))).toBe(false);
+		expect(p(order({ status: "confirmed" }))).toBe(false);
+	});
+
+	test("still ANDs with the rest - a lit status chip must not become a lie", () => {
+		const p = buildInboxPredicate({ pinMode: "only", statuses: [...BUCKET_LEAVES.new] });
+		expect(p(order({ status: "pending", pinnedAt: 1 }))).toBe(true);
+		// Pinned, but not in the selected bucket: the chip says New, so a
+		// Completed order must not appear under it.
+		expect(p(order({ status: "delivered", pinnedAt: 1 }))).toBe(false);
+	});
+
+	test('"top" is the default, so an absent mode keeps pins on top', () => {
+		const pinned = order({ status: "delivered", pinnedAt: 5_000 });
+		expect(buildInboxPredicate({ statuses: [...BUCKET_LEAVES.new] })(pinned)).toBe(true);
+	});
+
+	test("pinning is all-tier in every mode, so none of them gates", () => {
+		expect(narrowsTheInbox({ pinMode: "only" })).toBe(false);
+		expect(narrowsTheInbox({ pinMode: "off" })).toBe(false);
 	});
 });
 
@@ -592,7 +667,7 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 	test("search still ANDs with the other filters, never ORs", () => {
 		expect(
 			buildInboxPredicate({
-				buckets: ["completed"],
+				statuses: [...BUCKET_LEAVES.completed],
 				searchText: "puchong",
 			})(rich),
 		).toBe(false);
@@ -616,5 +691,71 @@ describe("search matches both the stored value and the on-screen wording", () =>
 
 	test("still misses what the order genuinely is not", () => {
 		expect(buildInboxPredicate({ searchText: "counter" })(o)).toBe(false);
+	});
+});
+
+describe("buildInboxPredicate — booking period (S8)", () => {
+	const NOW = Date.UTC(2026, 8, 15, 6, 30);
+	const today = todayMytMidnight(NOW);
+	const DAY = 86_400_000;
+	const booking = (from: number, to: number, extra: Partial<FilterableOrder> = {}) =>
+		order({
+			status: "confirmed",
+			deliveryMethod: "booking",
+			bookingCheckIn: today + from * DAY,
+			bookingCheckOut: today + to * DAY,
+			...extra,
+		});
+
+	test("keeps only active bookings, and never a plain product order", () => {
+		const p = buildInboxPredicate({ bookingPeriods: ["active"] }, NOW);
+		expect(p(booking(-2, 3))).toBe(true);
+		expect(p(booking(2, 5))).toBe(false); // upcoming
+		expect(p(booking(-9, -2))).toBe(false); // ended
+		// The trap: a product order has no span, so "Active" must exclude it —
+		// otherwise the chip would keep the whole product inbox.
+		expect(p(order({ status: "confirmed" }))).toBe(false);
+	});
+
+	test("ANDs with the other dimensions rather than replacing them", () => {
+		// The reason this is a chip and not a bucket: an active booking is also
+		// `in_progress`, so the two compose.
+		const p = buildInboxPredicate(
+			{ bookingPeriods: ["active"], paymentStatuses: ["unpaid"] },
+			NOW,
+		);
+		expect(p(booking(-1, 4, { paymentStatus: "unpaid" }))).toBe(true);
+		expect(p(booking(-1, 4, { paymentStatus: "received" }))).toBe(false);
+		const withBucket = buildInboxPredicate(
+			{ bookingPeriods: ["active"], statuses: [...BUCKET_LEAVES.in_progress] },
+			NOW,
+		);
+		expect(withBucket(booking(-1, 4))).toBe(true);
+	});
+
+	test("an empty period list filters nothing", () => {
+		const p = buildInboxPredicate({ bookingPeriods: [] }, NOW);
+		expect(p(order({ status: "confirmed" }))).toBe(true);
+	});
+
+	test("a pinned order still outranks the period filter", () => {
+		// Pin privilege short-circuits every rule; a new one must not be the
+		// exception that quietly breaks it.
+		const p = buildInboxPredicate(
+			{ bookingPeriods: ["active"], pinMode: "top" },
+			NOW,
+		);
+		expect(p(order({ status: "confirmed", pinnedAt: 1 }))).toBe(true);
+	});
+});
+
+describe("narrowsTheInbox — the Pro gate", () => {
+	test("booking periods do NOT trip it; every other filter does", () => {
+		// Booking is all-tier (S4 put the seller calendar outside this same
+		// gate). A store with a free calendar that must pay to ask "who is here
+		// right now" would be incoherent.
+		expect(narrowsTheInbox({ bookingPeriods: ["active"] })).toBe(false);
+		expect(narrowsTheInbox({ paymentStatuses: ["unpaid"] })).toBe(true);
+		expect(narrowsTheInbox({})).toBe(false);
 	});
 });

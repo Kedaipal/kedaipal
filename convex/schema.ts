@@ -49,6 +49,24 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
+		// Marketing source the SELLER arrived from (z8r3fdd1v0) — the `?src=` /
+		// `utm_source` tag on their first marketing-route hit, carried through
+		// sign-up in sessionStorage and stamped once at createRetailer after a
+		// server-side re-sanitize (sanitizeAttributionSource — the client value
+		// is never trusted). Absent = untagged/direct, so nothing backfills —
+		// the seller-side sibling of `orders.attributionSource` (86eyq0eq9),
+		// same posture: per-row read only, no index. Surfaced in the admin
+		// sellers table; naming convention lives in src/lib/marketing-attribution.
+		signupSource: v.optional(v.string()),
+		// GA4 client id captured from the seller's `_ga` cookie at signup
+		// (z8r3fdd1v1), wire format `<random>.<timestamp>` — validated server-side
+		// (isValidGaClientId; garbage is dropped, never stored). Lets the
+		// server-side key events (`first_order`, `subscribe_paid`) stitch into the
+		// same GA4 user journey as the client-side funnel events. Absent =
+		// GA never booted in their browser (ad-blocker/unset env) — the emitter
+		// falls back to a synthetic id (events count but don't stitch). Same
+		// posture as signupSource: per-row read only, no index.
+		gaClientId: v.optional(v.string()),
 		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
 		// rule reads: checkout phone plate/validator arm, address variant, Places
 		// autocomplete region, and the currency a new store defaults to. Undefined
@@ -74,6 +92,14 @@ export default defineSchema({
 		// address is a fact and is never retired by a tick. Cleared on every
 		// switch (a new move re-opens every question).
 		countrySetupAcked: v.optional(v.array(v.string())),
+		// DEV-ONLY store purge in flight (z8r3fdbmc9): stamped by
+		// admin.purgeStoreForAdmin the moment the erasure cascade is scheduled,
+		// so every admin session locks the row (no act-as, no double purge)
+		// while the deletion self-chains. Never cleared on success — the row
+		// itself is the cascade's final delete. A stamp older than the retry
+		// window means a crashed cascade; the purge may then be re-run (every
+		// phase is idempotent).
+		purgeStartedAt: v.optional(v.number()),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
@@ -301,6 +327,37 @@ export default defineSchema({
 				country: v.optional(countryValidator),
 			}),
 		),
+		// Legal/billing identity printed in the "From" block of the invoices and
+		// receipts BUYERS download (z8r3fdcrzj) — the seller's registered entity,
+		// SSM/UEN number, and a billing address, so a corporate customer's finance
+		// department will accept the document. DELIBERATELY separate from
+		// `businessAddress` above: that field is a geo origin captured for
+		// delivery pricing and is owner-only because many sellers run from home.
+		// Every field here is typed by the seller with in-UI copy stating it
+		// appears on buyer documents — publishing is the point, and opting in is
+		// per-field. Never added to the by-slug storefront payload; it reaches a
+		// buyer only inside a PDF their tracking token already unlocks. All
+		// fields optional; an all-blank save stores undefined (no empty shells).
+		// See docs/invoices-receipts.md.
+		businessIdentity: v.optional(
+			v.object({
+				// Registered entity name, when it differs from the trading name
+				// ("Hermoolah Enterprise" vs "Hermoolah").
+				legalName: v.optional(v.string()),
+				// SSM registration (MY) / UEN (SG) — the label is chosen by the
+				// store's country at render time, the value is stored verbatim.
+				registrationNumber: v.optional(v.string()),
+				// Multiline billing address, exactly as the seller wants it
+				// printed (newline-separated). NOT geocoded, NOT the delivery
+				// origin — paper only.
+				address: v.optional(v.string()),
+				// Billing-query contact (phone or email), printed as typed.
+				contact: v.optional(v.string()),
+				// Tax registration (e.g. SST) — printed string only, no tax
+				// behaviour attached (compliance is tracked separately).
+				taxNumber: v.optional(v.string()),
+			}),
+		),
 		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
 		// behaviour, no migration). "flat" = one fee per delivery order with an
 		// optional free-above-subtotal threshold (all-tier). "radius" = distance
@@ -356,6 +413,18 @@ export default defineSchema({
 				// be fetched, checkout/address-edit is REFUSED (strict since
 				// 27 Jul — the buyer always sees the real rider price, the seller
 				// never calculates a charge).
+				// Provider-aware live pricing (z8r3fdbvdy): quotes EVERY booking
+				// provider the store has armed and charges the higher, so the
+				// collected fee covers whichever tool dispatch actually uses.
+				// Supersedes `mode: "lalamove"`, which survives as the
+				// single-provider ancestor until stored rows are migrated —
+				// widen → migrate → narrow.
+				v.object({
+					mode: v.literal("live"),
+					// Same posture as the mode below: behaviour is always "block".
+					// A live-priced store must never hand the seller fee homework.
+					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+				}),
 				v.object({
 					mode: v.literal("lalamove"),
 					// VESTIGIAL (27 Jul): behavior is always "block" — the resolver
@@ -457,6 +526,87 @@ export default defineSchema({
 				// card). Cleared whenever the stored key changes.
 				paymentMethods: v.optional(v.array(v.string())),
 				methodsCheckedAt: v.optional(v.number()),
+			}),
+		),
+		// Delyva courier booking (86eyjpv6z) — nationwide parcel + cold-chain
+		// dispatch, ADDITIVE to deliveryBooking (Lalamove) above: a seller can
+		// run both (rider for intra-city, Delyva for outstation). BYO-ONLY like
+		// its siblings — the seller's own Delyva account; Kedaipal never books
+		// or pays on their behalf. Connect flow is a single API key: the
+		// delyva.connect ACTION validates it against GET /user + GET /customer
+		// and stores everything else itself (apiSecret is Delyva's webhook
+		// HMAC secret fetched from /user, customerId the integer quote/order
+		// payloads need), already `enc.v1.`-encrypted — no plaintext ever lands
+		// here, unlike the Lalamove/HitPay save-then-encrypt path. There is NO
+		// env/sandbox field by design: Delyva has one API host and no key
+		// prefix — a "sandbox" is just a separate account made at
+		// demo.delyva.app, indistinguishable by key. See docs/delivery-delyva.md.
+		delyva: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				apiKey: v.optional(v.string()),
+				// Webhook HMAC secret (X-Delyvax-Hmac-SHA256), from GET /user.
+				apiSecret: v.optional(v.string()),
+				// Last 4 chars of the plaintext key, for the settings card.
+				apiKeyHint: v.optional(v.string()),
+				// Delyva's integer customer id (GET /customer) — required by
+				// instantQuote/order payloads and doubles as a webhook
+				// cross-check (their events echo it).
+				customerId: v.optional(v.number()),
+				// Delyva company scope of the account (GET /user) — kept for
+				// support/debugging; not used in API calls today.
+				companyId: v.optional(v.string()),
+				// Whether this key belongs to Delyva's DEMO environment, resolved
+				// at connect from `GET /company/{companyId}` (the demo company
+				// answers `code: "demo"`, `websiteUrl: demo.delyva.app`). Delyva
+				// has no key prefix and one API host, so this lookup is the ONLY
+				// way to tell a play-money account from a real one — and it is
+				// load-bearing for the same reason the Lalamove `env` stamp is
+				// (86eypncfy): a demo booking dispatches no courier and spends no
+				// real credit, so every surface that spends must be able to say
+				// so. Undefined = a row connected before this lookup existed;
+				// treat as "unknown", never as production.
+				isDemo: v.optional(v.boolean()),
+				// Delyva's company code ("demo", or the real operator's) — shown
+				// in the settings card so an unexpected account is legible rather
+				// than just a boolean.
+				companyCode: v.optional(v.string()),
+				// The account's display name (GET /customer) — settings card
+				// "Connected — <name>" proof that the key hit the right account.
+				accountName: v.optional(v.string()),
+				// Store-level default parcel type (locked decision 27 Aug):
+				// PARCEL (ambient) / CHILLED / FROZEN — the frozen-seller ICP is
+				// store-wide, so the default lives here with a per-order
+				// override in the dispatch dialog. Unset → PARCEL.
+				defaultItemType: v.optional(
+					v.union(
+						v.literal("PARCEL"),
+						v.literal("CHILLED"),
+						v.literal("FROZEN"),
+					),
+				),
+				// Structured pickup address for Delyva bookings. Deliberately its
+				// own field, not a parse of `businessAddress` (that is one
+				// free-text label + coords — fine for a rider, not for a parcel
+				// courier's zone pricing, which keys on postcode/state). Also the
+				// unit Delyva's cold-chain activation applies to, so precision
+				// here is part of the setup story. Required before booking
+				// (dispatch blocks with reason when absent).
+				pickupAddress: v.optional(
+					v.object({
+						address1: v.string(),
+						address2: v.optional(v.string()),
+						city: v.string(),
+						state: v.string(),
+						postcode: v.string(),
+					}),
+				),
+				// First save that stored a full credential (settings card copy).
+				connectedAt: v.optional(v.number()),
+				// When connect last (re)registered our webhook URL with Delyva —
+				// unset means subscription failed and the card offers a retry
+				// (bookings still work; status just won't flow until it's set).
+				webhooksSubscribedAt: v.optional(v.number()),
 			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
@@ -777,6 +927,17 @@ export default defineSchema({
 				// the parked partial-payment deposit 86eyhwb03). Optional; 0 is
 				// normalized to unset so "no deposit" has one spelling.
 				securityDeposit: v.optional(v.number()),
+				// Weekend per-night rate (sen; S13 `z8r3fddkp8`) — the campsite
+				// price shape. Unset = one rate for every night (every existing
+				// row, zero migration). Free-range stays only; a package is one
+				// flat price and refuses it. The split lands on the ORDER as two
+				// frozen lines (`items[]`), never as new order fields.
+				weekendPrice: v.optional(v.number()),
+				// Which NIGHTS the weekend rate covers — weekday indexes of the
+				// night slept (0 = Sun .. 6 = Sat, `weekdayIndexMyt`), deduped +
+				// sorted. Only present alongside `weekendPrice`; defaults to
+				// [5, 6] = Fri + Sat nights when the seller doesn't choose.
+				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
@@ -1110,6 +1271,19 @@ export default defineSchema({
 		// re-describe a placed booking (the securityDeposit posture). The span
 		// itself lives in bookingCheckIn/Out; this only records the SHAPE.
 		bookingPackaged: v.optional(v.boolean()),
+		// Which NIGHTS this stay was sold as weekend nights (S13) — weekday
+		// indexes, 0 = Sun. Set only when a weekend rate actually applied, so
+		// absent means "one rate every night" (and every pre-S13 booking).
+		//
+		// Frozen for the same reason `bookingPackaged` is: the seller can change
+		// the listing's weekend days tomorrow, and a placed booking must keep
+		// describing the deal that was struck. The two order LINES already carry
+		// the counts and the rates, which is what the money needs; this is what
+		// the DISPLAY needs — it is the only way to say WHICH nights the weekend
+		// line charged for, since the counts alone can't locate them in the span.
+		// The frozen `variantLabel` ("Weekend nights (Fri & Sat)") names the same
+		// set in prose for the CSV and the PDF; this is that set, machine-readable.
+		bookingWeekendDays: v.optional(v.array(v.number())),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets
@@ -1256,6 +1430,11 @@ export default defineSchema({
 					// RE-quotes (Lalamove honours quotes 5 min), so these are a
 					// paper trail, never booking inputs.
 					v.literal("lalamove"),
+					// Provider-aware live quote (z8r3fdbvdy) — same paper-trail
+					// posture, plus `quoteProvider`/`quotesConsidered` below, which
+					// answer "why was I charged this" once more than one provider
+					// could have set the price.
+					v.literal("live"),
 					// Weight/zone rate card (86eyeea1n).
 					v.literal("weight"),
 				),
@@ -1267,10 +1446,29 @@ export default defineSchema({
 				zoneName: v.optional(v.string()),
 				chargeableKg: v.optional(v.number()),
 				bandMaxKg: v.optional(v.number()),
-				// Provider-quote audit trail (mode "lalamove" only).
+				// Provider-quote audit trail (live modes only).
 				quotationId: v.optional(v.string()),
 				vehicleType: v.optional(v.string()),
 				quotedAt: v.optional(v.number()),
+				// Which provider's price the buyer actually paid, and every quote
+				// that competed for it (mode "live"). Absent on "lalamove" rows —
+				// there was only ever one bidder.
+				quoteProvider: v.optional(
+					v.union(v.literal("lalamove"), v.literal("delyva")),
+				),
+				quoteServiceName: v.optional(v.string()),
+				quotesConsidered: v.optional(
+					v.array(
+						v.object({
+							provider: v.union(
+								v.literal("lalamove"),
+								v.literal("delyva"),
+							),
+							fee: v.number(),
+							currency: v.string(),
+						}),
+					),
+				),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -1724,11 +1922,56 @@ export default defineSchema({
 	// creation-time index, and `by_retailer` serves the account-deletion cascade.
 	deliveryQuotes: defineTable({
 		retailerId: v.id("retailers"),
+		// Which provider's price the buyer is being charged (z8r3fdbvdy).
+		// OPTIONAL while pre-existing rows exist: absent = "lalamove", the only
+		// provider that could mint a row before live pricing became
+		// provider-aware. Rows are transient (consumed at create, purged daily),
+		// so this narrows to required on its own within a day of deploy —
+		// widen → migrate → narrow, with the migration being the clock.
+		provider: v.optional(
+			v.union(v.literal("lalamove"), v.literal("delyva")),
+		),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
-		quotationId: v.string(),
+		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
+		// prices are indicative and never expire; dispatch re-prices anyway).
+		quotationId: v.optional(v.string()),
 		// Buyer-paid fee (sen) after RM→sen conversion.
 		fee: v.number(),
-		vehicleType: v.string(),
+		// The currency the fee is in — recorded rather than assumed, because a
+		// provider account belonging to another market prices in ITS currency
+		// and such a quote must never be charged (chooseLiveQuote drops it).
+		currency: v.optional(v.string()),
+		// Lalamove only.
+		vehicleType: v.optional(v.string()),
+		// Delyva only: which service in its returned list set this price.
+		serviceCode: v.optional(v.string()),
+		serviceName: v.optional(v.string()),
+		// The cart this quote priced (PR #253 review): Delyva's bid depends on
+		// the summed variant weight, so a quote minted for one cart must not be
+		// redeemable against another — an emptier cart at quote time buys a
+		// cheaper courier band. Compared against the ORDER's real lines at
+		// redemption, the way coordinates already are. Absent on legacy
+		// Lalamove-mode rows, whose price never depended on the cart.
+		lines: v.optional(
+			v.array(
+				v.object({
+					variantId: v.id("productVariants"),
+					quantity: v.number(),
+				}),
+			),
+		),
+		// Every quote that competed, winner included — the audit trail for
+		// "why was I charged RM5.70" months later. Copied onto the order's
+		// deliverySnapshot at create, since this row is consumed there.
+		considered: v.optional(
+			v.array(
+				v.object({
+					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					fee: v.number(),
+					currency: v.string(),
+				}),
+			),
+		),
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).
@@ -1747,7 +1990,9 @@ export default defineSchema({
 	deliveryJobs: defineTable({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
-		provider: v.literal("lalamove"),
+		// Which booking provider ran this job. Lalamove = intra-city rider;
+		// Delyva (86eyjpv6z) = nationwide parcel/cold-chain courier aggregator.
+		provider: v.union(v.literal("lalamove"), v.literal("delyva")),
 		// Unset while the row is a pre-call RESERVATION (inserted atomically
 		// before the POST /v3/orders side effect so two concurrent confirms can't
 		// both dispatch a rider); patched in by commitBooking once Lalamove
@@ -1771,8 +2016,26 @@ export default defineSchema({
 		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
 		// lives HERE, never rewriting the order.
 		costActual: v.number(),
+		// Lalamove: the 5-minute quotation the booking was placed against.
+		// Delyva: the service CODE picked in the dispatch dialog (their quotes
+		// are indicative, not id-bound — create re-prices), so this stays the
+		// "what was bought" audit slot for both providers.
 		quotationId: v.string(),
+		// Lalamove: MOTORCYCLE/CAR. Delyva: the service code again (machine
+		// slot); the human name lives in `serviceName` below.
 		vehicleType: v.string(),
+		// Delyva only — the courier service actually booked ("DHL eCommerce",
+		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
+		serviceName: v.optional(v.string()),
+		// Delyva only — the consignment number (AWB) the buyer can track with.
+		// Arrives via the order.created webhook (or the post-process fetch) and
+		// is mirrored onto orders.courierName/trackingNo (86eyehvk4 fields) the
+		// moment it's known. Distinct from providerOrderId (Delyva's internal
+		// order id, which webhooks correlate on).
+		awb: v.optional(v.string()),
+		// Delyva only — the itemType this trip was booked as (PARCEL/CHILLED/
+		// FROZEN), frozen at dispatch for the audit trail.
+		itemType: v.optional(v.string()),
 		// Trip direction frozen at reserve time (86eyg0n8e). "collection" = this
 		// booking picked up FROM the buyer and dropped off AT the seller, so the
 		// webhook must update THIS row only — picked_up/completed never advance
@@ -1816,7 +2079,10 @@ export default defineSchema({
 	})
 		.index("by_order", ["orderId"])
 		.index("by_retailer", ["retailerId"])
-		.index("by_provider_order", ["providerOrderId"]),
+		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
+		// are both opaque strings, so a bare providerOrderId index + .unique()
+		// would let a cross-provider collision throw in a webhook handler.
+		.index("by_provider_order", ["provider", "providerOrderId"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
@@ -2203,6 +2469,14 @@ export default defineSchema({
 		// asynchronously just after issue by invoices.generateInvoicePdf (and absent
 		// on rows issued before this field). See docs/invoices-receipts.md.
 		pdfStorageId: v.optional(v.id("_storage")),
+		// The RECEIPT for this invoice once it's paid (z8r3fdcrzj) — a second
+		// frozen document, never an overwrite of `pdfStorageId`: the invoice blob
+		// is the bill the seller received (kept for their records), the receipt is
+		// the proof of payment ("Amount paid", no payment instructions). Rendered
+		// asynchronously by invoices.generateInvoiceReceiptPdf, scheduled from
+		// markPaid (and on demand for rows paid before this shipped). Absent on
+		// unpaid/void invoices — a void row never gets one.
+		receiptPdfStorageId: v.optional(v.id("_storage")),
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
