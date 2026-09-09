@@ -185,11 +185,24 @@ async function sendInvoiceEmail(
 	}
 }
 
-/** Scheduled by invoices.issueInvoice — "here's your new invoice + how to pay". */
+/** Scheduled by every issuance path — "here's your new invoice + how to pay".
+ * A store's FIRST invoice (z8r3fday24) gets its own framing: "your first
+ * order is in" or "your free period has ended", by what ended the period. */
 export const notifyInvoiceIssued = internalAction({
-	args: { invoiceId: v.id("invoices") },
-	handler: async (ctx, { invoiceId }): Promise<void> => {
-		await sendInvoiceEmail(ctx, invoiceId, "invoiceIssued");
+	args: {
+		invoiceId: v.id("invoices"),
+		firstInvoice: v.optional(
+			v.union(v.literal("first_order"), v.literal("backstop")),
+		),
+	},
+	handler: async (ctx, { invoiceId, firstInvoice }): Promise<void> => {
+		const key: BillingEmailKey =
+			firstInvoice === "first_order"
+				? "firstInvoiceOrder"
+				: firstInvoice === "backstop"
+					? "firstInvoiceBackstop"
+					: "invoiceIssued";
+		await sendInvoiceEmail(ctx, invoiceId, key);
 	},
 });
 
@@ -246,8 +259,9 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("invoiceIssued"),
 			v.literal("invoiceReminder"),
 			v.literal("invoiceOverdue"),
+			v.literal("firstInvoiceOrder"),
+			v.literal("firstInvoiceBackstop"),
 			v.literal("trialEndingSoon"),
-			v.literal("trialEnded"),
 			v.literal("welcome"),
 			v.literal("thanks"),
 			v.literal("autoRenewEnabled"),
@@ -286,7 +300,7 @@ export const sendSampleBillingEmail = internalAction({
 						totalFormatted: sampleTotal,
 						dashboardUrl: url,
 					})
-				: key === "trialEndingSoon" || key === "trialEnded"
+				: key === "trialEndingSoon"
 					? renderTrialEmail(loc, key, {
 							storeName: "Sample Store",
 							billingUrl: url,
@@ -364,12 +378,15 @@ async function sendRetailerNotice(
 	}
 }
 
-/** Trial nudges (no invoice). `trialEndingSoon` (~3 days left) and `trialEnded`
- * (locked) — scheduled by the daily cron. */
+/** Free-period nudge (no invoice): `trialEndingSoon` (~3 days before the
+ * backstop) — scheduled by the daily cron. The old `trialEnded` lock notice is
+ * gone with start-when-you-sell: the free period ending now ISSUES a first
+ * invoice (`firstInvoice*` keys above), and only that invoice going overdue
+ * locks — which sends the ordinary `invoiceOverdue`. */
 export const notifyTrialEmail = internalAction({
 	args: {
 		retailerId: v.id("retailers"),
-		key: v.union(v.literal("trialEndingSoon"), v.literal("trialEnded")),
+		key: v.union(v.literal("trialEndingSoon")),
 		daysLeft: v.optional(v.number()),
 	},
 	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {

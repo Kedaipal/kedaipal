@@ -22,7 +22,7 @@ import {
 	query,
 	type QueryCtx,
 } from "./_generated/server";
-import { isAdmin } from "./lib/auth";
+import { adminUserIds, isAdmin } from "./lib/auth";
 import { autoRenewMethodLabel } from "./lib/hitpayBilling";
 import {
 	type BillingCycle,
@@ -56,7 +56,15 @@ export type AccessState = {
 	 * payload. */
 	billingCycle: BillingCycle;
 	comped: boolean;
+	/** The free period's BACKSTOP deadline (signup + TRIAL_DAYS). */
 	trialEndsAt?: number;
+	/** Start-when-you-sell (z8r3fday24): set once the free period ENDED — at
+	 * the first live order or the backstop — and the first invoice was issued.
+	 * While unset on a `trialing` row the store is still free. Drives the
+	 * pill/banner/billing-tab wording ("Free · until your first order" vs
+	 * "first invoice due"). Owner-only like the rest of this descriptor. */
+	freePeriodEndedAt?: number;
+	freePeriodEndReason?: "first_order" | "backstop";
 	currentPeriodEnd?: number;
 	caps: { orderCap: number; userCap: number; broadcastQuota: number };
 	/** Boolean feature entitlements (CRM, Order Inbox, …) resolved from the plan
@@ -137,6 +145,8 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 		billingCycle: sub.billingCycle,
 		comped,
 		trialEndsAt: sub.trialEndsAt,
+		freePeriodEndedAt: sub.freePeriodEndedAt,
+		freePeriodEndReason: sub.freePeriodEndReason,
 		currentPeriodEnd: sub.currentPeriodEnd,
 		caps: {
 			orderCap: sub.orderCap,
@@ -189,6 +199,52 @@ export async function getAccess(
 		);
 	}
 	return resolveAccess(sub);
+}
+
+/**
+ * Start-when-you-sell (z8r3fday24): a store's FIRST LIVE ORDER ends its free
+ * period and fires the first invoice. Called from the one order-created seam
+ * every channel funnels through (`subscriptionUsage.recordOrderCreated` —
+ * storefront, counter, claim link, booking), so "first live order" means the
+ * first order, full stop. Returns true when this call ended the free period.
+ *
+ * This reads the subscription row from inside the order pipeline — a
+ * deliberate, narrow exception to "the pipeline never reads subscription
+ * status": it is a one-time STAMP plus a scheduled job, never a gate. Nothing
+ * here can refuse or fail the order: every early return is a silent no-op and
+ * the issuance runs in its own scheduled mutation
+ * (`invoices.internalIssueFirstInvoice`). `updatedAt` is left alone — it is
+ * the status-flip moment, and the status does not change here.
+ *
+ * Skips: not trialing, comped, already ended, or a store owned by a Kedaipal
+ * admin (dogfooding — an identity-blind check on the owner's user id against
+ * the same allowlist `isAdmin` uses, so Zaki's own store never bills itself).
+ */
+export async function endFreePeriodOnFirstOrder(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	now: number,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailerId);
+	if (
+		!sub ||
+		sub.status !== "trialing" ||
+		sub.comped === true ||
+		sub.freePeriodEndedAt !== undefined
+	)
+		return false;
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer || adminUserIds().includes(retailer.userId)) return false;
+	await ctx.db.patch(sub._id, {
+		freePeriodEndedAt: now,
+		freePeriodEndReason: "first_order",
+	});
+	await ctx.scheduler.runAfter(
+		0,
+		internal.invoices.internalIssueFirstInvoice,
+		{ subscriptionId: sub._id },
+	);
+	return true;
 }
 
 /**
@@ -377,7 +433,10 @@ export const internalBackfillSubscriptions = internalMutation({
 
 /**
  * Daily status cron. Flips:
- *  - `trialing → past_due` when the trial has lapsed (`trialEndsAt < now`).
+ *  - `trialing → past_due` when the FIRST INVOICE is overdue (z8r3fday24 —
+ *    "trial lapsed → locked" is gone: the free period ending, by first order
+ *    or by the `trialEndsAt` backstop, ISSUES the first invoice and that
+ *    invoice's dueDate is the only lock, exactly like a renewal).
  *  - `active → past_due` when the retailer has a still-pending invoice past its
  *    `dueDate` (founding ghost / unpaid renewal). Comped subs are never flipped.
  * Since 86eyb6z4r it also RUNS the renewal machine:
@@ -399,7 +458,10 @@ export const internalDailyBillingStatus = internalMutation({
 	handler: async (
 		ctx,
 	): Promise<{
+		/** Trials locked over an OVERDUE first invoice (+ the legacy comped flip). */
 		trialExpired: number;
+		/** Free periods the backstop ended → first invoices scheduled. */
+		firstInvoicesIssued: number;
 		overdue: number;
 		renewalsIssued: number;
 		autoChargeRetries: number;
@@ -410,6 +472,7 @@ export const internalDailyBillingStatus = internalMutation({
 	}> => {
 		const now = Date.now();
 		let trialExpired = 0;
+		let firstInvoicesIssued = 0;
 		let overdue = 0;
 		let renewalsIssued = 0;
 		let autoChargeRetries = 0;
@@ -418,33 +481,87 @@ export const internalDailyBillingStatus = internalMutation({
 		let remindersSent = 0;
 		let trialReminders = 0;
 
-		// Trial expiry → lock + "trial ended" email (once, on the transition).
-		// Otherwise, "trial ends in 3 days" email (once, deduped by trialReminderSentAt).
+		// Trials — start-when-you-sell (z8r3fday24). The free period ends at the
+		// store's first live order (stamped by endFreePeriodOnFirstOrder from the
+		// order pipeline's usage seam) or at the `trialEndsAt` backstop here,
+		// whichever comes first. Either way the machine writes the first invoice
+		// (invoices.internalIssueFirstInvoice) and the seller keeps full access
+		// through its 14-day grace — that invoice's dueDate is the ONLY lock.
 		const trialing = await ctx.db
 			.query("subscriptions")
 			.withIndex("by_status", (q) => q.eq("status", "trialing"))
 			.collect();
 		for (const sub of trialing) {
-			if (sub.trialEndsAt === undefined) continue;
-			if (sub.trialEndsAt < now) {
-				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
-				trialExpired++;
-				await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
-					retailerId: sub.retailerId,
-					key: "trialEnded",
-				});
+			if (sub.freePeriodEndedAt === undefined) {
+				if (sub.trialEndsAt === undefined) continue;
+				if (sub.trialEndsAt < now) {
+					if (sub.comped === true) {
+						// A comped row can't be billed; the legacy flip keeps its status
+						// honest (comped is never frozen, so nothing actually locks).
+						await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
+						trialExpired++;
+						continue;
+					}
+					// Backstop: end the free period + issue the first invoice. No lock,
+					// no status change — `updatedAt` stays the flip moment it was.
+					await ctx.db.patch(sub._id, {
+						freePeriodEndedAt: now,
+						freePeriodEndReason: "backstop",
+					});
+					await ctx.scheduler.runAfter(
+						0,
+						internal.invoices.internalIssueFirstInvoice,
+						{ subscriptionId: sub._id },
+					);
+					firstInvoicesIssued++;
+					continue;
+				}
+				// "Free period ends in 3 days" (once, deduped by trialReminderSentAt).
+				const daysLeft = Math.ceil((sub.trialEndsAt - now) / DAY_MS);
+				if (daysLeft <= 3 && sub.trialReminderSentAt === undefined) {
+					await ctx.db.patch(sub._id, { trialReminderSentAt: now });
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyTrialEmail,
+						{ retailerId: sub.retailerId, key: "trialEndingSoon", daysLeft },
+					);
+					trialReminders++;
+				}
 				continue;
 			}
-			const daysLeft = Math.ceil((sub.trialEndsAt - now) / DAY_MS);
-			if (daysLeft <= 3 && sub.trialReminderSentAt === undefined) {
-				await ctx.db.patch(sub._id, { trialReminderSentAt: now });
-				await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
-					retailerId: sub.retailerId,
-					key: "trialEndingSoon",
-					daysLeft,
-				});
-				trialReminders++;
+			// Free period over → the first invoice is the clock.
+			if (sub.comped === true) continue;
+			const invoices = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
+				.collect();
+			const pending = invoices.find((inv) => inv.status === "pending");
+			if (pending) {
+				if (pending.dueDate < now) {
+					await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
+					trialExpired++;
+					// "Now locked — pay to resume" (once, on the transition).
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyInvoiceOverdue,
+						{ invoiceId: pending._id },
+					);
+				}
+				continue;
 			}
+			// A settle moves the row to `active`, so a paid invoice here is a
+			// mid-transaction glimpse at most — never re-bill over it.
+			if (invoices.some((inv) => inv.status === "paid")) continue;
+			// The free period ended but no bill exists (the issuance failed, or it
+			// was voided without a replacement): write it again rather than lock.
+			// The bill IS the lock's clock — with none there is nothing to be
+			// overdue on. (To give a store free service, comp it — don't void.)
+			await ctx.scheduler.runAfter(
+				0,
+				internal.invoices.internalIssueFirstInvoice,
+				{ subscriptionId: sub._id },
+			);
+			firstInvoicesIssued++;
 		}
 
 		// Active subs: overdue lock, auto-charge retries, renewal issuance, and
@@ -569,6 +686,7 @@ export const internalDailyBillingStatus = internalMutation({
 
 		return {
 			trialExpired,
+			firstInvoicesIssued,
 			overdue,
 			renewalsIssued,
 			autoChargeRetries,

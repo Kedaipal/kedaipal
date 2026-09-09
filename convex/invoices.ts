@@ -466,6 +466,10 @@ async function insertPendingInvoice(
 		currency: BillingCurrency;
 		dueDate?: number;
 		origin: InvoiceOrigin;
+		/** Start-when-you-sell (z8r3fday24): the store's FIRST invoice, and what
+		 * ended the free period — picks the "your first order is in" / "your
+		 * free period has ended" email instead of the generic issued one. */
+		firstInvoice?: "first_order" | "backstop";
 	},
 ): Promise<Id<"invoices">> {
 	const base = planPrice(args.plan, args.billingCycle, false, args.currency);
@@ -512,7 +516,7 @@ async function insertPendingInvoice(
 	await ctx.scheduler.runAfter(
 		ISSUE_EMAIL_DELAY_MS,
 		internal.billingEmail.notifyInvoiceIssued,
-		{ invoiceId },
+		{ invoiceId, firstInvoice: args.firstInvoice },
 	);
 	// Render + store the invoice PDF (frozen at issue). Async so a render hiccup
 	// never fails issuance; the download surfaces "preparing" until it lands.
@@ -634,6 +638,157 @@ export const voidInvoice = mutation({
 			);
 		}
 		return { ok: true };
+	},
+});
+
+/**
+ * Start-when-you-sell (z8r3fday24): the store's FIRST invoice, issued the
+ * moment its free period ends — by the first live order (scheduled from
+ * subscriptions.endFreePeriodOnFirstOrder) or by the daily cron's backstop.
+ *
+ * Bills the tier on the row (Pro — every trial showcases Pro; the seller can
+ * switch the pending invoice to Starter before paying, `switchPendingPlan`),
+ * monthly, in the store's country currency, at the founding price when the
+ * store was promised one (`foundingPricingApplies`, same rule as self-serve).
+ * Never auto-charged, even with a saved method — a first bill the seller has
+ * not seen is exactly the surprise debit 86eyb6z4r refuses to send; the
+ * Pay-now link is in the email and on the billing tab.
+ *
+ * Idempotent: refuses when the free period hasn't ended, the row isn't
+ * trialing, it's comped, or ANY pending/paid invoice already exists — so the
+ * trigger and the cron can both call it and only one bill ever lands.
+ */
+export const internalIssueFirstInvoice = internalMutation({
+	args: { subscriptionId: v.id("subscriptions") },
+	handler: async (ctx, { subscriptionId }): Promise<{ issued: boolean }> => {
+		const sub = await ctx.db.get(subscriptionId);
+		if (
+			!sub ||
+			sub.status !== "trialing" ||
+			sub.comped === true ||
+			sub.freePeriodEndedAt === undefined
+		)
+			return { issued: false };
+		const invoices = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
+			.collect();
+		if (invoices.some((inv) => inv.status === "pending" || inv.status === "paid"))
+			return { issued: false };
+		const retailer = await ctx.db.get(sub.retailerId);
+		if (!retailer) return { issued: false };
+		const now = Date.now();
+		const founding = foundingPricingApplies({
+			plan: sub.plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now,
+		});
+		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const invoiceId = await insertPendingInvoice(ctx, {
+			retailerId: sub.retailerId,
+			subscriptionId: sub._id,
+			plan: sub.plan,
+			billingCycle: "monthly",
+			founding,
+			currency,
+			origin: "free_period_end",
+			firstInvoice: sub.freePeriodEndReason ?? "backstop",
+		});
+		console.info("[billing] first invoice issued", {
+			retailerId: sub.retailerId,
+			invoiceId,
+			reason: sub.freePeriodEndReason,
+		});
+		return { issued: true };
+	},
+});
+
+/**
+ * Seller: switch the plan on a pending MACHINE-issued invoice before paying
+ * it (z8r3fday24). Every trial runs on Pro, so the first invoice bills Pro;
+ * a seller who wants Starter — or a Starter picker who changed their mind —
+ * swaps here in ONE mutation: the old invoice is voided (its Pay-now link
+ * killed) and the replacement issued at the new tier, same cycle, same
+ * currency, and the SAME due date, so switching can never extend the grace.
+ * Admin-issued invoices are deliberately excluded — Arif may have priced one
+ * by hand — and hold invoices have no tier to switch.
+ */
+export const switchPendingPlan = mutation({
+	args: { plan: v.union(v.literal("starter"), v.literal("pro")) },
+	handler: async (ctx, { plan }): Promise<{ invoiceId: Id<"invoices"> }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) throw new ConvexError("No store found for your account");
+		await rateLimiter.limit(ctx, "billingSelfServe", {
+			key: retailer._id,
+			throws: true,
+		});
+		if (!isPlanSelectable(plan))
+			throw new ConvexError("That plan isn't available yet.");
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
+		if (!sub) throw new ConvexError("No subscription found for your store");
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
+		if (!pending) throw new ConvexError("There's no unpaid invoice to switch.");
+		if (pending.kind === "hold")
+			throw new ConvexError(
+				"That invoice is for your Off-Season Hold, not a plan — resume your plan first.",
+			);
+		if ((pending.origin ?? "admin") === "admin")
+			throw new ConvexError(
+				"This invoice was issued by our team — message us and we'll change it for you.",
+			);
+		const currentPlan = pending.plan ?? sub.plan;
+		if (currentPlan === plan)
+			throw new ConvexError(
+				`Your invoice is already for ${plan === "pro" ? "Pro" : "Starter"}.`,
+			);
+		const now = Date.now();
+		await ctx.db.patch(pending._id, {
+			status: "void",
+			voidedAt: now,
+			voidedBy: identity.subject,
+			voidReason: `Switched to ${plan} by the seller`,
+		});
+		if (pending.gatewayRequestId) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.expireInvoiceRequest,
+				{ requestId: pending.gatewayRequestId },
+			);
+		}
+		const founding = foundingPricingApplies({
+			plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now,
+		});
+		const currency: BillingCurrency =
+			pending.currency === "SGD" ? "SGD" : "MYR";
+		const invoiceId = await insertPendingInvoice(ctx, {
+			retailerId: retailer._id,
+			subscriptionId: sub._id,
+			plan,
+			billingCycle: pending.billingCycle ?? "monthly",
+			founding,
+			currency,
+			dueDate: pending.dueDate,
+			origin: "self_serve",
+		});
+		return { invoiceId };
 	},
 });
 
