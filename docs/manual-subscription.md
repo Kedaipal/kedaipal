@@ -75,9 +75,16 @@ prompt payer gets just the one "issued" email. Invoice creation + mark-paid stay
    invoice it schedules `notifyInvoiceOverdue` ("storefront stays live, pay to resume
    editing"). Once, on the status transition.
 
-**Trial vendor (≤2):**
-1. **Ends in 3 days** — daily cron, once, deduped by `subscriptions.trialReminderSentAt`
-   (`notifyTrialEmail "trialEndingSoon"`). "Choose a plan" — trials have no invoice.
+**Free-period vendor (≤2, start-when-you-sell — see below):**
+1. **Free period ends in 3 days** — daily cron, once, deduped by
+   `subscriptions.trialReminderSentAt` (`notifyTrialEmail "trialEndingSoon"`): "your
+   first invoice arrives then, or sooner with your first order — nothing to do".
+2. **First invoice** — the moment the free period ends, by first order
+   (`firstInvoiceOrder`, "your first order is in 🎉") or by the day-14 backstop
+   (`firstInvoiceBackstop`, "your free period has ended"). Both are ordinary invoice
+   emails (amount, due date, Pay-now, how-to-pay) with the framing changed. From
+   there the vendor is on the paid-vendor ladder above (reminder, overdue). The old
+   `trialEnded` lock notice is gone — nothing locks at the end of a free period.
 2. **Trial ended / locked** — on the trialing→past_due flip (`notifyTrialEmail "trialEnded"`).
 
 **On payment (positive, not dunning):** `markPaid` schedules `notifyPaymentReceived` — a
@@ -155,11 +162,14 @@ claims via admin mark-paid, so a hand-crafted link grants nothing.
 
 - **Subscription** (one per retailer, created in-transaction by `createRetailer`).
   `plan` ∈ `starter | pro | scale`; `status` ∈ `trialing | active | past_due |
-  cancelled`. Entitlement **caps are denormalized** onto the row (`orderCap`,
-  `userCap`, `broadcastQuota`) — feature-gating reads the caps, **never the `plan`
-  field**, so the seam stays clean for automated billing.
-- **Invoice** (per period). Admin marks paid; `dueDate` drives the
-  `active → past_due` overdue cron.
+  cancelled | on_hold` (`on_hold` = Off-Season Hold, below). Entitlement **caps are
+  denormalized** onto the row (`orderCap`, `userCap`, `broadcastQuota`) —
+  feature-gating reads the caps, **never the `plan` field**, so the seam stays clean
+  for automated billing. A held row's EFFECTIVE `orderCap` is 0, resolved by
+  `resolveAccess` and never stored.
+- **Invoice** (per period). `kind` ∈ `plan` (default) | `hold`; `origin` ∈ `admin |
+  self_serve | auto_renewal | free_period_end`. `dueDate` drives the `→ past_due`
+  overdue cron — for EVERY status, including a trial's first invoice.
 - **Founding member** ledger — atomic rank claim (1..10), Pro-only at v1.
 
 ### Two invariants everything rests on
@@ -172,17 +182,134 @@ claims via admin mark-paid, so a hand-crafted link grants nothing.
    status. Soft-lock (`past_due`) freezes **only** the seller's dashboard
    growth-writes.
 
+## Start-when-you-sell + Off-Season Hold (Sep 2026, ClickUp `z8r3fday24`)
+
+The 30 Aug 2026 pricing reset's three backend moves, built on the auto-renewal
+engine (`86eyb6z4r`): Scale RM399/S$149 (still Coming soon — nobody was repriced),
+the additional-outlet add-on at S$18, Pro 200 / Scale 400 order allowances
+(`migrations.resyncSubscriptionCaps` re-syncs existing rows), and the two
+mechanisms below. Decisions: Zaki, 9 Sep 2026.
+
+### Start-when-you-sell — "free until you sell"
+
+A new store is **free until its first live order, or day 15, whichever comes
+first**. Not a trial with a deadline: the order is the trigger, the day-14
+`trialEndsAt` is only the backstop.
+
+- **Trigger.** `subscriptions.endFreePeriodOnFirstOrder` is called from the ONE
+  order-created seam every channel funnels through (`subscriptionUsage.
+  recordOrderCreated` — storefront, counter, claim link, booking), so "first
+  live order" means the first order, full stop (counter sales count; a seller's
+  own test order counts too — it opens a 14-day due window, voidable by Arif).
+  It stamps `freePeriodEndedAt` + `freePeriodEndReason: "first_order"` and
+  schedules the first invoice. **A stamp plus a scheduled job, never a gate** —
+  the narrow, documented exception to "the pipeline never reads subscription
+  status"; nothing in it can refuse or fail the order. Skips comped rows and
+  stores owned by a Kedaipal admin (identity-blind, `ADMIN_USER_IDS`).
+- **Backstop.** The daily cron ends the free period at `trialEndsAt` the same way
+  (`freePeriodEndReason: "backstop"`) — it no longer locks.
+- **The first invoice** (`invoices.internalIssueFirstInvoice`, origin
+  `free_period_end`) bills **the trialed tier — Pro** (every trial showcases
+  Pro; Zaki, 9 Sep: "default to Pro, still switchable before paying"), monthly,
+  in the store's country currency, at the founding price when the store was
+  promised one (`foundingPricingApplies`). Never auto-charged, even with a
+  saved method — a first bill the seller hasn't seen is exactly the surprise
+  debit `86eyb6z4r` refuses. Idempotent: refuses when any pending/paid invoice
+  exists, so trigger and cron can both call it.
+- **Switch before paying.** `invoices.switchPendingPlan({ plan })` voids the
+  machine-issued invoice (Pay-now link killed) and reissues at the other tier
+  with the **same due date**, so switching can never extend the grace. Refuses
+  admin-issued invoices (Arif may have priced one by hand) and hold invoices.
+  Surfaced inside the pending-invoice card, with the consequence: paying a
+  Starter invoice moves the store to Starter (no CRM / inbox / insights).
+- **The invoice's `dueDate` is the only lock.** The trialing branch of the cron
+  now mirrors the active branch: pending + not due → grace; pending + overdue →
+  `past_due` + `invoiceOverdue`; no invoice on file (voided, failed) → the
+  machine writes it again rather than locking (to give a store free service,
+  comp it — don't void). Paying it settles through the ordinary path → `active`.
+- **Surfaces.** Pill: "Free · until first order" → "Free · N days left" (last 5
+  days) → "First invoice due". Banner: ends-in-N-days (dismissable) → "your
+  first order is in / free period ended — invoice ready, due in N days"
+  (dismissable, keyed by due date) → the ordinary invoice-due-soon → overdue.
+  Billing tab: status chip, a one-line explainer while free, the first-invoice
+  card with the switch. Dashboard checklist: "Start your plan" → "Pay your first
+  invoice". The self-serve picker stays for a free store that would rather
+  start today, prefaced with "no rush".
+
+### Off-Season Hold — pause between seasons for RM19 / S$9
+
+A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
+`lib/plans.ts`; the `Plan` union, `PLANS` and the feature matrix are untouched).
+`plan` keeps the tier the seller resumes to.
+
+- **What pauses:** new orders. `retailers.orderingPausedAt` is set on entry and
+  cleared on resume — a **store setting**, denormalized on purpose, so the
+  buyer-facing payload (`orderingPaused`) and every order-create path
+  (`orders.create`, counter `startAnonymousSession` / `bindSessionManualPhone` /
+  `createOrderFromSession`, `orderClaims.sendClaim`, `bookings.requestBooking`)
+  refuse on the seller's own switch — like opening hours — and the pipeline
+  still never reads billing status. The storefront shows a "seasonal break"
+  note under the header on every buyer route, every ordering CTA reads
+  "Ordering paused" (disabled-with-reason), checkout renders the note instead
+  of the form, and the cart is kept for the reopening. Server refusal was a
+  deliberate deviation from the copy pack's "UI-level only": a stale tab must
+  not place an order the seller said they can't fulfil.
+- **What stays live:** storefront, catalog, buyer list, order history, and
+  editing (`frozen` stays false; the tier's features stay on).
+- **Entry** (`subscriptions.setSeasonalHold({ hold: true })`, owner or admin
+  act-as, audited): from `active` or `past_due` only — never a free store (a
+  store that isn't selling simply doesn't convert) or a comped row. A pending
+  PLAN invoice is voided ("rather pause than pay"). **Billing:** paid through a
+  future date by the plan → nothing now, the cron issues the hold invoice at
+  `currentPeriodEnd`; otherwise (period over, or a bill just voided) the hold
+  invoice issues at once (`internalIssueRenewalInvoice({ force: true })`,
+  origin `self_serve`, kind `hold`). Email `holdStarted` restates the deal.
+- **While held:** the cron's active loop also walks `on_hold` rows;
+  `internalIssueRenewalInvoice` picks `kind: "hold"` (flat price, no founding
+  discount, monthly, `plan` = the resume tier). A hold invoice auto-charges
+  when a method is attached (the seller chose the price by tapping Pause);
+  overdue → `past_due` like any other. **Settle** of a hold invoice keeps the
+  row `on_hold`, rolls the period and stamps `periodPaidBy: "hold"`.
+- **Resume** (`{ hold: false }`): from `on_hold`, or from a lock over an unpaid
+  HOLD invoice (that bill is voided; a lock over an unpaid PLAN invoice is not
+  a hold to resume from — settle it). Status → `active` on the kept tier,
+  ordering reopens. **Billing:** a running period bought by the plan owes
+  nothing; a period bought by a hold (or none) issues the tier invoice at once
+  — **unused hold days are forfeited**, stated in the card and the confirm
+  before the tap. Email `holdResumed`.
+- **Surfaces.** Settings → Billing card (every real paid seller sees it —
+  discoverable where billing lives; four states: offer / pause-instead /
+  resume / hold-overdue), status chip "On hold · since …", pill "On hold", a
+  persistent calm banner with a Resume link, the cap meter hidden (cap 0 is
+  not "0 / 0"), admin console "Off-Season Hold" pill on hold invoices, the
+  founder report counts `onHold` separately from churn.
+
+Pure rules: `convex/lib/seasonalHold.ts` (`canEnterHold`, `canResumeHold`,
+`holdBillsNow`, `resumeBillsNow`, the buyer message). Tests:
+`convex/startWhenYouSell.test.ts`, `convex/seasonalHold.test.ts`,
+`src/components/storefront/seasonal-break.test.tsx`, plus additions to
+`plans.test.ts`, `migrations.test.ts`, `billingEmailCopy.test.ts`,
+`invoices.test.ts`, `subscription.test.ts`, `billing-tab.test.tsx`.
+
+**Prod rollout:** the schema is widen-only (a status literal + optional
+fields). After the deploy run `npx convex run migrations:resyncSubscriptionCaps
+--prod` once — until it runs, existing rows still read "N of 500". No env vars,
+no crons, no Meta templates.
+
 ## Locking (when the cron flips to `past_due`)
 
 The daily cron locks a vendor on any of:
-1. **Trial lapsed** (`trialing`, `trialEndsAt < now`).
-2. **Invoice overdue** (`active` with a pending invoice past its `dueDate`).
-3. **Period lapsed, no invoice** (`active`, `currentPeriodEnd < now`, and **no** pending
-   invoice) — we never give a paid vendor free service past their cycle while waiting on
-   Arif to issue a renewal. A pending invoice with a *future* due date keeps them in grace.
+1. **Invoice overdue** — a pending invoice past its `dueDate`, for `trialing`
+   (the first invoice), `active` and `on_hold` alike. This is the ONLY lock.
+2. ~~Trial lapsed~~ — retired with start-when-you-sell: the backstop ISSUES the
+   first invoice (no status change); see above.
+3. ~~Period lapsed, no invoice~~ — retired with `86eyb6z4r`: the cron issues the
+   renewal (or the hold renewal) and the seller rides its grace.
 
-Comped subs never lock. Each transition fires its one email (overdue → `notifyInvoiceOverdue`;
-trial → `trialEnded`; period-lapse → `notifySubscriptionLapsed`).
+A pending invoice with a *future* due date always keeps them in grace. Comped subs
+never lock (a comped trial that runs out its backstop still takes the legacy
+`past_due` flip, which for a comped row locks nothing). Each transition fires its
+one email (`notifyInvoiceOverdue`).
 
 ## Issuing — system-set due date, cycle starts at payment
 
@@ -398,16 +525,27 @@ Tests: `convex/planGating.test.ts` (gates, bypasses, meter, soft-lock),
 
 ## Signup paths (`createRetailer`)
 
-**Founding-10 members get NO free trial** (they're paying Pro customers); regular signups get
-the 14-day trial. The admin onboard-a-client form has a **"Founding Member"** toggle (gated on
-spots remaining). When set, the invite link carries `founding: true` → onboarding passes
-`intent: "founding"` → an **active** sub (Pro caps, no trial) with a 14-day pay-by window, +
-`foundingIntent: true`. The slot is **reserved at signup** (rank assigned, badge live). Arif
-issues the founding invoice (monthly **or** annual — the issue form auto-applies the discount
-from `foundingIntent`); the paid cycle is confirmed at mark-paid.
+Every signup starts the same **free period** (`status: trialing`, `plan: pro`,
+`trialEndsAt = now + 14d` as the backstop, Pro-level caps) — free until the first
+live order or day 15, see "Start-when-you-sell" above. The admin onboard-a-client
+form has a **"Founding Member"** toggle (gated on spots remaining). When set, the
+invite link carries `founding: true` → onboarding passes `intent: "founding"` →
+the same free period + `foundingIntent: true` and a **reserved rank** (badge live).
+The founding discount then applies automatically to whichever invoice ends the free
+period (first order or backstop) or to one Arif issues; the paid cycle is confirmed
+at settle.
 
-- **Public** (default / `intent: "public"`): `status: trialing`, `plan: pro`,
-  `trialEndsAt = now + 14d`, Pro-level caps. Tier chosen at conversion.
+> **Verified 9 Sep 2026 (z8r3fday24 audit):** `intent: "founding"` is still an
+> unprivileged public arg on `createRetailer` — anyone can pass it and, while
+> spots remain, reserve a rank + `foundingIntent` (and with `subscribeSelf` /
+> the first invoice, self-bill at the founding price). Founding pricing was
+> retired for NEW signups on 30 Aug, so the remaining slots should be Arif's to
+> hand out only. Closing the public arg breaks the admin invite link's toggle
+> (the link token isn't signed), so the fix — designate founding via the
+> admin issue form's checkbox only — is a decision for Arif, not smuggled here.
+
+- **Public** (default / `intent: "public"`): the free period. Tier chosen at
+  conversion — the first invoice bills Pro, switchable to Starter before paying.
 - **Founding** (`intent: "founding"`): `status: active` (NO trial), `currentPeriodEnd =
   now + 14d` (pay-by window, not free), `foundingIntent: true`, reserved rank, Pro caps,
   **no invoice**. They set up their store; pay the founding invoice (RM104, monthly/annual) to
@@ -460,30 +598,31 @@ deploy-time floor.
 
 ## Pricing / caps — single source of truth
 
-`convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale RM299; founding Pro RM104
-(Scale RM209, unreachable at launch). Caps per CLAUDE.md: Starter 100/1/0, Pro
-500/2/100, Scale 2000/5/500 — all finite since Arif's 2026-06-28 decision dropped
-Scale's "unlimited" (kept an upsell ceiling for a future Enterprise tier). The
+`convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale **RM399** (S$29 / S$59 /
+S$149; the 30 Aug 2026 reset, `z8r3fday24`); founding Pro RM104 (Scale RM279,
+unreachable at launch — founding is retired for new signups, existing members keep
+theirs); Off-Season Hold **RM19 / S$9** (`HOLD_MONTHLY_PRICES`); additional outlet
+RM49 / S$18. Caps: Starter 100/1/0, Pro **200**/2/100, Scale **400**/5/500 — the
+allowances `/pricing` advertises, all finite since Arif's 2026-06-28 decision
+dropped Scale's "unlimited" (kept an upsell ceiling for a future Enterprise tier). The
 `UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
 plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
 **no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
 
 > **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
 > The public pricing surface shows Scale as the **multi-outlet / high-volume** tier
-> at **RM299/mo flat** (no bands, no metering; the reseller band table was removed
+> at **RM399/mo flat** (no bands, no metering; the reseller band table was removed
 > after the 1 Jul ICP audit). Scale stays "Coming soon" — not purchasable — until
 > the separate Scale build (multi-outlet management, outlet counting, RM49/mo
 > additional-outlet billing) ships. See [`pricing.md`](./pricing.md).
 
-> **Display order allowances ≠ backend cap (ClickUp 86eye2ccu).** The pricing page
-> advertises the *decided* monthly allowances **Starter 100 / Pro 200 / Scale ~400**
-> ahead of enforcement (Arif, 9 Aug 2026: copy first, so the page never advertises a
-> number the business can't hold). `PLAN_CAPS` still reads **Pro 500 / Scale 2,000**
-> until `86eye2ccu` ships the lower caps — and that constant is the denominator the
-> **billing-tab order meter** renders — so until then a Pro seller reads "200
-> orders/mo" on `/pricing` but "N of 500" in Settings → Billing. Both Pro (500→200)
-> and Scale (2,000→400) diverge; `86eye2ccu` must drop both. Annual billing is hidden
-> on the page until recurring billing (`86eyb6z4r`) ships. See
+> **Order allowances now match the page (ClickUp 86eye2ccu, landed via z8r3fday24).**
+> `/pricing` advertised **Starter 100 / Pro 200 / Scale 400** ahead of enforcement
+> (Arif, 9 Aug 2026) while `PLAN_CAPS` read Pro 500 / Scale 2,000 — the denominator
+> the billing-tab meter renders. The constants moved with the pricing reset;
+> `migrations.resyncSubscriptionCaps` re-syncs the denormalized caps on existing
+> rows (idempotent, `updatedAt` untouched). Still open from `86eye2ccu`: the admin
+> per-store allowance override and the surfaced-not-billed overage copy. See
 > [`pricing.md`](./pricing.md).
 
 ## SGD invoices — billing a Singapore seller (Aug 2026)

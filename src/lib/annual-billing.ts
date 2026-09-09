@@ -30,7 +30,7 @@ import { daysUntil } from "./subscription";
  * "Scale is unavailable for v1." (convex/invoices.ts), so offering it would
  * reproduce in-app exactly the dead-end CTA we refuse to ship on the public
  * pricing page. Add `"scale"` in the same change that makes Scale purchasable
- * (ClickUp z8r3fday24).
+ * (the separate Scale build — the z8r3fday24 pricing reset only moved its price).
  *
  * A Starter seller is still TOLD annual exists, in the Starter → Pro nudge —
  * a constraint is surfaced, never enforced silently.

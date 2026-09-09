@@ -76,10 +76,15 @@ A settle **by any rail** (auto-charge, Pay-now, admin mark-paid) clears the
 dunning state inside `settleInvoicePaid`.
 
 **Heal-on-attach:** re-authorising while a machine-issued renewal pends (or
-while past_due) charges immediately — fixing your card shouldn't wait for
-tomorrow's cron. A fresh **self-serve** invoice is deliberately NOT charged
-at attach (its Pay-now button is right there; an implicit first charge would
-be a surprise).
+while past_due, or while an Off-Season **hold** invoice pends — its flat price
+is exactly what the seller chose by tapping Pause) charges immediately — fixing
+your card shouldn't wait for tomorrow's cron. A fresh **self-serve** invoice is
+deliberately NOT charged at attach (its Pay-now button is right there; an
+implicit first charge would be a surprise), and neither is a store's **first
+invoice** from start-when-you-sell (`z8r3fday24`) — the same rule: a bill the
+seller hasn't seen is never charged unseen. Held subscriptions renew through
+this machine too (`internalIssueRenewalInvoice` picks `kind: "hold"`), and the
+setup page + pre-charge notice quote the hold price while held.
 
 **Pre-charge notice:** auto-renew sellers get `autoRenewUpcoming` once per
 cycle in the 3-day window before `currentPeriodEnd` (amount + method + date +
