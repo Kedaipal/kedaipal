@@ -181,9 +181,12 @@ one place the builder lives.
 | `awb` | despatch-label QR (`convex/awb.ts` `storeUrlFor`) |
 | any preset / free-form | Home's tagged share links, or a seller's own hand-written tag |
 
-(`powered-by` — the badge's tag, renamed from `storefront_badge` in
-`z8r3fdd1v0` — is NOT in this system: it tags kedaipal.com itself and lands
-on `retailers.signupSource`, not on any order.)
+(`powered-by` and its per-surface siblings `powered-by-track` / `-claim` /
+`-receipt` — the badge's tags, renamed from `storefront_badge` in `z8r3fdd1v0`
+and widened in `z8r3fdcwd0` — are NOT in this system: they tag kedaipal.com
+itself and land on `retailers.signupSource` (+ the referring store as
+`retailers.signupReferrerId`), never on any order. See
+[`powered-by-badge.md`](./powered-by-badge.md).)
 
 ## Edge cases
 

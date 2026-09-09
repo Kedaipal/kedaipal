@@ -67,6 +67,15 @@ export default defineSchema({
 		// falls back to a synthetic id (events count but don't stitch). Same
 		// posture as signupSource: per-row read only, no index.
 		gaClientId: v.optional(v.string()),
+		// The store whose "Powered by Kedaipal" badge this seller came through
+		// (z8r3fdcwd0) — the `&store=<slug>` half of the badge link, resolved to
+		// a retailer id at createRetailer (a slug naming no store is dropped,
+		// never stored). An id rather than the slug because slugs are renameable
+		// and the admin console wants the referrer's CURRENT name. Absent = not
+		// via a badge. Convex enforces no referential integrity, so the ref
+		// dangles once the referrer is purged — readers treat a missing doc as
+		// "no referrer". Same posture as signupSource: per-row read, no index.
+		signupReferrerId: v.optional(v.id("retailers")),
 		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
 		// rule reads: checkout phone plate/validator arm, address variant, Places
 		// autocomplete region, and the currency a new store defaults to. Undefined

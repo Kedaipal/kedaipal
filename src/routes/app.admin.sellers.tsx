@@ -210,8 +210,14 @@ function SellerCard({
 							// Acquisition tag the signup arrived with (z8r3fdd1v0) —
 							// verbatim, these are Kedaipal's own `?src=` tags. Absent =
 							// direct/untagged, so nothing renders for the common case.
+							// A powered-by signup also names the store whose badge it
+							// came through (z8r3fdcwd0) — the CAC ledger's "who brings
+							// us sellers" column, in the same pill.
 							<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px]">
 								via {seller.signupSource}
+								{seller.signupReferrer
+									? ` · /${seller.signupReferrer.slug}`
+									: null}
 							</span>
 						) : null}
 					</span>
@@ -286,10 +292,10 @@ function SellerCard({
 						description={
 							<>
 								Dev-only test reset. Erases <strong>everything</strong> this
-								store owns — products, orders, customers, settings, images —
-								and the store itself, exactly like the account-deletion
-								cascade. The owner's login survives, so opening /onboarding
-								afterwards starts a fresh store. This cannot be undone.
+								store owns — products, orders, customers, settings, images — and
+								the store itself, exactly like the account-deletion cascade. The
+								owner's login survives, so opening /onboarding afterwards starts
+								a fresh store. This cannot be undone.
 							</>
 						}
 						confirmPhrase={seller.slug}

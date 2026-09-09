@@ -36,7 +36,10 @@ import { useOnboardingStart } from "../hooks/useOnboardingStart";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { readGaClientId, trackEvent } from "../lib/ga-events";
-import { readMarketingSource } from "../lib/marketing-attribution";
+import {
+	readMarketingReferrerStore,
+	readMarketingSource,
+} from "../lib/marketing-attribution";
 import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
@@ -199,8 +202,11 @@ function OnboardingForm() {
 		setSubmitting(true);
 		try {
 			// The tag the session arrived with (marketing routes / powered-by
-			// badge) — the server re-sanitizes, this is only a hint.
+			// badge) — the server re-sanitizes, this is only a hint. Beside it,
+			// the store whose badge it was (z8r3fdcwd0) — the server resolves the
+			// slug to a store and drops one that names nobody.
 			const signupSource = readMarketingSource();
+			const signupReferrerSlug = readMarketingReferrerStore();
 			// GA client id, so server-side key events (first_order/subscribe_paid)
 			// stitch to this browser's funnel — validated server-side, hint only.
 			const gaClientId = readGaClientId();
@@ -213,6 +219,7 @@ function OnboardingForm() {
 				// plan begins once Arif marks their founding invoice paid.
 				...(prefill?.founding ? { intent: "founding" as const } : {}),
 				...(signupSource !== undefined ? { signupSource } : {}),
+				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
 			});
 			// The funnel's terminal key event — after the mutation succeeds, so a

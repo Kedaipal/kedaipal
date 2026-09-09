@@ -114,6 +114,20 @@ describe("trackEvent", () => {
 		});
 	});
 
+	it("attaches the powered-by referrer store beside src when the session has one (z8r3fdcwd0)", async () => {
+		envState.measurementId = "G-TEST123";
+		sessionStorage.setItem("kedaipal:marketing-src", "powered-by-track");
+		sessionStorage.setItem("kedaipal:marketing-ref-store", "hermoolah");
+		const { trackEvent } = await loadGaEvents();
+
+		trackEvent("store_created");
+
+		expect(eventMock).toHaveBeenCalledWith("store_created", {
+			src: "powered-by-track",
+			ref_store: "hermoolah",
+		});
+	});
+
 	it("an explicit src param out-ranks the stored one", async () => {
 		envState.measurementId = "G-TEST123";
 		sessionStorage.setItem("kedaipal:marketing-src", "stored");

@@ -83,9 +83,21 @@ At `createRetailer` the tag is re-sanitized server-side and stamped onto
 admin sellers directory.
 
 **Naming convention** for tags Kedaipal itself emits: `powered-by` (the
-storefront badge — renamed from `storefront_badge`), `spotlight-<member>`,
+storefront badge — renamed from `storefront_badge`) and its per-surface
+siblings `powered-by-track` / `powered-by-claim` / `powered-by-receipt` (one
+author, `convex/lib/poweredBy.ts` — see
+[`powered-by-badge.md`](./powered-by-badge.md)), `spotlight-<member>`,
 `referral-<member>`, `tiktok-live`, `directory`, `qr-poster`. Free-form tags
 sanitize and store verbatim.
+
+**The badge also names its store (z8r3fdcwd0):** `?store=<slug>` is captured
+beside the tag (same last-touch rule, its own key — the pair is rewritten
+together, so a later tagged hit without `store=` clears a stale referrer),
+rides every funnel event as `ref_store`, and lands as
+**`retailers.signupReferrerId`** — the slug resolved to a store id at
+`createRetailer`, dropped when it names no store. The admin pill reads
+`via powered-by-track · /<referrer-slug>`. Register `ref_store` as a GA4 custom
+dimension to report on it; the param is sent either way.
 
 **Operator step (GA4 UI, once per property):** mark `onboarding_start` and
 `store_created` as **key events** (Admin → Events → toggle "Mark as key

@@ -1,4 +1,13 @@
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import {
+	PDFArray,
+	PDFDict,
+	PDFDocument,
+	PDFName,
+	PDFRawStream,
+	PDFString,
+	StandardFonts,
+	decodePDFRawStream,
+} from "pdf-lib";
 import { describe, expect, test } from "vitest";
 import type { AwbLabelData } from "./awb";
 import type { OrderReceiptData, SubscriptionInvoiceData } from "./document";
@@ -19,6 +28,7 @@ function isPdf(bytes: Uint8Array): boolean {
 
 const receipt: OrderReceiptData = {
 	storeName: "Sweet Co",
+	storeSlug: "sweet-co",
 	sellerLines: [],
 	orderShortId: "ORD-1234",
 	orderDate: Date.UTC(2026, 5, 29, 16, 0, 0),
@@ -401,5 +411,119 @@ describe("buildAwbPdf", () => {
 		// Merged module runs keep the QR/barcode geometry compact; a blow-up here
 		// would mean a print job too big to hand back from an action.
 		expect(bytes.length).toBeLessThan(2_000_000);
+	});
+});
+
+// --- "Powered by Kedaipal" on paper (z8r3fdcwd0) ---------------------------
+
+/** Every URI link annotation in the document, in page order. */
+async function linkUris(bytes: Uint8Array): Promise<string[]> {
+	const doc = await PDFDocument.load(bytes);
+	const out: string[] = [];
+	for (const page of doc.getPages()) {
+		const annots = page.node.Annots();
+		if (!annots) continue;
+		for (let i = 0; i < annots.size(); i++) {
+			const annot = doc.context.lookup(annots.get(i), PDFDict);
+			const action = annot.lookup(PDFName.of("A"), PDFDict);
+			const uri = action.lookup(PDFName.of("URI"));
+			if (uri instanceof PDFString) out.push(uri.asString());
+		}
+	}
+	return out;
+}
+
+/**
+ * True when `text` was drawn somewhere in the document. pdf-lib writes every
+ * standard-font string into the content stream as a WinAnsi hex string, so
+ * the hex of the text is what to look for once the streams are decoded.
+ */
+async function drawsText(bytes: Uint8Array, text: string): Promise<boolean> {
+	const doc = await PDFDocument.load(bytes);
+	const needle = Buffer.from(text, "latin1").toString("hex");
+	for (const page of doc.getPages()) {
+		const contents = page.node.Contents();
+		if (!contents) continue;
+		const streams =
+			contents instanceof PDFArray
+				? contents.asArray().map((ref) => doc.context.lookup(ref))
+				: [contents];
+		for (const stream of streams) {
+			if (!(stream instanceof PDFRawStream)) continue;
+			const body = Buffer.from(decodePDFRawStream(stream).decode()).toString(
+				"latin1",
+			);
+			if (body.toLowerCase().includes(needle)) return true;
+		}
+	}
+	return false;
+}
+
+describe("Powered by Kedaipal on paper (z8r3fdcwd0)", () => {
+	test("the order receipt draws the mark and links it, tagged as the receipt surface + the store", async () => {
+		const bytes = await buildOrderReceiptPdf(receipt);
+		expect(await drawsText(bytes, "POWERED BY")).toBe(true);
+		expect(await linkUris(bytes)).toEqual([
+			"https://kedaipal.com/?src=powered-by-receipt&store=sweet-co",
+		]);
+	});
+
+	test("the invoice face carries it too — one builder, two faces", async () => {
+		const bytes = await buildOrderReceiptPdf({
+			...receipt,
+			paid: false,
+			paidDate: undefined,
+			paymentStatusLabel: "Awaiting payment",
+		});
+		expect(await drawsText(bytes, "POWERED BY")).toBe(true);
+		expect(await linkUris(bytes)).toEqual([
+			"https://kedaipal.com/?src=powered-by-receipt&store=sweet-co",
+		]);
+	});
+
+	test("with no slug in scope the link is tagged but store-less", async () => {
+		const bytes = await buildOrderReceiptPdf({ ...receipt, storeSlug: undefined });
+		expect(await linkUris(bytes)).toEqual([
+			"https://kedaipal.com/?src=powered-by-receipt",
+		]);
+	});
+
+	test("the subscription invoice — Kedaipal's OWN document — says no such thing about itself", async () => {
+		const bytes = await buildSubscriptionInvoicePdf(invoice);
+		expect(await drawsText(bytes, "POWERED BY")).toBe(false);
+		expect(await linkUris(bytes)).toEqual([]);
+		// The plain site line stays.
+		expect(await drawsText(bytes, "kedaipal.com")).toBe(true);
+	});
+
+	test("every despatch label ends with the same lockup — no link, nothing to click on a parcel", async () => {
+		const bytes = await buildAwbPdf([labelBase], { paperSize: "a6" });
+		expect(await drawsText(bytes, "POWERED BY")).toBe(true);
+		expect(await linkUris(bytes)).toEqual([]);
+	});
+
+	test("the lockup survives a label whose seller footer is already at the two-line cap", async () => {
+		const bytes = await buildAwbPdf(
+			[{ ...labelBase, footerText: "E".repeat(120) }],
+			{ paperSize: "a6" },
+		);
+		expect(await drawsText(bytes, "POWERED BY")).toBe(true);
+	});
+
+	test("the pill's tracking is reset after the lockup — no leaked Tc on the rest of the page", async () => {
+		// Every powered-by draw sets Tc for one string and puts it back to 0.
+		const bytes = await buildOrderReceiptPdf(receipt);
+		const doc = await PDFDocument.load(bytes);
+		const page = doc.getPages()[0];
+		const contents = page.node.Contents();
+		const stream =
+			contents instanceof PDFArray
+				? doc.context.lookup(contents.asArray().at(-1))
+				: contents;
+		if (!(stream instanceof PDFRawStream)) throw new Error("no content stream");
+		const body = Buffer.from(decodePDFRawStream(stream).decode()).toString("latin1");
+		const tcs = [...body.matchAll(/([\d.]+) Tc/g)].map((m) => Number(m[1]));
+		expect(tcs.length).toBeGreaterThan(0);
+		expect(tcs.at(-1)).toBe(0);
 	});
 });
