@@ -1,37 +1,17 @@
 import { z } from "zod";
+import {
+	BRAND_NAME_MESSAGE,
+	containsBrand,
+	isReservedSlug,
+	RESERVED_SLUG_MESSAGE,
+} from "../../convex/lib/reservedSlugs";
+import { STORE_NAME_MAX, STORE_NAME_MIN } from "../../convex/lib/slug";
 
 /**
- * Reserved slugs — blocked from retailer registration. Includes route collisions
- * (`app`, `sign-in`, `sign-up`), static asset paths, and brand-sensitive words.
+ * Reserved handles live in ONE module shared with the server validator —
+ * `convex/lib/reservedSlugs.ts` — and are machine-checked against the route
+ * tree there. This file mirrors the SHAPE rules of `convex/lib/slug.ts` only.
  */
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
-	"_",
-	"about",
-	"admin",
-	"api",
-	"app",
-	"assets",
-	"blog",
-	"docs",
-	"favicon.ico",
-	"help",
-	"kedaipal",
-	"login",
-	"logout",
-	"onboarding",
-	"pricing",
-	"public",
-	"robots.txt",
-	"settings",
-	"sign-in",
-	"sign-up",
-	"signin",
-	"signup",
-	"sitemap.xml",
-	"static",
-	"support",
-	"www",
-]);
 
 /**
  * Derive a URL-safe slug from a store name.
@@ -69,8 +49,8 @@ export const slugSchema = z
 	.refine((s) => SLUG_PATTERN.test(s), {
 		message: "Use lowercase letters, numbers and single dashes",
 	})
-	.refine((s) => !RESERVED_SLUGS.has(s), {
-		message: "This slug is reserved",
+	.refine((s) => !isReservedSlug(s), {
+		message: RESERVED_SLUG_MESSAGE,
 	});
 
 /**
@@ -89,11 +69,32 @@ export const categorySlugSchema = z
 		message: "Use lowercase letters, numbers and single dashes",
 	});
 
-export const storeNameSchema = z
-	.string()
-	.trim()
-	.min(2, "Store name must be at least 2 characters")
-	.max(60, "Store name must be at most 60 characters");
+export type StoreNameValidationResult =
+	| { ok: true; value: string }
+	| { ok: false; message: string };
+
+/**
+ * Client pre-check for the store name — the inline hint under the field on
+ * onboarding, Settings → Store and the admin onboard form, and the reason the
+ * submit button is disabled. Mirrors `assertValidStoreName` in
+ * `convex/lib/slug.ts` sentence for sentence (the brand copy is imported, not
+ * retyped) so the seller reads the same words whichever side catches it.
+ */
+export function validateStoreName(raw: string): StoreNameValidationResult {
+	const s = raw.trim();
+	if (s.length < STORE_NAME_MIN)
+		return {
+			ok: false,
+			message: `Store name must be at least ${STORE_NAME_MIN} characters`,
+		};
+	if (s.length > STORE_NAME_MAX)
+		return {
+			ok: false,
+			message: `Store name must be at most ${STORE_NAME_MAX} characters`,
+		};
+	if (containsBrand(s)) return { ok: false, message: BRAND_NAME_MESSAGE };
+	return { ok: true, value: s };
+}
 
 export type SlugValidationResult =
 	| { ok: true; value: string }
@@ -112,6 +113,6 @@ export function validateSlugShape(raw: string): SlugValidationResult {
 	if (s.length < SLUG_MIN) return { ok: false, reason: "tooShort" };
 	if (s.length > SLUG_MAX) return { ok: false, reason: "tooLong" };
 	if (!SLUG_PATTERN.test(s)) return { ok: false, reason: "invalid" };
-	if (RESERVED_SLUGS.has(s)) return { ok: false, reason: "reserved" };
+	if (isReservedSlug(s)) return { ok: false, reason: "reserved" };
 	return { ok: true, value: s };
 }

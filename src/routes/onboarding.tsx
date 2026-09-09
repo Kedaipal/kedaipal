@@ -42,7 +42,7 @@ import {
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
-import { slugify } from "../lib/slug";
+import { slugify, validateStoreName } from "../lib/slug";
 
 /**
  * Optional prefill, carried as a single URL-safe token (`?p=…`). Set when Kedaipal
@@ -163,10 +163,14 @@ function OnboardingForm() {
 		return <LoadingScreen />;
 	}
 
+	// Same rule as the server (`assertValidStoreName`), read inline before the
+	// seller ever submits — the brand check is the one they would not guess.
+	const nameCheck = validateStoreName(storeName);
+
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		if (storeName.trim().length < 2) {
-			toast.error("Store name must be at least 2 characters");
+		if (!nameCheck.ok) {
+			toast.error(nameCheck.message);
 			return;
 		}
 		if (availability.status !== "available") return;
@@ -222,7 +226,7 @@ function OnboardingForm() {
 	}
 
 	const canSubmit =
-		storeName.trim().length >= 2 &&
+		nameCheck.ok &&
 		availability.status === "available" &&
 		agreed &&
 		!submitting;
@@ -283,6 +287,9 @@ function OnboardingForm() {
 						placeholder="e.g. Your store name"
 						variant="field"
 					/>
+					{storeName.trim().length > 0 && !nameCheck.ok ? (
+						<p className="text-sm text-destructive">✗ {nameCheck.message}</p>
+					) : null}
 				</Field>
 
 				<Field label="URL slug">

@@ -38,6 +38,7 @@ How the product actually works. Read in this order.
 | Doc | What it covers |
 |---|---|
 | [messaging-channels.md](./messaging-channels.md) | ChannelAdapter seam — WhatsApp as one of N channels; how a 2nd channel lands. |
+| [vendor-identity.md](./vendor-identity.md) | The three store IDs (`userId` / `slug` / `_id`) and what is unique; **reserved handles** — the route-tree namespace a slug can never take, one shared module, machine-checked. |
 | [whatsapp-webhook-security.md](./whatsapp-webhook-security.md) | Inbound webhook signature verification (HMAC-SHA256), fail-closed. |
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
