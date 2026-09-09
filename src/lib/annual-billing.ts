@@ -67,7 +67,7 @@ export const ANNUAL_SWAP_MIN_DAYS = 4;
  * satisfy it without either importing the other. */
 export type AnnualOfferSubscription = {
 	plan: Plan;
-	status: "trialing" | "active" | "past_due" | "cancelled";
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
 	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
 	currentPeriodEnd?: number;

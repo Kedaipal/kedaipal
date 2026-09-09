@@ -43,7 +43,8 @@ export type SubscriptionStatus =
 	| "trialing"
 	| "active"
 	| "past_due"
-	| "cancelled";
+	| "cancelled"
+	| "on_hold";
 
 export type AccessState = {
 	plan: Plan;

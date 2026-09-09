@@ -40,6 +40,9 @@ import { defaultCapsForPlan } from "./subscriptions";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DUE_GRACE_DAYS = 14; // pay-by window when the admin doesn't override it
 
+/** Who created an invoice — the schema's `origin` union (absent reads as "admin"). */
+type InvoiceOrigin = NonNullable<Doc<"invoices">["origin"]>;
+
 /** Delay between issuing an invoice and sending the "invoice issued" email —
  * long enough for the scheduled Pay-now mint (subscriptionPayments.
  * mintInvoicePaymentRequest) to land so the email carries the link, short
@@ -462,7 +465,7 @@ async function insertPendingInvoice(
 		founding: boolean;
 		currency: BillingCurrency;
 		dueDate?: number;
-		origin: "admin" | "self_serve" | "auto_renewal";
+		origin: InvoiceOrigin;
 	},
 ): Promise<Id<"invoices">> {
 	const base = planPrice(args.plan, args.billingCycle, false, args.currency);
@@ -784,7 +787,7 @@ export const listPending = query({
 			dueDate: number;
 			createdAt: number;
 			plan: Plan;
-			origin: "admin" | "self_serve" | "auto_renewal";
+			origin: InvoiceOrigin;
 			hasPayNowLink: boolean;
 			autoRenew: {
 				method: string;

@@ -11,13 +11,16 @@ import {
 	FOUNDING_MONTHLY_PRICES,
 	FOUNDING_PRICE_LAPSE_MS,
 	foundingPricingApplies,
+	HOLD_MONTHLY_PRICES,
 	isPlanSelectable,
 	isUnlimited,
+	OUTLET_ADDON_MONTHLY_PRICES,
+	PLAN_CAPS,
 	PLAN_MONTHLY_PRICE,
 	PLAN_MONTHLY_PRICES,
-	PLANS,
 	planPrice,
 	planQualifiesForFounding,
+	PLANS,
 	starterPricePerDay,
 	UNLIMITED,
 } from "./plans";
@@ -75,7 +78,7 @@ describe("plans — pricing", () => {
 	test("monthly price is the table price", () => {
 		expect(planPrice("starter", "monthly")).toBe(7900);
 		expect(planPrice("pro", "monthly")).toBe(14900);
-		expect(planPrice("scale", "monthly")).toBe(29900);
+		expect(planPrice("scale", "monthly")).toBe(39900);
 	});
 
 	test("annual = monthly × 10 (10 months paid, 12 received)", () => {
@@ -98,10 +101,18 @@ describe("plans — pricing", () => {
 		expect(planPrice("starter", "monthly", true)).toBe(PLAN_MONTHLY_PRICE.starter);
 	});
 
-	test("SGD table prices per the Aug 2026 SG deck (S$29 / S$59 / S$119)", () => {
+	test("Scale is RM399 / S$149 — the 30 Aug 2026 reset (Arif, FINAL 6 Sep)", () => {
+		expect(planPrice("scale", "monthly")).toBe(39900);
+		expect(planPrice("scale", "monthly", false, "SGD")).toBe(14900);
+		// Starter / Pro did not move.
+		expect(planPrice("starter", "monthly")).toBe(7900);
+		expect(planPrice("pro", "monthly")).toBe(14900);
+	});
+
+	test("SGD table prices — S$29 / S$59 (Aug 2026 SG deck) and S$149 (reset)", () => {
 		expect(planPrice("starter", "monthly", false, "SGD")).toBe(2900);
 		expect(planPrice("pro", "monthly", false, "SGD")).toBe(5900);
-		expect(planPrice("scale", "monthly", false, "SGD")).toBe(11900);
+		expect(planPrice("scale", "monthly", false, "SGD")).toBe(14900);
 		// Annual keeps the same 10-months-charged rule in every currency.
 		expect(planPrice("pro", "annual", false, "SGD")).toBe(5900 * 10);
 	});
@@ -115,9 +126,28 @@ describe("plans — pricing", () => {
 
 	test("SGD founding prices — same ~30%-rounded-down rule as MYR", () => {
 		expect(planPrice("pro", "monthly", true, "SGD")).toBe(4100); // S$41
-		expect(FOUNDING_MONTHLY_PRICES.SGD.scale).toBe(8300); // S$83
+		expect(FOUNDING_MONTHLY_PRICES.SGD.scale).toBe(10400); // S$104 (0.7 × S$149, floored)
+		expect(FOUNDING_MONTHLY_PRICES.MYR.scale).toBe(27900); // RM279 (0.7 × RM399, floored)
 		// Starter has no founding price → falls back to its standard SGD price.
 		expect(planPrice("starter", "monthly", true, "SGD")).toBe(2900);
+	});
+
+	test("Off-Season Hold is RM19 / S$9 — priced in every billing currency, below Starter", () => {
+		expect(HOLD_MONTHLY_PRICES.MYR).toBe(1900);
+		expect(HOLD_MONTHLY_PRICES.SGD).toBe(900);
+		for (const currency of BILLING_CURRENCIES) {
+			expect(HOLD_MONTHLY_PRICES[currency]).toBeGreaterThan(0);
+			expect(HOLD_MONTHLY_PRICES[currency]).toBeLessThan(
+				PLAN_MONTHLY_PRICES[currency].starter,
+			);
+		}
+		// A hold is a status, not a tier — the Plan union must not have grown.
+		expect(PLANS).toEqual(["starter", "pro", "scale"]);
+	});
+
+	test("additional-outlet add-on: RM49 / S$18 (S$18 confirmed 1 Sep 2026)", () => {
+		expect(OUTLET_ADDON_MONTHLY_PRICES.MYR).toBe(4900);
+		expect(OUTLET_ADDON_MONTHLY_PRICES.SGD).toBe(1800);
 	});
 
 	test("every billing currency prices every plan (exhaustive tables)", () => {
@@ -182,18 +212,26 @@ describe("plans — gating helpers", () => {
 			userCap: 1,
 			broadcastQuota: 0,
 		});
+		// Pro 200 / Scale 400 — the allowances /pricing had advertised ahead of
+		// enforcement (86eye2ccu), landed with the pricing reset (z8r3fday24).
 		expect(capsForPlan("pro")).toEqual({
-			orderCap: 500,
+			orderCap: 200,
 			userCap: 2,
 			broadcastQuota: 100,
 		});
-		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28):
-		// orders 2,000/mo (~4× Pro), broadcasts 500/mo (~5× Pro). All finite now.
+		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28);
+		// broadcasts stay 500/mo (~5× Pro). All finite.
 		expect(capsForPlan("scale")).toEqual({
-			orderCap: 2000,
+			orderCap: 400,
 			userCap: 5,
 			broadcastQuota: 500,
 		});
+	});
+
+	test("the order allowances match what /pricing advertises (100 / 200 / 400)", () => {
+		expect(PLAN_CAPS.starter.orderCap).toBe(100);
+		expect(PLAN_CAPS.pro.orderCap).toBe(200);
+		expect(PLAN_CAPS.scale.orderCap).toBe(400);
 	});
 
 	// The UNLIMITED/isUnlimited sentinel is retained for a future Enterprise tier

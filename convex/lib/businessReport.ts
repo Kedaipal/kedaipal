@@ -156,6 +156,9 @@ export type SubscriptionCounts = {
 	 * anyway so the number starts moving on its own the day a cancellation flow
 	 * ships, instead of needing a report change to notice. */
 	cancelled: number;
+	/** Off-Season Hold (z8r3fday24) — paid sellers paused between seasons. Not
+	 * churn: they're billing RM19/S$9 and one tap from their tier. */
+	onHold: number;
 	/** Comped rows across every status (they're counted in their status bucket
 	 * too — this is an overlay, not a fifth status). */
 	comped: number;
@@ -446,6 +449,7 @@ export function reduceBusinessReport(
 		active: 0,
 		pastDue: 0,
 		cancelled: 0,
+		onHold: 0,
 		comped: 0,
 	};
 	const mrr: MrrSummary = {
@@ -472,6 +476,7 @@ export function reduceBusinessReport(
 		else if (sub.status === "active") counts.active += 1;
 		else if (sub.status === "past_due") counts.pastDue += 1;
 		else if (sub.status === "cancelled") counts.cancelled += 1;
+		else if (sub.status === "on_hold") counts.onHold += 1;
 
 		const lastPaid = latestPaid.get(sub.retailerId);
 		const slug = retailerById.get(sub.retailerId)?.slug ?? sub.retailerId;

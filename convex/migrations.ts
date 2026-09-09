@@ -16,6 +16,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
 import { generateTrackingToken } from "./lib/order";
+import { capsForPlan } from "./lib/plans";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
 import { createCategoryNameMemo, resolveCategoryNames } from "./orders";
 
@@ -342,5 +343,43 @@ export const migrateLalamoveModeToLive = internalMutation({
 			);
 		}
 		return { migrated, isDone: page.isDone };
+	},
+});
+
+/**
+ * Re-sync the denormalized entitlement caps on every subscription row to the
+ * current `PLAN_CAPS` (30 Aug 2026 pricing reset, z8r3fday24: Pro 500 → 200,
+ * Scale 2,000 → 400). The caps are copied onto the row at signup and at every
+ * settle, so a constant change alone leaves every EXISTING seller on the old
+ * denominator — "N of 500" in Settings → Billing under a page that says 200.
+ *
+ * Idempotent: rows already at the canonical caps are skipped. The patch
+ * deliberately leaves `updatedAt` alone — for a past_due row that field is the
+ * lock-flip moment the founder report reads (docs/shipped-log.md).
+ *
+ * The table is one row per store (≈ hundreds), so a single collect is fine.
+ * Run: `npx convex run migrations:resyncSubscriptionCaps`
+ */
+export const resyncSubscriptionCaps = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; patched: number }> => {
+		const subs = await ctx.db.query("subscriptions").collect();
+		let patched = 0;
+		for (const sub of subs) {
+			const caps = capsForPlan(sub.plan);
+			if (
+				sub.orderCap === caps.orderCap &&
+				sub.userCap === caps.userCap &&
+				sub.broadcastQuota === caps.broadcastQuota
+			)
+				continue;
+			await ctx.db.patch(sub._id, {
+				orderCap: caps.orderCap,
+				userCap: caps.userCap,
+				broadcastQuota: caps.broadcastQuota,
+			});
+			patched++;
+		}
+		return { scanned: subs.length, patched };
 	},
 });

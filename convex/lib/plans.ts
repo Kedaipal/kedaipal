@@ -29,12 +29,14 @@ export function planQualifiesForFounding(plan: Plan): boolean {
 export type PlanCaps = {
 	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
 	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
-	 * Scale's "unlimited"). NOTE: the pricing page advertises the *decided*
-	 * allowances 100/200/400 (caps ticket 86eye2ccu) ahead of enforcement. These
-	 * constants still read Pro 500 / Scale 2,000 until 86eye2ccu ships the lower
-	 * caps — and this is the value the shipped billing-tab order meter renders as
-	 * its denominator — so the advertised copy and this constant deliberately
-	 * diverge for BOTH Pro and Scale in the meantime. */
+	 * Scale's "unlimited"). Starter 100 / Pro 200 / Scale 400 — the allowances
+	 * `/pricing` advertises (caps ticket 86eye2ccu; the numbers landed with the
+	 * 30 Aug 2026 pricing reset, z8r3fday24, so the billing-tab meter's
+	 * denominator and the page finally agree). Rows carry the cap denormalized,
+	 * so a change here needs `migrations.resyncSubscriptionCaps` on prod.
+	 *
+	 * While a subscription is ON HOLD the EFFECTIVE cap is 0 (ordering off) —
+	 * resolved by `resolveAccess`, never stored, so resuming needs no rewrite. */
 	orderCap: number;
 	/** Hard cap on dashboard users. */
 	userCap: number;
@@ -45,8 +47,8 @@ export type PlanCaps = {
 // Per CLAUDE.md pricing table.
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
 	starter: { orderCap: 100, userCap: 1, broadcastQuota: 0 },
-	pro: { orderCap: 500, userCap: 2, broadcastQuota: 100 },
-	scale: { orderCap: 2000, userCap: 5, broadcastQuota: 500 },
+	pro: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+	scale: { orderCap: 400, userCap: 5, broadcastQuota: 500 },
 };
 
 /** Boolean feature entitlements per plan — the pricing table's ✓/– rows for
@@ -173,13 +175,16 @@ export const BILLING_CURRENCY_FOR_COUNTRY: Record<Country, BillingCurrency> = {
 };
 
 // Standard monthly price per billing currency (minor units — sen / cents).
-// SGD numbers come from the Aug 2026 SG pricing deck (S$29 / S$59 / S$119).
+// Starter/Pro: locked May 2026 (MYR) + the Aug 2026 SG pricing deck (SGD).
+// Scale: RM399 / S$149 per the 30 Aug 2026 pricing reset (z8r3fday24 — Arif
+// locked RM399 FINAL on 6 Sep after an RM299/RM300 wobble; earlier numbers are
+// void). Scale is still "Coming soon", so nobody was repriced by the move.
 export const PLAN_MONTHLY_PRICES: Record<
 	BillingCurrency,
 	Record<Plan, number>
 > = {
-	MYR: { starter: 7900, pro: 14900, scale: 29900 },
-	SGD: { starter: 2900, pro: 5900, scale: 11900 },
+	MYR: { starter: 7900, pro: 14900, scale: 39900 },
+	SGD: { starter: 2900, pro: 5900, scale: 14900 },
 };
 
 // MYR shorthand for the table above.
@@ -187,14 +192,16 @@ export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
 
 // Founding Member monthly price — 30% lifetime discount (manual v1), per
 // billing currency, rounded DOWN to a whole unit the same way in each (MYR
-// RM104.30 → RM104; SGD S$41.30 → S$41, S$83.30 → S$83). Only the Pro number
-// is reachable at launch; Scale kept for when it activates.
+// RM104.30 → RM104, RM279.30 → RM279; SGD S$41.30 → S$41, S$104.30 → S$104).
+// Founding pricing was RETIRED for new signups in the 30 Aug 2026 reset — no
+// public surface advertises it — but every claimed member keeps their rate, so
+// the table stays in billing. Scale kept for when it activates.
 export const FOUNDING_MONTHLY_PRICES: Record<
 	BillingCurrency,
 	Record<"pro" | "scale", number>
 > = {
-	MYR: { pro: 10400, scale: 20900 },
-	SGD: { pro: 4100, scale: 8300 },
+	MYR: { pro: 10400, scale: 27900 },
+	SGD: { pro: 4100, scale: 10400 },
 };
 
 // MYR shorthand for the founding table above.
@@ -209,13 +216,29 @@ export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
  * message catalogs because the catalogs used to spell "RM49" into the sentence,
  * which quoted ringgit at a Singaporean reading S$ tier prices two lines above.
  *
- * SGD follows the tier ratio (SGD ≈ 0.4 × MYR across all three plans) and keeps
- * the same just-under-a-round-number shape. UNCONFIRMED — swap in a decided
- * number when Scale is priced for sale.
+ * SGD S$18 is the number in the 30 Aug 2026 pricing reset artifact (confirmed
+ * by Arif, 1 Sep — it replaced the S$19 ratio guess); MYR RM49 holds.
  */
 export const OUTLET_ADDON_MONTHLY_PRICES: Record<BillingCurrency, number> = {
 	MYR: 4900,
-	SGD: 1900,
+	SGD: 1800,
+};
+
+/**
+ * Off-Season Hold — the monthly price of a PAUSED subscription (minor units).
+ * RM19 / S$9 per the 30 Aug 2026 pricing reset (z8r3fday24).
+ *
+ * A hold is a subscription STATUS (`on_hold`), not a `Plan`: the seller keeps
+ * their tier (`subscriptions.plan` is what they resume to), ordering switches
+ * off, and the storefront / catalog / buyer list / order history stay live.
+ * Not on `PLAN_MONTHLY_PRICES` on purpose — widening the `Plan` union would
+ * drag a non-tier through every feature matrix and picker. Every surface that
+ * quotes the hold price reads it from here (the `pricing-copy.test.ts`
+ * currency-literal guard forbids spelling it into copy).
+ */
+export const HOLD_MONTHLY_PRICES: Record<BillingCurrency, number> = {
+	MYR: 1900,
+	SGD: 900,
 };
 
 /**
@@ -319,6 +342,14 @@ export function annualQuote(
 	};
 }
 
+/**
+ * The free period's BACKSTOP, in days (start-when-you-sell, z8r3fday24). A new
+ * store is free until its FIRST LIVE ORDER — any channel — or until this many
+ * days pass, whichever comes first; that moment issues the first invoice
+ * (`invoices.internalIssueFirstInvoice`). So this is no longer "the trial
+ * length": most stores end their free period earlier, by selling. Copy calls it
+ * "day 15" (the invoice lands the day after 14 full free days).
+ */
 export const TRIAL_DAYS = 14;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
