@@ -24,7 +24,7 @@ export const TERMS_VERSION = "2026-07-01";
 // localStorage address autofill, named Kedaipal as data user for analytics +
 // the global opt-out list, added the SG PDPA line (SG-incorporated operator)
 // and the DPO designation, and dropped the never-populated acceptanceIp field.
-export const PRIVACY_VERSION = "2026-08-17";
+export const PRIVACY_VERSION = "2026-09-09";
 export const AUP_VERSION = "2026-05-26";
 
 /** Contact address shown in Terms, Privacy, and the AUP. */

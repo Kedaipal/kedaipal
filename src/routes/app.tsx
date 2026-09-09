@@ -19,6 +19,7 @@ import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
 import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
+import { usePostHogRetailer } from "../components/app/posthog-identity";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
@@ -52,6 +53,7 @@ function AppShell() {
 	const { actAsRetailerId, setActAs } = useActAs();
 	const retailer = useDashboardRetailer();
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
+	usePostHogRetailer(retailer?._id, actingAsAdmin);
 	const counts = useQuery(
 		convexQuery(
 			api.orders.countActionable,

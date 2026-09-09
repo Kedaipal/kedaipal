@@ -43,7 +43,7 @@ How the product actually works. Read in this order.
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
-| [analytics.md](./analytics.md) | GA4 + Microsoft Clarity: env-gated boot, the `/track`/`/claim` exclusion, the funnel events (client, server-side key events, Clarity Smart-event mirror), `MASK_PII` for session replay, privacy disclosure, and the weekly heatmap/recording review ritual. |
+| [analytics.md](./analytics.md) | GA4 + Microsoft Clarity + PostHog: which tool owns which funnel (GA4 = Kedaipal's seller-acquisition funnel incl. server-side key events; Clarity = replay/heatmaps, the Smart-event mirror and the weekly review ritual; PostHog = each store's buyer conversion funnel) and why three is free-tier arbitrage rather than a capability gap; env-gated boot, the `/track`/`/claim` exclusion every provider shares, `MASK_PII`, the `analyticsDistinctId` funnel join, the PostHog dashboard setup + prod rollout checklist, and privacy disclosure. |
 
 ## Roadmaps (designed / in-progress)
 

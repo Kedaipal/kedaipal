@@ -12,8 +12,10 @@ import { ConvexProvider } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
 import type { Country } from "../../convex/lib/country";
+import { PostHogIdentity } from "../components/app/posthog-identity";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
+import { usePostHog } from "../hooks/usePostHog";
 import { isBuyerRouteId } from "../lib/buyer-routes";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
@@ -105,6 +107,7 @@ function Providers({ children }: { children: React.ReactNode }) {
 			) : (
 				<ClerkProvider publishableKey={publishableKey}>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+						<PostHogIdentity />
 						{children}
 					</ConvexProviderWithClerk>
 				</ClerkProvider>
@@ -142,6 +145,7 @@ function SetupNotice() {
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
 	useClarity();
+	usePostHog();
 	return (
 		<html lang={getLocale()} suppressHydrationWarning>
 			<head>
