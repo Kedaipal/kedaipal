@@ -6,7 +6,12 @@ import { compareCalendarVersions } from "../../convex/lib/appVersion";
 import type { Release } from "../content/releases";
 import { RELEASE_KIND_LABELS, RELEASES } from "../content/releases";
 import { isCalendarVersion } from "./app-version";
-import { localized, resolveWhatsNew } from "./releases";
+import {
+	localized,
+	PANEL_RELEASE_LIMIT,
+	resolveWhatsNew,
+	splitPanelReleases,
+} from "./releases";
 import {
 	isSpotlightKey,
 	SPOTLIGHT_ANCHOR,
@@ -113,6 +118,47 @@ describe("resolveWhatsNew", () => {
 		});
 		expect(s.all.map((r) => r.version)).toEqual(["2026.08.2", "2026.08.1"]);
 		expect(s.unseenVersions.has("2026.09.1")).toBe(false);
+	});
+});
+
+describe("splitPanelReleases", () => {
+	const seven = [
+		release("2026.09.7"),
+		release("2026.09.6"),
+		release("2026.09.5"),
+		release("2026.09.4"),
+		release("2026.09.3"),
+		release("2026.09.2"),
+		release("2026.09.1"),
+	];
+
+	test("shows the newest five and folds the rest", () => {
+		const { shown, older } = splitPanelReleases(seven, new Set());
+		expect(shown.map((r) => r.version)).toEqual([
+			"2026.09.7",
+			"2026.09.6",
+			"2026.09.5",
+			"2026.09.4",
+			"2026.09.3",
+		]);
+		expect(older.map((r) => r.version)).toEqual(["2026.09.2", "2026.09.1"]);
+		expect(PANEL_RELEASE_LIMIT).toBe(5);
+	});
+
+	test("never folds an unseen release — the limit stretches to fit them", () => {
+		// A seller back from a long gap has six unseen releases; hiding the
+		// sixth behind "Show older" would make the panel lie about what they
+		// missed.
+		const unseen = new Set(seven.slice(0, 6).map((r) => r.version));
+		const { shown, older } = splitPanelReleases(seven, unseen);
+		expect(shown).toHaveLength(6);
+		expect(older.map((r) => r.version)).toEqual(["2026.09.1"]);
+	});
+
+	test("folds nothing when there is nothing past the limit", () => {
+		const { shown, older } = splitPanelReleases(seven.slice(0, 3), new Set());
+		expect(shown).toHaveLength(3);
+		expect(older).toHaveLength(0);
 	});
 });
 
