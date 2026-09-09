@@ -52,7 +52,7 @@ import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
-import { slugify } from "../lib/slug";
+import { slugify, validateStoreName } from "../lib/slug";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -316,6 +316,7 @@ function OnboardClientCard() {
 	// and check availability live so we never hand out a link to a taken slug.
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
 	const availability = useSlugAvailability(derivedSlug);
+	const nameCheck = validateStoreName(storeName);
 
 	// Live email pre-check (debounced) — Clerk allows one account per email and
 	// we're 1 store per login, so a duplicate email means the invite would dead-end.
@@ -335,9 +336,7 @@ function OnboardClientCard() {
 	const emailTaken = emailCheck?.exists === true;
 
 	const ready =
-		storeName.trim().length >= 2 &&
-		availability.status === "available" &&
-		!emailTaken;
+		nameCheck.ok && availability.status === "available" && !emailTaken;
 
 	const link =
 		typeof window === "undefined"
@@ -382,6 +381,11 @@ function OnboardClientCard() {
 					placeholder="e.g. Mak Cik Kuih"
 					variant="field"
 				/>
+				{storeName.trim().length > 0 && !nameCheck.ok ? (
+					<p className="text-sm font-normal text-destructive">
+						✗ {nameCheck.message}
+					</p>
+				) : null}
 			</label>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
