@@ -268,18 +268,25 @@ funnel. Known GA4 limitation either way: MP events carry no `session_id`, so
 they show in user-scoped explorations and key-event counts but can read as
 "unassigned" in some session-scoped standard reports.
 
-**Convex env vars (prod deployment — release-checklist items):**
+**Convex env vars (prod deployment):** both are forwarded by `deploy.yml`'s
+*Sync Convex environment variables* step — add them in GitHub → Environments →
+**prod** and the deploy pushes them. The wiring is pinned by
+[`src/lib/deploy-env-wiring.test.ts`](../src/lib/deploy-env-wiring.test.ts).
 
-| Var | Value |
-| --- | --- |
-| `GA4_MEASUREMENT_ID` | The same `G-…` id as `VITE_GA_MEASUREMENT_ID` |
-| `GA4_MP_API_SECRET` | GA4 UI → Admin → Data streams → *stream* → Measurement Protocol API secrets → Create |
+| Var | Value | GitHub `prod` store |
+| --- | --- | --- |
+| `GA4_MEASUREMENT_ID` | The same `G-…` id as `VITE_GA_MEASUREMENT_ID` | **Variable** — it is public |
+| `GA4_MP_API_SECRET` | GA4 UI → Admin → Data streams → *stream* → Measurement Protocol API secrets → Create | **Secret** — it lets anyone inject events into the property |
 
 Both unset (local dev, preview) → the action is a silent no-op, same posture
-as the client providers.
+as the client providers. **That silence is also the trap:** z8r3fdd1v1 shipped
+with neither var wired into `deploy.yml`, so in production the key events
+no-op'd behind a green deploy until the PostHog rollout audit (86eyrayux)
+caught it. Adding a GitHub value is necessary, not sufficient — the workflow
+has to forward it.
 
 **Operator steps (GA4 UI, once per property):** create the MP API secret
-(above), set both Convex env vars, then mark `first_order` and
+(above), add both GitHub `prod` values (above), then mark `first_order` and
 `subscribe_paid` as **key events** (Admin → Events). Verify with a test
 retailer's first confirmed order in Realtime/DebugView (server events appear
 within minutes), then check Funnel Exploration segments by `src`.
@@ -416,8 +423,9 @@ already a live concern (`86eypxght`). If it ever becomes an issue,
   live in `.env.local.example`; leave blank locally to stay out of the project.
   For prod, add them to the GitHub Actions **`prod` environment variables**
   alongside `VITE_GA_MEASUREMENT_ID`.
-- **Server (Convex runtime):** `npx convex env set POSTHOG_PROJECT_KEY phc_…`
-  and optionally `POSTHOG_HOST`. **This is a separate env store from the
+- **Server (Convex runtime, local dev):** `npx convex env set POSTHOG_PROJECT_KEY phc_…`
+  and optionally `POSTHOG_HOST` (production is pipeline-managed — see *Turning
+  it on in production*). **This is a separate env store from the
   frontend's** — setting only the `VITE_` vars gets you pageviews with no server
   events, which looks like a broken funnel rather than a missing config.
 - A **blank** value counts as unset on both sides. This is load-bearing: Vite
@@ -649,16 +657,21 @@ Three limits of masking, encoded as conventions rather than attributes:
 
 ### 3. Disclosure
 
-Clarity is listed as a data processor, session recording is described under
-"Information We Collect", and the cookie section names the analytics cookies
-(`_clck` persists ~1 year) instead of claiming everything is strictly necessary
-— all in the [privacy policy](../src/routes/privacy.tsx).
+Clarity and PostHog are both listed as data processors, session recording is
+described under "Information We Collect", and the cookie section names the
+analytics cookies (Clarity's `_clck` and PostHog's identifier each persist ~1
+year) instead of claiming everything is strictly necessary — all in the
+[privacy policy](../src/routes/privacy.tsx). The PostHog entry is explicit that
+it receives an anonymous browser id plus order facts (total, item count) and
+never a shopper's name, phone, or address — that is the contract
+`captureServerEvent`'s scalar-only validator enforces.
 
 **Changing that page means bumping `PRIVACY_VERSION` in both
 [`src/lib/legal.ts`](../src/lib/legal.ts) and
 [`convex/lib/legal.ts`](../convex/lib/legal.ts)** — it drives the "Last updated"
 date and `consentIsStale()`, which triggers the dashboard re-acceptance banner.
-This PR bumped it to `2026-08-04`.
+Clarity's PR bumped it to `2026-08-04`; PostHog (86eyrayux) bumped it to
+`2026-09-09`, naming PostHog as a processor and in the cookie section.
 
 Clarity also exposes `consent()` / `consentV2()`. Unused today (there's no
 cookie banner, and GA already runs without one); that's the hook if the

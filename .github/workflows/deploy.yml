@@ -45,8 +45,14 @@ jobs:
           # PostHog project token (86eyrayux). A `vars` entry, not a secret —
           # the same token ships in the client bundle on every page.
           POSTHOG_PROJECT_KEY: ${{ vars.POSTHOG_PROJECT_KEY }}
+          # Server-side GA4 key events (z8r3fdd1v1). The measurement id is
+          # public (same G-… as VITE_GA_MEASUREMENT_ID); the Measurement
+          # Protocol api_secret is a real secret — it lets anyone inject events
+          # into the property.
+          GA4_MEASUREMENT_ID: ${{ vars.GA4_MEASUREMENT_ID }}
+          GA4_MP_API_SECRET: ${{ secrets.GA4_MP_API_SECRET }}
         run: |
-          CONVEX_ENV_VARS=("CLERK_JWT_ISSUER_DOMAIN" "WHATSAPP_ACCESS_TOKEN" "WHATSAPP_PHONE_NUMBER_ID" "WHATSAPP_CHECKOUT_PHONE" "WHATSAPP_VERIFY_TOKEN" "APP_URL" "RESEND_API_KEY" "EMAIL_FROM" "POSTHOG_PROJECT_KEY")
+          CONVEX_ENV_VARS=("CLERK_JWT_ISSUER_DOMAIN" "WHATSAPP_ACCESS_TOKEN" "WHATSAPP_PHONE_NUMBER_ID" "WHATSAPP_CHECKOUT_PHONE" "WHATSAPP_VERIFY_TOKEN" "APP_URL" "RESEND_API_KEY" "EMAIL_FROM" "POSTHOG_PROJECT_KEY" "GA4_MEASUREMENT_ID" "GA4_MP_API_SECRET")
           for var_name in "${CONVEX_ENV_VARS[@]}"; do
             var_value="${!var_name}"
             if [ -n "$var_value" ]; then
