@@ -312,7 +312,7 @@ describe("pause — a paid seller paused through their paid period", () => {
 		expect(sub?.periodPaidBy).toBe("hold");
 		expect(sub?.plan).toBe("pro");
 		expect(sub?.orderCap).toBe(200); // stored caps stay the tier's
-		expect(sub!.currentPeriodEnd - Date.now()).toBeGreaterThan(29 * DAY);
+		expect((sub?.currentPeriodEnd ?? 0) - Date.now()).toBeGreaterThan(29 * DAY);
 		expect((await getRetailer(t, s.retailerId))?.orderingPausedAt).toBeTypeOf("number");
 		// Month rollover while held: the next period end bills the hold again.
 		await t.run((ctx) => ctx.db.patch(s.subId, { currentPeriodEnd: Date.now() - 1000 }));

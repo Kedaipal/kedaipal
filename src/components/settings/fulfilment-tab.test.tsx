@@ -657,7 +657,9 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 	it("saves the provider-aware mode, not the Lalamove one", async () => {
 		renderLive();
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
 		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
 		expect(updateSettings.mock.calls[0][0].deliveryConfig).toEqual({
@@ -684,21 +686,27 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 	it("names both providers on the tile — not just the rider one", () => {
 		const { container } = renderLive();
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.querySelector('img[alt="Delyva"]')).toBeTruthy();
 		expect(container.querySelector('img[alt="Lalamove"]')).toBeTruthy();
 	});
 
 	it("says what will be quoted, and refuses when nothing is connected", () => {
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.textContent).toContain("Nothing can quote yet");
 		expect(container.textContent).toContain("Integrations");
 	});
 
 	it("shows a status chip per provider, not a Lalamove-only section", () => {
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		// Both providers get a row and a chip even when unarmed — connection
 		// state was previously a Lalamove-only section a screen away.
 		expect(container.textContent).toContain("Riders");
@@ -711,13 +719,17 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 		// with a stale env stamp warned about Lalamove test keys on a store
 		// that only had Delyva.
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.textContent).not.toContain("Test mode");
 	});
 
 	it("hides the rider-only controls when no rider bids", () => {
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		// The vehicle picker is a Lalamove setting — meaningless for a
 		// parcel-only store, and it used to render regardless.
 		expect(container.textContent).not.toContain("Default vehicle");
@@ -725,10 +737,12 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 	it("keeps the rider controls when Lalamove is connected", () => {
 		const { container } = renderLive();
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.textContent).toContain("Default vehicle");
 	});
-})
+});
 
 describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 	let updateSettings: ReturnType<typeof vi.fn>;
@@ -799,4 +813,4 @@ describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 			"Turn on at least one service under Courier booking",
 		);
 	});
-})
+});

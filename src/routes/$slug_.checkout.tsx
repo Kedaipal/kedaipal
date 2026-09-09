@@ -10,6 +10,10 @@ import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
+import {
+	OrderingPausedProvider,
+	SeasonalBreakNotice,
+} from "../components/storefront/seasonal-break";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
@@ -147,6 +151,40 @@ function CheckoutRoute() {
 	// — before the buyer's items hydrate from localStorage.
 	if (!retailer || !cart.hydrated) {
 		return <CheckoutSkeleton />;
+	}
+
+	// Off-Season Hold (z8r3fday24): no form at all — the server would refuse
+	// the order anyway, and a form that can't submit is a trap. The cart is
+	// kept (localStorage) for when the store reopens.
+	if (retailer.orderingPaused) {
+		return (
+			<OrderingPausedProvider paused>
+				<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-10">
+					<StorefrontHeader retailer={retailer} asPageHeading={false} />
+					<SeasonalBreakNotice storeName={retailer.storeName} />
+					<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+						<h1 className="font-heading text-xl font-extrabold tracking-tight">
+							Checkout
+						</h1>
+						<p className="mt-2 text-sm text-muted-foreground">
+							{retailer.storeName} isn't taking orders this season, so there's
+							nothing to check out yet. Your basket is saved for when they're
+							back.
+						</p>
+						<Link
+							to="/$slug"
+							params={{ slug: retailer.slug }}
+							activeOptions={{ exact: true }}
+							className="tap-target mt-4 inline-flex h-11 items-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-medium"
+						>
+							<ArrowLeft className="size-4" aria-hidden />
+							Back to {retailer.storeName}
+						</Link>
+					</div>
+					<StorefrontFooter />
+				</div>
+			</OrderingPausedProvider>
+		);
 	}
 
 	if (booking) {

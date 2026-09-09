@@ -92,6 +92,9 @@ export type AccessState = {
 	 * unpaid hold invoice going overdue locks like any other. */
 	held: boolean;
 	heldAt?: number;
+	/** What bought the current paid period — lets the hold card say whether a
+	 * resume bills the tier at once (hold-bought) or nothing (plan-bought). */
+	periodPaidBy?: "plan" | "hold";
 	/** Saved-method auto-renewal summary (86eyb6z4r) — OWNER-only surface (this
 	 * state rides getMyRetailer, which shoppers never see). `failing` means the
 	 * last charge attempt was declined and dunning is running; `setupPending`
@@ -181,6 +184,7 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 		frozen,
 		held,
 		heldAt: sub.heldAt,
+		periodPaidBy: sub.periodPaidBy,
 		autoRenew: sub.autoRenew
 			? {
 					method: sub.autoRenew.method,

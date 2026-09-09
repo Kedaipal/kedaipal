@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
+import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
@@ -29,15 +30,17 @@ import { formatPrice, formatShortDate } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
+	freePeriodState,
 	ORDER_CAP_WARN_RATIO,
 	PLAN_LABEL,
-	trialDaysLeft,
 } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
+import { FirstInvoiceSwitch } from "./first-invoice-switch";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 import { PlanPickerCard } from "./plan-picker-card";
+import { SeasonalHoldCard } from "./seasonal-hold-card";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -79,7 +82,9 @@ export function BillingTab({
 	// Back from the invoice's HitPay checkout: reconcile against HitPay's
 	// status API instead of trusting the redirect (lost-webhook safety net —
 	// the settle is idempotent, so racing the webhook is harmless).
-	const verifyPayment = useAction(api.subscriptionPayments.verifyInvoicePayment);
+	const verifyPayment = useAction(
+		api.subscriptionPayments.verifyInvoicePayment,
+	);
 	const verifiedReturn = useRef(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	useEffect(() => {
@@ -128,14 +133,22 @@ export function BillingTab({
 		adminOwnAccount,
 	});
 
+	const freePeriod = freePeriodState(sub, now);
+	const held = sub?.status === "on_hold" || sub?.held === true;
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
-			const d = trialDaysLeft(sub.trialEndsAt, now);
-			return d > 0
-				? `Trial · ${d} day${d === 1 ? "" : "s"} left`
-				: "Trial ended";
+			// Start-when-you-sell: free until the first order or day 15; then
+			// the first invoice (pending card below) is the clock.
+			if (freePeriod.kind === "ended")
+				return "Free period over · first invoice due";
+			if (freePeriod.kind === "free")
+				return freePeriod.daysLeft <= 5
+					? `Free · ${freePeriod.daysLeft} day${freePeriod.daysLeft === 1 ? "" : "s"} left`
+					: "Free · until your first order";
 		}
+		if (sub.status === "on_hold")
+			return `On hold${sub.heldAt ? ` · since ${formatShortDate(sub.heldAt)}` : ""}`;
 		if (sub.status === "past_due") return "Past due";
 		if (sub.status === "cancelled") return "Cancelled";
 		if (sub.currentPeriodEnd)
@@ -221,7 +234,9 @@ export function BillingTab({
 									? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
 									: sub?.status === "trialing"
 										? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-										: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+										: held
+											? "border border-accent/20 bg-accent/10 text-accent"
+											: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
 							}`}
 						>
 							{statusLine}
@@ -230,6 +245,20 @@ export function BillingTab({
 					{sub?.comped ? (
 						<p className="text-xs text-muted-foreground">
 							Your account is on the house — no invoices to settle.
+						</p>
+					) : null}
+					{held ? (
+						<p className="text-xs text-muted-foreground">
+							{HOLD_LABEL} — ordering is paused. Your{" "}
+							{PLAN_LABEL[sub?.plan ?? "pro"]} plan comes back with one tap
+							below.
+						</p>
+					) : null}
+					{freePeriod.kind === "free" ? (
+						<p className="text-xs text-muted-foreground">
+							You're free until your first live order, or day 15 — whichever
+							comes first. Your first invoice arrives then, with 14 days to pay;
+							your storefront stays live throughout.
 						</p>
 					) : null}
 
@@ -283,7 +312,7 @@ export function BillingTab({
 							    an unexplained absence — "why can't I?" is exactly the question
 							    a silent gap produces. */}
 							<p className="text-xs text-muted-foreground">
-								Want 500 orders/month, the customer database and the order
+								Want 200 orders/month, the customer database and the order
 								inbox? Move up to Pro — which can also be billed annually, with
 								two months free. We don't offer annual on Starter: you shouldn't
 								pay a year upfront before the shop has proven itself.
@@ -305,6 +334,19 @@ export function BillingTab({
 				</section>
 			)}
 
+			{/* Off-Season Hold (z8r3fday24) — a plan-state decision, so it sits
+			    right under the plan card, above annual + the payment mechanics.
+			    Every real paid seller sees it (discoverable where billing lives);
+			    the card itself decides which of its four states to render. */}
+			{!adminOwnAccount && sub && !sub.comped ? (
+				<SeasonalHoldCard
+					retailerId={retailer._id}
+					country={retailer.country}
+					sub={sub}
+					pendingKind={pending ? (pending.kind ?? "plan") : undefined}
+				/>
+			) : null}
+
 			{/* Annual billing — a plan decision, so it sits with the plan and above
 			    the payment mechanics. Renders nothing for a seller it doesn't
 			    apply to (see resolveAnnualOffer). */}
@@ -323,7 +365,11 @@ export function BillingTab({
 					<div className="flex items-baseline justify-between gap-3">
 						<div>
 							<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-								Amount due
+								{pending.kind === "hold"
+									? `Amount due · ${HOLD_LABEL}`
+									: pending.origin === "free_period_end"
+										? "Your first invoice"
+										: "Amount due"}
 							</p>
 							<p className="mt-1 text-2xl font-bold tabular-nums">
 								{formatPrice(pending.total, pending.currency)}
@@ -347,6 +393,26 @@ export function BillingTab({
 							Includes your Founding Member discount of{" "}
 							{formatPrice(pending.foundingDiscount, pending.currency)}.
 						</p>
+					) : null}
+					{pending.kind === "hold" ? (
+						<p className="text-xs text-muted-foreground">
+							One month of {HOLD_LABEL} — ordering stays paused, everything else
+							stays live. Resume your plan from the card above whenever your
+							season is back.
+						</p>
+					) : null}
+					{/* Switch tier before paying (z8r3fday24): machine-issued plan
+					    invoices only — the first invoice, or a self-serve pick. The
+					    server refuses admin-issued and hold invoices too. */}
+					{(pending.kind ?? "plan") === "plan" &&
+					(pending.origin === "free_period_end" ||
+						pending.origin === "self_serve") &&
+					(pending.plan === "pro" || pending.plan === "starter") ? (
+						<FirstInvoiceSwitch
+							invoicePlan={pending.plan}
+							currency={pending.currency === "SGD" ? "SGD" : "MYR"}
+							founding={(pending.foundingDiscount ?? 0) > 0}
+						/>
 					) : null}
 
 					<div className="border-t border-border pt-4">
@@ -447,24 +513,33 @@ export function BillingTab({
 				sub?.status === "past_due" ||
 				sub?.status === "cancelled") ? (
 				gateway?.payNow ? (
-					<PlanPickerCard
-						sub={sub}
-						currency={gateway.currency}
-						renewing={sub.status !== "trialing"}
-						foundingPricing={gateway.foundingPricing}
-						foundingPricingLapsed={gateway.foundingPricingLapsed}
-					/>
+					<div className="flex flex-col gap-2">
+						{freePeriod.kind === "free" ? (
+							<p className="px-1 text-xs text-muted-foreground">
+								No rush — your first invoice arrives with your first live order,
+								or on day 15. Pick a plan now only if you'd rather start today.
+							</p>
+						) : null}
+						<PlanPickerCard
+							sub={sub}
+							currency={gateway.currency}
+							renewing={sub.status !== "trialing"}
+							foundingPricing={gateway.foundingPricing}
+							foundingPricingLapsed={gateway.foundingPricingLapsed}
+						/>
+					</div>
 				) : (
 					<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
 						<div>
 							<p className="text-sm font-medium">
 								{sub.status === "trialing"
-									? "Ready to choose a plan?"
+									? "Want to start your plan now?"
 									: "Renew your subscription"}
 							</p>
 							<p className="mt-1 text-xs text-muted-foreground">
-								Message us on WhatsApp and we'll send your invoice. Your plan
-								activates once payment lands.
+								{freePeriod.kind === "free"
+									? "No rush — your first invoice arrives with your first live order, or on day 15. To start today instead, message us on WhatsApp and we'll send your invoice."
+									: "Message us on WhatsApp and we'll send your invoice. Your plan activates once payment lands."}
 							</p>
 						</div>
 						<a

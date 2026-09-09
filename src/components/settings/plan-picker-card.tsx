@@ -21,7 +21,8 @@ const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
 	},
 	pro: {
 		name: "Pro",
-		pitch: "Everything in Starter + customer database, order inbox, insights, online payments",
+		pitch:
+			"Everything in Starter + customer database, order inbox, insights, online payments",
 	},
 };
 
@@ -99,9 +100,9 @@ export function PlanPickerCard({
 				</p>
 				{foundingPricingLapsed ? (
 					<p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-						Your Founding Member rank is yours for good, but the founding
-						price lapses after 3 months without an active subscription — so
-						these are the standard prices. Questions? Message us.
+						Your Founding Member rank is yours for good, but the founding price
+						lapses after 3 months without an active subscription — so these are
+						the standard prices. Questions? Message us.
 					</p>
 				) : null}
 			</div>
@@ -194,8 +195,8 @@ export function PlanPickerCard({
 					: `Get my ${PLAN_PITCH[plan].name} invoice`}
 			</button>
 			<p className="text-[11px] text-muted-foreground">
-				Your plan activates once payment lands. Changing plan later or paying
-				by bank transfer? Both still work — just message us.
+				Your plan activates once payment lands. Changing plan later or paying by
+				bank transfer? Both still work — just message us.
 			</p>
 		</section>
 	);

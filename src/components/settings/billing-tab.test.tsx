@@ -29,7 +29,9 @@ type Retailer = Parameters<typeof BillingTab>[0]["retailer"];
  * that's past due, matching the screenshot the fix targets. */
 function retailer(overrides: Partial<Retailer> = {}): Retailer {
 	return {
+		_id: "r_openmarket",
 		slug: "openmarket",
+		country: "MY",
 		isFoundingMember: false,
 		ordersThisMonth: 0,
 		subscription: {
@@ -307,7 +309,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false });
 		render(<BillingTab retailer={trialing()} />);
 		expect(
-			screen.getByText(/Message us on WhatsApp and we'll send your invoice/),
+			screen.getByText(/message us on WhatsApp and we'll send your invoice/i),
 		).toBeTruthy();
 		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
@@ -344,9 +346,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 				} as unknown as Partial<Retailer>)}
 			/>,
 		);
-		expect(
-			screen.getByText(/couldn't charge your Visa ·· 4242/),
-		).toBeTruthy();
+		expect(screen.getByText(/couldn't charge your Visa ·· 4242/)).toBeTruthy();
 		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
 	});
 
@@ -639,5 +639,215 @@ describe("BillingTab invoice history documents", () => {
 		expect(
 			screen.queryByRole("button", { name: /download receipt pdf/i }),
 		).toBeNull();
+	});
+});
+
+/**
+ * Start-when-you-sell + Off-Season Hold (z8r3fday24). The rules live server-
+ * side (convex/startWhenYouSell.test.ts, convex/seasonalHold.test.ts); these
+ * cover that the tab tells the seller the truth about each state and offers
+ * the right switch.
+ */
+describe("BillingTab — free period, first invoice, Off-Season Hold (z8r3fday24)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const paidPro = (overrides: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				periodPaidBy: "plan",
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				features: { crm: true, orderInbox: true, chargeablePickup: true },
+				active: true,
+				frozen: false,
+				held: false,
+				...overrides,
+			},
+		} as never);
+
+	it("a free store reads 'until your first order' and is told the invoice comes then", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "trialing",
+						comped: false,
+						trialEndsAt: Date.now() + 12 * DAY,
+						caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+						active: true,
+						frozen: false,
+						held: false,
+					},
+				} as never)}
+			/>,
+		);
+		expect(screen.getByText("Free · until your first order")).toBeTruthy();
+		expect(
+			screen.getByText(/free until your first live order, or day 15/),
+		).toBeTruthy();
+		// No hold card for a store that isn't paying yet.
+		expect(screen.queryByText("Pause for the season")).toBeNull();
+	});
+
+	it("the first invoice card names itself and offers the Starter switch; an admin-issued invoice does not", () => {
+		const first = {
+			_id: "i_first",
+			status: "pending",
+			currency: "MYR",
+			total: 14900,
+			amount: 14900,
+			plan: "pro",
+			billingCycle: "monthly",
+			origin: "free_period_end",
+			invoiceNumber: "INV-FIRST",
+			dueDate: Date.now() + 12 * DAY,
+			createdAt: Date.now(),
+		};
+		mockQueries({ isAdmin: false, invoices: [first] });
+		const ended = retailer({
+			subscription: {
+				plan: "pro",
+				status: "trialing",
+				comped: false,
+				trialEndsAt: Date.now() + 9 * DAY,
+				freePeriodEndedAt: Date.now() - DAY,
+				freePeriodEndReason: "first_order",
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: true,
+				frozen: false,
+				held: false,
+			},
+		} as never);
+		const { unmount } = render(<BillingTab retailer={ended} />);
+		expect(
+			screen.getByText("Free period over · first invoice due"),
+		).toBeTruthy();
+		expect(screen.getByText("Your first invoice")).toBeTruthy();
+		expect(screen.getByText("Switch to Starter")).toBeTruthy();
+		// The consequence is stated where the tap is.
+		expect(
+			screen.getByText(/no customer database, order inbox or insights/),
+		).toBeTruthy();
+		unmount();
+
+		mockQueries({ isAdmin: false, invoices: [{ ...first, origin: "admin" }] });
+		render(<BillingTab retailer={ended} />);
+		expect(screen.queryByText("Switch to Starter")).toBeNull();
+	});
+
+	it("a Starter invoice offers the switch back to Pro", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					_id: "i_st",
+					status: "pending",
+					currency: "MYR",
+					total: 7900,
+					amount: 7900,
+					plan: "starter",
+					billingCycle: "monthly",
+					origin: "self_serve",
+					invoiceNumber: "INV-ST",
+					dueDate: Date.now() + 10 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={paidPro({
+					status: "trialing",
+					freePeriodEndedAt: Date.now(),
+				})}
+			/>,
+		);
+		expect(screen.getByText("Switch to Pro")).toBeTruthy();
+	});
+
+	it("a paid seller is offered the pause, with the price and when it starts billing", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={paidPro()} />);
+		expect(screen.getByText("Off-Season Hold")).toBeTruthy();
+		expect(screen.getByText("Pause for the season")).toBeTruthy();
+		expect(screen.getByText(/RM\s*19\.00\/month/)).toBeTruthy();
+		// Paid through a future date → the hold bills after it, not today.
+		expect(screen.getByText(/the hold starts billing after that/)).toBeTruthy();
+	});
+
+	it("a held seller sees the resume switch, what a resume bills, and the status chip", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={paidPro({
+					status: "on_hold",
+					held: true,
+					heldAt: Date.now() - 3 * DAY,
+					periodPaidBy: "hold",
+					caps: { orderCap: 0, userCap: 2, broadcastQuota: 100 },
+				})}
+			/>,
+		);
+		expect(screen.getByText(/^On hold · since/)).toBeTruthy();
+		expect(screen.getByText("Resume Pro")).toBeTruthy();
+		expect(screen.getByText(/unused hold days aren't refunded/i)).toBeTruthy();
+		// The cap meter is meaningless at cap 0 — hidden, not "0 / 0".
+		expect(screen.queryByText("Orders this month")).toBeNull();
+	});
+
+	it("a seller locked over the TIER invoice is offered 'pause instead'; comped and admins never see the card", () => {
+		mockQueries({ isAdmin: false });
+		const { unmount } = render(<BillingTab retailer={retailer()} />); // past_due fixture
+		expect(screen.getByText("Rather pause than pay for Pro?")).toBeTruthy();
+		expect(screen.getByText("Pause instead")).toBeTruthy();
+		unmount();
+
+		mockQueries({ isAdmin: false });
+		const { unmount: u2 } = render(
+			<BillingTab retailer={paidPro({ comped: true })} />,
+		);
+		expect(screen.queryByText("Pause for the season")).toBeNull();
+		u2();
+
+		mockQueries({ isAdmin: true });
+		render(<BillingTab retailer={paidPro()} />);
+		expect(screen.queryByText("Pause for the season")).toBeNull();
+	});
+
+	it("a hold invoice is labelled as the hold, not the tier", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					_id: "i_hold",
+					status: "pending",
+					kind: "hold",
+					currency: "MYR",
+					total: 1900,
+					amount: 1900,
+					plan: "pro",
+					billingCycle: "monthly",
+					origin: "auto_renewal",
+					invoiceNumber: "INV-HOLD",
+					dueDate: Date.now() + 10 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={paidPro({
+					status: "on_hold",
+					held: true,
+					periodPaidBy: "hold",
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Amount due · Off-Season Hold/)).toBeTruthy();
+		expect(screen.queryByText("Switch to Starter")).toBeNull();
 	});
 });

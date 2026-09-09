@@ -60,7 +60,11 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
-import { hasFeature, hasSubscribed, trialDaysLeft } from "../lib/subscription";
+import {
+	freePeriodState,
+	hasFeature,
+	hasSubscribed,
+} from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/")({
@@ -238,15 +242,13 @@ function DashboardHome() {
 	const activated = Boolean(activatedAt);
 	const linkShared = Boolean(retailer.linkSharedAt);
 
-	// Onboarding "complete" gate: the vendor has converted from the 14-day trial
+	// Onboarding "complete" gate: the vendor has converted from the free period
 	// to a paid plan (subscribe step). Derived from the embedded subscription —
-	// no separate stamp needed. Trial vendors stay `trialing` until first payment.
+	// no separate stamp needed. Free stores stay `trialing` until their first
+	// invoice is paid (start-when-you-sell, z8r3fday24).
 	const subscription = retailer.subscription;
 	const subscribed = hasSubscribed(subscription);
-	const trialLeft =
-		subscription?.status === "trialing"
-			? trialDaysLeft(subscription.trialEndsAt, Date.now())
-			: null;
+	const freePeriod = freePeriodState(subscription, Date.now());
 
 	// Recent-order badges share the seller's status vocabulary. Dashboard chrome
 	// is EN-only, so resolve in EN with the retailer's primary fulfilment method.
@@ -348,13 +350,22 @@ function DashboardHome() {
 			key: "subscribe",
 			done: subscribed,
 			icon: Sparkles,
-			title: "Subscribe to a plan",
+			title:
+				freePeriod.kind === "ended"
+					? "Pay your first invoice"
+					: "Start your plan",
 			why:
-				trialLeft !== null
-					? `You're on a free 14-day trial — ${trialLeft} day${trialLeft === 1 ? "" : "s"} left. Subscribe to a plan to keep your store live and accepting orders after the trial ends.`
-					: "Subscribe to a plan to keep your store live and accepting orders — pick Starter, Pro, or Scale.",
+				freePeriod.kind === "free"
+					? `You're free until your first live order, or day 15 — ${freePeriod.daysLeft} day${freePeriod.daysLeft === 1 ? "" : "s"} left on that clock. Your first invoice starts your plan; there's nothing to do before then.`
+					: freePeriod.kind === "ended"
+						? `${
+								freePeriod.reason === "first_order"
+									? "Your first order came in, so your first invoice is ready."
+									: "Your 14 free days are up, so your first invoice is ready."
+							} Pay it to start your plan — or switch to Starter first if that fits better. Your storefront stays live either way.`
+						: "Pick the plan that fits — Starter, Pro, or Scale — to keep your store live and accepting orders.",
 			time: "~2 min",
-			cta: "Choose your plan",
+			cta: freePeriod.kind === "ended" ? "View invoice" : "View billing",
 			to: "/app/settings",
 			tab: "billing",
 		},

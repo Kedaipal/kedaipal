@@ -116,63 +116,65 @@ export function BookingCalendar({
 	return (
 		<div
 			className={
-				disabled ? "pointer-events-none opacity-55 transition-opacity" : undefined
+				disabled
+					? "pointer-events-none opacity-55 transition-opacity"
+					: undefined
 			}
 			aria-busy={disabled || undefined}
 		>
-		<Calendar
-			// Monday start: Sat+Sun sit adjacent for weekend-led booking.
-			weekStartsOn={1}
-			month={calendarDateFromMytEpoch(month)}
-			onMonthChange={(m) => onMonthChange(mytEpochFromCalendarDate(m))}
-			startMonth={calendarDateFromMytEpoch(minMonth)}
-			endMonth={calendarDateFromMytEpoch(maxMonth)}
-			className="w-full"
-			classNames={{
-				month_grid: "w-full border-collapse",
-				weekdays: "grid grid-cols-7",
-				weekday: "w-auto text-[11px] font-medium text-muted-foreground",
-				week: "mt-1 grid w-full grid-cols-7 gap-0",
-				day: "relative p-0 text-center text-sm",
-			}}
-			modifiers={modifiers}
-			modifiersClassNames={{
-				unavailable:
-					"[&>button]:text-muted-foreground/60 [&>button]:line-through [&>button]:decoration-muted-foreground/50 [&>button]:bg-muted [&>button]:rounded-lg [&>button]:hover:bg-muted",
-				stay_start:
-					"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg",
-				stay_end:
-					"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg [&>button]:!no-underline",
-				stay_middle:
-					"[&>button]:bg-accent/15 [&>button]:text-accent-emphasis [&>button]:font-semibold [&>button]:rounded-lg",
-				checkout_only:
-					"[&>button]:border [&>button]:border-dashed [&>button]:border-ring [&>button]:!bg-transparent [&>button]:!text-muted-foreground [&>button]:!line-through",
-				// A dot under the number. `bg-current` so it stays legible on the
-				// navy stay band (white) and on a plain day (foreground).
-				weekend_night:
-					"[&>button]:relative [&>button]:after:absolute [&>button]:after:bottom-1 [&>button]:after:left-1/2 [&>button]:after:size-1 [&>button]:after:-translate-x-1/2 [&>button]:after:rounded-full [&>button]:after:bg-current [&>button]:after:opacity-70 [&>button]:after:content-['']",
-			}}
-			disabled={(date) => {
-				const day = mytEpochFromCalendarDate(date);
-				if (pickingCheckOut && selection.checkIn !== undefined) {
-					// Phase 2: earlier days stay enabled ONLY where they could start a
-					// fresh stay (a tap restarts there); later days cap at the ceiling.
-					if (day > selection.checkIn) {
-						return checkoutCeiling !== undefined && day > checkoutCeiling;
+			<Calendar
+				// Monday start: Sat+Sun sit adjacent for weekend-led booking.
+				weekStartsOn={1}
+				month={calendarDateFromMytEpoch(month)}
+				onMonthChange={(m) => onMonthChange(mytEpochFromCalendarDate(m))}
+				startMonth={calendarDateFromMytEpoch(minMonth)}
+				endMonth={calendarDateFromMytEpoch(maxMonth)}
+				className="w-full"
+				classNames={{
+					month_grid: "w-full border-collapse",
+					weekdays: "grid grid-cols-7",
+					weekday: "w-auto text-[11px] font-medium text-muted-foreground",
+					week: "mt-1 grid w-full grid-cols-7 gap-0",
+					day: "relative p-0 text-center text-sm",
+				}}
+				modifiers={modifiers}
+				modifiersClassNames={{
+					unavailable:
+						"[&>button]:text-muted-foreground/60 [&>button]:line-through [&>button]:decoration-muted-foreground/50 [&>button]:bg-muted [&>button]:rounded-lg [&>button]:hover:bg-muted",
+					stay_start:
+						"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg",
+					stay_end:
+						"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg [&>button]:!no-underline",
+					stay_middle:
+						"[&>button]:bg-accent/15 [&>button]:text-accent-emphasis [&>button]:font-semibold [&>button]:rounded-lg",
+					checkout_only:
+						"[&>button]:border [&>button]:border-dashed [&>button]:border-ring [&>button]:!bg-transparent [&>button]:!text-muted-foreground [&>button]:!line-through",
+					// A dot under the number. `bg-current` so it stays legible on the
+					// navy stay band (white) and on a plain day (foreground).
+					weekend_night:
+						"[&>button]:relative [&>button]:after:absolute [&>button]:after:bottom-1 [&>button]:after:left-1/2 [&>button]:after:size-1 [&>button]:after:-translate-x-1/2 [&>button]:after:rounded-full [&>button]:after:bg-current [&>button]:after:opacity-70 [&>button]:after:content-['']",
+				}}
+				disabled={(date) => {
+					const day = mytEpochFromCalendarDate(date);
+					if (pickingCheckOut && selection.checkIn !== undefined) {
+						// Phase 2: earlier days stay enabled ONLY where they could start a
+						// fresh stay (a tap restarts there); later days cap at the ceiling.
+						if (day > selection.checkIn) {
+							return checkoutCeiling !== undefined && day > checkoutCeiling;
+						}
+						return !canCheckIn(day, ctx);
 					}
 					return !canCheckIn(day, ctx);
-				}
-				return !canCheckIn(day, ctx);
-			}}
-			onDayClick={(date, dayModifiers) => {
-				if (dayModifiers.disabled) return;
-				onSelect(mytEpochFromCalendarDate(date));
-			}}
-			// Day cells stretch to the grid columns (the wrapper's size-9 is for
-			// the compact insights picker; checkout wants the full card width with
-			// ≥44px touch targets).
-			styles={{ day_button: { width: "100%", minHeight: "2.75rem" } }}
-		/>
+				}}
+				onDayClick={(date, dayModifiers) => {
+					if (dayModifiers.disabled) return;
+					onSelect(mytEpochFromCalendarDate(date));
+				}}
+				// Day cells stretch to the grid columns (the wrapper's size-9 is for
+				// the compact insights picker; checkout wants the full card width with
+				// ≥44px touch targets).
+				styles={{ day_button: { width: "100%", minHeight: "2.75rem" } }}
+			/>
 		</div>
 	);
 }
@@ -188,7 +190,10 @@ export function BookingCalendarLegend({
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
 			<span className="flex items-center gap-1.5">
-				<i className="size-3.5 rounded border border-border bg-card" aria-hidden />
+				<i
+					className="size-3.5 rounded border border-border bg-card"
+					aria-hidden
+				/>
 				Available
 			</span>
 			<span className="flex items-center gap-1.5">

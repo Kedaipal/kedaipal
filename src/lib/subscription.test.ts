@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { UNLIMITED } from "../../convex/lib/plans";
 import {
+	freePeriodState,
 	hasFeature,
 	hasSubscribed,
 	isCrmLocked,
@@ -60,16 +61,47 @@ describe("tierPill", () => {
 		).toBe("Starter");
 	});
 
-	test("trialing → countdown (warn when ended)", () => {
+	test("free store → 'until first order', a countdown only in the backstop's last days (start-when-you-sell)", () => {
+		expect(
+			tierPill(sub({ status: "trialing", trialEndsAt: NOW + 12 * DAY }), NOW),
+		).toEqual({ label: "Free · until first order", tone: "trial" });
 		expect(
 			tierPill(sub({ status: "trialing", trialEndsAt: NOW + 5 * DAY }), NOW),
-		).toEqual({ label: "Trial · 5 days left", tone: "trial" });
+		).toEqual({ label: "Free · 5 days left", tone: "trial" });
 		expect(
 			tierPill(sub({ status: "trialing", trialEndsAt: NOW + DAY }), NOW).label,
-		).toBe("Trial · 1 day left");
+		).toBe("Free · 1 day left");
+		// Founding members keep their rank up front.
 		expect(
-			tierPill(sub({ status: "trialing", trialEndsAt: NOW - DAY }), NOW),
-		).toEqual({ label: "Trial ended", tone: "warn" });
+			tierPill(sub({ status: "trialing", trialEndsAt: NOW + 12 * DAY }), NOW, 3)
+				.label,
+		).toBe("Founding #3 · until first order");
+	});
+
+	test("first invoice out → 'First invoice due' (warn), whatever the backstop says", () => {
+		const ended = sub({
+			status: "trialing",
+			trialEndsAt: NOW + 9 * DAY,
+			freePeriodEndedAt: NOW - DAY,
+			freePeriodEndReason: "first_order",
+		});
+		expect(tierPill(ended, NOW)).toEqual({
+			label: "First invoice due",
+			tone: "warn",
+		});
+		expect(tierPill(ended, NOW, 2).label).toBe(
+			"Founding #2 · First invoice due",
+		);
+	});
+
+	test("on_hold → 'On hold'", () => {
+		expect(tierPill(sub({ status: "on_hold", held: true }), NOW)).toEqual({
+			label: "On hold",
+			tone: "trial",
+		});
+		expect(tierPill(sub({ status: "on_hold" }), NOW, 5).label).toBe(
+			"Founding #5 · On hold",
+		);
 	});
 
 	test("past_due / cancelled → warn", () => {
@@ -94,7 +126,54 @@ describe("tierPill", () => {
 	});
 });
 
+describe("freePeriodState (start-when-you-sell)", () => {
+	test("free with the backstop countdown, ended with its reason, none otherwise", () => {
+		expect(
+			freePeriodState(
+				sub({ status: "trialing", trialEndsAt: NOW + 3 * DAY }),
+				NOW,
+			),
+		).toEqual({ kind: "free", daysLeft: 3 });
+		expect(
+			freePeriodState(
+				sub({
+					status: "trialing",
+					freePeriodEndedAt: NOW,
+					freePeriodEndReason: "first_order",
+				}),
+				NOW,
+			),
+		).toEqual({ kind: "ended", reason: "first_order" });
+		// A stamped end with no reason (defensive) reads as the backstop.
+		expect(
+			freePeriodState(sub({ status: "trialing", freePeriodEndedAt: NOW }), NOW),
+		).toEqual({ kind: "ended", reason: "backstop" });
+		expect(freePeriodState(sub({ status: "active" }), NOW).kind).toBe("none");
+		expect(freePeriodState(undefined, NOW).kind).toBe("none");
+	});
+});
+
 describe("shouldNudgePayment", () => {
+	test("nudges once the first invoice is out, whatever the backstop says", () => {
+		expect(
+			shouldNudgePayment(
+				sub({
+					status: "trialing",
+					trialEndsAt: NOW + 10 * DAY,
+					freePeriodEndedAt: NOW,
+				}),
+				NOW,
+			),
+		).toBe(true);
+		expect(
+			shouldNudgePayment(
+				sub({ status: "trialing", trialEndsAt: NOW + 10 * DAY }),
+				NOW,
+			),
+		).toBe(false);
+		expect(shouldNudgePayment(sub({ status: "on_hold" }), NOW)).toBe(false);
+	});
+
 	test("past_due always; trialing only in the last stretch; active never", () => {
 		expect(shouldNudgePayment(sub({ status: "past_due" }), NOW)).toBe(true);
 		expect(
@@ -154,7 +233,10 @@ describe("resolveBannerState", () => {
 		// A healthy saved method changes nothing.
 		expect(
 			resolveBannerState(
-				sub({ status: "active", autoRenew: { ...failing, failedAttempts: 0, failing: false } }),
+				sub({
+					status: "active",
+					autoRenew: { ...failing, failedAttempts: 0, failing: false },
+				}),
 				NOW + 30 * DAY,
 				NOW,
 			).kind,
@@ -179,7 +261,7 @@ describe("resolveBannerState", () => {
 		});
 	});
 
-	test("trialing within 5 days (no invoice) → trialWarn; ended flag at/below 0", () => {
+	test("free store: backstop within 5 days → trialWarn; a lapsed backstop with no invoice on file → ended", () => {
 		expect(
 			resolveBannerState(
 				sub({ status: "trialing", trialEndsAt: NOW + 2 * DAY }),
@@ -189,11 +271,70 @@ describe("resolveBannerState", () => {
 		).toEqual({ kind: "trialWarn", daysLeft: 2, ended: false });
 		expect(
 			resolveBannerState(
-				sub({ status: "trialing", trialEndsAt: NOW - DAY }),
+				sub({ status: "trialing", trialEndsAt: NOW + 9 * DAY }),
+				undefined,
+				NOW,
+			).kind,
+		).toBe("none");
+		// The period ended (first order or backstop) but no bill is on file
+		// (voided / failed) — the old ended state, until the cron writes it again.
+		expect(
+			resolveBannerState(
+				sub({
+					status: "trialing",
+					trialEndsAt: NOW + 9 * DAY,
+					freePeriodEndedAt: NOW - DAY,
+					freePeriodEndReason: "backstop",
+				}),
 				undefined,
 				NOW,
 			),
 		).toEqual({ kind: "trialWarn", daysLeft: 0, ended: true });
+	});
+
+	test("first invoice out + pending → firstInvoice nudge until the invoiceWarn window takes over (start-when-you-sell)", () => {
+		const ended = sub({
+			status: "trialing",
+			trialEndsAt: NOW + 9 * DAY,
+			freePeriodEndedAt: NOW - DAY,
+			freePeriodEndReason: "first_order",
+		});
+		expect(resolveBannerState(ended, NOW + 12 * DAY, NOW)).toEqual({
+			kind: "firstInvoice",
+			reason: "first_order",
+			daysLeft: 12,
+		});
+		// Inside the 5-day window the generic "pay me" outranks it.
+		expect(resolveBannerState(ended, NOW + 3 * DAY, NOW)).toEqual({
+			kind: "invoiceWarn",
+			daysLeft: 3,
+		});
+	});
+
+	test("on hold → held, below every payment deadline, above the cap nudge (which can't fire at cap 0)", () => {
+		const caps = { orderCap: 0, userCap: 2, broadcastQuota: 100 };
+		expect(
+			resolveBannerState(
+				sub({ status: "on_hold", held: true, caps }),
+				undefined,
+				NOW,
+				undefined,
+				50,
+			),
+		).toEqual({ kind: "held" });
+		// A hold invoice due soon is still "pay me".
+		expect(
+			resolveBannerState(
+				sub({ status: "on_hold", held: true, caps }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("invoiceWarn");
+		// Locked over an overdue hold invoice → pastDue wins.
+		expect(
+			resolveBannerState(sub({ status: "past_due", caps }), NOW - DAY, NOW)
+				.kind,
+		).toBe("pastDue");
 	});
 
 	test("soft order-cap nudge: over/near, ranked below payment deadlines", () => {
