@@ -28,6 +28,7 @@ import {
 	MOBILE_MESSAGE,
 	otherCountryMobile,
 } from "../../convex/lib/slug";
+import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
@@ -239,7 +240,11 @@ function OnboardingForm() {
 		!submitting;
 
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-12">
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-6">
+			{/* Brand + account bar — same container width as the form, so the page
+			    says whose app this is and which account the store will belong to
+			    (with the way out) before asking for anything. */}
+			<OnboardingTopBar />
 			<header className="flex flex-col gap-2">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
@@ -460,8 +465,10 @@ function AvailabilityHint({
 
 function LoadingScreen() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md items-center justify-center px-5">
-			<p className="text-sm text-muted-foreground">Loading…</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-6">
+			{/* Same bar as the form screen, so the brand doesn't blink in late. */}
+			<OnboardingTopBar />
+			<p className="m-auto text-sm text-muted-foreground">Loading…</p>
 		</main>
 	);
 }
