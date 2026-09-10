@@ -11,6 +11,10 @@ import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { ProductGrid } from "../components/storefront/product-grid";
+import {
+	OrderingPausedProvider,
+	SeasonalBreakNotice,
+} from "../components/storefront/seasonal-break";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
@@ -239,53 +243,56 @@ function CategoryRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Same brand header as the store home (cover/logo/name) — the buyer
+		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
+				{/* Same brand header as the store home (cover/logo/name) — the buyer
 			    never loses the sense of whose store they're in. */}
-			<StorefrontHeader retailer={retailer} asPageHeading={false} />
+				<StorefrontHeader retailer={retailer} asPageHeading={false} />
+				<SeasonalBreakNotice storeName={retailer.storeName} />
 
-			{/* Category identity: a way back, then the category's own name + blurb. */}
-			<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
-				<Link
-					to="/$slug"
-					params={{ slug: retailer.slug }}
-					activeOptions={{ exact: true }}
-					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-				>
-					<ArrowLeft className="size-4" aria-hidden />
-					All products
-				</Link>
-				<div className="flex flex-col gap-1">
-					{/* This page's own subject, so it owns the <h1>; the brand header
+				{/* Category identity: a way back, then the category's own name + blurb. */}
+				<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
+					<Link
+						to="/$slug"
+						params={{ slug: retailer.slug }}
+						activeOptions={{ exact: true }}
+						className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						<ArrowLeft className="size-4" aria-hidden />
+						All products
+					</Link>
+					<div className="flex flex-col gap-1">
+						{/* This page's own subject, so it owns the <h1>; the brand header
 					    above renders the store name as plain text here. */}
-					<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
-						{page.category.name}
-					</h1>
-					{page.category.description ? (
-						<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
-							{page.category.description}
-						</p>
-					) : null}
+						<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
+							{page.category.name}
+						</h1>
+						{page.category.description ? (
+							<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
+								{page.category.description}
+							</p>
+						) : null}
+					</div>
 				</div>
-			</div>
 
-			<section className="mt-2 px-5 lg:px-8">
-				{/* No category rail here. Once a buyer is inside a category the page
+				<section className="mt-2 px-5 lg:px-8">
+					{/* No category rail here. Once a buyer is inside a category the page
 				    already names it (h1 + blurb above) and the only move that
 				    matters is browsing what's in it; a row of sibling categories
 				    just competes with the products it sits on top of. "← All
 				    products" is the way back out. */}
-				<ProductGrid
-					retailerId={retailer._id}
-					cart={cart}
-					products={page.products}
-					storeSlug={retailer.slug}
-				/>
-			</section>
+					<ProductGrid
+						retailerId={retailer._id}
+						cart={cart}
+						products={page.products}
+						storeSlug={retailer.slug}
+					/>
+				</section>
 
-			<StorefrontFooter slug={slug} />
+				<StorefrontFooter slug={slug} />
 
-			<CartBar cart={cart} storeSlug={retailer.slug} />
-		</div>
+				<CartBar cart={cart} storeSlug={retailer.slug} />
+			</div>
+		</OrderingPausedProvider>
 	);
 }

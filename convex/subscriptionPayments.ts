@@ -51,9 +51,11 @@ import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	foundingPricingApplies,
+	HOLD_MONTHLY_PRICES,
 	planPrice,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
+import { HOLD_LABEL } from "./lib/seasonalHold";
 
 /** How long an unfinished authorisation session is offered for "resume" before
  * a new one is minted. */
@@ -471,6 +473,8 @@ export const autoRenewSetupContext = internalQuery({
 		notifyEmail: string | undefined;
 		currency: BillingCurrency;
 		plan: Doc<"subscriptions">["plan"];
+		/** Off-Season Hold (z8r3fday24): the next charge is the hold price. */
+		onHold: boolean;
 		comped: boolean;
 		founding: boolean;
 		attached: boolean;
@@ -494,6 +498,7 @@ export const autoRenewSetupContext = internalQuery({
 			notifyEmail: retailer.notifyEmail,
 			currency: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"],
 			plan: sub.plan,
+			onHold: sub.status === "on_hold",
 			comped: sub.comped === true,
 			// Display amount on HitPay's page mirrors what the next bill will
 			// actually be — founding pricing honours the 3-month lapse window.
@@ -579,17 +584,21 @@ export const startAutoRenewSetup = action({
 			);
 		}
 
-		const planLabel = `${context.plan.charAt(0).toUpperCase()}${context.plan.slice(1)}`;
+		const planLabel = context.onHold
+			? HOLD_LABEL
+			: `${context.plan.charAt(0).toUpperCase()}${context.plan.slice(1)}`;
 		const inputs = {
 			planLabel,
 			storeName: context.storeName,
 			customerEmail: email,
-			amountSen: planPrice(
-				context.plan,
-				"monthly",
-				context.founding,
-				context.currency,
-			),
+			amountSen: context.onHold
+				? HOLD_MONTHLY_PRICES[context.currency]
+				: planPrice(
+						context.plan,
+						"monthly",
+						context.founding,
+						context.currency,
+					),
 			currency: context.currency,
 			redirectUrl: billingPageUrl("autorenew=return"),
 			reference: context.subscriptionId,
@@ -808,9 +817,13 @@ async function applyMethodAttached(
 		.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
 		.filter((q) => q.eq(q.field("status"), "pending"))
 		.first();
+	// A hold invoice (z8r3fday24) is machine-priced at the flat hold rate the
+	// seller chose by tapping "Pause" — charging it is what they asked for.
 	if (
 		pending &&
-		(pending.origin === "auto_renewal" || sub.status === "past_due")
+		(pending.origin === "auto_renewal" ||
+			pending.kind === "hold" ||
+			sub.status === "past_due")
 	) {
 		await ctx.scheduler.runAfter(
 			0,

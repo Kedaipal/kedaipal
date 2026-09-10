@@ -176,8 +176,8 @@ export function AutoRenewalCard({
 			</div>
 			{!on && !sub.autoRenewSetupPending ? (
 				<p className="text-[11px] text-muted-foreground">
-					You'll authorise it once on HitPay's secure page — Kedaipal never
-					sees or stores your card or wallet details.
+					You'll authorise it once on HitPay's secure page — Kedaipal never sees
+					or stores your card or wallet details.
 				</p>
 			) : null}
 

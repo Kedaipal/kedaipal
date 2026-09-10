@@ -843,6 +843,11 @@ type RetailerPublic = {
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
+	// Off-Season Hold (z8r3fday24) — public-safe: buyers must see that ordering
+	// is paused (the storefront shows a "seasonal break" note and hides the
+	// cart CTAs; every order-create path refuses with the same reason). A store
+	// setting, not billing state — the subscription itself stays owner-only.
+	orderingPaused?: boolean;
 	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
 	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
 	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
@@ -977,6 +982,7 @@ async function buildRetailerPublic(
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
+		orderingPaused: row.orderingPausedAt !== undefined,
 		sendingPaused: !!sendingLimits?.pausedAt,
 		sendingPauseReason: sendingLimits?.pauseReason,
 	};
@@ -1124,6 +1130,7 @@ export const getRetailerBySlug = query({
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
+					orderingPaused: active.orderingPausedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.

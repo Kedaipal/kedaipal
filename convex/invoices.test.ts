@@ -613,7 +613,7 @@ describe("backfill", () => {
 });
 
 describe("daily billing cron", () => {
-	test("flips lapsed trial → past_due and overdue active → past_due, leaves comped", async () => {
+	test("lapsed trial → free period ends + first invoice scheduled (no lock); overdue active → past_due", async () => {
 		const t = setup();
 		// A trialing retailer whose trial has lapsed.
 		await t
@@ -653,8 +653,24 @@ describe("daily billing cron", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.trialExpired).toBe(1);
+		// Start-when-you-sell (z8r3fday24): the backstop ENDS the free period and
+		// writes the first bill — it no longer locks. Only that invoice going
+		// overdue locks (covered in startWhenYouSell.test.ts).
+		expect(res.trialExpired).toBe(0);
+		expect(res.firstInvoicesIssued).toBe(1);
 		expect(res.overdue).toBe(1);
+		const trialSub = await t.run(async (ctx) => {
+			const tr = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "trial-store"))
+				.first();
+			return ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", tr!._id))
+				.first();
+		});
+		expect(trialSub?.status).toBe("trialing");
+		expect(trialSub?.freePeriodEndReason).toBe("backstop");
 
 		expect((await getSubFor(t, foundingId))?.status).toBe("past_due");
 	});

@@ -8,12 +8,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type SubscriptionView = {
 	plan: "starter" | "pro" | "scale";
-	status: "trialing" | "active" | "past_due" | "cancelled";
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
 	/** Optional on the mirror (the server always sends it) so a payload rendered
 	 * from an older cache degrades to "monthly" rather than throwing. */
 	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
+	/** The free period's backstop deadline (signup + 14 days). */
 	trialEndsAt?: number;
+	/** Start-when-you-sell (z8r3fday24): set once the free period ended (first
+	 * live order or backstop) and the first invoice was issued. */
+	freePeriodEndedAt?: number;
+	freePeriodEndReason?: "first_order" | "backstop";
+	/** Off-Season Hold (z8r3fday24): paused between seasons. */
+	held?: boolean;
+	heldAt?: number;
+	periodPaidBy?: "plan" | "hold";
 	currentPeriodEnd?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
 	features?: Record<PlanFeature, boolean>;
@@ -102,12 +111,36 @@ export function daysUntil(ts: number | undefined, now: number): number {
 	return Math.max(0, Math.ceil((ts - now) / DAY_MS));
 }
 
-/** Whole days left in trial (rounded up, never negative). */
+/** Whole days left until the free period's BACKSTOP (rounded up, never
+ * negative). The period usually ends earlier, at the first live order — see
+ * `freePeriodState`. */
 export function trialDaysLeft(
 	trialEndsAt: number | undefined,
 	now: number,
 ): number {
 	return daysUntil(trialEndsAt, now);
+}
+
+/**
+ * Where a trialing store is in its free period (start-when-you-sell,
+ * z8r3fday24). `free`: still free, `daysLeft` to the backstop. `ended`: the
+ * first invoice has been issued — by the first order or the backstop — and
+ * that invoice's due date is now the clock (the pending invoice, not this
+ * helper, says how long is left). Non-trialing rows are `none`.
+ */
+export type FreePeriodState =
+	| { kind: "none" }
+	| { kind: "free"; daysLeft: number }
+	| { kind: "ended"; reason: "first_order" | "backstop" };
+
+export function freePeriodState(
+	sub: SubscriptionView | undefined,
+	now: number,
+): FreePeriodState {
+	if (!sub || sub.status !== "trialing") return { kind: "none" };
+	if (sub.freePeriodEndedAt !== undefined)
+		return { kind: "ended", reason: sub.freePeriodEndReason ?? "backstop" };
+	return { kind: "free", daysLeft: trialDaysLeft(sub.trialEndsAt, now) };
 }
 
 /**
@@ -173,6 +206,17 @@ export type BannerState =
 	| { kind: "pastDue" }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
+	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
+	| { kind: "held" }
+	/** Start-when-you-sell: the free period ended. With a pending invoice,
+	 * `daysLeft` counts to its due date; without one (the minutes before the
+	 * machine writes it, or a voided bill awaiting the cron's rewrite) it is
+	 * absent — "your first invoice is on its way". */
+	| {
+			kind: "firstInvoice";
+			reason: "first_order" | "backstop";
+			daysLeft?: number;
+	  }
 	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
 	| { kind: "orderCapOver"; used: number; cap: number }
 	| { kind: "orderCapNear"; used: number; cap: number };
@@ -197,10 +241,30 @@ export function resolveBannerState(
 		if (daysLeft <= warnDays) return { kind: "invoiceWarn", daysLeft };
 	}
 
+	// A paused store: below every payment deadline (a hold invoice due soon is
+	// still "pay me"), above the free-period + cap nudges (neither applies).
+	if (sub.status === "on_hold" || sub.held) return { kind: "held" };
+
 	if (sub.status === "trialing") {
-		const daysLeft = trialDaysLeft(sub.trialEndsAt, now);
-		if (daysLeft <= warnDays)
-			return { kind: "trialWarn", daysLeft, ended: daysLeft <= 0 };
+		const free = freePeriodState(sub, now);
+		if (free.kind === "ended") {
+			// The first invoice is the clock now. While it pends (and isn't yet
+			// inside the invoiceWarn window above) — a soft "it's ready" nudge.
+			// No invoice on file at all (voided / failed) → the old ended state,
+			// until the cron writes it again.
+			if (pendingDueAt !== undefined)
+				return {
+					kind: "firstInvoice",
+					reason: free.reason,
+					daysLeft: daysUntil(pendingDueAt, now),
+				};
+			// No invoice on file yet (the minutes-long issue delay, or a voided
+			// bill the cron will rewrite) → "on its way", never the red ended
+			// state: the machine writes the bill, the seller has nothing to fix.
+			return { kind: "firstInvoice", reason: free.reason };
+		}
+		if (free.kind === "free" && free.daysLeft <= warnDays)
+			return { kind: "trialWarn", daysLeft: free.daysLeft, ended: false };
 	}
 
 	const cap = orderCapState(sub, ordersThisMonth);
@@ -216,11 +280,18 @@ export type TierTone = "neutral" | "trial" | "warn" | "founding" | "admin";
 
 export type TierPill = { label: string; tone: TierTone };
 
-/** Compact tier label for the nav pill. With a `foundingRank`, founding members
- * read "Founding #N · 28 days left" / "Founding #N" instead of a plain "Trial".
- * When `isAdmin` is set (a Kedaipal admin viewing their OWN store), the pill reads
- * "Admin" instead of any trial/plan/past-due state — admins run the app for free
- * and are never soft-locked, so a "days left" countdown would be a lie. */
+/** How many days before the backstop the pill switches from "until your first
+ * order" to a countdown — the same window the banner warns in. */
+const PILL_COUNTDOWN_DAYS = PAYMENT_WARN_DAYS;
+
+/** Compact tier label for the nav pill. A free store reads "Free · until first
+ * order" (start-when-you-sell — the order is the trigger, the day-14 backstop
+ * only surfaces as a countdown in its last days); once the first invoice is
+ * out it reads "First invoice due". With a `foundingRank`, founding members
+ * read "Founding #N · …" instead. A held store reads "On hold". When `isAdmin`
+ * is set (a Kedaipal admin viewing their OWN store), the pill reads "Admin"
+ * instead of any state — admins run the app for free and are never
+ * soft-locked, so a countdown would be a lie. */
 export function tierPill(
 	sub: SubscriptionView,
 	now: number,
@@ -231,22 +302,23 @@ export function tierPill(
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
 	switch (sub.status) {
 		case "trialing": {
-			const days = trialDaysLeft(sub.trialEndsAt, now);
-			const ended = days <= 0;
-			const left = ended
-				? "trial ended"
-				: `${days} day${days === 1 ? "" : "s"} left`;
-			if (fm) {
+			const free = freePeriodState(sub, now);
+			if (free.kind === "ended") {
 				return {
-					label: `${fm} · ${left}`,
-					tone: ended ? "warn" : "founding",
+					label: fm ? `${fm} · First invoice due` : "First invoice due",
+					tone: "warn",
 				};
 			}
-			return {
-				label: ended ? "Trial ended" : `Trial · ${left}`,
-				tone: ended ? "warn" : "trial",
-			};
+			const days = free.kind === "free" ? free.daysLeft : 0;
+			const left =
+				days <= PILL_COUNTDOWN_DAYS
+					? `${days} day${days === 1 ? "" : "s"} left`
+					: "until first order";
+			if (fm) return { label: `${fm} · ${left}`, tone: "founding" };
+			return { label: `Free · ${left}`, tone: "trial" };
 		}
+		case "on_hold":
+			return { label: fm ? `${fm} · On hold` : "On hold", tone: "trial" };
 		case "past_due":
 			return { label: fm ? `${fm} · Past due` : "Past due", tone: "warn" };
 		case "cancelled":
@@ -259,15 +331,19 @@ export function tierPill(
 	}
 }
 
-/** Whether the dashboard should surface a "pay your invoice" nudge. True while a
- * trial is in its last stretch or once it's past due. */
+/** Whether the dashboard should surface a "pay your invoice" nudge. True once
+ * the first invoice is out, while the free period's backstop is in its last
+ * stretch, or once past due. */
 export function shouldNudgePayment(
 	sub: SubscriptionView,
 	now: number,
 	trialNudgeDaysLeft = 3,
 ): boolean {
 	if (sub.status === "past_due") return true;
-	if (sub.status === "trialing")
-		return trialDaysLeft(sub.trialEndsAt, now) <= trialNudgeDaysLeft;
+	if (sub.status === "trialing") {
+		const free = freePeriodState(sub, now);
+		if (free.kind === "ended") return true;
+		return free.kind === "free" && free.daysLeft <= trialNudgeDaysLeft;
+	}
 	return false;
 }

@@ -334,6 +334,8 @@ type InvoiceForPdf = {
 	invoiceNumber: string;
 	plan?: "starter" | "pro" | "scale";
 	billingCycle?: "monthly" | "annual";
+	/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
+	kind?: "plan" | "hold";
 	amount: number;
 	foundingDiscount?: number;
 	total: number;
@@ -381,8 +383,12 @@ export function subscriptionLineLabel(invoice: {
 	plan?: "starter" | "pro" | "scale";
 	billingCycle?: "monthly" | "annual";
 	foundingDiscount?: number;
+	kind?: "plan" | "hold";
 }): string {
 	const cycle = invoice.billingCycle === "annual" ? "Annual" : "Monthly";
+	if (invoice.kind === "hold") {
+		return `Kedaipal Off-Season Hold - ${cycle} Subscription`;
+	}
 	if (invoice.foundingDiscount !== undefined) {
 		return `Kedaipal Founding 10 Seller Plan - ${cycle} Subscription`;
 	}

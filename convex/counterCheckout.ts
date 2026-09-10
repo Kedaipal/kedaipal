@@ -29,6 +29,7 @@ import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
+import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
 	adminUserIds,
@@ -101,6 +102,13 @@ function generatePairingCode(taken: ReadonlySet<string>): string {
  * caller's own store (strict 1:1 user↔retailer). Returns the access descriptor
  * so admin-on-behalf writes are attributable. See docs/admin-console.md.
  */
+/** Off-Season Hold (z8r3fday24): a paused store takes no orders through the
+ * counter either — the cashier UI disables the flow with this same reason. */
+function assertOrderingNotPaused(retailer: Doc<"retailers">): void {
+	if (retailer.orderingPausedAt !== undefined)
+		throw new ConvexError(orderingPausedMessage(retailer.storeName));
+}
+
 async function requireCounterRetailer(
 	ctx: QueryCtx | MutationCtx,
 	retailerId?: Id<"retailers">,
@@ -345,6 +353,7 @@ export const bindSessionManualPhone = mutation({
 	): Promise<{ sessionId: Id<"counterCheckoutSessions">; reclaimed: boolean }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
 		const retailer = access.retailer;
+		assertOrderingNotPaused(retailer);
 
 		let normalizedPhone: string;
 		try {
@@ -442,6 +451,7 @@ export const startAnonymousSession = mutation({
 	): Promise<{ sessionId: Id<"counterCheckoutSessions"> }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
 		const retailer = access.retailer;
+		assertOrderingNotPaused(retailer);
 		const now = Date.now();
 		const openBound = await openBoundSessions(ctx, retailer._id, now);
 
@@ -699,6 +709,7 @@ export const createOrderFromSession = mutation({
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
 		const retailer = access.retailer;
+		assertOrderingNotPaused(retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",

@@ -7,14 +7,12 @@ import {
 	SlidersHorizontal,
 } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
-import {
-	bookingPriceSuffix,
-	weekendRateSuffix,
-} from "../../lib/booking-dates";
+import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
 
 export type StorefrontProduct = FunctionReturnType<
 	typeof api.products.list
@@ -53,6 +51,8 @@ export function ProductCard({
 	cartSubtotal,
 	priority = false,
 }: ProductCardProps) {
+	// Off-Season Hold (z8r3fday24): every quick-add flips together.
+	const paused = useOrderingPaused();
 	// Multi-variant products can't be quick-added — the buyer must pick options
 	// on the product page first. A custom line also forces the product page so the
 	// buyer can see (and choose) the made-to-order option. See docs/custom-option.md.
@@ -271,12 +271,12 @@ export function ProductCard({
 					<Button
 						type="button"
 						onClick={() => onQuickAdd(product)}
-						disabled={outOfStock || minUnreachable}
+						disabled={paused || outOfStock || minUnreachable}
 						size="sm"
 						className="mt-auto h-11 w-full rounded-xl"
 					>
-						<Plus className="size-4" />
-						Add
+						{paused ? null : <Plus className="size-4" />}
+						{paused ? ORDERING_PAUSED_CTA : "Add"}
 					</Button>
 				)}
 			</div>

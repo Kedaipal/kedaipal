@@ -355,6 +355,7 @@ export const Route = createFileRoute("/app/settings")({
 			// tab reconciles once and then clears the flag from the URL.
 			...(search.autorenew === "return" ? { autorenew: "return" as const } : {}),
 			...(search.paid === "return" ? { paid: "return" as const } : {}),
+
 		};
 	},
 	component: SettingsRoute,

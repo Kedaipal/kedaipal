@@ -185,8 +185,8 @@ export function CourierBookingSection({
 							{delyvaIsLastBidder ? (
 								<>
 									On — the only service pricing your live delivery charge right
-									now. Turn on Lalamove too, or switch the charge mode above,
-									to switch this off.{" "}
+									now. Turn on Lalamove too, or switch the charge mode above, to
+									switch this off.{" "}
 									<Link
 										to="/app/settings"
 										search={{ tab: "integrations" }}
@@ -250,8 +250,8 @@ export function CourierBookingSection({
 			    is what stops "which one do I pick?" confusion for the seller who
 			    books nothing through Kedaipal. */}
 			<p className="text-xs text-muted-foreground">
-				Arranging your own courier always works too — mark the order shipped
-				and add the tracking number there.
+				Arranging your own courier always works too — mark the order shipped and
+				add the tracking number there.
 			</p>
 		</div>
 	);

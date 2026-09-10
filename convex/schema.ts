@@ -702,6 +702,14 @@ export default defineSchema({
 		// checklist's activation states. See docs/activation-checklist.md.
 		activatedAt: v.optional(v.number()),
 		linkSharedAt: v.optional(v.number()),
+		// Off-Season Hold (z8r3fday24): set while the store's subscription is
+		// `on_hold`, cleared on resume. Denormalized HERE, on the store, so the
+		// buyer-facing storefront payload and every order-create path (storefront,
+		// counter, claim link, booking) read a STORE setting — never the
+		// subscription row. The billing invariant holds: the order pipeline still
+		// never reads subscription status; it refuses on the seller's own
+		// "ordering is paused" switch, like opening hours or a minimum order.
+		orderingPausedAt: v.optional(v.number()),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would
@@ -2298,11 +2306,41 @@ export default defineSchema({
 			v.literal("active"),
 			v.literal("past_due"),
 			v.literal("cancelled"),
+			// Off-Season Hold (z8r3fday24): a PAID seller paused between seasons.
+			// Ordering is off (effective orderCap 0 — resolved, never stored), the
+			// storefront / catalog / buyer list / order history stay live, and the
+			// row bills HOLD_MONTHLY_PRICES (RM19 / S$9) each period instead of the
+			// tier price. `plan` keeps the tier they resume to. A status literal,
+			// not a flag: it is mutually exclusive with the others and the cron
+			// already scans `by_status`. Reachable from active / past_due only.
+			v.literal("on_hold"),
 		),
+		// The free period's BACKSTOP deadline (signup + TRIAL_DAYS). Since the
+		// start-when-you-sell reset (z8r3fday24) the free period usually ends
+		// EARLIER, at the store's first live order — see freePeriodEndedAt.
 		trialEndsAt: v.optional(v.number()),
-		// Stamped when the "trial ends in 3 days" email is sent, so the daily cron
-		// sends it at most once.
+		// Stamped when the "free period ends in 3 days" email is sent, so the daily
+		// cron sends it at most once.
 		trialReminderSentAt: v.optional(v.number()),
+		// Start-when-you-sell (z8r3fday24): when the free period ENDED and why —
+		// `first_order` (any order-create channel; stamped from the usage seam)
+		// or `backstop` (the daily cron at trialEndsAt). Set exactly once; the
+		// first invoice is issued in the same beat (invoices.internalIssueFirst
+		// Invoice). The status stays `trialing` until that invoice is paid
+		// (→ active) or overdue (→ past_due) — the invoice's dueDate is the only
+		// lock, exactly like a renewal. Absent = still free.
+		freePeriodEndedAt: v.optional(v.number()),
+		freePeriodEndReason: v.optional(
+			v.union(v.literal("first_order"), v.literal("backstop")),
+		),
+		// Off-Season Hold bookkeeping. `heldAt` = when the current hold began
+		// (cleared on resume). `periodPaidBy` = what bought the CURRENT period —
+		// stamped at settle from the invoice's `kind`; a resume mid-period issues
+		// the tier invoice at once when the period was bought by a hold invoice,
+		// and nothing when it was bought by the plan (they already paid for the
+		// month). Absent = plan (every row that predates holds).
+		heldAt: v.optional(v.number()),
+		periodPaidBy: v.optional(v.union(v.literal("plan"), v.literal("hold"))),
 		currentPeriodStart: v.optional(v.number()),
 		currentPeriodEnd: v.optional(v.number()),
 		cancelledAt: v.optional(v.number()),
@@ -2436,10 +2474,17 @@ export default defineSchema({
 		origin: v.optional(
 			v.union(
 				v.literal("admin"), // Arif, from the admin console
-				v.literal("self_serve"), // the seller's own plan picker
+				v.literal("self_serve"), // the seller's own plan picker / plan switch / hold
 				v.literal("auto_renewal"), // the daily cron's renewal issuance
+				v.literal("free_period_end"), // start-when-you-sell: the first invoice
 			),
 		),
+		// What is being billed (z8r3fday24): the tier (`plan`, the default and
+		// every pre-existing row) or an Off-Season Hold period (`hold`, priced
+		// from HOLD_MONTHLY_PRICES; `plan` then names the tier the seller resumes
+		// to). Settle reads it: a paid hold invoice keeps the sub `on_hold` and
+		// stamps periodPaidBy "hold" instead of activating the tier.
+		kind: v.optional(v.union(v.literal("plan"), v.literal("hold"))),
 		// --- HitPay Pay-now link + gateway settle (86eyb6z4r) ------------------
 		// One-off payment request minted against KEDAIPAL's own HitPay account so
 		// the seller can pay this invoice online. Top-level + indexed so the v1

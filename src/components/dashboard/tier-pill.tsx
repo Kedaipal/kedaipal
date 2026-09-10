@@ -65,7 +65,10 @@ export function TierPill({
 	);
 	const displayLabel =
 		compact && subscription.status === "trialing"
-			? label.replace(/(\d+) days? left/i, "$1d left")
+			? label
+					.replace(/(\d+) days? left/i, "$1d left")
+					.replace(/until first order/i, "1st order")
+					.replace(/First invoice due/i, "Invoice due")
 			: label;
 
 	// Admin pill points at the console; the seller-state pill points at billing.

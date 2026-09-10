@@ -41,7 +41,7 @@ import { m } from "../paraglide/messages";
 
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 const SEO_DESC =
-	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter RM79/mo, Pro RM149/mo, Scale RM299/mo flat — S$ pricing for Singapore.";
+	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter RM79/mo, Pro RM149/mo, Scale RM399/mo flat — S$ pricing for Singapore.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
@@ -165,10 +165,9 @@ interface Feature {
 function useFeatures(): Feature[] {
 	return [
 		{
-			// Decided allowances (Starter 100 / Pro 200 / Scale 400) from the caps
-			// ticket 86eye2ccu. Copy leads enforcement (Arif, 9 Aug 2026): PLAN_CAPS
-			// still reads 2,000 for Scale until that ticket ships the soft-cap meter,
-			// but the page must never advertise a number the business can't hold.
+			// Allowances (Starter 100 / Pro 200 / Scale 400) from the caps ticket
+			// 86eye2ccu — enforced in PLAN_CAPS since the pricing reset (z8r3fday24),
+			// and plans.test.ts pins that the two agree.
 			label: m.pricingpage_feat_orders_per_month(),
 			starter: "100",
 			pro: "200",
@@ -433,8 +432,8 @@ function TierCard({
 	pending: boolean;
 }) {
 	const shouldReduceMotion = useReducedMotion();
-	// Scale is the flat multi-outlet tier (RM299/mo — Arif, 19 Jul 2026), still
-	// not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
+	// Scale is the flat multi-outlet tier (RM399/mo — Arif, FINAL 6 Sep 2026),
+	// still not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
 	// See docs/pricing.md.
 	const isScale = tier.id === "scale";
 	const price =
