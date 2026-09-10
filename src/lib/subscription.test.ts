@@ -130,6 +130,37 @@ describe("resolveBannerState", () => {
 		).toBe("pastDue");
 	});
 
+	test("a failing auto-charge outranks the invoice countdown, but not past_due (86eyb6z4r)", () => {
+		const failing = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+		};
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: failing }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewFailed");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: failing }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
+		// A healthy saved method changes nothing.
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: { ...failing, failedAttempts: 0, failing: false } }),
+				NOW + 30 * DAY,
+				NOW,
+			).kind,
+		).toBe("none");
+	});
+
 	test("active with a pending invoice due within 5 days → invoiceWarn", () => {
 		expect(
 			resolveBannerState(sub({ status: "active" }), NOW + 3 * DAY, NOW),

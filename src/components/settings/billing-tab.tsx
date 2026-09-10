@@ -1,9 +1,11 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
+import { useAction } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	Award,
 	Banknote,
+	CreditCard,
 	ExternalLink,
 	LifeBuoy,
 	Mail,
@@ -11,6 +13,8 @@ import {
 	QrCode,
 	ShieldCheck,
 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -31,22 +35,32 @@ import {
 } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
+import { AutoRenewalCard } from "./auto-renewal-card";
 import { InvoiceDownloadButton } from "./invoice-download-button";
+import { PlanPickerCard } from "./plan-picker-card";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
 >;
 
 /** Retailer-facing billing dashboard (Settings → Billing). Current plan + status,
- * the pending invoice + how to pay (Kedaipal's bank/DuitNow/QR), Founding ribbon,
- * and invoice history. See docs/manual-subscription.md. */
+ * the pending invoice + how to pay (Pay-now link, then Kedaipal's
+ * bank/DuitNow/QR), the auto-renewal card, the self-serve plan picker, the
+ * annual offer, Founding ribbon, and invoice history. See
+ * docs/manual-subscription.md + docs/hitpay-recurring.md. */
 export function BillingTab({
 	retailer,
 	target,
+	billingReturn,
+	onBillingReturnHandled,
 }: {
 	retailer: Retailer;
 	/** Deep-link target — which card to ring, and how (see FulfilmentTab). */
 	target?: CardTarget;
+	/** From the URL: back from HitPay's auth page ("autorenew") or its invoice
+	 * checkout ("paid"). Undefined on a plain visit. */
+	billingReturn?: "autorenew" | "paid";
+	onBillingReturnHandled?: () => void;
 }) {
 	const sub = retailer.subscription;
 	const ring = (anchor: string): FixHighlight | undefined =>
@@ -57,7 +71,37 @@ export function BillingTab({
 	const instructions = useQuery(
 		convexQuery(api.billing.paymentInstructions, {}),
 	).data;
+	const gateway = useQuery(
+		convexQuery(api.subscriptionPayments.billingGatewayAvailable, {}),
+	).data;
 	const supportWa = useSupportWaNumber();
+
+	// Back from the invoice's HitPay checkout: reconcile against HitPay's
+	// status API instead of trusting the redirect (lost-webhook safety net —
+	// the settle is idempotent, so racing the webhook is harmless).
+	const verifyPayment = useAction(api.subscriptionPayments.verifyInvoicePayment);
+	const verifiedReturn = useRef(false);
+	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	useEffect(() => {
+		if (billingReturn !== "paid" || verifiedReturn.current) return;
+		verifiedReturn.current = true;
+		setConfirmingPayment(true);
+		void (async () => {
+			try {
+				const result = await verifyPayment({});
+				if (result.settled) {
+					toast.success("Payment received — your plan is active", {
+						description: "A receipt is on its way to your inbox.",
+					});
+				}
+			} catch {
+				// The webhook usually settles it anyway; the invoice list is reactive.
+			} finally {
+				setConfirmingPayment(false);
+				onBillingReturnHandled?.();
+			}
+		})();
+	}, [billingReturn, verifyPayment, onBillingReturnHandled]);
 
 	// A Kedaipal admin on their OWN store runs the app for free and is never on a
 	// tier — no trial, plan, cap or invoice applies. Mirror the shell chrome (which
@@ -134,8 +178,10 @@ export function BillingTab({
 							Founding Member #{retailer.foundingMemberRank} of 10
 						</p>
 						<p className="text-xs text-amber-800/80 dark:text-amber-300/80">
-							Your 30% lifetime discount is locked in — thank you for backing
-							Kedaipal early.
+							Your 30% discount is locked in — thank you for backing Kedaipal
+							early. It stays yours as long as your subscription doesn't lapse
+							for more than 3 months; your rank and badge are permanent either
+							way.
 						</p>
 					</div>
 				</div>
@@ -305,6 +351,22 @@ export function BillingTab({
 
 					<div className="border-t border-border pt-4">
 						<p className="text-sm font-medium">How to pay</p>
+						{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
+						    hosted page, auto-confirmed — the manual rails stay below. */}
+						{pending.gatewayPayment?.url ? (
+							<div className="mt-2">
+								<a
+									href={pending.gatewayPayment.url}
+									className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
+								>
+									<CreditCard className="size-4" />
+									{confirmingPayment ? "Confirming payment…" : "Pay online now"}
+								</a>
+								<p className="mt-1.5 text-xs text-muted-foreground">
+									Confirmed automatically — no need to message us after.
+								</p>
+							</div>
+						) : null}
 						{pending.currency !== "MYR" ? (
 							// Cross-border invoice (e.g. SGD): the configured MY bank/DuitNow
 							// rails can't settle it, so never show them here — mirrors the
@@ -374,40 +436,65 @@ export function BillingTab({
 				</section>
 			) : null}
 
-			{/* No invoice yet, but they need to act → reach Arif on WhatsApp. Manual
-			    sub: Arif issues + activates once payment lands, so there's no
-			    self-serve plan picker. */}
+			{/* No invoice yet, but they need to act. With the payment gateway
+			    configured this is the SELF-SERVE plan picker (86eyb6z4r) — pick a
+			    plan, get an invoice with a Pay-now button, done. Without it, the
+			    manual "message us" flow renders exactly as before. */}
 			{!adminOwnAccount &&
 			!pending &&
 			!sub?.comped &&
-			(sub?.status === "trialing" || sub?.status === "past_due") ? (
-				<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
-					<div>
-						<p className="text-sm font-medium">
-							{sub.status === "past_due"
-								? "Renew your subscription"
-								: "Ready to choose a plan?"}
-						</p>
-						<p className="mt-1 text-xs text-muted-foreground">
-							Message us on WhatsApp and we'll send your invoice. Your plan
-							activates once payment lands.
-						</p>
-					</div>
-					<a
-						href={buildWaContactLink(
-							sub.status === "past_due"
-								? `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`
-								: `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`,
-							supportWa,
-						)}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
-					>
-						<ExternalLink className="size-4" />
-						Message us
-					</a>
-				</section>
+			(sub?.status === "trialing" ||
+				sub?.status === "past_due" ||
+				sub?.status === "cancelled") ? (
+				gateway?.payNow ? (
+					<PlanPickerCard
+						sub={sub}
+						currency={gateway.currency}
+						renewing={sub.status !== "trialing"}
+						foundingPricing={gateway.foundingPricing}
+						foundingPricingLapsed={gateway.foundingPricingLapsed}
+					/>
+				) : (
+					<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
+						<div>
+							<p className="text-sm font-medium">
+								{sub.status === "trialing"
+									? "Ready to choose a plan?"
+									: "Renew your subscription"}
+							</p>
+							<p className="mt-1 text-xs text-muted-foreground">
+								Message us on WhatsApp and we'll send your invoice. Your plan
+								activates once payment lands.
+							</p>
+						</div>
+						<a
+							href={buildWaContactLink(
+								sub.status === "trialing"
+									? `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`
+									: `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`,
+								supportWa,
+							)}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+						>
+							<ExternalLink className="size-4" />
+							Message us
+						</a>
+					</section>
+				)
+			) : null}
+
+			{/* Auto-renewal (86eyb6z4r) — rendered whenever the gateway is up for a
+			    real (non-comped) account, whatever the plan state: the seller can
+			    set it up ahead of their first renewal or fix a failing method. */}
+			{!adminOwnAccount && !sub?.comped && sub && gateway?.autoRenew ? (
+				<AutoRenewalCard
+					sub={sub}
+					methods={gateway.methods}
+					returnFromSetup={billingReturn === "autorenew"}
+					onReturnHandled={onBillingReturnHandled ?? (() => {})}
+				/>
 			) : null}
 
 			{/* History */}

@@ -102,6 +102,30 @@ export function SubscriptionBanner({
 		);
 	}
 
+	// A declined auto-charge: access is still on, but the saved method needs
+	// attention — name the problem and land the seller on the fix. Persistent
+	// (no dismiss): it disappears when the invoice settles or dunning resolves.
+	if (state.kind === "autoRenewFailed") {
+		return (
+			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
+				<p className="flex-1 text-sm text-foreground/90">
+					<span className="font-medium">
+						We couldn't charge your saved payment method for your renewal.
+					</span>{" "}
+					Pay the invoice or update your method — your store stays live
+					meanwhile.
+				</p>
+				<Link
+					to="/app/settings"
+					search={{ tab: "billing" }}
+					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+				>
+					Fix payment
+				</Link>
+			</div>
+		);
+	}
+
 	if (state.kind === "pastDue") {
 		const waUrl = buildWaContactLink(
 			`Hi, I'd like to settle my Kedaipal subscription for my store (/${slug}).`,

@@ -324,6 +324,8 @@ export const Route = createFileRoute("/app/settings")({
 		tab?: SettingsTab;
 		fix?: CountrySetupItemKey;
 		spot?: SettingsSpotlightKey;
+		autorenew?: "return";
+		paid?: "return";
 	} => {
 		const raw =
 			typeof search.tab === "string"
@@ -348,6 +350,11 @@ export const Route = createFileRoute("/app/settings")({
 				: undefined,
 			...(fix ? { fix } : {}),
 			...(spot ? { spot } : {}),
+			// HitPay redirect returns (86eyb6z4r): back from the auto-renewal
+			// authorisation page / from an invoice's hosted checkout. The billing
+			// tab reconciles once and then clears the flag from the URL.
+			...(search.autorenew === "return" ? { autorenew: "return" as const } : {}),
+			...(search.paid === "return" ? { paid: "return" as const } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -422,7 +429,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix, spot } = Route.useSearch();
+	const { tab, fix, spot, autorenew, paid } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -840,7 +847,20 @@ function SettingsRoute() {
 				) : null}
 
 				{activeTab === "billing" ? (
-					<BillingTab retailer={retailer} target={cardTarget} />
+					<BillingTab
+						retailer={retailer}
+						target={cardTarget}
+						billingReturn={
+							autorenew === "return"
+								? "autorenew"
+								: paid === "return"
+									? "paid"
+									: undefined
+						}
+						onBillingReturnHandled={() =>
+							navigate({ search: { tab: "billing" }, replace: true })
+						}
+					/>
 				) : null}
 
 				{activeTab === "whatsapp" ? (

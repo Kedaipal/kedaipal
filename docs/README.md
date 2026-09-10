@@ -23,6 +23,7 @@ How the product actually works. Read in this order.
 | [order-note.md](./order-note.md) | Shopper's free-text note at checkout: persisted on the order, carried in the `wa.me` body, surfaced to the seller + echoed to the buyer. |
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
+| [manual-subscription.md](./manual-subscription.md) → [hitpay-recurring.md](./hitpay-recurring.md) | How sellers pay **Kedaipal**: trial → invoice → settle → entitlement (manual v1 + the seam), then the automated layer — cron-issued renewals, invoice Pay-now links, self-serve subscribe, tokenised auto-renewal + dunning on Kedaipal's own HitPay account. |
 | [fulfilment.md](./fulfilment.md) | Delivery + self-collect as optional, symmetric methods: per-method toggles, the working-method invariant, multi-location pickup library, frozen snapshot lifecycle, WhatsApp confirm composition. |
 | [delivery-live-pricing.md](./delivery-live-pricing.md) | **What the buyer pays for delivery when a store books couriers live:** the provider-aware rule (quote every armed provider, charge the higher), why min-pricing was rejected, cold-cart handling, and the cross-currency guard. |
 | [delivery-lalamove.md](./delivery-lalamove.md) | Intra-city rider booking: live checkout quotes, the confirm-and-dispatch flow, webhook-driven status, and the disabled-with-reason taxonomy. |
