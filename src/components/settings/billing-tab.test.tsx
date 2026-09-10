@@ -799,6 +799,49 @@ describe("BillingTab — free period, first invoice, Off-Season Hold (z8r3fday24
 		expect(screen.queryByText("Orders this month")).toBeNull();
 	});
 
+	it("pause copy uses the SERVER billing rule — a hold-bought period or a pending plan invoice bills now, never 'after {date}'", () => {
+		const DAY2 = 24 * 60 * 60 * 1000;
+		// Resumed mid-hold-bought period: paid through a future date, but by the
+		// HOLD — pausing again bills the hold immediately (the live-found bug).
+		mockQueries({ isAdmin: false });
+		const { unmount } = render(
+			<BillingTab retailer={paidPro({ periodPaidBy: "hold" })} />,
+		);
+		expect(screen.queryByText(/the hold starts billing after that/)).toBeNull();
+		expect(
+			screen.getByText(/hold invoice \(RM\s*19\.00\) is issued right away/),
+		).toBeTruthy();
+		unmount();
+
+		// Active with a pending PLAN invoice: pausing voids it and bills the hold
+		// now — the copy must say both.
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					_id: "i_pend",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					amount: 14900,
+					plan: "pro",
+					billingCycle: "monthly",
+					origin: "self_serve",
+					invoiceNumber: "INV-PEND",
+					dueDate: Date.now() + 12 * DAY2,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(<BillingTab retailer={paidPro()} />);
+		expect(
+			screen.getByText(
+				/unpaid Pro invoice is cancelled and your first hold invoice/,
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/the hold starts billing after that/)).toBeNull();
+	});
+
 	it("a seller locked over the TIER invoice is offered 'pause instead'; comped and admins never see the card", () => {
 		mockQueries({ isAdmin: false });
 		const { unmount } = render(<BillingTab retailer={retailer()} />); // past_due fixture

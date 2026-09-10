@@ -8,7 +8,7 @@ import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	HOLD_MONTHLY_PRICES,
 } from "../../../convex/lib/plans";
-import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
+import { HOLD_LABEL, holdBillsNow } from "../../../convex/lib/seasonalHold";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -147,7 +147,17 @@ export function SeasonalHoldCard({
 	}
 
 	// --- Pause states --------------------------------------------------------
-	const pauseBillsNow = lockedOverPlan || paidThrough === undefined;
+	// THE server rule (lib/seasonalHold.ts), not a re-derivation — found live:
+	// a store resumed mid-hold-bought-period (periodPaidBy "hold"), carrying the
+	// pending plan invoice its resume issued, read "the hold starts billing
+	// after {date}" while pausing would actually bill the hold immediately.
+	const pauseBillsNow = holdBillsNow({
+		currentPeriodEnd: sub.currentPeriodEnd,
+		periodPaidBy: sub.periodPaidBy,
+		hadPendingInvoice: pendingKind === "plan",
+		now,
+	});
+	const voidsPlanInvoice = pendingKind === "plan";
 	return (
 		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
 			<div className="flex items-start gap-3">
@@ -174,9 +184,11 @@ export function SeasonalHoldCard({
 				<p className="text-xs text-muted-foreground">
 					{lockedOverPlan
 						? `Your unpaid ${plan} invoice is cancelled, editing unlocks, and your first hold invoice (${price}) is issued now with 14 days to pay.`
-						: pauseBillsNow
-							? `Your first hold invoice (${price}) is issued right away, with 14 days to pay.`
-							: `You're paid up for ${plan} until ${paidThrough ? formatShortDate(paidThrough) : "your period ends"} — the hold starts billing after that.`}
+						: voidsPlanInvoice
+							? `Your unpaid ${plan} invoice is cancelled and your first hold invoice (${price}) is issued now, with 14 days to pay.`
+							: pauseBillsNow
+								? `Your first hold invoice (${price}) is issued right away, with 14 days to pay.`
+								: `You're paid up for ${plan} until ${paidThrough ? formatShortDate(paidThrough) : "your period ends"} — the hold starts billing after that.`}
 				</p>
 				<Button
 					type="button"
@@ -193,9 +205,11 @@ export function SeasonalHoldCard({
 				onOpenChange={(open) => setConfirm(open ? "pause" : null)}
 				title="Pause for the season?"
 				description={`New orders stop immediately — buyers see a seasonal-break note. Everything else stays live. ${
-					pauseBillsNow
-						? `Your first ${price} hold invoice is issued now.`
-						: `The ${price}/month hold starts billing after ${paidThrough ? formatShortDate(paidThrough) : "your current period"}.`
+					voidsPlanInvoice
+						? `Your unpaid ${plan} invoice is cancelled and your first ${price} hold invoice is issued now.`
+						: pauseBillsNow
+							? `Your first ${price} hold invoice is issued now.`
+							: `The ${price}/month hold starts billing after ${paidThrough ? formatShortDate(paidThrough) : "your current period"}.`
 				} Resume any time from here.`}
 				confirmLabel="Pause ordering"
 				onConfirm={() => run(true)}
