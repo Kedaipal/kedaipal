@@ -231,6 +231,23 @@ export async function getAccess(
 }
 
 /**
+ * Minutes between the first order and its invoice — deliberately NOT 0.
+ * Product: the seller's inbox beat belongs to the ORDER at that moment; the
+ * "your first order is in — here's your first invoice" email landing a few
+ * minutes later reads as a follow-up, not a toll booth, and the due date
+ * (+14d) makes the offset irrelevant. Infrastructure: a zero-delay schedule
+ * on the plain order-create path made every real-timer convex-test suite run
+ * the billing chain CONCURRENTLY with test transactions — convex-test stages
+ * writes on one per-instance stack, which is not concurrency-safe (the
+ * intermittent mockup-blob CI failure) — and a scheduled mutation firing
+ * after instance teardown crashes its scheduler outright. With a minutes
+ * delay the chain is inert inside any test file's lifetime unless a suite
+ * advances fake timers on purpose (the invoices.test.ts pattern). Do not
+ * lower this below a couple of minutes without re-checking that class.
+ */
+const FIRST_INVOICE_DELAY_MS = 10 * 60 * 1000;
+
+/**
  * Start-when-you-sell (z8r3fday24): a store's FIRST LIVE ORDER ends its free
  * period and fires the first invoice. Called from the one order-created seam
  * every channel funnels through (`subscriptionUsage.recordOrderCreated` —
@@ -269,7 +286,7 @@ export async function endFreePeriodOnFirstOrder(
 		freePeriodEndReason: "first_order",
 	});
 	await ctx.scheduler.runAfter(
-		0,
+		FIRST_INVOICE_DELAY_MS,
 		internal.invoices.internalIssueFirstInvoice,
 		{ subscriptionId: sub._id },
 	);

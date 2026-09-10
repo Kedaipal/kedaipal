@@ -204,11 +204,17 @@ export function SubscriptionBanner({
 			: state.kind === "firstInvoice"
 				? `${
 						state.reason === "first_order"
-							? "Your first order is in — your first invoice is ready"
-							: "Your free period has ended — your first invoice is ready"
+							? "Your first order is in — your first invoice is "
+							: "Your free period has ended — your first invoice is "
 					}${
-						pending ? ` · ${formatPrice(pending.total, pending.currency)}` : ""
-					}, due in ${dayLabel(state.daysLeft)}. Pay it from Billing, or switch plan there first.`
+						state.daysLeft === undefined
+							? "on its way. It'll appear in Billing in a few minutes."
+							: `ready${
+									pending
+										? ` · ${formatPrice(pending.total, pending.currency)}`
+										: ""
+								}, due in ${dayLabel(state.daysLeft)}. Pay it from Billing, or switch plan there first.`
+					}`
 				: isEndedTrial
 					? "Your free period has ended. Choose a plan to continue — your storefront stays live."
 					: `Your free period ends in ${dayLabel(state.kind === "trialWarn" ? state.daysLeft : 0)} — or sooner, with your first order. Your first invoice arrives then; nothing to do before that.`;

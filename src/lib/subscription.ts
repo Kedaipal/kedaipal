@@ -208,11 +208,14 @@ export type BannerState =
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
 	| { kind: "held" }
-	/** Start-when-you-sell: the first invoice is out and not yet near due. */
+	/** Start-when-you-sell: the free period ended. With a pending invoice,
+	 * `daysLeft` counts to its due date; without one (the minutes before the
+	 * machine writes it, or a voided bill awaiting the cron's rewrite) it is
+	 * absent — "your first invoice is on its way". */
 	| {
 			kind: "firstInvoice";
 			reason: "first_order" | "backstop";
-			daysLeft: number;
+			daysLeft?: number;
 	  }
 	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
 	| { kind: "orderCapOver"; used: number; cap: number }
@@ -255,7 +258,10 @@ export function resolveBannerState(
 					reason: free.reason,
 					daysLeft: daysUntil(pendingDueAt, now),
 				};
-			return { kind: "trialWarn", daysLeft: 0, ended: true };
+			// No invoice on file yet (the minutes-long issue delay, or a voided
+			// bill the cron will rewrite) → "on its way", never the red ended
+			// state: the machine writes the bill, the seller has nothing to fix.
+			return { kind: "firstInvoice", reason: free.reason };
 		}
 		if (free.kind === "free" && free.daysLeft <= warnDays)
 			return { kind: "trialWarn", daysLeft: free.daysLeft, ended: false };

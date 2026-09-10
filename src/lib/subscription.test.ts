@@ -276,8 +276,9 @@ describe("resolveBannerState", () => {
 				NOW,
 			).kind,
 		).toBe("none");
-		// The period ended (first order or backstop) but no bill is on file
-		// (voided / failed) — the old ended state, until the cron writes it again.
+		// The period ended but no bill is on file yet (the minutes-long issue
+		// delay, or a voided bill the cron will rewrite) — "on its way", never
+		// the red ended state: the machine writes the bill, nothing to fix.
 		expect(
 			resolveBannerState(
 				sub({
@@ -289,7 +290,7 @@ describe("resolveBannerState", () => {
 				undefined,
 				NOW,
 			),
-		).toEqual({ kind: "trialWarn", daysLeft: 0, ended: true });
+		).toEqual({ kind: "firstInvoice", reason: "backstop" });
 	});
 
 	test("first invoice out + pending → firstInvoice nudge until the invoiceWarn window takes over (start-when-you-sell)", () => {
