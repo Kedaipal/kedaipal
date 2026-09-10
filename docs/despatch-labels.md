@@ -189,7 +189,8 @@ delivery address), 1 cancelled"). Never a bare "skipped 4".
 
 **A label is a fixed-size physical object, so the layout can never overflow.**
 The header is fixed; the bottom stack (payment strip → courier + barcode → meta
-line → note → contents → footer) is **measured before anything is drawn**; and
+line → note → contents → footer → the fixed "Powered by Kedaipal" lockup slot,
+z8r3fdcwd0) is **measured before anything is drawn**; and
 the recipient block gets exactly what is left, truncating lines rather than
 spilling. That's the design system's "uniform cards" rule applied to paper, and
 it's covered by a test that throws 200-character names, 12 address lines and 40

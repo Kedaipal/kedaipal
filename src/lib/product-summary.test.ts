@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { describeProduct, type SummaryInput } from "./product-summary";
+import {
+	describeProduct,
+	type SummaryInput,
+	weekendRateConsequence,
+} from "./product-summary";
 
 function row(
 	partial: Partial<SummaryInput["rows"][number]> = {},
@@ -189,5 +193,109 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 				"RM",
 			),
 		).toBe("Booking · 1 spot/night · No price yet");
+	});
+});
+
+describe("describeProduct — weekend rate (S13)", () => {
+	it("names the second rate by its nights, after the base price", () => {
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "80", blockWhenOutOfStock: false })],
+					customLine: null,
+					booking: {
+						capacityPerNight: "5",
+						weekendPrice: "120",
+						weekendDays: [5, 6],
+					},
+				},
+				"RM",
+			),
+		).toBe("Booking · 5 spots/night · RM 80/night · RM 120 Fri & Sat");
+	});
+
+	it("a package never shows it — one flat price", () => {
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "150", blockWhenOutOfStock: false })],
+					customLine: null,
+					booking: {
+						capacityPerNight: "",
+						packageLength: "30",
+						weekendPrice: "120",
+						weekendDays: [5, 6],
+					},
+				},
+				"RM",
+			),
+		).toBe("Booking · 30-day package · Unlimited spots · RM 150 per package");
+	});
+
+	it("blank rate or no nights adds nothing", () => {
+		const base = {
+			options: [],
+			rows: [row({ price: "80", blockWhenOutOfStock: false })],
+			customLine: null,
+		};
+		expect(
+			describeProduct(
+				{ ...base, booking: { capacityPerNight: "1", weekendPrice: "" } },
+				"RM",
+			),
+		).toBe("Booking · 1 spot/night · RM 80/night");
+		expect(
+			describeProduct(
+				{
+					...base,
+					booking: { capacityPerNight: "1", weekendPrice: "120", weekendDays: [] },
+				},
+				"RM",
+			),
+		).toBe("Booking · 1 spot/night · RM 80/night");
+	});
+});
+
+describe("weekendRateConsequence", () => {
+	it("states which nights charge what, in the store's currency", () => {
+		expect(
+			weekendRateConsequence(
+				{ basePrice: "80", weekendPrice: "120", weekendDays: [5, 6] },
+				"RM",
+			),
+		).toBe("Fri and Sat nights charge RM 120, other nights RM 80.");
+		expect(
+			weekendRateConsequence(
+				{ basePrice: "", weekendPrice: "45.50", weekendDays: [0] },
+				"S$",
+			),
+		).toBe("Sun nights charge S$ 45.50.");
+	});
+
+	it("is silent when blank, and explains an empty or full night set", () => {
+		expect(
+			weekendRateConsequence(
+				{ basePrice: "80", weekendPrice: "", weekendDays: [5, 6] },
+				"RM",
+			),
+		).toBeNull();
+		expect(
+			weekendRateConsequence(
+				{ basePrice: "80", weekendPrice: "120", weekendDays: [] },
+				"RM",
+			),
+		).toMatch(/at least one night/);
+		expect(
+			weekendRateConsequence(
+				{
+					basePrice: "80",
+					weekendPrice: "120",
+					weekendDays: [0, 1, 2, 3, 4, 5, 6],
+				},
+				"RM",
+			),
+		).toMatch(/every night/);
 	});
 });

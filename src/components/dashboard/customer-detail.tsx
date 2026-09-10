@@ -13,6 +13,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { currentBookingLine } from "../../../convex/lib/bookingPeriod";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatPhone, getDisplayName } from "../../lib/customer";
 import {
@@ -47,6 +48,9 @@ export function CustomerDetail({
 	ordersLoading,
 }: CustomerDetailProps) {
 	const displayName = getDisplayName(customer);
+	// Derived from the orders this page already loads — no extra query for a
+	// one-line answer.
+	const bookingLine = currentBookingLine(orders);
 	const hasName = Boolean(
 		customer.name?.trim() || customer.waProfileName?.trim(),
 	);
@@ -67,6 +71,17 @@ export function CustomerDetail({
 						{formatPhone(customer.waPhone)} · customer since{" "}
 						{formatShortDate(customer.firstOrderAt)}
 					</p>
+					{/* The reception-desk glance (S8): is this person CURRENT? It sits
+					    directly under the name because that is the question being asked
+					    while they stand at the counter — above the lifetime metrics,
+					    which are the slower "who is this to my business" read. Absent
+					    entirely for a customer with no bookings, so a product-only
+					    store's card is unchanged. */}
+					{bookingLine ? (
+						<span className="mt-1 rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent-emphasis">
+							{bookingLine}
+						</span>
+					) : null}
 				</div>
 				<div className="mt-1 flex w-full gap-2">
 					<a

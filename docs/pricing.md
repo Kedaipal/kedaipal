@@ -13,8 +13,9 @@ numbers come from the caps ticket `86eye2ccu`.
 - **`src/components/landing/pricing-teaser.tsx`** — the landing-page teaser; same
   three tiers, links to the full page.
 - **`src/components/cost/cost-calculator.tsx`** (`/cost`) — not a tier surface,
-  but it anchors the seller's own leak against the **Founding price**, so it
-  prices Kedaipal too and follows the same region.
+  but it anchors the seller's own leak against the **Pro list price**, so it
+  prices Kedaipal too and follows the same region. (It anchored on the Founding
+  price until that was retired — 30 Aug 2026 pricing reset, ClickUp z8r3fday21.)
 - Copy lives in `messages/en.json` + `messages/ms.json` + `messages/zh.json`
   (`pricing_*` for the teaser, `pricingpage_*` for the full page, `cost_*` for
   the calculator). All three locales are kept in lockstep — the i18n parity test
@@ -122,7 +123,7 @@ third billing currency is a compile error, never a silent Malaysian fallback.
 
 | | MYR | SGD |
 | --- | --- | --- |
-| Founding anchor | RM104 | S$41 |
+| Pro price anchor | RM149 | S$59 |
 | Labour rate (`LABOR_RATE_PER_HR`) | 25/hr | 15/hr |
 | AOV slider | max 500, step 5, default 35 | max 200, step 2, default 15 |
 
@@ -132,9 +133,9 @@ The MY column is byte-identical to pre-SG and a test pins it.
 implausibly cheap labour to a Singaporean and would quietly undercut the
 chase-cost half of the argument.
 
-`FOUNDING_PRICE` is **derived** from `FOUNDING_MONTHLY_PRICES`, not restated —
-the file used to carry its own literal `104`, a second copy of the Pro founding
-price with nothing stopping it drifting. A test asserts the identity.
+`PRO_PRICE` is **derived** from `PLAN_MONTHLY_PRICES`, not restated — the file
+used to carry its own literal, a second copy of the Pro price with nothing
+stopping it drifting. A test asserts the identity.
 
 The calculator holds only what the visitor **stated** (a shared link's params,
 then each slider they move) and derives the rest, because the region can resolve
@@ -179,8 +180,15 @@ today's is.
 | Tier | Price | Positioning | Orders (display) | Seats | Outlets |
 | --- | --- | --- | --- | --- | --- |
 | **Starter** | RM79/mo | Single home seller, just starting | 100/mo | 1 | 1 |
-| **Pro** | RM149/mo (founding RM104) | Established single shop | 200/mo | 2 | 1 |
-| **Scale** | **RM299/mo flat — Coming soon** (founding RM209) | Multi-outlet / high-volume seller | ~400/mo | 5 | Up to 3 (+RM49/mo each additional) |
+| **Pro** | RM149/mo | Established single shop | 200/mo | 2 | 1 |
+| **Scale** | **RM299/mo flat — Coming soon** | Multi-outlet / high-volume seller | ~400/mo | 5 | Up to 3 (+RM49/mo each additional) |
+
+**Founding pricing (RM104/S$41) is retired** (30 Aug 2026 pricing reset,
+ClickUp z8r3fday21): no public surface advertises it any more — a guard in
+`landing-redesign.test.ts` now covers `cost_*` too — and existing Founding
+Members simply keep their rate (`FOUNDING_MONTHLY_PRICES` stays in billing for
+them). Scale's launch price moves to **RM399/S$149** with the companion backend
+ticket (z8r3fday24); this table updates when that constant lands.
 
 All three prices are **flat** — no metering (Arif, 19 Jul 2026). The 1 Jul ICP
 audit disqualified reseller/wholesale networks; our real payers outgrow Pro on
@@ -190,12 +198,12 @@ All reseller-band copy, the band table, and its i18n keys were **removed** (the 
 
 Presentation rules:
 
-- **Annual billing is hidden** (`SHOW_ANNUAL_TOGGLE = false` in `pricing.tsx`).
-  There are no recurring-billing rails behind an annual price yet (HitPay
-  recurring `86eyb6z4r` unbuilt) and a permanent visible % discount undercuts the
-  flat-price posture (Arif, 28 Jul + 9 Aug 2026). Monthly is the only cycle. Flip
-  the constant to re-expose the toggle; if reinstated, frame the saving as
-  "2 months free", never a percentage.
+- **The public annual toggle stays hidden** (`SHOW_ANNUAL_TOGGLE = false` in
+  `pricing.tsx`). There are no recurring-billing rails behind a public annual
+  price (HitPay recurring `86eyb6z4r` unbuilt), so it would be a dead-end CTA,
+  and a permanent visible % discount undercuts the flat-price posture (Arif,
+  28 Jul + 9 Aug 2026). Monthly is the only **advertised** cycle. Annual is sold
+  in-app instead — see [Annual billing](#annual-billing) below.
 - Scale is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
   (trials are Pro-only), on both the full page and the teaser.
 - **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
@@ -236,7 +244,56 @@ Presentation rules:
   build ships. "Additional outlets RM49/mo each" is display copy only — the billing
   lever ships with that build.
 - Founding is generic across plans: `FOUNDING_MONTHLY_PRICE` covers pro (RM104) +
-  scale (RM209), 30% lifetime — not hardcoded to Pro.
+  scale (RM209), 30% lifetime — not hardcoded to Pro. **Retired for new signups
+  30 Aug 2026**; the constants remain only so existing members keep their rate.
+
+## Annual billing
+
+**10 months charged, 12 received.** Always "2 months free", never a percentage —
+a standing % badge reads as a markdown on a flat price (Arif, 28 Jul + 9 Aug
+2026).
+
+`annualQuote(plan, founding, currency)` in `convex/lib/plans.ts` is the **single
+author** of every annual number: `monthly`, `annualTotal`, `effectiveMonthly`,
+`saving`, `monthsFree`. `annualTotal` *is* `planPrice(plan, "annual", …)`, pinned
+by a test.
+
+| Tier | MYR/yr | Effective/mo | Saves | SGD/yr | Effective/mo | Saves |
+| --- | --- | --- | --- | --- | --- | --- |
+| Starter | RM790 | RM65.84 | RM158 | S$290 | S$24.17 | S$58 |
+| Pro | RM1,490 | RM124.17 | RM298 | S$590 | S$49.17 | S$118 |
+| Scale | RM2,990 | RM249.17 | RM598 | S$1,190 | S$99.17 | S$238 |
+
+(Scale moves with the pricing reset — RM399/S$149 → RM3,990/S$1,490 — when
+`z8r3fday24` lands. The table derives, so it needs no edit here.)
+
+**One helper because the surfaces disagreed.** `/pricing` computed its yearly
+total as `floor(monthly × 10 / 12) × 10` — a year priced at 8.33 months — so a
+Starter card advertised **RM650/yr against an RM790 invoice**, under-quoting
+every tier by RM140–500 / S$50–200. Two definitions of "annual", 17% apart, on
+the same product. That code was behind the hidden toggle, so nobody had seen it;
+it would have shipped the day the flag flipped.
+
+Two more defects fixed in the same pass, both in that dead code:
+
+- `pricingpage_billed_annual` read **"Billed RM{total}/yr"** in all three
+  locales. It slipped past `pricing-copy.test.ts` because the guard was
+  `/\bRM\s?\d/` and `RM{` is not `RM` + a digit. The guard is now
+  `/\bRM\s?[\d{]/` — a symbol glued to a *placeholder* is exactly as wrong as
+  one glued to `79`, and this is the third time a currency was spelled into
+  `pricing_*` copy.
+- A **`-17%`** badge sat on the toggle, four lines below the comment forbidding
+  percentages. It now reads `pricingpage_annual_badge` ("2 months free").
+
+`effectiveMonthly` rounds **up**: `Math.round` understated it (MYR Starter
+6,583 × 12 = 78,996 against a 79,000 charge), and a seller multiplying the small
+number by twelve must never land under the bill. Same
+strictly-true-beats-tightest rule as `starterPricePerDay`.
+
+**Where annual is actually sold:** the seller's Settings → Billing tab, to
+proven payers on Pro, as a prefilled WhatsApp message. The eligibility ladder,
+the swap runbook and the credit-not-refund policy live in
+[`manual-subscription.md`](./manual-subscription.md#annual-billing--the-in-app-offer-sep-2026).
 
 ## Enterprise — hidden
 

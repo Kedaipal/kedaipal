@@ -5,6 +5,7 @@ import { useAction, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	BadgeCheck,
+	CalendarCheck,
 	CalendarDays,
 	CheckCircle,
 	Clock,
@@ -41,16 +42,18 @@ import {
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
+import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import {
-	OrderItemLine,
 	type OrderBookingSpan,
+	OrderItemLine,
 } from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
@@ -58,12 +61,14 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { shipsAsParcel } from "../lib/dispatch-surface";
 import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -265,8 +270,18 @@ function getStatusConfig(
 		},
 		shipped: {
 			label: label("shipped"),
+			// The milestone this marks depends on the method, and so does its
+			// picture: a parcel leaves, a pickup order waits at the store, and a
+			// booking BEGINS — "Checked In" for a stay, "Active" for a package.
+			// A truck on a campsite check-in was the delivery default leaking
+			// through the same self_collect-or-else binary the shipping
+			// surfaces used (8 Sep). CalendarCheck reads for both booking
+			// shapes and matches the CalendarRange the seller's page already
+			// gives a booking.
 			icon:
-				method === "self_collect" ? (
+				method === "booking" ? (
+					<CalendarCheck className="size-5" />
+				) : method === "self_collect" ? (
 					<Store className="size-5" />
 				) : (
 					<Truck className="size-5" />
@@ -290,19 +305,23 @@ function OrderNotFound() {
 	// Intentionally does NOT echo the URL token — it's a capability, and the link
 	// may simply be stale. Keep the message generic.
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-2xl font-bold">Order not found</h1>
-			<p className="text-sm text-muted-foreground">
-				This tracking link is invalid or has expired. Please use the link from
-				your WhatsApp order confirmation, or message the store for a new one.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-2xl font-bold">Order not found</h1>
+				<p className="text-sm text-muted-foreground">
+					This tracking link is invalid or has expired. Please use the link from
+					your WhatsApp order confirmation, or message the store for a new one.
+				</p>
+			</div>
+			{/* Unknown token = unknown store, so the badge carries no `store=`. */}
+			<StorefrontFooter surface="track" />
 		</main>
 	);
 }
 
 function TrackingSkeleton() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-4 pt-10">
 			<Skeleton className="h-3 w-16" />
 			<Skeleton className="mt-3 h-8 w-32" />
 			<Skeleton className="mt-1 h-4 w-44" />
@@ -350,6 +369,9 @@ function TrackingSkeleton() {
 				))}
 				<Skeleton className="h-10 w-full rounded-xl" />
 			</section>
+			{/* Rendered on the skeleton too, so the badge is in place before the
+			    order resolves instead of popping in under the content. */}
+			<StorefrontFooter surface="track" />
 		</main>
 	);
 }
@@ -460,6 +482,7 @@ function TrackingRoute() {
 					checkIn: order.bookingCheckIn,
 					checkOut: order.bookingCheckOut,
 					packaged: isBookingPackage,
+					weekendDays: order.bookingWeekendDays,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -617,10 +640,14 @@ function TrackingRoute() {
 	}
 
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
-			{/* Header */}
-			<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-				Kedaipal
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-4 pt-10">
+			{/* Header — the STORE's name is the eyebrow. This is the seller's order
+			    page as far as the buyer is concerned (same as the storefront, where
+			    the store brand leads); Kedaipal's own mark is the powered-by badge
+			    at the foot of the page, so the platform isn't named twice. */}
+			<p className="truncate text-xs font-semibold uppercase tracking-widest text-accent">
+				{order.storeName ||
+					(order.retailerLocale === "ms" ? "Pesanan anda" : "Your order")}
 			</p>
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
@@ -1123,14 +1150,16 @@ function TrackingRoute() {
 				</div>
 			) : null}
 
-			{/* Shipment tracking — only for delivery orders. Courier + consignment
-			    number render copyable even without a link (cold-chain couriers have
-			    no public tracking page — the buyer pastes the number into the
-			    courier's app/WhatsApp instead). The link is scheme-checked at the
+			{/* Shipment tracking — only for PARCEL orders (never a stay: there is
+			    nothing in transit, and a booking can no longer be given a courier
+			    seller-side either). Courier + consignment number render copyable
+			    even without a link (cold-chain couriers have no public tracking
+			    page — the buyer pastes the number into the courier's app/WhatsApp
+			    instead). The link is scheme-checked at the
 			    href: write-time sanitize covers new values, but rows written before
 			    it existed could hold a javascript:/data: URL, and this anchor is
 			    the one buyer-facing surface where that would execute. */}
-			{!isSelfCollect &&
+			{shipsAsParcel(deliveryMethod) &&
 			(order.courierName ||
 				order.trackingNo ||
 				isSafeTrackingUrl(order.carrierTrackingUrl)) ? (
@@ -1267,17 +1296,24 @@ function TrackingRoute() {
 							</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							{Math.round(
-								(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-							)}{" "}
-							{isBookingPackage
-								? ms
-									? "hari"
-									: "days"
-								: ms
-									? "malam"
-									: "night(s)"}{" "}
-							· {order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
+							{(() => {
+								// "2 night(s)" was the only place the app hedged its
+								// plural instead of counting — every other surface says
+								// "2 nights" / "1 night". Malay doesn't inflect, so only
+								// the EN branch takes the count.
+								const n = Math.round(
+									(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+								);
+								const unit = isBookingPackage
+									? ms
+										? "hari"
+										: `day${n === 1 ? "" : "s"}`
+									: ms
+										? "malam"
+										: `night${n === 1 ? "" : "s"}`;
+								return `${n} ${unit}`;
+							})()} ·{" "}
+							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>
 				</section>
@@ -1451,24 +1487,34 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Delivery method */}
-			<div className="mt-4 flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-sm font-medium text-muted-foreground">
-				{isSelfCollect ? (
-					<Package className="size-4" />
-				) : (
-					<Truck className="size-4" />
-				)}
-				{isSelfCollect
-					? order.pickupSnapshot?.locationType === "drop_off"
-						? "Drop-off"
-						: "Self Collect"
-					: isCollection
-						? "Collection from your address"
-						: "Delivery"}
-			</div>
+			{/* Delivery method — never on a stay. A booking has no method to
+			    report, and the fall-through printed "Delivery" with a truck icon
+			    on a campsite booking. The YOUR STAY card above is a booking's
+			    fulfilment surface, so this and the date row below both stand
+			    down rather than restate it in delivery words (8 Sep; the SELLER
+			    page has said "Booking · 2 nights · Check-in" all along, so the
+			    two sides were describing one order differently). */}
+			{isBooking ? null : (
+				<div className="mt-4 flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-sm font-medium text-muted-foreground">
+					{isSelfCollect ? (
+						<Package className="size-4" />
+					) : (
+						<Truck className="size-4" />
+					)}
+					{isSelfCollect
+						? order.pickupSnapshot?.locationType === "drop_off"
+							? "Drop-off"
+							: "Self Collect"
+						: isCollection
+							? "Collection from your address"
+							: "Delivery"}
+				</div>
+			)}
 
-			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
-			{order.fulfilmentDate !== undefined ? (
+			{/* Fulfilment date the buyer chose — reassures them the seller has it.
+			    A booking's fulfilmentDate IS its check-in, already printed above
+			    under its own word, so this would duplicate it as "Delivery on". */}
+			{!isBooking && order.fulfilmentDate !== undefined ? (
 				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
 					<CalendarDays className="size-4 text-accent" />
 					{isSelfCollect
@@ -1497,6 +1543,7 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				country={order.retailerCountry}
 				subtotal={order.subtotal}
+				orderItems={order.items}
 				currency={order.currency}
 				fulfilmentDate={order.fulfilmentDate}
 				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
@@ -1519,7 +1566,7 @@ function TrackingRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item, i) => {
+					{withLineKeys(order.items).map(({ key, item }, i) => {
 						// Folded quote: this single made-to-order line carries the
 						// locked custom-work price instead of its RM0 snapshot.
 						const isQuoteLine = i === quoteLineIdx;
@@ -1531,7 +1578,7 @@ function TrackingRoute() {
 							: item.price;
 						return (
 							<OrderItemLine
-								key={item.variantId ?? `${item.productId}-${i}`}
+								key={key}
 								name={item.name}
 								variantLabel={item.variantLabel}
 								quantity={item.quantity}
@@ -1619,7 +1666,8 @@ function TrackingRoute() {
 				    order, no delivery/email needed. */}
 				<ReceiptDownloadButton
 					token={token}
-					label="Download receipt (PDF)"
+					paid={isOrderDocPaid(order.paymentStatus)}
+					pdfHint
 					variant="outline"
 					className="w-full"
 				/>
@@ -1676,6 +1724,12 @@ function TrackingRoute() {
 					{order.retailerLocale === "ms" ? "Dasar Privasi" : "Privacy Policy"}
 				</a>
 			</p>
+
+			{/* "Powered by Kedaipal" (z8r3fdcwd0) — the order page is the one buyer
+			    surface EVERY order reaches (the confirmation message's only link),
+			    so it is the badge's highest-volume home. Direct flex child of the
+			    min-h-dvh column so `mt-auto` sinks it to the bottom. */}
+			<StorefrontFooter slug={order.retailerSlug} surface="track" />
 		</main>
 	);
 }

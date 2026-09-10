@@ -25,7 +25,14 @@ import type {
  */
 
 /** Which settings tab fixes this row. */
-export type CountrySetupTab = "store" | "whatsapp" | "payments" | "fulfilment";
+export type CountrySetupTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "fulfilment"
+	// Third-party accounts (2 Sep IA rework) — HitPay's checklist row lands
+	// on the card's new home.
+	| "integrations";
 
 type CountrySetupCopy = {
 	title: string;
@@ -56,8 +63,9 @@ const COPY: Record<
 	hitpay: ({ to, from }) => ({
 		title: "Check your HitPay account",
 		body: `Your HitPay keys were connected while the store was in ${placeName(from)}. A HitPay account settles one country's currency, so ${COUNTRY_CURRENCY[to]} payments will be declined at checkout.`,
-		tab: "payments",
-		action: "Open Payments",
+		// HitPay's card moved to Integrations (2 Sep IA rework).
+		tab: "integrations",
+		action: "Open Integrations",
 	}),
 	business_address: ({ to, from }) => ({
 		title: "Set your business address",
@@ -89,11 +97,11 @@ const COPY: Record<
 		tab: "fulfilment",
 		action: "Open Fulfilment",
 	}),
-	delivery_booking: ({ to }) => ({
-		title: "Lalamove booking is still switched on",
-		body: `We can't book riders in ${COUNTRY_LABELS[to]} yet, so the dispatch card is hidden on your orders and nothing can be spent by accident. Your API keys are kept if you switch back.`,
-		tab: "fulfilment",
-		action: "Open Fulfilment",
+	delivery_booking: ({ to, from }) => ({
+		title: "Your Lalamove keys may belong to the wrong market",
+		body: `Lalamove issues API keys per market, so the keys you pasted${from ? ` for ${COUNTRY_LABELS[from]}` : " before the switch"} can't price or book riders in ${COUNTRY_LABELS[to]} — quotes will fail until you create ${COUNTRY_LABELS[to]} keys on developers.lalamove.com and paste them in Integrations. Booking stays switched on; nothing books until the keys work.`,
+		tab: "integrations",
+		action: "Open Integrations",
 	}),
 	wa_phone: ({ to, from }) => ({
 		title: "Your store's WhatsApp number is foreign",
@@ -184,7 +192,15 @@ export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
  * is Malaysian, so ringing it red would be asserting something we don't know.
  * Those get amber: "check this", not "this is broken".
  */
-export type FixHighlight = "error" | "check";
+export type FixHighlight = "error" | "check" | "spotlight";
+
+/**
+ * A card a deep link sent the seller to: which anchor, and how to ring it.
+ * The one shape every settings tab accepts, whoever the sender is — the
+ * post-switch checklist (`?fix=`, error/check) or a What's-new note
+ * (`?spot=`, spotlight). See `src/lib/spotlight.ts`.
+ */
+export type CardTarget = { anchor: string; highlight: FixHighlight };
 
 export function highlightFor(verifiable: boolean): FixHighlight {
 	return verifiable ? "error" : "check";
@@ -200,6 +216,15 @@ export function highlightRingClass(
 	}
 	if (highlight === "check") {
 		return "border-amber-400 ring-2 ring-amber-400/25 dark:border-amber-500";
+	}
+	if (highlight === "spotlight") {
+		// "Here's the thing we were talking about" — the brand mint, because a
+		// What's-new note is an invitation, not a complaint. Nothing is wrong
+		// with the card, so it must never borrow red or amber. The pulse
+		// (`animate-kp-spotlight`) draws the eye once and settles; it is
+		// switched off under prefers-reduced-motion in styles.css, leaving the
+		// static ring.
+		return "border-accent-emphasis ring-2 ring-accent/40 animate-kp-spotlight dark:border-accent";
 	}
 	return "border-input";
 }

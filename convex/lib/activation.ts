@@ -6,6 +6,7 @@
  * docs/activation-checklist.md.
  */
 
+import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
@@ -32,4 +33,21 @@ export async function stampRetailerActivation(
 	const retailer = await ctx.db.get(retailerId);
 	if (!retailer || retailer.activatedAt !== undefined) return;
 	await ctx.db.patch(retailerId, { activatedAt: now, updatedAt: now });
+
+	// Server-side GA4 `first_order` key event (z8r3fdd1v1) — scheduled HERE, in
+	// the branch that actually writes the stamp, so the write-once semantics
+	// above ARE the once-per-retailer-ever dedupe (an OCC re-run no-ops before
+	// reaching this line, and the scheduler is transactional: nothing fires if
+	// the mutation rolls back). Fire-and-forget so analytics can never block an
+	// order confirm. See convex/ga4Events.ts + docs/analytics.md.
+	await ctx.scheduler.runAfter(0, internal.ga4Events.sendKeyEvent, {
+		event: "first_order",
+		retailerId,
+		...(retailer.gaClientId !== undefined
+			? { gaClientId: retailer.gaClientId }
+			: {}),
+		...(retailer.signupSource !== undefined
+			? { src: retailer.signupSource }
+			: {}),
+	});
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FOUNDING_MONTHLY_PRICES } from "../../convex/lib/plans";
+import { PLAN_MONTHLY_PRICES } from "../../convex/lib/plans";
 import {
 	BOUNDS_FOR,
 	COST_INPUTS_SCHEMA_FOR,
@@ -9,8 +9,8 @@ import {
 	computeStatusQuoCost,
 	DEFAULT_CHASE_MIN,
 	DEFAULT_INPUTS_FOR,
-	FOUNDING_PRICE,
 	LABOR_RATE_PER_HR,
+	PRO_PRICE,
 	WEEKS_PER_MONTH,
 } from "./calculator";
 
@@ -34,15 +34,15 @@ describe("computeStatusQuoCost — formula", () => {
 		expect(r.total).toBeCloseTo(r.missedRevenue + r.chaseCost, 6);
 	});
 
-	it("derives savings and ratio from the total vs the Founding price", () => {
+	it("derives savings and ratio from the total vs the Pro price", () => {
 		const r = computeStatusQuoCost(ICP, "MYR");
-		expect(r.savings).toBeCloseTo(r.total - FOUNDING_PRICE.MYR, 6);
-		expect(r.ratio).toBeCloseTo(r.total / FOUNDING_PRICE.MYR, 6);
+		expect(r.savings).toBeCloseTo(r.total - PRO_PRICE.MYR, 6);
+		expect(r.ratio).toBeCloseTo(r.total / PRO_PRICE.MYR, 6);
 	});
 
 	it("yields positive savings and is not disqualified for an ICP seller", () => {
 		const r = computeStatusQuoCost(ICP, "MYR");
-		expect(r.total).toBeGreaterThan(FOUNDING_PRICE.MYR);
+		expect(r.total).toBeGreaterThan(PRO_PRICE.MYR);
 		expect(r.savings).toBeGreaterThan(0);
 		expect(r.disqualified).toBe(false);
 		expect(r.disqualifyReason).toBeNull();
@@ -65,10 +65,10 @@ describe("computeStatusQuoCost — the SGD arm", () => {
 		expect(LABOR_RATE_PER_HR.SGD).toBe(15);
 	});
 
-	it("anchors savings against the SGD Founding price", () => {
+	it("anchors savings against the SGD Pro price", () => {
 		const r = computeStatusQuoCost(SG_ICP, "SGD");
-		expect(r.savings).toBeCloseTo(r.total - FOUNDING_PRICE.SGD, 6);
-		expect(r.ratio).toBeCloseTo(r.total / FOUNDING_PRICE.SGD, 6);
+		expect(r.savings).toBeCloseTo(r.total - PRO_PRICE.SGD, 6);
+		expect(r.ratio).toBeCloseTo(r.total / PRO_PRICE.SGD, 6);
 	});
 
 	it("never mixes currencies — the same inputs cost differently in each", () => {
@@ -79,16 +79,17 @@ describe("computeStatusQuoCost — the SGD arm", () => {
 	});
 });
 
-describe("FOUNDING_PRICE", () => {
+describe("PRO_PRICE", () => {
 	/**
-	 * Guards the duplicate this file used to carry (a literal `104`). The
+	 * Guards the duplicate this file used to carry (a literal price). The
 	 * calculator's anchor and the price the pricing page advertises are the
 	 * same number by construction now, and this fails if someone reintroduces
-	 * a local copy.
+	 * a local copy. Founding pricing retired 30 Aug 2026 — the anchor is the
+	 * Pro LIST price, not a founding discount.
 	 */
-	it("is the Pro founding price from the billing tables, in major units", () => {
-		expect(FOUNDING_PRICE.MYR).toBe(FOUNDING_MONTHLY_PRICES.MYR.pro / 100);
-		expect(FOUNDING_PRICE.SGD).toBe(FOUNDING_MONTHLY_PRICES.SGD.pro / 100);
+	it("is the Pro list price from the billing tables, in major units", () => {
+		expect(PRO_PRICE.MYR).toBe(PLAN_MONTHLY_PRICES.MYR.pro / 100);
+		expect(PRO_PRICE.SGD).toBe(PLAN_MONTHLY_PRICES.SGD.pro / 100);
 	});
 });
 
@@ -106,18 +107,18 @@ describe("computeStatusQuoCost — honest disqualification", () => {
 			{ ordersPerWeek: 2, aov: 5, missedPerWeek: 1, chaseMin: 1 },
 			"MYR",
 		);
-		expect(r.total).toBeLessThanOrEqual(FOUNDING_PRICE.MYR);
+		expect(r.total).toBeLessThanOrEqual(PRO_PRICE.MYR);
 		expect(r.disqualified).toBe(true);
 		expect(r.disqualifyReason).toBe("below_price");
 	});
 
 	it("does not disqualify exactly above the price threshold", () => {
-		// missedRevenue alone = 1 × 30 × 4.33 = 129.9 > 104, no chasing.
+		// missedRevenue alone = 1 × 40 × 4.33 = 173.2 > 149, no chasing.
 		const r = computeStatusQuoCost(
-			{ ordersPerWeek: 0, aov: 30, missedPerWeek: 1, chaseMin: 0 },
+			{ ordersPerWeek: 0, aov: 40, missedPerWeek: 1, chaseMin: 0 },
 			"MYR",
 		);
-		expect(r.total).toBeGreaterThan(FOUNDING_PRICE.MYR);
+		expect(r.total).toBeGreaterThan(PRO_PRICE.MYR);
 		expect(r.disqualified).toBe(false);
 	});
 });

@@ -18,11 +18,36 @@ that a feature nobody is told about is a missing piece of UI, not a shipped one.
 
 | surface | when | why |
 | --- | --- | --- |
-| **Permanent panel** — "What's new" in the More menu (mobile) and sidebar footer (desktop) | always openable; carries a dot when something is unseen | a dismissed announcement must never become unreadable |
+| **Permanent panel** — "What's new" in the More menu (mobile) and sidebar footer (desktop) | always openable; carries a dot when something is unseen; shows the newest **five** releases, the rest behind "Show N older releases" | a dismissed announcement must never become unreadable |
 | **Modal** | opens unprompted **only** for a release marked `notable: true` | a modal on every release trains sellers to dismiss reflexively — and then the one that matters is dismissed too |
 
 Both read the same entries and the same seen-state, so the dot and the modal
 cannot disagree.
+
+### How many releases the panel shows
+
+`PANEL_RELEASE_LIMIT = 5` (`src/lib/releases.ts`). The array keeps every
+release forever — there is no separate changelog page, and the rule above says
+nothing may become unreadable — but the panel renders the newest five and folds
+the rest behind a **"Show N older releases"** button inside the scroll area.
+Every open starts folded; it is history the seller asked for once, not a
+preference.
+
+**Unseen releases are never folded.** `splitPanelReleases` stretches the cut
+to the number of unseen releases, so a seller back from a long gap (or a
+store act-as stamped with an old version) sees everything they missed without
+knowing to tap. Unseen releases are always the newest, so the unseen set is a
+prefix and the split is one slice.
+
+The whole array still ships in the dashboard bundle (~6 KB of prose per
+release). That is deliberate for now: the dashboard is Clerk-gated and not
+first-paint critical. If the file passes ~30 releases, move the older ones out
+of the bundle before adding a public changelog page — the two are separate
+decisions. A public page is **parked by decision**, not forgotten:
+[z8r3fddrya](https://app.clickup.com/t/z8r3fddrya) records why (the fold made it
+unnecessary as a readability fix; it earns its keep as a marketing surface) and
+the one trap it must handle — entries carry `/app` deep links that dead-end for
+a signed-out visitor.
 
 ## Where things live
 
@@ -86,6 +111,51 @@ worse than no entry at all. Keep them apart.
    `to="/app/settings?tab=store"` renders the same `href` as the
    `search={{ tab: "store" }}` form used elsewhere in the app; the panel takes
    the string form because a release entry is data, not JSX.
+
+   **Land on the card, not the tab — `spotlightHref`.** When the feature is
+   one card on a settings tab, write `href: spotlightHref("delyva")`
+   ([`src/lib/spotlight.ts`](../src/lib/spotlight.ts)). It renders
+   `/app/settings?tab=integrations&spot=delyva`: the route scrolls to that
+   card and rings it in the brand mint with a short pulse, so "Connect
+   Delyva" lands on the Delyva card rather than the top of a six-card tab.
+   It is the same scroll-and-ring the post-switch checklist uses via
+   `?fix=` (red/amber, something to fix); `spot` is the same machinery in
+   the invitation colour, because nothing is wrong with a card that is
+   merely new. A `fix` wins if both are present.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Delyva connect | `spotlightHref("delyva")` | `/app/settings?tab=integrations` |
+   | Annual billing | `spotlightHref("annual_billing")` | `/app/settings?tab=billing` |
+
+   **A card on a product's form — two hops, same ring.** Some features live
+   on ONE product's edit form rather than a settings tab (the weekend rate on
+   a stay listing). A note can't know which product, so a registry row with
+   `page: "product"` renders `/app/products?spot=<key>`: the list shows a
+   mint-ringed banner saying what the seller is looking for (copy and
+   eligibility in [`src/lib/product-spotlight.ts`](../src/lib/product-spotlight.ts)),
+   every row the key applies to carries `spot` on to
+   `/app/products/<id>?spot=<key>`, and the form scrolls to that card and
+   rings it. Rows the key doesn't apply to (a physical product for
+   `weekend_rate`) don't forward it, so the seller is never rung on a card
+   that isn't there; with no eligible listing at all the banner says so and
+   offers "+ New product" instead of a dead end. Each page validates `spot`
+   against its own keys — a settings key pasted onto the list is dropped,
+   not forwarded.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Weekend rate | `spotlightHref("weekend_rate")` | `/app/products` |
+
+   Adding a key: give the card an `id={SPOTLIGHT_ANCHOR.<key>.anchor}` and
+   thread `highlight` to it (every settings tab takes a `target: CardTarget`
+   prop for this; `ProductStepCard` takes `id` + `highlight`), then add the
+   row — and, for a product-page key, its `PRODUCT_SPOTLIGHT` copy (a
+   compile error until you do). `spotlight.test.ts` fails if the tab doesn't
+   exist, no card renders the anchor, or a product-page key has no list copy;
+   `releases.test.ts` fails on a `?spot=` that isn't a key, sits on the wrong
+   tab, or points a product key anywhere but the list. Reduced-motion users
+   get the static ring without the pulse.
 5. Set `notable: true` only if the change alters how the seller works.
 6. **Declare the `kind`** — see below. Required, so this is a compile error.
 7. **Most releases earn no entry at all.** An empty release is simply absent

@@ -1090,3 +1090,330 @@ the bug.
 send every field, so it is safe today; the validator now says so, because a
 future partial caller would silently wipe a seller's package length,
 instant-book and deposit settings.
+
+## S13 — weekend / weekday per-night rates (`z8r3fddkp8`)
+
+**Sengloh (Hidden Gems'ite, Founding Member #7, the booking anchor)** charges
+a different per-night rate on weekends — the standard campsite / homestay
+price shape — and a listing carried exactly ONE per-night price. Both
+workarounds leak: two listings ("Weekday plot" / "Weekend plot") let a buyer
+book the weekday listing on a Saturday, double the capacity, need ~50 manual
+blocks a year each and can't take a Thu→Sun stay at all; a 2-night "Weekend
+package" (S7) has no must-start-on-Friday rule, so the weekend price is
+bookable on a Tuesday. The fix is a **listing-level pricing rule on the one
+implicit variant** — the same shape every other booking need took (capacity,
+package, instant book, deposit). Never a second variant: that would split
+capacity in two, the exact trap the two-listings workaround falls into.
+
+### Shape
+
+- **`products.booking.weekendPrice`** (sen, optional; unset = one rate for
+  every night — every existing row, zero migration) and
+  **`products.booking.weekendDays`** — weekday indexes of the **NIGHT the
+  guest sleeps** (0 = Sun .. 6 = Sat, the `weekdayIndexMyt` convention), deduped
+  + sorted, default **`[5, 6]` = Fri + Sat nights** (the ticket's recommended
+  default; Arif's open call only changes the constant, and the picker covers
+  "Fri, Sat & Sun" and "Sunday only" sites). Kept as a weekday SET, not a
+  dated list, so a future `peakDates[]` for public holidays can sit beside it
+  without a rename.
+- **`sanitizeWeekendRate`** (`convex/lib/productKind.ts`) is the pair's one
+  validator: no price → **both** unset (days alone are dropped — "no weekend
+  rate" has one spelling, the `securityDeposit` posture); a price → integer
+  sen in (0, RM 100,000], ≥1 night, **never all seven** ("that's every night
+  — set it as the price per night instead"). **A fixed-length package refuses
+  the pair outright** — a package is one flat price by definition, and a
+  constraint is surfaced, not silently ignored. Both forms hide the fields
+  when a package length is set and say why, and drop the pair from the
+  payload, so a seller never meets the refusal.
+- **`weekdayIndexMyt` moved** from `openingHours.ts` into `fulfilmentDate.ts`
+  (its true home — it is MYT day arithmetic every day-granular feature shares;
+  four call sites repointed). `DEFAULT_WEEKEND_DAYS`, `weekendDaysLabel()`
+  (the ONE author of "Fri & Sat", rendered Mon→Sun so "Sat & Sun" never comes
+  out backwards), `WEEKDAY_NIGHTS_LABEL` / `weekendNightsLabel()` and their
+  reader `bookingNightKind()` all live beside the sanitizer.
+
+### One pure author for the split
+
+**`splitNightsByRate(checkIn, checkOut, booking)`** in
+`convex/lib/bookingAvailability.ts`, beside `resolveBookingRange` →
+`{ weekdayNights, weekendNights }`. Imported by **the buyer's checkout
+receipt AND `requestBooking`**, so the preview and the charge cannot disagree
+by a night. A night is the calendar day it starts on — a 12→14 Sep stay
+sleeps the 12th and 13th, the check-out morning never counts (pinned: a
+Sunday night → Monday morning stay is a Sunday-night charge, and never a
+Monday one). Month and year boundaries are plain 24 h steps (no DST). A
+listing without the rate, or a package, reports every night as weekday so
+callers need no branch.
+
+### Two frozen lines, zero new money branches
+
+`requestBooking` writes **two `orders.items[]` lines** on a mixed free-range
+stay — `Weekday nights` at the base rate, `Weekend nights (Fri & Sat)` at the
+weekend rate — same `productId`/`variantId`, each `quantity` its own night
+count, weekday first. A stay that is all one kind writes ONE line, still
+labelled (the label answers "why did I pay RM 80 not RM 120?" on an
+all-weekday stay too); a listing without the rate keeps today's unlabelled
+line byte-for-byte. Both rates are **frozen on the lines** (snapshot posture,
+like the deposit — pinned: a later listing edit never re-prices a placed
+stay). There is **no client arg for the split** — nothing to tamper with; the
+server computes it from the listing. `computeOrderTotals` is untouched:
+`total = Σ lines + securityDeposit`, so totals, CSV, the receipt/invoice PDF,
+Insights and `revenueExcludingDeposit` all reconcile with no new code
+(pinned on a Thu→Mon stay with a deposit). Insights groups on
+`productId::variantId`, so both lines land in one product row.
+
+### Where each side sees it
+
+- **Storefront card, product page, detail sheet** — a second line under the
+  price: "RM 120/night Fri & Sat" (`weekendRateSuffix` in `booking-dates.ts`,
+  next to `bookingPriceSuffix`; SG stores print S$ through the same
+  `formatPrice` path).
+- **Buyer calendar** — weekend nights carry a **dot under the number** (never
+  a fill: the fill vocabulary is taken by the stay band and the unavailable
+  state), only on bookable days, `bg-current` so it survives the navy stay
+  band; the legend gains "Fri & Sat · RM 120/night". The rate and nights ride
+  the **`availability` payload**, so the calendar tints from the same answer
+  the server prices against, with no second read.
+- **Checkout receipt** — both rates stated before any date is picked, then
+  the itemised split ("2 weekday nights × RM 80" / "2 weekend nights ×
+  RM 120") above the deposit line and the total — exactly the two lines the
+  order will carry. EN/MS inline, like the rest of this form (paraglide
+  covers pre-sign-in surfaces only — the ticket's paraglide line was stale).
+- **Seller order detail + buyer tracking page** — `OrderItemLine` reads the
+  kind back from the frozen label through `bookingNightKind` and prints
+  "2 weekend nights × RM 120.00 · Thu 10 Sep → Mon 14 Sep", suppressing the
+  duplicate label in the title row. An unrecognised label (pre-S13, or an
+  ordinary variant) falls back to today's "2 nights ×" with the label shown.
+- **Seller config** — in the same booking pricing card in BOTH the wizard
+  (step 3) and the edit form, **directly under the base price because it IS a
+  price**: "Weekend rate" input; the **`WeekdayPicker`** (new shared
+  component on `FilterChip` accent, Mon→Sun, the same control Settings →
+  Fulfilment uses for "Open on") appears once a rate is typed, Fri + Sat
+  preselected; one consequence line from `weekendRateConsequence` ("Fri and
+  Sat nights charge RM 120, other nights RM 80."). Wizard review row
+  ("Weekend rate · RM 120 on Fri & Sat nights"); `describeProduct` strip
+  ("Booking · 5 spots/night · RM 80/night · RM 120 Fri & Sat").
+- **`products.update` stays a whole-object replace** — both callers send the
+  new pair with every other field (the PR #242 rule).
+
+### Fixes in passing
+
+- **The edit route never seeded `packageUnit`**, so a "2 nights" package
+  reopened in the edit form as "2 months" and would have saved that way on
+  the next edit. Seeded now.
+- The wizard's review row for the deposit hardcoded "RM" — an SG store's
+  review said RM. Now the store's currency.
+
+### S13 tests
+
+`convex/lib/productKind.test.ts` (new): the sanitizer sweep (defaults,
+dedupe/sort, no nights, every night, bad index, package pairing), the label
+author/reader round-trip. `convex/lib/bookingAvailability.test.ts`:
+`splitNightsByRate` — Thu→Mon, Sunday-night vs Monday-morning, year boundary
+(31 Dec → 2 Jan), month boundary summing to the night count, all-one-kind,
+no-rate / empty-days / package. `convex/bookings.test.ts` ("weekend / weekday
+rates (S13)"): two frozen lines reconciling with subtotal + deposit, frozen
+through a listing edit, one line for an all-weekday and an all-weekend stay,
+a Sunday-only night set, the no-rate listing unchanged, `availability`
+quoting the pair. `convex/products.test.ts`: round-trip + default days, 0
+clears both, dedupe, the refusal sweep. Frontend: `order-item-line`,
+`product-summary` (strip + consequence), `booking-dates` (suffix), and
+`product-wizard-booking` (default Fri + Sat, the picker adds Sunday, the
+package hides + drops the pair, an empty night set is refused at its step).
+
+### A split line names its OWN nights (8 Sep)
+
+The first cut printed the WHOLE stay on both lines — a Thu→Sat booking read
+"1 weekday night × RM 40 · 17 Sep → 19 Sep" and "1 weekend night × RM 50 ·
+17 Sep → 19 Sep". Each line looked priced for the entire stay, and neither
+said which night was the expensive one (Zaki, 8 Sep).
+
+The obvious fix — give each line its own range, "17 → 18" and "18 → 19" —
+is right for that order and **wrong for the feature's own headline case**. A
+Thu→Mon stay charges the weekday rate for the Thursday *and* the Sunday, with
+the weekend nights between them: the set is **not contiguous**, so no range is
+true of that line. Ranges also collide with the vocabulary already in use — a
+"–" between two nights reads like the check-in → check-out arrow, which would
+make two nights look like one.
+
+So a split line **lists its nights**: "2 weekday nights × RM 40.00 · Thu 24
+Sep, Sun 27 Sep". Individual nights are honest on every stay, contiguous or
+not. `describeNights` caps at three named nights and then counts the rest
+("Tue 1 Sep, Wed 2 Sep +3 more nights") so a 30-night stay's weekday line
+can't run away with the sub-line; `formatNight` drops the year and the comma
+(the card above already states the stay, and commas separate the nights).
+
+**This needed a new frozen order field**, against the ticket's "no new order
+fields" line — flagged rather than smuggled. That line was about the MONEY,
+which genuinely needs nothing new: the two lines carry the counts and the
+rates. Locating those nights inside the span is a different question, and two
+lines reading "1 weekday night" and "1 weekend night" cannot answer it.
+**`orders.bookingWeekendDays`** freezes the night set at request, exactly the
+`bookingPackaged` precedent (a display-only snapshot, so a seller moving their
+weekend to Sundays tomorrow never relocates the nights a placed booking was
+charged for). The frozen `variantLabel` names the same set in prose for the
+CSV and the PDF; this is that set, machine-readable.
+
+**`partitionNights`** is the one author — `splitNightsByRate` now derives its
+counts from it, so a line's count and the dates printed beside it cannot
+disagree. A booking placed before this field existed falls back to the stay
+span rather than printing nothing.
+
+### Booking surfaces stopped speaking delivery (8 Sep)
+
+Zaki's first test order surfaced a **Shipment tracking** card on a campsite
+stay, inviting a courier and a consignment number for a parcel that cannot
+exist. The card was not the bug — the IDIOM was. Every shipping surface asked
+**`!isSelfCollect`**: "not a pickup, so it must be a parcel". True while
+`delivery | self_collect` were the only two methods; wrong from the day
+`booking` became the third, and it swept every stay into the delivery branch.
+
+**`shipsAsParcel(method)`** now answers that question by name, in
+`src/lib/dispatch-surface.ts` — the module that already owned "what does this
+order show a dispatch provider", and which spelled `deliveryMethod !==
+"delivery"` twice itself; both now read through it. `undefined` resolves to
+`delivery` (the legacy value, and the direction that fails safe: a stray
+tracking card is recoverable, a real parcel with nowhere to put its
+consignment number is not).
+
+Fixed with it, all the same class, all on the buyer's tracking page — which
+had never been given the booking treatment the seller's page got in S3, so
+the two sides described one order differently:
+
+- **The Shipment-tracking card** (seller) and the **courier/consignment block**
+  (buyer) — gone from a stay on both sides.
+- **The dispatch hub** (seller) — both providers already declined a booking,
+  so nothing was visible, but the hub still opened two Convex subscriptions
+  per stay to ask a settled question.
+- **"Delivery" + "Delivery on 17 Sep"** (buyer) — a truck-iconed method chip
+  and the check-in date wearing a delivery label, directly under a YOUR STAY
+  card already saying "Check-in · Thu 17 Sep". Both stand down for a booking
+  rather than restate the stay in delivery words.
+- **A truck on "Checked In"** (buyer timeline) — the same self-collect-or-else
+  binary in the status icon map. Now `CalendarCheck`, which reads for both
+  booking shapes ("Checked In" for a stay, "Active" for a package) and matches
+  the `CalendarRange` the seller's page gives a booking.
+- **"2 night(s)"** (buyer) — the one place the app hedged a plural instead of
+  counting it. Malay doesn't inflect, so only the EN branch takes the count.
+
+Already correct, and confirmed so rather than assumed: the **mark-shipped
+courier prompt** (gated `deliveryMethod === "delivery"`, so "Mark as Checked
+In" never asked for a courier), **Print label** (needs a `deliveryAddress`,
+which a booking has none of), and the **delivery-address block**.
+
+`shipsAsParcel` is pinned by a test that goes red if it is restored to the
+`!isSelfCollect` meaning.
+
+### What S13 deliberately does NOT do
+
+- **No public holidays / peak dates.** That wants a dated list, not a weekday
+  set — ticket it when Sengloh asks; `weekendDays` is shaped so `peakDates[]`
+  can sit beside it.
+- **No weekend rate on packages**, and no "must start on Friday" rule for
+  them — a package is one flat price; the S7 scope stands.
+- **No variants on booking listings** (still deferred, see S1) — this is a
+  pricing rule on the one variant, so capacity stays per listing.
+
+## S8 — the "Active" period lens (`86eyqxb2q`)
+
+FS Fitness's second ask: *"sit at the gym and see who has paid."* The inbox
+already answered "who has paid" — payment-status filters and customer search
+were shipped long ago. What it could not answer was **"who is current"**: a
+member whose month started three weeks ago is buried in a fulfilment-date-sorted
+list, because their fulfilment date is their START date and by week three that
+is ancient history.
+
+### It is a CHIP, not the bucket the ticket asked for
+
+The ticket specified a new inbox bucket. It cannot be one, and the reason
+matters beyond this feature: **buckets are a partition.** `new | in_progress |
+completed | cancelled` — every order sits in exactly one, which is what makes
+the counts sum to the total and "All" mean something. "Active" is a different
+AXIS: an active booking is simultaneously `in_progress`. Adding it to that list
+would have made the buckets overlap and quietly broken both properties, and the
+seller would have met it as counts that no longer add up.
+
+As a chip it composes instead — with the buckets, and with the payment filter
+that answers the other half of the same question ("Active now" + "Unpaid" is
+literally the reception-desk query). Owner call, 1 Sep, before any code.
+
+### Shape
+
+`convex/lib/bookingPeriod.ts` is the pure authority: `active`, `ending_soon`,
+`upcoming`, `ended`, with `now` injected exactly as `matchesFulfilmentWindow`
+takes it, so the boundaries are unit-tested without freezing clocks.
+
+- **`ending_soon` is a SUBSET of `active`**, not a sibling. Multi-selects here OR
+  within themselves, so picking both is simply `active`. The alternative — a
+  separate boolean refinement — would be a second control for one idea.
+- **Boundaries follow the exclusive-`checkOut` rule** the vertical runs on: a
+  stay checking in TODAY is active; one checking out today is NOT (they left this
+  morning, and tonight belongs to the next guest). Both pinned by test.
+- **Two exclusions live in the predicate**, not in composition: an order with no
+  span never matches (otherwise "Active" would keep a store's entire product
+  inbox), and a cancelled booking never matches (declined and expired both land
+  there; the Cancelled bucket is how you reach them).
+- **`ended` exists but is not offered as a chip.** History is what Insights and
+  the customer record are for; a fourth chip would need someone to ask for it.
+
+### All-tier, deliberately
+
+`bookingPeriods` is excluded from `NARROWING_FILTER_KEYS`, so it does not trip
+the `orderInbox` Pro gate — joining `searchText` and `showPinned` as the
+exceptions. S4 put the seller calendar outside this same gate because booking is
+all-tier, and a store that gets a free calendar but must pay to ask "who is here
+right now" would be incoherent. It cannot be used to dodge the gate: a period
+only ever matches an order carrying a booking span, so on a product inbox it
+returns nothing.
+
+### Counts and the midnight trap
+
+The three counts (`bookingActive`, `bookingEndingSoon`, `bookingUpcoming`) are
+tallied over the FULL window like every other count, never the filtered set — a
+chip whose number moves as you use it tells the seller their bookings vanished.
+`endingSoon` is a subset of `active`, so the two deliberately **do not sum**;
+the chips read as "12 active, 3 of them ending this week".
+
+`buildInboxPredicate` now takes `now` and `searchOrders` passes the SAME value it
+tallied the counts against. Without that, a request straddling midnight could
+count a booking as active and then filter it out — the chip's number
+disagreeing with its own list.
+
+### Where the seller meets it
+
+- **Inbox chips, LAST in the row** — after every workflow bucket, behind a
+  divider that marks the change of axis, and visible only for stores with
+  booking listings (the same `hasBookingListings` query the Calendar view is
+  gated on). Each carries a `title` explaining why you'd tap it, because this is
+  new vocabulary.
+
+  Placement is an owner call (1 Sep) and it overrides the ticket, which said the
+  bucket should sit "right after New (urgency)". Two reasons: they are a
+  different DIMENSION so they must not sit inside the partition, and — the one
+  that decides it — **most sellers don't sell bookings at all**, so a minority
+  feature must not displace the buckets every seller navigates by. The first
+  build wedged them between Pinned and All, which read as chaos on a real
+  inbox.
+- **`?period=` in the URL**, repeated like `?asrc=`, narrowed against the real
+  union so a hand-edited link can't push a value the server rejects — so "who's
+  on site right now" is a link a seller can pin or send.
+- **The customer card** carries one line under the name — "Active · 3 days
+  left", "Starts in 4 days", "Ended 2 days ago" — derived from the orders that
+  page already loads, so it costs no extra query. A customer with several
+  bookings shows the active one (soonest-ending, if more than one), else the
+  soonest upcoming, else the most recently ended: the renewal conversation.
+- **The CSV export honours it**, via the shared predicate — the invariant
+  `lib/orderInboxFilter.ts` exists for.
+- **The filter panel reflects it** — the active-filter badge counts it, it
+  appears as a removable token in the panel's summary, "Clear all" clears it,
+  and it has its own section (gated on `hasBookingListings` like the chips).
+  The chips stay the primary control; the panel exists so the count, the
+  summary and the clear all tell the truth. `bookingPeriods` is a REQUIRED
+  field on `OrderFilterValue` for exactly this reason — it made
+  `clearedFilters()` fail to compile until it was handled, where an optional
+  field would have shipped a "Clear all" that silently left the chips on.
+- **Chip tone: navy, like the buckets.** They were built mint (the component's
+  old rule said "accent = an applied constraint") and that read as two apps in
+  one row. `Pinned` stays the single mint chip — pinning is the seller's own
+  mark on an order rather than a category the app computed, so it is meant to
+  stand apart (owner call, 1 Sep). `filter-chip.tsx` now says so.

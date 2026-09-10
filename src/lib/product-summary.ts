@@ -4,6 +4,7 @@
 // the variant editor's draft state, so it live-updates as they edit.
 // See docs/product-setup-wizard.md.
 
+import { weekendDaysLabel } from "../../convex/lib/productKind";
 import { parsePriceInput } from "./format";
 
 export type SummaryInput = {
@@ -27,12 +28,50 @@ export type SummaryInput = {
 		capacityPerNight: string;
 		packageLength?: string;
 		autoAccept?: boolean;
+		/** Weekend per-night rate as typed (RM) + the nights it covers (S13).
+		 * Blank/absent = one rate; ignored on a package. */
+		weekendPrice?: string;
+		weekendDays?: readonly number[];
 	} | null;
 };
 
 /** "12" / "12.50" — trailing .00 dropped so the strip reads like speech. */
 function formatMajor(n: number): string {
 	return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+/**
+ * The one-line consequence under the seller's weekend-rate field (S13) —
+ * "Fri and Sat nights charge RM 120, other nights RM 80." Shared by the
+ * wizard and the edit form so the two can't explain the same knob
+ * differently. Pure over the typed drafts; `null` when the rate is blank
+ * (the caller shows its own "leave blank" hint).
+ */
+export function weekendRateConsequence(
+	{
+		basePrice,
+		weekendPrice,
+		weekendDays,
+	}: {
+		basePrice: string;
+		weekendPrice: string;
+		weekendDays: readonly number[];
+	},
+	currency: string,
+): string | null {
+	const weekend = parsePriceInput(weekendPrice.trim());
+	if (weekend === null || weekend <= 0) return null;
+	if (weekendDays.length === 0) return "Pick at least one night for this rate.";
+	if (weekendDays.length === 7) {
+		return "That's every night — set it as the price per night instead.";
+	}
+	const nights = weekendDaysLabel(weekendDays).replace(" & ", " and ");
+	const base = parsePriceInput(basePrice.trim());
+	const other =
+		base !== null && base > 0
+			? `, other nights ${currency} ${formatMajor(base)}`
+			: "";
+	return `${nights} nights charge ${currency} ${formatMajor(weekend)}${other}.`;
 }
 
 export function describeProduct(
@@ -63,6 +102,20 @@ export function describeProduct(
 				? `${currency} ${formatMajor(price)}${isPackage ? " per package" : "/night"}`
 				: "No price yet",
 		);
+		// The second rate, named by its nights: "RM 120 Fri & Sat". A package
+		// has one flat price, so the weekend rate never shows there.
+		const weekend = parsePriceInput(booking.weekendPrice?.trim() ?? "");
+		if (
+			!isPackage &&
+			weekend &&
+			weekend > 0 &&
+			booking.weekendDays &&
+			booking.weekendDays.length > 0
+		) {
+			parts.push(
+				`${currency} ${formatMajor(weekend)} ${weekendDaysLabel(booking.weekendDays)}`,
+			);
+		}
 		if (booking.autoAccept) parts.push("Instant book");
 		return parts.join(" · ");
 	}
