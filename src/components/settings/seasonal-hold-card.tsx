@@ -63,6 +63,14 @@ export function SeasonalHoldCard({
 	if (!held && !lockedOverHold && !lockedOverPlan && sub.status !== "active")
 		return null;
 
+	// The price is the headline fact of this card — a chip beside the title,
+	// never buried mid-paragraph (Zaki, 10 Sep: "RM19 doesn't seem prominent").
+	const priceChip = (
+		<span className="shrink-0 rounded-full bg-accent/10 px-2.5 py-1 text-xs font-bold tabular-nums text-accent">
+			{price}/month
+		</span>
+	);
+
 	const run = async (hold: boolean) => {
 		try {
 			const res = await setHold({ retailerId, hold });
@@ -95,16 +103,24 @@ export function SeasonalHoldCard({
 						className="mt-0.5 size-5 shrink-0 text-accent"
 						aria-hidden
 					/>
-					<div className="flex flex-col gap-1">
-						<p className="text-sm font-semibold">
-							{lockedOverHold
-								? "Your hold invoice is overdue"
-								: `On ${HOLD_LABEL}${sub.heldAt ? ` since ${formatShortDate(sub.heldAt)}` : ""}`}
+					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+						<div className="flex items-center justify-between gap-3">
+							<p className="text-sm font-semibold">
+								{lockedOverHold
+									? "Your hold invoice is overdue"
+									: `On ${HOLD_LABEL}${sub.heldAt ? ` since ${formatShortDate(sub.heldAt)}` : ""}`}
+							</p>
+							{priceChip}
+						</div>
+						<p className="text-xs text-muted-foreground">
+							<span className="font-medium text-foreground/80">Paused:</span>{" "}
+							new orders — buyers see a seasonal-break note, not a dead link.
 						</p>
 						<p className="text-xs text-muted-foreground">
-							Ordering is paused — buyers see your store with a seasonal-break
-							note. Your storefront, catalog, buyer list, order history and
-							editing stay live. {price}/month while paused.
+							<span className="font-medium text-foreground/80">
+								Still live:
+							</span>{" "}
+							storefront, catalog, buyer list, order history and editing.
 						</p>
 						{lockedOverHold ? (
 							<p className="text-xs text-muted-foreground">
@@ -165,18 +181,26 @@ export function SeasonalHoldCard({
 					className="mt-0.5 size-5 shrink-0 text-muted-foreground"
 					aria-hidden
 				/>
-				<div className="flex flex-col gap-1">
-					<p className="text-sm font-semibold">
-						{lockedOverPlan ? `Rather pause than pay for ${plan}?` : HOLD_LABEL}
+				<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+					<div className="flex items-center justify-between gap-3">
+						<p className="text-sm font-semibold">
+							{lockedOverPlan
+								? `Rather pause than pay for ${plan}?`
+								: HOLD_LABEL}
+						</p>
+						{priceChip}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Between seasons? Keep everything warm while ordering takes a break.
 					</p>
 					<p className="text-xs text-muted-foreground">
-						Between seasons? Keep everything warm for {price}/month.{" "}
 						<span className="font-medium text-foreground/80">Paused:</span> new
-						orders — buyers see your store with a seasonal-break note, not a
-						dead link.{" "}
+						orders — buyers see a seasonal-break note, not a dead link.
+					</p>
+					<p className="text-xs text-muted-foreground">
 						<span className="font-medium text-foreground/80">Still live:</span>{" "}
-						your storefront, catalog, buyer list, order history and editing. One
-						tap brings {plan} back.
+						storefront, catalog, buyer list, order history and editing. One tap
+						brings {plan} back.
 					</p>
 				</div>
 			</div>

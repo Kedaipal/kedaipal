@@ -774,6 +774,7 @@ describe("BillingTab — free period, first invoice, Off-Season Hold (z8r3fday24
 		render(<BillingTab retailer={paidPro()} />);
 		expect(screen.getByText("Off-Season Hold")).toBeTruthy();
 		expect(screen.getByText("Pause for the season")).toBeTruthy();
+		// The price is a header chip now — the headline fact, not mid-paragraph.
 		expect(screen.getByText(/RM\s*19\.00\/month/)).toBeTruthy();
 		// Paid through a future date → the hold bills after it, not today.
 		expect(screen.getByText(/the hold starts billing after that/)).toBeTruthy();
