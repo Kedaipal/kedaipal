@@ -29,6 +29,7 @@ How the product actually works. Read in this order.
 | [delivery-lalamove.md](./delivery-lalamove.md) | Intra-city rider booking: live checkout quotes, the confirm-and-dispatch flow, webhook-driven status, and the disabled-with-reason taxonomy. |
 | [delivery-delyva.md](./delivery-delyva.md) | Nationwide parcel + cold-chain courier booking: one-key connect, the service picker, webhooks, demo/sandbox detection, and the per-country tenancy facts. |
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
+| [powered-by-badge.md](./powered-by-badge.md) | The buyer-facing "Powered by Kedaipal" growth loop: which surfaces carry the badge (storefront, order page, claim page, receipt PDF, despatch label, WhatsApp line), the one link builder + per-surface tags, and how a click lands on `retailers.signupSource` / `signupReferrerId`. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
 | [landing-video-demo.md](./landing-video-demo.md) | The 30-second demo on `/`: why it sits directly under the hero, the 21.5 MB → 928 KB encode recipe, the `preload="none"` loading posture, and the player's autoplay/pause/reduced-motion rules. |
@@ -39,6 +40,7 @@ How the product actually works. Read in this order.
 | Doc | What it covers |
 |---|---|
 | [messaging-channels.md](./messaging-channels.md) | ChannelAdapter seam — WhatsApp as one of N channels; how a 2nd channel lands. |
+| [vendor-identity.md](./vendor-identity.md) | The three store IDs (`userId` / `slug` / `_id`) and what is unique; **reserved handles** — the route-tree namespace a slug can never take, one shared module, machine-checked. |
 | [whatsapp-webhook-security.md](./whatsapp-webhook-security.md) | Inbound webhook signature verification (HMAC-SHA256), fail-closed. |
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |

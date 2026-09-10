@@ -627,6 +627,74 @@ describe("retailers legal consent", () => {
 		expect(row?.signupSource).toBeUndefined();
 	});
 
+	// --- Powered-by referrer store (z8r3fdcwd0) -----------------------------
+
+	const REFERRER_OWNER = "user_referrer_owner";
+
+	test("createRetailer resolves signupReferrerSlug to the referring store's id", async () => {
+		const t = setup();
+		await t
+			.withIdentity({ subject: REFERRER_OWNER })
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Hermoolah",
+				slug: "hermoolah",
+			});
+		const referrer = await readRetailer(t, REFERRER_OWNER);
+
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Referred Store",
+			slug: "referred",
+			signupSource: "powered-by-track",
+			// Case-folded like the client capture — the badge's slug is lowercase
+			// but a hand-typed link may not be.
+			signupReferrerSlug: "Hermoolah",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupSource).toBe("powered-by-track");
+		expect(row?.signupReferrerId).toBe(referrer?._id);
+	});
+
+	test("createRetailer drops a referrer slug that names no store — nobody to credit", async () => {
+		const t = setup();
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Orphan Referral",
+			slug: "orphan",
+			signupSource: "powered-by",
+			signupReferrerSlug: "no-such-store",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		// The tag still lands — the referrer is the only thing that couldn't.
+		expect(row?.signupSource).toBe("powered-by");
+		expect(row?.signupReferrerId).toBeUndefined();
+	});
+
+	test("createRetailer never looks up a referrer slug that isn't slug-shaped", async () => {
+		const t = setup();
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Forged Referral",
+			slug: "forged",
+			signupSource: "powered-by",
+			signupReferrerSlug: "<script>alert(1)</script>",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupReferrerId).toBeUndefined();
+	});
+
+	test("createRetailer without a referrer leaves signupReferrerId absent", async () => {
+		const t = setup();
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Plain Store",
+			slug: "plain",
+			signupSource: "spotlight-thg",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupReferrerId).toBeUndefined();
+	});
+
 	test("createRetailer stores a wire-format gaClientId on the row", async () => {
 		const t = setup();
 		const asA = t.withIdentity({ subject: USER_A });

@@ -428,6 +428,26 @@ imply a calculation the system cannot perform.
   runs from *mark-paid* — on a year-long commitment the paper can be off by up to
   the 14-day grace.
 
+### Superseded by 86eyb6z4r (auto-sub era) — read the above with these deltas
+
+The offer card itself stays valid (it targets **active** monthly sellers, whom
+`subscribeSelf` deliberately refuses — mid-cycle changes remain a human
+conversation). But three premises above changed when HitPay recurring landed:
+
+- **`SHOW_ANNUAL_TOGGLE` is now `true`.** The "no self-serve checkout" reason is
+  gone: a public annual price leads to the in-app plan picker → invoice →
+  Pay-now link, a real checkout. The badge reads "2 months free", per the rule.
+- **Trialing / past_due / cancelled sellers self-serve annual directly** through
+  the plan picker (`invoices.subscribeSelf`) — the WhatsApp prefill is no longer
+  their only route. Currency there derives from the store's country / last paid
+  invoice, same posture as above.
+- **"The annual renewal chase does not exist" is stale.** The daily cron now
+  auto-issues every renewal (annual included) with an email + Pay-now link, and
+  auto-charges a saved method; the `console.info` is no longer the mechanism.
+  The 30-day advance notice for four-figure annual charges is still worth
+  shipping — auto-renew sellers get a 3-day pre-charge notice today.
+
+
 ## Deferred / known gaps (manual-sub era — revisit for auto-sub)
 
 - **No cancellation flow.** The `cancelled` status exists but nothing reaches it; a churning

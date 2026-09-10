@@ -88,11 +88,15 @@ export const Route = createFileRoute("/$slug_/checkout")({
 function CheckoutNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Store not found</h1>
-			<p className="text-sm text-muted-foreground">
-				No retailer uses <span className="font-mono">/{slug}</span>.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Store not found</h1>
+				<p className="text-sm text-muted-foreground">
+					No retailer uses <span className="font-mono">/{slug}</span>.
+				</p>
+			</div>
+			{/* No store to attribute to — the slug names nobody. */}
+			<StorefrontFooter />
 		</main>
 	);
 }
@@ -216,7 +220,7 @@ function CheckoutRoute() {
 						/>
 					</div>
 				</div>
-				<StorefrontFooter />
+				<StorefrontFooter slug={slug} />
 			</div>
 		);
 	}
@@ -286,7 +290,7 @@ function CheckoutRoute() {
 
 			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-			<StorefrontFooter />
+			<StorefrontFooter slug={slug} />
 		</div>
 	);
 }

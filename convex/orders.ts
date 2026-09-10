@@ -1693,6 +1693,8 @@ export const receiptPdfInputs = internalQuery({
 				// here (that's the private delivery origin, often a home).
 				businessIdentity: retailer?.businessIdentity,
 				country: retailer?.country,
+				// Attributes the document's "Powered by Kedaipal" link to this store.
+				storeSlug: retailer?.slug,
 			}),
 		};
 	},

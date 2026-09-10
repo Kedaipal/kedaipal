@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { slugify, slugSchema, validateSlugShape } from "./slug";
+import { BRAND_NAME_MESSAGE } from "../../convex/lib/reservedSlugs";
+import {
+	slugify,
+	slugSchema,
+	validateSlugShape,
+	validateStoreName,
+} from "./slug";
 
 describe("slugify", () => {
 	it("basic lowercasing and space replacement", () => {
@@ -70,5 +76,29 @@ describe("validateSlugShape", () => {
 			ok: true,
 			value: "valid-slug",
 		});
+	});
+});
+
+describe("validateStoreName", () => {
+	it("returns the trimmed value for an ordinary name", () => {
+		expect(validateStoreName("  Mak Cik Kuih ")).toEqual({
+			ok: true,
+			value: "Mak Cik Kuih",
+		});
+	});
+
+	it("refuses the brand with the shared server sentence", () => {
+		for (const name of ["Kedaipal Support", "Kedai Pal", "my kedaipal shop"]) {
+			expect(validateStoreName(name), name).toEqual({
+				ok: false,
+				message: BRAND_NAME_MESSAGE,
+			});
+		}
+	});
+
+	it("mirrors the server length rules", () => {
+		expect(validateStoreName("K").ok).toBe(false);
+		expect(validateStoreName("a".repeat(61)).ok).toBe(false);
+		expect(validateStoreName("ab").ok).toBe(true);
 	});
 });

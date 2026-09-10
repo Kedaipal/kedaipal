@@ -174,7 +174,9 @@ async function settleInvoicePaid(
 	// 5) Render + store the payment RECEIPT (z8r3fdcrzj) — a second frozen
 	// document beside the invoice blob, proof of payment for the seller's
 	// books. Scheduled (not inline) for the same reason as the invoice PDF:
-	// rendering doesn't belong in the settle transaction.
+	// rendering doesn't belong in the settle transaction. Lives in the shared
+	// settle core so gateway-settled invoices (auto-charge / Pay-now webhook)
+	// get their receipt exactly like admin-marked ones.
 	await ctx.scheduler.runAfter(
 		0,
 		internal.invoices.generateInvoiceReceiptPdf,
@@ -1008,6 +1010,7 @@ export const listPending = query({
 				dueDate: inv.dueDate,
 				createdAt: inv.createdAt,
 				plan: (inv.plan ?? sub?.plan ?? "pro") as Plan,
+
 				origin: inv.origin ?? "admin",
 				kind: inv.kind ?? "plan",
 				hasPayNowLink: inv.gatewayPayment !== undefined,

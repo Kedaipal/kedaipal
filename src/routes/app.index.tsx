@@ -287,16 +287,18 @@ function DashboardHome() {
 			tab: "whatsapp",
 		},
 		{
+			// One door, the Products page — a COLLAPSED row is a single link, so
+			// pointing it at the import route forced every tap straight into the
+			// Excel upload. The Products page is the chooser: its empty state
+			// offers "+ New product" and "Import from spreadsheet" side by side.
 			key: "product",
 			done: hasProduct,
 			icon: Package,
 			title: "Add your products",
-			why: "Selling 20+ items? Import your whole catalogue from a spreadsheet in one go — no typing them in one by one. Or add a single product to start.",
+			why: "Add products one at a time, or import your whole catalogue from a spreadsheet in one go — you'll get both options on the Products page.",
 			time: "~5 min",
-			cta: "Import products",
-			to: "/app/products/import",
-			secondaryCta: "Add one product",
-			secondaryTo: "/app/products/new",
+			cta: "Add products",
+			to: "/app/products",
 		},
 		{
 			key: "payment",
@@ -917,8 +919,7 @@ export type ChecklistItem = {
 	 * Optional secondary action shown beneath the primary CTA (e.g. "add one"
 	 * alongside the recommended bulk import). Only rendered in the expanded row.
 	 */
-	secondaryCta?: string;
-	secondaryTo?: string;
+
 	/** Renders an "Optional" pill so the seller knows they can skip. */
 	optional?: boolean;
 };
@@ -985,13 +986,6 @@ function ChecklistRow({
 						<ArrowRight className="size-3.5" />
 					</Button>
 				</Link>
-				{item.secondaryCta && item.secondaryTo ? (
-					<Link to={item.secondaryTo}>
-						<Button size="sm" variant="outline" className="h-11 w-full">
-							{item.secondaryCta}
-						</Button>
-					</Link>
-				) : null}
 			</li>
 		);
 	}

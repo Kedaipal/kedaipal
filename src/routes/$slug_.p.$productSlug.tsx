@@ -212,20 +212,23 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 function ProductNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Product not found</h1>
-			<p className="text-sm text-muted-foreground">
-				It may have sold out for good or been renamed — the store&apos;s full
-				catalog is still open.
-			</p>
-			<Link
-				to="/$slug"
-				params={{ slug }}
-				activeOptions={{ exact: true }}
-				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
-			>
-				Browse the store
-			</Link>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Product not found</h1>
+				<p className="text-sm text-muted-foreground">
+					It may have sold out for good or been renamed — the store&apos;s full
+					catalog is still open.
+				</p>
+				<Link
+					to="/$slug"
+					params={{ slug }}
+					activeOptions={{ exact: true }}
+					className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
+				>
+					Browse the store
+				</Link>
+			</div>
+			<StorefrontFooter slug={slug} />
 		</main>
 	);
 }
@@ -311,7 +314,7 @@ function ProductRoute() {
 				/>
 				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-				<StorefrontFooter />
+				<StorefrontFooter slug={slug} />
 			</div>
 		</OrderingPausedProvider>
 	);

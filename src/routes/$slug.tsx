@@ -220,11 +220,16 @@ export const Route = createFileRoute("/$slug")({
 function StoreNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Store not found</h1>
-			<p className="text-sm text-muted-foreground">
-				No retailer uses <span className="font-mono">/{slug}</span>.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Store not found</h1>
+				<p className="text-sm text-muted-foreground">
+					No retailer uses <span className="font-mono">/{slug}</span>.
+				</p>
+			</div>
+			{/* No store to attribute to — the slug names nobody. The badge is
+			    still the one way out of this dead end. */}
+			<StorefrontFooter />
 		</main>
 	);
 }
@@ -326,7 +331,7 @@ function StorefrontRoute() {
 					/>
 				</section>
 
-				<StorefrontFooter />
+				<StorefrontFooter slug={slug} />
 
 				<CartBar cart={cart} storeSlug={retailer.slug} />
 			</div>

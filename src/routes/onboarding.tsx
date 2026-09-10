@@ -28,6 +28,7 @@ import {
 	MOBILE_MESSAGE,
 	otherCountryMobile,
 } from "../../convex/lib/slug";
+import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
@@ -36,13 +37,16 @@ import { useOnboardingStart } from "../hooks/useOnboardingStart";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { readGaClientId, trackEvent } from "../lib/ga-events";
-import { readMarketingSource } from "../lib/marketing-attribution";
+import {
+	readMarketingReferrerStore,
+	readMarketingSource,
+} from "../lib/marketing-attribution";
 import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
-import { slugify } from "../lib/slug";
+import { slugify, validateStoreName } from "../lib/slug";
 
 /**
  * Optional prefill, carried as a single URL-safe token (`?p=…`). Set when Kedaipal
@@ -163,10 +167,14 @@ function OnboardingForm() {
 		return <LoadingScreen />;
 	}
 
+	// Same rule as the server (`assertValidStoreName`), read inline before the
+	// seller ever submits — the brand check is the one they would not guess.
+	const nameCheck = validateStoreName(storeName);
+
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		if (storeName.trim().length < 2) {
-			toast.error("Store name must be at least 2 characters");
+		if (!nameCheck.ok) {
+			toast.error(nameCheck.message);
 			return;
 		}
 		if (availability.status !== "available") return;
@@ -195,8 +203,11 @@ function OnboardingForm() {
 		setSubmitting(true);
 		try {
 			// The tag the session arrived with (marketing routes / powered-by
-			// badge) — the server re-sanitizes, this is only a hint.
+			// badge) — the server re-sanitizes, this is only a hint. Beside it,
+			// the store whose badge it was (z8r3fdcwd0) — the server resolves the
+			// slug to a store and drops one that names nobody.
 			const signupSource = readMarketingSource();
+			const signupReferrerSlug = readMarketingReferrerStore();
 			// GA client id, so server-side key events (first_order/subscribe_paid)
 			// stitch to this browser's funnel — validated server-side, hint only.
 			const gaClientId = readGaClientId();
@@ -209,6 +220,7 @@ function OnboardingForm() {
 				// plan begins once Arif marks their founding invoice paid.
 				...(prefill?.founding ? { intent: "founding" as const } : {}),
 				...(signupSource !== undefined ? { signupSource } : {}),
+				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
 			});
 			// The funnel's terminal key event — after the mutation succeeds, so a
@@ -222,13 +234,17 @@ function OnboardingForm() {
 	}
 
 	const canSubmit =
-		storeName.trim().length >= 2 &&
+		nameCheck.ok &&
 		availability.status === "available" &&
 		agreed &&
 		!submitting;
 
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-12">
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-6">
+			{/* Brand + account bar — same container width as the form, so the page
+			    says whose app this is and which account the store will belong to
+			    (with the way out) before asking for anything. */}
+			<OnboardingTopBar />
 			<header className="flex flex-col gap-2">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
@@ -283,6 +299,9 @@ function OnboardingForm() {
 						placeholder="e.g. Your store name"
 						variant="field"
 					/>
+					{storeName.trim().length > 0 && !nameCheck.ok ? (
+						<p className="text-sm text-destructive">✗ {nameCheck.message}</p>
+					) : null}
 				</Field>
 
 				<Field label="URL slug">
@@ -446,8 +465,10 @@ function AvailabilityHint({
 
 function LoadingScreen() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md items-center justify-center px-5">
-			<p className="text-sm text-muted-foreground">Loading…</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-6">
+			{/* Same bar as the form screen, so the brand doesn't blink in late. */}
+			<OnboardingTopBar />
+			<p className="m-auto text-sm text-muted-foreground">Loading…</p>
 		</main>
 	);
 }

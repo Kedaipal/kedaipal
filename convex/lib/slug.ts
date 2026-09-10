@@ -5,7 +5,9 @@
  *
  * IMPORTANT: Keep in sync with `src/lib/slug.ts`. Both files must stay
  * byte-identical in logic — they exist separately because Convex functions
- * bundle from the `convex/` directory.
+ * bundle from the `convex/` directory. The reserved-word list is the one part
+ * that is NOT mirrored: both sides import it from `./reservedSlugs.ts`, which
+ * is machine-checked against the route tree (z8r3fddrd3).
  *
  * This module is also the ONE author of phone normalization (SG-lite,
  * 86eynw28q): the client (`src/lib/phone.ts`, `src/lib/schemas.ts`) imports
@@ -15,35 +17,12 @@
  */
 
 import { COUNTRIES, type Country, COUNTRY_DIAL_CODE } from "./country";
-
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
-	"_",
-	"about",
-	"admin",
-	"api",
-	"app",
-	"assets",
-	"blog",
-	"docs",
-	"favicon.ico",
-	"help",
-	"kedaipal",
-	"login",
-	"logout",
-	"onboarding",
-	"pricing",
-	"public",
-	"robots.txt",
-	"settings",
-	"sign-in",
-	"sign-up",
-	"signin",
-	"signup",
-	"sitemap.xml",
-	"static",
-	"support",
-	"www",
-]);
+import {
+	BRAND_NAME_MESSAGE,
+	containsBrand,
+	isReservedSlug,
+	RESERVED_SLUG_MESSAGE,
+} from "./reservedSlugs";
 
 /**
  * Best-effort slugification of free text (store names, product names):
@@ -83,8 +62,8 @@ export function assertValidSlug(raw: string): string {
 	if (!SLUG_PATTERN.test(s)) {
 		throw new Error("Slug must use lowercase letters, numbers and single dashes");
 	}
-	if (RESERVED_SLUGS.has(s)) {
-		throw new Error("This slug is reserved");
+	if (isReservedSlug(s)) {
+		throw new Error(RESERVED_SLUG_MESSAGE);
 	}
 	return s;
 }
@@ -109,10 +88,24 @@ export function assertValidCategorySlug(raw: string): string {
 	return s;
 }
 
+export const STORE_NAME_MIN = 2;
+export const STORE_NAME_MAX = 60;
+
+/**
+ * The store name is what every buyer reads — WhatsApp message body, storefront
+ * header, tracking page — so it carries the same brand rule as the slug
+ * (`containsBrand`): a store called "Kedaipal Support" on the slug
+ * `abc-trading` is a stronger impersonation than any URL. Mirrors
+ * `validateStoreName` in `src/lib/slug.ts`, which gives the seller the same
+ * sentence inline before they ever submit.
+ */
 export function assertValidStoreName(raw: string): string {
 	const s = raw.trim();
-	if (s.length < 2) throw new Error("Store name must be at least 2 characters");
-	if (s.length > 60) throw new Error("Store name must be at most 60 characters");
+	if (s.length < STORE_NAME_MIN)
+		throw new Error(`Store name must be at least ${STORE_NAME_MIN} characters`);
+	if (s.length > STORE_NAME_MAX)
+		throw new Error(`Store name must be at most ${STORE_NAME_MAX} characters`);
+	if (containsBrand(s)) throw new Error(BRAND_NAME_MESSAGE);
 	return s;
 }
 
