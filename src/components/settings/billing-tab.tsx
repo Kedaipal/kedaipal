@@ -7,6 +7,7 @@ import {
 	Banknote,
 	CreditCard,
 	ExternalLink,
+	Loader2,
 	LifeBuoy,
 	Mail,
 	MessageCircle,
@@ -82,6 +83,11 @@ export function BillingTab({
 	const verifyPayment = useAction(api.subscriptionPayments.verifyInvoicePayment);
 	const verifiedReturn = useRef(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	// True from "Subscribe" click until the HitPay redirect actually navigates
+	// — the pending-invoice card holds a spinner instead of flashing the manual
+	// rails, and the auto-renewal card stays hidden. Cleared by the picker on a
+	// failed redirect (the page navigates away on success).
+	const [redirecting, setRedirecting] = useState(false);
 	useEffect(() => {
 		if (billingReturn !== "paid" || verifiedReturn.current) return;
 		verifiedReturn.current = true;
@@ -350,6 +356,19 @@ export function BillingTab({
 					) : null}
 
 					<div className="border-t border-border pt-4">
+						{/* Mid-subscribe (the picker just created this invoice and the
+						    HitPay redirect is loading): a beat where the fallback rails
+						    would flash and invite a manual payment before the seller
+						    even SEES the HitPay page. Hold the section on a spinner —
+						    if the redirect fails, the toast fires and this unwinds to
+						    the normal payment options. */}
+						{redirecting ? (
+							<div className="flex items-center gap-2.5 py-2 text-sm text-muted-foreground">
+								<Loader2 className="size-4 animate-spin" />
+								Taking you to HitPay's secure payment page…
+							</div>
+						) : (
+							<>
 						<p className="text-sm font-medium">How to pay</p>
 						{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
 						    hosted page, auto-confirmed — the manual rails stay below. */}
@@ -432,6 +451,8 @@ export function BillingTab({
 							<ExternalLink className="size-4" />
 							I've paid — notify us
 						</a>
+							</>
+						)}
 					</div>
 				</section>
 			) : null}
@@ -453,6 +474,7 @@ export function BillingTab({
 						renewing={sub.status !== "trialing"}
 						foundingPricing={gateway.foundingPricing}
 						foundingPricingLapsed={gateway.foundingPricingLapsed}
+						onRedirectingChange={setRedirecting}
 					/>
 				) : (
 					<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -493,6 +515,7 @@ export function BillingTab({
 			    a half-finished setup to resume, or an ACTIVE seller who came in
 			    on the manual rail and can opt in. */}
 			{!adminOwnAccount &&
+			!redirecting &&
 			!sub?.comped &&
 			sub &&
 			gateway?.autoRenew &&

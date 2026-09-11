@@ -345,6 +345,19 @@ export const internalSettleFromGateway = internalMutation({
 				gatewayPayment: { ...invoice.gatewayPayment, paymentId },
 			});
 		}
+		// Kill the open Pay-now link the moment ANY gateway settle lands — an
+		// auto-charge racing a seller's finger on the link is a real
+		// double-payment window otherwise (the settle guard would surface it as
+		// a late_payment audit, but not taking the money beats auditing it).
+		// Best-effort: when the settle came FROM the link itself the request is
+		// already completed and the DELETE just logs a warn.
+		if (invoice.gatewayRequestId) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.expireInvoiceRequest,
+				{ requestId: invoice.gatewayRequestId },
+			);
+		}
 		// A successful AUTO-CHARGE also advances the saved-method counters —
 		// resolved via the pending-charge stamp so a Pay-now settle on a session
 		// mid-dunning doesn't inflate timesCharged. (Dunning state itself was

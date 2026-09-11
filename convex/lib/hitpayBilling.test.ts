@@ -55,6 +55,7 @@ describe("buildAutoRenewSessionParams", () => {
 	const inputs = {
 		planLabel: "Pro",
 		storeName: "Kek Mahsuri",
+		description: "Kedaipal subscription — pay & save your method for auto-renewal",
 		customerEmail: "seller@example.com",
 		customerName: "Mahsuri",
 		amountSen: 14900,

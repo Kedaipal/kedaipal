@@ -150,6 +150,11 @@ const PURPOSE_MAX = 255;
 export type AutoRenewSessionInputs = {
 	planLabel: string; // "Pro · Monthly" — shown on HitPay's page
 	storeName: string;
+	/** Shown under the plan name on HitPay's page. Load-bearing copy: their
+	 * page's button always reads "Pay {amount}" even in save-method mode where
+	 * the amount is display-only — this line is our only way to say whether
+	 * anything is actually charged today. */
+	description: string;
 	customerEmail: string; // REQUIRED by HitPay
 	customerName?: string;
 	/** Display-only on the authorisation page (the seller's current price);
@@ -174,7 +179,7 @@ export function buildAutoRenewSessionParams(
 		"name",
 		`Kedaipal ${inputs.planLabel} — ${inputs.storeName}`.slice(0, PURPOSE_MAX),
 	);
-	params.set("description", "Kedaipal subscription auto-renewal");
+	params.set("description", inputs.description);
 	params.set("save_payment_method", "true");
 	params.set("customer_email", inputs.customerEmail);
 	if (inputs.customerName) params.set("customer_name", inputs.customerName);

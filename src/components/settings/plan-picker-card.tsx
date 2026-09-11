@@ -40,6 +40,7 @@ export function PlanPickerCard({
 	renewing,
 	foundingPricing,
 	foundingPricingLapsed,
+	onRedirectingChange,
 }: {
 	sub: SubscriptionView;
 	currency: BillingCurrency;
@@ -52,6 +53,9 @@ export function PlanPickerCard({
 	/** Founding-shaped store whose 3-month lapse window passed — explain why
 	 * the price reads standard instead of leaving them to wonder. */
 	foundingPricingLapsed: boolean;
+	/** Signals the tab that a HitPay redirect is in flight, so the freshly
+	 * created invoice's card shows a spinner instead of the manual rails. */
+	onRedirectingChange?: (redirecting: boolean) => void;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
 	const startAutoRenewSetup = useAction(
@@ -73,6 +77,7 @@ export function PlanPickerCard({
 	// future renewals charge themselves.
 	const subscribeAuto = async () => {
 		setBusy(true);
+		onRedirectingChange?.(true);
 		try {
 			await subscribeSelf({ plan, billingCycle: cycle });
 			const { url } = await startAutoRenewSetup({});
@@ -80,6 +85,9 @@ export function PlanPickerCard({
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			setBusy(false);
+			// Unwind the tab's spinner — the invoice (when created before the
+			// failure) shows its normal payment options as the fallback.
+			onRedirectingChange?.(false);
 		}
 	};
 

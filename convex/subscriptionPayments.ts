@@ -591,9 +591,17 @@ export const startAutoRenewSetup = action({
 		}
 
 		const planLabel = `${context.plan.charAt(0).toUpperCase()}${context.plan.slice(1)}`;
+		const chargesToday = context.pendingInvoiceTotalSen !== undefined;
 		const inputs = {
 			planLabel,
 			storeName: context.storeName,
+			// HitPay's page button always reads "Pay {amount}" — this line under
+			// the plan name is our only way to tell the seller whether money
+			// moves today (subscribe flow) or only at the next renewal (opt-in
+			// from an already-paid plan).
+			description: chargesToday
+				? "Kedaipal subscription — pay & save your method for auto-renewal"
+				: "Auto-renewal setup — nothing is charged today; renewals bill automatically",
 			customerEmail: email,
 			// The store name is the customer identity on HitPay's dashboard —
 			// without it the Subscriptions list reads "N/A" (sandbox, 11 Sep).
