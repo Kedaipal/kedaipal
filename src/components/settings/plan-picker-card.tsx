@@ -28,10 +28,11 @@ const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
 /**
  * Settings → Billing: self-serve plan picker (86eyb6z4r) — replaces the
  * "message us on WhatsApp and we'll send your invoice" card when the payment
- * gateway is configured. Pick a plan + cycle → your invoice appears with a
- * Pay-now button → paying activates the plan, nobody at Kedaipal in the
- * loop. Founding-intent stores see their promised discounted Pro price
- * (applied server-side too). Annual leads with its real hook: 2 months free.
+ * gateway is configured. ONE door (Zaki, 11 Sep): pick a plan + cycle →
+ * invoice created → straight to HitPay's authorisation page → attach charges
+ * the bill and the plan renews itself from then on. Nobody at Kedaipal in
+ * the loop. Founding pricing is server-resolved; annual leads with its real
+ * hook: 2 months free.
  */
 export function PlanPickerCard({
 	sub,
@@ -62,42 +63,30 @@ export function PlanPickerCard({
 		sub.plan === "starter" ? "starter" : "pro",
 	);
 	const [cycle, setCycle] = useState<Cycle>("monthly");
-	const [busy, setBusy] = useState<"subscribe" | "invoice" | null>(null);
+	const [busy, setBusy] = useState(false);
 
 	const founding = foundingPricing;
 
-	// The default path (owner decision, 11 Sep 2026): subscribing IS enrolling
-	// in auto-renewal, like every mainstream subscription — invoice created,
-	// then straight to HitPay's authorisation page; attaching the method
-	// charges the bill and future renewals charge themselves. The manual
-	// escape hatch below stays first-class because DuitNow/bank sellers CANNOT
-	// tokenise — for them an invoice + Pay-now link is the whole product.
+	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
+	// like every mainstream subscription: invoice created, then straight to
+	// HitPay's authorisation page; attaching the method charges the bill and
+	// future renewals charge themselves.
 	const subscribeAuto = async () => {
-		setBusy("subscribe");
+		setBusy(true);
 		try {
 			await subscribeSelf({ plan, billingCycle: cycle });
 			const { url } = await startAutoRenewSetup({});
 			window.location.assign(url);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
-			setBusy(null);
+			setBusy(false);
 		}
 	};
 
-	const requestInvoice = async () => {
-		setBusy("invoice");
-		try {
-			await subscribeSelf({ plan, billingCycle: cycle });
-			toast.success("Invoice created", {
-				description:
-					"Pay it below — your plan activates the moment payment lands.",
-			});
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(null);
-		}
-	};
+	// No explicit "get an invoice instead" path (Zaki, 11 Sep): ONE door. The
+	// manual rail still exists implicitly — subscribing creates the invoice
+	// before the redirect, so a seller who abandons HitPay's page comes back to
+	// a pending invoice with the Pay-now button AND the bank/DuitNow details.
 
 	const priceLine = (p: PickablePlan) => {
 		const foundingApplies = founding && p === "pro";
@@ -115,7 +104,7 @@ export function PlanPickerCard({
 					{renewing ? "Renew your subscription" : "Ready to choose a plan?"}
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Pick a plan to get your invoice — pay it online and your plan
+					Pick a plan — you'll pay on HitPay's secure page and your plan
 					activates straight away.
 				</p>
 				{foundingPricingLapsed ? (
@@ -208,10 +197,10 @@ export function PlanPickerCard({
 				<button
 					type="button"
 					onClick={subscribeAuto}
-					disabled={busy !== null}
+					disabled={busy}
 					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
-					{busy === "subscribe"
+					{busy
 						? "Opening secure payment…"
 						: `Subscribe to ${PLAN_PITCH[plan].name}`}
 				</button>
@@ -227,18 +216,6 @@ export function PlanPickerCard({
 					Kedaipal never sees your card or wallet details.
 				</p>
 			</div>
-			{/* The can't-tokenise escape hatch (DuitNow / bank-transfer sellers) —
-			    quieter, never hidden. */}
-			<button
-				type="button"
-				onClick={requestInvoice}
-				disabled={busy !== null}
-				className="w-fit text-left text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
-			>
-				{busy === "invoice"
-					? "Creating your invoice…"
-					: "Prefer to pay each bill yourself? Get an invoice instead (DuitNow, bank transfer…)"}
-			</button>
 		</section>
 	);
 }

@@ -296,8 +296,10 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		render(<BillingTab retailer={trialing()} />);
 		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
 		expect(screen.getByText(/Subscribe to Pro/)).toBeTruthy();
-		// The can't-tokenise escape hatch stays first-class.
-		expect(screen.getByText(/Get an invoice instead/)).toBeTruthy();
+		// ONE door (Zaki, 11 Sep): no explicit get-an-invoice path — an abandoned
+		// authorisation still lands back on a pending invoice with Pay-now +
+		// bank details, so the manual rail survives implicitly.
+		expect(screen.queryByText(/Get an invoice instead/)).toBeNull();
 		expect(
 			screen.queryByText(/Message us on WhatsApp and we'll send your invoice/),
 		).toBeNull();
@@ -315,9 +317,28 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 	});
 
-	it("gateway ON → the auto-renewal card offers the one-time setup", () => {
+	it("pre-subscription the auto-renewal card is HIDDEN — the picker is the one door", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("an ACTIVE manual subscriber gets the opt-in auto-renewal card", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
 		expect(screen.getByText("Auto-renewal")).toBeTruthy();
 		expect(screen.getByText("Turn on auto-renewal")).toBeTruthy();
 		// The trust line: Kedaipal never touches the card details.

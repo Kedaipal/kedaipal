@@ -485,10 +485,20 @@ export function BillingTab({
 				)
 			) : null}
 
-			{/* Auto-renewal (86eyb6z4r) — rendered whenever the gateway is up for a
-			    real (non-comped) account, whatever the plan state: the seller can
-			    set it up ahead of their first renewal or fix a failing method. */}
-			{!adminOwnAccount && !sub?.comped && sub && gateway?.autoRenew ? (
+			{/* Auto-renewal (86eyb6z4r) — a MANAGEMENT surface, not an enrolment
+			    one (Zaki, 11 Sep): new subscribers are enrolled by the plan
+			    picker's subscribe flow itself, so pre-subscription this card
+			    would just be a second, confusing door. It renders only when
+			    there's something to manage: a method attached (incl. failing),
+			    a half-finished setup to resume, or an ACTIVE seller who came in
+			    on the manual rail and can opt in. */}
+			{!adminOwnAccount &&
+			!sub?.comped &&
+			sub &&
+			gateway?.autoRenew &&
+			(sub.autoRenew !== undefined ||
+				sub.autoRenewSetupPending === true ||
+				sub.status === "active") ? (
 				<AutoRenewalCard
 					sub={sub}
 					methods={gateway.methods}
