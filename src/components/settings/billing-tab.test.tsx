@@ -236,6 +236,29 @@ describe("BillingTab pending invoice — how to pay", () => {
 		expect(screen.getByText("How to pay")).toBeTruthy();
 	});
 
+	it("returning from HitPay holds the pay rails on a spinner — no double-pay window", () => {
+		// Landing back with ?paid=return (or ?autorenew=return): the settle is a
+		// beat behind the page load, and quick hands could pay the still-pending
+		// invoice a second time. The section shows "Confirming…" instead.
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					...pendingInvoice("MYR"),
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_1",
+					},
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} billingReturn="paid" />);
+		expect(screen.getByText("Confirming your payment…")).toBeTruthy();
+		expect(screen.queryByText("Pay online now")).toBeNull();
+		expect(screen.queryByText("How to pay")).toBeNull();
+	});
+
 	it("no gateway link → no Pay-now button, manual flow byte-identical", () => {
 		mockQueries({ isAdmin: false, invoices: [pendingInvoice("MYR")] });
 		render(<BillingTab retailer={retailer()} />);

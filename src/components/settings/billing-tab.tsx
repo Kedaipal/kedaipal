@@ -88,6 +88,21 @@ export function BillingTab({
 	// rails, and the auto-renewal card stays hidden. Cleared by the picker on a
 	// failed redirect (the page navigates away on success).
 	const [redirecting, setRedirecting] = useState(false);
+	// The mirror-image window on the way BACK: landing from HitPay, the charge
+	// (auto-renew attach) or webhook (Pay-now) settles a beat later than the
+	// page loads — quick hands could pay the still-pending invoice again. Hold
+	// the pay rails on a spinner until the invoice flips (the card unmounts) or
+	// a 15s cap passes, so a DECLINED charge re-exposes the payment options
+	// instead of hiding them forever. Cleared early when the attach reconcile
+	// reports the seller abandoned setup.
+	const [confirmingReturn, setConfirmingReturn] = useState(
+		billingReturn !== undefined,
+	);
+	useEffect(() => {
+		if (!confirmingReturn) return;
+		const timer = setTimeout(() => setConfirmingReturn(false), 15_000);
+		return () => clearTimeout(timer);
+	}, [confirmingReturn]);
 	useEffect(() => {
 		if (billingReturn !== "paid" || verifiedReturn.current) return;
 		verifiedReturn.current = true;
@@ -362,10 +377,12 @@ export function BillingTab({
 						    even SEES the HitPay page. Hold the section on a spinner —
 						    if the redirect fails, the toast fires and this unwinds to
 						    the normal payment options. */}
-						{redirecting ? (
+						{redirecting || confirmingReturn ? (
 							<div className="flex items-center gap-2.5 py-2 text-sm text-muted-foreground">
 								<Loader2 className="size-4 animate-spin" />
-								Taking you to HitPay's secure payment page…
+								{redirecting
+									? "Taking you to HitPay's secure payment page…"
+									: "Confirming your payment…"}
 							</div>
 						) : (
 							<>
@@ -526,7 +543,12 @@ export function BillingTab({
 					sub={sub}
 					methods={gateway.methods}
 					returnFromSetup={billingReturn === "autorenew"}
-					onReturnHandled={onBillingReturnHandled ?? (() => {})}
+					onReturnHandled={(attached) => {
+						// Setup abandoned → nothing will charge; re-expose the pay
+						// options right away instead of riding out the 15s cap.
+						if (attached === false) setConfirmingReturn(false);
+						onBillingReturnHandled?.();
+					}}
 				/>
 			) : null}
 

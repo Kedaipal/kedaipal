@@ -27,7 +27,9 @@ export function AutoRenewalCard({
 	methods: string[];
 	/** True when the URL carries ?autorenew=return (back from HitPay). */
 	returnFromSetup: boolean;
-	onReturnHandled: () => void;
+	/** `attached === false` ⇒ the seller abandoned setup (nothing will charge);
+	 * undefined ⇒ outcome unknown, the webhook may still land it. */
+	onReturnHandled: (attached?: boolean) => void;
 }) {
 	const startSetup = useAction(api.subscriptionPayments.startAutoRenewSetup);
 	const finishSetup = useAction(api.subscriptionPayments.finishAutoRenewSetup);
@@ -42,8 +44,10 @@ export function AutoRenewalCard({
 		if (!returnFromSetup || reconciled.current) return;
 		reconciled.current = true;
 		void (async () => {
+			let attached: boolean | undefined;
 			try {
 				const result = await finishSetup({});
+				attached = result.attached;
 				if (result.attached) {
 					toast.success("Auto-renewal is on", {
 						description: "Your renewals will be charged automatically.",
@@ -56,7 +60,7 @@ export function AutoRenewalCard({
 			} catch {
 				// The webhook path may still land it; the card re-renders reactively.
 			} finally {
-				onReturnHandled();
+				onReturnHandled(attached);
 			}
 		})();
 	}, [returnFromSetup, finishSetup, onReturnHandled]);
