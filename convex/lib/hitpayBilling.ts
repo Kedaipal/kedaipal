@@ -162,7 +162,10 @@ export type AutoRenewSessionInputs = {
 	redirectUrl: string;
 	/** Our correlation handle — the subscription id. */
 	reference: string;
-	paymentMethods: string[];
+	/** Undefined = omit the param and let HitPay offer the ACCOUNT's own
+	 * tokenisable set — the fallback when our preferred list is rejected
+	 * (an account may have only TnG, or only card, enabled). */
+	paymentMethods: string[] | undefined;
 };
 
 /** Form body for POST /v1/recurring-billing with save_payment_method=true. */
@@ -180,7 +183,7 @@ export function buildAutoRenewSessionParams(
 	if (inputs.customerName) params.set("customer_name", inputs.customerName);
 	params.set("amount", senToDecimalString(inputs.amountSen));
 	params.set("currency", inputs.currency.toUpperCase());
-	for (const method of inputs.paymentMethods) {
+	for (const method of inputs.paymentMethods ?? []) {
 		params.append("payment_methods[]", method);
 	}
 	params.set("times_to_be_charged", String(AUTO_RENEW_TIMES_TO_BE_CHARGED));

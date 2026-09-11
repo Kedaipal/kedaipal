@@ -395,25 +395,55 @@ describe("startAutoRenewSetup", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	test("degrades to card-only when the full method list is rejected (422)", async () => {
+	test("a method-list 422 retries with the param OMITTED — the account's own set decides", async () => {
+		// The sandbox found this for real: a TnG-only account rejected our
+		// [card, touch_n_go] list, and a card-only fallback would have been the
+		// one method it doesn't have. The only assumption-free fallback is no
+		// payment_methods param at all.
 		const t = setup();
 		stubBillingEnv();
 		await seedRetailer(t, "u_422", "s422-store");
 		const fetchMock = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
 			const body = String(init?.body ?? "");
-			if (body.includes("touch_n_go")) {
-				return new Response(JSON.stringify({ message: "method not enabled" }), {
-					status: 422,
-				});
+			if (body.includes("payment_methods")) {
+				return new Response(
+					JSON.stringify({
+						error_code: "validation_error",
+						message:
+							"The selected payment methods is invalid. It must be one of: touch_n_go",
+						errors: { payment_methods: ["must be one of: touch_n_go"] },
+					}),
+					{ status: 422 },
+				);
 			}
-			return Response.json({ id: "rb_card", url: "https://auth.example/rb_card" });
+			return Response.json({ id: "rb_own", url: "https://auth.example/rb_own" });
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const { url } = await t
 			.withIdentity({ subject: "u_422", email: "u_422@x.com" })
 			.action(api.subscriptionPayments.startAutoRenewSetup, {});
-		expect(url).toBe("https://auth.example/rb_card");
+		expect(url).toBe("https://auth.example/rb_own");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+		// The retry must carry NO payment_methods at all — not a different guess.
+		const retryBody = String(fetchMock.mock.calls[1]?.[1]?.body ?? "");
+		expect(retryBody).not.toContain("payment_methods");
+		expect(retryBody).toContain("save_payment_method=true");
+	});
+
+	test("a non-method 422 (or 5xx) does NOT retry — one clean failure to the seller", async () => {
+		const t = setup();
+		stubBillingEnv();
+		await seedRetailer(t, "u_5xx", "s5xx-store");
+		const fetchMock = vi.fn(
+			async () => new Response("upstream down", { status: 502 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			t
+				.withIdentity({ subject: "u_5xx", email: "u_5xx@x.com" })
+				.action(api.subscriptionPayments.startAutoRenewSetup, {}),
+		).rejects.toThrow(/Couldn't reach the payment service/);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	test("without gateway credentials the action refuses with seller-facing copy", async () => {

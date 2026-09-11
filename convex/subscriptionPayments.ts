@@ -595,28 +595,32 @@ export const startAutoRenewSetup = action({
 			reference: context.subscriptionId,
 		};
 		const methods = AUTO_RENEW_METHODS[context.currency];
-		let session = await createRecurringSession(credentials, {
+		let result = await createRecurringSession(credentials, {
 			...inputs,
 			paymentMethods: methods,
 		});
-		// The account may not have every tokenisable rail enabled (Touch 'n Go
-		// cross-border is account config) — degrade to card-only rather than
-		// dead-ending the seller, and log loudly so ops chases enablement.
-		if (session === null && methods.length > 1) {
+		// The account may not have OUR preferred rails enabled — sandbox proved
+		// the assumption cuts both ways (a TnG-only account rejected card, a
+		// card-only account would reject TnG). On a payment-methods rejection,
+		// retry with the param OMITTED so HitPay offers whatever the ACCOUNT can
+		// actually tokenise — the buyer gateway's omit-and-let-the-account-decide
+		// posture. Log loudly so ops chases enablement of the missing rail.
+		if (result.kind === "invalid_methods") {
 			console.error(
-				"[billing] auto-renew session rejected with full method list — retrying card-only",
-				{ methods },
+				"[billing] auto-renew session rejected our method list — retrying with the account's own set",
+				{ methods, providerMessage: result.message },
 			);
-			session = await createRecurringSession(credentials, {
+			result = await createRecurringSession(credentials, {
 				...inputs,
-				paymentMethods: ["card"],
+				paymentMethods: undefined,
 			});
 		}
-		if (session === null) {
+		if (result.kind !== "ok") {
 			throw new ConvexError(
 				"Couldn't reach the payment service — try again in a moment.",
 			);
 		}
+		const session = result.session;
 		// Supersede any stale session so a forgotten link can't attach later.
 		if (context.existingSessionId) {
 			await ctx.scheduler.runAfter(
@@ -634,10 +638,17 @@ export const startAutoRenewSetup = action({
 	},
 });
 
+type CreateSessionResult =
+	| { kind: "ok"; session: { id: string; url: string } }
+	// HitPay 422'd specifically on `payment_methods` — the account doesn't have
+	// (all of) our preferred rails; the caller retries with the param omitted.
+	| { kind: "invalid_methods"; message: string }
+	| { kind: "failed" };
+
 async function createRecurringSession(
 	credentials: BillingGatewayCredentials,
 	inputs: Parameters<typeof buildAutoRenewSessionParams>[0],
-): Promise<{ id: string; url: string } | null> {
+): Promise<CreateSessionResult> {
 	let response: Response;
 	try {
 		response = await fetch(
@@ -652,21 +663,25 @@ async function createRecurringSession(
 		console.error("[billing] recurring session create failed (network)", {
 			err: err instanceof Error ? err.message : String(err),
 		});
-		return null;
+		return { kind: "failed" };
 	}
 	if (!response.ok) {
+		const body = (await response.text()).slice(0, 500);
 		console.error("[billing] recurring session create rejected", {
 			status: response.status,
-			body: (await response.text()).slice(0, 300),
+			body: body.slice(0, 300),
 		});
-		return null;
+		if (response.status === 422 && body.includes("payment_methods")) {
+			return { kind: "invalid_methods", message: body.slice(0, 200) };
+		}
+		return { kind: "failed" };
 	}
 	const session = (await response.json()) as { id?: string; url?: string };
 	if (!session.id || !session.url) {
 		console.error("[billing] recurring session malformed response");
-		return null;
+		return { kind: "failed" };
 	}
-	return { id: session.id, url: session.url };
+	return { kind: "ok", session: { id: session.id, url: session.url } };
 }
 
 /**

@@ -78,6 +78,16 @@ describe("buildAutoRenewSessionParams", () => {
 		expect(params.getAll("payment_methods[]")).not.toContain("duitnow");
 	});
 
+	test("paymentMethods undefined omits the param — the account's own tokenisable set decides", () => {
+		const params = buildAutoRenewSessionParams({
+			...inputs,
+			paymentMethods: undefined,
+		});
+		expect(params.getAll("payment_methods[]")).toEqual([]);
+		expect(params.toString()).not.toContain("payment_methods");
+		expect(params.get("save_payment_method")).toBe("true");
+	});
+
 	test("times_to_be_charged is set explicitly — HitPay's default of 1 would kill the second renewal", () => {
 		const params = buildAutoRenewSessionParams(inputs);
 		expect(params.get("times_to_be_charged")).toBe(
