@@ -347,6 +347,36 @@ describe("mintInvoicePaymentRequest", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	test("a methodless mint stores NO link — a dead checkout is worse than no button", async () => {
+		// Sandbox-observed 11 Sep: an SGD request on an account with no SGD
+		// rails returns 201 with payment_methods: [] and its checkout page
+		// renders a dead "Awaiting customer present card" state.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_dead", "dead-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			currency: "SGD",
+			amount: 5900,
+			total: 5900,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					id: "req_dead_1",
+					url: "https://pay.example/req_dead_1",
+					payment_methods: [],
+				}),
+			),
+		);
+		await t.action(internal.subscriptionPayments.mintInvoicePaymentRequest, {
+			invoiceId,
+		});
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.gatewayRequestId).toBeUndefined();
+		expect(invoice?.gatewayPayment).toBeUndefined();
+	});
+
 	test("a failed mint leaves the invoice on the manual rail (never blocks)", async () => {
 		const t = setup();
 		stubBillingEnv();

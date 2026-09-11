@@ -300,11 +300,28 @@ export const mintInvoicePaymentRequest = internalAction({
 			});
 			return;
 		}
-		const request = (await response.json()) as { id?: string; url?: string };
+		const request = (await response.json()) as {
+			id?: string;
+			url?: string;
+			payment_methods?: string[];
+		};
 		if (!request.id || !request.url) {
 			console.error("[billing] Pay-now mint malformed response", {
 				invoiceNumber: context.invoiceNumber,
 			});
+			return;
+		}
+		// The response echoes the ACCOUNT's resolved methods for this currency.
+		// An explicit EMPTY list means the checkout page would render dead
+		// ("Awaiting customer present card", sandbox-observed 11 Sep on an SGD
+		// request with no SGD rails enabled) — don't store the link: no button
+		// beats a dead button, and the invoice stays on the manual rail. An
+		// absent field is treated as "no information", same as the BYO probe.
+		if (request.payment_methods !== undefined && request.payment_methods.length === 0) {
+			console.error(
+				"[billing] Pay-now mint has NO usable payment methods for this currency — link not stored; enable a method on the HitPay account",
+				{ invoiceNumber: context.invoiceNumber, currency: context.currency },
+			);
 			return;
 		}
 		await ctx.runMutation(internal.subscriptionPayments.recordInvoiceRequest, {
