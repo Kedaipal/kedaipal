@@ -7,8 +7,8 @@ import {
 	Banknote,
 	CreditCard,
 	ExternalLink,
-	Loader2,
 	LifeBuoy,
+	Loader2,
 	Mail,
 	MessageCircle,
 	QrCode,
@@ -82,7 +82,9 @@ export function BillingTab({
 	// Back from the invoice's HitPay checkout: reconcile against HitPay's
 	// status API instead of trusting the redirect (lost-webhook safety net —
 	// the settle is idempotent, so racing the webhook is harmless).
-	const verifyPayment = useAction(api.subscriptionPayments.verifyInvoicePayment);
+	const verifyPayment = useAction(
+		api.subscriptionPayments.verifyInvoicePayment,
+	);
 	const verifiedReturn = useRef(false);
 	// True from "Subscribe" click until the HitPay redirect actually navigates
 	// — the pending-invoice card holds a spinner instead of flashing the manual
@@ -335,7 +337,11 @@ export function BillingTab({
 			sub &&
 			sub.status === "active" &&
 			gateway?.payNow ? (
-				<PlanChangeCard sub={sub} currency={gateway.currency} />
+				<PlanChangeCard
+					sub={sub}
+					currency={gateway.currency}
+					openInvoiceNumber={pending?.invoiceNumber}
+				/>
 			) : null}
 
 			{/* Annual billing — a plan decision, so it sits with the plan and above
@@ -398,88 +404,88 @@ export function BillingTab({
 							</div>
 						) : (
 							<>
-						<p className="text-sm font-medium">How to pay</p>
-						{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
+								<p className="text-sm font-medium">How to pay</p>
+								{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
 						    hosted page, auto-confirmed — the manual rails stay below. */}
-						{pending.gatewayPayment?.url ? (
-							<div className="mt-2">
+								{pending.gatewayPayment?.url ? (
+									<div className="mt-2">
+										<a
+											href={pending.gatewayPayment.url}
+											className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
+										>
+											<CreditCard className="size-4" />
+											Pay online now
+										</a>
+										<p className="mt-1.5 text-xs text-muted-foreground">
+											Confirmed automatically — no need to message us after.
+										</p>
+									</div>
+								) : null}
+								{pending.currency !== "MYR" ? (
+									// Cross-border invoice (e.g. SGD): the configured MY bank/DuitNow
+									// rails can't settle it, so never show them here — mirrors the
+									// invoice PDF and email.
+									<p className="mt-2 text-sm text-muted-foreground">
+										We'll confirm payment details with you on WhatsApp — quote{" "}
+										<span className="font-mono">{pending.invoiceNumber}</span>{" "}
+										as your payment reference.
+									</p>
+								) : hasPayDetails ? (
+									<div className="mt-2 flex flex-col gap-3">
+										{instructions?.bankAccountNumber ? (
+											<div className="flex items-start gap-2.5 text-sm">
+												<Banknote className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+												<div>
+													<p className="font-medium">
+														{instructions.bankName ?? "Bank transfer"}
+													</p>
+													<p className="font-mono">
+														{instructions.bankAccountNumber}
+													</p>
+													{instructions.bankAccountName ? (
+														<p className="text-xs text-muted-foreground">
+															{instructions.bankAccountName}
+														</p>
+													) : null}
+												</div>
+											</div>
+										) : null}
+										{instructions?.duitnowId ? (
+											<div className="flex items-start gap-2.5 text-sm">
+												<QrCode className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+												<div>
+													<p className="font-medium">DuitNow</p>
+													<p className="font-mono">{instructions.duitnowId}</p>
+												</div>
+											</div>
+										) : null}
+										{instructions?.qrUrl ? (
+											<ZoomableImage
+												src={instructions.qrUrl}
+												alt="DuitNow QR"
+												caption="Scan to pay (DuitNow)"
+												wrapperClassName="w-40 overflow-hidden rounded-xl border border-border bg-white"
+												className="block aspect-square w-full object-contain"
+											/>
+										) : null}
+									</div>
+								) : (
+									<p className="mt-2 text-sm text-muted-foreground">
+										Message us on WhatsApp to receive payment details.
+									</p>
+								)}
 								<a
-									href={pending.gatewayPayment.url}
-									className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
+									href={buildWaContactLink(
+										`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
+										supportWa,
+									)}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 								>
-									<CreditCard className="size-4" />
-									Pay online now
+									<ExternalLink className="size-4" />
+									I've paid — notify us
 								</a>
-								<p className="mt-1.5 text-xs text-muted-foreground">
-									Confirmed automatically — no need to message us after.
-								</p>
-							</div>
-						) : null}
-						{pending.currency !== "MYR" ? (
-							// Cross-border invoice (e.g. SGD): the configured MY bank/DuitNow
-							// rails can't settle it, so never show them here — mirrors the
-							// invoice PDF and email.
-							<p className="mt-2 text-sm text-muted-foreground">
-								We'll confirm payment details with you on WhatsApp — quote{" "}
-								<span className="font-mono">{pending.invoiceNumber}</span> as
-								your payment reference.
-							</p>
-						) : hasPayDetails ? (
-							<div className="mt-2 flex flex-col gap-3">
-								{instructions?.bankAccountNumber ? (
-									<div className="flex items-start gap-2.5 text-sm">
-										<Banknote className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-										<div>
-											<p className="font-medium">
-												{instructions.bankName ?? "Bank transfer"}
-											</p>
-											<p className="font-mono">
-												{instructions.bankAccountNumber}
-											</p>
-											{instructions.bankAccountName ? (
-												<p className="text-xs text-muted-foreground">
-													{instructions.bankAccountName}
-												</p>
-											) : null}
-										</div>
-									</div>
-								) : null}
-								{instructions?.duitnowId ? (
-									<div className="flex items-start gap-2.5 text-sm">
-										<QrCode className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-										<div>
-											<p className="font-medium">DuitNow</p>
-											<p className="font-mono">{instructions.duitnowId}</p>
-										</div>
-									</div>
-								) : null}
-								{instructions?.qrUrl ? (
-									<ZoomableImage
-										src={instructions.qrUrl}
-										alt="DuitNow QR"
-										caption="Scan to pay (DuitNow)"
-										wrapperClassName="w-40 overflow-hidden rounded-xl border border-border bg-white"
-										className="block aspect-square w-full object-contain"
-									/>
-								) : null}
-							</div>
-						) : (
-							<p className="mt-2 text-sm text-muted-foreground">
-								Message us on WhatsApp to receive payment details.
-							</p>
-						)}
-						<a
-							href={buildWaContactLink(
-								`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
-								supportWa,
-							)}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
-						>
-							<ExternalLink className="size-4" />
-							I've paid — notify us
-						</a>
 							</>
 						)}
 					</div>

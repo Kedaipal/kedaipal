@@ -256,6 +256,12 @@ The two directions are deliberately asymmetric, because what is fair differs:
 on an annual Starter (RM790) moving to a monthly Pro (RM149) is unmistakably an
 upgrade that a price comparison would have scheduled as a downgrade.
 
+**An open invoice disables the UPGRADE, and the card names it.** `changePlan`
+keeps the one-pending-invoice rule `subscribeSelf` already enforces — a second
+bill on the table is how a seller ends up `past_due` on a tier they never got —
+so the button is disabled with the invoice number rather than erroring on
+confirm. Moving DOWN charges nothing, so it stays available throughout.
+
 ### Why credit-as-days, and not "charge the difference"
 
 Charging a prorated difference was designed, reviewed and rejected. It breaks on

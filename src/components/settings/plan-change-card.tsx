@@ -11,7 +11,11 @@ import {
 	planChangeCarryoverDays,
 	planPrice,
 } from "../../../convex/lib/plans";
-import { convexErrorMessage, formatPrice, formatShortDate } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatShortDate,
+} from "../../lib/format";
 import { PLAN_LABEL, type SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 
@@ -52,9 +56,15 @@ function featuresLost(from: Plan, to: Plan): string[] {
 export function PlanChangeCard({
 	sub,
 	currency,
+	openInvoiceNumber,
 }: {
 	sub: SubscriptionView;
 	currency: BillingCurrency;
+	/** The seller's unsettled invoice, if any. Moving UP writes a second bill,
+	 * which the server refuses while one is open — so the option is disabled
+	 * with the invoice named, rather than erroring on confirm. Moving DOWN
+	 * costs nothing and stays available. */
+	openInvoiceNumber?: string;
 }) {
 	const changePlan = useMutation(api.invoices.changePlan);
 	const cancelPlanChange = useMutation(api.invoices.cancelPlanChange);
@@ -74,9 +84,13 @@ export function PlanChangeCard({
 		try {
 			const result = await changePlan({ plan });
 			if (result.kind === "scheduled") {
-				toast.success(`Moving to ${PLAN_LABEL[plan]} on ${formatShortDate(result.effectiveAt)}`, {
-					description: "Nothing changes until then — and you can cancel any time.",
-				});
+				toast.success(
+					`Moving to ${PLAN_LABEL[plan]} on ${formatShortDate(result.effectiveAt)}`,
+					{
+						description:
+							"Nothing changes until then — and you can cancel any time.",
+					},
+				);
 			} else if (result.chargingSavedMethod) {
 				toast.success(`Upgrading to ${PLAN_LABEL[plan]}`, {
 					description: "Charging your saved payment method now.",
@@ -138,20 +152,22 @@ export function PlanChangeCard({
 			<div>
 				<p className="text-sm font-medium">Change your plan</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Moving up starts right away and the days you've already paid for
-					carry over. Moving down waits until your current period ends, so
-					nothing you've paid for is lost.
+					Moving up starts right away and the days you've already paid for carry
+					over. Moving down waits until your current period ends, so nothing
+					you've paid for is lost.
 				</p>
 			</div>
 			<div className="flex flex-col gap-2 sm:flex-row">
 				{options.map((plan) => {
 					const up = isPlanUpgrade(current, plan);
+					const blocked = up && openInvoiceNumber !== undefined;
 					return (
 						<button
 							key={plan}
 							type="button"
+							disabled={blocked}
 							onClick={() => setTarget(plan)}
-							className="tap-target inline-flex h-11 w-fit items-center gap-1.5 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+							className="tap-target inline-flex h-11 w-fit items-center gap-1.5 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
 						>
 							{up ? (
 								<ArrowUpRight className="size-4" />
@@ -163,6 +179,13 @@ export function PlanChangeCard({
 					);
 				})}
 			</div>
+			{openInvoiceNumber && options.some((p) => isPlanUpgrade(current, p)) ? (
+				<p className="text-xs text-muted-foreground">
+					Moving up waits until invoice{" "}
+					<span className="font-mono">{openInvoiceNumber}</span> is settled —
+					two open bills at once is how a paid-up store ends up locked out.
+				</p>
+			) : null}
 
 			{target ? (
 				<ConfirmDialog
@@ -203,7 +226,12 @@ function upgradeCopy({
 	currency: BillingCurrency;
 	sub: SubscriptionView;
 }): string {
-	const price = planPrice(target, cycle, founding && target === "pro", currency);
+	const price = planPrice(
+		target,
+		cycle,
+		founding && target === "pro",
+		currency,
+	);
 	// Same pure helper the server applies at settle, so the number quoted here
 	// is the number granted — not an estimate that drifts.
 	const carried = planChangeCarryoverDays({

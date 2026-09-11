@@ -1140,3 +1140,331 @@ describe("invoices.markPaid — subscribe_paid key event (z8r3fdd1v1)", () => {
 		expect(renewal.params?.value).toBe(149);
 	});
 });
+
+/**
+ * Mid-cycle tier changes (86eyb6z4r) — the four scenarios a seller can walk,
+ * end to end through the real mutations. The pure arithmetic is pinned in
+ * plans.test.ts; this block pins what the MONEY and the ACCESS do: an upgrade
+ * bills full price and hands back the unused days, a downgrade charges nothing
+ * and takes nothing away until the period already paid for runs out, and the
+ * guards refuse the states where either would be wrong.
+ */
+describe("invoices.changePlan — mid-cycle tier moves", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** An ACTIVE, paying seller mid-period — the only state a plan CHANGE applies
+	 * to (everyone else is choosing a plan, which is the picker's job). */
+	async function seedActive(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		opts: { plan: "starter" | "pro"; daysLeft: number; country?: "MY" | "SG" },
+	) {
+		const asUser = t.withIdentity({ subject: userId });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: `Store ${slug}`,
+			slug,
+		});
+		const retailerId = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			if (!r) throw new Error("no retailer");
+			if (opts.country) await ctx.db.patch(r._id, { country: opts.country });
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			const now = Date.now();
+			await ctx.db.patch(sub._id, {
+				plan: opts.plan,
+				billingCycle: "monthly",
+				status: "active",
+				currentPeriodStart: now - (30 - opts.daysLeft) * DAY,
+				currentPeriodEnd: now + opts.daysLeft * DAY,
+			});
+			return r._id;
+		});
+		return { asUser, retailerId };
+	}
+
+	const pendingFor = (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) =>
+		t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.filter((inv) => inv.status === "pending");
+		});
+
+	test("A — upgrade bills FULL price now and the unused days come back as days", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_up", "up-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		const at = Date.now();
+
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res.kind).toBe("invoiced");
+		// No saved method on this store → the seller pays the invoice by hand.
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		expect(res.chargingSavedMethod).toBe(false);
+
+		const invoice = await getInvoice(t, res.invoiceId);
+		// Full Pro, never a prorated difference — a part-price invoice is what
+		// the design review killed (a small unpaid top-up inherits the service
+		// bill's lifecycle and soft-locks a fully paid store).
+		expect(invoice?.total).toBe(14900);
+		expect(invoice?.plan).toBe("pro");
+		expect(invoice?.billingCycle).toBe("monthly");
+		expect(invoice?.origin).toBe("self_serve");
+
+		// Nothing moves until the money lands — still Starter, still their caps.
+		const before = await getSubFor(t, retailerId);
+		expect(before?.plan).toBe("starter");
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		const after = await getSubFor(t, retailerId);
+		expect(after?.plan).toBe("pro");
+		expect(after?.orderCap).toBe(500);
+		// 10 unused Starter days (RM79/30 a day) buy 5 Pro days (RM149/30 a day),
+		// added on top of the fresh 30 — so 35, not 30 and not 40.
+		expect(after?.currentPeriodEnd).toBe(at + 30 * DAY + 5 * DAY);
+	});
+
+	test("A2 — an upgrade paid LATE credits only the days still unused", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_late", "late-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+
+		// The manual rail is 14 days wide. Settle 8 days after the invoice was
+		// written: only 2 Starter days are left to credit, and the arithmetic
+		// must be done at SETTLE, not at issue.
+		vi.setSystemTime(Date.now() + 8 * DAY);
+		const at = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		const after = await getSubFor(t, retailerId);
+		expect(after?.plan).toBe("pro");
+		// 2 Starter days ≈ 1 Pro day.
+		expect(after?.currentPeriodEnd).toBe(at + 30 * DAY + 1 * DAY);
+	});
+
+	test("A3 — an upgrade settled AFTER the period lapsed credits nothing", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_lapse", "lapse-store", {
+			plan: "starter",
+			daysLeft: 3,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		vi.setSystemTime(Date.now() + 5 * DAY);
+		const at = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		// Nothing was left to carry — a plain 30-day period, no negative credit.
+		expect((await getSubFor(t, retailerId))?.currentPeriodEnd).toBe(at + 30 * DAY);
+	});
+
+	test("B — downgrade is SCHEDULED: no invoice, no loss of access today", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_dn", "dn-store", {
+			plan: "pro",
+			daysLeft: 12,
+		});
+		const periodEnd = (await getSubFor(t, retailerId))?.currentPeriodEnd;
+
+		const res = await asUser.mutation(api.invoices.changePlan, {
+			plan: "starter",
+		});
+		expect(res.kind).toBe("scheduled");
+		if (res.kind !== "scheduled") throw new Error("expected a schedule");
+		// It lands exactly when the period they paid for runs out — the date the
+		// dialog and the banner both quote.
+		expect(res.effectiveAt).toBe(periodEnd);
+
+		// Charges nothing, and takes nothing away yet.
+		expect(await pendingFor(t, retailerId)).toHaveLength(0);
+		const sub = await getSubFor(t, retailerId);
+		expect(sub?.plan).toBe("pro");
+		expect(sub?.orderCap).toBe(500);
+		expect(sub?.pendingPlanChange?.plan).toBe("starter");
+
+		// And it's reversible right up to the moment it lands.
+		await asUser.mutation(api.invoices.cancelPlanChange, {});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("B2 — a scheduled downgrade never moves updatedAt (the past_due lock stamp)", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_stamp", "stamp-store", {
+			plan: "pro",
+			daysLeft: 12,
+		});
+		const before = (await getSubFor(t, retailerId))?.updatedAt;
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		expect((await getSubFor(t, retailerId))?.updatedAt).toBe(before);
+	});
+
+	test("C — the scheduled plan is what the renewal invoice bills, once", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_land", "land-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+
+		// The period runs out — the cron notices and writes the renewal bill.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { currentPeriodEnd: Date.now() - 1000 });
+		});
+		const cron = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(cron.renewalsIssued).toBe(1);
+
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		// Billed at STARTER, not the Pro they were on — the whole point.
+		expect(renewal?.plan).toBe("starter");
+		expect(renewal?.total).toBe(7900);
+		expect(renewal?.origin).toBe("auto_renewal");
+		// The intent is consumed by the bill that honoured it, so a second cycle
+		// can't re-downgrade a seller who has since moved back up.
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+
+		// Access only actually drops when that bill is paid.
+		if (!renewal) throw new Error("no renewal invoice");
+		expect((await getSubFor(t, retailerId))?.plan).toBe("pro");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: renewal._id });
+		const after = await getSubFor(t, retailerId);
+		expect(after?.plan).toBe("starter");
+		expect(after?.orderCap).toBe(100);
+	});
+
+	test("C2 — moving back up supersedes a scheduled downgrade", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_undo", "undo-store", {
+			plan: "pro",
+			daysLeft: 9,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeDefined();
+
+		// They're on Pro, so "up" means dropping to Starter first isn't needed —
+		// cancelling is the seller-facing route, but a *later* upgrade invoice
+		// must clear the intent too or the renewal would undo what they paid for.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { plan: "starter" });
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("D — the guards: open invoice, wrong status, same plan, on the house", async () => {
+		const t = setup();
+
+		// An unpaid bill already on the table — a second one is how a seller ends
+		// up past_due on a plan they never got.
+		const open = await seedActive(t, "u_g1", "g1-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		await open.asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		await expect(
+			open.asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/Settle your open invoice/);
+
+		// Not active → the plan PICKER is the right door (it starts a period).
+		const locked = await seedActive(t, "u_g2", "g2-store", {
+			plan: "starter",
+			daysLeft: 2,
+		});
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", locked.retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "past_due" });
+		});
+		await expect(
+			locked.asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/active subscription/);
+
+		// Already there.
+		const same = await seedActive(t, "u_g3", "g3-store", {
+			plan: "pro",
+			daysLeft: 5,
+		});
+		await expect(
+			same.asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/already on pro/);
+
+		// Comped pilots never pay, so there is no tier to move between.
+		const comped = await seedActive(t, "u_g4", "g4-store", {
+			plan: "pro",
+			daysLeft: 5,
+		});
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", comped.retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { comped: true });
+		});
+		await expect(
+			comped.asUser.mutation(api.invoices.changePlan, { plan: "starter" }),
+		).rejects.toThrow(/on the house/);
+	});
+
+	test("D2 — an SG seller's upgrade is invoiced in SGD", async () => {
+		const t = setup();
+		const { asUser } = await seedActive(t, "u_sg", "sg-store", {
+			plan: "starter",
+			daysLeft: 10,
+			country: "SG",
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		const invoice = await getInvoice(t, res.invoiceId);
+		expect(invoice?.currency).toBe("SGD");
+		expect(invoice?.total).toBe(5900);
+	});
+
+	test("D3 — a founding member upgrading is billed THEIR price, not list", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_fnd2", "fnd2-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { isFoundingMember: true });
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		const invoice = await getInvoice(t, res.invoiceId);
+		expect(invoice?.total).toBe(10400);
+		expect(invoice?.foundingDiscount).toBe(4500);
+	});
+});

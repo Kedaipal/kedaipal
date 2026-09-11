@@ -390,9 +390,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 				} as unknown as Partial<Retailer>)}
 			/>,
 		);
-		expect(
-			screen.getByText(/couldn't charge your Visa ·· 4242/),
-		).toBeTruthy();
+		expect(screen.getByText(/couldn't charge your Visa ·· 4242/)).toBeTruthy();
 		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
 	});
 
@@ -414,6 +412,95 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		);
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+	});
+});
+
+/**
+ * WHO gets offered a tier change (86eyb6z4r). The card's own copy is covered in
+ * plan-change-card.test.tsx; this pins the gate, which has to agree with the
+ * server guards on `invoices.changePlan` exactly — an offered control that the
+ * server would refuse is a wrong-but-enabled button.
+ */
+describe("BillingTab plan change gating (86eyb6z4r)", () => {
+	const seller = (over: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				currentPeriodEnd: Date.now() + 12 * 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+				...over,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("an ACTIVE paying seller is offered the other tier", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.getByText("Change your plan")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Move down to Starter/ }),
+		).toBeTruthy();
+	});
+
+	it("hides while TRIALING — choosing a plan is the picker's job", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={seller({
+					status: "trialing",
+					trialEndsAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				})}
+			/>,
+		);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides while PAST DUE — the server refuses, so nothing is offered", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller({ status: "past_due" })} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides from comped accounts and from an admin on their own store", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller({ comped: true })} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+		cleanup();
+
+		mockQueries({ isAdmin: true, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides when the gateway is off — there is no way to pay the upgrade", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("names the open invoice that is holding an upgrade back", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_open",
+					status: "pending",
+					invoiceNumber: "INV-202609-AB12",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={seller({ plan: "starter" })} />);
+		const up = screen.getByRole("button", { name: /Move up to Pro/ });
+		expect((up as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(/Moving up waits until invoice/)).toBeTruthy();
 	});
 });
 
