@@ -373,6 +373,7 @@ http.route({
 			const credentials = resolveBillingGatewayCredentials({
 				HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
 				HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
+				HITPAY_BILLING_WEBHOOK_SALT: process.env.HITPAY_BILLING_WEBHOOK_SALT,
 			});
 			if (!credentials) {
 				// We only receive these if we registered the endpoint — a missing
@@ -382,13 +383,23 @@ http.route({
 				);
 				return new Response("server misconfigured", { status: 500 });
 			}
+			// Dashboard-registered events are signed with the ENDPOINT's own
+			// secret, not the API-key salt (see BillingGatewayCredentials).
 			const valid = await verifyEventSignature(
 				rawBody,
 				eventSignature,
-				credentials.salt,
+				credentials.webhookSalt,
 			);
 			if (!valid) {
-				console.warn("HitPay event webhook rejected: invalid signature");
+				console.warn(
+					"HitPay event webhook rejected: invalid signature — if this is every event, HITPAY_BILLING_WEBHOOK_SALT is missing or wrong (it is the signing secret of the registered endpoint, NOT the API-key salt)",
+					{
+						eventObject: req.headers.get("hitpay-event-object"),
+						eventType: req.headers.get("hitpay-event-type"),
+						usingDedicatedSalt:
+							process.env.HITPAY_BILLING_WEBHOOK_SALT !== undefined,
+					},
+				);
 				return new Response("invalid signature", { status: 401 });
 			}
 			let payload: unknown;

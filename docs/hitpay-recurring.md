@@ -1,6 +1,6 @@
 # Subscription auto-renewal + Pay-now — HitPay on Kedaipal's own account
 
-**ClickUp:** [`86eyb6z4r`](https://app.clickup.com/t/86eyb6z4r) · **Status:** built, sandbox verification pending
+**ClickUp:** [`86eyb6z4r`](https://app.clickup.com/t/86eyb6z4r) · **Status:** built; sandbox-verified end-to-end on MY (TnG) and SG (PayNow) — V2 event verification pending the endpoint secret
 **Files:** `convex/lib/hitpayBilling.ts` (pure), `convex/subscriptionPayments.ts` (actions/queries), `convex/invoices.ts` (settle core + self-serve + renewal issuance), `convex/subscriptions.ts` (cron), `convex/http.ts` (webhook branches), `convex/billingEmail.ts` + `convex/lib/billingEmailCopy.ts` (emails), `src/components/settings/{billing-tab,auto-renewal-card,plan-picker-card}.tsx`, `src/routes/app.admin.billing.tsx`
 
 ## What it is
@@ -95,7 +95,7 @@ Deduped by `renewalNoticeSentForPeriodEnd`.
 | Sender | Kedaipal's account, dashboard-registered | per-request `webhook` param |
 | Body | JSON | form-encoded |
 | Signature | HMAC-SHA256 over **raw body**, header `Hitpay-Signature` | HMAC over sorted `key+value` concat, `hmac` **field** |
-| Salt | `HITPAY_BILLING_SALT` (env) | seller's stored salt (orders) / `HITPAY_BILLING_SALT` (invoices) |
+| Salt | `HITPAY_BILLING_WEBHOOK_SALT` — the **endpoint's own** secret (env) | seller's stored salt (orders) / `HITPAY_BILLING_SALT` (invoices) |
 | Events | `charge.created`, `recurring_billing.method_attached/detached/subscription_updated` | `status=completed` |
 
 The v1 branch resolves **orders first** (`by_gateway_request` on orders),
@@ -125,9 +125,10 @@ returns null → ack for anything unrecognised.
 | Var | Meaning |
 |---|---|
 | `HITPAY_BILLING_API_KEY` | Kedaipal's own HitPay API key (sandbox `test_`-prefixed; mode inferred like the BYO path) |
-| `HITPAY_BILLING_SALT` | The matching webhook salt |
+| `HITPAY_BILLING_SALT` | The **API-key** salt — signs the per-request v1 completion webhooks |
+| `HITPAY_BILLING_WEBHOOK_SALT` | The **registered endpoint's** signing secret — signs the dashboard V2 events. Optional: falls back to `HITPAY_BILLING_SALT`, but on a real account the two DIFFER, and without it every V2 event 401s |
 
-**Both or nothing.** Absent ⇒ every surface (Pay-now, auto-renewal, plan
+**The first two, both or nothing.** Absent ⇒ every surface (Pay-now, auto-renewal, plan
 picker) quietly stays hidden and manual billing renders byte-identical to
 before — fail-open-to-manual. These are **deployment env**, never a table:
 `billingConfig` is readable by every signed-in seller via
@@ -135,7 +136,8 @@ before — fail-open-to-manual. These are **deployment env**, never a table:
 
 Also: the V2 events must be **registered in HitPay's dashboard** (Developers
 → Webhook Endpoints → `<CONVEX_SITE_URL>/webhook/hitpay`, select the four
-recurring/charge events) — the salt shown there is `HITPAY_BILLING_SALT`.
+recurring/charge events) — the signing secret shown for THAT endpoint is
+`HITPAY_BILLING_WEBHOOK_SALT`, **not** the API-key salt (sandbox-proved).
 
 ## Currency + methods
 
@@ -150,6 +152,43 @@ recurring/charge events) — the salt shown there is `HITPAY_BILLING_SALT`.
   which would kill the second renewal; 100 = documented max ≈ 8 years of
   monthly charges — at exhaustion the charge fails into normal dunning and
   the seller re-authorises).
+
+## Webhooks: TWO mechanisms, TWO secrets (sandbox-proved, 11 Sep 2026)
+
+- **Per-request v1 completion webhooks** — we pass `webhook=<our URL>` when
+  minting each invoice payment request, so they need **no dashboard setup** and
+  are signed with the **API-key salt** (`HITPAY_BILLING_SALT`), field-concat
+  HMAC. This is what settles Pay-now invoices.
+- **Dashboard-registered V2 events** (`charge.created`,
+  `recurring_billing.*`) — no per-session parameter exists, so registration in
+  Developers → Webhook Endpoints is the only way to receive them. They are
+  signed with **that endpoint's own secret** (`HITPAY_BILLING_WEBHOOK_SALT`),
+  raw-body HMAC-SHA256 hex in `Hitpay-Signature`. Proved the hard way: a real
+  `method_attached` verified against *neither* HMAC form of the API salt. The
+  var falls back to the API salt when unset, and the rejection log says so.
+
+**The real V2 payload is an ENVELOPE, not the docs' flat object:**
+
+```json
+{ "event": "recurring_billing.method_attached",
+  "affected_method_id": "…",
+  "recurring_billing": { "id": "…", "status": "active", "cycle": "save_card",
+    "reference": "<our subscription id>",
+    "payment_provider_charge_method": "touch_n_go",
+    "default_method": { "payment_provider": "touch_n_go", … } } }
+```
+
+The billing id is NESTED and the authorised rail lives in
+`payment_provider_charge_method` — the docs-derived reader found neither, which
+is why an attach recorded the default "card" for a Touch 'n Go wallet.
+`extractRecurringEvent` now reads the envelope first and keeps the flat shape
+as a fallback; both forms are pinned by tests carrying verbatim captured
+payloads.
+
+**What registration buys** (money flows without it): the true method label, and
+detach detection. Without it the redirect reconcile still attaches the method
+but cannot see WHICH, and a method removed at HitPay's end is only discovered
+when the next charge fails into normal dunning.
 
 ## Subscribe = auto-renewal by default (Zaki, 11 Sep 2026)
 

@@ -38,7 +38,17 @@ import {
 
 export type BillingGatewayCredentials = {
 	apiKey: string;
+	/** The API-key salt (shown beside the key in the dashboard). Signs the
+	 * per-request v1 completion webhooks we attach to payment requests. */
 	salt: string;
+	/**
+	 * The signing secret of the dashboard-REGISTERED webhook endpoint, which is
+	 * a DIFFERENT secret from the API-key salt (proved on live sandbox traffic,
+	 * 11 Sep 2026: a real `method_attached` verified against neither the raw-body
+	 * nor field-concat HMAC of the API salt). Falls back to `salt` when unset, so
+	 * an account where the two happen to match needs no extra configuration.
+	 */
+	webhookSalt: string;
 	mode: HitpayMode;
 };
 
@@ -55,11 +65,18 @@ export type BillingGatewayCredentials = {
 export function resolveBillingGatewayCredentials(env: {
 	HITPAY_BILLING_API_KEY?: string;
 	HITPAY_BILLING_SALT?: string;
+	HITPAY_BILLING_WEBHOOK_SALT?: string;
 }): BillingGatewayCredentials | null {
 	const apiKey = env.HITPAY_BILLING_API_KEY?.trim();
 	const salt = env.HITPAY_BILLING_SALT?.trim();
 	if (!apiKey || !salt) return null;
-	return { apiKey, salt, mode: inferHitpayMode(apiKey) };
+	const webhookSalt = env.HITPAY_BILLING_WEBHOOK_SALT?.trim();
+	return {
+		apiKey,
+		salt,
+		webhookSalt: webhookSalt && webhookSalt.length > 0 ? webhookSalt : salt,
+		mode: inferHitpayMode(apiKey),
+	};
 }
 
 /**
@@ -312,18 +329,25 @@ function record(value: unknown): JsonRecord | null {
 }
 
 /**
- * Classify a verified V2 event payload. Field names are TOLERANT lookups —
- * HitPay's event docs are thin, so we accept the documented spellings plus
- * obvious variants, and anything unrecognised returns null (logged + acked by
- * the route, never an error). The header pair (`Hitpay-Event-Object` /
- * `Hitpay-Event-Type`) refines classification when present.
+ * Classify a verified V2 event payload.
  *
- * Confirmed against the docs' sample charge payload: `id`, `channel:
- * "recurrent"`, `status: "succeeded"`, `amount` (major units), `currency`,
- * `payment_provider.charge.method`. The recurring-billing id on a charge is
- * probed at `recurring_billing_id` / `recurring_plan_id` /
- * `business_recurring_plans_id` — when absent the route falls back to the
- * pending-charge correlation (see subscriptionPayments.ts).
+ * CAPTURED FROM LIVE SANDBOX TRAFFIC (11 Sep 2026) — the docs' flat sample is
+ * NOT what the wire carries for recurring events. The real shape is an
+ * ENVELOPE:
+ *
+ *   { "event": "recurring_billing.method_attached",
+ *     "affected_method_id": "…",
+ *     "recurring_billing": { "id": "…", "status": "active", "cycle":
+ *       "save_card", "reference": "<our subscription id>",
+ *       "payment_provider_charge_method": "touch_n_go",
+ *       "default_method": { "payment_provider": "touch_n_go", … }, … } }
+ *
+ * So the billing object is NESTED under `recurring_billing` and the authorised
+ * rail lives in `payment_provider_charge_method` — neither of which the
+ * docs-derived reader looked at, which is why an attach used to record the
+ * default "card" instead of the real method. `event` is authoritative when
+ * present; the header pair and the older flat shape remain as fallbacks so a
+ * payload matching the published docs still parses.
  */
 export function extractRecurringEvent(
 	payload: unknown,
@@ -333,27 +357,50 @@ export function extractRecurringEvent(
 	if (!body) return null;
 	const object = headers.eventObject?.toLowerCase() ?? "";
 	const type = headers.eventType?.toLowerCase() ?? "";
+	// `event` ("recurring_billing.method_attached") is the authoritative
+	// classifier on real traffic; headers and payload shape are the fallbacks.
+	const event = asString(body.event)?.toLowerCase() ?? "";
+	// Envelope form nests the object; the flat form IS the object.
+	const nested = record(body.recurring_billing);
+	const billing = nested ?? body;
 
 	const billingId =
 		asString(body.recurring_billing_id) ??
 		asString(body.recurring_plan_id) ??
 		asString(body.business_recurring_plans_id);
 
-	// method_attached / method_detached / subscription_updated — the payload is
-	// the recurring-billing object itself (its `id` IS the billing id).
+	// method_attached / method_detached / subscription_updated.
 	const looksLikeBillingObject =
-		asString(body.cycle) !== null || body.save_card !== undefined;
-	if (object.includes("recurring") || looksLikeBillingObject) {
-		const id = asString(body.id) ?? billingId;
+		asString(billing.cycle) !== null || billing.save_card !== undefined;
+	if (
+		event.startsWith("recurring_billing") ||
+		object.includes("recurring") ||
+		looksLikeBillingObject
+	) {
+		const id = asString(billing.id) ?? billingId;
 		if (!id) return null;
-		if (type.includes("detach")) return { kind: "method_detached", billingId: id };
-		if (type.includes("attach")) {
-			const provider = record(body.payment_provider);
+		const says = (needle: string) =>
+			event.includes(needle) || type.includes(needle);
+		if (says("detach")) return { kind: "method_detached", billingId: id };
+		if (says("attach")) {
+			// Real traffic carries the rail on the billing object itself; the
+			// nested default_method repeats it. The provider/charge/details path
+			// is the documented (card) shape and still supplies a "Visa ·· 4242"
+			// style label when present.
+			const defaultMethod = record(billing.default_method);
+			const provider = record(billing.payment_provider);
 			const charge = provider ? record(provider.charge) : null;
 			const details = charge ? record(charge.details) : null;
+			const methods = Array.isArray(billing.payment_methods)
+				? billing.payment_methods
+				: [];
 			const methodCode =
-				asString(body.payment_method) ??
+				asString(billing.payment_provider_charge_method) ??
+				asString(defaultMethod?.payment_provider_charge_method) ??
+				asString(defaultMethod?.payment_provider) ??
+				asString(billing.payment_method) ??
 				asString(charge?.method) ??
+				(methods.length === 1 ? asString(methods[0]) : null) ??
 				undefined;
 			const brand = details ? asString(details.brand) : null;
 			const last4 = details ? asString(details.last4) : null;
@@ -364,7 +411,7 @@ export function extractRecurringEvent(
 				methodLabel: brand && last4 ? `${brand} ·· ${last4}` : undefined,
 			};
 		}
-		const status = asString(body.status);
+		const status = asString(billing.status);
 		if (status) return { kind: "billing_status", billingId: id, status };
 		return null;
 	}

@@ -14,7 +14,8 @@
  *    HitPay ships no charge-failure webhook. Kedaipal owns the retry
  *    schedule (lib/hitpayBilling.ts) and the no-double-charge reconcile.
  *
- * Credentials live in the deployment env (HITPAY_BILLING_API_KEY/_SALT) —
+ * Credentials live in the deployment env (HITPAY_BILLING_API_KEY/_SALT, plus
+ * HITPAY_BILLING_WEBHOOK_SALT for dashboard-registered events) — the first two
  * absent ⇒ everything here quietly no-ops and manual billing is unchanged.
  * See docs/hitpay-recurring.md.
  */
@@ -63,6 +64,7 @@ function billingCredentials(): BillingGatewayCredentials | null {
 	return resolveBillingGatewayCredentials({
 		HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
 		HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
+		HITPAY_BILLING_WEBHOOK_SALT: process.env.HITPAY_BILLING_WEBHOOK_SALT,
 	});
 }
 
