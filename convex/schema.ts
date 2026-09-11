@@ -2374,6 +2374,26 @@ export default defineSchema({
 				amountSen: v.optional(v.number()),
 			}),
 		),
+		// A tier change the seller asked for that takes effect at the END of the
+		// period they already paid for (86eyb6z4r). DOWNGRADES only: they keep
+		// the tier they bought — caps, features and all — until the period runs
+		// out, and the renewal invoice the cron issues then bills the new plan
+		// and clears this. An UPGRADE never lands here; it is immediate, billed
+		// at full price, with the unused remainder credited back as days
+		// (planChangeCarryoverDays). No `billingCycle` on purpose — a cycle
+		// change is a different conversation (the annual offer's void-and-
+		// reissue runbook), and a field that could express it would eventually
+		// be set by a picker that defaults to monthly.
+		pendingPlanChange: v.optional(
+			v.object({
+				plan: v.union(
+					v.literal("starter"),
+					v.literal("pro"),
+					v.literal("scale"),
+				),
+				requestedAt: v.number(),
+			}),
+		),
 		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent
 		// for — one notice per cycle, reset naturally when the period rolls.
 		renewalNoticeSentForPeriodEnd: v.optional(v.number()),

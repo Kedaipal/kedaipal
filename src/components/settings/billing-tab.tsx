@@ -39,6 +39,7 @@ import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
 import { InvoiceDownloadButton } from "./invoice-download-button";
+import { PlanChangeCard } from "./plan-change-card";
 import { PlanPickerCard } from "./plan-picker-card";
 
 type Retailer = NonNullable<
@@ -308,35 +309,34 @@ export function BillingTab({
 						</div>
 					) : null}
 
-					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
+					{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
+					    only), so the constraint is explained here rather than left as
+					    an unexplained absence — "why can't I?" is exactly the question
+					    a silent gap produces. The upgrade ACTION itself now lives in
+					    the plan-change card below (it used to hand off to Arif on
+					    WhatsApp; tier changes are self-serve since 86eyb6z4r). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
-						<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-							{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
-							    only), so the constraint is explained here rather than left as
-							    an unexplained absence — "why can't I?" is exactly the question
-							    a silent gap produces. */}
-							<p className="text-xs text-muted-foreground">
-								Want 500 orders/month, the customer database and the order
-								inbox? Move up to Pro — which can also be billed annually, with
-								two months free. We don't offer annual on Starter: you shouldn't
-								pay a year upfront before the shop has proven itself.
-							</p>
-							<a
-								href={buildWaContactLink(
-									`Hi, I'd like to upgrade from Starter to Pro for my Kedaipal store (/${retailer.slug}).`,
-									supportWa,
-								)}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-							>
-								<ExternalLink className="size-4" />
-								Upgrade to Pro
-							</a>
-						</div>
+						<p className="border-t border-border pt-4 text-xs text-muted-foreground">
+							Want 500 orders/month, the customer database and the order inbox?
+							Move up to Pro below — which can also be billed annually, with two
+							months free. We don't offer annual on Starter: you shouldn't pay a
+							year upfront before the shop has proven itself.
+						</p>
 					) : null}
 				</section>
 			)}
+
+			{/* Change tier (86eyb6z4r) — a plan decision, so it sits directly under
+			    the current-plan card and above the payment mechanics. Only an ACTIVE
+			    paid subscription can be "changed"; everyone else is CHOOSING a plan,
+			    which is the picker's job further down. */}
+			{!adminOwnAccount &&
+			!sub?.comped &&
+			sub &&
+			sub.status === "active" &&
+			gateway?.payNow ? (
+				<PlanChangeCard sub={sub} currency={gateway.currency} />
+			) : null}
 
 			{/* Annual billing — a plan decision, so it sits with the plan and above
 			    the payment mechanics. Renders nothing for a seller it doesn't

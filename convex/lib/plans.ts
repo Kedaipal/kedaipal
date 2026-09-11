@@ -319,6 +319,90 @@ export function annualQuote(
 	};
 }
 
+/** Days in a billing cycle — the flat slabs `nextPeriodEnd` grants. */
+export function cycleDays(cycle: BillingCycle): number {
+	return cycle === "annual" ? 365 : 30;
+}
+
+/**
+ * Extra days granted on the new plan for value the seller had already paid for
+ * — the "credit as days" model for a mid-cycle change.
+ *
+ * The seller pays the ordinary full price for the new plan, so the invoice
+ * stays a bog-standard service bill: the gateway amount check, the saved-method
+ * consent guard, the PDF totals and the MRR figure all keep working untouched.
+ * What they had left over comes back as TIME rather than as a discount.
+ *
+ *   valueLeft   = fromPrice × daysLeft / fromCycleDays
+ *   carryover   = valueLeft ÷ (toPrice / toCycleDays)
+ *
+ * Day-rates rather than a naive price ratio, so crossing cycles is right too:
+ * RM26 left on a monthly Starter buys 5 days of monthly Pro but only hours of
+ * an annual Pro, because an annual plan's daily rate is far lower per ringgit
+ * paid. Both prices are read at the seller's OWN founding rate and currency.
+ *
+ * Deliberately called at SETTLE, never at issue: on the manual rail a seller
+ * can pay up to 14 days after the invoice is cut, and `daysLeft` must be the
+ * days genuinely still unused when the money lands. Priced at issue, a
+ * late-paid upgrade would buy days that had already elapsed — the flaw that
+ * sank the charge-the-difference design.
+ *
+ * Applies to ANY invoice settled while a paid period is still running, not
+ * just upgrades: the rule is simply that a seller never loses time they have
+ * already bought. That also fixes early renewals, which used to forfeit the
+ * remainder silently.
+ *
+ * Rounds to the nearest whole day (flooring quietly shaves up to a day of paid
+ * value); returns 0 once the period has lapsed, so it can never resurrect a
+ * period that had already run out.
+ */
+export function planChangeCarryoverDays(args: {
+	fromPlan: Plan;
+	fromCycle: BillingCycle;
+	toPlan: Plan;
+	toCycle: BillingCycle;
+	founding: boolean;
+	currency: BillingCurrency;
+	/** The period the seller already paid for. */
+	periodEnd: number | undefined;
+	now: number;
+}): number {
+	if (args.periodEnd === undefined) return 0;
+	const msLeft = args.periodEnd - args.now;
+	if (msLeft <= 0) return 0;
+	const fromPrice = planPrice(
+		args.fromPlan,
+		args.fromCycle,
+		args.founding,
+		args.currency,
+	);
+	const toPrice = planPrice(
+		args.toPlan,
+		args.toCycle,
+		args.founding,
+		args.currency,
+	);
+	if (fromPrice <= 0 || toPrice <= 0) return 0;
+	const valueLeft = (fromPrice * (msLeft / DAY_MS)) / cycleDays(args.fromCycle);
+	const newDailyRate = toPrice / cycleDays(args.toCycle);
+	return Math.round(valueLeft / newDailyRate);
+}
+
+/** Tier order, low to high. Plan changes are classified by RANK, never by
+ * price: a founding Pro (RM104) undercuts a list Starter… no it doesn't, but a
+ * promo or a price reset could, and a seller on an ANNUAL Starter (RM790)
+ * moving to a MONTHLY Pro (RM149) would read as a "downgrade" on price while
+ * being an unmistakable tier upgrade. Rank is total and survives any repricing. */
+export function planRank(plan: Plan): number {
+	return PLANS.indexOf(plan);
+}
+
+/** True when `to` is a higher tier than `from` (the immediate, pay-now
+ * direction); false for same-tier or lower (the scheduled direction). */
+export function isPlanUpgrade(from: Plan, to: Plan): boolean {
+	return planRank(to) > planRank(from);
+}
+
 export const TRIAL_DAYS = 14;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 

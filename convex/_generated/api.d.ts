@@ -24,7 +24,6 @@ import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as delivery from "../delivery.js";
 import type * as delyva from "../delyva.js";
-import type * as devWebhookTest from "../devWebhookTest.js";
 import type * as email from "../email.js";
 import type * as foundingMembers from "../foundingMembers.js";
 import type * as ga4Events from "../ga4Events.js";
@@ -159,7 +158,6 @@ declare const fullApi: ApiFromModules<{
   customers: typeof customers;
   delivery: typeof delivery;
   delyva: typeof delyva;
-  devWebhookTest: typeof devWebhookTest;
   email: typeof email;
   foundingMembers: typeof foundingMembers;
   ga4Events: typeof ga4Events;

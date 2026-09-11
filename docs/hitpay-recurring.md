@@ -240,6 +240,79 @@ the tokenised path), and a 422 on `payment_methods` means the account lacks
 (some of) our preferred rails — the retry omits the param and lets the
 account's own tokenisable set decide.
 
+## Changing tier mid-subscription — credit as DAYS (Zaki, 11 Sep 2026)
+
+An active seller changes tier from Settings → Billing (`invoices.changePlan`).
+The two directions are deliberately asymmetric, because what is fair differs:
+
+| | Upgrade (higher tier) | Downgrade (lower tier) |
+|---|---|---|
+| When | Immediately, on payment | End of the period already paid for |
+| Bill | An ORDINARY full-price invoice | None — the next renewal bills it |
+| The remainder | Carried over as extra DAYS | Kept as-is: they keep the tier they bought |
+| Reversible | Settle or void the invoice | `cancelPlanChange`, any time |
+
+**Direction is decided by tier RANK (`isPlanUpgrade`), never by price.** A seller
+on an annual Starter (RM790) moving to a monthly Pro (RM149) is unmistakably an
+upgrade that a price comparison would have scheduled as a downgrade.
+
+### Why credit-as-days, and not "charge the difference"
+
+Charging a prorated difference was designed, reviewed and rejected. It breaks on
+this product's own rails:
+
+- **It is only sound if payment is instantaneous.** Priced at issue, a seller on
+  the 14-day manual rail who pays twelve days later has been charged for days
+  that already elapsed — and pinning their period to the old end date means a
+  late-paid upgrade can buy **zero** days and trigger an instant re-bill.
+- **A small top-up invoice inherits the service bill's lifecycle.** An unpaid
+  RM35 add-on hits `dueDate`, flips the seller to `past_due`, and soft-locks a
+  store that had fully paid for the period it is standing in — with no exit,
+  since the picker hides behind `!pending` and `subscribeSelf` refuses a second
+  pending invoice.
+- It also needed an amount override, invoice-level proration metadata, a new
+  origin literal, a PDF discount line, a sub-30-sen special case and an MRR fix.
+
+Credit-as-days needs **one pure helper and one changed line in settle**. The
+invoice stays an ordinary full-price bill, so the gateway amount check, the
+saved-method consent guard, the PDF totals and the founder report's MRR all keep
+working untouched, and no new money path exists to get wrong.
+
+### The arithmetic (`planChangeCarryoverDays`)
+
+```
+valueLeft = fromPrice × daysLeft / fromCycleDays
+carryover = valueLeft ÷ (toPrice / toCycleDays)
+```
+
+Day-rates, not a price ratio, so crossing cycles is right: RM26 left on a
+monthly Starter buys 6 days of ANNUAL Pro but only 5 of monthly Pro, because a
+year bought upfront is cheaper per day. Both prices are read at the seller's own
+founding rate and currency, and the result rounds to whole days (flooring would
+quietly shave up to a day of paid value).
+
+**Applied at SETTLE, never at issue** — `daysLeft` must be the days genuinely
+unused when the money lands. It applies to ANY invoice settled while a paid
+period is still running, not just upgrades, so an early renewal no longer
+forfeits its remainder either. A lapsed or missing period carries 0, so this can
+never resurrect a period that had already run out.
+
+### The scheduled half (`subscriptions.pendingPlanChange`)
+
+`{ plan, requestedAt }` — no `billingCycle` on purpose: a cycle change is the
+annual offer's void-and-reissue runbook, and a field that could express one would
+eventually be set by a picker that defaults to monthly. The renewal cron reads
+it, bills that plan, and **clears it** (leaving it set would re-apply the
+downgrade to every future renewal). The pre-charge "renewing soon" email reads it
+too, so the heads-up quotes the plan and price actually about to be charged
+rather than the tier the seller is on their way out of.
+
+Nothing about entitlement moves until the renewal settles: a downgrading seller
+keeps their caps, their features and their data access for everything they paid
+for. The confirm dialog names exactly what they lose and when — losing the
+customer database by surprise is the kind of thing a seller discovers at the
+worst moment.
+
 ## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
 
 The 30% founding price survives a subscription lapse of up to **3 months**

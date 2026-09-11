@@ -27,6 +27,11 @@ export type SubscriptionView = {
 	};
 	autoRenewSetupPending?: boolean;
 	foundingIntent?: boolean;
+	/** A downgrade taking effect at the end of the paid period (86eyb6z4r). */
+	pendingPlanChange?: {
+		plan: "starter" | "pro" | "scale";
+		effectiveAt: number;
+	};
 };
 
 /**

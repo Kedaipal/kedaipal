@@ -1093,3 +1093,221 @@ describe("verifyInvoicePayment (redirect-return reconcile)", () => {
 		expect(invoice?.paymentMethod).toBe("hitpay_touch_n_go");
 	});
 });
+
+describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
+	/** An ACTIVE paid seller, mid-period. */
+	async function seedActive(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		plan: "starter" | "pro" = "starter",
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.patch(subId, {
+				plan,
+				status: "active" as const,
+				currentPeriodStart: now - 20 * 86400000,
+				currentPeriodEnd: now + 10 * 86400000,
+			});
+			// A paid invoice fixes the billing currency.
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: subId,
+				invoiceNumber: "INV-PAID-1",
+				plan,
+				billingCycle: "monthly" as const,
+				amount: 7900,
+				total: 7900,
+				currency: "MYR",
+				periodStart: now - 20 * 86400000,
+				periodEnd: now + 10 * 86400000,
+				dueDate: now - 20 * 86400000,
+				status: "paid" as const,
+				createdAt: now - 20 * 86400000,
+			});
+		});
+		return { retailerId, subId };
+	}
+
+	test("UP is immediate and billed at the ordinary full price", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_up", "up-store");
+		const res = await t
+			.withIdentity({ subject: "u_up" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res.kind).toBe("invoiced");
+		const invoice = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending");
+		});
+		// Full sticker price — NOT a prorated difference. That is what keeps the
+		// gateway amount check, the PDF totals and MRR all working untouched.
+		expect(invoice?.total).toBe(14900);
+		expect(invoice?.plan).toBe("pro");
+		// The tier does not move until they actually pay.
+		expect((await getSub(t, subId))?.plan).toBe("starter");
+	});
+
+	test("paying an upgrade CARRIES the unused days onto the new period", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_carry", "carry-store");
+		await t
+			.withIdentity({ subject: "u_carry" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		const invoiceId = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending")?._id;
+		});
+		if (!invoiceId) throw new Error("no invoice");
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId });
+		const after = await getSub(t, subId);
+		expect(after?.plan).toBe("pro");
+		// 10 days of Starter left → 5 days of Pro, on top of the fresh 30. The
+		// old behaviour granted a bare 30 and burned the remainder.
+		const grantedDays = Math.round(
+			((after?.currentPeriodEnd ?? 0) - Date.now()) / 86400000,
+		);
+		expect(grantedDays).toBe(35);
+		expect(grantedDays).toBeGreaterThan(30);
+	});
+
+	test("DOWN is scheduled, charges nothing, and changes nothing today", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_dn", "dn-store", "pro");
+		const res = await t
+			.withIdentity({ subject: "u_dn" })
+			.mutation(api.invoices.changePlan, { plan: "starter" });
+		expect(res.kind).toBe("scheduled");
+		const sub = await getSub(t, subId);
+		expect(sub?.pendingPlanChange?.plan).toBe("starter");
+		// Still Pro, still the Pro caps — they paid for them.
+		expect(sub?.plan).toBe("pro");
+		expect(sub?.orderCap).toBe(500);
+		// And no bill was raised.
+		const invoices = await t.run(async (ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect(),
+		);
+		expect(invoices.filter((i) => i.status === "pending")).toHaveLength(0);
+	});
+
+	test("the scheduled downgrade lands with the renewal, then clears itself", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_sch", "sch-store", "pro");
+		await t
+			.withIdentity({ subject: "u_sch" })
+			.mutation(api.invoices.changePlan, { plan: "starter" });
+		// The period runs out.
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		const issued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId: subId },
+		);
+		expect(issued.issued).toBe(true);
+		const renewal = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending");
+		});
+		expect(renewal?.plan).toBe("starter");
+		expect(renewal?.total).toBe(7900);
+		// Consumed — it must not re-apply to every future renewal.
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("a scheduled downgrade can be cancelled, and an upgrade supersedes it", async () => {
+		const t = setup();
+		const { subId } = await seedActive(t, "u_undo", "undo-store", "pro");
+		const asUser = t.withIdentity({ subject: "u_undo" });
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		await asUser.mutation(api.invoices.cancelPlanChange, {});
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+		// Schedule again, then move UP — the pending downgrade must not survive.
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		await t.run(async (ctx) => ctx.db.patch(subId, { plan: "starter" }));
+		await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("refuses the no-op, the non-active seller and an open invoice", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_g", "g-store");
+		const asUser = t.withIdentity({ subject: "u_g" });
+		await expect(
+			asUser.mutation(api.invoices.changePlan, { plan: "starter" }),
+		).rejects.toThrow(/already on starter/);
+		// An open bill must be settled before moving up (single-pending invariant).
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: subId,
+				invoiceNumber: "INV-OPEN",
+				plan: "starter" as const,
+				billingCycle: "monthly" as const,
+				amount: 7900,
+				total: 7900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86400000,
+				dueDate: now + 14 * 86400000,
+				status: "pending" as const,
+				createdAt: now,
+			});
+		});
+		await expect(
+			asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/Settle your open invoice/);
+		// Not active → the picker's job, not this one.
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, { status: "past_due" as const }),
+		);
+		await expect(
+			asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/Choose a plan/);
+	});
+
+	test("an upgrade charges an already-attached saved method", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { subId } = await seedActive(t, "u_sm", "sm-store");
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_sm",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			}),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ payment_id: "pay_sm", status: "succeeded" }),
+			),
+		);
+		const res = await t
+			.withIdentity({ subject: "u_sm" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res).toMatchObject({ kind: "invoiced", chargingSavedMethod: true });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		expect((await getSub(t, subId))?.plan).toBe("pro");
+	});
+});
