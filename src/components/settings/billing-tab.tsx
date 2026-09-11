@@ -14,10 +14,11 @@ import {
 	QrCode,
 	ShieldCheck,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
@@ -82,7 +83,6 @@ export function BillingTab({
 	// the settle is idempotent, so racing the webhook is harmless).
 	const verifyPayment = useAction(api.subscriptionPayments.verifyInvoicePayment);
 	const verifiedReturn = useRef(false);
-	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	// True from "Subscribe" click until the HitPay redirect actually navigates
 	// — the pending-invoice card holds a spinner instead of flashing the manual
 	// rails, and the auto-renewal card stays hidden. Cleared by the picker on a
@@ -103,10 +103,17 @@ export function BillingTab({
 		const timer = setTimeout(() => setConfirmingReturn(false), 15_000);
 		return () => clearTimeout(timer);
 	}, [confirmingReturn]);
+	// Back from HitPay restores this page with `redirecting` still latched —
+	// every way to pay would stay hidden behind a spinner. See the hook.
+	useResetOnBfcache(
+		useCallback(() => {
+			setRedirecting(false);
+			setConfirmingReturn(false);
+		}, []),
+	);
 	useEffect(() => {
 		if (billingReturn !== "paid" || verifiedReturn.current) return;
 		verifiedReturn.current = true;
-		setConfirmingPayment(true);
 		void (async () => {
 			try {
 				const result = await verifyPayment({});
@@ -114,11 +121,16 @@ export function BillingTab({
 					toast.success("Payment received — your plan is active", {
 						description: "A receipt is on its way to your inbox.",
 					});
+				} else {
+					// The server already answered: nothing settled (abandoned
+					// checkout, or a decline). Hand the pay options straight back
+					// instead of making them wait out the cap — the timer is the
+					// fallback for "no answer", not for "answered no".
+					setConfirmingReturn(false);
 				}
 			} catch {
 				// The webhook usually settles it anyway; the invoice list is reactive.
 			} finally {
-				setConfirmingPayment(false);
 				onBillingReturnHandled?.();
 			}
 		})();
@@ -396,7 +408,7 @@ export function BillingTab({
 									className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
 								>
 									<CreditCard className="size-4" />
-									{confirmingPayment ? "Confirming payment…" : "Pay online now"}
+									Pay online now
 								</a>
 								<p className="mt-1.5 text-xs text-muted-foreground">
 									Confirmed automatically — no need to message us after.
@@ -538,7 +550,13 @@ export function BillingTab({
 			gateway?.autoRenew &&
 			(sub.autoRenew !== undefined ||
 				sub.autoRenewSetupPending === true ||
-				sub.status === "active") ? (
+				sub.status === "active" ||
+				// A seller holding an open bill — past_due mid-dunning, or a
+				// trial whose subscribe redirect failed — has no plan picker
+				// (it hides behind `!pending`) and would otherwise have NO way
+				// to reach auto-renewal at all. Theirs is exactly the store
+				// applyMethodAttached's heal path exists for.
+				pending !== undefined) ? (
 				<AutoRenewalCard
 					sub={sub}
 					methods={gateway.methods}

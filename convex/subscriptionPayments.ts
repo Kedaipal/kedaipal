@@ -46,6 +46,7 @@ import {
 	buildInvoicePaymentRequestParams,
 	CHARGE_OUTCOME_UNKNOWN_WINDOW_MS,
 	nextChargeRetryAt,
+	readAttachedMethodCode,
 	resolveBillingGatewayCredentials,
 } from "./lib/hitpayBilling";
 import {
@@ -235,16 +236,21 @@ export const recordInvoiceRequest = internalMutation({
 		requestId: v.string(),
 		url: v.string(),
 	},
-	handler: async (ctx, { invoiceId, requestId, url }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ invoiceId, requestId, url },
+	): Promise<{ ok: boolean }> => {
 		const invoice = await ctx.db.get(invoiceId);
 		// Settled/voided while the mint was on the wire → don't store; the
-		// orphaned request is deleted by the caller.
-		if (!invoice || invoice.status !== "pending") return;
-		if (invoice.gatewayRequestId) return; // double-scheduled mint — keep the first
+		// caller kills the orphaned request (`ok: false`).
+		if (!invoice || invoice.status !== "pending") return { ok: false };
+		// Double-scheduled mint — keep the first, kill this one.
+		if (invoice.gatewayRequestId) return { ok: false };
 		await ctx.db.patch(invoiceId, {
 			gatewayRequestId: requestId,
 			gatewayPayment: { provider: "hitpay", url },
 		});
+		return { ok: true };
 	},
 });
 
@@ -324,12 +330,47 @@ export const mintInvoicePaymentRequest = internalAction({
 				"[billing] Pay-now mint has NO usable payment methods for this currency — link not stored; enable a method on the HitPay account",
 				{ invoiceNumber: context.invoiceNumber, currency: context.currency },
 			);
+			// HitPay already created it; a request we refuse to store is one no
+			// void or settle path can ever reach, so kill it here or it stays
+			// live and payable forever (these carry no expiry).
+			await expireRequest(credentials, request.id);
 			return;
 		}
-		await ctx.runMutation(internal.subscriptionPayments.recordInvoiceRequest, {
+		const stored: { ok: boolean } = await ctx.runMutation(
+			internal.subscriptionPayments.recordInvoiceRequest,
+			{ invoiceId, requestId: request.id, url: request.url },
+		);
+		if (!stored.ok) {
+			// Settled/voided under us, or a link already stored. Same reasoning:
+			// an unstored request is unreachable by every later cleanup path.
+			await expireRequest(credentials, request.id);
+		}
+	},
+});
+
+/** Re-mint a Pay-now link after a declined auto-charge killed it. Clears the
+ * dead id first so the mint's already-minted guard doesn't refuse. */
+export const remintInvoicePaymentRequest = internalAction({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<void> => {
+		await ctx.runMutation(internal.subscriptionPayments.clearInvoiceRequest, {
 			invoiceId,
-			requestId: request.id,
-			url: request.url,
+		});
+		await ctx.runAction(
+			internal.subscriptionPayments.mintInvoicePaymentRequest,
+			{ invoiceId },
+		);
+	},
+});
+
+export const clearInvoiceRequest = internalMutation({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<void> => {
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice || invoice.status !== "pending") return;
+		await ctx.db.patch(invoiceId, {
+			gatewayRequestId: undefined,
+			gatewayPayment: undefined,
 		});
 	},
 });
@@ -337,6 +378,38 @@ export const mintInvoicePaymentRequest = internalAction({
 /** Kill an invoice's Pay-now request at HitPay (void / settled out-of-band).
  * Best-effort: DELETE on an already-completed request fails, and that's fine
  * — a payment that slipped through lands as a `late_payment` audit stamp. */
+/** DELETE a payment request at HitPay. Plain helper so the mint can kill a
+ * request it just created without hopping through the scheduler — an orphan
+ * must die in the same action that orphaned it. Best-effort by contract. */
+async function expireRequest(
+	credentials: BillingGatewayCredentials,
+	requestId: string,
+): Promise<void> {
+	try {
+		const response = await fetch(
+			`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${requestId}`,
+			{
+				method: "DELETE",
+				headers: {
+					"X-BUSINESS-API-KEY": credentials.apiKey,
+					"X-Requested-With": "XMLHttpRequest",
+				},
+			},
+		);
+		if (!response.ok) {
+			console.warn("[billing] Pay-now link delete rejected", {
+				requestId,
+				status: response.status,
+			});
+		}
+	} catch (err) {
+		console.warn("[billing] Pay-now link delete failed", {
+			requestId,
+			err: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
 export const expireInvoiceRequest = internalAction({
 	args: { requestId: v.string() },
 	handler: async (_ctx, { requestId }): Promise<void> => {
@@ -493,12 +566,16 @@ export const autoRenewSetupContext = internalQuery({
 		comped: boolean;
 		founding: boolean;
 		attached: boolean;
-		existingSetup: { url: string; createdAt: number } | null;
+		existingSetup: Doc<"subscriptions">["autoRenewSetup"] | null;
 		existingSessionId: string | undefined;
 		/** The seller's open bill, when one exists — the authorisation page then
 		 * displays THAT amount (it is what attach will immediately charge). */
+		pendingInvoiceId: Id<"invoices"> | undefined;
 		pendingInvoiceTotalSen: number | undefined;
 		pendingInvoiceCurrency: string | undefined;
+		/** The plan being BILLED (invoices carry it; the sub's own `plan` is
+		 * still the OLD tier until settle — every trial row says "pro"). */
+		pendingInvoicePlan: Doc<"subscriptions">["plan"] | undefined;
 	} | null> => {
 		const retailer = await ctx.db
 			.query("retailers")
@@ -535,8 +612,10 @@ export const autoRenewSetupContext = internalQuery({
 			attached: sub.autoRenew !== undefined,
 			existingSetup: sub.autoRenewSetup ?? null,
 			existingSessionId: sub.autoRenewSessionId,
+			pendingInvoiceId: pending?._id,
 			pendingInvoiceTotalSen: pending?.total,
 			pendingInvoiceCurrency: pending?.currency,
+			pendingInvoicePlan: pending?.plan,
 		};
 	},
 });
@@ -546,15 +625,23 @@ export const recordAutoRenewSession = internalMutation({
 		subscriptionId: v.id("subscriptions"),
 		sessionId: v.string(),
 		url: v.string(),
+		// What the page at `url` displays — the consent record attach checks
+		// against before charging anything. Absent ⇒ the page promised no
+		// charge today.
+		invoiceId: v.optional(v.id("invoices")),
+		amountSen: v.optional(v.number()),
 	},
-	handler: async (ctx, { subscriptionId, sessionId, url }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ subscriptionId, sessionId, url, invoiceId, amountSen },
+	): Promise<void> => {
 		const sub = await ctx.db.get(subscriptionId);
 		if (!sub) return;
 		// No `updatedAt` — for a past_due row that field IS the lock-flip moment
 		// the founder report reads (docs/shipped-log.md).
 		await ctx.db.patch(subscriptionId, {
 			autoRenewSessionId: sessionId,
-			autoRenewSetup: { url, createdAt: Date.now() },
+			autoRenewSetup: { url, createdAt: Date.now(), invoiceId, amountSen },
 		});
 	},
 });
@@ -592,10 +679,18 @@ export const startAutoRenewSetup = action({
 		if (context.attached)
 			throw new ConvexError("Auto-renewal is already on for your store.");
 
-		// Resume a fresh unfinished session instead of minting a second one.
+		// Resume a fresh unfinished session — but ONLY while the page it points
+		// at still tells the truth. The amount and the "nothing is charged
+		// today" line were baked in when it was minted; if the seller's open
+		// bill has since appeared, changed, or been voided-and-reissued, that
+		// page would collect consent for one amount and attach would charge
+		// another. Mint a fresh one instead (the stale session is superseded
+		// below).
 		if (
 			context.existingSetup &&
-			Date.now() - context.existingSetup.createdAt < SETUP_RESUME_WINDOW_MS
+			Date.now() - context.existingSetup.createdAt < SETUP_RESUME_WINDOW_MS &&
+			context.existingSetup.invoiceId === context.pendingInvoiceId &&
+			context.existingSetup.amountSen === context.pendingInvoiceTotalSen
 		) {
 			return { url: context.existingSetup.url };
 		}
@@ -609,7 +704,11 @@ export const startAutoRenewSetup = action({
 			);
 		}
 
-		const planLabel = `${context.plan.charAt(0).toUpperCase()}${context.plan.slice(1)}`;
+		// The plan being BILLED — the sub's own `plan` is the OLD tier until
+		// settle (every trial row reads "pro"), so titling the authorisation
+		// page from it shows "Kedaipal Pro" above a Starter amount.
+		const billedPlan = context.pendingInvoicePlan ?? context.plan;
+		const planLabel = `${billedPlan.charAt(0).toUpperCase()}${billedPlan.slice(1)}`;
 		const chargesToday = context.pendingInvoiceTotalSen !== undefined;
 		const inputs = {
 			planLabel,
@@ -640,7 +739,11 @@ export const startAutoRenewSetup = action({
 			redirectUrl: billingPageUrl("autorenew=return"),
 			reference: context.subscriptionId,
 		};
-		const methods = AUTO_RENEW_METHODS[context.currency];
+		// Offer the rails for the currency THIS SESSION bills in, not the
+		// store's home currency — a MY store holding an SGD invoice was being
+		// offered Touch 'n Go (MYR-only) against an SGD amount, and only
+		// HitPay's 422 wording saved it from dead-ending.
+		const methods = AUTO_RENEW_METHODS[inputs.currency];
 		let result = await createRecurringSession(credentials, {
 			...inputs,
 			paymentMethods: methods,
@@ -679,6 +782,9 @@ export const startAutoRenewSetup = action({
 			subscriptionId: context.subscriptionId,
 			sessionId: session.id,
 			url: session.url,
+			// The consent record: what this page shows is what attach may charge.
+			invoiceId: context.pendingInvoiceId,
+			amountSen: context.pendingInvoiceTotalSen,
 		});
 		return { url: session.url };
 	},
@@ -801,17 +907,15 @@ async function fetchRecurringSession(
 		});
 		return null;
 	}
-	const body = (await response.json()) as {
-		status?: string;
-		times_charged?: number;
-		payment_method?: string;
-	};
+	const body = (await response.json()) as Record<string, unknown>;
+	// Same reader the webhook uses — the GET response IS a recurring-billing
+	// object, and reading only the docs' flat `payment_method` here is what
+	// made the reconcile path record "card" for a Touch 'n Go wallet.
 	return {
-		status: body.status ?? "unknown",
+		status: typeof body.status === "string" ? body.status : "unknown",
 		timesCharged:
 			typeof body.times_charged === "number" ? body.times_charged : 0,
-		paymentMethod:
-			typeof body.payment_method === "string" ? body.payment_method : undefined,
+		paymentMethod: readAttachedMethodCode(body),
 	};
 }
 
@@ -859,22 +963,49 @@ async function applyMethodAttached(
 			chargeAt: sub.currentPeriodEnd,
 		});
 	}
-	// Attach charges ANY open bill immediately (owner decision, Zaki 11 Sep
-	// 2026): authorising the method IS the consent — the authorisation page
-	// displayed exactly this amount. This is what makes the subscribe flow
-	// Netflix-shaped (pick plan → authorise once → charged + auto-renewing),
-	// and it heals a mid-dunning or locked store without waiting a cron day.
-	const pending = await ctx.db
-		.query("invoices")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
-		.filter((q) => q.eq(q.field("status"), "pending"))
-		.first();
-	if (pending) {
-		await ctx.scheduler.runAfter(
-			0,
-			internal.subscriptionPayments.chargeDueRenewal,
-			{ invoiceId: pending._id },
-		);
+	// Attach charges the open bill immediately (owner decision, Zaki 11 Sep
+	// 2026): authorising the method IS the consent. That makes the subscribe
+	// flow Netflix-shaped (pick plan → authorise once → charged + auto-
+	// renewing) and heals a mid-dunning store without waiting a cron day.
+	//
+	// TWO guards make "authorising IS the consent" actually true:
+	//  1. FIRST ATTACH ONLY. This helper runs for every attach signal — the
+	//     webhook, its retries, AND the redirect reconcile — so charging on
+	//     each one races two charges onto the same bill (each sees the invoice
+	//     still pending, and the in-flight charge hasn't moved HitPay's
+	//     times_charged yet, so the reconcile guard waves the second through).
+	//  2. THE BILL THE PAGE SHOWED. `autoRenewSetup` recorded the invoice and
+	//     amount displayed at mint time; anything else — a renewal issued while
+	//     the seller sat on HitPay's page, an admin invoice voided and
+	//     reissued, or a bill that simply didn't exist when the page promised
+	//     "nothing is charged today" — is NOT consented to. It stays for the
+	//     cron/Pay-now rail, which is exactly where an unconsented bill belongs.
+	const firstAttach = sub.autoRenew === undefined;
+	const displayed = sub.autoRenewSetup;
+	if (firstAttach && displayed?.invoiceId !== undefined) {
+		const pending = await ctx.db.get(displayed.invoiceId);
+		if (
+			pending &&
+			pending.status === "pending" &&
+			pending.total === displayed.amountSen
+		) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.chargeDueRenewal,
+				{ invoiceId: pending._id },
+			);
+		} else {
+			console.warn(
+				"[billing] attach did not charge — the open bill is not the one the authorisation page displayed",
+				{
+					retailerId: sub.retailerId,
+					displayedInvoiceId: displayed.invoiceId,
+					displayedAmountSen: displayed.amountSen,
+					actualStatus: pending?.status,
+					actualTotal: pending?.total,
+				},
+			);
+		}
 	}
 	return { applied: true };
 }
@@ -1011,6 +1142,8 @@ export const chargeContext = internalQuery({
 		subscriptionId: Id<"subscriptions">;
 		sessionId: string | undefined;
 		autoRenew: Doc<"subscriptions">["autoRenew"];
+		/** The invoice's live Pay-now request, killed while we charge. */
+		gatewayRequestId: string | undefined;
 	} | null> => {
 		const invoice = await ctx.db.get(invoiceId);
 		if (!invoice) return null;
@@ -1024,6 +1157,7 @@ export const chargeContext = internalQuery({
 			subscriptionId: sub._id,
 			sessionId: sub.autoRenewSessionId,
 			autoRenew: sub.autoRenew,
+			gatewayRequestId: invoice.gatewayRequestId,
 		};
 	},
 });
@@ -1035,9 +1169,32 @@ export const recordChargeAttempt = internalMutation({
 		subscriptionId: v.id("subscriptions"),
 		invoiceId: v.id("invoices"),
 	},
-	handler: async (ctx, { subscriptionId, invoiceId }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ subscriptionId, invoiceId },
+	): Promise<{ claimed: boolean }> => {
 		const sub = await ctx.db.get(subscriptionId);
-		if (!sub?.autoRenew) return;
+		if (!sub?.autoRenew) return { claimed: false };
+		// MUTEX, not just a stamp. Convex mutations are serializable, so this
+		// read-then-patch is the one place two concurrent charge actions can be
+		// made to disagree: whoever patches first owns the attempt, the loser
+		// is told to stand down. Without it, two schedulers (attach webhook +
+		// redirect reconcile, or cron + heal) both POST — and the
+		// outcome-unknown reconcile can't save us, because while charge A is
+		// still in flight HitPay's times_charged hasn't moved yet, so charge B
+		// reads "remote not ahead" and charges anyway.
+		const inFlight =
+			sub.autoRenew.lastChargeAttemptAt !== undefined &&
+			Date.now() - sub.autoRenew.lastChargeAttemptAt <
+				CHARGE_OUTCOME_UNKNOWN_WINDOW_MS;
+		if (inFlight) {
+			console.warn("[billing] charge attempt refused — one already in flight", {
+				subscriptionId,
+				invoiceId,
+				pendingChargeInvoiceId: sub.autoRenew.pendingChargeInvoiceId,
+			});
+			return { claimed: false };
+		}
 		await ctx.db.patch(subscriptionId, {
 			autoRenew: {
 				...sub.autoRenew,
@@ -1045,6 +1202,7 @@ export const recordChargeAttempt = internalMutation({
 				pendingChargeInvoiceId: invoiceId,
 			},
 		});
+		return { claimed: true };
 	},
 });
 
@@ -1097,6 +1255,15 @@ export const recordChargeFailure = internalMutation({
 				sub.autoRenew.methodLabel ?? autoRenewMethodLabel(sub.autoRenew.method),
 			final: nextRetry === null,
 		});
+		// The charge killed the invoice's Pay-now link to close the
+		// double-payment window; a decline means the seller needs it back —
+		// the failure email's whole CTA is "pay it yourself". Idempotent: the
+		// mint no-ops when a link is already stored.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.subscriptionPayments.remintInvoicePaymentRequest,
+			{ invoiceId },
+		);
 	},
 });
 
@@ -1154,10 +1321,26 @@ export const chargeDueRenewal = internalAction({
 			// Session never took the charge — fall through and charge normally.
 		}
 
-		await ctx.runMutation(internal.subscriptionPayments.recordChargeAttempt, {
-			subscriptionId: context.subscriptionId,
-			invoiceId,
-		});
+		const claim: { claimed: boolean } = await ctx.runMutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: context.subscriptionId, invoiceId },
+		);
+		if (!claim.claimed) {
+			// Another charge action owns this window (or the method vanished).
+			// Standing down is always safe: the owner either settles the invoice
+			// or records a failure, and the retry sweep picks it up from there.
+			return;
+		}
+		// The seller must not be able to pay the same bill by hand while our
+		// merchant-initiated charge is in flight — that window is the real
+		// double-payment hazard (they are on HitPay's page, where no spinner of
+		// ours can reach them). A decline re-mints the link, see
+		// recordChargeFailure.
+		if (context.gatewayRequestId) {
+			await ctx.runAction(internal.subscriptionPayments.expireInvoiceRequest, {
+				requestId: context.gatewayRequestId,
+			});
+		}
 
 		let response: Response;
 		try {

@@ -369,6 +369,54 @@ describe("extractRecurringEvent", () => {
 		});
 	});
 
+	test("ENVELOPED charge.created parses like its recurring siblings", () => {
+		// No live charge capture exists yet (the sync response settles first),
+		// but every captured V2 event was enveloped — reading only the docs'
+		// flat sample would ack real charge events into the void.
+		expect(
+			extractRecurringEvent(
+				{
+					event: "charge.created",
+					charge: {
+						id: "pay_env_1",
+						status: "succeeded",
+						amount: 149,
+						currency: "myr",
+						recurring_billing_id: "rb_1",
+						payment_provider: { charge: { method: "touch_n_go" } },
+					},
+				},
+				{ eventObject: "charge", eventType: "created" },
+			),
+		).toEqual({
+			kind: "charge",
+			paymentId: "pay_env_1",
+			recurringBillingId: "rb_1",
+			status: "succeeded",
+			amountSen: 14900,
+			currency: "MYR",
+			methodCode: "touch_n_go",
+		});
+	});
+
+	test("an enveloped charge resolves the billing id from a nested object too", () => {
+		expect(
+			extractRecurringEvent(
+				{
+					event: "charge.created",
+					charge: {
+						id: "pay_env_2",
+						status: "succeeded",
+						amount: 59,
+						currency: "sgd",
+						recurring_billing: { id: "rb_nested" },
+					},
+				},
+				{ eventObject: null, eventType: null },
+			),
+		).toMatchObject({ recurringBillingId: "rb_nested", amountSen: 5900 });
+	});
+
 	test("unrecognised payloads → null (acked + dropped by the route)", () => {
 		expect(extractRecurringEvent({ hello: "world" }, noHeaders)).toBeNull();
 		expect(extractRecurringEvent("not an object", noHeaders)).toBeNull();

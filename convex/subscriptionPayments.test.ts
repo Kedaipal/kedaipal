@@ -510,7 +510,17 @@ describe("startAutoRenewSetup", () => {
 			origin: "self_serve" as const,
 		});
 		await t.run(async (ctx) =>
-			ctx.db.patch(subId, { autoRenewSessionId: "rb_nflx" }),
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_nflx",
+				// The consent record startAutoRenewSetup writes: this invoice, at
+				// this amount, is what the authorisation page showed.
+				autoRenewSetup: {
+					url: "https://auth.example/rb_nflx",
+					createdAt: Date.now(),
+					invoiceId,
+					amountSen: 14900,
+				},
+			}),
 		);
 		vi.stubGlobal(
 			"fetch",
@@ -530,6 +540,110 @@ describe("startAutoRenewSetup", () => {
 		const sub = await getSub(t, subId);
 		expect(sub?.status).toBe("active");
 		expect(sub?.autoRenew?.method).toBe("touch_n_go");
+	});
+
+	test("attach does NOT charge a bill the authorisation page never showed", async () => {
+		// The page's amount IS the consent. A renewal issued while the seller sat
+		// on HitPay's page — or an admin bill voided and reissued at a different
+		// total — was never consented to, so it stays for the cron/Pay-now rail.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_drift", "drift-store");
+		const shownInvoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-SHOWN",
+			status: "void" as const,
+		});
+		// The bill that actually exists at attach time is a DIFFERENT, pricier one.
+		await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-REISSUED",
+			amount: 149000,
+			total: 149000,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_drift",
+				autoRenewSetup: {
+					url: "https://auth.example/rb_drift",
+					createdAt: Date.now(),
+					invoiceId: shownInvoiceId,
+					amountSen: 14900,
+				},
+			}),
+		);
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_drift",
+			methodCode: "card",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		// The method IS attached (that part of the authorisation was real)…
+		expect((await getSub(t, subId))?.autoRenew?.method).toBe("card");
+		// …but no charge was ever fired for the bill nobody agreed to.
+		const chargeCalls = fetchMock.mock.calls.filter((c) =>
+			String(c[0]).includes("/charge/"),
+		);
+		expect(chargeCalls).toHaveLength(0);
+	});
+
+	test("a duplicate attach signal never charges twice", async () => {
+		// applyMethodAttached runs for the webhook, its retries AND the redirect
+		// reconcile. Charging on each one races two charges onto one bill.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_dup2", "dup2-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_dup2",
+				autoRenewSetup: {
+					url: "https://auth.example/rb_dup2",
+					createdAt: Date.now(),
+					invoiceId,
+					amountSen: 14900,
+				},
+			}),
+		);
+		const fetchMock = vi.fn(async (url: unknown) =>
+			String(url).includes("/charge/")
+				? Response.json({ payment_id: "pay_dup2", status: "succeeded" })
+				: Response.json({ status: "active", times_charged: 1 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		// Webhook, then the redirect reconcile a beat later — both attach signals.
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_dup2",
+			methodCode: "touch_n_go",
+		});
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_dup2",
+			methodCode: "touch_n_go",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		const charges = fetchMock.mock.calls.filter((c) =>
+			String(c[0]).includes("/charge/"),
+		);
+		expect(charges).toHaveLength(1);
+		expect((await getInvoice(t, invoiceId))?.status).toBe("paid");
+	});
+
+	test("a second charge action stands down while one is in flight (mutex)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_mutex", "mutex-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await attachAutoRenew(t, subId);
+		// Someone already claimed the attempt moments ago.
+		const claimA: { claimed: boolean } = await t.mutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: subId, invoiceId },
+		);
+		expect(claimA.claimed).toBe(true);
+		const claimB: { claimed: boolean } = await t.mutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: subId, invoiceId },
+		);
+		expect(claimB.claimed).toBe(false);
 	});
 
 	test("without gateway credentials the action refuses with seller-facing copy", async () => {

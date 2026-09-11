@@ -1,6 +1,6 @@
 import { useAction, useMutation } from "convex/react";
 import { Check } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import {
@@ -8,6 +8,7 @@ import {
 	type BillingCurrency,
 	planPrice,
 } from "../../../convex/lib/plans";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 
@@ -68,6 +69,14 @@ export function PlanPickerCard({
 	);
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const [busy, setBusy] = useState(false);
+	// Back from HitPay: re-arm Subscribe instead of leaving it disabled on
+	// "Opening secure payment…" forever (bfcache keeps this state alive).
+	useResetOnBfcache(
+		useCallback(() => {
+			setBusy(false);
+			onRedirectingChange?.(false);
+		}, [onRedirectingChange]),
+	);
 
 	const founding = foundingPricing;
 
@@ -79,7 +88,20 @@ export function PlanPickerCard({
 		setBusy(true);
 		onRedirectingChange?.(true);
 		try {
-			await subscribeSelf({ plan, billingCycle: cycle });
+			const { chargingSavedMethod } = await subscribeSelf({
+				plan,
+				billingCycle: cycle,
+			});
+			if (chargingSavedMethod) {
+				// Already has a saved method — the server is charging it now, and
+				// startAutoRenewSetup would only refuse with "already on".
+				toast.success("Charging your saved payment method…", {
+					description: "Your plan activates the moment it goes through.",
+				});
+				setBusy(false);
+				onRedirectingChange?.(false);
+				return;
+			}
 			const { url } = await startAutoRenewSetup({});
 			window.location.assign(url);
 		} catch (err) {

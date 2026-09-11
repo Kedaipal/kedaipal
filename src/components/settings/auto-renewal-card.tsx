@@ -1,8 +1,9 @@
 import { useAction, useMutation } from "convex/react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -36,6 +37,8 @@ export function AutoRenewalCard({
 	const cancelAutoRenew = useMutation(api.subscriptionPayments.cancelAutoRenew);
 	const [busy, setBusy] = useState(false);
 	const [confirmingOff, setConfirmingOff] = useState(false);
+	// Back from HitPay's authorisation page — re-arm the button.
+	useResetOnBfcache(useCallback(() => setBusy(false), []));
 
 	// Back from HitPay's authorisation page: reconcile once (the webhook may
 	// have already recorded the attach — then this just confirms instantly).

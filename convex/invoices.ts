@@ -345,19 +345,12 @@ export const internalSettleFromGateway = internalMutation({
 				gatewayPayment: { ...invoice.gatewayPayment, paymentId },
 			});
 		}
-		// Kill the open Pay-now link the moment ANY gateway settle lands — an
-		// auto-charge racing a seller's finger on the link is a real
-		// double-payment window otherwise (the settle guard would surface it as
-		// a late_payment audit, but not taking the money beats auditing it).
-		// Best-effort: when the settle came FROM the link itself the request is
-		// already completed and the DELETE just logs a warn.
-		if (invoice.gatewayRequestId) {
-			await ctx.scheduler.runAfter(
-				0,
-				internal.subscriptionPayments.expireInvoiceRequest,
-				{ requestId: invoice.gatewayRequestId },
-			);
-		}
+		// NOTE: no Pay-now link kill here. Every settle that reaches this point
+		// already has a dead link — an auto-charge kills it when it CLAIMS the
+		// attempt (the only window where both rails could take money), and a
+		// Pay-now settle is the link completing itself. Killing again would fire
+		// a guaranteed-to-fail DELETE on the commonest path and train the eye to
+		// ignore the warn that matters. Manual markPaid/voidInvoice keep theirs.
 		// A successful AUTO-CHARGE also advances the saved-method counters —
 		// resolved via the pending-charge stamp so a Pay-now settle on a session
 		// mid-dunning doesn't inflate timesCharged. (Dunning state itself was
@@ -551,7 +544,7 @@ export const subscribeSelf = mutation({
 	handler: async (
 		ctx,
 		{ plan, billingCycle },
-	): Promise<{ invoiceId: Id<"invoices"> }> => {
+	): Promise<{ invoiceId: Id<"invoices">; chargingSavedMethod: boolean }> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new ConvexError("Not authenticated");
 		const retailer = await ctx.db
@@ -607,7 +600,19 @@ export const subscribeSelf = mutation({
 			currency,
 			origin: "self_serve",
 		});
-		return { invoiceId };
+		// A seller who still has a saved method (lapsed after a void, or came
+		// back later) never reaches the authorisation page — startAutoRenewSetup
+		// refuses with "already on". Without this their brand-new invoice would
+		// sit unpaid forever while the button that made it promised an immediate
+		// charge. Charge the saved method instead: same consent, same amount.
+		if (sub.autoRenew !== undefined) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.chargeDueRenewal,
+				{ invoiceId },
+			);
+		}
+		return { invoiceId, chargingSavedMethod: sub.autoRenew !== undefined };
 	},
 });
 

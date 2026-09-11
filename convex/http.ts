@@ -396,8 +396,12 @@ http.route({
 					{
 						eventObject: req.headers.get("hitpay-event-object"),
 						eventType: req.headers.get("hitpay-event-type"),
+						// Derived from the value actually used — a blank env var
+						// resolves to the API-salt fallback, and re-reading the raw
+						// env here would claim a dedicated salt was in play during
+						// exactly the misconfiguration this log exists to diagnose.
 						usingDedicatedSalt:
-							process.env.HITPAY_BILLING_WEBHOOK_SALT !== undefined,
+							credentials.webhookSalt !== credentials.salt,
 					},
 				);
 				return new Response("invalid signature", { status: 401 });

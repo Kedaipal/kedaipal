@@ -54,8 +54,18 @@ retained** for bank-transfer holdouts.
 A charge action can die between HitPay taking the money and us settling.
 Defences, in order:
 
-1. `recordChargeAttempt` stamps `lastChargeAttemptAt` +
-   `pendingChargeInvoiceId` **before** the HTTP call.
+0. `recordChargeAttempt` is a **mutex, not a stamp**: it refuses the claim
+   when an attempt is already in flight, so two schedulers (attach webhook +
+   reconcile, or cron + heal) can never both POST. The loser stands down; the
+   owner settles or records a failure either way. Without it the reconcile in
+   (2) cannot save us — while charge A is in flight HitPay's `times_charged`
+   has not moved, so charge B reads "remote not ahead" and charges anyway.
+1. The winner stamps `lastChargeAttemptAt` + `pendingChargeInvoiceId` **before**
+   the HTTP call, and **kills the invoice's Pay-now link** in the same breath —
+   that window (seller on HitPay's page, our charge in flight) is the one place
+   both rails could take money, and no spinner of ours reaches them there. A
+   decline re-mints the link, because the failure email's whole CTA is "pay it
+   yourself".
 2. A later run seeing a fresh stamp with no recorded outcome **reconciles
    first**: `GET /recurring-billing/{id}` and compare `times_charged` to our
    `autoRenew.timesCharged`. Remote ahead ⇒ the money is real ⇒ settle with
@@ -75,11 +85,19 @@ always the way out; the overdue lock at `dueDate` + its email are unchanged.
 A settle **by any rail** (auto-charge, Pay-now, admin mark-paid) clears the
 dunning state inside `settleInvoicePaid`.
 
-**Heal-on-attach:** re-authorising while a machine-issued renewal pends (or
-while past_due) charges immediately — fixing your card shouldn't wait for
-tomorrow's cron. A fresh **self-serve** invoice is deliberately NOT charged
-at attach (its Pay-now button is right there; an implicit first charge would
-be a surprise).
+**Charge-on-attach, and its two guards.** Attaching a method charges the open
+bill immediately — that is what makes subscribe Netflix-shaped, and it heals a
+mid-dunning store without waiting for tomorrow's cron. Two guards keep
+"authorising IS the consent" literally true:
+
+1. **First attach only.** `applyMethodAttached` runs for every attach signal —
+   the webhook, its retries, AND the redirect reconcile — so charging on each
+   one raced two charges onto the same bill.
+2. **Only the bill the page showed.** `autoRenewSetup` records the invoice id
+   and amount displayed when the session was minted; a bill that appeared,
+   changed, or was reissued afterwards is NOT consented to and stays for the
+   cron/Pay-now rail. A stale session is likewise re-minted rather than
+   resumed when that context has moved.
 
 **Pre-charge notice:** auto-renew sellers get `autoRenewUpcoming` once per
 cycle in the 3-day window before `currentPeriodEnd` (amount + method + date +
@@ -144,14 +162,16 @@ recurring/charge events) — the signing secret shown for THAT endpoint is
 - Session methods per billing currency (`AUTO_RENEW_METHODS`): MYR = `card`,
   `touch_n_go`; SGD = `card` (PayNow can't be tokenised). FPX/DuitNow are
   push-only and never appear.
-- A 422 on the full MYR list (TnG cross-border not enabled on the account)
-  degrades to card-only with a loud log — never a seller dead-end.
+- A 422 naming `payment_methods` retries with the param OMITTED, so the
+  ACCOUNT's own tokenisable set decides (sandbox: a TnG-only account
+  rejected `card`, and a card-only fallback would have been the one method
+  it did not have).
 - Renewal/self-serve invoice currency: last **paid** invoice's currency,
   falling back to `BILLING_CURRENCY_FOR_COUNTRY[retailer.country]`.
-- `times_to_be_charged=100` is set **explicitly** (HitPay defaults to 1,
-  which would kill the second renewal; 100 = documented max ≈ 8 years of
-  monthly charges — at exhaustion the charge fails into normal dunning and
-  the seller re-authorises).
+- `times_to_be_charged` is NEVER sent: a save-payment-method session
+  rejects it outright ("You cant set times_to_be_charged for save_card is
+  true", sandbox 11 Sep 2026). No charge-count ceiling exists on the
+  tokenised path.
 
 ## Webhooks: TWO mechanisms, TWO secrets (sandbox-proved, 11 Sep 2026)
 
@@ -202,11 +222,13 @@ REVERSED the earlier don't-charge-self-serve-at-attach rule by owner decision.
 
 Two things keep it honest for the Malaysian rails:
 
-- **The escape hatch is first-class, not buried**: "Prefer to pay each bill
-  yourself? Get an invoice instead" sits under the CTA, because DuitNow and
-  bank-transfer sellers structurally CANNOT tokenise — for them the invoice +
-  Pay-now link is the whole product. The opt-in "Turn on auto-renewal" card
-  remains for already-active sellers who came in manually.
+- **The manual rail survives implicitly, not as a second button.** The explicit
+  "get an invoice instead" link was built and then removed the same day — ONE
+  door. It still works for the DuitNow/bank seller who structurally cannot
+  tokenise: the invoice is created BEFORE the redirect, so abandoning HitPay's
+  page (or tapping Back) lands them on a pending invoice carrying both the
+  Pay-now button and the bank/DuitNow details. The opt-in "Turn on
+  auto-renewal" card remains for sellers who came in manually.
 - The authorisation session shows **the open bill's total** when one exists
   (an annual subscribe shows the annual figure), else the current renewal
   price; `customer_name` carries the store name so HitPay's dashboard lists a
@@ -261,11 +283,12 @@ already bills at list.
    (webhook or return reconcile) → confirmation email.
 4. `npx convex run subscriptionPayments:chargeDueRenewal '{"invoiceId":"…"}'`
    against a seeded pending renewal → settles.
-5. Verify the **method_attached payload shape** against
-   `extractRecurringEvent` (the docs are thin; the parser is tolerant but the
-   sandbox is the truth) — adjust the probes if HitPay spells fields
-   differently, and confirm whether `times_to_be_charged` is consumed in
-   save-card mode.
+5. ✅ DONE (11 Sep 2026) — the `method_attached` payload was captured from
+   live sandbox traffic and `extractRecurringEvent` rewritten against it (an
+   envelope, not the docs' flat object). `times_to_be_charged` is rejected
+   outright in save-card mode. A verbatim enveloped `charge.created` is still
+   unseen — the parser handles both shapes, and the sync response settles
+   first, so this is corroboration rather than a money path.
 6. Production: Arif's open HitPay support thread must confirm **TnG
    tokenisation cross-border for MY customers + MYR on the tokenised charge
    path** on the live SG account (86eyb6z2d question set). Card rail works

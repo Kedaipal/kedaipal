@@ -329,6 +329,36 @@ function record(value: unknown): JsonRecord | null {
 }
 
 /**
+ * The rail a seller actually authorised, read off a HitPay recurring-billing
+ * object. ONE reader for every path that sees one — the event webhook AND the
+ * session GET the redirect reconcile uses. They diverged once already: the
+ * webhook was taught the real fields while the GET still read the docs' flat
+ * `payment_method` (a key the live payload does not carry), so a Touch 'n Go
+ * seller reconciled as "card" whenever the webhook was unavailable.
+ *
+ * Probe order is evidence-ordered: `payment_provider_charge_method` is what
+ * live traffic carries, `default_method.*` is the same fact nested, and
+ * `payment_method` / `payment_provider.charge.method` are the documented
+ * (card) shape. Returns undefined rather than guessing — callers decide what
+ * an unknown rail means.
+ */
+export function readAttachedMethodCode(
+	billing: Record<string, unknown>,
+): string | undefined {
+	const defaultMethod = record(billing.default_method);
+	const provider = record(billing.payment_provider);
+	const charge = provider ? record(provider.charge) : null;
+	return (
+		asString(billing.payment_provider_charge_method) ??
+		asString(defaultMethod?.payment_provider_charge_method) ??
+		asString(defaultMethod?.payment_provider) ??
+		asString(billing.payment_method) ??
+		asString(charge?.method) ??
+		undefined
+	);
+}
+
+/**
  * Classify a verified V2 event payload.
  *
  * CAPTURED FROM LIVE SANDBOX TRAFFIC (11 Sep 2026) — the docs' flat sample is
@@ -383,31 +413,15 @@ export function extractRecurringEvent(
 			event.includes(needle) || type.includes(needle);
 		if (says("detach")) return { kind: "method_detached", billingId: id };
 		if (says("attach")) {
-			// Real traffic carries the rail on the billing object itself; the
-			// nested default_method repeats it. The provider/charge/details path
-			// is the documented (card) shape and still supplies a "Visa ·· 4242"
-			// style label when present.
-			const defaultMethod = record(billing.default_method);
 			const provider = record(billing.payment_provider);
 			const charge = provider ? record(provider.charge) : null;
 			const details = charge ? record(charge.details) : null;
-			const methods = Array.isArray(billing.payment_methods)
-				? billing.payment_methods
-				: [];
-			const methodCode =
-				asString(billing.payment_provider_charge_method) ??
-				asString(defaultMethod?.payment_provider_charge_method) ??
-				asString(defaultMethod?.payment_provider) ??
-				asString(billing.payment_method) ??
-				asString(charge?.method) ??
-				(methods.length === 1 ? asString(methods[0]) : null) ??
-				undefined;
 			const brand = details ? asString(details.brand) : null;
 			const last4 = details ? asString(details.last4) : null;
 			return {
 				kind: "method_attached",
 				billingId: id,
-				methodCode: methodCode ?? undefined,
+				methodCode: readAttachedMethodCode(billing),
 				methodLabel: brand && last4 ? `${brand} ·· ${last4}` : undefined,
 			};
 		}
@@ -416,27 +430,44 @@ export function extractRecurringEvent(
 		return null;
 	}
 
-	// charge.created — the payload is a payment. `channel: "recurrent"` is the
-	// documented marker; the object header saying "charge"/"payment" also counts.
+	// charge.created — the payload is a payment. Every V2 event captured from
+	// live traffic was enveloped, so unwrap the SAME way as the recurring
+	// branch before falling back to the docs' flat sample: `event` names the
+	// object, and the object sits under that key. Reading only the flat shape
+	// here would silently ack every real charge event (`id` is nested), which
+	// would quietly kill the corroboration rail the webhook exists for.
 	const channel = asString(body.channel);
 	if (
+		event.startsWith("charge") ||
 		channel === "recurrent" ||
 		object.includes("charge") ||
 		object.includes("payment")
 	) {
-		const paymentId = asString(body.id);
-		const status = asString(body.status);
+		const payment =
+			record(body.charge) ?? record(body.payment) ?? record(body.data) ?? body;
+		const paymentId = asString(payment.id);
+		const status = asString(payment.status);
 		if (!paymentId || !status) return null;
-		const provider = record(body.payment_provider);
+		const provider = record(payment.payment_provider);
 		const charge = provider ? record(provider.charge) : null;
+		// An enveloped charge may carry its billing object too; either spelling
+		// of the id resolves the subscription.
+		const chargeBilling = record(payment.recurring_billing);
 		return {
 			kind: "charge",
 			paymentId,
-			recurringBillingId: billingId,
+			recurringBillingId:
+				asString(payment.recurring_billing_id) ??
+				asString(payment.recurring_plan_id) ??
+				asString(chargeBilling?.id) ??
+				billingId,
 			status,
-			amountSen: amountToSen(body.amount),
-			currency: asString(body.currency)?.toUpperCase() ?? null,
-			methodCode: asString(charge?.method) ?? undefined,
+			amountSen: amountToSen(payment.amount),
+			currency: asString(payment.currency)?.toUpperCase() ?? null,
+			methodCode:
+				asString(charge?.method) ??
+				asString(payment.payment_provider_charge_method) ??
+				undefined,
 		};
 	}
 	return null;

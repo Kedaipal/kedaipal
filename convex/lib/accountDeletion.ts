@@ -236,11 +236,14 @@ export async function runDeletionPhase(
 			//    killed — a payment into a deleted store is only ever a refund.
 			// Idempotent: voided invoices drop out of the pending filter, and a
 			// re-entered batch finds no subscription rows left to act on.
+			// Bounded like every sibling phase (the driver re-enters until a
+			// batch comes back short). Voided rows drop out of this filter, so
+			// re-entry never redoes work.
 			const pending = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.filter((q) => q.eq(q.field("status"), "pending"))
-				.collect();
+				.take(limit);
 			for (const invoice of pending) {
 				await ctx.db.patch(invoice._id, {
 					status: "void",

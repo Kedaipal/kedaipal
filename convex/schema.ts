@@ -2361,7 +2361,18 @@ export default defineSchema({
 		// "finish setting up" instead of minting a second session. Cleared on
 		// attach or cancel.
 		autoRenewSetup: v.optional(
-			v.object({ url: v.string(), createdAt: v.number() }),
+			v.object({
+				url: v.string(),
+				createdAt: v.number(),
+				// What the authorisation page at `url` actually DISPLAYS. Attach
+				// charges the open bill only when the pending invoice still matches
+				// both of these — the page's amount IS the consent, so a bill that
+				// appeared, changed or was reissued after the page was minted must
+				// never be charged off it. Absent invoiceId ⇒ the page said
+				// "nothing is charged today", so attach charges nothing.
+				invoiceId: v.optional(v.id("invoices")),
+				amountSen: v.optional(v.number()),
+			}),
 		),
 		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent
 		// for — one notice per cycle, reset naturally when the period rolls.
