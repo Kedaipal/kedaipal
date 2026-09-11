@@ -32,6 +32,7 @@
  */
 
 import { v } from "convex/values";
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { deleteOrderOwnedBlobs } from "./orderBlobs";
@@ -226,11 +227,48 @@ export async function runDeletionPhase(
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {
+			// A deleted tenant must not leave MONEY rails live (86eyb6z4r):
+			//  - the saved-method session at HitPay is cancelled remotely
+			//    (best-effort — with the local row gone nothing can ever charge,
+			//    the DELETE is hygiene so the token doesn't outlive the account);
+			//  - pending invoices are VOIDED (they're retained by decision, so
+			//    they must not stay forever-payable) and their Pay-now links
+			//    killed — a payment into a deleted store is only ever a refund.
+			// Idempotent: voided invoices drop out of the pending filter, and a
+			// re-entered batch finds no subscription rows left to act on.
+			const pending = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.collect();
+			for (const invoice of pending) {
+				await ctx.db.patch(invoice._id, {
+					status: "void",
+					voidedAt: Date.now(),
+					voidReason: "Account deleted",
+				});
+				if (invoice.gatewayRequestId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.subscriptionPayments.expireInvoiceRequest,
+						{ requestId: invoice.gatewayRequestId },
+					);
+				}
+			}
 			const rows = await ctx.db
 				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
-			for (const subscription of rows) await ctx.db.delete(subscription._id);
+			for (const subscription of rows) {
+				if (subscription.autoRenewSessionId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.subscriptionPayments.deleteRecurringSession,
+						{ sessionId: subscription.autoRenewSessionId },
+					);
+				}
+				await ctx.db.delete(subscription._id);
+			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptionUsage": {
