@@ -1,4 +1,4 @@
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { Check } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -53,18 +53,39 @@ export function PlanPickerCard({
 	foundingPricingLapsed: boolean;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
+	const startAutoRenewSetup = useAction(
+		api.subscriptionPayments.startAutoRenewSetup,
+	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
 	const [plan, setPlan] = useState<PickablePlan>(
 		sub.plan === "starter" ? "starter" : "pro",
 	);
 	const [cycle, setCycle] = useState<Cycle>("monthly");
-	const [busy, setBusy] = useState(false);
+	const [busy, setBusy] = useState<"subscribe" | "invoice" | null>(null);
 
 	const founding = foundingPricing;
 
-	const submit = async () => {
-		setBusy(true);
+	// The default path (owner decision, 11 Sep 2026): subscribing IS enrolling
+	// in auto-renewal, like every mainstream subscription — invoice created,
+	// then straight to HitPay's authorisation page; attaching the method
+	// charges the bill and future renewals charge themselves. The manual
+	// escape hatch below stays first-class because DuitNow/bank sellers CANNOT
+	// tokenise — for them an invoice + Pay-now link is the whole product.
+	const subscribeAuto = async () => {
+		setBusy("subscribe");
+		try {
+			await subscribeSelf({ plan, billingCycle: cycle });
+			const { url } = await startAutoRenewSetup({});
+			window.location.assign(url);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setBusy(null);
+		}
+	};
+
+	const requestInvoice = async () => {
+		setBusy("invoice");
 		try {
 			await subscribeSelf({ plan, billingCycle: cycle });
 			toast.success("Invoice created", {
@@ -74,7 +95,7 @@ export function PlanPickerCard({
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
-			setBusy(false);
+			setBusy(null);
 		}
 	};
 
@@ -183,20 +204,41 @@ export function PlanPickerCard({
 				})}
 			</div>
 
+			<div className="flex flex-col gap-2">
+				<button
+					type="button"
+					onClick={subscribeAuto}
+					disabled={busy !== null}
+					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
+				>
+					{busy === "subscribe"
+						? "Opening secure payment…"
+						: `Subscribe to ${PLAN_PITCH[plan].name}`}
+				</button>
+				<p className="text-[11px] text-muted-foreground">
+					You'll authorise a card or Touch 'n Go once on HitPay's secure page
+					and be charged{" "}
+					{formatPrice(
+						planPrice(plan, cycle, founding && plan === "pro", currency),
+						currency,
+					)}{" "}
+					now — then it renews automatically each{" "}
+					{cycle === "annual" ? "year" : "month"}. Turn it off any time;
+					Kedaipal never sees your card or wallet details.
+				</p>
+			</div>
+			{/* The can't-tokenise escape hatch (DuitNow / bank-transfer sellers) —
+			    quieter, never hidden. */}
 			<button
 				type="button"
-				onClick={submit}
-				disabled={busy}
-				className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
+				onClick={requestInvoice}
+				disabled={busy !== null}
+				className="w-fit text-left text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
 			>
-				{busy
+				{busy === "invoice"
 					? "Creating your invoice…"
-					: `Get my ${PLAN_PITCH[plan].name} invoice`}
+					: "Prefer to pay each bill yourself? Get an invoice instead (DuitNow, bank transfer…)"}
 			</button>
-			<p className="text-[11px] text-muted-foreground">
-				Your plan activates once payment lands. Changing plan later or paying
-				by bank transfer? Both still work — just message us.
-			</p>
 		</section>
 	);
 }

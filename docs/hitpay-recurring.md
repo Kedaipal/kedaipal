@@ -151,6 +151,34 @@ recurring/charge events) — the salt shown there is `HITPAY_BILLING_SALT`.
   monthly charges — at exhaustion the charge fails into normal dunning and
   the seller re-authorises).
 
+## Subscribe = auto-renewal by default (Zaki, 11 Sep 2026)
+
+The plan picker's primary CTA is **"Subscribe to {plan}"** — invoice created,
+then straight to HitPay's authorisation page; **attaching the method charges
+the open bill immediately** (`applyMethodAttached` schedules the charge for
+ANY pending invoice — the authorisation page displayed exactly that amount,
+so authorising IS the consent) and every later renewal charges itself. The
+Netflix shape: subscribing enrols you; cancelling is the explicit act. This
+REVERSED the earlier don't-charge-self-serve-at-attach rule by owner decision.
+
+Two things keep it honest for the Malaysian rails:
+
+- **The escape hatch is first-class, not buried**: "Prefer to pay each bill
+  yourself? Get an invoice instead" sits under the CTA, because DuitNow and
+  bank-transfer sellers structurally CANNOT tokenise — for them the invoice +
+  Pay-now link is the whole product. The opt-in "Turn on auto-renewal" card
+  remains for already-active sellers who came in manually.
+- The authorisation session shows **the open bill's total** when one exists
+  (an annual subscribe shows the annual figure), else the current renewal
+  price; `customer_name` carries the store name so HitPay's dashboard lists a
+  real customer instead of "N/A".
+
+Sandbox-verified API rules encoded the same day: a save-payment-method
+session REJECTS `times_to_be_charged` (so no charge-count ceiling exists on
+the tokenised path), and a 422 on `payment_methods` means the account lacks
+(some of) our preferred rails — the retry omits the param and lets the
+account's own tokenisable set decide.
+
 ## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
 
 The 30% founding price survives a subscription lapse of up to **3 months**

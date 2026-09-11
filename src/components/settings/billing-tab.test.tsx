@@ -295,7 +295,9 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
 		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
-		expect(screen.getByText(/Get my .* invoice/)).toBeTruthy();
+		expect(screen.getByText(/Subscribe to Pro/)).toBeTruthy();
+		// The can't-tokenise escape hatch stays first-class.
+		expect(screen.getByText(/Get an invoice instead/)).toBeTruthy();
 		expect(
 			screen.queryByText(/Message us on WhatsApp and we'll send your invoice/),
 		).toBeNull();
@@ -309,7 +311,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		expect(
 			screen.getByText(/Message us on WhatsApp and we'll send your invoice/),
 		).toBeTruthy();
-		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 	});
 
@@ -367,7 +369,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 			/>,
 		);
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
-		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
 	});
 });
 

@@ -385,7 +385,8 @@ describe("startAutoRenewSetup", () => {
 
 		const body = String(fetchMock.mock.calls[0]?.[1]?.body ?? "");
 		expect(body).toContain("save_payment_method=true");
-		expect(body).toContain("times_to_be_charged=100");
+		// save_payment_method sessions REJECT times_to_be_charged (sandbox 11 Sep).
+		expect(body).not.toContain("times_to_be_charged");
 
 		// A fresh unfinished session is RESUMED, not re-minted.
 		const again = await t
@@ -444,6 +445,61 @@ describe("startAutoRenewSetup", () => {
 				.action(api.subscriptionPayments.startAutoRenewSetup, {}),
 		).rejects.toThrow(/Couldn't reach the payment service/);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("with an open bill the session displays THAT amount and names the store (subscribe flow)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_sess", "sess-store");
+		await seedRenewalInvoice(t, retailerId, subId, {
+			origin: "self_serve" as const,
+			billingCycle: "annual" as const,
+			amount: 149000,
+			total: 149000,
+		});
+		const fetchMock = vi.fn(async (_url: unknown, _init?: { body?: unknown }) =>
+			Response.json({ id: "rb_sess", url: "https://auth.example/rb_sess" }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await t
+			.withIdentity({ subject: "u_sess", email: "u_sess@x.com" })
+			.action(api.subscriptionPayments.startAutoRenewSetup, {});
+		const body = String(fetchMock.mock.calls[0]?.[1]?.body ?? "");
+		// The page shows what attach will charge — the annual bill, not RM149.
+		expect(body).toContain("amount=1490.00");
+		// The store name is the customer identity on HitPay's dashboard
+		// (without it the Subscriptions list reads "N/A" — sandbox, 11 Sep).
+		expect(body).toContain("customer_name=Store+sess-store");
+	});
+
+	test("attach charges the open self-serve bill immediately — subscribe IS auto-renewal (Zaki, 11 Sep)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_nflx", "nflx-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			origin: "self_serve" as const,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, { autoRenewSessionId: "rb_nflx" }),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ payment_id: "pay_nflx_1", status: "succeeded" }),
+			),
+		);
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_nflx",
+			methodCode: "touch_n_go",
+		});
+		// Run the charge the attach scheduled (plus its follow-ups).
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.paymentMethod).toBe("hitpay_touch_n_go");
+		const sub = await getSub(t, subId);
+		expect(sub?.status).toBe("active");
+		expect(sub?.autoRenew?.method).toBe("touch_n_go");
 	});
 
 	test("without gateway credentials the action refuses with seller-facing copy", async () => {

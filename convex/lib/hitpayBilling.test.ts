@@ -3,7 +3,6 @@ import {
 	AUTO_CHARGE_MAX_ATTEMPTS,
 	AUTO_CHARGE_RETRY_DELAYS_MS,
 	AUTO_RENEW_METHODS,
-	AUTO_RENEW_TIMES_TO_BE_CHARGED,
 	autoRenewMethodLabel,
 	buildAutoRenewSessionParams,
 	buildInvoicePaymentRequestParams,
@@ -88,12 +87,11 @@ describe("buildAutoRenewSessionParams", () => {
 		expect(params.get("save_payment_method")).toBe("true");
 	});
 
-	test("times_to_be_charged is set explicitly — HitPay's default of 1 would kill the second renewal", () => {
-		const params = buildAutoRenewSessionParams(inputs);
-		expect(params.get("times_to_be_charged")).toBe(
-			String(AUTO_RENEW_TIMES_TO_BE_CHARGED),
-		);
-		expect(AUTO_RENEW_TIMES_TO_BE_CHARGED).toBe(100); // documented max
+	test("times_to_be_charged is NEVER sent — save_payment_method sessions reject it", () => {
+		// Sandbox-verified 11 Sep 2026: "You cant set times_to_be_charged for
+		// save_card is true". The docs' default-of-1 worry doesn't apply to the
+		// tokenised path, and neither does the 100-charge ceiling.
+		expect(buildAutoRenewSessionParams(inputs).get("times_to_be_charged")).toBeNull();
 	});
 
 	test("HitPay's own receipt emails stay off (one voice per event)", () => {

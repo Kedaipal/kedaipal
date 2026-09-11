@@ -100,15 +100,12 @@ export function gatewayPaymentMethodTag(methodCode: string | undefined): string 
 	return code ? `hitpay_${code}` : "hitpay";
 }
 
-/**
- * HitPay caps a save-payment-method session's charges via
- * `times_to_be_charged` (1–100, DEFAULT 1 — the default would kill the second
- * renewal). 100 is the documented max ≈ 8 years of monthly charges; when a
- * session runs out the charge fails and normal dunning walks the seller
- * through re-authorising. Verified against the API reference, re-verify in
- * sandbox (the docs are ambiguous about whether save_card mode consumes it).
- */
-export const AUTO_RENEW_TIMES_TO_BE_CHARGED = 100;
+// `times_to_be_charged` is deliberately ABSENT from the session params: the
+// API reference documents it (1–100, default 1) for plan-cycle billing, but a
+// save_payment_method session REJECTS it outright — "You cant set
+// times_to_be_charged for save_card is true" (sandbox-verified 11 Sep 2026).
+// Good news twice over: no param to send, and no charge-count ceiling on the
+// tokenised path.
 
 /**
  * Kedaipal-owned retry schedule after a failed auto-charge (HitPay's own
@@ -186,7 +183,6 @@ export function buildAutoRenewSessionParams(
 	for (const method of inputs.paymentMethods ?? []) {
 		params.append("payment_methods[]", method);
 	}
-	params.set("times_to_be_charged", String(AUTO_RENEW_TIMES_TO_BE_CHARGED));
 	params.set("redirect_url", inputs.redirectUrl);
 	params.set("reference", inputs.reference);
 	// HitPay's own receipts stay off — Kedaipal sends the charge receipt

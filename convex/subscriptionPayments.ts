@@ -476,6 +476,10 @@ export const autoRenewSetupContext = internalQuery({
 		attached: boolean;
 		existingSetup: { url: string; createdAt: number } | null;
 		existingSessionId: string | undefined;
+		/** The seller's open bill, when one exists — the authorisation page then
+		 * displays THAT amount (it is what attach will immediately charge). */
+		pendingInvoiceTotalSen: number | undefined;
+		pendingInvoiceCurrency: string | undefined;
 	} | null> => {
 		const retailer = await ctx.db
 			.query("retailers")
@@ -487,6 +491,11 @@ export const autoRenewSetupContext = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.first();
 		if (!sub) return null;
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
 		return {
 			retailerId: retailer._id,
 			subscriptionId: sub._id,
@@ -507,6 +516,8 @@ export const autoRenewSetupContext = internalQuery({
 			attached: sub.autoRenew !== undefined,
 			existingSetup: sub.autoRenewSetup ?? null,
 			existingSessionId: sub.autoRenewSessionId,
+			pendingInvoiceTotalSen: pending?.total,
+			pendingInvoiceCurrency: pending?.currency,
 		};
 	},
 });
@@ -584,13 +595,21 @@ export const startAutoRenewSetup = action({
 			planLabel,
 			storeName: context.storeName,
 			customerEmail: email,
-			amountSen: planPrice(
-				context.plan,
-				"monthly",
-				context.founding,
-				context.currency,
-			),
-			currency: context.currency,
+			// The store name is the customer identity on HitPay's dashboard —
+			// without it the Subscriptions list reads "N/A" (sandbox, 11 Sep).
+			customerName: context.storeName,
+			// Show the amount attach will actually charge: the open bill when one
+			// exists (the subscribe-with-auto-renewal flow — possibly an annual
+			// total), else the seller's current renewal price. Display-only
+			// either way; charges always pass the invoice total at charge time.
+			amountSen:
+				context.pendingInvoiceTotalSen ??
+				planPrice(context.plan, "monthly", context.founding, context.currency),
+			currency:
+				context.pendingInvoiceCurrency === "SGD" ||
+				context.pendingInvoiceCurrency === "MYR"
+					? context.pendingInvoiceCurrency
+					: context.currency,
 			redirectUrl: billingPageUrl("autorenew=return"),
 			reference: context.subscriptionId,
 		};
@@ -771,13 +790,10 @@ async function fetchRecurringSession(
 
 /**
  * A payment method landed on the session (webhook or reconcile). Overwrite
- * semantics so whichever path runs second only refines the label. When the
- * seller was mid-dunning (a machine-issued renewal sits unpaid, or they're
- * already locked), the fix should heal them without waiting a day — charge
- * right away. A fresh self-serve invoice is deliberately NOT charged here:
- * its Pay-now button is a tap away, and an implicit first charge would be a
- * surprise. (No `updatedAt` on any patch here — the past_due flip-moment
- * invariant, docs/shipped-log.md.)
+ * semantics so whichever path runs second only refines the label. Any open
+ * bill is charged straight away — see the owner-decision comment below.
+ * (No `updatedAt` on any patch here — the past_due flip-moment invariant,
+ * docs/shipped-log.md.)
  */
 async function applyMethodAttached(
 	ctx: MutationCtx,
@@ -816,17 +832,17 @@ async function applyMethodAttached(
 			chargeAt: sub.currentPeriodEnd,
 		});
 	}
-	// Heal-on-attach: an unpaid machine-issued renewal (or a locked store)
-	// charges immediately instead of waiting for the next cron day.
+	// Attach charges ANY open bill immediately (owner decision, Zaki 11 Sep
+	// 2026): authorising the method IS the consent — the authorisation page
+	// displayed exactly this amount. This is what makes the subscribe flow
+	// Netflix-shaped (pick plan → authorise once → charged + auto-renewing),
+	// and it heals a mid-dunning or locked store without waiting a cron day.
 	const pending = await ctx.db
 		.query("invoices")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
 		.filter((q) => q.eq(q.field("status"), "pending"))
 		.first();
-	if (
-		pending &&
-		(pending.origin === "auto_renewal" || sub.status === "past_due")
-	) {
+	if (pending) {
 		await ctx.scheduler.runAfter(
 			0,
 			internal.subscriptionPayments.chargeDueRenewal,
