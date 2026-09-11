@@ -11,8 +11,10 @@
  *   - A **revenue order** is one whose status is confirmed → delivered. `pending`
  *     and `cancelled` are excluded from EVERY figure (an order cancelled after
  *     payment therefore drops out of both earned and collected).
- *   - **Earned** = Σ total over revenue orders (order placed = revenue recognised).
- *   - **Collected** = Σ total over revenue orders whose paymentStatus is
+ *   - **Earned** = Σ total over revenue orders, NET of any refundable security
+ *     deposit (order placed = revenue recognised; held money is never revenue
+ *     — the amount netted out is reported back as `depositsHeld`).
+ *   - **Collected** = Σ deposit-net total over revenue orders whose paymentStatus is
  *     "received" (money actually in hand). The payment-method donut slices this
  *     same figure, so Σ slices === collected.
  *   - Revenue anchors on `createdAt` (when the order was placed); `fulfilmentDate`
@@ -98,15 +100,22 @@ export type TrendBucket = { start: number; earned: number; orderCount: number };
 export type PaymentStat = { method: string; revenue: number; orderCount: number };
 
 /** One by-source row (86eyq0eq9). `source` is an `attributionBucket` key —
- * a stamped `?src=` tag, "counter", or "direct". Revenue is EARNED (Σ total
- * over revenue orders), so Σ rows === the earned KPI — this is "which funnel
- * produced the order", not "which funnel got paid". */
+ * a stamped `?src=` tag, "counter", or "direct". Revenue is EARNED — the same
+ * deposit-net figure as the KPI, never `total` (z8r3fdcw70) — so Σ rows === the
+ * earned KPI; this is "which funnel produced the order", not "which funnel got
+ * paid". */
 export type SourceStat = { source: string; revenue: number; orderCount: number };
 
 export type InsightsAggregate = {
-	/** Σ total over revenue orders. */
+	/** Σ deposit-net total over revenue orders. */
 	earned: number;
-	/** Σ total over revenue orders with paymentStatus "received". */
+	/** Σ security deposit netted out of `earned` over the same revenue orders —
+	 * the amount the "Revenue earned" tile says it excludes. Whether the
+	 * deposit has since been returned makes no difference here (this is "what
+	 * this window excluded", not an outstanding-liability figure — that tail is
+	 * z8r3fdd07u). 0 on a store without deposits, so the tile stays silent. */
+	depositsHeld: number;
+	/** Σ deposit-net total over revenue orders with paymentStatus "received". */
 	collected: number;
 	/** Count of revenue orders (denominator for AOV). */
 	orderCount: number;
@@ -177,6 +186,7 @@ export function reduceInsights(
 	{ from, bucketing }: { from: number; bucketing: Bucketing },
 ): InsightsAggregate {
 	let earned = 0;
+	let depositsHeld = 0;
 	let collected = 0;
 	let orderCount = 0;
 	const productMap = new Map<string, ProductStat>();
@@ -192,18 +202,22 @@ export function reduceInsights(
 		// inlined since this module stays dependency-light).
 		const revenue = Math.max(0, o.total - (o.securityDeposit ?? 0));
 		earned += revenue;
+		// What the clamp above actually removed — Σ securityDeposit on every real
+		// order (total = stay + deposit), and never more than total on a bad one.
+		depositsHeld += o.total - revenue;
 
 		// By-source rows — every revenue order lands in exactly one bucket
-		// (stamped tag → counter → direct), so Σ rows === earned/orderCount.
+		// (stamped tag → counter → direct) and adds the SAME deposit-net revenue
+		// as earned, so Σ rows === earned/orderCount holds on a booking store too.
 		const sourceKey = attributionBucket(o);
 		const sourceRow = sourceMap.get(sourceKey);
 		if (sourceRow) {
-			sourceRow.revenue += o.total;
+			sourceRow.revenue += revenue;
 			sourceRow.orderCount += 1;
 		} else {
 			sourceMap.set(sourceKey, {
 				source: sourceKey,
-				revenue: o.total,
+				revenue,
 				orderCount: 1,
 			});
 		}
@@ -256,6 +270,7 @@ export function reduceInsights(
 
 	return {
 		earned,
+		depositsHeld,
 		collected,
 		orderCount,
 		products: [...productMap.values()].sort((a, b) => b.revenue - a.revenue),

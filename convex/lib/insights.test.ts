@@ -115,6 +115,35 @@ describe("reduceInsights — revenue split", () => {
 		expect(agg.collected).toBe(16_000);
 		expect(agg.trend.reduce((sum, b) => sum + b.earned, 0)).toBe(21_000);
 		expect(agg.payments.reduce((sum, p) => sum + p.revenue, 0)).toBe(16_000);
+		// The by-source rows net the deposit the same way — they added `total`
+		// until z8r3fdcw70, so a booking store's rows summed past earned.
+		expect(agg.sources.reduce((sum, r) => sum + r.revenue, 0)).toBe(21_000);
+		// …and the page is told how much was netted out.
+		expect(agg.depositsHeld).toBe(10_000);
+	});
+
+	test("depositsHeld is 0 when the only deposit sits on a non-revenue order", () => {
+		const agg = reduceInsights(
+			[
+				order({ total: 26_000, securityDeposit: 10_000, status: "pending" }),
+				order({ total: 26_000, securityDeposit: 10_000, status: "cancelled" }),
+			],
+			{ from: D1, bucketing: "day" },
+		);
+		expect(agg.depositsHeld).toBe(0);
+		expect(agg.earned).toBe(0);
+		expect(agg.sources).toEqual([]);
+	});
+
+	test("a deposit larger than the total nets to zero revenue, never negative", () => {
+		// Cannot happen on a real order (total = stay + deposit) — pins the clamp
+		// so depositsHeld can never exceed what earned actually excluded.
+		const agg = reduceInsights(
+			[order({ total: 5_000, securityDeposit: 8_000 })],
+			{ from: D1, bucketing: "day" },
+		);
+		expect(agg.earned).toBe(0);
+		expect(agg.depositsHeld).toBe(5_000);
 	});
 
 	test("collected counts only received revenue orders", () => {
@@ -299,6 +328,12 @@ describe("reduceInsights — by-source breakdown (86eyq0eq9)", () => {
 			[
 				order({ total: 10_000, attributionSource: "tiktok" }),
 				order({ total: 6_000, attributionSource: "tiktok" }),
+				// RM160 stay + RM100 deposit — the row nets the deposit like earned.
+				order({
+					total: 26_000,
+					securityDeposit: 10_000,
+					attributionSource: "tiktok",
+				}),
 				order({ total: 4_000, source: "counter" }), // counter checkout, no stamp
 				order({ total: 9_000, source: "storefront" }), // untagged → direct
 				order({ total: 2_000 }), // legacy undefined source → direct
@@ -308,11 +343,12 @@ describe("reduceInsights — by-source breakdown (86eyq0eq9)", () => {
 		);
 		const rowSum = agg.sources.reduce((s, r) => s + r.revenue, 0);
 		expect(rowSum).toBe(agg.earned);
-		expect(agg.earned).toBe(31_000);
+		expect(agg.earned).toBe(47_000);
+		expect(agg.depositsHeld).toBe(10_000);
 		expect(agg.sources[0]).toMatchObject({
 			source: "tiktok",
-			revenue: 16_000,
-			orderCount: 2,
+			revenue: 32_000, // 10k + 6k + (26k − 10k deposit)
+			orderCount: 3,
 		});
 		expect(agg.sources.find((r) => r.source === "counter")).toMatchObject({
 			revenue: 4_000,
