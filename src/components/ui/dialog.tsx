@@ -58,15 +58,28 @@ function DialogContent({
 			<DialogPrimitive.Content
 				data-slot="dialog-content"
 				className={cn(
-					// `overflow-hidden` clips children to the rounded corners — without it
-					// a full-bleed footer (DialogFooter's -mx/-mb) or any edge-to-edge
-					// child renders a square corner that pokes past the rounded modal,
-					// giving the "two different bottom edges" look. It makes
+					// The overflow pair is load-bearing on BOTH axes, for different
+					// reasons.
+					//
+					// X — `overflow-x-hidden` clips children to the rounded corners:
+					// without it a full-bleed footer (DialogFooter's -mx/-mb) or any
+					// edge-to-edge child renders a square corner poking past the rounded
+					// modal, the "two different bottom edges" look. It also makes
 					// `grid-cols-[minmax(0,1fr)]` load-bearing: a grid track is
 					// `min-width:auto` by default, so a single wide child (a long footer
 					// button, a table) would push the box past `max-w` and get CLIPPED
 					// rather than wrapped. Pinning the track lets children shrink.
-					"fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-hidden rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+					//
+					// Y — the cap and the scroll travel TOGETHER and neither is
+					// optional. A dialog is centred with `-translate-y-1/2`, so content
+					// taller than the viewport overflows at BOTH ends; with a hidden
+					// y-axis and no cap that content is clipped rather than scrolled,
+					// and DialogFooter's Cancel/confirm buttons become unreachable with
+					// no way to recover them (found on the plan-change dialog: 497px on
+					// desktop, taller once its list wraps at 375px). The cap mirrors the
+					// `max-w` beside it — a 1rem gutter on every side — and matches what
+					// Sheet, this primitive's sibling, has always done.
+					"fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-x-hidden overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
 					className,
 				)}
 				{...props}
