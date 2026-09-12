@@ -2583,6 +2583,35 @@ export default defineSchema({
 		notes: v.optional(v.string()),
 	}).index("by_observed", ["observedAt"]),
 
+	// Per-TEMPLATE lifecycle history (ClickUp z8r3fddtkh), one row per Meta
+	// template webhook: status changes (APPROVED/PAUSED/DISABLED/…), category
+	// re-classifications (UTILITY → MARKETING is a 6.1× per-send price jump
+	// from 1 Oct 2026, with an appeal window) and quality-score moves (the
+	// warning before a pause). The admin console reads the NEWEST row per
+	// (templateName, language) as that template's live state; `by_template`
+	// serves that read and the purge's keep-the-newest rule. Retention: 90
+	// days, but the newest row per template is ALWAYS kept — same posture as
+	// wabaHealth (convex/lib/retention.ts).
+	wabaTemplateEvents: defineTable({
+		templateName: v.string(),
+		language: v.string(),
+		kind: v.union(
+			v.literal("status"),
+			v.literal("category"),
+			v.literal("quality"),
+		),
+		event: v.optional(v.string()),
+		previousCategory: v.optional(v.string()),
+		newCategory: v.optional(v.string()),
+		previousQuality: v.optional(v.string()),
+		newQuality: v.optional(v.string()),
+		reason: v.optional(v.string()),
+		alerted: v.boolean(),
+		observedAt: v.number(),
+	})
+		.index("by_observed", ["observedAt"])
+		.index("by_template", ["templateName", "language", "observedAt"]),
+
 	// Per-retailer kill switch + cap overrides. Lazily created — absent row means
 	// "tier/age defaults, not paused" (see lib/wabaLimits.ts resolveSendingLimits).
 	// `pausedAt` set = the kill switch is on (blocks non-transactional sends).

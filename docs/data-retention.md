@@ -15,6 +15,7 @@ The numbers below cite it; change a window there, never here first.
 | --- | --- | --- |
 | `outboundMessageLog` | **90 days**, rolled up first | Fastest-growing table (one row per outbound WhatsApp attempt) and also the WhatsApp **cost ledger** (Meta bills per-send from Oct 2026). Raw rows cover incident forensics + bill disputes; before deletion each row is folded into `messageLogRollups`, so aggregate cost/volume accounting survives forever. |
 | `wabaHealth` | **90 days**, newest row always kept | History is for trend-eyeballing only. The newest row is `canSend`'s live quality state and Meta health webhooks can be months apart — purging it would silently **fail the gateway open to HIGH**, so it is retained regardless of age. |
+| `wabaTemplateEvents` | **90 days**, newest row **per template + language** always kept | Per-template status/category/quality history from Meta's template webhooks (ClickUp `z8r3fddtkh`). The admin console reads the newest row per template as its live state (paused? billed as marketing?) and Meta posts only on change, so a healthy template may go a year between rows — purging its last one would blank the panel. |
 | `adminAuditLog` | **24 months** (stated decision) | Compliance-friendly window: long enough to answer "who at Kedaipal touched my store?" for any plausible dispute or PDPA access request, bounded so the trail doesn't outlive its usefulness. |
 | `orderEvents` | **No purge (deferred)** | An order's event timeline is part of the order record — purging events on a different clock than their orders would leave half-erased histories. Their lifetime is tied to **order retention**, which is ticket `86eydwct5` (PDPA Q2). Hard-delete already cascades them (`deleteOrderCascade`), so the table only grows with live orders. |
 | `optOuts` | **Never purged** | An opt-out row is the buyer's **standing legal instruction** ("do not message me") across the whole shared WABA number — deleting it would re-consent the buyer on our behalf. It grows with distinct humans who said STOP, not with traffic. The consequence: reads must stay indexed + bounded (see the `adminListVendors` fix below), never "small enough to `.collect()`". |
@@ -58,16 +59,17 @@ by construction, not by luck.
 
 ## The purge crons
 
-Three daily jobs in [`convex/crons.ts`](../convex/crons.ts) (04:05 / 04:15 /
-04:25 UTC, beside the existing housekeeping block):
+Four daily jobs in [`convex/crons.ts`](../convex/crons.ts) (04:05 / 04:15 /
+04:20 / 04:25 UTC, beside the existing housekeeping block):
 
 | Cron | Mutation |
 | --- | --- |
 | `purge expired outbound message log` | `wabaProtection.purgeExpiredOutboundLog` |
 | `purge expired waba health history` | `wabaProtection.purgeExpiredWabaHealth` |
+| `purge expired waba template events` | `wabaProtection.purgeExpiredWabaTemplateEvents` |
 | `purge expired admin audit log` | `admin.purgeExpiredAdminAudit` |
 
-All three are paginated, self-chaining `internalMutation`s — the
+All four are paginated, self-chaining `internalMutation`s — the
 `counterCheckout.purgeStaleSessions` / `migrations.ts` house pattern: delete up
 to `LOG_PURGE_PAGE_SIZE` (100) rows per transaction, then
 `ctx.scheduler.runAfter(0, …)` to continue, so a first run against a years-old

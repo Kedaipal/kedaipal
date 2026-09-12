@@ -7,6 +7,7 @@ import {
 	Ban,
 	CircleCheck,
 	Copy,
+	FileText,
 	type LucideIcon,
 	Pause,
 	Play,
@@ -20,7 +21,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import type { AdminOptOutRow } from "../../convex/wabaProtection";
+import type {
+	AdminOptOutRow,
+	AdminTemplateRow,
+} from "../../convex/wabaProtection";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import {
@@ -134,6 +138,8 @@ function AdminWabaContent() {
 			</section>
 
 			<HealthBanner />
+
+			<TemplatesPanel />
 
 			<div className="relative">
 				<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -450,6 +456,208 @@ function OptOutRegister() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Per-template state (z8r3fddtkh). Meta can pause, disable or re-categorise
+ * an approved template AFTER approval; a category flip out of UTILITY is a
+ * ~6× per-send price jump from 1 Oct 2026 with an appeal window. Before this
+ * panel the first sign was the Meta invoice. Every template this deployment
+ * is configured to send is listed — including ones whose env var is unset,
+ * so a silent send path is visible as "not configured" rather than absent.
+ */
+type LanguageState = AdminTemplateRow["languages"][number];
+
+type Tone = "ok" | "warn" | "bad" | "muted";
+
+const TONE_CLASS: Record<Tone, string> = {
+	ok: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
+	warn: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
+	bad: "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300",
+	muted: "bg-muted text-muted-foreground",
+};
+
+const BAD_STATUS = new Set([
+	"PAUSED",
+	"DISABLED",
+	"REJECTED",
+	"PENDING_DELETION",
+	"FLAGGED",
+]);
+const LOW_RATE = new Set(["UTILITY", "AUTHENTICATION", "SERVICE"]);
+
+function statusTone(status: string | undefined): Tone {
+	if (!status) return "muted";
+	if (status === "APPROVED") return "ok";
+	if (BAD_STATUS.has(status)) return "bad";
+	return "warn"; // PENDING, IN_APPEAL, …
+}
+function categoryTone(category: string | undefined): Tone {
+	if (!category) return "muted";
+	return LOW_RATE.has(category) ? "ok" : "bad";
+}
+function qualityTone(quality: string | undefined): Tone {
+	if (!quality) return "muted";
+	if (quality === "GREEN") return "ok";
+	if (quality === "RED") return "bad";
+	if (quality === "YELLOW") return "warn";
+	return "muted";
+}
+
+/** "status · category · quality" chips for one language of one template. */
+function LanguageChips({ lang }: { lang: LanguageState }) {
+	const chips: Array<{ label: string; value: string; tone: Tone }> = [
+		{
+			label: "status",
+			value: lang.status ?? "no update yet",
+			tone: statusTone(lang.status),
+		},
+		{
+			label: "billed as",
+			value: lang.category ?? "unknown",
+			tone: categoryTone(lang.category),
+		},
+		{
+			label: "quality",
+			value: lang.quality ?? "unknown",
+			tone: qualityTone(lang.quality),
+		},
+	];
+	return (
+		// Two columns, not a flex row: on a phone the third chip wraps, and it
+		// must wrap UNDER its language, not into the language column.
+		<div className="grid grid-cols-[1.5rem_1fr] items-start gap-x-1.5">
+			<span className="pt-0.5 font-mono text-xs uppercase text-muted-foreground">
+				{lang.language}
+			</span>
+			<div className="flex flex-wrap items-center gap-1.5">
+				{chips.map((c) => (
+					<span
+						key={c.label}
+						title={`${c.label}: ${c.value}`}
+						className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs ${TONE_CLASS[c.tone]}`}
+					>
+						<span className="opacity-70">{c.label}</span>
+						<span className="font-medium">{c.value}</span>
+					</span>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function TemplatesPanel() {
+	const data = useQuery(
+		convexQuery(api.wabaProtection.adminListTemplates, {}),
+	).data;
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-start gap-3">
+				<FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+				<div>
+					<h3 className="font-semibold">Message templates</h3>
+					<p className="text-sm text-muted-foreground">
+						Meta can pause, disable or re-categorise an approved template at any
+						time. A template billed outside <b>UTILITY</b> costs ~6× per send
+						from 1 Oct 2026 and can be appealed for a short window — ops is
+						emailed the moment Meta tells us. This is the live state per
+						template and language.
+					</p>
+				</div>
+			</div>
+
+			{data === undefined ? (
+				<Skeleton className="h-24 w-full" />
+			) : (
+				<>
+					{data.neverReceived ? (
+						<p className="rounded-xl border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+							<span className="font-medium text-foreground">
+								No template updates received yet.
+							</span>{" "}
+							Subscribe <code>message_template_status_update</code>,{" "}
+							<code>template_category_update</code> and{" "}
+							<code>message_template_quality_update</code> under the app's
+							WhatsApp webhook fields in the Meta App dashboard. Until then the
+							states below stay “no update yet”.
+						</p>
+					) : null}
+					<ul className="flex flex-col divide-y divide-border">
+						{data.rows.map((row) => (
+							<li
+								key={row.envVar ?? row.templateName}
+								className="flex flex-col gap-1.5 py-2.5"
+							>
+								<div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+									{row.templateName ? (
+										<span className="font-mono text-sm">
+											{row.templateName}
+										</span>
+									) : (
+										<span className="text-sm text-muted-foreground">
+											Not configured on this deployment
+										</span>
+									)}
+									{row.purpose ? (
+										<span className="text-xs text-muted-foreground">
+											{row.purpose}
+										</span>
+									) : (
+										<span className="text-xs text-muted-foreground">
+											Reported by Meta — not in this deployment's config
+										</span>
+									)}
+									{row.envVar ? (
+										<code className="text-[11px] text-muted-foreground">
+											{row.envVar}
+										</code>
+									) : null}
+								</div>
+								{row.languages.map((lang) => (
+									<LanguageChips key={lang.language} lang={lang} />
+								))}
+							</li>
+						))}
+					</ul>
+					{data.recent.length > 0 ? (
+						<details className="text-xs">
+							<summary className="cursor-pointer text-muted-foreground">
+								Recent updates from Meta ({data.recent.length})
+							</summary>
+							<ul className="mt-2 flex flex-col gap-1">
+								{data.recent.map((ev) => (
+									<li
+										key={ev._id}
+										className="flex flex-wrap items-baseline gap-x-2"
+									>
+										<span className="tabular-nums text-muted-foreground">
+											{new Date(ev.observedAt).toLocaleString("en-MY")}
+										</span>
+										<span className="font-mono">{ev.templateName}</span>
+										<span className="uppercase text-muted-foreground">
+											{ev.language}
+										</span>
+										<span
+											className={
+												ev.alerted ? "text-red-700 dark:text-red-300" : ""
+											}
+										>
+											{ev.summary}
+										</span>
+										{ev.alerted ? (
+											<span className="text-muted-foreground">
+												· ops emailed
+											</span>
+										) : null}
+									</li>
+								))}
+							</ul>
+						</details>
+					) : null}
+				</>
+			)}
+		</section>
 	);
 }
 

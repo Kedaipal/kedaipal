@@ -200,9 +200,42 @@ updates emit nothing.
 
 **⚠️ Subscribe these fields in the Meta App dashboard** (App → WhatsApp →
 Configuration → Webhook fields) — it's a dashboard toggle, **not** code:
-`phone_number_quality_update`, `account_update`, and `message_template_status_update`
-(the last is for the templates ticket; we log-and-ignore it here). The repo
-previously relied only on the `messages` field.
+`phone_number_quality_update`, `account_update`, and the three template fields
+below. The repo previously relied only on the `messages` field.
+
+## Template lifecycle webhooks (ClickUp `z8r3fddtkh`)
+
+We run six Meta-approved utility templates (buyer confirm push, payment
+reminder, claim link, three seller alerts — the registry is
+`configuredTemplates()` in `convex/lib/whatsapp.ts`). Meta can change any of
+them **after** approval, and from 1 Oct 2026 the category is the only thing
+that sets the per-send price (utility RM 0.0564 vs marketing RM 0.3467 — 6.1×).
+Before this, the handler explicitly ignored template events; the first sign of
+a recategorised template would have been the invoice.
+
+Parsed in `convex/lib/wabaTemplateWebhook.ts` (pure, no Convex imports) from
+the same webhook, keyed by `field`:
+
+| Field | What it says | Pages ops when |
+| --- | --- | --- |
+| `message_template_status_update` | `APPROVED` / `REJECTED` / `PAUSED` / `DISABLED` / `PENDING_DELETION` / … | REJECTED, PAUSED, DISABLED, PENDING_DELETION, FLAGGED — every send naming the template now fails outright |
+| `template_category_update` | `previous_category` → `new_category` | the template **leaves** UTILITY / AUTHENTICATION / SERVICE (the 6.1× case; an appeal window opens). Winning an appeal back is recorded, not alerted |
+| `message_template_quality_update` | `GREEN` / `YELLOW` / `RED` | YELLOW or RED — Meta's warning before it pauses |
+
+Every event is persisted to **`wabaTemplateEvents`** (`recordTemplateEvent`);
+alerting ones schedule `sendWabaTemplateAlert` → email to `ADMIN_ALERT_EMAIL`
+(fallback `EMAIL_FROM`) naming the template, the change and the fix
+(appeal / re-submit / review copy). The admin console
+(`/app/admin/waba` → **Message templates**, `adminListTemplates`) shows each
+configured template per language with its newest **status · billed-as ·
+quality**, lists env vars that are *unset* as "not configured" so a silent
+send path is visible, surfaces templates Meta mentions that we don't
+configure, and keeps the last 20 raw events under a disclosure. Its empty
+state says which three fields to subscribe.
+
+**Retention:** 90 days, but the newest row per (template, language) is always
+kept — Meta posts only on change, so a healthy template may go a year between
+events (`purgeExpiredWabaTemplateEvents`, 04:20 UTC daily).
 
 ## Alerts
 
@@ -234,20 +267,23 @@ npx convex run wabaProtection:listRecentOutbound '{"retailerId":"<id>"}'
 ## Schema (`convex/schema.ts`)
 
 `optOuts` (global, by_phone + by_created) · `wabaHealth` (history, by_observed) ·
+`wabaTemplateEvents` (per-template history, by_observed + by_template) ·
 `retailerSendingLimits` (kill switch + cap overrides, by_retailer) ·
 `outboundMessageLog` (audit, by_retailer_sent + by_phone_sent + by_sent) ·
 `messageLogRollups` (permanent monthly cost-ledger aggregates).
 
-**Retention:** `outboundMessageLog` and `wabaHealth` are purged on a 90-day
-window (the outbound log rolls up into `messageLogRollups` first; the newest
-health row is always kept); `optOuts` is **never** purged — see
+**Retention:** `outboundMessageLog`, `wabaHealth` and `wabaTemplateEvents` are
+purged on a 90-day window (the outbound log rolls up into `messageLogRollups`
+first; the newest health row, and the newest row per template, are always
+kept); `optOuts` is **never** purged — see
 [`docs/data-retention.md`](./data-retention.md) for the full policy table.
 
 ## Env vars
 
 | Var | Required | Purpose |
 | --- | --- | --- |
-| `ADMIN_ALERT_EMAIL` | no | health-alert recipient (falls back to `EMAIL_FROM`) |
+| `ADMIN_ALERT_EMAIL` | no | health-alert + template-alert recipient (falls back to `EMAIL_FROM`) |
+| `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` | no | the seller's manual payment reminder as a utility template (unset ⇒ free-form, best-effort) — see [`payment-reminder.md`](./payment-reminder.md) |
 
 (`WHATSAPP_*` send creds are unchanged from the existing send path.)
 
@@ -255,6 +291,9 @@ health row is always kept); `optOuts` is **never** purged — see
 
 - `convex/lib/wabaLimits.test.ts` — caps ramp/tiers, category policy, opt-out keywords.
 - `convex/lib/wabaWebhook.test.ts` — health-event mapping.
+- `convex/lib/wabaTemplateWebhook.test.ts` — template status/category/quality
+  parsing + the alert truth table; `convex/wabaTemplateEvents.test.ts` — signed
+  webhook → row → ops email, the admin per-template view, keep-the-newest purge.
 - `convex/wabaProtection.test.ts` — category gating (transactional always sends;
   session blocked on pause/opt-out/quality/cap), opt-out lifecycle, health history,
   and end-to-end (paused transactional still sends; opted-out session suppressed

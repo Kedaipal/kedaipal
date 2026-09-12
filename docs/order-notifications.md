@@ -72,6 +72,13 @@ decoupled from Meta template review.
 | `WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE` | `seller_payment_claim_utility` | buyer name, shortId, total | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 | `WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE` | `seller_payment_received_utility` | buyer name, shortId, total, **gateway name** | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 
+The buyer-facing templates live beside these: `WHATSAPP_ORDER_CONFIRM_TEMPLATE`
+([`one-message-per-order.md`](./one-message-per-order.md)),
+`WHATSAPP_PAYMENT_REMINDER_TEMPLATE` ([`payment-reminder.md`](./payment-reminder.md))
+and `WHATSAPP_CLAIM_LINK_TEMPLATE` ([`claim-links.md`](./claim-links.md)). All
+six are watched for post-approval pauses and category flips — see the template
+webhook section of [`waba-protection.md`](./waba-protection.md).
+
 The received template's body must say the payment is **settled and needs no
 action**, and must name the gateway through a **variable**:
 

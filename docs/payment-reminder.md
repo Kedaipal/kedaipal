@@ -49,17 +49,46 @@ week's end; PR feedback on `86ey570am`).
   button and every window state; Settings → Payments names the behaviour so
   it's discoverable before day 11 ever arrives.
 
-## Deliverability caveat (and the plan for it)
+## Deliverability — the utility template (ClickUp `z8r3fddtkh`)
 
-The reminder is a free-form **`session_message`** (gated: kill switch,
-per-seller caps and opt-outs all apply — an unsolicited nudge days after the
-last conversation is exactly the traffic WABA protection exists to govern).
-By day 11 the buyer's 24h service window is almost always closed, so **Meta
-may silently not deliver it** (error 131047) unless the buyer has messaged
-recently. The button's helper copy says this to the seller outright and points
-at the always-works direct-chat button. Moving this send onto a registered
-utility template — which delivers regardless of the window — is part of the
-remaining `86eyd63r8` template work.
+By day 11 the buyer's 24h service window is almost always closed, and a
+free-form message outside it is **silently not delivered** (Meta 131047). A
+registered template is the one message shape Meta delivers with no open
+window, so the reminder now has two wire shapes behind one policy:
+
+| `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` | Sent as | Gateway category | Delivers when the window is closed? |
+| --- | --- | --- | --- |
+| set (`payment_reminder_utility`) | the Meta-approved utility template | `utility_template` | **yes** |
+| unset | the legacy free-form payment message (intro → transfer ref → "Make payment" CTA) | `session_message` | no — best effort |
+
+Both are gated (kill switch, per-seller caps, opt-outs — an unsolicited nudge
+days after the last conversation is exactly the traffic WABA protection exists
+to govern), both are best-effort (a Meta rejection is logged, never thrown at
+the seller, and the 24h cooldown stamp stands either way — tapping again on a
+number Meta refuses helps nobody). `orders.get` exposes
+`paymentReminderViaTemplate` on the **seller** path only, and the button's
+helper copy reads from it: with the template it says the reminder "lands even
+if the buyer has never replied"; without it, it keeps the old caveat and points
+at the always-works direct-chat button.
+
+**Template registration (Meta, EN + BM).** Body params are the confirm
+template's three — `{{1}}` order id, `{{2}}` store name (through
+`templateParam`), `{{3}}` amount as `MYR 120.00` — and the URL button base is
+`https://kedaipal.com/track/{{1}}` ← the tracking **token** (added via Meta's
+*Add variable* control, never hand-typed braces). Proposed body, strictly
+transactional (a promotional word is how a template gets re-categorised to
+marketing at 6.1× the price — see the template-webhook section of
+[`waba-protection.md`](./waba-protection.md)):
+
+> EN — *A reminder from {{2}}: order {{1}} is still awaiting payment ({{3}}).
+> Use the order number as your transfer reference. Tap below for how to pay and
+> to confirm once you have.*
+>
+> BM — *Peringatan daripada {{2}}: pesanan {{1}} masih menunggu pembayaran
+> ({{3}}). Gunakan nombor pesanan sebagai rujukan pindahan. Tekan di bawah
+> untuk cara membayar dan sahkan setelah selesai.*
+>
+> Button: **How to pay** / **Cara bayar** → `https://kedaipal.com/track/{{1}}`
 
 ## Tests
 
@@ -67,7 +96,10 @@ remaining `86eyd63r8` template work.
 including the cooldown-outlives-the-window edge) and
 `convex/manualPaymentReminder.test.ts` (end-to-end: day-5 refusal, day-12
 send + stamp, same-day second tap refused, day-20 permanent close, paid/foreign
--owner refusals, and a pin that nothing ever *schedules* a reminder).
+-owner refusals, a pin that nothing ever *schedules* a reminder, and the
+template path — env set ⇒ a `template` payload with the three body params and
+the tracking token on the button, logged as `utility_template`; the seller
+payload flag; a Meta rejection stays best-effort).
 
 ## History
 

@@ -14,6 +14,7 @@ import {
 import {
 	claimLinkTemplateName,
 	orderConfirmTemplateName,
+	paymentReminderTemplateName,
 	templateParam,
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
@@ -799,12 +800,17 @@ export const getManualReminderContext = internalQuery({
  * this is ever invoked). Re-sends the full payment message — reminder intro →
  * amount + transfer ref → "Make payment" CTA to the order page.
  *
- * Sent as a gated `session_message` (kill switch / caps / opt-outs apply) and
- * best-effort: by day 11 the buyer's 24h service window is almost always
- * closed, so a free-form send can silently not deliver (Meta 131047) unless
- * the buyer has messaged recently. The button's helper copy says so — and
- * moving this onto a registered utility template is part of the remaining
- * 86eyd63r8 template work, which fixes the deliverability for good.
+ * Two wire shapes, one policy (z8r3fddtkh):
+ *  - `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` set ⇒ the Meta-approved utility
+ *    template (`utility_template` category — kill switch / caps / opt-outs
+ *    apply). Templates are the ONE message shape Meta delivers with no open
+ *    service window, so by day 11 this is the only version that reliably
+ *    lands. Body {{1}} shortId, {{2}} store, {{3}} amount; button ← tracking
+ *    token.
+ *  - unset ⇒ the legacy free-form `session_message` (same gating), best
+ *    effort: the buyer's 24h window is almost always closed by day 11, so it
+ *    can silently not deliver (Meta 131047). The button's helper copy says
+ *    which shape this deployment is on (`orders.get` → paymentReminderViaTemplate).
  */
 export const notifyManualPaymentReminder = internalAction({
 	args: { orderId: v.id("orders") },
@@ -833,6 +839,44 @@ export const notifyManualPaymentReminder = internalAction({
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const templateName = paymentReminderTemplateName();
+		if (templateName) {
+			const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+			try {
+				const receipt = await wa.send(meta.customerWaPhone, {
+					kind: "template",
+					templateName,
+					languageCode: TEMPLATE_LANGUAGE[locale],
+					bodyParams: [
+						meta.shortId,
+						// Seller-authored free text rides templateParam (a tab in a
+						// store name is a terminal 132007 rejection otherwise).
+						templateParam(meta.storeName, "the store"),
+						`${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+					],
+					// Approved button URL is https://kedaipal.com/track/{{1}} — Meta
+					// appends ONLY this suffix (the tracking token, not the shortId).
+					urlButtonParam: trackingToken,
+				});
+				if (receipt?.blocked) {
+					// The gateway logged why (opt-out / cap / pause). The seller's
+					// cooldown stamp stands — a blocked buyer isn't reachable by
+					// tapping again either.
+					console.warn("WA payment reminder blocked by gateway", {
+						shortId: meta.shortId,
+						blocked: receipt.blocked,
+					});
+				}
+			} catch (err) {
+				// Best-effort like the free-form path: the tap already stamped the
+				// cooldown, and a template Meta rejects will be rejected again.
+				console.error("WA payment reminder template send failed", {
+					shortId: meta.shortId,
+					err,
+				});
+			}
+			return;
+		}
 		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
 			shortId: meta.shortId,
 			storeName: meta.storeName,
