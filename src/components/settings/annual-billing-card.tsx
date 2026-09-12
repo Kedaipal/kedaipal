@@ -228,13 +228,20 @@ export function AnnualBillingCard({
 			</div>
 
 			{/* Above the CTA, never below it and never as fine print: a seller who
-			    has to hunt for "what if I want out" assumes the answer is bad. There
-			    is no proration machinery in the codebase, so this promises only what
-			    a human can honour by hand at the next issue. */}
+			    has to hunt for "what if I want out" assumes the answer is bad. Every
+			    clause here is machinery that actually exists (86eyb6z4r): moving up
+			    a tier credits the unused remainder as extra days
+			    (planChangeCarryoverDays, applied at settle), and moving down is
+			    scheduled for the end of the paid term (pendingPlanChange), so the
+			    months already bought are kept rather than refunded. The previous
+			    wording promised a cash-equivalent credit that nothing computed and
+			    that Arif had no way to issue by hand. */}
 			<p className="text-[11px] leading-relaxed text-muted-foreground">
 				One invoice, paid the same way as your monthly one. A year already paid
-				isn't refunded in cash — if you change plan or stop part-way, the months
-				you haven't used are credited to your new plan or your next invoice.
+				isn't refunded in cash. Move up a plan and we only charge the new
+				price — the time you'd already paid for carries over as extra days.
+				Move down and the change waits until your year is up, so you keep what
+				you've paid for until then.
 			</p>
 
 			{/* Emphasis ladder: full primary only when nothing competes. Whenever an

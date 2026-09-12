@@ -459,19 +459,23 @@ export const getAutoRenewEmailContext = internalQuery({
 			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
 				? lastPaid.currency
 				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		// A scheduled downgrade lands WITH the next renewal, so the heads-up must
+		// quote the plan and price the seller is actually about to be charged —
+		// not the tier they are on their way out of.
+		const renewingPlan = sub.pendingPlanChange?.plan ?? sub.plan;
 		const founding = foundingPricingApplies({
-			plan: sub.plan,
+			plan: renewingPlan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
 		});
-		const amount = planPrice(sub.plan, sub.billingCycle, founding, currency);
+		const amount = planPrice(renewingPlan, sub.billingCycle, founding, currency);
 		return {
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
-			planLabel: planLabel(sub.plan, sub.billingCycle),
+			planLabel: planLabel(renewingPlan, sub.billingCycle),
 			amountFormatted: formatMoney(amount, currency),
 			payNowUrl: pending?.gatewayPayment?.url,
 		};

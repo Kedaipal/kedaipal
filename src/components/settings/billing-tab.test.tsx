@@ -236,6 +236,29 @@ describe("BillingTab pending invoice — how to pay", () => {
 		expect(screen.getByText("How to pay")).toBeTruthy();
 	});
 
+	it("returning from HitPay holds the pay rails on a spinner — no double-pay window", () => {
+		// Landing back with ?paid=return (or ?autorenew=return): the settle is a
+		// beat behind the page load, and quick hands could pay the still-pending
+		// invoice a second time. The section shows "Confirming…" instead.
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					...pendingInvoice("MYR"),
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_1",
+					},
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} billingReturn="paid" />);
+		expect(screen.getByText("Confirming your payment…")).toBeTruthy();
+		expect(screen.queryByText("Pay online now")).toBeNull();
+		expect(screen.queryByText("How to pay")).toBeNull();
+	});
+
 	it("no gateway link → no Pay-now button, manual flow byte-identical", () => {
 		mockQueries({ isAdmin: false, invoices: [pendingInvoice("MYR")] });
 		render(<BillingTab retailer={retailer()} />);
@@ -295,7 +318,11 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
 		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
-		expect(screen.getByText(/Get my .* invoice/)).toBeTruthy();
+		expect(screen.getByText(/Subscribe to Pro/)).toBeTruthy();
+		// ONE door (Zaki, 11 Sep): no explicit get-an-invoice path — an abandoned
+		// authorisation still lands back on a pending invoice with Pay-now +
+		// bank details, so the manual rail survives implicitly.
+		expect(screen.queryByText(/Get an invoice instead/)).toBeNull();
 		expect(
 			screen.queryByText(/Message us on WhatsApp and we'll send your invoice/),
 		).toBeNull();
@@ -309,13 +336,32 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		expect(
 			screen.getByText(/Message us on WhatsApp and we'll send your invoice/),
 		).toBeTruthy();
-		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 	});
 
-	it("gateway ON → the auto-renewal card offers the one-time setup", () => {
+	it("pre-subscription the auto-renewal card is HIDDEN — the picker is the one door", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("an ACTIVE manual subscriber gets the opt-in auto-renewal card", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
 		expect(screen.getByText("Auto-renewal")).toBeTruthy();
 		expect(screen.getByText("Turn on auto-renewal")).toBeTruthy();
 		// The trust line: Kedaipal never touches the card details.
@@ -344,9 +390,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 				} as unknown as Partial<Retailer>)}
 			/>,
 		);
-		expect(
-			screen.getByText(/couldn't charge your Visa ·· 4242/),
-		).toBeTruthy();
+		expect(screen.getByText(/couldn't charge your Visa ·· 4242/)).toBeTruthy();
 		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
 	});
 
@@ -367,7 +411,96 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 			/>,
 		);
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
-		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+	});
+});
+
+/**
+ * WHO gets offered a tier change (86eyb6z4r). The card's own copy is covered in
+ * plan-change-card.test.tsx; this pins the gate, which has to agree with the
+ * server guards on `invoices.changePlan` exactly — an offered control that the
+ * server would refuse is a wrong-but-enabled button.
+ */
+describe("BillingTab plan change gating (86eyb6z4r)", () => {
+	const seller = (over: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				currentPeriodEnd: Date.now() + 12 * 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+				...over,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("an ACTIVE paying seller is offered the other tier", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.getByText("Change your plan")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Move down to Starter/ }),
+		).toBeTruthy();
+	});
+
+	it("hides while TRIALING — choosing a plan is the picker's job", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={seller({
+					status: "trialing",
+					trialEndsAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				})}
+			/>,
+		);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides while PAST DUE — the server refuses, so nothing is offered", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller({ status: "past_due" })} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides from comped accounts and from an admin on their own store", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller({ comped: true })} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+		cleanup();
+
+		mockQueries({ isAdmin: true, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides when the gateway is off — there is no way to pay the upgrade", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("names the open invoice that is holding an upgrade back", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_open",
+					status: "pending",
+					invoiceNumber: "INV-202609-AB12",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={seller({ plan: "starter" })} />);
+		const up = screen.getByRole("button", { name: /Move up to Pro/ });
+		expect((up as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(/Moving up waits until invoice/)).toBeTruthy();
 	});
 });
 

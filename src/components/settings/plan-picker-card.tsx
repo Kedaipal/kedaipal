@@ -1,6 +1,6 @@
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { Check } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import {
@@ -8,6 +8,7 @@ import {
 	type BillingCurrency,
 	planPrice,
 } from "../../../convex/lib/plans";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 
@@ -28,10 +29,11 @@ const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
 /**
  * Settings → Billing: self-serve plan picker (86eyb6z4r) — replaces the
  * "message us on WhatsApp and we'll send your invoice" card when the payment
- * gateway is configured. Pick a plan + cycle → your invoice appears with a
- * Pay-now button → paying activates the plan, nobody at Kedaipal in the
- * loop. Founding-intent stores see their promised discounted Pro price
- * (applied server-side too). Annual leads with its real hook: 2 months free.
+ * gateway is configured. ONE door (Zaki, 11 Sep): pick a plan + cycle →
+ * invoice created → straight to HitPay's authorisation page → attach charges
+ * the bill and the plan renews itself from then on. Nobody at Kedaipal in
+ * the loop. Founding pricing is server-resolved; annual leads with its real
+ * hook: 2 months free.
  */
 export function PlanPickerCard({
 	sub,
@@ -39,6 +41,7 @@ export function PlanPickerCard({
 	renewing,
 	foundingPricing,
 	foundingPricingLapsed,
+	onRedirectingChange,
 }: {
 	sub: SubscriptionView;
 	currency: BillingCurrency;
@@ -51,8 +54,14 @@ export function PlanPickerCard({
 	/** Founding-shaped store whose 3-month lapse window passed — explain why
 	 * the price reads standard instead of leaving them to wonder. */
 	foundingPricingLapsed: boolean;
+	/** Signals the tab that a HitPay redirect is in flight, so the freshly
+	 * created invoice's card shows a spinner instead of the manual rails. */
+	onRedirectingChange?: (redirecting: boolean) => void;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
+	const startAutoRenewSetup = useAction(
+		api.subscriptionPayments.startAutoRenewSetup,
+	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
 	const [plan, setPlan] = useState<PickablePlan>(
@@ -60,23 +69,54 @@ export function PlanPickerCard({
 	);
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const [busy, setBusy] = useState(false);
+	// Back from HitPay: re-arm Subscribe instead of leaving it disabled on
+	// "Opening secure payment…" forever (bfcache keeps this state alive).
+	useResetOnBfcache(
+		useCallback(() => {
+			setBusy(false);
+			onRedirectingChange?.(false);
+		}, [onRedirectingChange]),
+	);
 
 	const founding = foundingPricing;
 
-	const submit = async () => {
+	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
+	// like every mainstream subscription: invoice created, then straight to
+	// HitPay's authorisation page; attaching the method charges the bill and
+	// future renewals charge themselves.
+	const subscribeAuto = async () => {
 		setBusy(true);
+		onRedirectingChange?.(true);
 		try {
-			await subscribeSelf({ plan, billingCycle: cycle });
-			toast.success("Invoice created", {
-				description:
-					"Pay it below — your plan activates the moment payment lands.",
+			const { chargingSavedMethod } = await subscribeSelf({
+				plan,
+				billingCycle: cycle,
 			});
+			if (chargingSavedMethod) {
+				// Already has a saved method — the server is charging it now, and
+				// startAutoRenewSetup would only refuse with "already on".
+				toast.success("Charging your saved payment method…", {
+					description: "Your plan activates the moment it goes through.",
+				});
+				setBusy(false);
+				onRedirectingChange?.(false);
+				return;
+			}
+			const { url } = await startAutoRenewSetup({});
+			window.location.assign(url);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
-		} finally {
 			setBusy(false);
+			// Unwind the tab's spinner — the invoice (when created before the
+			// failure) shows its normal payment options as the fallback.
+			onRedirectingChange?.(false);
 		}
 	};
+
+	// No explicit "get an invoice instead" path (Zaki, 11 Sep): ONE door. The
+	// manual rail still exists implicitly — subscribing creates the invoice
+	// before the redirect, so a seller who abandons HitPay's page comes back to
+	// a pending invoice with the Pay-now button AND the bank/DuitNow details.
 
 	const priceLine = (p: PickablePlan) => {
 		const foundingApplies = founding && p === "pro";
@@ -94,7 +134,7 @@ export function PlanPickerCard({
 					{renewing ? "Renew your subscription" : "Ready to choose a plan?"}
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Pick a plan to get your invoice — pay it online and your plan
+					Pick a plan — you'll pay on HitPay's secure page and your plan
 					activates straight away.
 				</p>
 				{foundingPricingLapsed ? (
@@ -183,20 +223,29 @@ export function PlanPickerCard({
 				})}
 			</div>
 
-			<button
-				type="button"
-				onClick={submit}
-				disabled={busy}
-				className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
-			>
-				{busy
-					? "Creating your invoice…"
-					: `Get my ${PLAN_PITCH[plan].name} invoice`}
-			</button>
-			<p className="text-[11px] text-muted-foreground">
-				Your plan activates once payment lands. Changing plan later or paying
-				by bank transfer? Both still work — just message us.
-			</p>
+			<div className="flex flex-col gap-2">
+				<button
+					type="button"
+					onClick={subscribeAuto}
+					disabled={busy}
+					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
+				>
+					{busy
+						? "Opening secure payment…"
+						: `Subscribe to ${PLAN_PITCH[plan].name}`}
+				</button>
+				<p className="text-[11px] text-muted-foreground">
+					You'll authorise a card or Touch 'n Go once on HitPay's secure page
+					and be charged{" "}
+					{formatPrice(
+						planPrice(plan, cycle, founding && plan === "pro", currency),
+						currency,
+					)}{" "}
+					now — then it renews automatically each{" "}
+					{cycle === "annual" ? "year" : "month"}. Turn it off any time;
+					Kedaipal never sees your card or wallet details.
+				</p>
+			</div>
 		</section>
 	);
 }

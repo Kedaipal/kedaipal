@@ -27,9 +27,12 @@ import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	type BillingCycle,
+	DEFAULT_BILLING_CURRENCY,
 	foundingPricingApplies,
 	isPlanSelectable,
+	isPlanUpgrade,
 	type Plan,
+	planChangeCarryoverDays,
 	planPrice,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -106,12 +109,47 @@ async function settleInvoicePaid(
 	const billedPlan = (invoice.plan ?? sub.plan) as Plan;
 	const billedCycle = invoice.billingCycle ?? sub.billingCycle;
 	const caps = defaultCapsForPlan(billedPlan);
+	// CREDIT AS DAYS: a seller never loses time they already paid for. Whatever
+	// is left of a still-running paid period is converted into days of the plan
+	// they're now on and added to the new period — an upgrade mid-cycle, an
+	// early renewal, or an admin-issued change all preserve their remainder.
+	// Computed HERE, at settle, from the days genuinely unused at the moment the
+	// money lands: priced at issue instead, a manual-rail seller paying twelve
+	// days later would be credited days that had already elapsed.
+	const retailerForCarryover = await ctx.db.get(invoice.retailerId);
+	const carryover = planChangeCarryoverDays({
+		fromPlan: sub.plan,
+		fromCycle: sub.billingCycle,
+		toPlan: billedPlan,
+		toCycle: billedCycle,
+		founding: foundingPricingApplies({
+			plan: sub.plan,
+			isFoundingMember: retailerForCarryover?.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now,
+		}),
+		currency:
+			invoice.currency === "SGD" || invoice.currency === "MYR"
+				? invoice.currency
+				: DEFAULT_BILLING_CURRENCY,
+		periodEnd: sub.status === "active" ? sub.currentPeriodEnd : undefined,
+		now,
+	});
+	if (carryover > 0) {
+		console.info("[billing] carried unused paid days onto the new period", {
+			retailerId: invoice.retailerId,
+			fromPlan: sub.plan,
+			toPlan: billedPlan,
+			carryoverDays: carryover,
+		});
+	}
 	await ctx.db.patch(sub._id, {
 		plan: billedPlan,
 		billingCycle: billedCycle,
 		status: "active",
 		currentPeriodStart: now,
-		currentPeriodEnd: nextPeriodEnd(billedCycle, now),
+		currentPeriodEnd: nextPeriodEnd(billedCycle, now) + carryover * DAY_MS,
 		orderCap: caps.orderCap,
 		userCap: caps.userCap,
 		broadcastQuota: caps.broadcastQuota,
@@ -345,6 +383,12 @@ export const internalSettleFromGateway = internalMutation({
 				gatewayPayment: { ...invoice.gatewayPayment, paymentId },
 			});
 		}
+		// NOTE: no Pay-now link kill here. Every settle that reaches this point
+		// already has a dead link — an auto-charge kills it when it CLAIMS the
+		// attempt (the only window where both rails could take money), and a
+		// Pay-now settle is the link completing itself. Killing again would fire
+		// a guaranteed-to-fail DELETE on the commonest path and train the eye to
+		// ignore the warn that matters. Manual markPaid/voidInvoice keep theirs.
 		// A successful AUTO-CHARGE also advances the saved-method counters —
 		// resolved via the pending-charge stamp so a Pay-now settle on a session
 		// mid-dunning doesn't inflate timesCharged. (Dunning state itself was
@@ -538,7 +582,7 @@ export const subscribeSelf = mutation({
 	handler: async (
 		ctx,
 		{ plan, billingCycle },
-	): Promise<{ invoiceId: Id<"invoices"> }> => {
+	): Promise<{ invoiceId: Id<"invoices">; chargingSavedMethod: boolean }> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new ConvexError("Not authenticated");
 		const retailer = await ctx.db
@@ -594,7 +638,182 @@ export const subscribeSelf = mutation({
 			currency,
 			origin: "self_serve",
 		});
-		return { invoiceId };
+		// A seller who still has a saved method (lapsed after a void, or came
+		// back later) never reaches the authorisation page — startAutoRenewSetup
+		// refuses with "already on". Without this their brand-new invoice would
+		// sit unpaid forever while the button that made it promised an immediate
+		// charge. Charge the saved method instead: same consent, same amount.
+		if (sub.autoRenew !== undefined) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.chargeDueRenewal,
+				{ invoiceId },
+			);
+		}
+		return { invoiceId, chargingSavedMethod: sub.autoRenew !== undefined };
+	},
+});
+
+/**
+ * Seller: change tier mid-subscription (86eyb6z4r).
+ *
+ * Two directions, deliberately asymmetric, because what is fair differs:
+ *
+ *  - UPGRADE is immediate. A normal full-price invoice for the new plan (no
+ *    special amount, no proration metadata — so it flows through every guard,
+ *    the PDF and the MRR figure untouched), and `settleInvoicePaid` converts
+ *    whatever was left of the old period into extra days on the new one. The
+ *    seller pays the sticker price and loses nothing.
+ *  - DOWNGRADE is SCHEDULED for the end of the period already paid for. No
+ *    invoice, no charge, nothing forfeited: they keep the tier they bought —
+ *    caps, features and data access — until it runs out, and the renewal the
+ *    cron issues then bills the cheaper plan.
+ *
+ * Direction is decided by tier RANK, never by price: a seller on an annual
+ * Starter (RM790) moving to a monthly Pro (RM149) is unmistakably an upgrade
+ * that a price comparison would schedule as a downgrade.
+ *
+ * Cycle changes are refused here — monthly↔annual keeps the annual offer's
+ * void-and-reissue runbook, which a human checks before any money moves.
+ */
+export const changePlan = mutation({
+	args: {
+		plan: v.union(v.literal("starter"), v.literal("pro")),
+	},
+	handler: async (
+		ctx,
+		{ plan },
+	): Promise<
+		| { kind: "scheduled"; effectiveAt: number }
+		| {
+				kind: "invoiced";
+				invoiceId: Id<"invoices">;
+				chargingSavedMethod: boolean;
+		  }
+	> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) throw new ConvexError("No store found for your account");
+		await rateLimiter.limit(ctx, "billingSelfServe", {
+			key: retailer._id,
+			throws: true,
+		});
+		if (!isPlanSelectable(plan))
+			throw new ConvexError("That plan isn't available yet.");
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
+		if (!sub) throw new ConvexError("No subscription found for your store");
+		if (sub.comped === true)
+			throw new ConvexError("Your account is on the house — nothing to change.");
+		// Only a seller mid-paid-period can "change" a plan; everyone else is
+		// choosing one, which is the plan picker's job (and starts a fresh period).
+		if (sub.status !== "active")
+			throw new ConvexError(
+				"Choose a plan from your billing page — a plan change applies to an active subscription.",
+			);
+		if (plan === sub.plan)
+			throw new ConvexError(`You're already on ${plan}.`);
+
+		if (!isPlanUpgrade(sub.plan, plan)) {
+			// Downgrade: schedule it, charge nothing, change nothing today.
+			// No `updatedAt` — for a past_due row that field IS the lock-flip
+			// moment the founder report reads (docs/shipped-log.md), and this
+			// mutation must never be the thing that moves it.
+			await ctx.db.patch(sub._id, {
+				pendingPlanChange: { plan, requestedAt: Date.now() },
+			});
+			return {
+				kind: "scheduled",
+				effectiveAt: sub.currentPeriodEnd ?? Date.now(),
+			};
+		}
+
+		// Upgrade: bill it now at the ordinary price.
+		const existingPending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
+		if (existingPending)
+			throw new ConvexError(
+				`Settle your open invoice (${existingPending.invoiceNumber}) first — then you can move up a plan.`,
+			);
+		const founding = foundingPricingApplies({
+			plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now: Date.now(),
+		});
+		const invoices = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.order("desc")
+			.collect();
+		const lastPaid = invoices.find((inv) => inv.status === "paid");
+		const currency: BillingCurrency =
+			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
+				? lastPaid.currency
+				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const invoiceId = await insertPendingInvoice(ctx, {
+			retailerId: retailer._id,
+			subscriptionId: sub._id,
+			plan,
+			// The seller's existing cycle — changing tier never silently changes
+			// how often they are billed.
+			billingCycle: sub.billingCycle,
+			founding,
+			currency,
+			origin: "self_serve",
+		});
+		// An upgrade supersedes any scheduled downgrade.
+		if (sub.pendingPlanChange !== undefined) {
+			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
+		}
+		// Same rule as subscribeSelf: a seller who already authorised a method
+		// is charged on it rather than being sent to an authorisation page that
+		// would refuse them ("already on").
+		if (sub.autoRenew !== undefined) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.chargeDueRenewal,
+				{ invoiceId },
+			);
+		}
+		return {
+			kind: "invoiced",
+			invoiceId,
+			chargingSavedMethod: sub.autoRenew !== undefined,
+		};
+	},
+});
+
+/** Seller: call off a scheduled downgrade. Always available — nothing has been
+ * charged, so nothing has to be undone. */
+export const cancelPlanChange = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ ok: true }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) throw new ConvexError("No store found for your account");
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
+		if (sub?.pendingPlanChange !== undefined) {
+			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
+		}
+		return { ok: true };
 	},
 });
 
@@ -675,8 +894,12 @@ export const internalIssueRenewalInvoice = internalMutation({
 		// Founding pricing honours the 3-month lapse window (cron renewals fire
 		// right at period end, so an ACTIVE member is virtually always inside
 		// it — the check is here for uniformity with subscribeSelf).
+		// A downgrade the seller scheduled takes effect HERE — the renewal is the
+		// first bill of the new tier. Read before pricing so the discount, the
+		// caps at settle and the amount all describe the same plan.
+		const renewingPlan = sub.pendingPlanChange?.plan ?? sub.plan;
 		const founding = foundingPricingApplies({
-			plan: sub.plan,
+			plan: renewingPlan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
@@ -696,12 +919,18 @@ export const internalIssueRenewalInvoice = internalMutation({
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: sub.retailerId,
 			subscriptionId: sub._id,
-			plan: sub.plan,
+			plan: renewingPlan,
 			billingCycle: sub.billingCycle,
 			founding,
 			currency,
 			origin: "auto_renewal",
 		});
+		// Consumed: the change is baked into a real bill now, and settle will
+		// move the subscription onto it. Leaving the flag set would re-apply the
+		// downgrade to every future renewal.
+		if (sub.pendingPlanChange !== undefined) {
+			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
+		}
 		const autoCharge = sub.autoRenew !== undefined;
 		if (autoCharge) {
 			await ctx.scheduler.runAfter(

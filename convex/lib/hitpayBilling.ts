@@ -38,7 +38,17 @@ import {
 
 export type BillingGatewayCredentials = {
 	apiKey: string;
+	/** The API-key salt (shown beside the key in the dashboard). Signs the
+	 * per-request v1 completion webhooks we attach to payment requests. */
 	salt: string;
+	/**
+	 * The signing secret of the dashboard-REGISTERED webhook endpoint, which is
+	 * a DIFFERENT secret from the API-key salt (proved on live sandbox traffic,
+	 * 11 Sep 2026: a real `method_attached` verified against neither the raw-body
+	 * nor field-concat HMAC of the API salt). Falls back to `salt` when unset, so
+	 * an account where the two happen to match needs no extra configuration.
+	 */
+	webhookSalt: string;
 	mode: HitpayMode;
 };
 
@@ -55,11 +65,18 @@ export type BillingGatewayCredentials = {
 export function resolveBillingGatewayCredentials(env: {
 	HITPAY_BILLING_API_KEY?: string;
 	HITPAY_BILLING_SALT?: string;
+	HITPAY_BILLING_WEBHOOK_SALT?: string;
 }): BillingGatewayCredentials | null {
 	const apiKey = env.HITPAY_BILLING_API_KEY?.trim();
 	const salt = env.HITPAY_BILLING_SALT?.trim();
 	if (!apiKey || !salt) return null;
-	return { apiKey, salt, mode: inferHitpayMode(apiKey) };
+	const webhookSalt = env.HITPAY_BILLING_WEBHOOK_SALT?.trim();
+	return {
+		apiKey,
+		salt,
+		webhookSalt: webhookSalt && webhookSalt.length > 0 ? webhookSalt : salt,
+		mode: inferHitpayMode(apiKey),
+	};
 }
 
 /**
@@ -100,15 +117,12 @@ export function gatewayPaymentMethodTag(methodCode: string | undefined): string 
 	return code ? `hitpay_${code}` : "hitpay";
 }
 
-/**
- * HitPay caps a save-payment-method session's charges via
- * `times_to_be_charged` (1–100, DEFAULT 1 — the default would kill the second
- * renewal). 100 is the documented max ≈ 8 years of monthly charges; when a
- * session runs out the charge fails and normal dunning walks the seller
- * through re-authorising. Verified against the API reference, re-verify in
- * sandbox (the docs are ambiguous about whether save_card mode consumes it).
- */
-export const AUTO_RENEW_TIMES_TO_BE_CHARGED = 100;
+// `times_to_be_charged` is deliberately ABSENT from the session params: the
+// API reference documents it (1–100, default 1) for plan-cycle billing, but a
+// save_payment_method session REJECTS it outright — "You cant set
+// times_to_be_charged for save_card is true" (sandbox-verified 11 Sep 2026).
+// Good news twice over: no param to send, and no charge-count ceiling on the
+// tokenised path.
 
 /**
  * Kedaipal-owned retry schedule after a failed auto-charge (HitPay's own
@@ -153,6 +167,11 @@ const PURPOSE_MAX = 255;
 export type AutoRenewSessionInputs = {
 	planLabel: string; // "Pro · Monthly" — shown on HitPay's page
 	storeName: string;
+	/** Shown under the plan name on HitPay's page. Load-bearing copy: their
+	 * page's button always reads "Pay {amount}" even in save-method mode where
+	 * the amount is display-only — this line is our only way to say whether
+	 * anything is actually charged today. */
+	description: string;
 	customerEmail: string; // REQUIRED by HitPay
 	customerName?: string;
 	/** Display-only on the authorisation page (the seller's current price);
@@ -162,7 +181,10 @@ export type AutoRenewSessionInputs = {
 	redirectUrl: string;
 	/** Our correlation handle — the subscription id. */
 	reference: string;
-	paymentMethods: string[];
+	/** Undefined = omit the param and let HitPay offer the ACCOUNT's own
+	 * tokenisable set — the fallback when our preferred list is rejected
+	 * (an account may have only TnG, or only card, enabled). */
+	paymentMethods: string[] | undefined;
 };
 
 /** Form body for POST /v1/recurring-billing with save_payment_method=true. */
@@ -174,16 +196,15 @@ export function buildAutoRenewSessionParams(
 		"name",
 		`Kedaipal ${inputs.planLabel} — ${inputs.storeName}`.slice(0, PURPOSE_MAX),
 	);
-	params.set("description", "Kedaipal subscription auto-renewal");
+	params.set("description", inputs.description);
 	params.set("save_payment_method", "true");
 	params.set("customer_email", inputs.customerEmail);
 	if (inputs.customerName) params.set("customer_name", inputs.customerName);
 	params.set("amount", senToDecimalString(inputs.amountSen));
 	params.set("currency", inputs.currency.toUpperCase());
-	for (const method of inputs.paymentMethods) {
+	for (const method of inputs.paymentMethods ?? []) {
 		params.append("payment_methods[]", method);
 	}
-	params.set("times_to_be_charged", String(AUTO_RENEW_TIMES_TO_BE_CHARGED));
 	params.set("redirect_url", inputs.redirectUrl);
 	params.set("reference", inputs.reference);
 	// HitPay's own receipts stay off — Kedaipal sends the charge receipt
@@ -308,18 +329,55 @@ function record(value: unknown): JsonRecord | null {
 }
 
 /**
- * Classify a verified V2 event payload. Field names are TOLERANT lookups —
- * HitPay's event docs are thin, so we accept the documented spellings plus
- * obvious variants, and anything unrecognised returns null (logged + acked by
- * the route, never an error). The header pair (`Hitpay-Event-Object` /
- * `Hitpay-Event-Type`) refines classification when present.
+ * The rail a seller actually authorised, read off a HitPay recurring-billing
+ * object. ONE reader for every path that sees one — the event webhook AND the
+ * session GET the redirect reconcile uses. They diverged once already: the
+ * webhook was taught the real fields while the GET still read the docs' flat
+ * `payment_method` (a key the live payload does not carry), so a Touch 'n Go
+ * seller reconciled as "card" whenever the webhook was unavailable.
  *
- * Confirmed against the docs' sample charge payload: `id`, `channel:
- * "recurrent"`, `status: "succeeded"`, `amount` (major units), `currency`,
- * `payment_provider.charge.method`. The recurring-billing id on a charge is
- * probed at `recurring_billing_id` / `recurring_plan_id` /
- * `business_recurring_plans_id` — when absent the route falls back to the
- * pending-charge correlation (see subscriptionPayments.ts).
+ * Probe order is evidence-ordered: `payment_provider_charge_method` is what
+ * live traffic carries, `default_method.*` is the same fact nested, and
+ * `payment_method` / `payment_provider.charge.method` are the documented
+ * (card) shape. Returns undefined rather than guessing — callers decide what
+ * an unknown rail means.
+ */
+export function readAttachedMethodCode(
+	billing: Record<string, unknown>,
+): string | undefined {
+	const defaultMethod = record(billing.default_method);
+	const provider = record(billing.payment_provider);
+	const charge = provider ? record(provider.charge) : null;
+	return (
+		asString(billing.payment_provider_charge_method) ??
+		asString(defaultMethod?.payment_provider_charge_method) ??
+		asString(defaultMethod?.payment_provider) ??
+		asString(billing.payment_method) ??
+		asString(charge?.method) ??
+		undefined
+	);
+}
+
+/**
+ * Classify a verified V2 event payload.
+ *
+ * CAPTURED FROM LIVE SANDBOX TRAFFIC (11 Sep 2026) — the docs' flat sample is
+ * NOT what the wire carries for recurring events. The real shape is an
+ * ENVELOPE:
+ *
+ *   { "event": "recurring_billing.method_attached",
+ *     "affected_method_id": "…",
+ *     "recurring_billing": { "id": "…", "status": "active", "cycle":
+ *       "save_card", "reference": "<our subscription id>",
+ *       "payment_provider_charge_method": "touch_n_go",
+ *       "default_method": { "payment_provider": "touch_n_go", … }, … } }
+ *
+ * So the billing object is NESTED under `recurring_billing` and the authorised
+ * rail lives in `payment_provider_charge_method` — neither of which the
+ * docs-derived reader looked at, which is why an attach used to record the
+ * default "card" instead of the real method. `event` is authoritative when
+ * present; the header pair and the older flat shape remain as fallbacks so a
+ * payload matching the published docs still parses.
  */
 export function extractRecurringEvent(
 	payload: unknown,
@@ -329,63 +387,87 @@ export function extractRecurringEvent(
 	if (!body) return null;
 	const object = headers.eventObject?.toLowerCase() ?? "";
 	const type = headers.eventType?.toLowerCase() ?? "";
+	// `event` ("recurring_billing.method_attached") is the authoritative
+	// classifier on real traffic; headers and payload shape are the fallbacks.
+	const event = asString(body.event)?.toLowerCase() ?? "";
+	// Envelope form nests the object; the flat form IS the object.
+	const nested = record(body.recurring_billing);
+	const billing = nested ?? body;
 
 	const billingId =
 		asString(body.recurring_billing_id) ??
 		asString(body.recurring_plan_id) ??
 		asString(body.business_recurring_plans_id);
 
-	// method_attached / method_detached / subscription_updated — the payload is
-	// the recurring-billing object itself (its `id` IS the billing id).
+	// method_attached / method_detached / subscription_updated.
 	const looksLikeBillingObject =
-		asString(body.cycle) !== null || body.save_card !== undefined;
-	if (object.includes("recurring") || looksLikeBillingObject) {
-		const id = asString(body.id) ?? billingId;
+		asString(billing.cycle) !== null || billing.save_card !== undefined;
+	if (
+		event.startsWith("recurring_billing") ||
+		object.includes("recurring") ||
+		looksLikeBillingObject
+	) {
+		const id = asString(billing.id) ?? billingId;
 		if (!id) return null;
-		if (type.includes("detach")) return { kind: "method_detached", billingId: id };
-		if (type.includes("attach")) {
-			const provider = record(body.payment_provider);
+		const says = (needle: string) =>
+			event.includes(needle) || type.includes(needle);
+		if (says("detach")) return { kind: "method_detached", billingId: id };
+		if (says("attach")) {
+			const provider = record(billing.payment_provider);
 			const charge = provider ? record(provider.charge) : null;
 			const details = charge ? record(charge.details) : null;
-			const methodCode =
-				asString(body.payment_method) ??
-				asString(charge?.method) ??
-				undefined;
 			const brand = details ? asString(details.brand) : null;
 			const last4 = details ? asString(details.last4) : null;
 			return {
 				kind: "method_attached",
 				billingId: id,
-				methodCode: methodCode ?? undefined,
+				methodCode: readAttachedMethodCode(billing),
 				methodLabel: brand && last4 ? `${brand} ·· ${last4}` : undefined,
 			};
 		}
-		const status = asString(body.status);
+		const status = asString(billing.status);
 		if (status) return { kind: "billing_status", billingId: id, status };
 		return null;
 	}
 
-	// charge.created — the payload is a payment. `channel: "recurrent"` is the
-	// documented marker; the object header saying "charge"/"payment" also counts.
+	// charge.created — the payload is a payment. Every V2 event captured from
+	// live traffic was enveloped, so unwrap the SAME way as the recurring
+	// branch before falling back to the docs' flat sample: `event` names the
+	// object, and the object sits under that key. Reading only the flat shape
+	// here would silently ack every real charge event (`id` is nested), which
+	// would quietly kill the corroboration rail the webhook exists for.
 	const channel = asString(body.channel);
 	if (
+		event.startsWith("charge") ||
 		channel === "recurrent" ||
 		object.includes("charge") ||
 		object.includes("payment")
 	) {
-		const paymentId = asString(body.id);
-		const status = asString(body.status);
+		const payment =
+			record(body.charge) ?? record(body.payment) ?? record(body.data) ?? body;
+		const paymentId = asString(payment.id);
+		const status = asString(payment.status);
 		if (!paymentId || !status) return null;
-		const provider = record(body.payment_provider);
+		const provider = record(payment.payment_provider);
 		const charge = provider ? record(provider.charge) : null;
+		// An enveloped charge may carry its billing object too; either spelling
+		// of the id resolves the subscription.
+		const chargeBilling = record(payment.recurring_billing);
 		return {
 			kind: "charge",
 			paymentId,
-			recurringBillingId: billingId,
+			recurringBillingId:
+				asString(payment.recurring_billing_id) ??
+				asString(payment.recurring_plan_id) ??
+				asString(chargeBilling?.id) ??
+				billingId,
 			status,
-			amountSen: amountToSen(body.amount),
-			currency: asString(body.currency)?.toUpperCase() ?? null,
-			methodCode: asString(charge?.method) ?? undefined,
+			amountSen: amountToSen(payment.amount),
+			currency: asString(payment.currency)?.toUpperCase() ?? null,
+			methodCode:
+				asString(charge?.method) ??
+				asString(payment.payment_provider_charge_method) ??
+				undefined,
 		};
 	}
 	return null;

@@ -8,15 +8,17 @@ import {
 	CreditCard,
 	ExternalLink,
 	LifeBuoy,
+	Loader2,
 	Mail,
 	MessageCircle,
 	QrCode,
 	ShieldCheck,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
@@ -37,6 +39,7 @@ import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
 import { InvoiceDownloadButton } from "./invoice-download-button";
+import { PlanChangeCard } from "./plan-change-card";
 import { PlanPickerCard } from "./plan-picker-card";
 
 type Retailer = NonNullable<
@@ -79,13 +82,41 @@ export function BillingTab({
 	// Back from the invoice's HitPay checkout: reconcile against HitPay's
 	// status API instead of trusting the redirect (lost-webhook safety net —
 	// the settle is idempotent, so racing the webhook is harmless).
-	const verifyPayment = useAction(api.subscriptionPayments.verifyInvoicePayment);
+	const verifyPayment = useAction(
+		api.subscriptionPayments.verifyInvoicePayment,
+	);
 	const verifiedReturn = useRef(false);
-	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	// True from "Subscribe" click until the HitPay redirect actually navigates
+	// — the pending-invoice card holds a spinner instead of flashing the manual
+	// rails, and the auto-renewal card stays hidden. Cleared by the picker on a
+	// failed redirect (the page navigates away on success).
+	const [redirecting, setRedirecting] = useState(false);
+	// The mirror-image window on the way BACK: landing from HitPay, the charge
+	// (auto-renew attach) or webhook (Pay-now) settles a beat later than the
+	// page loads — quick hands could pay the still-pending invoice again. Hold
+	// the pay rails on a spinner until the invoice flips (the card unmounts) or
+	// a 15s cap passes, so a DECLINED charge re-exposes the payment options
+	// instead of hiding them forever. Cleared early when the attach reconcile
+	// reports the seller abandoned setup.
+	const [confirmingReturn, setConfirmingReturn] = useState(
+		billingReturn !== undefined,
+	);
+	useEffect(() => {
+		if (!confirmingReturn) return;
+		const timer = setTimeout(() => setConfirmingReturn(false), 15_000);
+		return () => clearTimeout(timer);
+	}, [confirmingReturn]);
+	// Back from HitPay restores this page with `redirecting` still latched —
+	// every way to pay would stay hidden behind a spinner. See the hook.
+	useResetOnBfcache(
+		useCallback(() => {
+			setRedirecting(false);
+			setConfirmingReturn(false);
+		}, []),
+	);
 	useEffect(() => {
 		if (billingReturn !== "paid" || verifiedReturn.current) return;
 		verifiedReturn.current = true;
-		setConfirmingPayment(true);
 		void (async () => {
 			try {
 				const result = await verifyPayment({});
@@ -93,11 +124,16 @@ export function BillingTab({
 					toast.success("Payment received — your plan is active", {
 						description: "A receipt is on its way to your inbox.",
 					});
+				} else {
+					// The server already answered: nothing settled (abandoned
+					// checkout, or a decline). Hand the pay options straight back
+					// instead of making them wait out the cap — the timer is the
+					// fallback for "no answer", not for "answered no".
+					setConfirmingReturn(false);
 				}
 			} catch {
 				// The webhook usually settles it anyway; the invoice list is reactive.
 			} finally {
-				setConfirmingPayment(false);
 				onBillingReturnHandled?.();
 			}
 		})();
@@ -275,35 +311,38 @@ export function BillingTab({
 						</div>
 					) : null}
 
-					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
+					{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
+					    only), so the constraint is explained here rather than left as
+					    an unexplained absence — "why can't I?" is exactly the question
+					    a silent gap produces. The upgrade ACTION itself now lives in
+					    the plan-change card below (it used to hand off to Arif on
+					    WhatsApp; tier changes are self-serve since 86eyb6z4r). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
-						<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-							{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
-							    only), so the constraint is explained here rather than left as
-							    an unexplained absence — "why can't I?" is exactly the question
-							    a silent gap produces. */}
-							<p className="text-xs text-muted-foreground">
-								Want 500 orders/month, the customer database and the order
-								inbox? Move up to Pro — which can also be billed annually, with
-								two months free. We don't offer annual on Starter: you shouldn't
-								pay a year upfront before the shop has proven itself.
-							</p>
-							<a
-								href={buildWaContactLink(
-									`Hi, I'd like to upgrade from Starter to Pro for my Kedaipal store (/${retailer.slug}).`,
-									supportWa,
-								)}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-							>
-								<ExternalLink className="size-4" />
-								Upgrade to Pro
-							</a>
-						</div>
+						<p className="border-t border-border pt-4 text-xs text-muted-foreground">
+							Want 500 orders/month, the customer database and the order inbox?
+							Move up to Pro below — which can also be billed annually, with two
+							months free. We don't offer annual on Starter: you shouldn't pay a
+							year upfront before the shop has proven itself.
+						</p>
 					) : null}
 				</section>
 			)}
+
+			{/* Change tier (86eyb6z4r) — a plan decision, so it sits directly under
+			    the current-plan card and above the payment mechanics. Only an ACTIVE
+			    paid subscription can be "changed"; everyone else is CHOOSING a plan,
+			    which is the picker's job further down. */}
+			{!adminOwnAccount &&
+			!sub?.comped &&
+			sub &&
+			sub.status === "active" &&
+			gateway?.payNow ? (
+				<PlanChangeCard
+					sub={sub}
+					currency={gateway.currency}
+					openInvoiceNumber={pending?.invoiceNumber}
+				/>
+			) : null}
 
 			{/* Annual billing — a plan decision, so it sits with the plan and above
 			    the payment mechanics. Renders nothing for a seller it doesn't
@@ -350,88 +389,105 @@ export function BillingTab({
 					) : null}
 
 					<div className="border-t border-border pt-4">
-						<p className="text-sm font-medium">How to pay</p>
-						{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
-						    hosted page, auto-confirmed — the manual rails stay below. */}
-						{pending.gatewayPayment?.url ? (
-							<div className="mt-2">
-								<a
-									href={pending.gatewayPayment.url}
-									className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
-								>
-									<CreditCard className="size-4" />
-									{confirmingPayment ? "Confirming payment…" : "Pay online now"}
-								</a>
-								<p className="mt-1.5 text-xs text-muted-foreground">
-									Confirmed automatically — no need to message us after.
-								</p>
-							</div>
-						) : null}
-						{pending.currency !== "MYR" ? (
-							// Cross-border invoice (e.g. SGD): the configured MY bank/DuitNow
-							// rails can't settle it, so never show them here — mirrors the
-							// invoice PDF and email.
-							<p className="mt-2 text-sm text-muted-foreground">
-								We'll confirm payment details with you on WhatsApp — quote{" "}
-								<span className="font-mono">{pending.invoiceNumber}</span> as
-								your payment reference.
-							</p>
-						) : hasPayDetails ? (
-							<div className="mt-2 flex flex-col gap-3">
-								{instructions?.bankAccountNumber ? (
-									<div className="flex items-start gap-2.5 text-sm">
-										<Banknote className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-										<div>
-											<p className="font-medium">
-												{instructions.bankName ?? "Bank transfer"}
-											</p>
-											<p className="font-mono">
-												{instructions.bankAccountNumber}
-											</p>
-											{instructions.bankAccountName ? (
-												<p className="text-xs text-muted-foreground">
-													{instructions.bankAccountName}
-												</p>
-											) : null}
-										</div>
-									</div>
-								) : null}
-								{instructions?.duitnowId ? (
-									<div className="flex items-start gap-2.5 text-sm">
-										<QrCode className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-										<div>
-											<p className="font-medium">DuitNow</p>
-											<p className="font-mono">{instructions.duitnowId}</p>
-										</div>
-									</div>
-								) : null}
-								{instructions?.qrUrl ? (
-									<ZoomableImage
-										src={instructions.qrUrl}
-										alt="DuitNow QR"
-										caption="Scan to pay (DuitNow)"
-										wrapperClassName="w-40 overflow-hidden rounded-xl border border-border bg-white"
-										className="block aspect-square w-full object-contain"
-									/>
-								) : null}
+						{/* Mid-subscribe (the picker just created this invoice and the
+						    HitPay redirect is loading): a beat where the fallback rails
+						    would flash and invite a manual payment before the seller
+						    even SEES the HitPay page. Hold the section on a spinner —
+						    if the redirect fails, the toast fires and this unwinds to
+						    the normal payment options. */}
+						{redirecting || confirmingReturn ? (
+							<div className="flex items-center gap-2.5 py-2 text-sm text-muted-foreground">
+								<Loader2 className="size-4 animate-spin" />
+								{redirecting
+									? "Taking you to HitPay's secure payment page…"
+									: "Confirming your payment…"}
 							</div>
 						) : (
-							<p className="mt-2 text-sm text-muted-foreground">
-								Message us on WhatsApp to receive payment details.
-							</p>
+							<>
+								<p className="text-sm font-medium">How to pay</p>
+								{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
+						    hosted page, auto-confirmed — the manual rails stay below. */}
+								{pending.gatewayPayment?.url ? (
+									<div className="mt-2">
+										<a
+											href={pending.gatewayPayment.url}
+											className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
+										>
+											<CreditCard className="size-4" />
+											Pay online now
+										</a>
+										<p className="mt-1.5 text-xs text-muted-foreground">
+											Confirmed automatically — no need to message us after.
+										</p>
+									</div>
+								) : null}
+								{pending.currency !== "MYR" ? (
+									// Cross-border invoice (e.g. SGD): the configured MY bank/DuitNow
+									// rails can't settle it, so never show them here — mirrors the
+									// invoice PDF and email.
+									<p className="mt-2 text-sm text-muted-foreground">
+										We'll confirm payment details with you on WhatsApp — quote{" "}
+										<span className="font-mono">{pending.invoiceNumber}</span>{" "}
+										as your payment reference.
+									</p>
+								) : hasPayDetails ? (
+									<div className="mt-2 flex flex-col gap-3">
+										{instructions?.bankAccountNumber ? (
+											<div className="flex items-start gap-2.5 text-sm">
+												<Banknote className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+												<div>
+													<p className="font-medium">
+														{instructions.bankName ?? "Bank transfer"}
+													</p>
+													<p className="font-mono">
+														{instructions.bankAccountNumber}
+													</p>
+													{instructions.bankAccountName ? (
+														<p className="text-xs text-muted-foreground">
+															{instructions.bankAccountName}
+														</p>
+													) : null}
+												</div>
+											</div>
+										) : null}
+										{instructions?.duitnowId ? (
+											<div className="flex items-start gap-2.5 text-sm">
+												<QrCode className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+												<div>
+													<p className="font-medium">DuitNow</p>
+													<p className="font-mono">{instructions.duitnowId}</p>
+												</div>
+											</div>
+										) : null}
+										{instructions?.qrUrl ? (
+											<ZoomableImage
+												src={instructions.qrUrl}
+												alt="DuitNow QR"
+												caption="Scan to pay (DuitNow)"
+												wrapperClassName="w-40 overflow-hidden rounded-xl border border-border bg-white"
+												className="block aspect-square w-full object-contain"
+											/>
+										) : null}
+									</div>
+								) : (
+									<p className="mt-2 text-sm text-muted-foreground">
+										Message us on WhatsApp to receive payment details.
+									</p>
+								)}
+								<a
+									href={buildWaContactLink(
+										`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
+										supportWa,
+									)}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+								>
+									<ExternalLink className="size-4" />
+									I've paid — notify us
+								</a>
+							</>
 						)}
-						<a
-							href={buildWaContactLink(
-								`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
-								supportWa,
-							)}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
-						>
-							<ExternalLink className="size-4" />
-							I've paid — notify us
-						</a>
 					</div>
 				</section>
 			) : null}
@@ -453,6 +509,7 @@ export function BillingTab({
 						renewing={sub.status !== "trialing"}
 						foundingPricing={gateway.foundingPricing}
 						foundingPricingLapsed={gateway.foundingPricingLapsed}
+						onRedirectingChange={setRedirecting}
 					/>
 				) : (
 					<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -485,15 +542,37 @@ export function BillingTab({
 				)
 			) : null}
 
-			{/* Auto-renewal (86eyb6z4r) — rendered whenever the gateway is up for a
-			    real (non-comped) account, whatever the plan state: the seller can
-			    set it up ahead of their first renewal or fix a failing method. */}
-			{!adminOwnAccount && !sub?.comped && sub && gateway?.autoRenew ? (
+			{/* Auto-renewal (86eyb6z4r) — a MANAGEMENT surface, not an enrolment
+			    one (Zaki, 11 Sep): new subscribers are enrolled by the plan
+			    picker's subscribe flow itself, so pre-subscription this card
+			    would just be a second, confusing door. It renders only when
+			    there's something to manage: a method attached (incl. failing),
+			    a half-finished setup to resume, or an ACTIVE seller who came in
+			    on the manual rail and can opt in. */}
+			{!adminOwnAccount &&
+			!redirecting &&
+			!sub?.comped &&
+			sub &&
+			gateway?.autoRenew &&
+			(sub.autoRenew !== undefined ||
+				sub.autoRenewSetupPending === true ||
+				sub.status === "active" ||
+				// A seller holding an open bill — past_due mid-dunning, or a
+				// trial whose subscribe redirect failed — has no plan picker
+				// (it hides behind `!pending`) and would otherwise have NO way
+				// to reach auto-renewal at all. Theirs is exactly the store
+				// applyMethodAttached's heal path exists for.
+				pending !== undefined) ? (
 				<AutoRenewalCard
 					sub={sub}
 					methods={gateway.methods}
 					returnFromSetup={billingReturn === "autorenew"}
-					onReturnHandled={onBillingReturnHandled ?? (() => {})}
+					onReturnHandled={(attached) => {
+						// Setup abandoned → nothing will charge; re-expose the pay
+						// options right away instead of riding out the 15s cap.
+						if (attached === false) setConfirmingReturn(false);
+						onBillingReturnHandled?.();
+					}}
 				/>
 			) : null}
 
