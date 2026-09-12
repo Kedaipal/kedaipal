@@ -87,7 +87,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		expect(copy.textContent).not.toContain("moves back by the same amount");
 	});
 
-	it("a downgrade says WHEN it lands and exactly WHAT is lost", () => {
+	it("a downgrade says WHEN it lands, WHAT it costs, and WHAT is lost", () => {
 		const periodEnd = Date.UTC(2027, 2, 12);
 		render(
 			<PlanChangeCard
@@ -98,21 +98,37 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		fireEvent.click(
 			screen.getByRole("button", { name: /Move down to Starter/ }),
 		);
-		const copy = screen.getByText(/You'll stay on Pro/);
+		const copy = screen.getByRole("dialog").textContent ?? "";
 		// Everything is kept until the date already paid through (assert the year,
 		// not the day/month order — that's the runner's locale, not our copy).
-		expect(copy.textContent).toMatch(
+		expect(copy).toMatch(
 			/stay on Pro with everything you have now until .*2027/,
 		);
+		// The saving is the REASON they're here — name the new bill and the old.
+		expect(copy).toMatch(/Your next invoice is RM\s*79\.00 for Starter/);
+		expect(copy).toMatch(/instead of RM\s*149\.00/);
 		// The losses are named, not left for the seller to discover later.
-		expect(copy.textContent).toContain("your customer database");
-		expect(copy.textContent).toContain("Seller Insights");
-		expect(copy.textContent).toContain("order inbox search");
+		expect(copy).toContain("your customer database");
+		expect(copy).toContain("Seller Insights");
+		expect(copy).toContain("order inbox search");
 		// And the data itself survives — the sentence must say so.
-		expect(copy.textContent).toContain("your data stays");
-		expect(copy.textContent).toContain(
-			"cancel this any time before it takes effect",
+		expect(copy).toContain("Your data stays");
+		expect(copy).toContain("cancel this any time before it takes effect");
+	});
+
+	it("a downgrade quotes a founding member's OWN price as the one they leave", () => {
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "pro", foundingIntent: true })}
+				currency="MYR"
+			/>,
 		);
+		fireEvent.click(
+			screen.getByRole("button", { name: /Move down to Starter/ }),
+		);
+		const copy = screen.getByRole("dialog").textContent ?? "";
+		expect(copy).toMatch(/instead of RM\s*104\.00/);
+		expect(copy).not.toMatch(/149/);
 	});
 
 	it("a founding member is quoted THEIR price, not list", () => {
@@ -145,9 +161,12 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			/>,
 		);
 		expect(screen.getByText(/Moving to Starter on .*2027/)).toBeTruthy();
-		expect(
-			screen.getByText(/You keep Pro — every feature and limit — until then/),
-		).toBeTruthy();
+		const banner = screen.getByText(/You keep Pro — every feature and limit/);
+		// The banner outlives the dialog, so it carries the amount too — the
+		// auto-renewal card beside it only ever names the DATE of the charge.
+		expect(banner.textContent).toMatch(
+			/Your next invoice will be RM\s*79\.00 for Starter/,
+		);
 		// No stacking a second change on top of a scheduled one.
 		expect(screen.queryByRole("button", { name: /Move down to/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: /Move up to/ })).toBeNull();

@@ -1,5 +1,6 @@
 import { useMutation } from "convex/react";
 import { ArrowDownRight, ArrowUpRight, CalendarClock } from "lucide-react";
+import type * as React from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -132,7 +133,12 @@ export function PlanChangeCard({
 						<p className="mt-1 text-xs text-muted-foreground">
 							You keep {PLAN_LABEL[current]} — every feature and limit — until
 							then, because you've already paid for it. Your next invoice will
-							be for {PLAN_LABEL[scheduled.plan]}.
+							be{" "}
+							{formatPrice(
+								planPrice(scheduled.plan, cycle, founding, currency),
+								currency,
+							)}{" "}
+							for {PLAN_LABEL[scheduled.plan]}.
 						</p>
 					</div>
 				</div>
@@ -201,7 +207,14 @@ export function PlanChangeCard({
 					description={
 						isPlanUpgrade(current, target)
 							? upgradeCopy({ current, target, cycle, founding, currency, sub })
-							: downgradeCopy({ current, target, sub })
+							: downgradeCopy({
+									current,
+									target,
+									cycle,
+									founding,
+									currency,
+									sub,
+								})
 					}
 					confirmLabel={busy ? "Working…" : `Move to ${PLAN_LABEL[target]}`}
 					onConfirm={() => confirm(target)}
@@ -254,18 +267,62 @@ function upgradeCopy({
 function downgradeCopy({
 	current,
 	target,
+	cycle,
+	founding,
+	currency,
 	sub,
 }: {
 	current: Plan;
 	target: Plan;
+	cycle: "monthly" | "annual";
+	founding: boolean;
+	currency: BillingCurrency;
 	sub: SubscriptionView;
-}): string {
+}): React.ReactNode {
 	const lost = featuresLost(current, target);
 	const when = sub.currentPeriodEnd
 		? formatShortDate(sub.currentPeriodEnd)
 		: "the end of your current period";
-	const lostLine = lost.length
-		? ` From then you'll lose access to ${lost.slice(0, -1).join(", ")}${lost.length > 1 ? " and " : ""}${lost[lost.length - 1]} — your data stays, but you won't be able to open it until you move back up.`
-		: "";
-	return `You'll stay on ${PLAN_LABEL[current]} with everything you have now until ${when}, because you've paid for it. ${PLAN_LABEL[target]} starts with your next invoice.${lostLine} You can cancel this any time before it takes effect.`;
+	const nowPrice = planPrice(current, cycle, founding, currency);
+	const thenPrice = planPrice(target, cycle, founding, currency);
+	// DialogDescription is a <p>, so the "list" is block spans rather than a
+	// <ul> — a nine-item comma run inside a paragraph is not something a seller
+	// reads, and these are the capabilities they are about to lose.
+	return (
+		<>
+			<span className="block">
+				You'll stay on {PLAN_LABEL[current]} with everything you have now until{" "}
+				{when}, because you've paid for it.
+			</span>
+			<span className="mt-2 block">
+				Your next invoice is{" "}
+				<span className="font-medium text-foreground">
+					{formatPrice(thenPrice, currency)} for {PLAN_LABEL[target]}
+				</span>
+				, instead of {formatPrice(nowPrice, currency)}.
+			</span>
+			{lost.length ? (
+				<>
+					<span className="mt-2 block">From {when} you lose:</span>
+					{/* Bounded: nine losses wrap to ~15 lines on a 375px phone, and
+					    DialogContent has no max-height and clips (overflow-hidden),
+					    which would put the Cancel/confirm buttons out of reach. */}
+					<span className="mt-1 block max-h-52 overflow-y-auto">
+						{lost.map((feature) => (
+							<span key={feature} className="block -indent-3 pl-6">
+								<span className="text-muted-foreground/60">•</span> {feature}
+							</span>
+						))}
+					</span>
+					<span className="mt-2 block">
+						Your data stays — you just won't be able to open it until you move
+						back up.
+					</span>
+				</>
+			) : null}
+			<span className="mt-2 block">
+				You can cancel this any time before it takes effect.
+			</span>
+		</>
+	);
 }

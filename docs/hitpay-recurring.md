@@ -317,7 +317,15 @@ Nothing about entitlement moves until the renewal settles: a downgrading seller
 keeps their caps, their features and their data access for everything they paid
 for. The confirm dialog names exactly what they lose and when — losing the
 customer database by surprise is the kind of thing a seller discovers at the
-worst moment.
+worst moment — as a scannable list, because a nine-item comma run inside a
+paragraph is not something anyone reads. It is bounded (`max-h-52`, its own
+scroll) since `DialogContent` has no max-height and clips: unbounded, the
+wrapped mobile case pushes the confirm buttons out of reach.
+
+Both the dialog and the banner that replaces it quote **the amount**, not just
+the tier: "Your next invoice is RM 79.00 for Starter, instead of RM 149.00". The
+saving is the reason the seller is there, and the auto-renewal card sitting
+beside the banner only ever names the DATE of the next charge.
 
 ## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
 
