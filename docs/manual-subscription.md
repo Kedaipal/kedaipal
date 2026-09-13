@@ -289,7 +289,12 @@ A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
   ordering reopens. **Billing:** a running period bought by the plan owes
   nothing; a period bought by a hold (or none) issues the tier invoice at once
   — **unused hold days are forfeited**, stated in the card and the confirm
-  before the tap. Email `holdResumed`.
+  before the tap. Consequence worth knowing (raised in the `z8r3fday24`
+  review, accepted): a seller who pauses, pays the hold, resumes, then pauses
+  again **inside that same hold-bought month pays the hold twice** — resuming
+  forfeited the first hold's cover, so the second pause buys fresh cover. It
+  follows from the forfeit rule rather than contradicting it, and a flip-flopper
+  is not a case worth a proration engine; revisit if anyone actually does it. Email `holdResumed`.
 - **Surfaces.** Settings → Billing card (every real paid seller sees it —
   discoverable where billing lives; four states: offer / pause-instead /
   resume / hold-overdue), status chip "On hold · since …", pill "On hold", a
