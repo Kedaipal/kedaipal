@@ -457,6 +457,28 @@ describe("invoices.switchPendingPlan — switch before paying", () => {
 		expect(retailerId).toBeDefined();
 	});
 
+	test("refuses a RENEWAL invoice — the auto-charge machine owns that row", async () => {
+		const t = setup();
+		const { retailerId, userId, invoice } = await seedFirstInvoice(t, "u_swr");
+		// The cron's renewal invoice, not a first/self-serve one. Switching it
+		// would hand an auto-renew seller a replacement nothing is scheduled to
+		// charge — silent drift to manual, then a surprise lock at day 14.
+		await t.run((ctx) =>
+			ctx.db.patch(invoice._id, { origin: "auto_renewal" as const }),
+		);
+		await expect(
+			t
+				.withIdentity({ subject: userId })
+				.mutation(api.invoices.switchPendingPlan, { plan: "starter" }),
+		).rejects.toThrow(/renewal invoice/i);
+		// Untouched: still pending, still Pro — nothing voided behind their back.
+		const after = (await invoicesFor(t, retailerId)).find(
+			(i) => i._id === invoice._id,
+		);
+		expect(after?.status).toBe("pending");
+		expect(after?.plan).toBe("pro");
+	});
+
 	test("a founding-intent store keeps its promised price when switching back to Pro", async () => {
 		const t = setup();
 		const seeded = await seedRetailer(t, "u_swf");

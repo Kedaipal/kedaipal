@@ -20,6 +20,7 @@ import {
 	holdBillsNow,
 	resumeBillsNow,
 } from "./lib/seasonalHold";
+import { rateLimiter } from "./lib/rateLimiter";
 import schema from "./schema";
 import { resolveAccess } from "./subscriptions";
 
@@ -457,6 +458,34 @@ describe("pause with money on the table", () => {
 		expect((await getSub(t, s.subId))?.status).toBe("on_hold");
 		const me = await t.withIdentity({ subject: s.userId }).query(api.retailers.getMyRetailer, {});
 		expect(me?.subscription?.frozen).toBe(false);
+	});
+});
+
+describe("rate limiting", () => {
+	test("the toggle shares the money-adjacent self-serve limiter — a held button can't mint invoices, gateway requests and emails", async () => {
+		const t = setup();
+		const s = await seedPaidSeller(t, "u_rl");
+		// Drain the same bucket switchPendingPlan uses, keyed by STORE (so admin
+		// act-as shares the seller's budget rather than getting a fresh one).
+		await t.run(async (ctx) => {
+			await rateLimiter.limit(ctx, "billingSelfServe", {
+				key: s.retailerId,
+				count: 4,
+			});
+		});
+		const refused = await t
+			.withIdentity({ subject: s.userId })
+			.mutation(api.subscriptions.setSeasonalHold, {
+				retailerId: s.retailerId,
+				hold: true,
+			})
+			.then(() => null)
+			.catch((e: unknown) => e as { data?: unknown });
+		expect(String(refused?.data)).toContain('\\"kind\\":\\"RateLimited\\"');
+		expect(String(refused?.data)).toContain('\\"name\\":\\"billingSelfServe\\"');
+		// Refused BEFORE any state moved — no half-pause.
+		expect((await getSub(t, s.subId))?.status).toBe("active");
+		expect((await getRetailer(t, s.retailerId))?.orderingPausedAt).toBeUndefined();
 	});
 });
 

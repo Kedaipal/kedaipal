@@ -228,7 +228,7 @@ export function SeasonalHoldCard({
 				open={confirm === "pause"}
 				onOpenChange={(open) => setConfirm(open ? "pause" : null)}
 				title="Pause for the season?"
-				description={`New orders stop immediately — buyers see a seasonal-break note. Everything else stays live. ${
+				description={`New orders stop immediately — buyers see a seasonal-break note, and any order links you've already sent stop working too. Everything else stays live. ${
 					voidsPlanInvoice
 						? `Your unpaid ${plan} invoice is cancelled and your first ${price} hold invoice is issued now.`
 						: pauseBillsNow

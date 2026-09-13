@@ -769,6 +769,18 @@ export const switchPendingPlan = mutation({
 			throw new ConvexError(
 				"This invoice was issued by our team — message us and we'll change it for you.",
 			);
+		// A RENEWAL invoice is the auto-charge machine's: `chargeDueRenewal` was
+		// scheduled against THIS row, and dunning retries key off it. Replacing it
+		// here would hand an auto-renew seller a bill nothing is scheduled to
+		// charge — silently dropping them to manual for a cycle, ending in a
+		// surprise lock at day 14. The UI only offers the switch on the first
+		// invoice / a self-serve pick; this closes the direct-API door behind it.
+		// Renewal plan changes stay a human conversation until the switch learns
+		// to re-arm the charge.
+		if (pending.origin === "auto_renewal")
+			throw new ConvexError(
+				"This is your renewal invoice — message us to change plan and we'll sort it out with you.",
+			);
 		const currentPlan = pending.plan ?? sub.plan;
 		if (currentPlan === plan)
 			throw new ConvexError(

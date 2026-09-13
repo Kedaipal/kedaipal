@@ -246,7 +246,8 @@ A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
   cleared on resume — a **store setting**, denormalized on purpose, so the
   buyer-facing payload (`orderingPaused`) and every order-create path
   (`orders.create`, counter `startAnonymousSession` / `bindSessionManualPhone` /
-  `createOrderFromSession`, `orderClaims.sendClaim`, `bookings.requestBooking`)
+  `createOrderFromSession`, `orderClaims.sendClaim` + **`resendClaim` +
+  `commit`**, `bookings.requestBooking`)
   refuse on the seller's own switch — like opening hours — and the pipeline
   still never reads billing status. The storefront shows a "seasonal break"
   note under the header on every buyer route, every ordering CTA reads
@@ -256,6 +257,18 @@ A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
   not place an order the seller said they can't fulfil.
 - **What stays live:** storefront, catalog, buyer list, order history, and
   editing (`frozen` stays false; the tier's features stay on).
+- **Claim links sent BEFORE the pause die with it** (found in review of
+  `z8r3fday24`). A claim is the one order invitation that can already be in a
+  buyer's chat when the seller taps Pause, so all three of its doors close:
+  `commit` refuses (the stale-tab guard — an idempotent re-commit by a buyer who
+  already completed still returns their order), `resendClaim` refuses, and
+  `getByToken` carries `store.orderingPaused` so `/claim/<token>` renders the
+  seasonal-break dead end **on load** rather than after the buyer fills in an
+  address the commit would reject. The alternative — honouring already-sent
+  links as personal commitments — was rejected: the seller has just said they
+  cannot fulfil, the claim TTL is minutes, and one rule with no exceptions beats
+  an invariant with an asterisk. The pause confirm dialog says so before the
+  tap.
 - **Entry** (`subscriptions.setSeasonalHold({ hold: true })`, owner or admin
   act-as, audited): from `active` or `past_due` only — never a free store (a
   store that isn't selling simply doesn't convert) or a comped row. A pending

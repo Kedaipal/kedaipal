@@ -289,6 +289,10 @@ export const resendClaim = mutation({
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
 		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		// Re-sending pushes a fresh link into the buyer's chat — a new order
+		// invitation, refused while paused exactly like sendClaim.
+		if (access.retailer.orderingPausedAt !== undefined)
+			throw new ConvexError(orderingPausedMessage(access.retailer.storeName));
 		const now = Date.now();
 		if (effectiveClaimStatus(claim, now) !== "open")
 			throw new ConvexError(
@@ -466,6 +470,11 @@ export interface ClaimPagePayload {
 		minNoticeDays: number;
 		openingHours?: OpeningHours;
 		confirmPushEnabled: boolean;
+		/** Off-Season Hold (z8r3fday24): the store paused ordering after this
+		 * link was sent. The page renders a dead end instead of the form — the
+		 * buyer learns on LOAD, not after filling in an address the commit
+		 * would refuse. */
+		orderingPaused: boolean;
 	};
 	/** Present only while the claim is OPEN. */
 	open?: {
@@ -535,6 +544,7 @@ export const getByToken = query({
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,
+				orderingPaused: retailer.orderingPausedAt !== undefined,
 			},
 		};
 		if (status === "open") {
@@ -628,6 +638,15 @@ export const commit = mutation({
 
 		const retailer = await ctx.db.get(claim.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
+		// Off-Season Hold (z8r3fday24): a claim sent BEFORE the seller paused is
+		// still a live link in a buyer's chat, so this is the stale-tab guard the
+		// other four create paths already have — "every order-create path refuses"
+		// has no exceptions, or the invariant isn't one. The buyer normally never
+		// reaches here: getByToken carries `orderingPaused` and the page renders a
+		// dead end on load. Idempotent re-commits are handled ABOVE this line, so
+		// a buyer who already completed still gets their order back.
+		if (retailer.orderingPausedAt !== undefined)
+			throw new ConvexError(orderingPausedMessage(retailer.storeName));
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 
 		// Same spend ceiling as any public order create — the commit schedules

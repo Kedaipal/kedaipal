@@ -29,6 +29,7 @@ import {
 	logAdminAction,
 	requireRetailerAccess,
 } from "./lib/auth";
+import { rateLimiter } from "./lib/rateLimiter";
 import { autoRenewMethodLabel } from "./lib/hitpayBilling";
 import {
 	type BillingCycle,
@@ -435,6 +436,15 @@ export const setSeasonalHold = mutation({
 		{ retailerId, hold },
 	): Promise<{ status: SubscriptionStatus; invoiceIssued: boolean }> => {
 		const access = await requireRetailerAccess(ctx, retailerId);
+		// Money-adjacent self-serve toggle: each flip can void an invoice, issue
+		// another (which mints a HitPay payment request) and send an email, so it
+		// takes the same limiter as `invoices.switchPendingPlan` — a held button
+		// must not burn the gateway account, the mail sender, or Arif's invoice
+		// list. Keyed by store, not caller, so admin act-as shares the budget.
+		await rateLimiter.limit(ctx, "billingSelfServe", {
+			key: retailerId,
+			throws: true,
+		});
 		const sub = await loadSubscription(ctx, retailerId);
 		if (!sub) throw new ConvexError("No subscription found for this store");
 		const now = Date.now();

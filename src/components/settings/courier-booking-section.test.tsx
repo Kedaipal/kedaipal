@@ -3,13 +3,7 @@
 // provider, never a radio: a seller may arm riders AND couriers and pick per
 // order. Each unconnected provider is disabled-with-reason + a link to
 // Integrations, and Lalamove live-quote pricing locks the rider toggle on.
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { CourierBookingSection } from "./courier-booking-section";
@@ -132,16 +126,11 @@ describe("disabled-with-reason, never a dead switch", () => {
 	it("an unconnected Lalamove points at Integrations", () => {
 		render(
 			section({
-				deliveryBooking: lalamove({
-					hasCredentials: false,
-					apiKeyHint: undefined,
-				}),
+				deliveryBooking: lalamove({ hasCredentials: false, apiKeyHint: undefined }),
 			}),
 		);
 		expect(
-			screen
-				.getByRole("switch", { name: /lalamove rider/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
 		).toBe(true);
 		expect(screen.getByText(/Connect Lalamove in Integrations/i)).toBeTruthy();
 	});
@@ -150,9 +139,7 @@ describe("disabled-with-reason, never a dead switch", () => {
 		state.delyva = delyva({ connected: false });
 		render(section());
 		expect(
-			screen
-				.getByRole("switch", { name: /delyva courier/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /delyva courier/i }).hasAttribute("disabled"),
 		).toBe(true);
 		expect(screen.getByText(/Connect Delyva in Integrations/i)).toBeTruthy();
 	});
@@ -169,7 +156,9 @@ describe("the one remaining coupling", () => {
 		const rider = screen.getByRole("switch", { name: /lalamove rider/i });
 		expect(rider.getAttribute("aria-checked")).toBe("true");
 		expect(rider.hasAttribute("disabled")).toBe(true);
-		expect(screen.getByText(/rider booking comes with it/i)).toBeTruthy();
+		expect(
+			screen.getByText(/rider booking comes with it/i),
+		).toBeTruthy();
 	});
 
 	it("…and Delyva stays independently toggleable beside it", async () => {
@@ -190,26 +179,18 @@ describe("plan + country gates", () => {
 		);
 		// Off → on is gated…
 		expect(
-			screen
-				.getByRole("switch", { name: /lalamove rider/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
 		).toBe(true);
 		// …on → off never is (downgrade never traps).
 		expect(
-			screen
-				.getByRole("switch", { name: /delyva courier/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /delyva courier/i }).hasAttribute("disabled"),
 		).toBe(false);
 	});
 
 	it("SG stores see no rider row at all — not a dead toggle", () => {
 		render(section({ riderBookingAvailable: false }));
-		expect(
-			screen.queryByRole("switch", { name: /lalamove rider/i }),
-		).toBeNull();
-		expect(
-			screen.getByRole("switch", { name: /delyva courier/i }),
-		).toBeTruthy();
+		expect(screen.queryByRole("switch", { name: /lalamove rider/i })).toBeNull();
+		expect(screen.getByRole("switch", { name: /delyva courier/i })).toBeTruthy();
 	});
 
 	it("badges a demo Delyva account on the row", () => {
@@ -232,14 +213,10 @@ describe("live pricing: vendors choose providers, the last bidder is guarded", (
 			}),
 		);
 		expect(
-			screen
-				.getByRole("switch", { name: /lalamove rider/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
 		).toBe(false);
 		expect(
-			screen
-				.getByRole("switch", { name: /delyva courier/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /delyva courier/i }).hasAttribute("disabled"),
 		).toBe(false);
 	});
 
@@ -252,9 +229,7 @@ describe("live pricing: vendors choose providers, the last bidder is guarded", (
 			}),
 		);
 		expect(
-			screen
-				.getByRole("switch", { name: /lalamove rider/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
 		).toBe(true);
 		expect(container.textContent).toContain(
 			"the only service pricing your live delivery charge",
@@ -270,23 +245,17 @@ describe("live pricing: vendors choose providers, the last bidder is guarded", (
 			}),
 		);
 		expect(
-			screen
-				.getByRole("switch", { name: /delyva courier/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /delyva courier/i }).hasAttribute("disabled"),
 		).toBe(true);
 		expect(
-			screen
-				.getByRole("switch", { name: /lalamove rider/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
 		).toBe(false);
 	});
 
 	it("legacy lalamove pricing keeps its hard lock — unchanged", () => {
 		render(section({ chargeMode: "lalamove" }));
 		expect(
-			screen
-				.getByRole("switch", { name: /lalamove rider/i })
-				.hasAttribute("disabled"),
+			screen.getByRole("switch", { name: /lalamove rider/i }).hasAttribute("disabled"),
 		).toBe(true);
 	});
-});
+})
