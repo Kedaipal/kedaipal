@@ -31,6 +31,7 @@ import { formatPrice, formatShortDate } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
+	isRenewing,
 	ORDER_CAP_WARN_RATIO,
 	PLAN_LABEL,
 	trialDaysLeft,
@@ -174,6 +175,10 @@ export function BillingTab({
 		}
 		if (sub.status === "past_due") return "Past due";
 		if (sub.status === "cancelled") return "Cancelled";
+		// The lapsed-but-not-yet-renewed window: access is still on, so the tier
+		// is still "Active", but quoting the expiry would name a date that has
+		// already gone by.
+		if (isRenewing(sub, now)) return "Active · renewing";
 		if (sub.currentPeriodEnd)
 			return `Active · expires ${formatShortDate(sub.currentPeriodEnd)}`;
 		return "Active";

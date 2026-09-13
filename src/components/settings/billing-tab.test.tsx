@@ -415,6 +415,85 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 	});
 });
 
+describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () => {
+	const lapsed = (over: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				// Paid period ran out yesterday; the cron has not issued the
+				// renewal yet. Access stays on, so status is still "active".
+				currentPeriodEnd: Date.now() - 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+				...over,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("says renewing instead of naming an expiry date that has gone by", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={lapsed()} />);
+		expect(screen.getByText("Active · renewing")).toBeTruthy();
+		expect(screen.queryByText(/expires/)).toBeNull();
+	});
+
+	it("still names the expiry while the period is actually running", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={lapsed({
+					currentPeriodEnd: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Active · expires/)).toBeTruthy();
+		expect(screen.queryByText("Active · renewing")).toBeNull();
+	});
+
+	it("the auto-renewal line says the charge is happening, not that it is due in the past", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "touch_n_go",
+						methodLabel: "Touch 'n Go",
+						failedAttempts: 0,
+						failing: false,
+						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Renewing now/)).toBeTruthy();
+		expect(screen.queryByText(/Next charge on/)).toBeNull();
+	});
+
+	it("a declined charge still outranks it — that message names the problem", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "touch_n_go",
+						methodLabel: "Touch 'n Go",
+						failedAttempts: 1,
+						failing: true,
+						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
+					},
+				})}
+			/>,
+		);
+		expect(
+			screen.getByText(/We couldn't charge your Touch 'n Go/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Renewing now/)).toBeNull();
+	});
+});
+
 /**
  * WHO gets offered a tier change (86eyb6z4r). The card's own copy is covered in
  * plan-change-card.test.tsx; this pins the gate, which has to agree with the

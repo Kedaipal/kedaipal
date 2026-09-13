@@ -349,6 +349,21 @@ the tier: "Your next invoice is RM 79.00 for Starter, instead of RM 149.00". The
 saving is the reason the seller is there, and the auto-renewal card sitting
 beside the banner only ever names the DATE of the next charge.
 
+### The renewing window
+
+Between a period lapsing and its renewal settling, a seller is still `active`
+with a `currentPeriodEnd` in the past — access stays on through the grace by
+design. Rendered naively the plan pill read "Active · expires 29 Aug 2026" beside
+"Next charge on 29 Aug 2026", both dates already gone (Zaki, 13 Sep 2026, on a
+backdated test store). `isRenewing` (src/lib/subscription.ts) is the single
+predicate for it: the pill says "Active · renewing" and the auto-renewal line
+says the charge is happening rather than naming a date behind us. A declined
+charge still outranks both — that message names the actual problem.
+
+The window is at most a day in production, since the daily cron issues the
+renewal on the next run. It is longer whenever the cron is delayed, which is
+exactly when a stale date would be most misleading.
+
 ## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
 
 The 30% founding price survives a subscription lapse of up to **3 months**

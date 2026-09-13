@@ -5,6 +5,7 @@ import {
 	hasSubscribed,
 	isCrmLocked,
 	isOrderInboxLocked,
+	isRenewing,
 	orderCapState,
 	resolveBannerState,
 	type SubscriptionView,
@@ -154,7 +155,10 @@ describe("resolveBannerState", () => {
 		// A healthy saved method changes nothing.
 		expect(
 			resolveBannerState(
-				sub({ status: "active", autoRenew: { ...failing, failedAttempts: 0, failing: false } }),
+				sub({
+					status: "active",
+					autoRenew: { ...failing, failedAttempts: 0, failing: false },
+				}),
 				NOW + 30 * DAY,
 				NOW,
 			).kind,
@@ -397,5 +401,46 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 		expect(isCrmLocked({ actingAsAdmin: false, subscription: crmOnly })).toBe(
 			false,
 		);
+	});
+});
+
+describe("isRenewing — the lapsed-but-not-yet-renewed window", () => {
+	const NOW = Date.UTC(2026, 8, 13);
+	const DAY = 24 * 60 * 60 * 1000;
+	const base = {
+		plan: "pro",
+		status: "active",
+		currentPeriodEnd: NOW + 10 * DAY,
+	} as SubscriptionView;
+
+	test("is false while the paid period is still running", () => {
+		expect(isRenewing(base, NOW)).toBe(false);
+	});
+
+	test("is true the moment it runs out, and stays true until the renewal settles", () => {
+		expect(isRenewing({ ...base, currentPeriodEnd: NOW }, NOW)).toBe(true);
+		expect(isRenewing({ ...base, currentPeriodEnd: NOW - DAY }, NOW)).toBe(
+			true,
+		);
+	});
+
+	test("is false for every state that already has its own words", () => {
+		// past_due says "Past due", a trial counts down, a comped account never
+		// renews at all — a second label on any of them would be noise.
+		for (const status of ["past_due", "trialing", "cancelled"] as const) {
+			expect(
+				isRenewing({ ...base, status, currentPeriodEnd: NOW - DAY }, NOW),
+			).toBe(false);
+		}
+		expect(
+			isRenewing({ ...base, comped: true, currentPeriodEnd: NOW - DAY }, NOW),
+		).toBe(false);
+	});
+
+	test("is false with no period at all, and for a missing payload", () => {
+		expect(isRenewing({ ...base, currentPeriodEnd: undefined }, NOW)).toBe(
+			false,
+		);
+		expect(isRenewing(undefined, NOW)).toBe(false);
 	});
 });
