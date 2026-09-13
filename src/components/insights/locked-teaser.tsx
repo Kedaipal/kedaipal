@@ -33,7 +33,6 @@ export function LockedTeaser({
 				<div className="flex flex-col gap-4 p-5">
 					<KpiRow
 						earned={1_284_000}
-						depositsExcluded={0}
 						collected={968_000}
 						orderCount={73}
 						aov={17_589}

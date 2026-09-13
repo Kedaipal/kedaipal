@@ -5,27 +5,17 @@ import { cn } from "../../lib/utils";
 // full-precision `title` on hover. Earned vs collected sit side by side because
 // "delivered ≠ paid" is the whole point of the split.
 
-/** Hover copy behind the deposit sub-label — the one line on the page that
- * explains WHY "Revenue earned" is smaller than a booking seller's bank
- * statement (z8r3fdcw70). The sub-label carries the amount; this carries the
- * reason. */
-export const DEPOSIT_EXCLUSION_HINT =
-	"Security deposits are held money returned after check-out, so they are not counted as revenue.";
-
 function KpiTile({
 	label,
 	value,
 	hint,
 	sub,
-	subHint,
 	emphasis,
 }: {
 	label: string;
 	value: string;
 	hint?: string;
 	sub?: string;
-	/** Hover title on the sub-label (the value's own hover is `hint`). */
-	subHint?: string;
 	emphasis?: boolean;
 }) {
 	return (
@@ -43,9 +33,7 @@ function KpiTile({
 				{value}
 			</span>
 			{sub ? (
-				<span className="text-[11px] text-muted-foreground" title={subHint}>
-					{sub}
-				</span>
+				<span className="text-[11px] text-muted-foreground">{sub}</span>
 			) : null}
 		</div>
 	);
@@ -53,37 +41,29 @@ function KpiTile({
 
 export function KpiRow({
 	earned,
-	depositsExcluded,
 	collected,
 	orderCount,
 	aov,
 	currency,
 }: {
 	earned: number;
-	/** Σ security deposit netted out of `earned` in this window (0 on a store
-	 * without booking deposits). */
-	depositsExcluded: number;
 	collected: number;
 	orderCount: number;
 	aov: number;
 	currency: string;
 }) {
 	const outstanding = Math.max(0, earned - collected);
-	// A booking order's total carries a refundable deposit that `earned` nets
-	// out (booking S5). Say so, with the amount, only when there is something to
-	// say — a store without deposits must see zero change.
-	const hasDeposits = depositsExcluded > 0;
-	const earnedSub = hasDeposits
-		? `excl. ${formatPriceCompact(depositsExcluded, currency)} security deposits`
-		: "confirmed → delivered";
+	// NOTE: every figure here is already net of any refundable booking security
+	// deposit. That exclusion is stated once, for the whole page, by
+	// <DepositNote> under this row — deliberately NOT per-tile, which would
+	// imply the other tiles are gross. See deposit-note.tsx.
 	return (
 		<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 			<KpiTile
 				label="Revenue earned"
 				value={formatPriceCompact(earned, currency)}
 				hint={formatPrice(earned, currency)}
-				sub={earnedSub}
-				subHint={hasDeposits ? DEPOSIT_EXCLUSION_HINT : undefined}
+				sub="confirmed → delivered"
 				emphasis
 			/>
 			<KpiTile

@@ -65,7 +65,11 @@ is self-correcting.
 
 A booking order's `total` carries the refundable security deposit (booking
 S5, [`docs/booking.md`](./booking.md#s5--security-deposit-end-to-end-86eyn4kee))
-— held money the seller returns after check-out, never revenue. `reduceInsights`
+— **held money, not a sale, so never revenue**. The seller may return it after
+check-out or keep part of it for damage, and **neither outcome re-enters any
+figure here** (a keep is compensation, not sales — Arif, 4 Sep 2026; pinned by
+`convex/bookings.test.ts`, which asserts that settling touches neither `total`
+nor the frozen `securityDeposit`). `reduceInsights`
 nets it out of **every** figure through the one rule `revenue = max(0, total −
 securityDeposit)` (`revenueExcludingDeposit` in `convex/lib/order.ts`, inlined
 so this module stays dependency-free): earned, the trend, collected, the
@@ -78,20 +82,42 @@ tests now carry the other's case.
 
 The amount netted out comes back as **`depositsExcluded`** (Σ over the same
 revenue orders; both queries return it and `buildInsightsView` sums it like
-`earned`) so the page can say what it did. When it is > 0 the **Revenue
-earned** tile's sub-label reads "excl. RM X security deposits" (store currency
-via `formatPriceCompact`, the same rule as the tile's value) with the full
-sentence on hover (`DEPOSIT_EXCLUSION_HINT` in `kpi-row.tsx`: "Security
-deposits are held money returned after check-out, so they are not counted as
-revenue."). At 0 the sub-label is the usual "confirmed → delivered", so a
-store without deposits sees no change. That line exists because Seng (Hidden
-Gems'ite, Founding #7) had to ask "does the sales include security deposit?"
-— a constraint is surfaced, never enforced silently.
+`earned`) so the page can say what it did. It is stated by **`DepositNote`**
+(`src/components/insights/deposit-note.tsx`) — one line directly under the KPI
+row, rendered only when the amount is > 0, carrying the exact figure, the
+reason, and where a kept deposit is recorded. At 0 it renders **nothing**, so a
+store without booking deposits sees the page it has always seen. That line
+exists because Seng (Hidden Gems'ite, Founding #7) had to ask "does the sales
+include security deposit?" — a constraint is surfaced, never enforced silently.
 
-Decided, not built here: **kept deposits stay out of revenue**
-(`securityDepositKeptAmount` is compensation, not sales — Arif, 4 Sep 2026),
-and a partial keep nets the whole deposit, not the returned remainder.
-`depositsExcluded` counts a deposit whether or not it has been returned yet.
+**Why a page-level line and not a sub-label in the "Revenue earned" tile**, which
+is what the ticket specified. Three reasons, all found by reviewing the built
+version rather than the plan:
+
+1. **Scope.** The deposit is netted out of *every* money figure on the page —
+   earned, the trend, collected, the payment donut, the by-source rows, and so
+   Avg order. A note inside one tile makes a claim about that tile and silently
+   implies its three neighbours are gross, which is the wrong conclusion and the
+   second-most-natural reading of the page. The exclusion is a property of the
+   page, so it is stated at the page.
+2. **Reach.** The tile had room for the amount but not the reason, so the reason
+   had to ride a hover `title` — mute on a phone, and unadvertised on desktop
+   (an 11px muted span with no affordance). This page's own trend chart is a
+   scrubber rather than a tooltip for exactly that reason (see *Frontend*
+   below); shipping the explanation hover-only here would have repeated the
+   mistake this same file warns about.
+3. **Precision.** Tiles compact money above RM 10,000 and pair it with a
+   full-precision hover. The note's amount is the only copy of itself, so it
+   uses `formatPrice` and is never rounded. A test pins both this and the
+   absence of any `title` in the note.
+
+The tile's sub-label therefore stays "confirmed → delivered" in every state —
+which also keeps the page's only on-screen statement of *which statuses count*
+visible to booking sellers, the one cohort that also has a `booking_requested`
+status deliberately excluded from revenue.
+
+Decided, not built here: a partial keep nets the whole deposit, not the returned
+remainder. `depositsExcluded` counts a deposit whether or not it has been returned yet.
 The name is load-bearing: it answers "what did this window leave out?", never
 "what is still outstanding?". It was called `depositsHeld` in review and
 renamed before merge, because the outstanding-liability figure is a genuinely
@@ -159,9 +185,10 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 ## Frontend
 
 - Route: `src/routes/app.insights.tsx` (Pro: full page; Starter/non-Pro: teaser).
-- Components in `src/components/insights/`: `kpi-row` (the four tiles; the
-  Revenue earned sub-label switches to the deposit exclusion when
-  `depositsExcluded` > 0, see [Security deposits](#security-deposits)), `revenue-trend`,
+- Components in `src/components/insights/`: `kpi-row` (the four tiles),
+  `deposit-note` (the one page-level line stating that refundable booking
+  deposits are excluded from every figure — renders nothing at 0, see
+  [Security deposits](#security-deposits)), `revenue-trend`,
   `top-products` (bar list + revenue/quantity toggle + thumbnails),
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
   opacity, on-brand), `source-breakdown` (bar list of `attributionBucket` rows;
@@ -216,9 +243,11 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   invariant, Σ sources = earned with a deposit order present, merge helpers).
 - `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid
   (`depositsExcluded` sums like earned and is dropped with the today payload).
-- `src/components/insights/kpi-row.test.tsx` — the Revenue earned sub-label:
-  unchanged at 0 with no deposit copy anywhere, amount + hover sentence when
-  > 0, store currency (SG), compact formatting on a large total.
+- `src/components/insights/deposit-note.test.tsx` — renders nothing at 0 or
+  below; states the amount, that it governs the whole page, and where a kept
+  deposit lives; the figure is exact rather than compacted on a large total;
+  store currency (SG); and it carries **no** `title`, so the explanation can
+  never regress to hover-only.
 - `src/components/insights/revenue-trend.test.tsx` — the scrubber (pure
   `scrubIndex`/`bucketRange`, tap/drag selection, zero-order bucket hides the
   link, arrow-key navigation, Esc/✕ clear) on a real memory router.
