@@ -14,6 +14,7 @@ import { ProblemStrip } from "../components/landing/problem-strip";
 import { RealSellers } from "../components/landing/real-sellers";
 import { VideoDemo } from "../components/landing/video-demo";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
 
 /**
  * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
@@ -38,13 +39,15 @@ const SITE_URL = "https://kedaipal.com";
  * a VideoObject whose date moves on every deploy is exactly the signal Google
  * treats as unreliable. Bump it only when the video is re-recorded, together
  * with the files in `public/video/` (see `docs/landing-video-demo.md`).
+ * The duration lives beside the asset table in `src/lib/demo-video.ts`.
  */
-const DEMO_UPLOAD_DATE = "2026-08-29";
-const DEMO_DURATION_ISO = "PT30S";
+const DEMO_UPLOAD_DATE = "2026-09-13";
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 const LOGO_URL = `${SITE_URL}/android-chrome-512x512.png`;
-const DEMO_VIDEO_URL = `${SITE_URL}/video/kedaipal-demo.mp4`;
-const DEMO_POSTER_URL = `${SITE_URL}/img/landing/demo-poster.webp`;
+/* The landscape cut is the canonical one for crawlers; the portrait cut is a
+   viewport-specific rendition of the same edit, not a second video. */
+const DEMO_VIDEO_URL = `${SITE_URL}${DEMO_VIDEO.landscape.mp4}`;
+const DEMO_POSTER_URL = `${SITE_URL}${DEMO_VIDEO.landscape.poster}`;
 
 /**
  * FAQPage entries MUST mirror the visible FAQ copy (messages/en.json,
@@ -136,15 +139,15 @@ const jsonLd = [
 	{
 		"@context": "https://schema.org",
 		"@type": "VideoObject",
-		name: "Kedaipal in 30 seconds — a WhatsApp order, start to finish",
+		name: "Kedaipal in 35 seconds — five kinds of sellers, one link, every order",
 		description:
-			"A silent 30-second demo: a customer messages on WhatsApp, opens the seller's Kedaipal storefront, checks out, and the order lands confirmed in the seller's dashboard. No Meta setup, no app for the buyer.",
+			"A 35-second demo: a custom cake, a frozen-food order, a live sale, a booking and an apparel order — each taken through one Kedaipal storefront link instead of a WhatsApp back-and-forth. Captions in English over a music soundtrack.",
 		thumbnailUrl: DEMO_POSTER_URL,
 		contentUrl: DEMO_VIDEO_URL,
 		uploadDate: DEMO_UPLOAD_DATE,
 		duration: DEMO_DURATION_ISO,
-		/* Silent clip — captions are burned into the frames, so there is no
-		   audio track and no caption file to declare. */
+		/* Captions are burned into the frames (no caption file to declare); the
+		   only audio is a music bed, so the language is the captions'. */
 		inLanguage: "en",
 		isFamilyFriendly: true,
 		publisher: {
