@@ -46,7 +46,7 @@ import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
 } from "../../convex/lib/delivery";
-import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
+import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
 	defaultTemplate,
@@ -112,6 +112,7 @@ import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
+import { validateStoreName } from "../lib/slug";
 import {
 	isSettingsSpotlightKey,
 	SPOTLIGHT_ANCHOR,
@@ -323,6 +324,8 @@ export const Route = createFileRoute("/app/settings")({
 		tab?: SettingsTab;
 		fix?: CountrySetupItemKey;
 		spot?: SettingsSpotlightKey;
+		autorenew?: "return";
+		paid?: "return";
 	} => {
 		const raw =
 			typeof search.tab === "string"
@@ -347,6 +350,11 @@ export const Route = createFileRoute("/app/settings")({
 				: undefined,
 			...(fix ? { fix } : {}),
 			...(spot ? { spot } : {}),
+			// HitPay redirect returns (86eyb6z4r): back from the auto-renewal
+			// authorisation page / from an invoice's hosted checkout. The billing
+			// tab reconciles once and then clears the flag from the URL.
+			...(search.autorenew === "return" ? { autorenew: "return" as const } : {}),
+			...(search.paid === "return" ? { paid: "return" as const } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -421,7 +429,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix, spot } = Route.useSearch();
+	const { tab, fix, spot, autorenew, paid } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -839,7 +847,20 @@ function SettingsRoute() {
 				) : null}
 
 				{activeTab === "billing" ? (
-					<BillingTab retailer={retailer} target={cardTarget} />
+					<BillingTab
+						retailer={retailer}
+						target={cardTarget}
+						billingReturn={
+							autorenew === "return"
+								? "autorenew"
+								: paid === "return"
+									? "paid"
+									: undefined
+						}
+						onBillingReturnHandled={() =>
+							navigate({ search: { tab: "billing" }, replace: true })
+						}
+					/>
 				) : null}
 
 				{activeTab === "whatsapp" ? (
@@ -1071,10 +1092,14 @@ function StoreNameForm({
 	const [value, setValue] = useState(current);
 	const [saving, setSaving] = useState(false);
 	const dirty = value.trim() !== current.trim() && value.trim().length > 0;
+	// Same rule as the server save — surfaced under the field so "Save name"
+	// is disabled WITH its reason rather than failing on click.
+	const nameCheck = validateStoreName(value);
+	const issue = dirty && !nameCheck.ok ? nameCheck.message : null;
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		if (!dirty) return;
+		if (!dirty || issue) return;
 		setSaving(true);
 		try {
 			await onSave(value.trim());
@@ -1098,16 +1123,17 @@ function StoreNameForm({
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder="Your Store Name"
-					maxLength={80}
+					maxLength={STORE_NAME_MAX}
 					variant="field"
 				/>
+				{issue ? <p className="text-sm text-destructive">✗ {issue}</p> : null}
 				<span className="self-end text-xs text-muted-foreground tabular-nums">
-					{value.trim().length}/80
+					{value.trim().length}/{STORE_NAME_MAX}
 				</span>
 			</div>
 			<Button
 				type="submit"
-				disabled={!dirty || saving}
+				disabled={!dirty || saving || issue !== null}
 				className={SAVE_BTN_CLASS}
 			>
 				{saving ? "Saving…" : "Save name"}

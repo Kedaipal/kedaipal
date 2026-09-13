@@ -284,6 +284,44 @@ describe("admin console reads", () => {
 		);
 	});
 
+	test("listSellersForAdmin resolves the powered-by referrer to its CURRENT slug + name (z8r3fdcwd0)", async () => {
+		const t = setup();
+		const referrer = await seedRetailer(t, "user_referrer_owner");
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				signupSource: "powered-by-track",
+				signupReferrerId: referrer._id,
+			});
+			// Renamed AFTER the signup — the console must show the name as it is
+			// now, which is why the row stores an id and not the slug.
+			await ctx.db.patch(referrer._id, { storeName: "Hermoolah (renamed)" });
+		});
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer).toEqual({
+			slug: referrer.slug,
+			storeName: "Hermoolah (renamed)",
+		});
+	});
+
+	test("listSellersForAdmin reads a purged referrer as no referrer, never throws", async () => {
+		const t = setup();
+		const referrer = await seedRetailer(t, "user_referrer_owner");
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { signupReferrerId: referrer._id });
+			await ctx.db.delete(referrer._id);
+		});
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		expect(
+			rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer,
+		).toBeUndefined();
+	});
+
 	test("listSellersForAdmin flags admin-owned stores via ownerIsAdmin", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);

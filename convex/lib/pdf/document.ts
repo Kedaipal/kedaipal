@@ -77,6 +77,10 @@ export type PaymentBlock = {
 
 export type OrderReceiptData = {
 	storeName: string;
+	// The store's slug — only so the "Powered by Kedaipal" link at the foot of
+	// the page can name whose document it was (`&store=`, z8r3fdcwd0). Never
+	// printed. Absent = the link is tagged but not attributed to a store.
+	storeSlug?: string;
 	// Extra "From" lines under the store name — the seller's legal identity
 	// (registered name, SSM/UEN, billing address, contact), pre-composed by
 	// orderToReceiptData from retailers.businessIdentity so the renderer stays a
@@ -272,12 +276,15 @@ export function orderToReceiptData(args: {
 	// exactly as before.
 	businessIdentity?: BusinessIdentityForReceipt;
 	country?: string;
+	// For the powered-by link's `&store=` attribution — see OrderReceiptData.
+	storeSlug?: string;
 }): OrderReceiptData {
 	const { order, storeName, paymentMethods } = args;
 	const status = order.paymentStatus ?? "unpaid";
 	const paid = isOrderDocPaid(status);
 	return {
 		storeName,
+		storeSlug: args.storeSlug,
 		sellerLines: businessIdentityToLines(
 			args.businessIdentity,
 			args.country ?? "MY",
@@ -327,6 +334,8 @@ type InvoiceForPdf = {
 	invoiceNumber: string;
 	plan?: "starter" | "pro" | "scale";
 	billingCycle?: "monthly" | "annual";
+	/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
+	kind?: "plan" | "hold";
 	amount: number;
 	foundingDiscount?: number;
 	total: number;
@@ -374,8 +383,12 @@ export function subscriptionLineLabel(invoice: {
 	plan?: "starter" | "pro" | "scale";
 	billingCycle?: "monthly" | "annual";
 	foundingDiscount?: number;
+	kind?: "plan" | "hold";
 }): string {
 	const cycle = invoice.billingCycle === "annual" ? "Annual" : "Monthly";
+	if (invoice.kind === "hold") {
+		return `Kedaipal Off-Season Hold - ${cycle} Subscription`;
+	}
 	if (invoice.foundingDiscount !== undefined) {
 		return `Kedaipal Founding 10 Seller Plan - ${cycle} Subscription`;
 	}

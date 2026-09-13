@@ -187,6 +187,7 @@ import {
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
 import { sanitizeAttributionSource } from "./lib/attribution";
+import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { isValidGaClientId } from "./lib/ga4";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
@@ -842,6 +843,11 @@ type RetailerPublic = {
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
+	// Off-Season Hold (z8r3fday24) — public-safe: buyers must see that ordering
+	// is paused (the storefront shows a "seasonal break" note and hides the
+	// cart CTAs; every order-create path refuses with the same reason). A store
+	// setting, not billing state — the subscription itself stays owner-only.
+	orderingPaused?: boolean;
 	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
 	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
 	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
@@ -976,6 +982,7 @@ async function buildRetailerPublic(
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
+		orderingPaused: row.orderingPausedAt !== undefined,
 		sendingPaused: !!sendingLimits?.pausedAt,
 		sendingPauseReason: sendingLimits?.pauseReason,
 	};
@@ -1123,6 +1130,7 @@ export const getRetailerBySlug = query({
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
+					orderingPaused: active.orderingPausedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -1320,6 +1328,11 @@ export const createRetailer = mutation({
 		// src/lib/marketing-attribution.ts). Re-sanitized here: the client value
 		// is a hint, never trusted verbatim.
 		signupSource: v.optional(v.string()),
+		// Slug of the store whose "Powered by Kedaipal" badge the session came
+		// through (z8r3fdcwd0, the `&store=` on the badge link), captured beside
+		// signupSource. A hint: resolved to a store id here, dropped when it
+		// names no store.
+		signupReferrerSlug: v.optional(v.string()),
 		// GA4 client id from the seller's `_ga` cookie (z8r3fdd1v1), so the
 		// server-side key events stitch to their client-side funnel. A hint like
 		// signupSource: validated here (wire format only), dropped otherwise.
@@ -1391,6 +1404,18 @@ export const createRetailer = mutation({
 			args.gaClientId !== undefined && isValidGaClientId(args.gaClientId)
 				? args.gaClientId
 				: undefined;
+		// Referrer store: shape-checked, then LOOKED UP. A slug that names no
+		// store (typo'd, forged, since purged) has nobody to credit and is
+		// dropped — unlike signupSource there is no "other" bucket, because an
+		// "other store" is not a store. Indexed read, one per signup.
+		const referrerSlug = sanitizeReferrerSlug(args.signupReferrerSlug);
+		const referrer = referrerSlug
+			? await ctx.db
+					.query("retailers")
+					.withIndex("by_slug", (q) => q.eq("slug", referrerSlug))
+					.first()
+			: null;
+		const signupReferrerId = referrer?._id;
 
 		const now = Date.now();
 		// Consent is implied: the onboarding UI gates submission on a required,
@@ -1408,6 +1433,7 @@ export const createRetailer = mutation({
 			currency: COUNTRY_CURRENCY[country],
 			...(args.country !== undefined ? { country: args.country } : {}),
 			...(signupSource !== undefined ? { signupSource } : {}),
+			...(signupReferrerId !== undefined ? { signupReferrerId } : {}),
 			...(gaClientId !== undefined ? { gaClientId } : {}),
 			channel: "whatsapp",
 			// Default self-collect ON so new retailers discover the pickup feature

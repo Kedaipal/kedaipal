@@ -3,7 +3,10 @@ import { extractGaClientId } from "../../convex/lib/ga4";
 import { isCapabilityTokenPath } from "./analytics-privacy";
 import { trackClarityEvent } from "./clarity-events";
 import { clientEnv } from "./env";
-import { readMarketingSource } from "./marketing-attribution";
+import {
+	readMarketingReferrerStore,
+	readMarketingSource,
+} from "./marketing-attribution";
 
 /**
  * Custom events for the acquisition funnel (z8r3fdd1v0):
@@ -61,9 +64,11 @@ export function ensureGaInitialized(pathname: string): boolean {
  * Fire a funnel event to every provider. Clarity gets the bare name (its own
  * gate + `src` tag live in `trackClarityEvent`); GA4 gets the name plus
  * params, with the captured marketing `src` (if any) attached to EVERY event
- * so the funnel stays segmentable by source end to end — an explicit `src` in
- * `params` out-ranks the stored one. GA no-ops without a measurement ID and on
- * capability-token paths; never throws — analytics must never break the page.
+ * so the funnel stays segmentable by source end to end — and, when the
+ * session came through another seller's powered-by badge, `ref_store` (that
+ * store's slug, z8r3fdcwd0) beside it. An explicit `src` in `params` out-ranks
+ * the stored one. GA no-ops without a measurement ID and on capability-token
+ * paths; never throws — analytics must never break the page.
  */
 export function trackEvent(
 	name: FunnelEvent,
@@ -74,7 +79,12 @@ export function trackEvent(
 		trackClarityEvent(name);
 		if (!ensureGaInitialized(window.location.pathname)) return;
 		const src = readMarketingSource();
-		ReactGA.event(name, { ...(src ? { src } : {}), ...params });
+		const refStore = readMarketingReferrerStore();
+		ReactGA.event(name, {
+			...(src ? { src } : {}),
+			...(refStore ? { ref_store: refStore } : {}),
+			...params,
+		});
 	} catch {
 		// Swallow — see doc comment.
 	}

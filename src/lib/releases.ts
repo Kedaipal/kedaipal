@@ -49,6 +49,38 @@ export function unseenReleases(
 	);
 }
 
+/**
+ * How many releases the panel renders before folding the rest behind a
+ * "Show older" button.
+ *
+ * The array is the permanent changelog and keeps every entry — a dismissed
+ * announcement must never become unreadable — but a seller opening the panel
+ * wants what changed since they last looked, not the full history above the
+ * fold. Five is roughly a month at the current cadence: enough that the last
+ * thing they half-remember is still on screen, few enough that the newest
+ * release is not one of a dozen. There is no separate changelog page, so the
+ * older releases stay one tap away here rather than disappearing.
+ */
+export const PANEL_RELEASE_LIMIT = 5;
+
+/**
+ * Split the build's releases into the ones the panel shows at once and the
+ * ones it folds. Unseen releases are NEVER folded — a seller returning after
+ * a long gap (or a brand-new seller stamped with an old version by act-as)
+ * must see everything they missed without knowing to tap "Show older". Since
+ * releases are newest-first and unseen ones are by definition the newest, the
+ * unseen set is always a prefix, so this is one slice.
+ */
+export function splitPanelReleases(
+	all: Release[],
+	unseenVersions: Set<string>,
+	limit = PANEL_RELEASE_LIMIT,
+): { shown: Release[]; older: Release[] } {
+	const unseenCount = all.filter((r) => unseenVersions.has(r.version)).length;
+	const cut = Math.max(limit, unseenCount);
+	return { shown: all.slice(0, cut), older: all.slice(cut) };
+}
+
 export interface WhatsNewState {
 	/** Every release in this build, newest first — the permanent changelog. */
 	all: Release[];

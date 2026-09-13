@@ -74,7 +74,7 @@ const jsonLd = [
 			"@type": "AggregateOffer",
 			priceCurrency: "MYR",
 			lowPrice: "79",
-			highPrice: "299",
+			highPrice: "399",
 			offerCount: "3",
 			description: "14-day free trial, no credit card required",
 		},

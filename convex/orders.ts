@@ -51,6 +51,7 @@ import {
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import { assertWithinOpeningHours } from "./lib/openingHours";
+import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
 import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
@@ -827,6 +828,10 @@ export const create = mutation({
 		// number (SG-lite, 86eynw28q + 86eynw29u).
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
+		// Off-Season Hold (z8r3fday24): the seller's own "ordering is paused"
+		// switch — a STORE setting like opening hours, never billing status.
+		if (retailer.orderingPausedAt !== undefined)
+			throw new ConvexError(orderingPausedMessage(retailer.storeName));
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 
 		// Address shape follows the STORE's country — SG stores take 6-digit
@@ -1688,6 +1693,8 @@ export const receiptPdfInputs = internalQuery({
 				// here (that's the private delivery origin, often a home).
 				businessIdentity: retailer?.businessIdentity,
 				country: retailer?.country,
+				// Attributes the document's "Powered by Kedaipal" link to this store.
+				storeSlug: retailer?.slug,
 			}),
 		};
 	},
