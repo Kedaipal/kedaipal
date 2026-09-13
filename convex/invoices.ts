@@ -92,20 +92,10 @@ async function settleInvoicePaid(
 		.first();
 	const firstTime = priorPaid === null;
 
-	// 1) Flip the invoice.
-	await ctx.db.patch(invoice._id, {
-		status: "paid",
-		markedPaidAt: record.paidAt,
-		markedPaidBy: record.recordedBy,
-		paymentMethod: record.method,
-	});
-
-	// 2) Reconcile the subscription FROM THE INVOICE (plan/cycle live on the
-	//    invoice, not the sub — so issuing never changes the seller's visible tier
-	//    before they pay). Falls back to the sub for pre-existing invoices.
-	//    A settle also closes any auto-charge dunning on this subscription —
-	//    however the money arrived (auto-charge, Pay-now, bank transfer), the
-	//    invoice is resolved and retries must stop.
+	// 1) Work out the period this payment actually buys, BEFORE writing anything.
+	//    Plan/cycle live on the INVOICE, not the sub, so issuing never changes
+	//    the seller's visible tier before they pay; pre-existing invoices fall
+	//    back to the sub.
 	const billedPlan = (invoice.plan ?? sub.plan) as Plan;
 	const billedCycle = invoice.billingCycle ?? sub.billingCycle;
 	const caps = defaultCapsForPlan(billedPlan);
@@ -144,12 +134,34 @@ async function settleInvoicePaid(
 			carryoverDays: carryover,
 		});
 	}
+	const grantedPeriodEnd = nextPeriodEnd(billedCycle, now) + carryover * DAY_MS;
+
+	// 2) Flip the invoice, and correct the period it claims to cover.
+	//    `insertPendingInvoice` can only ESTIMATE that period: it stamps 30 days
+	//    from the issue date, but the period is granted from the moment the money
+	//    lands and is extended by any carryover. Left alone, the PDF receipt says
+	//    "Period: 13 Sep - 13 Oct" for a payment that bought service to 29 Oct
+	//    (Zaki's store, 13 Sep 2026 — RM79 Starter upgraded same-day to Pro), and
+	//    a manual-rail seller paying twelve days late got a receipt for twelve
+	//    days they never had. The receipt now states what the money bought.
+	await ctx.db.patch(invoice._id, {
+		status: "paid",
+		markedPaidAt: record.paidAt,
+		markedPaidBy: record.recordedBy,
+		paymentMethod: record.method,
+		periodStart: now,
+		periodEnd: grantedPeriodEnd,
+	});
+
+	// 3) Reconcile the subscription. A settle also closes any auto-charge dunning
+	//    on this subscription — however the money arrived (auto-charge, Pay-now,
+	//    bank transfer), the invoice is resolved and retries must stop.
 	await ctx.db.patch(sub._id, {
 		plan: billedPlan,
 		billingCycle: billedCycle,
 		status: "active",
 		currentPeriodStart: now,
-		currentPeriodEnd: nextPeriodEnd(billedCycle, now) + carryover * DAY_MS,
+		currentPeriodEnd: grantedPeriodEnd,
 		orderCap: caps.orderCap,
 		userCap: caps.userCap,
 		broadcastQuota: caps.broadcastQuota,

@@ -1238,6 +1238,61 @@ describe("invoices.changePlan — mid-cycle tier moves", () => {
 		expect(after?.currentPeriodEnd).toBe(at + 30 * DAY + 5 * DAY);
 	});
 
+	test("A4 — the settled invoice states the period the money actually bought", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_rcpt", "rcpt-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+
+		// Issued now, paid 6 days later — so the period runs from the PAYMENT,
+		// not the issue date, and carries the 4 Starter days still unused.
+		const issued = await getInvoice(t, res.invoiceId);
+		vi.setSystemTime(Date.now() + 6 * DAY);
+		const paidAt = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, {
+			invoiceId: res.invoiceId,
+		});
+
+		const settled = await getInvoice(t, res.invoiceId);
+		const sub = await getSubFor(t, retailerId);
+		// The receipt (PDF prints exactly these two) matches the service the
+		// seller actually holds — a mismatch is a document understating what was
+		// bought, which is the one thing a receipt must not do.
+		expect(settled?.periodStart).toBe(paidAt);
+		expect(settled?.periodEnd).toBe(sub?.currentPeriodEnd);
+		// And it is genuinely corrected, not coincidentally equal to the estimate.
+		expect(settled?.periodStart).not.toBe(issued?.periodStart);
+		expect(settled?.periodEnd).not.toBe(issued?.periodEnd);
+		// 4 Starter days left ≈ 2 Pro days, on top of the fresh 30.
+		expect(settled?.periodEnd).toBe(paidAt + 32 * DAY);
+	});
+
+	test("A5 — a plain renewal's receipt still covers exactly its own cycle", async () => {
+		// The no-carryover case: nothing should move but the dates, and the span
+		// must stay a whole cycle so the founder report's legacy span fallback
+		// (monthsInInvoicePeriod) can never read a part-month.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_span", "span-store", {
+			plan: "starter",
+			daysLeft: 0,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		const paidAt = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, {
+			invoiceId: res.invoiceId,
+		});
+		const settled = await getInvoice(t, res.invoiceId);
+		expect(settled?.periodEnd).toBe(paidAt + 30 * DAY);
+		expect(
+			((settled?.periodEnd ?? 0) - (settled?.periodStart ?? 0)) / DAY,
+		).toBe(30);
+		expect((await getSubFor(t, retailerId))?.plan).toBe("pro");
+	});
+
 	test("A2 — an upgrade paid LATE credits only the days still unused", async () => {
 		const t = setup();
 		const { asUser, retailerId } = await seedActive(t, "u_late", "late-store", {

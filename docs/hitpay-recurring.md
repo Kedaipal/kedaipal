@@ -307,6 +307,18 @@ days of a plan costing RM4.97 a day rather than 30 of one costing RM2.63.
 thin wrapper on it, so the number the copy quotes is by construction the number
 settle grants.
 
+**The settled invoice is corrected to match.** `insertPendingInvoice` can only
+ESTIMATE the period it covers — 30 days from the ISSUE date — but the period is
+granted from the moment the money lands and is stretched by any carryover, so
+settle rewrites `periodStart`/`periodEnd` on the invoice it is flipping. Without
+it the PDF receipt (the only surface that prints those two fields) said "Period:
+13 Sep - 13 Oct" for a payment that bought service to 29 Oct, and on the 14-day
+manual rail every late payment produced a receipt for days the seller never had.
+The founder report is unaffected: `monthsInInvoicePeriod` reads `billingCycle`
+and only measures the span for legacy rows that predate it. Historical invoices
+are left alone — the estimate was the only truth available when they settled, so
+there is no backfill.
+
 **Applied at SETTLE, never at issue** — `daysLeft` must be the days genuinely
 unused when the money lands. It applies to ANY invoice settled while a paid
 period is still running, not just upgrades, so an early renewal no longer
