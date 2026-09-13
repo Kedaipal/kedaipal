@@ -1,5 +1,14 @@
 import { useRouterState } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	createContext,
+	createElement,
+	type ReactNode,
+	useCallback,
+	useContext,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { type Country, DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	parseRegionCookie,
@@ -151,4 +160,35 @@ export function useLandingRegion(): [Country, (next: Country) => void] {
 	}, []);
 
 	return [region, setRegion];
+}
+
+type LandingRegionValue = [Country, (next: Country) => void];
+
+const LandingRegionContext = createContext<LandingRegionValue | null>(null);
+
+/**
+ * One region for the whole landing page (landing v2, z8r3fdegej). Two
+ * sections now react to it — the Delivery courier list and the pricing
+ * teaser — and each owning its own `useLandingRegion()` would give the page
+ * two toggles that can disagree for a render (the cookie write is shared,
+ * the React state is not). The provider owns the single state; both sections
+ * read it, and whichever toggle the visitor uses moves both.
+ *
+ * `/pricing`, `/cost` and onboarding keep calling the hook directly — they
+ * are single-surface pages with one toggle each.
+ */
+export function LandingRegionProvider({ children }: { children: ReactNode }) {
+	const value = useLandingRegion();
+	return createElement(LandingRegionContext.Provider, { value }, children);
+}
+
+/**
+ * The shared landing region. Falls back to a private hook instance when no
+ * provider is mounted, so a section still renders correctly in isolation
+ * (tests, storybook-style harnesses) — it just can't share its pick.
+ */
+export function useLandingRegionContext(): LandingRegionValue {
+	const shared = useContext(LandingRegionContext);
+	const own = useLandingRegion();
+	return shared ?? own;
 }

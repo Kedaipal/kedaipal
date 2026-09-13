@@ -65,38 +65,26 @@
    the existing theme palette (navy + mint).
    ============================================= */
 
-/* Marquee strip */
+/* Logo-wall marquee rows (payment rails, couriers) — Mobbin-style, slow, and
+   the reverse direction is a property of the animation, not a second keyframe
+   set to keep in sync. */
 @keyframes kp-marquee {
 	to {
 		transform: translateX(-50%);
 	}
 }
 
+/* The hero's seller-kinds strip (28s); the logo walls use the slow variants. */
 @utility animate-kp-marquee {
 	animation: kp-marquee 28s linear infinite;
 }
 
-/* Slower + reversed — the payment logo wall's alternating rows (Mobbin-style).
-   Same keyframes: reverse direction is a property of the animation, not a
-   second keyframe set to keep in sync. */
 @utility animate-kp-marquee-slow {
 	animation: kp-marquee 45s linear infinite;
 }
 
 @utility animate-kp-marquee-slow-reverse {
 	animation: kp-marquee 45s linear infinite reverse;
-}
-
-/* Slow push-in for photo backdrops (the how-it-works step collages) —
-   alternate direction so the loop breathes instead of snapping back. */
-@keyframes kp-kenburns {
-	to {
-		transform: scale(1.08);
-	}
-}
-
-@utility animate-kp-kenburns {
-	animation: kp-kenburns 14s ease-in-out infinite alternate;
 }
 
 /* Spotlight glow for a card a What's-new note deep-linked to (docs/whats-new.md).
@@ -122,11 +110,32 @@
 	animation: kp-spotlight 1.6s ease-out 3;
 }
 
+/* Pop-in for a badge or stamp that just changed (hero stage): one quick
+   overshoot from small, then rest. Keyed remounts retrigger it. */
+@keyframes kp-pop {
+	0% {
+		transform: scale(0.6);
+		opacity: 0;
+	}
+	70% {
+		transform: scale(1.08);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+}
+
+@utility animate-kp-pop {
+	animation: kp-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+	.animate-kp-pop,
 	.animate-kp-marquee,
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
-	.animate-kp-kenburns,
 	.animate-kp-highlight-sweep,
 	.animate-kp-spotlight {
 		animation: none;

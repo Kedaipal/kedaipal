@@ -396,7 +396,16 @@ Two mobile-carousel follow-ups (owner-caught):
   ordinary rails keep the house CSS snap classes. `pt-4` on the flex
   container keeps the "Most popular" badge inside Embla's overflow clip.
 
-## Deliberately unchanged / out of scope
+## Superseded by landing v2 (13 Sep 2026)
+
+`problem-strip.tsx`, `how-it-works.tsx` (+ mockups), `feature-grid.tsx` and the
+`MoneyMath` block described above were **cut** in `z8r3fdegej`; the hero's tilt
+phone (`hero-device.tsx`, `phone-screen-mockup.tsx`) was replaced by the
+before/after stage. What remains of this doc is the record of the 29 Aug pass
+for the sections that survived (sellers rail, handshake, payment wall, FAQ,
+pricing teaser). Current structure: [`landing-v2.md`](./landing-v2.md).
+
+## Deliberately unchanged / out of scope (as of 29 Aug)
 
 - **`src/components/landing/money-math.tsx`, `payment-handshake.tsx`,
   `payment-methods.tsx`, `problem-strip.tsx`, `how-it-works.tsx`,

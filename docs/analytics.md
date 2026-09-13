@@ -66,7 +66,7 @@ root's pageview effect).
 | `land_marketing` | once per page load, first marketing-route mount | `/`, `/pricing`, `/cost` via [`useMarketingLanding`](../src/hooks/useMarketingLanding.ts) |
 | `view_pricing` | every `/pricing` mount | `pricing.tsx` |
 | `calc_used` | first calculator input change per visit | `cost.tsx` (`syncToUrl` choke point) |
-| `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
+| `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary (retired 13 Sep 2026 with the hero's secondary link — landing v2)`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
 | `onboarding_start` | signed-in seller reaches the store-creation form AND the retailer query resolved to "no store yet" — an already-onboarded seller hitting `/onboarding` gets redirected, never counted | `onboarding.tsx` via [`useOnboardingStart`](../src/hooks/useOnboardingStart.ts) |
 | `store_created` | `createRetailer` succeeded (never on validation failure) | `onboarding.tsx` |
 

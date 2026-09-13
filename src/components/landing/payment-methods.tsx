@@ -4,14 +4,14 @@ import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { FadeIn } from "./fade-in";
-import { Eyebrow } from "./landing-ui";
+import { Eyebrow, LogoMarqueeRow, logoPillClass } from "./landing-ui";
 
 /**
  * "Your customers pay the way they already do" — the payment-methods wall
  * (ClickUp 86eye3p6z §G, animated 29 Aug per Arif's Mobbin reference: the
- * slow logo rows under "Your AI agents are guessing"). Sits directly under
- * the money-math block so the 0%-cut argument and the rails land in one
- * eyeline, with a compact repeat in the footer.
+ * slow logo rows under "Your AI agents are guessing"). Sits between the
+ * Delivery section and the pricing teaser (landing v2, z8r3fdegej) so the
+ * rails land right before the price, with a compact repeat in the footer.
  *
  * Two auto-scrolling rows in opposite directions replace the old static
  * grouped rows; hovering a row pauses it (the pause is on the row, not the
@@ -29,10 +29,6 @@ import { Eyebrow } from "./landing-ui";
  * never becomes a reason to pull stray logos off the web.
  */
 
-/** White pill shared by marks and wordmarks so every chip has one silhouette. */
-const pillClass =
-	"inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-white shadow-sm transition-transform duration-200 hover:-translate-y-0.5";
-
 function MethodChip({
 	method,
 	hidden = false,
@@ -43,14 +39,14 @@ function MethodChip({
 	if (!method.src) {
 		return (
 			<span
-				className={cn(pillClass, "h-11 px-4 text-sm font-bold text-slate-800")}
+				className={cn(logoPillClass, "h-11 px-4 text-sm font-bold text-slate-800")}
 			>
 				{method.name}
 			</span>
 		);
 	}
 	return (
-		<span className={cn(pillClass, "h-11 px-4")}>
+		<span className={cn(logoPillClass, "h-11 px-4")}>
 			<AppImage
 				src={method.src}
 				// The duplicated marquee copy is aria-hidden at the row level; empty
@@ -75,28 +71,14 @@ function WallRow({
 	methods: PaymentMethod[];
 	reverse?: boolean;
 }) {
-	const chips = (hidden: boolean) => (
-		<div
-			aria-hidden={hidden || undefined}
-			className="flex shrink-0 items-center gap-2.5 pr-2.5"
-		>
-			{methods.map((method) => (
-				<MethodChip key={method.id} method={method} hidden={hidden} />
-			))}
-		</div>
-	);
 	return (
-		<div className="flex overflow-hidden py-1">
-			<div
-				className={cn(
-					"flex hover:[animation-play-state:paused]",
-					reverse ? "animate-kp-marquee-slow-reverse" : "animate-kp-marquee-slow",
-				)}
-			>
-				{chips(false)}
-				{chips(true)}
-			</div>
-		</div>
+		<LogoMarqueeRow reverse={reverse}>
+			{(hidden) =>
+				methods.map((method) => (
+					<MethodChip key={method.id} method={method} hidden={hidden} />
+				))
+			}
+		</LogoMarqueeRow>
 	);
 }
 

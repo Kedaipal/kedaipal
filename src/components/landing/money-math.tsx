@@ -1,6 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { motion, useReducedMotion } from "framer-motion";
-import { ArrowRight } from "lucide-react";
 import { m } from "../../paraglide/messages";
 import {
 	FoodpandaIcon,
@@ -8,8 +6,6 @@ import {
 	ShopeeIcon,
 	TikTokIcon,
 } from "../dashboard/brand-icons";
-import { FadeIn } from "./fade-in";
-import { Eyebrow } from "./landing-ui";
 
 /**
  * "The money math" (ClickUp 86eye3p6z §A) — the cost context a visitor needs
@@ -73,152 +69,6 @@ const MARKETPLACE_RATES = [
 	},
 ] as const;
 
-const MAX_PCT = 22;
-
-export function MoneyMath() {
-	const shouldReduceMotion = useReducedMotion();
-
-	return (
-		<section
-			id="money-math"
-			aria-labelledby="money-math-heading"
-			className="bg-background"
-		>
-			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
-				<div className="grid items-center gap-12 lg:grid-cols-[1fr_1.05fr] lg:gap-16">
-					<FadeIn>
-						<div>
-							<Eyebrow>{m.mm_label()}</Eyebrow>
-							<h2
-								id="money-math-heading"
-								className="mt-4 text-3xl font-bold leading-[1.08] md:text-5xl"
-								style={{ letterSpacing: "-0.02em" }}
-							>
-								{m.mm_heading()}
-							</h2>
-							<p className="mt-5 text-base leading-relaxed text-muted-foreground md:text-lg">
-								{m.mm_line2_pre()}{" "}
-								<strong className="font-bold text-accent-emphasis">
-									{m.mm_line2_zero()}
-								</strong>{" "}
-								{m.mm_line2_post()}
-							</p>
-							<p
-								className="mt-3 text-xl font-bold md:text-2xl"
-								style={{ letterSpacing: "-0.01em" }}
-							>
-								{m.mm_line3()}
-							</p>
-							<div className="mt-7">
-								{/* A text link, not a button — the page has exactly one
-								    primary CTA and it is "Start 14-day free trial". */}
-								<Link
-									to="/cost"
-									className="group inline-flex min-h-11 items-center gap-1.5 text-base font-semibold text-accent underline-offset-4 hover:underline"
-								>
-									{m.mm_cta()}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</Link>
-								<p className="mt-1.5 text-xs text-muted-foreground">
-									{m.mm_cta_note()}
-								</p>
-							</div>
-						</div>
-					</FadeIn>
-
-					<FadeIn delay={0.1}>
-						<div className="rounded-3xl border border-border bg-card p-6 shadow-lg md:p-8">
-							<p className="text-sm font-semibold text-muted-foreground">
-								{m.mm_line1()}
-							</p>
-							<div className="mt-5 flex flex-col gap-3">
-								{/* The bars GROW to their cut on scroll-into-view (once,
-								    staggered) — watching 20% extend is the argument; a static
-								    bar is just a table. Reduced motion renders final widths. */}
-								{MARKETPLACE_RATES.map((row, i) => (
-									<div
-										key={row.id}
-										className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-3 sm:grid-cols-[7.25rem_minmax(0,1fr)]"
-									>
-										<span className="flex items-center gap-1.5 text-[13px] font-semibold">
-											<row.Icon className={`size-4 shrink-0 ${row.iconClass}`} />
-											{row.name}
-										</span>
-										<div className="relative h-9 overflow-hidden rounded-full bg-muted">
-											<motion.span
-												initial={
-													shouldReduceMotion
-														? false
-														: { width: "2.5rem", opacity: 0 }
-												}
-												whileInView={{
-													width: `${(row.pct / MAX_PCT) * 100}%`,
-													opacity: 1,
-												}}
-												viewport={{ once: true, margin: "-60px" }}
-												transition={{
-													duration: 0.9,
-													delay: i * 0.15,
-													ease: [0.22, 1, 0.36, 1],
-												}}
-												className="absolute inset-y-0 left-0 flex items-center justify-end whitespace-nowrap rounded-full bg-destructive/10 pr-3.5 text-[13px] font-bold text-red-700 dark:text-red-300"
-											>
-												{row.rate()}
-											</motion.span>
-										</div>
-									</div>
-								))}
-								<div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-3 sm:grid-cols-[7.25rem_minmax(0,1fr)]">
-									<span className="flex items-center gap-1.5 text-[13px] font-extrabold text-accent-emphasis">
-										{/* The icon-only mark (near-square /logo.svg, the same asset
-										    the notification icon uses) — the wordmark variants are
-										    unreadable at size-4 and the name is already the label. */}
-										<img
-											src="/logo.svg"
-											alt=""
-											width={78}
-											height={68}
-											loading="lazy"
-											className="size-4 shrink-0"
-										/>
-										Kedaipal
-									</span>
-									<div className="flex h-9 items-center gap-3 overflow-hidden rounded-full bg-muted">
-										{/* The punchline pops AFTER the cuts finish growing. */}
-										<motion.span
-											initial={
-												shouldReduceMotion
-													? false
-													: { scale: 0.5, opacity: 0 }
-											}
-											whileInView={{ scale: 1, opacity: 1 }}
-											viewport={{ once: true, margin: "-60px" }}
-											transition={{
-												type: "spring",
-												stiffness: 320,
-												damping: 18,
-												delay: 0.7,
-											}}
-											className="flex h-9 min-w-16 items-center justify-center rounded-full bg-accent px-4 text-sm font-extrabold text-accent-foreground"
-										>
-											0%
-										</motion.span>
-										<span className="truncate text-xs font-semibold text-accent-emphasis">
-											{m.mm_bar_kedaipal_value()}
-										</span>
-									</div>
-								</div>
-							</div>
-							<p className="mt-5 text-[11px] leading-relaxed text-muted-foreground">
-								{m.mm_note()}
-							</p>
-						</div>
-					</FadeIn>
-				</div>
-			</div>
-		</section>
-	);
-}
 
 /**
  * One-line variant for `/pricing`, where the tier cards are already the focus —

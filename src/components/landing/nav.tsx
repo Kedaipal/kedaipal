@@ -216,9 +216,12 @@ export function Nav() {
 		return () => window.removeEventListener("scroll", onScroll);
 	}, []);
 
+	// The design's link set (landing v2, z8r3fdegej): the two sections the
+	// target tier is sold on, then the price, then the objections. Pricing sits
+	// between them as its own route link below.
 	const navLinks = [
-		{ href: "/#features", label: m.nav_features() },
-		{ href: "/#how", label: m.nav_how() },
+		{ href: "/#delivery", label: m.nav_delivery() },
+		{ href: "/#payments", label: m.nav_payments() },
 		{ href: "/#faq", label: m.nav_faq() },
 	];
 
@@ -255,9 +258,8 @@ export function Nav() {
 						/>
 					</Link>
 					{/* The cost calculator left the nav (86eye3p6z): five links plus the
-					    locale switcher and the CTA crowded the bar between md and ~lg,
-					    and `/cost` now has a better front door — the money-math block's
-					    own CTA, where a visitor is already thinking about the number. */}
+					    locale switcher and the CTA crowded the bar between md and ~lg;
+					    `/cost` is linked from the pricing teaser's "full breakdown" row. */}
 					<div className="hidden items-center gap-1 md:flex">
 						{navLinks.map((link) => (
 							<a key={link.href} href={link.href} className={linkClass}>

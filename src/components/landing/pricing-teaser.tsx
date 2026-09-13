@@ -11,7 +11,7 @@ import {
 	PLAN_MONTHLY_PRICES,
 	starterPricePerDay,
 } from "../../../convex/lib/plans";
-import { useLandingRegion } from "../../hooks/useLandingRegion";
+import { useLandingRegionContext } from "../../hooks/useLandingRegion";
 import { trackSignupCta } from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
@@ -93,7 +93,9 @@ export function PricingTeaser() {
 	const { isSignedIn } = useAuth();
 	const tiers = getTiers();
 	const shouldReduceMotion = useReducedMotion();
-	const [region, setRegion] = useLandingRegion();
+	// The page's ONE region (landing v2): the Delivery section's toggle and this
+	// one move the same state, so the courier list and the prices never disagree.
+	const [region, setRegion] = useLandingRegionContext();
 	// `BILLING_CURRENCY_FOR_COUNTRY`, not `COUNTRY_CURRENCY`: the latter maps a
 	// country to the full storefront `SupportedCurrency` union, which is wider
 	// than the set Kedaipal invoices subscriptions in.

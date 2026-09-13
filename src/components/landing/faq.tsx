@@ -1,35 +1,48 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { useState } from "react";
+import {
+	FAQ_PRIMARY_IDS,
+	FAQ_SECONDARY_IDS,
+	type FaqMessages,
+} from "../../lib/landing-faq";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Eyebrow } from "./landing-ui";
+
+/**
+ * Every FAQ id → its message pair, typed, so `landing-faq.ts` can order the
+ * page with plain numbers and the structured-data test can prove the mirror
+ * (paraglide's `m` is a namespace of functions, not an indexable catalog, so
+ * a template-string lookup would be untyped).
+ */
+export const FAQ_MESSAGES: FaqMessages = {
+	1: { q: m.faq_q_1, a: m.faq_a_1 },
+	2: { q: m.faq_q_2, a: m.faq_a_2 },
+	3: { q: m.faq_q_3, a: m.faq_a_3 },
+	4: { q: m.faq_q_4, a: m.faq_a_4 },
+	5: { q: m.faq_q_5, a: m.faq_a_5 },
+	6: { q: m.faq_q_6, a: m.faq_a_6 },
+	7: { q: m.faq_q_7, a: m.faq_a_7 },
+	8: { q: m.faq_q_8, a: m.faq_a_8 },
+	9: { q: m.faq_q_9, a: m.faq_a_9 },
+	10: { q: m.faq_q_10, a: m.faq_a_10 },
+	11: { q: m.faq_q_11, a: m.faq_a_11 },
+	12: { q: m.faq_q_12, a: m.faq_a_12 },
+	13: { q: m.faq_q_13, a: m.faq_a_13 },
+};
 
 export function Faq() {
 	const shouldReduceMotion = useReducedMotion();
 	const [openIndex, setOpenIndex] = useState<number | null>(0);
 	const [showAll, setShowAll] = useState(false);
 
-	// Primary set mirrors the landing design's six "questions sellers actually
-	// ask" — and the FAQPage JSON-LD in src/routes/index.tsx MUST mirror these
-	// (update both together, Google penalises drift).
-	const primaryItems = [
-		{ q: m.faq_q_1(), a: m.faq_a_1() },
-		{ q: m.faq_q_3(), a: m.faq_a_3() },
-		{ q: m.faq_q_12(), a: m.faq_a_12() },
-		{ q: m.faq_q_11(), a: m.faq_a_11() },
-		{ q: m.faq_q_7(), a: m.faq_a_7() },
-		{ q: m.faq_q_10(), a: m.faq_a_10() },
-	];
-
-	const secondaryItems = [
-		{ q: m.faq_q_9(), a: m.faq_a_9() },
-		{ q: m.faq_q_8(), a: m.faq_a_8() },
-		{ q: m.faq_q_2(), a: m.faq_a_2() },
-		{ q: m.faq_q_4(), a: m.faq_a_4() },
-		{ q: m.faq_q_5(), a: m.faq_a_5() },
-		{ q: m.faq_q_6(), a: m.faq_a_6() },
-	];
+	// The primary set IS the FAQPage JSON-LD in src/routes/index.tsx — both
+	// read FAQ_PRIMARY_IDS, and landing-faq.test.ts proves they agree.
+	const toItems = (ids: readonly (keyof FaqMessages)[]) =>
+		ids.map((id) => ({ q: FAQ_MESSAGES[id].q(), a: FAQ_MESSAGES[id].a() }));
+	const primaryItems = toItems(FAQ_PRIMARY_IDS);
+	const secondaryItems = toItems(FAQ_SECONDARY_IDS);
 
 	const visibleItems = showAll
 		? [...primaryItems, ...secondaryItems]
