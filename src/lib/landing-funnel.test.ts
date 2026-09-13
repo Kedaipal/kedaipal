@@ -58,9 +58,10 @@ describe("landing funnel copy", () => {
 			ms: /sampai|~/i,
 			zh: /最高|约|~/,
 		};
+		// `mm_line1` left with the MoneyMath block (landing v2, z8r3fdegej); the
+		// Shopee rate still renders on /pricing via `MoneyMathRow`, so it stays
+		// hedged there.
 		for (const [locale, catalog] of catalogs) {
-			expect(catalog.mm_line1, `${locale} mm_line1`).toContain("20%");
-			expect(catalog.mm_line1, `${locale} mm_line1`).toMatch(hedge[locale]);
 			expect(catalog.mm_rate_shopee, `${locale} mm_rate_shopee`).toMatch(
 				hedge[locale],
 			);

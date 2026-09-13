@@ -31,6 +31,9 @@ catalog + buyer list + order history stay live, one-tap resume to the prior tier
 
 ## 2. Start-when-you-sell — public copy replacements (wave 2, this ticket)
 
+> **Landing rows shipped 13 Sep 2026** in `z8r3fdegej` (landing v2), verbatim.
+> The `/pricing` rows below are still open here.
+
 Framing rule: the promise is **"free until you sell"** — full product from day
 one, the first invoice fires on the **first live order or day 15, whichever
 comes first**. Never call it a trial-with-a-deadline; the deadline is the
