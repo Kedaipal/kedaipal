@@ -1,15 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useRef } from "react";
 import { z } from "zod";
 
 import { CostCalculator } from "#/components/cost/cost-calculator";
 import { Footer } from "#/components/landing/footer";
 import { Nav } from "#/components/landing/nav";
-import {
-	BOUNDS,
-	type CostInputs,
-	clamp,
-	DEFAULT_INPUTS,
-} from "#/lib/calculator";
+import { useMarketingLanding } from "#/hooks/useMarketingLanding";
+import type { CostInputs } from "#/lib/calculator";
+import { trackEvent } from "#/lib/ga-events";
 
 const SEO_TITLE = "What is WhatsApp-only ordering costing you? — Kedaipal";
 const SEO_DESC =
@@ -22,6 +20,11 @@ const OG_IMAGE = `${SITE_URL}/og-image.png`;
  * Optional prefill params so a shared `/cost?w=40&aov=35&m=5&min=5` link
  * reproduces a seller's numbers (intercept + case-study channels). All
  * coerced and optional; out-of-range values are clamped client-side.
+ *
+ * The params carry bare numbers with no currency, so a link built in Malaysia
+ * and opened in Singapore reinterprets `aov=35` as S$35. Deliberate: a region
+ * baked into the link would outlive the share, and the MY/SG toggle sits
+ * directly above the sliders for anyone who needs to correct it.
  */
 const searchSchema = z.object({
 	w: z.coerce.number().optional(),
@@ -52,29 +55,32 @@ export const Route = createFileRoute("/cost")({
 });
 
 function CostPage() {
+	// GA4 funnel (z8r3fdd1v0): capture ?src= + land_marketing on mount.
+	useMarketingLanding();
 	const search = Route.useSearch();
 	const navigate = Route.useNavigate();
+	// `calc_used` fires on the FIRST input change only — `syncToUrl` is the one
+	// choke point every slider/stepper interaction funnels through (it never
+	// runs on mount, only from user edits), so touching the calculator at all
+	// counts once per visit.
+	const calcUsedFired = useRef(false);
 
-	const initialInputs: CostInputs = {
-		ordersPerWeek:
-			search.w !== undefined
-				? clamp(search.w, BOUNDS.ordersPerWeek.min, BOUNDS.ordersPerWeek.max)
-				: DEFAULT_INPUTS.ordersPerWeek,
-		aov:
-			search.aov !== undefined
-				? clamp(search.aov, BOUNDS.aov.min, BOUNDS.aov.max)
-				: DEFAULT_INPUTS.aov,
-		missedPerWeek:
-			search.m !== undefined
-				? clamp(search.m, BOUNDS.missedPerWeek.min, BOUNDS.missedPerWeek.max)
-				: DEFAULT_INPUTS.missedPerWeek,
-		chaseMin:
-			search.min !== undefined
-				? clamp(search.min, BOUNDS.chaseMin.min, BOUNDS.chaseMin.max)
-				: DEFAULT_INPUTS.chaseMin,
+	// Only the params the link actually carried. Anything absent is left for the
+	// calculator to fill from the detected region's defaults, and clamping to
+	// the slider ranges happens there too — the bounds are per currency now, and
+	// the region isn't resolved until the calculator mounts.
+	const initialInputs: Partial<CostInputs> = {
+		...(search.w !== undefined && { ordersPerWeek: search.w }),
+		...(search.aov !== undefined && { aov: search.aov }),
+		...(search.m !== undefined && { missedPerWeek: search.m }),
+		...(search.min !== undefined && { chaseMin: search.min }),
 	};
 
 	const syncToUrl = (inputs: CostInputs) => {
+		if (!calcUsedFired.current) {
+			calcUsedFired.current = true;
+			trackEvent("calc_used");
+		}
 		navigate({
 			search: {
 				w: inputs.ordersPerWeek,

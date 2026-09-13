@@ -162,20 +162,23 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 function CategoryNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Category not found</h1>
-			<p className="text-sm text-muted-foreground">
-				This category may have been renamed or removed — the store's full
-				catalog is still open.
-			</p>
-			<Link
-				to="/$slug"
-				params={{ slug }}
-				activeOptions={{ exact: true }}
-				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
-			>
-				Browse all products
-			</Link>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Category not found</h1>
+				<p className="text-sm text-muted-foreground">
+					This category may have been renamed or removed — the store's full
+					catalog is still open.
+				</p>
+				<Link
+					to="/$slug"
+					params={{ slug }}
+					activeOptions={{ exact: true }}
+					className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
+				>
+					Browse all products
+				</Link>
+			</div>
+			<StorefrontFooter slug={slug} />
 		</main>
 	);
 }
@@ -280,7 +283,7 @@ function CategoryRoute() {
 				/>
 			</section>
 
-			<StorefrontFooter />
+			<StorefrontFooter slug={slug} />
 
 			<CartBar cart={cart} storeSlug={retailer.slug} />
 		</div>

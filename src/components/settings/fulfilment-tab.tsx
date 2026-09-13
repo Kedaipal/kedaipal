@@ -31,6 +31,7 @@ import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
 	deliveryModeAllowed,
+	riderBookingAllowed,
 } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
@@ -51,13 +52,13 @@ import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
+	type CardTarget,
 	type FixHighlight,
 	highlightRingClass,
 	SETTINGS_ANCHOR,
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
-import { clientEnv } from "../../lib/env";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -80,6 +81,8 @@ import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
+import { ToggleSwitch } from "../ui/toggle-switch";
+import { CourierBookingSection } from "./courier-booking-section";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
@@ -107,11 +110,11 @@ type DeliveryBookingSummary = {
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
-	/** Deep-link target from the post-switch checklist: the anchor to scroll to
-	 * and how loudly to ring it (86eyqgujv). Undefined on a normal visit — the
-	 * ring is contextual to having asked to fix something, never a permanent
-	 * red border on a field we only want checked. */
-	fix?: { anchor: string; highlight: FixHighlight };
+	/** Deep-link target: the anchor to scroll to and how loudly to ring it —
+	 * red/amber from the post-switch checklist (86eyqgujv), mint from a
+	 * What's-new note (`?spot=`). Undefined on a normal visit: the ring is
+	 * contextual to having been sent here, never a permanent border. */
+	target?: CardTarget;
 	/** Storefront currency — every money input on this tab wears its symbol.
 	 * Threaded rather than assumed: an SG store's delivery, pickup-fee and
 	 * minimum-order fields quoted "RM" before this (86eyqgujv). */
@@ -205,38 +208,6 @@ function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
  * today and a single use doesn't justify a new shared primitive. Keeps the
  * component count flat per the wider settings module convention.
  */
-function ToggleSwitch({
-	on,
-	onChange,
-	disabled = false,
-	label,
-}: {
-	on: boolean;
-	onChange: (next: boolean) => void;
-	disabled?: boolean;
-	label: string;
-}) {
-	return (
-		<button
-			type="button"
-			role="switch"
-			aria-checked={on}
-			aria-label={label}
-			disabled={disabled}
-			onClick={() => onChange(!on)}
-			className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
-				on ? "border-accent bg-accent" : "border-input bg-muted"
-			} ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
-		>
-			<span
-				className={`inline-block size-5 rounded-full bg-background shadow-sm transition-transform ${
-					on ? "translate-x-5" : "translate-x-0.5"
-				}`}
-			/>
-		</button>
-	);
-}
-
 /** The currency symbol worn by a money input, positioned for the shared
  * `pl-9` inputs on this tab. One author so a new currency never leaves a
  * stray "RM" behind on a field. */
@@ -250,7 +221,7 @@ function MoneyPrefix({ currency }: { currency: string }) {
 
 export function FulfilmentTab({
 	retailerId,
-	fix,
+	target,
 	currency,
 	country,
 	offerSelfCollect,
@@ -268,10 +239,10 @@ export function FulfilmentTab({
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
 	const updateSettings = useUpdateSettings();
-	/** Ring this card when it's the one the post-switch checklist sent the
-	 * seller to (86eyqgujv). Undefined on a normal visit. */
+	/** Ring this card when it's the one the deep link sent the seller to.
+	 * Undefined on a normal visit. */
 	const ring = (anchor: string): FixHighlight | undefined =>
-		fix?.anchor === anchor ? fix.highlight : undefined;
+		target?.anchor === anchor ? target.highlight : undefined;
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
@@ -453,6 +424,20 @@ export function FulfilmentTab({
 						canUseLalamove={hasFeature(subscription, "delivery")}
 					/>
 				</div>
+
+				{/* Second question inside the same card: the charge above decides
+				    what the BUYER pays; this decides how parcels physically leave.
+				    Independent toggles, not a radio — a seller may arm riders AND
+				    couriers and pick per order. Accounts are wired up under
+				    Settings → Integrations. 86eyjpv6z. */}
+				<div className="border-t border-border pt-4">
+					<CourierBookingSection
+						deliveryBooking={deliveryBooking}
+						chargeMode={deliveryConfig?.mode}
+						canUse={hasFeature(subscription, "delivery")}
+						riderBookingAvailable={riderBookingAllowed(country)}
+					/>
+				</div>
 			</Card>
 
 			{/* Directly after Delivery, and before Pickup, because that is what it
@@ -600,7 +585,10 @@ export function FulfilmentTab({
 
 // --- Delivery charge (86extzdr8) --------------------------------------------
 
-type ChargeMode = "free" | "flat" | "radius" | "weight" | "lalamove";
+// "live" is stored but not yet offered as a radio (z8r3fdbvdy ships the
+// engine before the switch) — the type accepts it so a store already on it
+// can't crash this tab.
+type ChargeMode = "free" | "flat" | "radius" | "weight" | "lalamove" | "live";
 
 type BandDraft = { maxKm: string; fee: string };
 
@@ -702,6 +690,81 @@ function ModeButton({
  * pick-one semantics visible at a glance. Decorative only: the button itself
  * carries aria-pressed.
  */
+/** One provider line in the live-mode "Priced by" block: logo, name, a
+ * five-word detail, and a STATUS CHIP instead of a paragraph. The chip is the
+ * whole point — connection state used to live in a separate Lalamove-only
+ * section a screen away, where its test-keys banner could show on a store
+ * with no Lalamove keys while a Delyva demo got no warning at all. */
+function ProviderPricingRow({
+	logo,
+	logoHeight,
+	name,
+	detail,
+	status,
+}: {
+	logo: string;
+	logoHeight: string;
+	name: string;
+	detail: string;
+	status: "live" | "test" | "connected" | "paused" | "off";
+}) {
+	const chip = {
+		live: {
+			label: "Live",
+			cls: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
+		},
+		test: {
+			label: "Test keys",
+			cls: "bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200",
+		},
+		connected: {
+			label: "Connected",
+			cls: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
+		},
+		paused: {
+			label: "Paused",
+			cls: "bg-muted text-muted-foreground",
+		},
+		off: {
+			label: "Not connected",
+			cls: "bg-muted text-muted-foreground",
+		},
+	}[status];
+	return (
+		<div className="flex items-center justify-between gap-3">
+			<span className="flex min-w-0 items-center gap-2">
+				<AppImage
+					src={logo}
+					alt=""
+					aspect={`${logoHeight} w-auto`}
+					fill={false}
+					className="shrink-0"
+				/>
+				<span className="truncate text-sm">
+					{name}{" "}
+					<span className="hidden text-xs text-muted-foreground sm:inline">
+						· {detail}
+					</span>
+				</span>
+			</span>
+			<span className="flex shrink-0 items-center gap-2">
+				<span
+					className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${chip.cls}`}
+				>
+					{chip.label}
+				</span>
+				<Link
+					to="/app/settings"
+					search={{ tab: "integrations" }}
+					className="text-xs font-medium text-accent hover:underline"
+				>
+					{status === "off" ? "Connect" : "Manage"}
+				</Link>
+			</span>
+		</div>
+	);
+}
+
 function ModeRadioDot({ active }: { active: boolean }) {
 	return (
 		<span
@@ -746,6 +809,7 @@ function DeliveryChargeSection({
 	currency: string;
 }) {
 	const updateSettings = useUpdateSettings();
+	const actAsRetailerId = useActAsRetailerId();
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
 	// Flat-mode drafts (RM display strings; sen on the wire).
 	const [flatFee, setFlatFee] = useState(
@@ -774,15 +838,12 @@ function DeliveryChargeSection({
 	const [onUnpriceable, setOnUnpriceable] = useState<"block" | "arrange">(
 		config?.mode === "weight" ? config.onUnpriceable : "arrange",
 	);
-	// Lalamove drafts (mode "lalamove" only). Blank key inputs mean "keep the
-	// stored pair" (server: undefined = no change); `editingKeys` swaps the
-	// stored-key summary row for fresh inputs (key rotation).
+	// Lalamove drafts (mode "lalamove" only). Keys live in Settings →
+	// Integrations since the 2 Sep IA rework — this section only reads the
+	// connection summary and refuses to save live-quote pricing without one.
 	const [vehicleType, setVehicleType] = useState<"MOTORCYCLE" | "CAR">(
 		deliveryBooking?.vehicleType ?? "MOTORCYCLE",
 	);
-	const [apiKey, setApiKey] = useState("");
-	const [apiSecret, setApiSecret] = useState("");
-	const [editingKeys, setEditingKeys] = useState(false);
 	const [promptBook, setPromptBook] = useState(
 		deliveryBooking?.promptBookOnPacked ?? false,
 	);
@@ -795,13 +856,33 @@ function DeliveryChargeSection({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
-	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
+	// Live pricing quotes whatever is ARMED, so the mode needs at least one
+	// armed provider — a connected-but-paused Delyva doesn't bid, and picking
+	// the mode with nothing behind it would block every checkout.
+	const delyvaSettings = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const delyvaArmed =
+		delyvaSettings?.connected === true && delyvaSettings.enabled === true;
+	// What actually BIDS at checkout is the Courier-booking toggle, not the
+	// mere presence of keys — liveQuote gates on deliveryBooking.enabled, so
+	// every surface here mirrors that or the panel lies about the quote.
+	const lalamoveArmed = hasStoredKey && deliveryBooking?.enabled === true;
+	// One tile covers both live modes: "lalamove" is the pre-migration
+	// spelling of the same choice, so a store still on it shows as selected
+	// rather than as nothing-picked.
+	const liveModeSelected = mode === "live" || mode === "lalamove";
+	const storedLiveMode = config?.mode === "live" || config?.mode === "lalamove";
 
 	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
 	// weight-zone / Lalamove) don't render and the server refuses storing them
 	// (convex/lib/delivery.ts COUNTRY_DELIVERY_MODES). The one-line reason
 	// below the grid says so, so the missing cards are never a mystery.
 	const myOnlyModesHidden = !deliveryModeAllowed(country, "radius");
+	// Gated separately from the MY-only pair: live pricing follows the
+	// booking providers (SG has Lalamove riders since z8r3fdch3r), while
+	// distance/weight-zone follow Malaysian geography.
+	const liveModeAvailable = deliveryModeAllowed(country, "live");
 	// Defensive: a stored MY-only mode on an SG store (pre-guard data) has no
 	// card to select — name the situation instead of showing nothing picked.
 	const storedModeUnavailable =
@@ -918,31 +999,39 @@ function DeliveryChargeSection({
 				onOutOfBands,
 				onUnpriceable,
 			};
-		} else if (mode === "lalamove") {
-			// Live provider quote (86eyb5hrf) — `onUnquotable` is vestigial (strict
-			// since 27 Jul: no quote, no order; the sanitizer normalizes stored
-			// rows to "block"). Mirrors the server gates so the failure is a
-			// helpful message, not a thrown save.
+		} else if (mode === "live" || mode === "lalamove") {
+			// Live provider quote (86eyb5hrf, provider-aware since z8r3fdbvdy) —
+			// `onUnquotable` is vestigial (strict since 27 Jul: no quote, no
+			// order; the sanitizer normalizes stored rows to "block"). Mirrors the
+			// server gates so the failure is a helpful message, not a thrown save.
 			if (!effectiveAddress) {
+				// Delyva-only stores never send a rider anywhere — their copy must
+				// not talk about one (PR #253 review FYI).
 				setError(
-					collectionMode
-						? "Set your business address above first — it's where riders drop off what they collect."
-						: "Set your business address above first — it's the pickup point riders are sent to.",
+					!lalamoveArmed && delyvaArmed
+						? "Set your business address above first — it anchors your store's delivery setup."
+						: collectionMode
+							? "Set your business address above first — it's where riders drop off what they collect."
+							: "Set your business address above first — it's the pickup point riders are sent to.",
 				);
 				return;
 			}
-			if (!hasStoredKey || editingKeys) {
-				if (!typedBothKeys) {
-					setError(
-						"Paste both your Lalamove API key and API secret — tap “How to set up” if you don't have them yet.",
-					);
-					return;
-				}
+			// At least ONE provider must be ARMED, or every checkout would block.
+			// Armed — not merely connected: the checkout quotes exactly what the
+			// Courier-booking toggles say (Zaki, 6 Sep — vendors choose their
+			// providers; the mode just needs one left on).
+			if (!lalamoveArmed && !delyvaArmed) {
+				setError(
+					hasStoredKey || delyvaSettings?.connected
+						? "Turn on at least one service under Courier booking below — live pricing quotes whatever is switched on."
+						: "Connect Lalamove or Delyva under Settings → Integrations first — live prices run on your own accounts.",
+				);
+				return;
 			}
-			nextConfig =
-				config?.mode === "lalamove"
-					? config
-					: { mode: "lalamove", onUnquotable: "block" };
+			nextConfig = {
+				mode: "live" as const,
+				onUnquotable: "block" as const,
+			};
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -968,13 +1057,18 @@ function DeliveryChargeSection({
 		}
 		setSaving(true);
 		try {
-			// Lalamove is enabled/disabled as part of the pricing choice — one
-			// save, one mental model. Switching AWAY also turns booking off (the
-			// server refuses a dangling live-quote config otherwise); the stored
-			// keys stay, so switching back later is instant.
-			const wasLalamove = deliveryBooking?.enabled === true;
+			// Live-quote pricing implies rider booking (the checkout quote runs on
+			// those credentials), so picking it arms booking too. Switching AWAY no
+			// longer disarms it (2 Sep IA rework): rider booking is its own toggle
+			// under Courier booking below, and a weight-priced store may keep
+			// riders armed beside Delyva. Keys never ride this save — they live in
+			// Settings → Integrations.
+			// Only the LEGACY single-provider mode arms rider booking as part of
+			// the save (pricing literally runs on those credentials). The live
+			// mode reads the toggles — re-arming Lalamove on every save would
+			// override a vendor who deliberately switched it off (Zaki, 6 Sep).
 			const bookingPatch =
-				mode === "lalamove"
+				mode === "lalamove" && hasStoredKey
 					? {
 							deliveryBooking: {
 								enabled: true,
@@ -985,21 +1079,9 @@ function DeliveryChargeSection({
 								deliveryDirection: collectionMode
 									? ("collection" as const)
 									: ("standard" as const),
-								apiKey: apiKey.trim() || undefined,
-								apiSecret: apiSecret.trim() || undefined,
 							},
 						}
-					: wasLalamove
-						? {
-								// Direction is deliberately omitted here — the server keeps
-								// the stored value, so switching pricing away and back never
-								// resets a collection store to standard.
-								deliveryBooking: {
-									enabled: false,
-									vehicleType,
-								},
-							}
-						: {};
+					: {};
 			await updateSettings({
 				deliveryConfig: nextConfig,
 				...bookingPatch,
@@ -1007,13 +1089,10 @@ function DeliveryChargeSection({
 			toast.success(
 				mode === "free"
 					? "Delivery charge turned off — delivery is free."
-					: mode === "lalamove"
-						? "Lalamove delivery is on — book riders from any confirmed delivery order."
+					: mode === "live" || mode === "lalamove"
+						? "Live courier pricing is on — buyers pay the real price for their address."
 						: "Delivery charge saved.",
 			);
-			setApiKey("");
-			setApiSecret("");
-			setEditingKeys(false);
 		} catch (err) {
 			setError(convexErrorMessage(err));
 		} finally {
@@ -1027,41 +1106,53 @@ function DeliveryChargeSection({
 				title="Delivery charge"
 				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
 			/>
-			{/* 2×2 grid, Lalamove FIRST (86eyb5hrf) — it's a pricing choice like
-			    the others, but the promoted one: branded with the official
-			    wordmark so every tier SEES rider delivery exists. For a locked
+			{/* 2×2 grid, live pricing FIRST (86eyb5hrf) — it's a pricing choice
+			    like the others, but the promoted one: it carries the providers'
+			    own wordmarks so every tier SEES that real courier pricing
+			    exists. Both marks, because since z8r3fdbvdy the mode prices
+			    across every armed provider — a Lalamove-only tile would say
+			    the wrong thing to a store that ships parcels. For a locked
 			    Starter it stays full-colour with a Pro chip + upgrade line
 			    (disabled-with-reason, not a washed-out ghost). SG stores see
-			    only Free + Flat (SG-lite) — the reason line below the grid
-			    names why the other modes are absent. */}
+			    Live + Free + Flat — distance and weight-zone stay MY-only, and
+			    the reason line below the grid names why. */}
 			<div className="grid grid-cols-2 gap-2">
-				{myOnlyModesHidden ? null : (
+				{!liveModeAvailable ? null : (
 					<button
 						type="button"
-						onClick={() => setMode("lalamove")}
-						disabled={lalamoveLocked && config?.mode !== "lalamove"}
-						aria-pressed={mode === "lalamove"}
+						onClick={() => setMode("live")}
+						disabled={lalamoveLocked && !storedLiveMode}
+						aria-pressed={liveModeSelected}
 						className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-							mode === "lalamove"
+							liveModeSelected
 								? "border-accent bg-accent/5"
 								: "border-border bg-card hover:border-accent/40"
-						} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+						} ${lalamoveLocked && !storedLiveMode ? "cursor-not-allowed" : ""}`}
 					>
 						<span className="flex items-center gap-1.5">
+							<span className="text-sm font-medium">Live courier price</span>
+							{lalamoveLocked ? <ProBadge /> : null}
+						</span>
+						<span className="flex items-center gap-2">
 							<AppImage
 								src="/img/lalamove-logo.svg"
 								alt="Lalamove"
-								aspect="h-4 w-auto"
+								aspect="h-3.5 w-auto"
 								fill={false}
 							/>
-							{lalamoveLocked ? <ProBadge /> : null}
+							<AppImage
+								src="/img/delyva-logo.png"
+								alt="Delyva"
+								aspect="h-2.5 w-auto"
+								fill={false}
+							/>
 						</span>
 						<span className="text-xs text-muted-foreground">
-							{lalamoveLocked && config?.mode !== "lalamove"
-								? "Rider delivery — upgrade to Pro to turn on"
-								: "Live rider price, one-tap booking"}
+							{lalamoveLocked && !storedLiveMode
+								? "Real courier prices — upgrade to Pro to turn on"
+								: "Real price per address"}
 						</span>
-						<ModeRadioDot active={mode === "lalamove"} />
+						<ModeRadioDot active={liveModeSelected} />
 					</button>
 				)}
 				<ModeButton
@@ -1102,8 +1193,9 @@ function DeliveryChargeSection({
 			</div>
 			{myOnlyModesHidden ? (
 				<p className="text-xs text-muted-foreground">
-					Distance, weight-zone and Lalamove pricing are Malaysia-only for now —
-					Singapore stores deliver free or at a flat fee.
+					Distance and weight-zone pricing are Malaysia-only for now — their
+					zone maps are Malaysia-shaped. Live courier price, Free and Flat all
+					work in Singapore.
 				</p>
 			) : null}
 			{storedModeUnavailable ? (
@@ -1114,36 +1206,140 @@ function DeliveryChargeSection({
 				</p>
 			) : null}
 
-			{mode === "lalamove" ? (
+			{liveModeSelected ? (
 				<div className="flex flex-col gap-4">
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
-						Buyers pay the real Lalamove price for their address at checkout,
-						and you book the rider in one tap from the order — which then marks
-						itself Shipped and puts the rider&apos;s live tracking on the
-						buyer&apos;s order page, automatically. There&apos;s{" "}
-						<b>no delivery area to set</b>, and{" "}
-						<b>buyers always see the price before ordering</b> (an address
-						Lalamove can&apos;t price can&apos;t check out, so you never work
-						out a delivery charge yourself). Runs entirely on{" "}
-						<b>your own Lalamove account</b>; Kedaipal never books or pays on
-						your behalf.
+						Buyers pay the <b>real courier price</b> for their address — an
+						address nobody can price can&apos;t check out, so you never work out
+						a charge yourself. Runs on your own courier accounts.
 					</p>
+
+					{/* WHO will be asked, and what happens when they disagree. Two
+					    armed providers is not an edge case — it is the reason this
+					    mode exists — and a seller who doesn't know both are quoted
+					    can't explain their own checkout prices to a buyer. */}
+					<div className="flex flex-col gap-2 rounded-xl border border-input p-3">
+						<span className="text-xs font-medium">Priced by</span>
+						<ProviderPricingRow
+							logo="/img/lalamove-logo.svg"
+							logoHeight="h-3.5"
+							name="Riders"
+							detail="Same-day, around your city"
+							status={
+								lalamoveArmed
+									? deliveryBooking?.env === "sandbox"
+										? "test"
+										: deliveryBooking?.env === "production"
+											? "live"
+											: "connected"
+									: hasStoredKey
+										? "paused"
+										: "off"
+							}
+						/>
+						<ProviderPricingRow
+							logo="/img/delyva-logo.png"
+							logoHeight="h-2.5"
+							name="Couriers"
+							detail="Nationwide parcels, cheapest service"
+							status={
+								delyvaArmed
+									? delyvaSettings?.isDemo
+										? "test"
+										: "live"
+									: delyvaSettings?.connected
+										? "paused"
+										: "off"
+							}
+						/>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{lalamoveArmed && delyvaArmed ? (
+								<>
+									Both get quoted and the buyer pays the <b>higher</b> — book
+									the cheaper one and the difference is yours.
+								</>
+							) : lalamoveArmed || delyvaArmed ? (
+								<>
+									One provider quotes today. Arm the other under{" "}
+									<b>Courier booking</b> below and the buyer pays the higher of
+									the two.
+								</>
+							) : (
+								<>
+									Nothing can quote yet, so delivery checkout would be refused —
+									connect a provider in{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Integrations
+									</Link>{" "}
+									first.
+								</>
+							)}
+						</p>
+						{/* ONE test-mode note, owned by whichever provider is actually
+						    in test — the old version was a Lalamove-only banner that
+						    could show on a store with no Lalamove keys at all, while a
+						    Delyva demo account got no warning here (Zaki, 4 Sep). */}
+						{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||
+						(delyvaArmed && delyvaSettings?.isDemo) ? (
+							<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+								<span>
+									<b>Test mode</b> — bookings simulate and buyers see test
+									prices. Swap live keys in{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium underline underline-offset-2"
+									>
+										Integrations
+									</Link>{" "}
+									before telling buyers.
+								</span>
+							</p>
+						) : null}
+						{delyvaArmed &&
+						delyvaSettings?.defaultItemType &&
+						delyvaSettings.defaultItemType !== "PARCEL" ? (
+							/* A cold default is priced as cold, and Delyva quotes
+							   nothing when the account carries no cold-chain service —
+							   which blocks every delivery checkout. Never something to
+							   discover as orders quietly stopping. */
+							<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+								Parcel type is{" "}
+								<b>
+									{delyvaSettings.defaultItemType === "FROZEN"
+										? "Frozen"
+										: "Chilled"}
+								</b>
+								, so only a cold-chain courier can price checkout — riders are
+								never substituted. No cold service on your Delyva account ={" "}
+								<b>delivery checkout refused</b>. Fix: ask Delyva to enable one,
+								or set the type to Parcel in Integrations.
+							</p>
+						) : null}
+					</div>
 					{/* Coverage education (27 Jul, measured live): city-zone limits are
 					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
-					    the vehicle picker below must not read as a range picker. */}
-					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						<b>Lalamove&apos;s own coverage still applies:</b> riders serve the
-						city zone around your pickup address (e.g. Klang Valley), so a buyer
-						too far outside it sees <i>&quot;this address is too far&quot;</i>{" "}
-						and can&apos;t choose delivery — roughly 40–70&nbsp;km depending on
-						direction, and never across zones (a Klang Valley store can&apos;t
-						Lalamove to Melaka). Vehicle choice doesn&apos;t change this: bike
-						and car cover the <b>same area</b> — the difference is parcel size
-						and price. Keep self-collect on as the fallback for far buyers.
-					</p>
+					    the vehicle picker below must not read as a range picker. Shown
+					    only when riders actually bid — a parcel-only store has no city
+					    zone to learn about. */}
+					{hasStoredKey ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+							<b>Riders serve your city zone only</b> (~40–70&nbsp;km, never
+							cross-zone) — a buyer beyond it sees &quot;too far&quot; and
+							can&apos;t pick delivery.{" "}
+							{delyvaArmed
+								? "Beyond the zone your Delyva couriers still quote, so checkout keeps working — as a parcel."
+								: "Keep self-collect on as the fallback for far buyers."}
+						</p>
+					) : null}
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Lalamove delivery is a Pro feature. Your setup still applies to
+							Live courier pricing is a Pro feature. Your setup still applies to
 							new orders — upgrade in Settings → Billing to change it, or switch
 							to Free / Flat fee (always allowed).
 						</p>
@@ -1152,213 +1348,54 @@ function DeliveryChargeSection({
 					{/* 1 · Pickup point — one editor, in the Business address card
 					    above. It used to be duplicated here and in radius mode,
 					    which is how a Singapore store ended up with no way to set
-					    one at all (86eyqgujv). */}
-					<BusinessAddressReference
-						address={businessAddress}
-						present={
-							collectionMode
-								? "Riders bring collected orders to"
-								: "Riders collect from"
-						}
-						missing={
-							collectionMode
-								? "Set your business address first — it's where riders bring collected orders."
-								: "Set your business address first — it's the exact point riders are sent to."
-						}
-					/>
+					    one at all (86eyqgujv). Riders need the exact pin; Delyva
+					    collects from its own pickup address in Integrations. */}
+					{hasStoredKey ? (
+						<BusinessAddressReference
+							address={businessAddress}
+							present={
+								collectionMode
+									? "Riders bring collected orders to"
+									: "Riders collect from"
+							}
+							missing={
+								collectionMode
+									? "Set your business address first — it's where riders bring collected orders."
+									: "Set your business address first — it's the exact point riders are sent to."
+							}
+						/>
+					) : null}
 
-					{/* 2 · Vehicle */}
-					<div className="flex flex-col gap-1.5">
-						<span className="text-xs font-medium text-muted-foreground">
-							Default vehicle
-						</span>
-						<div className="grid grid-cols-2 gap-2">
-							<ModeButton
-								active={vehicleType === "MOTORCYCLE"}
-								disabled={lalamoveLocked}
-								onClick={() => setVehicleType("MOTORCYCLE")}
-								title="Motorcycle"
-								subtitle="Most orders, cheapest"
-							/>
-							<ModeButton
-								active={vehicleType === "CAR"}
-								disabled={lalamoveLocked}
-								onClick={() => setVehicleType("CAR")}
-								title="Car"
-								subtitle="Bulky / fragile"
-							/>
-						</div>
-						<p className="text-xs text-muted-foreground">
-							Just the default — you can switch vehicle per order in the booking
-							dialog.
-						</p>
-					</div>
-
-					{/* 3 · The seller's own API keys (BYO-only) */}
-					<div className="flex flex-col gap-2">
-						<div className="flex items-center justify-between">
-							<span className="text-xs font-medium text-muted-foreground">
-								Your Lalamove account (API key)
-							</span>
-							<a
-								href="/guides/lalamove-setup.html"
-								target="_blank"
-								rel="noopener noreferrer"
-								className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
-							>
-								How to set up <ExternalLink className="size-3" />
-							</a>
-						</div>
-						{hasStoredKey && !editingKeys ? (
-							<div className="flex flex-col gap-2">
-								<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
-									<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-										Key ending{" "}
-										<span className="font-mono">
-											…{deliveryBooking?.apiKeyHint}
-										</span>{" "}
-										stored
-										{deliveryBooking?.env === "sandbox" ? (
-											<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-												Test keys
-											</span>
-										) : deliveryBooking?.env === "production" ? (
-											<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-												Live
-											</span>
-										) : null}
-									</span>
-									<button
-										type="button"
-										onClick={() => setEditingKeys(true)}
-										className="text-xs font-medium text-accent hover:underline"
-									>
-										Replace
-									</button>
-								</div>
-								{/* Say what the badge COSTS, not just what it is — a seller
-								    who doesn't know how sandbox differs from live reads a
-								    neutral "Test keys" chip as harmless (86eypncfy). */}
-								{deliveryBooking?.env === "sandbox" ? (
-									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-										<span>
-											<span className="font-medium">
-												No real rider will be dispatched.
-											</span>{" "}
-											Sandbox keys (
-											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
-												pk_test_
-											</code>
-											) book simulated trips and quote your buyers test prices,
-											and the sandbox wallet can&apos;t be topped up with real
-											money. Replace them with your live{" "}
-											<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
-												pk_prod_
-											</code>{" "}
-											pair when you&apos;re ready to take real orders.
-										</span>
-									</p>
-								) : null}
-							</div>
-						) : (
-							<div className="flex flex-col gap-2">
-								{/* Plain text inputs with a CSS mask on the secret — NOT
-								    type="password", so Chrome never mistakes this for a
-								    login form and autofills saved credentials into it. */}
-								<Input
-									type="text"
-									name="lalamove-api-key"
-									autoComplete="off"
-									data-1p-ignore
-									data-lpignore="true"
-									data-form-type="other"
-									value={apiKey}
-									disabled={lalamoveLocked}
-									onChange={(e) => setApiKey(e.target.value)}
-									placeholder="API key (pk_…)"
-									className="h-11 font-mono text-sm"
-								/>
-								<Input
-									type="text"
-									name="lalamove-api-secret"
-									autoComplete="off"
-									data-1p-ignore
-									data-lpignore="true"
-									data-form-type="other"
-									value={apiSecret}
-									disabled={lalamoveLocked}
-									onChange={(e) => setApiSecret(e.target.value)}
-									placeholder="API secret (sk_…)"
-									className="h-11 font-mono text-sm"
-									style={
-										apiSecret.length > 0
-											? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
-											: undefined
-									}
-								/>
-								{hasStoredKey && editingKeys ? (
-									<button
-										type="button"
-										onClick={() => {
-											setEditingKeys(false);
-											setApiKey("");
-											setApiSecret("");
-										}}
-										className="self-start text-xs font-medium text-muted-foreground hover:underline"
-									>
-										Keep the stored key instead
-									</button>
-								) : null}
-							</div>
-						)}
-						<p className="text-xs text-muted-foreground">
-							From the Lalamove Partner Portal (partnerportal.lalamove.com) →
-							Developers tab. You pay Lalamove directly from your own prepaid
-							wallet — Kedaipal never books or pays on your behalf. Your key
-							stays saved if you switch pricing methods, so switching back is
-							instant.
-						</p>
-					</div>
-
-					{/* 4 · Webhook — each seller registers OUR endpoint in THEIR
-					    Partner Portal; without it bookings still work but the
-					    shipped/delivered updates stop being automatic. */}
+					{/* 2 · Vehicle — a rider setting, so it follows the rider. */}
 					{hasStoredKey ? (
 						<div className="flex flex-col gap-1.5">
 							<span className="text-xs font-medium text-muted-foreground">
-								One more step: your Lalamove webhook
+								Default vehicle
 							</span>
-							<div className="flex items-center gap-2">
-								<code className="min-w-0 flex-1 truncate rounded-lg border border-input bg-muted/40 px-3 py-2.5 font-mono text-xs">
-									{lalamoveWebhookUrl()}
-								</code>
-								<Button
-									type="button"
-									variant="outline"
-									className="h-10 shrink-0 px-3 text-xs"
-									onClick={() => {
-										navigator.clipboard
-											.writeText(lalamoveWebhookUrl())
-											.then(() => toast.success("Webhook link copied"))
-											.catch(() =>
-												toast.error("Couldn't copy — select and copy manually"),
-											);
-									}}
-								>
-									Copy
-								</Button>
+							<div className="grid grid-cols-2 gap-2">
+								<ModeButton
+									active={vehicleType === "MOTORCYCLE"}
+									disabled={lalamoveLocked}
+									onClick={() => setVehicleType("MOTORCYCLE")}
+									title="Motorcycle"
+									subtitle="Most orders, cheapest"
+								/>
+								<ModeButton
+									active={vehicleType === "CAR"}
+									disabled={lalamoveLocked}
+									onClick={() => setVehicleType("CAR")}
+									title="Car"
+									subtitle="Bulky / fragile"
+								/>
 							</div>
 							<p className="text-xs text-muted-foreground">
-								Paste this in your Lalamove Partner Portal → Developers →
-								Webhook URL (choose version 3). It powers the automatic Shipped
-								and Delivered updates, and the live tracking on the buyer&apos;s
-								order page — step 5 in the guide.
+								Just the default — you can switch vehicle per order in the
+								booking dialog.
 							</p>
 						</div>
 					) : null}
 
-					{/* 5 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
+					{/* 4 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
 					    riders collect FROM the customer's address and drop off at the
 					    business address. Sits ABOVE prompt-on-packed because it changes
 					    what the whole feature does, not just when it prompts. */}
@@ -1403,7 +1440,7 @@ function DeliveryChargeSection({
 						</div>
 					</div>
 
-					{/* 6 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
+					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
 					    marking a paid, due-today order Packed pops the confirm dialog
 					    with today's price, so the seller always sees the cost + taps
 					    to spend. */}
@@ -1842,14 +1879,12 @@ function DeliveryChargeSection({
 				disabled={
 					saving ||
 					(mode === "radius" && radiusLocked && config?.mode === "radius") ||
-					(mode === "lalamove" && lalamoveLocked && config?.mode === "lalamove")
+					(liveModeSelected && lalamoveLocked && storedLiveMode)
 				}
 				isLoading={saving}
 				className="h-11 self-start"
 			>
-				{mode === "lalamove"
-					? "Save Lalamove delivery"
-					: "Save delivery charge"}
+				{liveModeSelected ? "Save live pricing" : "Save delivery charge"}
 			</Button>
 		</div>
 	);
@@ -2937,14 +2972,4 @@ function LocationListSkeleton() {
 			))}
 		</ul>
 	);
-}
-
-// --- Lalamove rider booking (86eyb5hrf) --------------------------------------
-
-/** The deployment's Lalamove webhook endpoint — Convex HTTP actions live on
- * the `.convex.site` twin of the client's `.convex.cloud` URL. Surfaced in
- * the card so BYO sellers can paste it into their own Partner Portal. */
-function lalamoveWebhookUrl(): string {
-	const convexUrl = clientEnv.VITE_CONVEX_URL ?? "";
-	return `${convexUrl.replace(".convex.cloud", ".convex.site")}/webhook/lalamove`;
 }

@@ -63,9 +63,13 @@ export type RetailerEmailVars = {
 	// `totalFormatted`; `paymentReference` carries the HitPay payment id.
 	gatewayPaidFormatted?: string;
 	// Optional — only set when key === "deliveryJobFailed". Human-readable
-	// reason the Lalamove booking ended without a rider (e.g. "No driver
+	// reason the booking ended without a rider/courier (e.g. "No driver
 	// accepted the order"). See docs/delivery-lalamove.md.
 	jobFailureReason?: string;
+	// Which booking provider the failed job belonged to (86eyjpv6z). Absent =
+	// "lalamove" (every pre-Delyva caller), so old scheduled sends render
+	// unchanged.
+	deliveryProvider?: "lalamove" | "delyva";
 	// True when the order has a made-to-order custom item that needs a mockup
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
@@ -359,17 +363,22 @@ const en = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
+		const delyva = v.deliveryProvider === "delyva";
+		const provider = delyva ? "Delyva" : "Lalamove";
+		const rebook = delyva ? "rebook the courier" : "rebook a rider";
 		const subject = `🚨 Delivery booking failed for ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Reason: ${v.jobFailureReason}`
-			: `The booking ended without a rider.`;
+			: delyva
+				? `The booking ended without a courier.`
+				: `The booking ended without a rider.`;
 		const lines = [
-			`<strong>${escapeHtml(v.shortId)}</strong> — the Lalamove booking did not go through.`,
+			`<strong>${escapeHtml(v.shortId)}</strong> — the ${provider} booking did not go through.`,
 			escapeHtml(reasonLine),
-			`Your buyer has <strong>not</strong> been notified and the order is unchanged — open the order to rebook a rider.`,
+			`Your buyer has <strong>not</strong> been notified and the order is unchanged — open the order to ${rebook}.`,
 		];
 		const html = wrapHtml("🚨", `Delivery booking failed — ${v.shortId}`, lines, v.dashboardUrl, "Rebook delivery");
-		const text = `🚨 Delivery booking failed for ${v.shortId}\n${reasonLine}\nYour buyer has not been notified and the order is unchanged — open the order to rebook a rider.\n${v.dashboardUrl}`;
+		const text = `🚨 Delivery booking failed for ${v.shortId}\n${reasonLine}\nYour buyer has not been notified and the order is unchanged — open the order to ${rebook}.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
@@ -555,17 +564,22 @@ const ms = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
+		const delyva = v.deliveryProvider === "delyva";
+		const provider = delyva ? "Delyva" : "Lalamove";
+		const rebook = delyva ? "tempah kurier semula" : "tempah rider semula";
 		const subject = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Sebab: ${v.jobFailureReason}`
-			: `Tempahan tamat tanpa rider.`;
+			: delyva
+				? `Tempahan tamat tanpa kurier.`
+				: `Tempahan tamat tanpa rider.`;
 		const lines = [
-			`<strong>${escapeHtml(v.shortId)}</strong> — tempahan Lalamove tidak berjaya.`,
+			`<strong>${escapeHtml(v.shortId)}</strong> — tempahan ${provider} tidak berjaya.`,
 			escapeHtml(reasonLine),
-			`Pembeli anda <strong>tidak</strong> dimaklumkan dan pesanan tidak berubah — buka pesanan untuk tempah rider semula.`,
+			`Pembeli anda <strong>tidak</strong> dimaklumkan dan pesanan tidak berubah — buka pesanan untuk ${rebook}.`,
 		];
 		const html = wrapHtml("🚨", `Tempahan penghantaran gagal — ${v.shortId}`, lines, v.dashboardUrl, "Tempah semula");
-		const text = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}\n${reasonLine}\nPembeli anda tidak dimaklumkan dan pesanan tidak berubah — buka pesanan untuk tempah rider semula.\n${v.dashboardUrl}`;
+		const text = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}\n${reasonLine}\nPembeli anda tidak dimaklumkan dan pesanan tidak berubah — buka pesanan untuk ${rebook}.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
@@ -751,17 +765,22 @@ const zh = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
+		const delyva = v.deliveryProvider === "delyva";
+		const provider = delyva ? "Delyva" : "Lalamove";
+		const rebook = delyva ? "重新预订快递" : "重新预订骑士";
 		const subject = `🚨 ${v.shortId} 的配送预订失败`;
 		const reasonLine = v.jobFailureReason
 			? `原因：${v.jobFailureReason}`
-			: `预订没有配对到骑士。`;
+			: delyva
+				? `预订没有配对到快递。`
+				: `预订没有配对到骑士。`;
 		const lines = [
-			`<strong>${escapeHtml(v.shortId)}</strong> —— Lalamove 预订没有成功。`,
+			`<strong>${escapeHtml(v.shortId)}</strong> —— ${provider} 预订没有成功。`,
 			escapeHtml(reasonLine),
-			`顾客<strong>还没有</strong>收到通知，订单也没有变化 —— 请打开订单重新预订骑士。`,
+			`顾客<strong>还没有</strong>收到通知，订单也没有变化 —— 请打开订单${rebook}。`,
 		];
 		const html = wrapHtml("🚨", `配送预订失败 —— ${v.shortId}`, lines, v.dashboardUrl, "重新预订");
-		const text = `🚨 ${v.shortId} 的配送预订失败\n${reasonLine}\n顾客还没有收到通知，订单也没有变化 —— 请打开订单重新预订骑士。\n${v.dashboardUrl}`;
+		const text = `🚨 ${v.shortId} 的配送预订失败\n${reasonLine}\n顾客还没有收到通知，订单也没有变化 —— 请打开订单${rebook}。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {

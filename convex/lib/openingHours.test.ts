@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { MYT_OFFSET_MS } from "./fulfilmentDate";
 import {
 	assertWithinOpeningHours,
 	type DayHours,
@@ -15,8 +14,8 @@ import {
 	openNowStatus,
 	sanitizeOpeningHours,
 	selectableTimeWindow,
-	weekdayIndexMyt,
 } from "./openingHours";
+import { MYT_OFFSET_MS, weekdayIndexMyt } from "./fulfilmentDate";
 
 // Fixed reference clock, matching fulfilmentDate.test.ts: 2026-06-26 (a
 // FRIDAY) at 09:00 MYT = 01:00 UTC.

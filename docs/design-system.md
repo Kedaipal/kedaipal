@@ -32,6 +32,34 @@ Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new s
 - Radius scales off `--radius: 0.75rem`: `rounded-sm/md/lg/xl/2xl…`. Cards/dialogs use `rounded-xl`; buttons `rounded-lg`; pills `rounded-full`.
 - Spacing: Tailwind default scale. Forms breathe (`gap-2`–`gap-4`); toolbars are compact.
 
+## Desktop density — three traps (2026-08-31)
+
+Mobile-first is the rule, but "desktop" is not one size, and the seller's
+booking calendar shipped too tall for the most common laptop before these were
+understood. All three cost a round trip:
+
+1. **A 13" laptop is `xl`, not `lg`.** 1280–1440px logical width lands in `xl`
+   (≥1280). Tuning density at `lg:` and stopping there does nothing for the
+   machine you were trying to help — it only affects the 1024–1279 band, which
+   almost nobody is on. Verify which breakpoint your target screen is in before
+   writing the class.
+2. **`min-h-*` is a floor, not a size.** A card that grows to fit its content
+   ignores the minimum entirely; shrinking the box means shrinking the CONTENT
+   (font sizes, avatar sizes, gaps, padding). Measure the real element and
+   subtract the parts rather than assuming the minimum won.
+3. **A CSS grid row stretches every cell to its tallest sibling.** One cell with
+   an extra line makes the whole row taller, so a rare state can cost height on
+   every screen. Prefer a FIXED number of content lines (drop one item to make
+   room for the "+N more") over a variable one — the height becomes
+   deterministic and the layout stops depending on the data.
+
+**Never wrap a token in `hsl()`.** Our tokens are already complete colour
+functions (`--muted: hsl(210 40% 96%)`), so the shadcn-idiomatic
+`hsl(var(--muted))` expands to `hsl(hsl(...))` — invalid, which drops the WHOLE
+declaration. In an arbitrary value that means the entire gradient computes to
+`background-image: none`. Write `var(--muted)`. A blocked-day hatch shipped
+broken this way for weeks because a flat fill sat beside it and hid the loss.
+
 ## Mobile-first rules (non-negotiable)
 1. **≥44px tap targets** for anything interactive. ⚠️ **`Button`'s own sizes top out at `h-9` = 36px** — even `size="lg"` and `size="icon"` do **not** clear 44px. For any primary *touch* target, add the **`tap-target`** utility (or `min-h-11`) to the button, or use the Input `field` variant for fields. (Mouse-only desktop controls may stay compact — 44px is a touch rule.) Icon-only buttons should use `size="icon"` + `tap-target`, not a text size like `lg`.
 2. **Single-column by default**, widen at `sm:`/`lg:`. Never design desktop-first and shrink.

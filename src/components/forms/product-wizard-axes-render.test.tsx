@@ -25,6 +25,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 import {
+	emptyWizardState,
 	ProductWizard,
 	type WizardState,
 	wizardStepIssues,
@@ -33,12 +34,21 @@ import { emptyRow } from "./variant-editor";
 
 afterEach(cleanup);
 
-/** Flag and editor disagree — the state the reconcile exists to survive. */
+/** Flag and editor disagree — the state the reconcile exists to survive.
+ *
+ * Built ON `emptyWizardState()` rather than hand-rolled behind an
+ * `as WizardState` cast: the cast used to hide missing booking fields, so any
+ * derived value the component reads unconditionally (a package length, a
+ * capacity) crashed the render instead of failing to compile. */
 function divergent(overrides: Partial<WizardState> = {}): WizardState {
 	return {
+		...emptyWizardState(),
 		name: "Kuih lapis",
 		description: "",
 		images: [],
+		// Answered, so the wizard opens on step 2 — the kind question isn't what
+		// these assertions are about.
+		kindCard: "physical",
 		shape: "single",
 		editor: {
 			options: [{ name: "", values: ["S"] }],
@@ -51,7 +61,7 @@ function divergent(overrides: Partial<WizardState> = {}): WizardState {
 		minQuantity: "",
 		minNoticeDays: "",
 		...overrides,
-	} as WizardState;
+	};
 }
 
 function renderWizard(state: WizardState) {

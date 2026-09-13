@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	type AutoRenewEmailVars,
 	type BillingEmailVars,
+	renderAutoRenewEmail,
 	renderBillingEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
@@ -184,5 +186,112 @@ describe("renderPaymentEmail", () => {
 	it("renders Chinese payment copy", () => {
 		const { subject } = renderPaymentEmail("zh", "welcome", pv);
 		expect(subject).toContain("欢迎");
+	});
+});
+
+describe("invoice emails carry the Pay-now link (86eyb6z4r)", () => {
+	const payNowUrl = "https://securecheckout.hit-pay.com/req_1";
+
+	it("payNowUrl leads the pay panel and the text body; manual rails stay below", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceIssued", {
+			...base,
+			payNowUrl,
+		});
+		expect(html).toContain(payNowUrl);
+		expect(html).toContain("Pay online now");
+		// The manual bank rail survives as the fallback, reframed.
+		expect(html).toContain("5123 4567 8901");
+		expect(html).toContain("Prefer a bank transfer?");
+		expect(text).toContain(`Pay online now: ${payNowUrl}`);
+	});
+
+	it("cross-border invoices get the link too — it's their ONLY self-serve rail", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceReminder", {
+			storeName: "SG Store",
+			invoiceNumber: "INV-SG-1",
+			planLabel: "Pro · Monthly",
+			totalFormatted: "SGD 59.00",
+			dueDateFormatted: "5 Jul 2026",
+			crossBorder: true,
+			payNowUrl,
+			billingUrl: base.billingUrl,
+		});
+		expect(html).toContain(payNowUrl);
+		expect(text).toContain(payNowUrl);
+	});
+
+	it("without a link the panel renders exactly as before", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceIssued", base);
+		expect(html).not.toContain("Pay online now");
+		expect(html).toContain("How to pay");
+		expect(text).not.toContain("Pay online now");
+	});
+});
+
+describe("renderAutoRenewEmail (86eyb6z4r)", () => {
+	const av: AutoRenewEmailVars = {
+		storeName: "Mak Kuih",
+		methodLabel: "Visa ·· 4242",
+		billingUrl: "https://kedaipal.com/app/settings?tab=billing",
+		planLabel: "Pro · Monthly",
+		amountFormatted: "MYR 104.00",
+		chargeDateFormatted: "5 Oct 2026",
+	};
+
+	it("enabled: names the method and the always-on off-switch", () => {
+		const { subject, html } = renderAutoRenewEmail("en", "autoRenewEnabled", av);
+		expect(subject.toLowerCase()).toContain("auto-renewal is on");
+		expect(html).toContain("Visa ·· 4242");
+		expect(html).toContain("turn this off any time");
+	});
+
+	it("upcoming: date + amount + method — the no-surprise-debit notice", () => {
+		const { subject, html, text } = renderAutoRenewEmail(
+			"en",
+			"autoRenewUpcoming",
+			av,
+		);
+		expect(subject).toContain("5 Oct 2026");
+		expect(html).toContain("MYR 104.00");
+		expect(html).toContain("Visa ·· 4242");
+		expect(text).toContain("Turn off auto-renewal");
+	});
+
+	it("failed: CTA goes to the Pay-now link when one exists, else billing", () => {
+		const withLink = renderAutoRenewEmail("en", "autoRenewFailed", {
+			...av,
+			payNowUrl: "https://pay.example/x",
+		});
+		expect(withLink.html).toContain("https://pay.example/x");
+		const withoutLink = renderAutoRenewEmail("en", "autoRenewFailed", av);
+		expect(withoutLink.html).toContain(av.billingUrl);
+		// The final notice says retries stopped; the interim one promises a retry.
+		const final = renderAutoRenewEmail("en", "autoRenewFailed", {
+			...av,
+			final: true,
+		});
+		expect(final.html.toLowerCase()).toContain("stopped retrying");
+		expect(withoutLink.html.toLowerCase()).toContain("retry automatically");
+	});
+
+	it("renders in Malay and Chinese for every key", () => {
+		for (const key of [
+			"autoRenewEnabled",
+			"autoRenewUpcoming",
+			"autoRenewFailed",
+		] as const) {
+			expect(renderAutoRenewEmail("ms", key, av).subject.length).toBeGreaterThan(
+				0,
+			);
+			expect(renderAutoRenewEmail("zh", key, av).subject.length).toBeGreaterThan(
+				0,
+			);
+		}
+		expect(
+			renderAutoRenewEmail("ms", "autoRenewUpcoming", av).subject,
+		).toContain("diperbaharui");
+		expect(renderAutoRenewEmail("zh", "autoRenewUpcoming", av).subject).toContain(
+			"续订",
+		);
 	});
 });

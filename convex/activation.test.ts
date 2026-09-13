@@ -307,3 +307,95 @@ describe("activation — getMyRetailer exposure", () => {
 		expect(me?.activatedAt).toBe(Date.now());
 	});
 });
+
+/**
+ * Server-side `first_order` key event (z8r3fdd1v1): the activation stamp is
+ * ALSO the GA4 dedupe guard — the event is scheduled exactly when
+ * `activatedAt` transitions unset → set, from any confirm site, and never
+ * again. Fake timers hold the scheduled job so we can inspect its args.
+ */
+async function firstOrderJobs(
+	t: ReturnType<typeof setup>,
+): Promise<Array<Record<string, unknown>>> {
+	const jobs = await t.run((ctx) =>
+		ctx.db.system.query("_scheduled_functions").collect(),
+	);
+	return jobs
+		.filter((j) => j.name.includes("sendKeyEvent"))
+		.map((j) => j.args[0] as Record<string, unknown>);
+}
+
+describe("activation — first_order key event (z8r3fdd1v1)", () => {
+	test("the activating confirm schedules first_order with the stored src + gaClientId", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				signupSource: "tiktok",
+				gaClientId: "123.456",
+			});
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await placeOrder(t, retailer._id, productId);
+
+		await t.mutation(internal.whatsapp.confirmOrderFromWhatsApp, {
+			shortId,
+			fromPhone: "60123456789",
+		});
+
+		const jobs = await firstOrderJobs(t);
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0]).toMatchObject({
+			event: "first_order",
+			retailerId: retailer._id,
+			src: "tiktok",
+			gaClientId: "123.456",
+		});
+	});
+
+	test("an untagged retailer fires first_order without src or gaClientId", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { orderId } = await placeOrder(t, retailer._id, productId);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, { orderId, status: "confirmed" });
+
+		const jobs = await firstOrderJobs(t);
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0].event).toBe("first_order");
+		expect(jobs[0].src).toBeUndefined();
+		expect(jobs[0].gaClientId).toBeUndefined();
+	});
+
+	test("a SECOND confirmed order never re-fires first_order (once per retailer ever)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const first = await placeOrder(t, retailer._id, productId);
+		const second = await placeOrder(t, retailer._id, productId, "60129876543");
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		await asUser.mutation(api.orders.updateStatus, {
+			orderId: first.orderId,
+			status: "confirmed",
+		});
+		await asUser.mutation(api.orders.updateStatus, {
+			orderId: second.orderId,
+			status: "confirmed",
+		});
+
+		expect(await firstOrderJobs(t)).toHaveLength(1);
+	});
+
+	test("a pending order that never confirms schedules nothing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await placeOrder(t, retailer._id, productId);
+
+		expect(await firstOrderJobs(t)).toHaveLength(0);
+	});
+});

@@ -23,10 +23,16 @@ How the product actually works. Read in this order.
 | [order-note.md](./order-note.md) | Shopper's free-text note at checkout: persisted on the order, carried in the `wa.me` body, surfaced to the seller + echoed to the buyer. |
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
+| [manual-subscription.md](./manual-subscription.md) → [hitpay-recurring.md](./hitpay-recurring.md) | How sellers pay **Kedaipal**: trial → invoice → settle → entitlement (manual v1 + the seam), then the automated layer — cron-issued renewals, invoice Pay-now links, self-serve subscribe, tokenised auto-renewal + dunning on Kedaipal's own HitPay account. |
 | [fulfilment.md](./fulfilment.md) | Delivery + self-collect as optional, symmetric methods: per-method toggles, the working-method invariant, multi-location pickup library, frozen snapshot lifecycle, WhatsApp confirm composition. |
+| [delivery-live-pricing.md](./delivery-live-pricing.md) | **What the buyer pays for delivery when a store books couriers live:** the provider-aware rule (quote every armed provider, charge the higher), why min-pricing was rejected, cold-cart handling, and the cross-currency guard. |
+| [delivery-lalamove.md](./delivery-lalamove.md) | Intra-city rider booking: live checkout quotes, the confirm-and-dispatch flow, webhook-driven status, and the disabled-with-reason taxonomy. |
+| [delivery-delyva.md](./delivery-delyva.md) | Nationwide parcel + cold-chain courier booking: one-key connect, the service picker, webhooks, demo/sandbox detection, and the per-country tenancy facts. |
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
+| [powered-by-badge.md](./powered-by-badge.md) | The buyer-facing "Powered by Kedaipal" growth loop: which surfaces carry the badge (storefront, order page, claim page, receipt PDF, despatch label, WhatsApp line), the one link builder + per-surface tags, and how a click lands on `retailers.signupSource` / `signupReferrerId`. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
+| [landing-video-demo.md](./landing-video-demo.md) | The 30-second demo on `/`: why it sits directly under the hero, the 21.5 MB → 928 KB encode recipe, the `preload="none"` loading posture, and the player's autoplay/pause/reduced-motion rules. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 
 ## Architecture & security
@@ -34,10 +40,12 @@ How the product actually works. Read in this order.
 | Doc | What it covers |
 |---|---|
 | [messaging-channels.md](./messaging-channels.md) | ChannelAdapter seam — WhatsApp as one of N channels; how a 2nd channel lands. |
+| [vendor-identity.md](./vendor-identity.md) | The three store IDs (`userId` / `slug` / `_id`) and what is unique; **reserved handles** — the route-tree namespace a slug can never take, one shared module, machine-checked. |
 | [whatsapp-webhook-security.md](./whatsapp-webhook-security.md) | Inbound webhook signature verification (HMAC-SHA256), fail-closed. |
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
+| [analytics.md](./analytics.md) | GA4 + Microsoft Clarity: env-gated boot, the `/track`/`/claim` exclusion, the funnel events (client, server-side key events, Clarity Smart-event mirror), `MASK_PII` for session replay, privacy disclosure, and the weekly heatmap/recording review ritual. |
 
 ## Roadmaps (designed / in-progress)
 
@@ -55,6 +63,7 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 
 | Doc | What it covers |
 |---|---|
+| [release-checklist.md](./release-checklist.md) | **Run this whenever `src/content/releases.ts` is touched.** Editing the release notes means a staging→main deploy is imminent: bump the version, then audit the diff for env vars, backfills, schema/index changes, crons, Meta templates and plan-gating moves, and write the findings — including "none" — into the release PR. |
 | [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
 
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

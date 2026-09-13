@@ -4,9 +4,11 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
+	CalendarRange,
 	ChartLine,
 	Check,
 	Clock,
+	History,
 	type LucideIcon,
 	Megaphone,
 	Package,
@@ -30,10 +32,18 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Locale } from "../../../convex/lib/locale";
-import type { Release, ReleaseIconName } from "../../content/releases";
-import { RELEASES } from "../../content/releases";
+import type {
+	Release,
+	ReleaseIconName,
+	ReleaseKind,
+} from "../../content/releases";
+import { RELEASE_KIND_LABELS, RELEASES } from "../../content/releases";
 import { APP_VERSION, isCalendarVersion } from "../../lib/app-version";
-import { localized, resolveWhatsNew } from "../../lib/releases";
+import {
+	localized,
+	resolveWhatsNew,
+	splitPanelReleases,
+} from "../../lib/releases";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -200,7 +210,50 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	settings: Settings,
 	chart: ChartLine,
 	table: Rows3,
+	calendar: CalendarRange,
 };
+
+/**
+ * Chip styling per kind — palette scales with explicit dark variants, the same
+ * idiom `StatusBadge` uses for order statuses. That is the house pattern for a
+ * CATEGORICAL set, and the reason semantic tokens are wrong here:
+ * `--primary` is navy in light and **mint in dark**, so `bg-primary` for
+ * "enhancement" would have been a distinct navy beside the mint "feature" chip
+ * in light mode and the same hue as it in dark. Three categories need three
+ * hues that survive both themes.
+ *
+ * Emerald keeps `feature` in the brand's mint family — the thing you can now
+ * DO. Blue is `enhancement`. Amber is `fix`: deliberately NOT red, because red
+ * reads as "something is wrong here", which is the opposite of what a fix is
+ * telling the seller, and would make a release of good news look like an
+ * incident report.
+ */
+const KIND_CHIP: Record<ReleaseKind, string> = {
+	feature:
+		"bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
+	enhancement: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+	fix: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+};
+
+/**
+ * The kind chip. Sits on its own line ABOVE the title rather than inline with
+ * it: a seller scanning a release is answering "is there anything new here?"
+ * before they read a single heading, and a column of labels down the left edge
+ * answers that in one pass. Inline, it would also push every long title into an
+ * extra wrap on a phone.
+ */
+function KindChip({ kind }: { kind: ReleaseKind }) {
+	return (
+		<span
+			className={cn(
+				"w-fit rounded-full px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase",
+				KIND_CHIP[kind],
+			)}
+		>
+			{RELEASE_KIND_LABELS[kind]}
+		</span>
+	);
+}
 
 /** `2026-08-25` → `25 Aug`. */
 const MONTHS = [
@@ -243,6 +296,15 @@ function WhatsNewDialog({
 }) {
 	const newest = releases[0];
 	const caughtUp = unseenVersions.size === 0;
+	// The panel shows the newest few and folds the rest (PANEL_RELEASE_LIMIT).
+	// Local, not persisted: every open starts folded, because "the rest" is
+	// history the seller asked for once, not a preference.
+	const [showOlder, setShowOlder] = useState(false);
+	useEffect(() => {
+		if (!open) setShowOlder(false);
+	}, [open]);
+	const { shown, older } = splitPanelReleases(releases, unseenVersions);
+	const visible = showOlder ? releases : shown;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -284,7 +346,7 @@ function WhatsNewDialog({
 				{/* Scrolls inside the dialog rather than growing it — on a phone a few
 				    releases would otherwise push the footer off screen. */}
 				<div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto p-4">
-					{releases.map((release) => {
+					{visible.map((release) => {
 						const isNew = unseenVersions.has(release.version);
 						return (
 							<section
@@ -354,6 +416,7 @@ function WhatsNewDialog({
 													/>
 												</span>
 												<div className="flex min-w-0 flex-1 flex-col gap-1">
+													<KindChip kind={entry.kind} />
 													<h3 className="font-heading text-sm leading-snug font-semibold">
 														{localized(entry.title, locale)}
 													</h3>
@@ -383,6 +446,21 @@ function WhatsNewDialog({
 							</section>
 						);
 					})}
+					{older.length > 0 && !showOlder ? (
+						// Inside the scroll area, after the last shown release, so it
+						// reads as "the list continues" — in the footer it would compete
+						// with "Got it". Names the count: "Show older" alone doesn't say
+						// whether that is one release or forty.
+						<Button
+							variant="outline"
+							onClick={() => setShowOlder(true)}
+							className="tap-target w-full"
+						>
+							<History className="size-4" />
+							Show {older.length} older{" "}
+							{older.length === 1 ? "release" : "releases"}
+						</Button>
+					) : null}
 				</div>
 
 				<DialogFooter className="mx-0 mb-0 sm:justify-between">

@@ -279,6 +279,87 @@ describe("resolveStages", () => {
 			defaultStageId("delivered"),
 		]);
 	});
+
+	test("a BOOKING ignores configured stages entirely", () => {
+		// The bug this pins: the configured-stages short-circuit ran before any
+		// booking check, so the moment a seller customised their flow for cakes,
+		// every campsite booking inherited it — "Mark as Packed" on a stay — and
+		// the booking-aware synthesized route became unreachable for exactly the
+		// sellers who had touched the setting.
+		const configured = [
+			stage({ id: "cfg-a", anchor: "confirmed", sortOrder: 0 }),
+			stage({ id: "cfg-b", anchor: "packed", sortOrder: 1 }),
+			stage({ id: "cfg-c", anchor: "shipped", sortOrder: 2 }),
+		];
+		const r = resolveStages({
+			orderStages: configured,
+			deliveryMethod: "booking",
+		});
+		expect(r.map((x) => x.id)).toEqual([
+			defaultStageId("confirmed"),
+			defaultStageId("shipped"),
+			defaultStageId("delivered"),
+		]);
+		// No "Packed" anchor survives — nothing is packed on a stay.
+		expect(r.some((x) => x.anchor === "packed")).toBe(false);
+
+		// …while every other method still honours the seller's own flow.
+		expect(
+			resolveStages({ orderStages: configured, deliveryMethod: "delivery" }).map(
+				(x) => x.id,
+			),
+		).toEqual(["cfg-a", "cfg-b", "cfg-c"]);
+		expect(
+			resolveStages({
+				orderStages: configured,
+				deliveryMethod: "self_collect",
+			}).map((x) => x.id),
+		).toEqual(["cfg-a", "cfg-b", "cfg-c"]);
+	});
+
+	test("a fixed-length package starts and ends; a stay checks in and out", () => {
+		const stay = resolveStages({ deliveryMethod: "booking" });
+		expect(stay.find((x) => x.anchor === "shipped")?.label.en).toBe(
+			"Checked In",
+		);
+		expect(stay.find((x) => x.anchor === "delivered")?.label.en).toBe(
+			"Checked Out",
+		);
+
+		// A gym member doesn't check out of a monthly membership on day 30.
+		const pkg = resolveStages({
+			deliveryMethod: "booking",
+			bookingPackaged: true,
+		});
+		expect(pkg.find((x) => x.anchor === "shipped")?.label.en).toBe("Active");
+		expect(pkg.find((x) => x.anchor === "delivered")?.label.en).toBe("Ended");
+		// MS carries too — a seller who never fills a label still gets both.
+		expect(pkg.find((x) => x.anchor === "shipped")?.label.ms).toBe("Aktif");
+
+		// The package wording is booking-only: it must not leak into a physical
+		// order that happens to carry the flag.
+		expect(
+			resolveStages({ deliveryMethod: "delivery", bookingPackaged: true }).find(
+				(x) => x.anchor === "shipped",
+			)?.label.en,
+		).toBe("On the Way");
+	});
+
+	test("an order stamped with a now-ignored custom stage still renders", () => {
+		// No migration ships with the gate, so a booking placed BEFORE it can
+		// hold a `currentStageId` that no longer exists in the list. It has to
+		// degrade to the synthesized stage for its canonical status, not vanish.
+		const stages = resolveStages({
+			orderStages: [stage({ id: "cfg-c", anchor: "shipped", sortOrder: 0 })],
+			deliveryMethod: "booking",
+		});
+		const current = resolveCurrentStage(
+			{ status: "shipped", currentStageId: "cfg-c" },
+			stages,
+		);
+		expect(current?.id).toBe(defaultStageId("shipped"));
+		expect(current?.label.en).toBe("Checked In");
+	});
 });
 
 describe("resolveCurrentStage", () => {

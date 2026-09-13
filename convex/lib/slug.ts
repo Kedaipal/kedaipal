@@ -5,7 +5,9 @@
  *
  * IMPORTANT: Keep in sync with `src/lib/slug.ts`. Both files must stay
  * byte-identical in logic — they exist separately because Convex functions
- * bundle from the `convex/` directory.
+ * bundle from the `convex/` directory. The reserved-word list is the one part
+ * that is NOT mirrored: both sides import it from `./reservedSlugs.ts`, which
+ * is machine-checked against the route tree (z8r3fddrd3).
  *
  * This module is also the ONE author of phone normalization (SG-lite,
  * 86eynw28q): the client (`src/lib/phone.ts`, `src/lib/schemas.ts`) imports
@@ -14,36 +16,13 @@
  * validator can never disagree about what a store accepts.
  */
 
-import { type Country, COUNTRY_DIAL_CODE } from "./country";
-
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
-	"_",
-	"about",
-	"admin",
-	"api",
-	"app",
-	"assets",
-	"blog",
-	"docs",
-	"favicon.ico",
-	"help",
-	"kedaipal",
-	"login",
-	"logout",
-	"onboarding",
-	"pricing",
-	"public",
-	"robots.txt",
-	"settings",
-	"sign-in",
-	"sign-up",
-	"signin",
-	"signup",
-	"sitemap.xml",
-	"static",
-	"support",
-	"www",
-]);
+import { COUNTRIES, type Country, COUNTRY_DIAL_CODE } from "./country";
+import {
+	BRAND_NAME_MESSAGE,
+	containsBrand,
+	isReservedSlug,
+	RESERVED_SLUG_MESSAGE,
+} from "./reservedSlugs";
 
 /**
  * Best-effort slugification of free text (store names, product names):
@@ -83,8 +62,8 @@ export function assertValidSlug(raw: string): string {
 	if (!SLUG_PATTERN.test(s)) {
 		throw new Error("Slug must use lowercase letters, numbers and single dashes");
 	}
-	if (RESERVED_SLUGS.has(s)) {
-		throw new Error("This slug is reserved");
+	if (isReservedSlug(s)) {
+		throw new Error(RESERVED_SLUG_MESSAGE);
 	}
 	return s;
 }
@@ -109,10 +88,24 @@ export function assertValidCategorySlug(raw: string): string {
 	return s;
 }
 
+export const STORE_NAME_MIN = 2;
+export const STORE_NAME_MAX = 60;
+
+/**
+ * The store name is what every buyer reads — WhatsApp message body, storefront
+ * header, tracking page — so it carries the same brand rule as the slug
+ * (`containsBrand`): a store called "Kedaipal Support" on the slug
+ * `abc-trading` is a stronger impersonation than any URL. Mirrors
+ * `validateStoreName` in `src/lib/slug.ts`, which gives the seller the same
+ * sentence inline before they ever submit.
+ */
 export function assertValidStoreName(raw: string): string {
 	const s = raw.trim();
-	if (s.length < 2) throw new Error("Store name must be at least 2 characters");
-	if (s.length > 60) throw new Error("Store name must be at most 60 characters");
+	if (s.length < STORE_NAME_MIN)
+		throw new Error(`Store name must be at least ${STORE_NAME_MIN} characters`);
+	if (s.length > STORE_NAME_MAX)
+		throw new Error(`Store name must be at most ${STORE_NAME_MAX} characters`);
+	if (containsBrand(s)) throw new Error(BRAND_NAME_MESSAGE);
 	return s;
 }
 
@@ -162,12 +155,33 @@ export const STORED_MOBILE_PATTERN: Record<Country, RegExp> = {
 };
 
 /**
+ * The noun the phone copy leads with — "Malaysian mobile", not "Malaysia
+ * mobile", so it can't be derived from COUNTRY_LABELS. One author for every
+ * surface that names the kind: the messages below, the settings cards' helper
+ * lines, and the cross-country rejection copy.
+ */
+export const MOBILE_KIND: Record<Country, string> = {
+	MY: "Malaysian mobile",
+	SG: "Singapore mobile",
+};
+
+/**
+ * The example each rejection shows — shaped the way a local writes one, and
+ * (pinned by test) a value that country's own validator accepts, so the copy
+ * can never demonstrate a format the save then refuses.
+ */
+export const MOBILE_EXAMPLE: Record<Country, string> = {
+	MY: "012-345 6789",
+	SG: "9123 4567",
+};
+
+/**
  * One rejection message per country — referenced by the server validators AND
  * the client schemas/fallback copy, so the wording exists in exactly one place.
  */
 export const MOBILE_MESSAGE: Record<Country, string> = {
-	MY: "Enter a Malaysian mobile number (e.g. 012-345 6789)",
-	SG: "Enter a Singapore mobile number (e.g. 9123 4567)",
+	MY: `Enter a ${MOBILE_KIND.MY} number (e.g. ${MOBILE_EXAMPLE.MY})`,
+	SG: `Enter a ${MOBILE_KIND.SG} number (e.g. ${MOBILE_EXAMPLE.SG})`,
 };
 
 /**
@@ -249,6 +263,65 @@ export function normalizeMobileDigits(
 }
 
 /**
+ * Which OTHER supported country would accept this value as a mobile, if any —
+ * input to better rejection copy, never to acceptance (z8r3fdbmc9).
+ *
+ * Sniffing a country from digits is deliberately banned for VALIDATION (see
+ * `assertValidWaPhoneForCountry` — sniffing is how a typo in one country's
+ * shape gets silently accepted as the other's). Error copy is the one place
+ * it's safe: the value is rejected either way, and naming what it looks like
+ * turns a dead end into a fix. The case that matters is a store sitting on the
+ * wrong country (a missed onboarding default): the seller types their own
+ * number, and "enter a Singapore mobile" describes the symptom while "that
+ * looks like a Malaysian mobile" names the cause.
+ */
+export function otherCountryMobile(
+	raw: string,
+	country: Country,
+): Country | null {
+	for (const candidate of COUNTRIES) {
+		if (candidate === country) continue;
+		if (
+			STORED_MOBILE_PATTERN[candidate].test(
+				normalizeMobileDigits(raw, candidate),
+			)
+		) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+/**
+ * The neutral cross-country rejection line — audience-safe, because the same
+ * schemas serve buyer checkout, the track-page repair, and the seller's alert
+ * and pickup-contact fields: it names what the number looks like and what this
+ * store takes, with no fix path only one side could follow. Surfaces with a
+ * country control in reach (onboarding, the settings contact card) layer their
+ * own pointed copy on top.
+ */
+export function crossCountryMobileMessage(
+	store: Country,
+	typed: Country,
+): string {
+	return `That looks like a ${MOBILE_KIND[typed]} number (+${COUNTRY_DIAL_CODE[typed]}) — this store takes ${MOBILE_KIND[store]} numbers (e.g. ${MOBILE_EXAMPLE[store]})`;
+}
+
+/**
+ * What a refused value's rejection SAYS — the cross-country line when the
+ * digits cleanly match the other supported country, the store's own
+ * `MOBILE_MESSAGE` otherwise. Acceptance is untouched; both the server
+ * authority below and the client schemas built from these pieces route their
+ * message through here so the copy can't drift between the two sides.
+ */
+export function mobileRejectionMessage(raw: string, country: Country): string {
+	const other = otherCountryMobile(raw, country);
+	return other
+		? crossCountryMobileMessage(country, other)
+		: MOBILE_MESSAGE[country];
+}
+
+/**
  * Stricter sibling of `assertValidWaPhoneForCountry` for numbers we intend to
  * MESSAGE: normalizes the same way, then requires the country's **mobile**
  * shape (`STORED_MOBILE_PATTERN`). An MY landline (`03-…` → `60312345678`)
@@ -277,9 +350,12 @@ export function normalizeMobileDigits(
  *
  * Which arm applies is the RETAILER's country (SG-lite, 86eynw28q/86eynw2dy) —
  * never a permissive both-countries regex. Cross-country numbers are rejected
- * on purpose: an SG store's checkout refuses a `+60` buyer with the SG
- * message, an MY store's refuses `+65`, keeping each side's typo protection
- * exactly as strict as it was when the app was MY-only.
+ * on purpose — an SG store's checkout refuses a `+60` buyer and vice versa,
+ * keeping each side's typo protection exactly as strict as it was when the
+ * app was MY-only — but the rejection copy names the mismatch when the digits
+ * cleanly match the other country (`mobileRejectionMessage`, z8r3fdbmc9),
+ * because "enter a Singapore mobile" is a dead end when the real problem is a
+ * store on the wrong country.
  *
  * Deliberately NOT applied to the counter's manual bind, where a cashier may
  * legitimately key an unusual number for a buyer standing in front of them
@@ -303,10 +379,10 @@ export function assertValidMobileForCountry(
 				)
 			: assertValidWaPhoneForCountry(raw, country);
 	} catch {
-		throw new Error(MOBILE_MESSAGE[country]);
+		throw new Error(mobileRejectionMessage(raw, country));
 	}
 	if (!STORED_MOBILE_PATTERN[country].test(normalized)) {
-		throw new Error(MOBILE_MESSAGE[country]);
+		throw new Error(mobileRejectionMessage(raw, country));
 	}
 	return normalized;
 }

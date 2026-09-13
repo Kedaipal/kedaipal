@@ -38,13 +38,21 @@ const NOTABLE: Release = {
 	version: "2026.09.1",
 	date: "2026-09-01",
 	notable: true,
-	entries: [{ title: { en: "Big thing" }, body: { en: "It is big." } }],
+	entries: [
+		{ kind: "feature", title: { en: "Big thing" }, body: { en: "It is big." } },
+	],
 };
 const QUIET: Release = {
 	version: "2026.08.2",
 	date: "2026-08-02",
 	notable: false,
-	entries: [{ title: { en: "Small thing" }, body: { en: "It is small." } }],
+	entries: [
+		{
+			kind: "fix",
+			title: { en: "Small thing" },
+			body: { en: "It is small." },
+		},
+	],
 };
 
 vi.mock("../../content/releases", async () => {
@@ -210,6 +218,17 @@ describe("WhatsNew — panel structure", () => {
 		expect(screen.getAllByText("New")).toHaveLength(1);
 	});
 
+	it("labels every entry with its kind, seen releases included", () => {
+		// The kind chip is the first thing a seller scans — "is this new, or is
+		// this a fix?" — so it has to render on EVERY card, not only the unseen
+		// ones. NOTABLE is a feature and QUIET is a fix, so both labels appearing
+		// exactly once proves the chip reads the entry rather than the release.
+		mockSeen({ seenVersion: "2026.08.2" });
+		renderShell();
+		expect(screen.getAllByText("New feature")).toHaveLength(1);
+		expect(screen.getAllByText("Bug fix")).toHaveLength(1);
+	});
+
 	it("names the release and date in the header when something is unseen", () => {
 		mockSeen({ seenVersion: "2026.08.2" });
 		renderShell();
@@ -245,6 +264,72 @@ describe("WhatsNew — caught-up state", () => {
 		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
 		expect(screen.getByText("Big thing")).toBeTruthy();
 		expect(screen.getByText("Small thing")).toBeTruthy();
+	});
+});
+
+describe("WhatsNew — folding older releases", () => {
+	function quiet(version: string): Release {
+		return { ...QUIET, version, date: "2026-08-01" };
+	}
+	const seven = [
+		{ ...NOTABLE, version: "2026.09.1" },
+		quiet("2026.08.9"),
+		quiet("2026.08.8"),
+		quiet("2026.08.7"),
+		quiet("2026.08.6"),
+		quiet("2026.08.5"),
+		quiet("2026.08.4"),
+	];
+
+	async function openPanel() {
+		screen.getByRole("button", { name: "What's new" }).click();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+	}
+	const dividers = () => screen.getAllByText(/^2026\.\d\d\.\d+$/);
+
+	it("shows five, then the rest on one tap — nothing becomes unreadable", async () => {
+		releasesUnderTest = seven;
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		await openPanel();
+		expect(dividers()).toHaveLength(5);
+		const more = screen.getByRole("button", { name: /show 2 older releases/i });
+		more.click();
+		await waitFor(() => expect(dividers()).toHaveLength(7));
+		expect(screen.queryByRole("button", { name: /older release/i })).toBeNull();
+	});
+
+	it("never folds an unseen release, even past the limit", async () => {
+		releasesUnderTest = seven;
+		// Seen only the oldest → six unseen; all six must be on screen. The
+		// notable one auto-opens the modal, so there is nothing to click.
+		mockSeen({ seenVersion: "2026.08.4" });
+		renderShell();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+		expect(dividers()).toHaveLength(6);
+		expect(
+			screen.getByRole("button", { name: /show 1 older release$/i }),
+		).toBeTruthy();
+	});
+
+	it("starts folded again on the next open", async () => {
+		releasesUnderTest = seven;
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		await openPanel();
+		screen.getByRole("button", { name: /older releases/i }).click();
+		await waitFor(() => expect(dividers()).toHaveLength(7));
+		screen.getByRole("button", { name: "Done" }).click();
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await openPanel();
+		expect(dividers()).toHaveLength(5);
+	});
+
+	it("shows no fold button when the history fits", async () => {
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		await openPanel();
+		expect(screen.queryByRole("button", { name: /older release/i })).toBeNull();
 	});
 });
 
@@ -292,8 +377,16 @@ describe("WhatsNew — entry keys", () => {
 				date: "2026-09-01",
 				notable: true,
 				entries: [
-					{ title: { en: "Same title" }, body: { en: "First body." } },
-					{ title: { en: "Same title" }, body: { en: "Second body." } },
+					{
+						kind: "feature",
+						title: { en: "Same title" },
+						body: { en: "First body." },
+					},
+					{
+						kind: "feature",
+						title: { en: "Same title" },
+						body: { en: "Second body." },
+					},
 				],
 			},
 		];

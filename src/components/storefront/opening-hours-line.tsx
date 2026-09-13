@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
 	formatFulfilmentTime,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	formatDayWindow,
@@ -11,7 +12,6 @@ import {
 	openNowStatus,
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
-	weekdayIndexMyt,
 } from "../../../convex/lib/openingHours";
 import {
 	Dialog,

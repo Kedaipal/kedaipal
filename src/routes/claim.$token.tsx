@@ -7,6 +7,7 @@ import { api } from "../../convex/_generated/api";
 import type { ClaimPagePayload } from "../../convex/orderClaims";
 import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Skeleton } from "../components/ui/skeleton";
 import { MASK_PII } from "../lib/analytics-privacy";
@@ -53,14 +54,18 @@ export const Route = createFileRoute("/claim/$token")({
 
 function ClaimNotFound() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="font-heading text-2xl font-extrabold">
-				Order link not found
-			</h1>
-			<p className="text-sm text-muted-foreground">
-				This link doesn&apos;t match any order. Check the link in your WhatsApp
-				chat, or ask the store to send a fresh one.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="font-heading text-2xl font-extrabold">
+					Order link not found
+				</h1>
+				<p className="text-sm text-muted-foreground">
+					This link doesn&apos;t match any order. Check the link in your
+					WhatsApp chat, or ask the store to send a fresh one.
+				</p>
+			</div>
+			{/* Unknown token = unknown store, so the badge carries no `store=`. */}
+			<StorefrontFooter surface="claim" />
 		</main>
 	);
 }
@@ -81,6 +86,8 @@ function ClaimSkeleton() {
 				<Skeleton className="h-40 w-full rounded-2xl" />
 				<Skeleton className="h-40 w-full rounded-2xl" />
 			</div>
+			{/* In place before the claim resolves, so it never pops in. */}
+			<StorefrontFooter surface="claim" />
 		</div>
 	);
 }
@@ -182,6 +189,7 @@ function ClaimDeadEnd({
 					</p>
 				) : null}
 			</div>
+			<StorefrontFooter slug={store.slug} surface="claim" />
 		</main>
 	);
 }
@@ -256,6 +264,7 @@ function ClaimRoute() {
 						</Link>
 					) : null}
 				</div>
+				<StorefrontFooter slug={store.slug} surface="claim" />
 			</main>
 		);
 	}
@@ -294,6 +303,9 @@ function ClaimRoute() {
 					pickupLocations={pickupLocations ?? []}
 				/>
 			</div>
+			{/* Direct flex child of the min-h-dvh column, above the fixed purchase
+			    bar's reserved padding — the same placement as /$slug/checkout. */}
+			<StorefrontFooter slug={store.slug} surface="claim" />
 		</div>
 	);
 }

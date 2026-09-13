@@ -296,3 +296,51 @@ export const backfillOrderCategoryNames = internalMutation({
 		return { patched, isDone: page.isDone };
 	},
 });
+
+/**
+ * `deliveryConfig.mode: "lalamove"` → `"live"` (z8r3fdbvdy).
+ *
+ * The old mode priced checkout with ONE provider while dispatch could use
+ * another — the measured leak (collected RM4.00, dispatched at RM4.75). The
+ * new mode quotes every armed provider and charges the higher, so the fee
+ * covers whichever tool ships the order.
+ *
+ * Safe to run on every store, because the change only BITES where the leak
+ * already did: a store with just Lalamove armed has exactly one bidder and
+ * prices identically to before. Only a store running both providers sees a
+ * different fee — and that store is currently losing the difference on every
+ * order that dispatches the other way.
+ *
+ * Idempotent: rows already on "live" are skipped, so re-running is safe.
+ *
+ * Run: `npx convex run migrations:migrateLalamoveModeToLive`
+ */
+export const migrateLalamoveModeToLive = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		let migrated = 0;
+		for (const retailer of page.page) {
+			if (retailer.deliveryConfig?.mode !== "lalamove") continue;
+			await ctx.db.patch(retailer._id, {
+				// `onUnquotable` is vestigial in both modes (always "block"); it is
+				// carried across rather than dropped so the row keeps validating.
+				deliveryConfig: { mode: "live", onUnquotable: "block" },
+				updatedAt: Date.now(),
+			});
+			migrated++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.migrateLalamoveModeToLive,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { migrated, isDone: page.isDone };
+	},
+});

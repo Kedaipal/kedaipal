@@ -68,7 +68,10 @@ export function OrderBulkBar({
 	allSelected: boolean;
 	// May return a promise — the destructive confirm awaits it so the confirm
 	// button shows its in-flight spinner and stays open if the apply rejects.
-	onApply: (status: BulkAction["status"]) => void | Promise<void>;
+	onApply: (
+		status: BulkAction["status"],
+		cancellationNote?: string,
+	) => void | Promise<void>;
 	// Permanent hard delete of the selection. Omit to hide the delete item.
 	onDelete?: () => void | Promise<void>;
 	// Open the despatch-label print dialog for the selection. Omit to hide.
@@ -214,15 +217,29 @@ export function OrderBulkBar({
 					if (!o) setPendingDestructive(null);
 				}}
 				title={`Cancel ${count} ${orderWord}?`}
-				description={`${count === 1 ? "The customer is" : "Customers are"} NOT notified — the cancellation shows on their order page, so message them yourself if it can't wait. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
+				description={`${count === 1 ? "The customer is" : "Customers are"} NOT sent a WhatsApp — your reason below is what they see on their order page. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
 				confirmLabel={`Cancel ${count} ${orderWord}`}
 				cancelLabel={`Keep ${orderWord}`}
 				destructive
-				onConfirm={() => {
+				reason={{
+					label: "Why are you cancelling?",
+					placeholder: "e.g. Closed for maintenance this weekend",
+					maxLength: 200,
+					// Deliberately not `required` here even though a booking demands
+					// one: the selection may be all ordinary orders. The SERVER
+					// applies the booking rule per order, so a batch containing a
+					// booking is refused with the reason named — one prompt, and the
+					// rule still can't be bypassed.
+					helper:
+						count === 1
+							? "The customer sees this on their order page. Required if it's a booking."
+							: `All ${count} customers see this on their order page. Required if any is a booking.`,
+				}}
+				onConfirm={(cancellationNote) => {
 					const action = pendingDestructive;
 					// Return the promise so ConfirmDialog can show its spinner while the
 					// bulk op runs and keep itself open if it rejects.
-					if (action) return onApply(action.status);
+					if (action) return onApply(action.status, cancellationNote);
 				}}
 			/>
 

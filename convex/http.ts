@@ -1,5 +1,7 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
+import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
 import { reportSecretMatches } from "./lib/businessReport";
 import { getAdapter } from "./lib/channels/registry";
@@ -9,6 +11,15 @@ import {
 	HITPAY_PROVIDER_LABEL,
 	verifyHitpayWebhook,
 } from "./lib/hitpay";
+import {
+	parseDelyvaWebhookEvent,
+	verifyDelyvaWebhook,
+} from "./lib/delyva";
+import {
+	extractRecurringEvent,
+	resolveBillingGatewayCredentials,
+	verifyEventSignature,
+} from "./lib/hitpayBilling";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
@@ -250,6 +261,85 @@ http.route({
 });
 
 /**
+ * Delyva courier webhook (86eyjpv6z, docs/delivery-delyva.md). Registered
+ * automatically at connect (POST /webhook per event) — the seller does no
+ * portal setup. Same trust posture as the Lalamove route:
+ *  - events that match no job of ours → 200 ack + ignore (bookings the
+ *    seller made outside Kedaipal; we can't verify them and don't act);
+ *  - a matching job with no stored secret → 500 fail closed;
+ *  - bad signature (`X-Delyvax-Hmac-SHA256`, base64 HMAC-SHA256 of the raw
+ *    body with the account's apiSecret) → 401;
+ *  - signed but wrong customerId for the job's retailer → 200 + log (defense
+ *    in depth; never act on someone else's order).
+ * Idempotency + out-of-order handling live in delyva.applyWebhookEvent.
+ */
+http.route({
+	path: "/webhook/delyva",
+	method: "POST",
+	handler: httpAction(async (ctx, req) => {
+		const rawBody = await req.text();
+		const event = parseDelyvaWebhookEvent(rawBody);
+		if (!event) {
+			// Subscription pings / non-order payloads: ack so Delyva keeps the
+			// URL healthy.
+			console.log("Delyva webhook: non-order body, acking", {
+				bytes: rawBody.length,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		const context = await ctx.runQuery(internal.delyva.getWebhookContext, {
+			delyvaOrderId: event.delyvaOrderId,
+		});
+		if (!context) {
+			console.log("Delyva webhook: no matching delivery job, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+				statusCode: event.statusCode,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		if (!context.apiSecret) {
+			// A job we placed but no secret to verify with — credentials were
+			// removed after booking. Fail closed (WhatsApp-route posture).
+			console.error("Delyva webhook rejected: no verifying secret stored", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("server misconfigured", { status: 500 });
+		}
+		const valid = await verifyDelyvaWebhook({
+			rawBody,
+			// Stored secrets are encrypted at rest (86eyn25gk); the signature is
+			// always over the plaintext secret.
+			apiSecret: await decryptSecret(context.apiSecret),
+			signatureHeader: req.headers.get("X-Delyvax-Hmac-SHA256"),
+		});
+		if (!valid) {
+			console.warn("Delyva webhook rejected: invalid signature", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("invalid signature", { status: 401 });
+		}
+		if (
+			event.customerId !== undefined &&
+			context.customerId !== null &&
+			event.customerId !== context.customerId
+		) {
+			console.warn("Delyva webhook: customerId mismatch, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		await ctx.runMutation(internal.delyva.applyWebhookEvent, {
+			jobId: context.jobId,
+			statusCode: event.statusCode,
+			consignmentNo: event.consignmentNo,
+			statusText: event.statusText,
+			eventAt: event.eventAt ?? Date.now(),
+		});
+		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
  * HitPay v1 completion webhook (86eyb6z3a, docs/hitpay-gateway.md) — the URL
  * is passed per payment request at mint time, so sellers register nothing.
  *
@@ -271,6 +361,115 @@ http.route({
 	method: "POST",
 	handler: httpAction(async (ctx, req) => {
 		const rawBody = await req.text();
+
+		// --- Branch 1: V2 event webhook (Kedaipal's own account, 86eyb6z4r) ---
+		// Dashboard-registered events (charge.created, recurring_billing.*)
+		// arrive as JSON signed via the `Hitpay-Signature` header — raw-body
+		// HMAC with KEDAIPAL's salt, a different scheme from the per-request v1
+		// form webhooks below (seller BYO accounts, `hmac` field). The header is
+		// the discriminator: v1 callbacks never carry it.
+		const eventSignature = req.headers.get("hitpay-signature");
+		if (eventSignature) {
+			const credentials = resolveBillingGatewayCredentials({
+				HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
+				HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
+			});
+			if (!credentials) {
+				// We only receive these if we registered the endpoint — a missing
+				// salt is OUR misconfiguration. Fail closed like /webhook/whatsapp.
+				console.error(
+					"HitPay event webhook rejected: HITPAY_BILLING_SALT not configured",
+				);
+				return new Response("server misconfigured", { status: 500 });
+			}
+			const valid = await verifyEventSignature(
+				rawBody,
+				eventSignature,
+				credentials.salt,
+			);
+			if (!valid) {
+				console.warn("HitPay event webhook rejected: invalid signature");
+				return new Response("invalid signature", { status: 401 });
+			}
+			let payload: unknown;
+			try {
+				payload = JSON.parse(rawBody);
+			} catch {
+				console.error("HitPay event webhook: unparseable JSON, acking");
+				return new Response("ok", { status: 200 });
+			}
+			const event = extractRecurringEvent(payload, {
+				eventObject: req.headers.get("hitpay-event-object"),
+				eventType: req.headers.get("hitpay-event-type"),
+			});
+			if (!event) {
+				console.log("HitPay event webhook: unrecognised event, acking");
+				return new Response("ok", { status: 200 });
+			}
+			if (event.kind === "charge") {
+				// Corroboration for the synchronous charge path (which usually
+				// settled already — the settle mutation no-ops duplicates).
+				if (event.status !== "succeeded") {
+					console.log("HitPay event webhook: non-succeeded charge, acking", {
+						status: event.status,
+					});
+					return new Response("ok", { status: 200 });
+				}
+				if (!event.recurringBillingId) {
+					console.log(
+						"HitPay event webhook: charge without a billing id, acking",
+					);
+					return new Response("ok", { status: 200 });
+				}
+				const recurring = await ctx.runQuery(
+					internal.subscriptionPayments.resolveRecurringContext,
+					{ billingId: event.recurringBillingId },
+				);
+				if (!recurring?.settleInvoiceId) {
+					console.log("HitPay event webhook: no invoice to settle, acking", {
+						billingId: event.recurringBillingId,
+					});
+					return new Response("ok", { status: 200 });
+				}
+				const result = await ctx.runMutation(
+					internal.invoices.internalSettleFromGateway,
+					{
+						invoiceId: recurring.settleInvoiceId,
+						paymentId: event.paymentId,
+						amountSen: event.amountSen ?? -1,
+						currency: event.currency ?? "",
+						methodCode: event.methodCode ?? recurring.methodCode,
+					},
+				);
+				console.log("HitPay event webhook processed", {
+					kind: "charge",
+					applied: result.applied,
+					reason: result.reason,
+				});
+				return new Response("ok", { status: 200 });
+			}
+			await ctx.runMutation(
+				internal.subscriptionPayments.applyRecurringEvent,
+				event.kind === "method_attached"
+					? {
+							kind: event.kind,
+							billingId: event.billingId,
+							methodCode: event.methodCode,
+							methodLabel: event.methodLabel,
+						}
+					: event.kind === "method_detached"
+						? { kind: event.kind, billingId: event.billingId }
+						: {
+								kind: event.kind,
+								billingId: event.billingId,
+								status: event.status,
+							},
+			);
+			console.log("HitPay event webhook processed", { kind: event.kind });
+			return new Response("ok", { status: 200 });
+		}
+
+		// --- Branch 2: v1 form-encoded completion webhooks ---------------------
 		const fields: Record<string, string> = {};
 		for (const [key, value] of new URLSearchParams(rawBody)) {
 			fields[key] = value;
@@ -288,6 +487,15 @@ http.route({
 			paymentRequestId: requestId,
 		});
 		if (!context) {
+			// Not a buyer order — a subscription-invoice Pay-now request?
+			// (Kedaipal's own account, so the verifying salt is the env one.)
+			const invoiceContext = await ctx.runQuery(
+				internal.subscriptionPayments.resolveInvoiceRequestContext,
+				{ paymentRequestId: requestId },
+			);
+			if (invoiceContext) {
+				return handleInvoiceCompletionWebhook(ctx, fields, invoiceContext);
+			}
 			console.log("HitPay webhook: no matching order, ignoring", {
 				requestId,
 			});
@@ -355,6 +563,102 @@ http.route({
 			reason: result.reason,
 		});
 		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
+ * v1 completion webhook for a SUBSCRIPTION-INVOICE Pay-now request
+ * (86eyb6z4r): same wire format as the buyer-order branch above, but the
+ * request was minted on KEDAIPAL's own account, so the verifying salt is the
+ * env credential (plaintext — never a per-seller stored secret). Settles
+ * through invoices.internalSettleFromGateway, whose amount check + duplicate
+ * guard mirror receiveGatewayPayment's posture.
+ */
+async function handleInvoiceCompletionWebhook(
+	ctx: ActionCtx,
+	fields: Record<string, string>,
+	invoiceContext: { invoiceId: Id<"invoices"> },
+): Promise<Response> {
+	const requestId = fields.payment_request_id;
+	const salt = process.env.HITPAY_BILLING_SALT;
+	if (!salt) {
+		// A request we minted with credentials that have since vanished — our
+		// misconfiguration, fail closed.
+		console.error(
+			"HitPay invoice webhook rejected: HITPAY_BILLING_SALT not configured",
+			{ requestId },
+		);
+		return new Response("server misconfigured", { status: 500 });
+	}
+	const valid = await verifyHitpayWebhook(fields, salt);
+	if (!valid) {
+		console.warn("HitPay invoice webhook rejected: invalid hmac", { requestId });
+		return new Response("invalid signature", { status: 401 });
+	}
+	if (fields.status !== "completed") {
+		console.log("HitPay invoice webhook: non-completed status, acking", {
+			requestId,
+			status: fields.status,
+		});
+		return new Response("ok", { status: 200 });
+	}
+	const amountSen = decimalStringToSen(fields.amount ?? "");
+	if (amountSen === null || !fields.payment_id) {
+		console.error("HitPay invoice webhook: malformed completed payload", {
+			requestId,
+			amount: fields.amount,
+		});
+		return new Response("ok", { status: 200 });
+	}
+	const result = await ctx.runMutation(
+		internal.invoices.internalSettleFromGateway,
+		{
+			invoiceId: invoiceContext.invoiceId,
+			paymentId: fields.payment_id,
+			amountSen,
+			currency: fields.currency ?? "",
+		},
+	);
+	console.log("HitPay invoice webhook processed", {
+		requestId,
+		applied: result.applied,
+		reason: result.reason,
+	});
+	return new Response("ok", { status: 200 });
+}
+
+/**
+ * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google
+ * (or any calendar app) polls this URL on its own schedule. The token in the
+ * path is the whole capability (/track posture); unknown tokens 404 with no
+ * detail. Read-only by construction, so a feed failure can never touch an
+ * order (locked posture).
+ */
+http.route({
+	pathPrefix: "/cal/",
+	method: "GET",
+	handler: httpAction(async (ctx, req) => {
+		const path = new URL(req.url).pathname;
+		let token = path.slice("/cal/".length);
+		if (token.endsWith(".ics")) token = token.slice(0, -".ics".length);
+		// Tokens are generated alphanumerics — anything else can't match.
+		if (!/^[A-Za-z0-9]{10,}$/.test(token)) {
+			return new Response("Not found", { status: 404 });
+		}
+		const feed = await ctx.runQuery(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) return new Response("Not found", { status: 404 });
+		return new Response(feed, {
+			status: 200,
+			headers: {
+				"Content-Type": "text/calendar; charset=utf-8",
+				// Calendar apps poll on long intervals anyway; a short shared
+				// max-age just absorbs double-fetches.
+				"Cache-Control": "private, max-age=300",
+				"Content-Disposition": 'inline; filename="kedaipal-bookings.ics"',
+			},
+		});
 	}),
 });
 

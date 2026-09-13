@@ -159,6 +159,7 @@ describe("RescheduleFulfilmentDialog — Lalamove slot-price preview", () => {
 			job: null,
 			blockReason: null,
 			bookingEnabled: true,
+			riderOnlyStore: true,
 			promptBookOnPacked: false,
 		};
 		const prepare = vi.fn().mockResolvedValue({
@@ -196,6 +197,7 @@ describe("RescheduleFulfilmentDialog — Lalamove slot-price preview", () => {
 			job: null,
 			blockReason: null,
 			bookingEnabled: false,
+			riderOnlyStore: false,
 			promptBookOnPacked: false,
 		};
 		const prepare = vi.fn();
@@ -283,6 +285,7 @@ describe("RescheduleFulfilmentDialog — PR #201 review regressions", () => {
 			job: null,
 			blockReason: null,
 			bookingEnabled: true,
+			riderOnlyStore: true,
 			promptBookOnPacked: false,
 		};
 		let resolveQuote: (v: unknown) => void = () => {};

@@ -1,7 +1,16 @@
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
+import {
+	CalendarRange,
+	ImagePlus,
+	Plus,
+	SlidersHorizontal,
+} from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
+import {
+	bookingPriceSuffix,
+	weekendRateSuffix,
+} from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
@@ -47,9 +56,15 @@ export function ProductCard({
 	// Multi-variant products can't be quick-added — the buyer must pick options
 	// on the product page first. A custom line also forces the product page so the
 	// buyer can see (and choose) the made-to-order option. See docs/custom-option.md.
+	// A BOOKING listing always routes to its page too (S2): the stay is picked on
+	// a calendar, so a cart quick-add has nothing to add.
+	const isBooking = product.kind === "booking";
+	// Second per-night rate on the nights the seller named (S13) — shown
+	// under the base price so a guest knows both before opening the listing.
+	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	const hasOptions = (product.options?.length ?? 0) > 0;
 	const hasCustom = product.variants.some((v) => v.isCustom);
-	const needsDetail = hasOptions || hasCustom;
+	const needsDetail = hasOptions || hasCustom || isBooking;
 	// A product "can run out" if any of its variants hard-blocks (flags are now
 	// resolved per-variant server-side). Only then does the low-stock badge apply.
 	const canRunOut = product.variants.some(
@@ -185,9 +200,23 @@ export function ProductCard({
 								</span>
 							) : null}
 							{formatPrice(product.priceFrom, product.currency)}
+							{isBooking ? (
+								<span className="text-xs font-medium text-muted-foreground">
+									{bookingPriceSuffix(
+										product.booking?.packageLength,
+										product.booking?.packageUnit,
+									)}
+								</span>
+							) : null}
 						</>
 					)}
 				</p>
+				{weekendSuffix && product.booking?.weekendPrice !== undefined ? (
+					<p className="text-xs font-medium text-muted-foreground tabular-nums">
+						{formatPrice(product.booking.weekendPrice, product.currency)}
+						{weekendSuffix}
+					</p>
+				) : null}
 				{/* Running cart line — shows what the buyer has already committed for
 				    this product (updates as they add more). Only rendered once it's in
 				    the cart, so un-added tiles stay clean. The money total is dropped
@@ -204,7 +233,8 @@ export function ProductCard({
 					// Disabled-with-reason wins over a link that goes nowhere useful:
 					// an unorderable product renders the inert button (an `<a>` can't
 					// be disabled), an orderable one renders the real link so the CTA
-					// is as copyable as the photo and the name.
+					// is as copyable as the photo and the name. Booking listings say
+					// what the page does — dates, not options.
 					chooseDisabled ? (
 						<Button
 							type="button"
@@ -213,8 +243,12 @@ export function ProductCard({
 							variant="outline"
 							className="mt-auto h-11 w-full rounded-xl"
 						>
-							<SlidersHorizontal className="size-4" />
-							Choose
+							{isBooking ? (
+								<CalendarRange className="size-4" />
+							) : (
+								<SlidersHorizontal className="size-4" />
+							)}
+							{isBooking ? "Book" : "Choose"}
 						</Button>
 					) : (
 						<Button
@@ -224,8 +258,12 @@ export function ProductCard({
 							className="mt-auto h-11 w-full rounded-xl"
 						>
 							<Link {...pageLink}>
-								<SlidersHorizontal className="size-4" />
-								Choose
+								{isBooking ? (
+									<CalendarRange className="size-4" />
+								) : (
+									<SlidersHorizontal className="size-4" />
+								)}
+								{isBooking ? "Book" : "Choose"}
 							</Link>
 						</Button>
 					)

@@ -15,6 +15,10 @@ import { Download, Share2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import {
+	orderDocumentNoun,
+	orderDocumentTitle,
+} from "../../../convex/lib/orderDocument";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	canSharePdf,
@@ -43,8 +47,10 @@ export function OrderDocumentActions({
 	const [downloading, setDownloading] = useState(false);
 	const [sharing, setSharing] = useState(false);
 
-	const noun = paid ? "receipt" : "invoice";
-	const Noun = paid ? "Receipt" : "Invoice";
+	// Shared with the PDF title + the download button (z8r3fdcrzj) — one
+	// module decides which face the document wears.
+	const noun = orderDocumentNoun(paid);
+	const Noun = orderDocumentTitle(paid);
 	const who = buyerName?.trim() ? buyerName.trim() : "the buyer";
 	const canShare = canSharePdf();
 

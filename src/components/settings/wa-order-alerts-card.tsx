@@ -22,20 +22,13 @@ import { MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { Country } from "../../../convex/lib/country";
-import { MOBILE_MESSAGE } from "../../../convex/lib/slug";
+import { MOBILE_KIND, MOBILE_MESSAGE } from "../../../convex/lib/slug";
 import { convexErrorMessage, formatMobile } from "../../lib/format";
 import { toNationalPhoneInput } from "../../lib/phone";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { MyPhoneInput } from "../ui/my-phone-input";
-
-/** The noun the helper line leads with — "Malaysian mobile", not "Malaysia
- * mobile", so it can't be derived from COUNTRY_LABELS. */
-const MOBILE_KIND: Record<Country, string> = {
-	MY: "Malaysian mobile",
-	SG: "Singapore mobile",
-};
 
 type WaOrderAlertsPatch = {
 	notifyWaPhone?: string;

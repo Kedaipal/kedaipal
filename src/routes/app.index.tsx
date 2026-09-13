@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
@@ -65,6 +66,13 @@ import { cn } from "../lib/utils";
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
 });
+
+// Named per store country (z8r3fdbmc9) — DuitNow is a Malaysian rail; an SG
+// store's confirmation carries PayNow instead.
+const PAYMENT_STEP_WHY: Record<Country, string> = {
+	MY: "Your bank account or DuitNow QR is included automatically in the order confirmation message sent to every shopper.",
+	SG: "Your bank account or PayNow QR is included automatically in the order confirmation message sent to every shopper.",
+};
 
 /**
  * How long the first-order celebration stays on the dashboard after activation.
@@ -277,23 +285,25 @@ function DashboardHome() {
 			tab: "whatsapp",
 		},
 		{
+			// One door, the Products page — a COLLAPSED row is a single link, so
+			// pointing it at the import route forced every tap straight into the
+			// Excel upload. The Products page is the chooser: its empty state
+			// offers "+ New product" and "Import from spreadsheet" side by side.
 			key: "product",
 			done: hasProduct,
 			icon: Package,
 			title: "Add your products",
-			why: "Selling 20+ items? Import your whole catalogue from a spreadsheet in one go — no typing them in one by one. Or add a single product to start.",
+			why: "Add products one at a time, or import your whole catalogue from a spreadsheet in one go — you'll get both options on the Products page.",
 			time: "~5 min",
-			cta: "Import products",
-			to: "/app/products/import",
-			secondaryCta: "Add one product",
-			secondaryTo: "/app/products/new",
+			cta: "Add products",
+			to: "/app/products",
 		},
 		{
 			key: "payment",
 			done: hasPayment,
 			icon: CreditCard,
 			title: "Add payment details",
-			why: "Your bank account or DuitNow QR is included automatically in the order confirmation message sent to every shopper.",
+			why: PAYMENT_STEP_WHY[retailer.country],
 			time: "~2 min",
 			cta: "Go to Settings",
 			to: "/app/settings",
@@ -898,8 +908,7 @@ export type ChecklistItem = {
 	 * Optional secondary action shown beneath the primary CTA (e.g. "add one"
 	 * alongside the recommended bulk import). Only rendered in the expanded row.
 	 */
-	secondaryCta?: string;
-	secondaryTo?: string;
+
 	/** Renders an "Optional" pill so the seller knows they can skip. */
 	optional?: boolean;
 };
@@ -966,13 +975,6 @@ function ChecklistRow({
 						<ArrowRight className="size-3.5" />
 					</Button>
 				</Link>
-				{item.secondaryCta && item.secondaryTo ? (
-					<Link to={item.secondaryTo}>
-						<Button size="sm" variant="outline" className="h-11 w-full">
-							{item.secondaryCta}
-						</Button>
-					</Link>
-				) : null}
 			</li>
 		);
 	}

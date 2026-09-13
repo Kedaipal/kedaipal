@@ -33,6 +33,7 @@ function row(partial: Partial<VariantRow> = {}): VariantRow {
 function browniesState(): WizardState {
 	return {
 		...emptyWizardState(),
+		kindCard: "physical",
 		name: "Chocolate fudge brownies",
 		shape: "choices",
 		fulfilmentAnswered: true,
@@ -64,6 +65,7 @@ function browniesState(): WizardState {
 function singleFromStock(): WizardState {
 	return {
 		...emptyWizardState(),
+		kindCard: "physical",
 		name: "Nasi lemak bungkus",
 		shape: "single",
 		fulfilmentAnswered: true,
@@ -358,6 +360,8 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 			name: "Brownies",
 			description: "Fudgy",
 			hidden: true,
+			kind: "physical" as const,
+			capacityPerNight: "1",
 			categoryIds: [],
 			images: [{ id: "st1", url: "blob:p1" }],
 			editor: {
@@ -401,6 +405,8 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 			name: handoff.initialValues.name ?? "",
 			description: handoff.initialValues.description ?? "",
 			hidden: handoff.initialValues.hidden ?? false,
+			kind: handoff.initialValues.kind ?? "physical",
+			capacityPerNight: handoff.initialValues.capacityPerNight ?? "1",
 			categoryIds: handoff.initialValues.categoryIds ?? [],
 			images: [],
 			editor: handoff.initialEditor,
@@ -597,6 +603,7 @@ describe("wizard — made-to-order product type", () => {
 	function madeToOrderState(): WizardState {
 		return {
 			...emptyWizardState(),
+			kindCard: "physical",
 			name: "Custom cake",
 			shape: "made_to_order",
 			fulfilmentAnswered: true,
@@ -609,10 +616,15 @@ describe("wizard — made-to-order product type", () => {
 	}
 
 	it("skips Preparation — the type has already answered it", () => {
-		expect(wizardSteps("made_to_order")).toEqual([1, 2, 3, 5]);
-		expect(wizardSteps("single")).toEqual([1, 2, 3, 4, 5]);
-		expect(wizardSteps("choices")).toEqual([1, 2, 3, 4, 5]);
-		expect(wizardSteps(null)).toEqual([1, 2, 3, 4, 5]);
+		expect(wizardSteps("made_to_order")).toEqual([0, 1, 2, 3, 5]);
+		expect(wizardSteps("single")).toEqual([0, 1, 2, 3, 4, 5]);
+		expect(wizardSteps("choices")).toEqual([0, 1, 2, 3, 4, 5]);
+		expect(wizardSteps(null)).toEqual([0, 1, 2, 3, 4, 5]);
+	});
+
+	it("booking kind walks its own route — no Choices, no Preparation", () => {
+		expect(wizardSteps(null, "booking")).toEqual([0, 1, 3, 5]);
+		expect(wizardSteps("single", "physical")).toEqual([0, 1, 2, 3, 4, 5]);
 	});
 
 	it("accepts a blank price where every other type demands one", () => {
@@ -700,6 +712,8 @@ describe("wizard — made-to-order product type", () => {
 			description: "",
 			images: [],
 			hidden: false,
+			kind: "physical" as const,
+			capacityPerNight: "1",
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
@@ -714,6 +728,8 @@ describe("wizard — made-to-order product type", () => {
 			description: "",
 			images: [],
 			hidden: false,
+			kind: "physical" as const,
+			capacityPerNight: "1",
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
@@ -732,6 +748,8 @@ describe("wizard — made-to-order product type", () => {
 			description: "",
 			images: [],
 			hidden: false,
+			kind: "physical" as const,
+			capacityPerNight: "1",
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",

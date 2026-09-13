@@ -55,6 +55,10 @@ const NEW_KEYS = [
 	"proof_customer_count_label",
 	"book_demo_cta",
 	"demo_wa_message",
+	// The MY/SG toggle. Detection moved from a time-zone guess to Cloudflare's
+	// CF-IPCountry (31 Aug 2026), but the toggle stays on all three pricing
+	// surfaces: geo-IP is a guess about a person, and the override is what
+	// stops a wrong guess being a dead end. See docs/pricing.md.
 	"region_toggle_label",
 	"region_my",
 	"region_sg",
@@ -64,23 +68,30 @@ describe("landing redesign — Founding 10 off the landing page", () => {
 	it("removes every landing-only founding key from every locale", () => {
 		for (const [locale, catalog] of catalogs) {
 			for (const key of REMOVED_KEYS) {
-				expect(key in catalog, `${locale}.${key} should have been removed`).toBe(
-					false,
-				);
+				expect(
+					key in catalog,
+					`${locale}.${key} should have been removed`,
+				).toBe(false);
 			}
 		}
 	});
 
 	it("keeps the pricing surfaces' key namespaces founding-free", () => {
-		// Both the landing teaser (`pricing_*`) and `/pricing` (`pricingpage_*`).
-		// `/cost` (`cost_*`) still carries its own founding-price CTA — that page
-		// is a lead tool with its own copy pass, deliberately out of scope here.
+		// The landing teaser (`pricing_*`), `/pricing` (`pricingpage_*`) AND
+		// `/cost` (`cost_*`) — the calculator's founding-price CTA was the last
+		// public advert of the retired RM104/S$41 rate (30 Aug 2026 pricing
+		// reset, ClickUp z8r3fday21). The regex covers all three locales'
+		// wording: "Founding", "Pengasas", "创始".
 		const offenders: string[] = [];
 		for (const [locale, catalog] of catalogs) {
 			for (const [key, value] of Object.entries(catalog)) {
-				if (!key.startsWith("pricing_") && !key.startsWith("pricingpage_"))
+				if (
+					!key.startsWith("pricing_") &&
+					!key.startsWith("pricingpage_") &&
+					!key.startsWith("cost_")
+				)
 					continue;
-				if (typeof value === "string" && /founding/i.test(value)) {
+				if (typeof value === "string" && /founding|pengasas|创始/i.test(value)) {
 					offenders.push(`${locale}.${key} = ${value}`);
 				}
 			}
@@ -106,7 +117,9 @@ describe("landing redesign — new copy present in every locale", () => {
 			const message = catalog.demo_wa_message;
 			expect(message, locale).toBeTruthy();
 			const duplicates = Object.entries(catalog)
-				.filter(([key, value]) => key !== "demo_wa_message" && value === message)
+				.filter(
+					([key, value]) => key !== "demo_wa_message" && value === message,
+				)
 				.map(([key]) => `${locale}.${key}`);
 			expect(duplicates, duplicates.join(", ")).toEqual([]);
 		}

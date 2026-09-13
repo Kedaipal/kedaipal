@@ -185,6 +185,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Seller self-serve billing (86eyb6z4r): subscribeSelf + the auto-renewal
+	// setup/reconcile actions. Authenticated, keyed by retailer/Clerk subject;
+	// each accepted call is at most one outbound HitPay API call on KEDAIPAL's
+	// own account. A couple of retries after a flaky redirect is legitimate.
+	billingSelfServe: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 4,
+	},
 	// Public poster scan (`KPS-<token>`) starting a buyer-initiated counter
 	// session. The token is printed on a wall, so this limit IS the security
 	// model (with the per-store open-session cap): keyed by

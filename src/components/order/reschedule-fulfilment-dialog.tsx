@@ -88,7 +88,7 @@ export function RescheduleFulfilmentDialog({
 	// stores never see it — their fees aren't time-sensitive.
 	const canPreviewFee =
 		isDelivery &&
-		dispatch?.bookingEnabled === true &&
+		dispatch?.riderOnlyStore === true &&
 		dispatch.blockReason === null &&
 		!hasActiveRiderJob;
 

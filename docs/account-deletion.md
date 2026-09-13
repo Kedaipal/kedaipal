@@ -57,6 +57,17 @@ Consequences worth knowing:
 - The **retailer row is deleted last**, so every continuation can re-resolve the
   tenant by `userId`, and each phase is idempotent — a crashed batch just
   resumes.
+- **One `.paginate()` per invocation.** Convex allows a single paginated query
+  per mutation, and two phases paginate (`slugHistory`, `optOuts` —
+  `PAGINATED_PHASES` in `lib/accountDeletion.ts`). The driver hands off to a
+  scheduled continuation before entering a second paginated phase in the same
+  invocation. This was a latent crash found in the field (z8r3fdbmc9): on a
+  small tenant `slugHistory` finished inside one invocation's budget, the loop
+  rolled into `optOuts`, the second paginate threw, the invocation's writes
+  rolled back, and the cascade **stalled with no continuation scheduled**.
+  convex-test does not enforce the limit, so only a real deployment surfaces
+  it — the tests now drain `finishAllScheduledFunctions` instead of asserting
+  single-invocation completion.
 - Progress is logged per phase (counts + ids only — never phone numbers or
   message bodies, per the log-redaction convention in
   [`docs/whatsapp-webhook-security.md`](./whatsapp-webhook-security.md)).

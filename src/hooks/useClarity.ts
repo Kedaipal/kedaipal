@@ -1,13 +1,13 @@
-import Clarity from "@microsoft/clarity";
 import { useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { isCapabilityTokenPath } from "../lib/analytics-privacy";
-import { clientEnv } from "../lib/env";
-
-let clarityInitialized = false;
+import { ensureClarityInitialized } from "../lib/clarity-events";
 
 /**
  * Boots Microsoft Clarity (session replays + heatmaps) once on the client.
+ * The funnel's Smart events share the same boot via `ensureClarityInitialized`
+ * — see `src/lib/clarity-events.ts`, which owns the init flag (a route firing
+ * `land_marketing` on mount runs before this root effect, so the flag can't
+ * live here).
  *
  * No-ops when VITE_CLARITY_PROJECT_ID is unset, so local dev and preview
  * builds never pollute the production Clarity project. Unlike GA, there's
@@ -15,19 +15,14 @@ let clarityInitialized = false;
  * tracks SPA route changes on its own; the pathname is read only to decide
  * whether booting is allowed at all.
  *
- * Never boots on `/track/*` — the tracking URL is the buyer's capability
- * secret; see `isCapabilityTokenPath` for the full rationale shared with
- * `useGoogleAnalytics`.
+ * Never boots on `/track/*` or `/claim/*` — those URLs are the buyer's
+ * capability secret; see `isCapabilityTokenPath` for the full rationale shared
+ * with `useGoogleAnalytics`.
  */
 export function useClarity() {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 
 	useEffect(() => {
-		const projectId = clientEnv.VITE_CLARITY_PROJECT_ID;
-		if (!projectId || clarityInitialized) return;
-		if (isCapabilityTokenPath(pathname)) return;
-
-		Clarity.init(projectId);
-		clarityInitialized = true;
+		ensureClarityInitialized(pathname);
 	}, [pathname]);
 }

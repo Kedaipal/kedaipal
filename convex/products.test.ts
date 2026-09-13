@@ -875,6 +875,49 @@ describe("products", () => {
 		).rejects.toThrow(/only once/);
 	});
 
+	test("a booking listing carries no stock flag — so no stock control is offered", async () => {
+		// The products list decides whether to offer the Stock button by reading
+		// the RESOLVED `blockWhenOutOfStock` off each variant (86eypn8ye). A stay
+		// has capacity, not stock: bookings are held by `bookingsOverlapping`, not
+		// by `onHand`, so an Adjust dialog there would let a seller move a number
+		// nothing reads. This pins the server-side contract that client filter
+		// depends on — if a booking listing ever starts resolving the flag true,
+		// this fires rather than a stock stepper quietly appearing on a campsite.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Standard Plot",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			kind: "booking",
+			booking: { capacityPerNight: 5 },
+			options: [],
+			variants: [{ optionValues: [], price: 12000, onHand: 0 }],
+		});
+
+		const list = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		const stay = list.find((p) => p.name === "Standard Plot");
+		expect(stay?.variants[0]?.blockWhenOutOfStock).toBeFalsy();
+
+		// The converse, so the test proves the filter discriminates rather than
+		// always returning false: a LEGACY product carrying the flag only at
+		// product level still resolves it onto the variant, and does get one.
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Keropok", stock: 7 }),
+		);
+		const after = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		const goods = after.find((p) => p.name === "Keropok");
+		expect(goods?.variants[0]?.blockWhenOutOfStock).toBe(true);
+	});
+
 	// --- saveVariantGrid reconcile ------------------------------------------
 
 	test("saveVariantGrid reconciles: patches matched, adds new, drops removed", async () => {
@@ -2657,5 +2700,261 @@ describe("orderedAt is seller-only", () => {
 		expect(dashboard.find((p) => p._id === productId)?.orderedAt).toBeGreaterThan(
 			0,
 		);
+	});
+});
+
+/**
+ * Product kind + booking config (booking bundle S1, ClickUp 86eyn4kap; spec
+ * 86eyj70z1). Kind is a vocabulary/question router stored minimally — and the
+ * kind ⟷ booking-config pairing is enforced both directions so a booking
+ * listing can never exist without availability semantics, nor capacity sit
+ * dead on a product that will never read it.
+ */
+describe("product kind + booking config", () => {
+	test("booking create stores kind + capacity; physical stays unset", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const bookingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		const listing = await asA.query(api.products.get, {
+			productId: bookingId,
+		});
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking).toEqual({ capacityPerNight: 5 });
+
+		// "physical" is the DEFAULT spelling — stored as unset so pre-kind and
+		// post-kind rows read identically (minQuantity's 0-normalizes posture).
+		const physicalId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Tent 2P plain" }),
+			kind: "physical" as const,
+		});
+		const physical = await asA.query(api.products.get, {
+			productId: physicalId,
+		});
+		expect(physical?.kind).toBeUndefined();
+		expect(physical?.booking).toBeUndefined();
+	});
+
+	test("security deposit: stored in sen, 0 normalizes to unset, bad values refused (S5)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Hilltop Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 2, securityDeposit: 10_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBe(10_000);
+		// 0 clears — "no deposit" has one spelling (sanitizeFee posture).
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 2, securityDeposit: 0 },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBeUndefined();
+		// Non-integer / negative / over the RM10k ceiling: refused.
+		for (const bad of [10.5, -1, 1_000_001]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { capacityPerNight: 2, securityDeposit: bad },
+				}),
+			).rejects.toThrow(/RM 0 and RM 10,000/);
+		}
+	});
+
+	test("package length + instant book + unlimited capacity round-trip (S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Monthly Gym Pass" }),
+			kind: "booking" as const,
+			// No capacity at all — a gym has no daily member cap.
+			booking: { packageLength: 30, autoAccept: true },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+		expect(listing?.booking?.packageLength).toBe(30);
+		expect(listing?.booking?.autoAccept).toBe(true);
+
+		// 0 clears the package back to a free-range stay; false clears instant book.
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 5, packageLength: 0, autoAccept: false },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.packageLength).toBeUndefined();
+		expect(listing?.booking?.autoAccept).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+
+		for (const bad of [10.5, -1, 400]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { packageLength: bad },
+				}),
+			).rejects.toThrow(/Package length/);
+		}
+	});
+
+	test("weekend rate + nights round-trip, default to Fri + Sat, and 0 clears both (S13)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5, weekendPrice: 12_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendPrice).toBe(12_000);
+		expect(listing?.booking?.weekendDays).toEqual([5, 6]);
+
+		// A custom night set is deduped + sorted on the way in.
+		await asA.mutation(api.products.update, {
+			productId,
+			booking: {
+				capacityPerNight: 5,
+				weekendPrice: 15_000,
+				weekendDays: [6, 0, 6],
+			},
+		});
+		listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendDays).toEqual([0, 6]);
+
+		// 0 clears — and clears the nights with it (one spelling for "no rate").
+		await asA.mutation(api.products.update, {
+			productId,
+			booking: { capacityPerNight: 5, weekendPrice: 0, weekendDays: [5, 6] },
+		});
+		listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendPrice).toBeUndefined();
+		expect(listing?.booking?.weekendDays).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+	});
+
+	test("weekend rate validation: no nights, every night, bad night, package pairing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const cases: Array<
+			[
+				{
+					weekendPrice?: number;
+					weekendDays?: number[];
+					packageLength?: number;
+				},
+				RegExp,
+			]
+		> = [
+			[{ weekendPrice: 12_000, weekendDays: [] }, /at least one night/],
+			[
+				{ weekendPrice: 12_000, weekendDays: [0, 1, 2, 3, 4, 5, 6] },
+				/every night/,
+			],
+			[{ weekendPrice: 12_000, weekendDays: [7] }, /days of the week/],
+			[{ weekendPrice: -1 }, /Weekend rate must be/],
+			[
+				{ weekendPrice: 12_000, packageLength: 30 },
+				/package has one flat price/,
+			],
+		];
+		for (const [booking, message] of cases) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id, { name: "Bad Plot" }),
+					kind: "booking" as const,
+					booking,
+				}),
+			).rejects.toThrow(message);
+		}
+	});
+
+	test("booking kind without its settings object is refused (capacity itself is optional since S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The kind ⟷ config pairing still holds both directions...
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				kind: "booking" as const,
+			}),
+		).rejects.toThrow(/booking settings/);
+		// ...but an EMPTY settings object is valid: no capacity = unlimited (S7),
+		// the shape a gym selling memberships needs.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Unlimited listing" }),
+			kind: "booking" as const,
+			booking: {},
+		});
+		const listing = await asA.query(api.products.get, { productId: id });
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+	});
+
+	test("capacity on a non-booking product is refused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				booking: { capacityPerNight: 3 },
+			}),
+		).rejects.toThrow(/Booking kind/);
+	});
+
+	test("capacity is a whole number between 1 and 100", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		for (const capacityPerNight of [0, 101, 2.5]) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id),
+					kind: "booking" as const,
+					booking: { capacityPerNight },
+				}),
+			).rejects.toThrow(/whole number between 1 and 100/);
+		}
+	});
+
+	test("update re-tunes capacity on a booking listing only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const bookingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		await asA.mutation(api.products.update, {
+			productId: bookingId,
+			booking: { capacityPerNight: 8 },
+		});
+		const listing = await asA.query(api.products.get, {
+			productId: bookingId,
+		});
+		expect(listing?.booking).toEqual({ capacityPerNight: 8 });
+
+		// A physical product refuses the knob — capacity can't be parked on a
+		// row that will never read it.
+		const physicalId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P plain" }),
+		);
+		await expect(
+			asA.mutation(api.products.update, {
+				productId: physicalId,
+				booking: { capacityPerNight: 3 },
+			}),
+		).rejects.toThrow(/booking listing/);
 	});
 });

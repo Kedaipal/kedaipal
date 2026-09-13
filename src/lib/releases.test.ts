@@ -4,16 +4,32 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compareCalendarVersions } from "../../convex/lib/appVersion";
 import type { Release } from "../content/releases";
-import { RELEASES } from "../content/releases";
+import { RELEASE_KIND_LABELS, RELEASES } from "../content/releases";
 import { isCalendarVersion } from "./app-version";
-import { localized, resolveWhatsNew } from "./releases";
+import {
+	localized,
+	PANEL_RELEASE_LIMIT,
+	resolveWhatsNew,
+	splitPanelReleases,
+} from "./releases";
+import {
+	isSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+	type SpotlightKey,
+} from "./spotlight";
 
 function release(version: string, notable = false): Release {
 	return {
 		version,
 		date: "2026-08-01",
 		notable,
-		entries: [{ title: { en: `t ${version}` }, body: { en: `b ${version}` } }],
+		entries: [
+			{
+				kind: "feature",
+				title: { en: `t ${version}` },
+				body: { en: `b ${version}` },
+			},
+		],
 	};
 }
 
@@ -105,6 +121,47 @@ describe("resolveWhatsNew", () => {
 	});
 });
 
+describe("splitPanelReleases", () => {
+	const seven = [
+		release("2026.09.7"),
+		release("2026.09.6"),
+		release("2026.09.5"),
+		release("2026.09.4"),
+		release("2026.09.3"),
+		release("2026.09.2"),
+		release("2026.09.1"),
+	];
+
+	test("shows the newest five and folds the rest", () => {
+		const { shown, older } = splitPanelReleases(seven, new Set());
+		expect(shown.map((r) => r.version)).toEqual([
+			"2026.09.7",
+			"2026.09.6",
+			"2026.09.5",
+			"2026.09.4",
+			"2026.09.3",
+		]);
+		expect(older.map((r) => r.version)).toEqual(["2026.09.2", "2026.09.1"]);
+		expect(PANEL_RELEASE_LIMIT).toBe(5);
+	});
+
+	test("never folds an unseen release — the limit stretches to fit them", () => {
+		// A seller back from a long gap has six unseen releases; hiding the
+		// sixth behind "Show older" would make the panel lie about what they
+		// missed.
+		const unseen = new Set(seven.slice(0, 6).map((r) => r.version));
+		const { shown, older } = splitPanelReleases(seven, unseen);
+		expect(shown).toHaveLength(6);
+		expect(older.map((r) => r.version)).toEqual(["2026.09.1"]);
+	});
+
+	test("folds nothing when there is nothing past the limit", () => {
+		const { shown, older } = splitPanelReleases(seven.slice(0, 3), new Set());
+		expect(shown).toHaveLength(3);
+		expect(older).toHaveLength(0);
+	});
+});
+
 describe("ordering", () => {
 	test("the tenth release of a month is newer than the ninth", () => {
 		// Lexically "2026.08.9" > "2026.08.10", so a string comparison would hide
@@ -186,6 +243,32 @@ describe("the shipped RELEASES content", () => {
 	test("has no duplicate versions", () => {
 		const seen = new Set(RELEASES.map((r) => r.version));
 		expect(seen.size).toBe(RELEASES.length);
+	});
+
+	test("every entry declares a kind with a label to render", () => {
+		// `kind` is required by the type, so the compiler already catches a
+		// missing one. What it cannot catch is a kind added to the union with no
+		// entry in RELEASE_KIND_LABELS — the chip would render `undefined` at the
+		// top of every card carrying it, which is exactly the surface a seller
+		// reads first.
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				expect(
+					RELEASE_KIND_LABELS[e.kind],
+					`${r.version}: "${e.title.en}" has kind "${e.kind}" with no label`,
+				).toBeTruthy();
+			}
+		}
+	});
+
+	test("every kind in the union has a label", () => {
+		// The other direction: adding a kind and forgetting its copy.
+		expect(Object.values(RELEASE_KIND_LABELS).every((l) => l.trim())).toBe(
+			true,
+		);
+		expect(new Set(Object.values(RELEASE_KIND_LABELS)).size).toBe(
+			Object.keys(RELEASE_KIND_LABELS).length,
+		);
 	});
 
 	test("every entry has non-empty English copy", () => {
@@ -275,6 +358,42 @@ describe("the shipped RELEASES content", () => {
 					tabs.includes(tab),
 					`${e.href} names tab "${tab}", which is not one of: ${tabs.join(", ")}`,
 				).toBe(true);
+			}
+		}
+	});
+
+	test("every `?spot=` deep link is a registry key, on that key's own page and tab", () => {
+		// A spotlight that names a key nothing renders scrolls nowhere and rings
+		// nothing; one paired with the wrong tab (or the wrong page) rings
+		// nothing on the wrong page. `spotlightHref` builds both halves from one
+		// key, so a note written with it can't get here — this guards the one
+		// typed by hand.
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				const [path, query] = (e.href ?? "").split("?");
+				const params = new URLSearchParams(query ?? "");
+				const spot = params.get("spot");
+				if (spot === null) continue;
+				expect(
+					isSpotlightKey(spot),
+					`${e.href}: "${spot}" is not a spotlight key`,
+				).toBe(true);
+				const target = SPOTLIGHT_ANCHOR[spot as SpotlightKey];
+				if (target.page === "product") {
+					// The products LIST is the first hop — never a guessed id.
+					expect(path, `${e.href}: a product spotlight lands on the list`).toBe(
+						"/app/products",
+					);
+					expect(params.get("tab")).toBeNull();
+					continue;
+				}
+				expect(path, `${e.href}: a settings spotlight lands on settings`).toBe(
+					"/app/settings",
+				);
+				expect(
+					params.get("tab"),
+					`${e.href}: spot "${spot}" lives on the ${target.tab} tab`,
+				).toBe(target.tab);
 			}
 		}
 	});

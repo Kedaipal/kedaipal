@@ -7,6 +7,8 @@ function draft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
 		name: "Brownies",
 		description: "",
 		hidden: false,
+		kind: "physical" as const,
+		capacityPerNight: "1",
 		categoryIds: [],
 		images: [{ id: "st1", url: "blob:hero" }],
 		editor: {

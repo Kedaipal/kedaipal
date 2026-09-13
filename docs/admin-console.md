@@ -253,3 +253,59 @@ pause flow) is a sensible next step but not yet implemented.
 - Individual act-as reads aren't logged per-read (only tenant entry is) — a per-read trail is
   possible later if compliance requires it, but is high-volume/low-signal for now.
 - PostHog funnel for act-as usage deferred.
+
+## Dev-only store purge (z8r3fdbmc9)
+
+A per-row trash control on `/app/admin/sellers` that erases a test store back
+to nothing so its Clerk login onboards fresh — the test-reset for the
+onboarding/country flows. Not a new deletion path: `admin.purgeStoreForAdmin`
+schedules the existing PDPA erasure cascade (`internal.retailers.deleteUser` →
+`runDeletionPhase`, every phase, self-chaining), so it can never drift from
+what account deletion erases. The Clerk USER survives — after the cascade
+`getMyRetailer` is null and `/onboarding` treats the login as brand-new.
+Erasure is asynchronous; the directory row disappears when the retailer doc
+goes in the final phase.
+
+**Gating, fail-closed at every layer:**
+
+1. `requireAdmin` (the env allowlist).
+2. `devStorePurgeAllowed()` — TWO independent guards: a hard deny when
+   `CONVEX_CLOUD_URL` names the production deployment (beats any flag), and an
+   explicit `DEV_STORE_PURGE_ENABLED=true|1` opt-in that prod simply never
+   sets. Absent/junk values read as OFF. Each guard is mutation-tested alone.
+3. The caller must echo the store's **slug** (`confirmSlug`) — the client
+   confirm dialog types it (`ConfirmDialog confirmPhrase`), the server
+   re-checks it, so a wrong-row misfire is refused on both sides.
+
+The button only renders when `admin.devStorePurgeEnabled` says so (cosmetic —
+the mutation re-checks). The purge is audited via `logDestructiveAdminAction`
+(`admin.purgeStore`, recorded even on an admin's own store — the 86eyhz189
+rule), and the audit row outlives the tenant because the cascade retains
+`adminAuditLog` by decision.
+
+**In-flight lock:** the purge stamps `retailers.purgeStartedAt` before
+scheduling the cascade. While it's set (and younger than the 10-minute retry
+window), the directory row shows "Purging…" with Manage and the trash both
+disabled, `startActAsSession` refuses the store, and a second purge is
+rejected — no session can touch a store mid-erase. The stamp is never cleared
+on success (the row itself is the cascade's final delete); a stamp older than
+the window means a crashed cascade, and re-running the purge is the recovery
+(every phase is idempotent).
+
+**Env:** `DEV_STORE_PURGE_ENABLED` is set on the dev deployment only. It is
+deliberately NOT in any prod checklist — never set it there; the prod
+deny-list exists precisely for the day someone does.
+
+**Expected log noise:** if any session still has the purged store's dashboard
+open, the moment the retailer row goes you'll see a burst of uncaught
+`Retailer not found` / `No store found for this account` query errors — live
+subscriptions re-running against a store that no longer exists and hitting the
+`requireRetailerAccess` guard, which is doing its job. One burst, then the
+client sees `getMyRetailer` go null and lands on onboarding. Deliberately NOT
+fail-softed: silencing it would weaken the access seam across every dashboard
+query for a few seconds of dev log noise.
+
+**Trap found on first use:** the erasure cascade itself had a latent crash —
+two phases paginate and Convex allows one `.paginate()` per mutation, so a
+small tenant stalled mid-erase. Fixed in the driver (see
+`docs/account-deletion.md`, "one paginate per invocation").

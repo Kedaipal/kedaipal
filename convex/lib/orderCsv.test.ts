@@ -80,6 +80,7 @@ describe("orderToCsvRow", () => {
 		// seller's bookkeeping template must keep matching on names.
 		expect(CSV_COLUMNS).toContain("Delivery fee");
 		expect(CSV_COLUMNS).not.toContain("Collection fee");
+		expect(CSV_COLUMNS).toContain("Security deposit");
 		// Standard + pickup rows are untouched.
 		expect(orderToCsvRow(base)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
 			"delivery",
@@ -161,6 +162,36 @@ describe("orderToCsvRow", () => {
 		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("Walk-in customer");
 		expect(row[CSV_COLUMNS.indexOf("Fulfilment date")]).toBe("");
 		expect(row[CSV_COLUMNS.indexOf("Total")]).toBe("0.00");
+	});
+});
+
+describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
+	test("prints the frozen deposit and 0.00 when absent, so columns subtract cleanly", () => {
+		const booking = orderToCsvRow({
+			shortId: "ORD-9001",
+			createdAt: JUN_30_MYT,
+			status: "confirmed",
+			deliveryMethod: "booking",
+			customer: { name: "Guest", waPhone: "+60123456789" },
+			items: [{ name: "Riverside Plot", quantity: 2 }],
+			subtotal: 16_000,
+			securityDeposit: 10_000,
+			total: 26_000,
+			currency: "MYR",
+		});
+		expect(booking[CSV_COLUMNS.indexOf("Security deposit")]).toBe("100.00");
+		const plain = orderToCsvRow({
+			shortId: "ORD-9002",
+			createdAt: JUN_30_MYT,
+			status: "confirmed",
+			deliveryMethod: "delivery",
+			customer: { name: "Aisha", waPhone: "+60123456789" },
+			items: [{ name: "Cake", quantity: 1 }],
+			subtotal: 5_000,
+			total: 5_000,
+			currency: "MYR",
+		});
+		expect(plain[CSV_COLUMNS.indexOf("Security deposit")]).toBe("0.00");
 	});
 });
 
@@ -381,17 +412,47 @@ describe("the rest of the missing fields", () => {
 
 describe("the money run stays adjacent", () => {
 	// The whole point of adding Custom work is that a human can eyeball the
-	// arithmetic left-to-right. If a later column is inserted between these,
-	// that stops being true — so the adjacency is pinned, not incidental.
-	test("Subtotal · Custom work · Pickup fee · Delivery fee · Total are consecutive", () => {
+	// arithmetic left-to-right. If a NON-addend column is inserted between
+	// these, that stops being true — so the adjacency is pinned, not
+	// incidental. The run grows only when a new column is genuinely one of the
+	// addends: Security deposit joined it in S5 (`86eyn4kee`) because a booking
+	// deposit is collected in the same payment and folds into `total` through
+	// the same extras seam as the fees — leaving it outside the run would make
+	// the identity read FALSE on every booking order.
+	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Total are consecutive", () => {
 		const start = CSV_COLUMNS.indexOf("Subtotal");
-		expect(CSV_COLUMNS.slice(start, start + 5)).toEqual([
+		expect(CSV_COLUMNS.slice(start, start + 6)).toEqual([
 			"Subtotal",
 			"Custom work",
 			"Pickup fee",
 			"Delivery fee",
+			"Security deposit",
 			"Total",
 		]);
+	});
+
+	// The reconciliation the adjacency exists to serve, on a booking order.
+	test("the run sums to Total on an order carrying a deposit", () => {
+		const row = orderToCsvRow({
+			shortId: "ORD-9100",
+			createdAt: JUN_30_MYT,
+			status: "confirmed",
+			deliveryMethod: "booking",
+			customer: { name: "Guest", waPhone: "+60123456789" },
+			items: [{ name: "Riverside Plot", quantity: 2 }],
+			subtotal: 16_000,
+			securityDeposit: 10_000,
+			total: 26_000,
+			currency: "MYR",
+		});
+		const at = (label: string) => Number(row[CSV_COLUMNS.indexOf(label)]);
+		expect(
+			at("Subtotal") +
+				at("Custom work") +
+				at("Pickup fee") +
+				at("Delivery fee") +
+				at("Security deposit"),
+		).toBeCloseTo(at("Total"), 2);
 	});
 });
 

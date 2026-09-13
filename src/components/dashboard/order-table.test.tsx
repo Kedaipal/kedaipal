@@ -69,6 +69,7 @@ function renderTable(
 		selected: new Set<string>(),
 		onToggleSelect: vi.fn(),
 		onTogglePin: vi.fn(),
+		empty: { title: "No orders match these filters", body: "Adjust or clear." },
 		columnWidths: {},
 		onColumnWidthsChange: vi.fn(),
 		...overrides,

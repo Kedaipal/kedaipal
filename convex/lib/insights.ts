@@ -52,6 +52,9 @@ export type InsightsOrderInput = {
 	createdAt: number;
 	status: string;
 	total: number;
+	/** Refundable security deposit (sen) inside `total` on a booking order —
+	 * held money, excluded from every revenue figure here. */
+	securityDeposit?: number;
 	paymentStatus?: string;
 	paymentMethod?: string;
 	/** Checkout surface ("storefront" | "counter") — feeds the source bucket. */
@@ -184,7 +187,11 @@ export function reduceInsights(
 	for (const o of orders) {
 		if (!isRevenueOrder(o.status)) continue;
 		orderCount += 1;
-		earned += o.total;
+		// Revenue excludes the refundable security deposit (held money the
+		// seller gives back after check-out — the revenueExcludingDeposit rule,
+		// inlined since this module stays dependency-light).
+		const revenue = Math.max(0, o.total - (o.securityDeposit ?? 0));
+		earned += revenue;
 
 		// By-source rows — every revenue order lands in exactly one bucket
 		// (stamped tag → counter → direct), so Σ rows === earned/orderCount.
@@ -206,10 +213,10 @@ export function reduceInsights(
 		const start = bucketStartFor(dayMidnight, from, bucketing);
 		const bucket = trendMap.get(start);
 		if (bucket) {
-			bucket.earned += o.total;
+			bucket.earned += revenue;
 			bucket.orderCount += 1;
 		} else {
-			trendMap.set(start, { start, earned: o.total, orderCount: 1 });
+			trendMap.set(start, { start, earned: revenue, orderCount: 1 });
 		}
 
 		// Top products — group order-item lines by product+variant (snapshot name).
@@ -235,14 +242,14 @@ export function reduceInsights(
 
 		// Collected + payment-method donut — only orders whose money is in hand.
 		if (o.paymentStatus === "received") {
-			collected += o.total;
+			collected += revenue;
 			const method = o.paymentMethod ?? "unspecified";
 			const slice = paymentMap.get(method);
 			if (slice) {
-				slice.revenue += o.total;
+				slice.revenue += revenue;
 				slice.orderCount += 1;
 			} else {
-				paymentMap.set(method, { method, revenue: o.total, orderCount: 1 });
+				paymentMap.set(method, { method, revenue, orderCount: 1 });
 			}
 		}
 	}

@@ -15,7 +15,11 @@ vi.mock("@convex-dev/react-query", () => ({
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 // InvoiceDownloadButton (rendered inside the pending-invoice card) fetches the
 // PDF URL via useAction — stub it so the card renders without a ConvexProvider.
-vi.mock("convex/react", () => ({ useAction: () => vi.fn() }));
+// The 86eyb6z4r cards (plan picker, auto-renewal) add useMutation.
+vi.mock("convex/react", () => ({
+	useAction: () => vi.fn(),
+	useMutation: () => vi.fn(),
+}));
 
 afterEach(cleanup);
 
@@ -55,16 +59,25 @@ function mockQueries({
 	// the destructuring default would swallow it.
 	supportWa = CONFIGURED_WA,
 	invoices = [],
+	gateway = null,
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
+	/** billingGatewayAvailable answer; null = gateway not configured. */
+	gateway?: {
+		payNow: boolean;
+		autoRenew: boolean;
+		methods: string[];
+		currency: string;
+	} | null;
 }) {
 	const NAME = {
 		amIAdmin: getFunctionName(api.billing.amIAdmin),
 		invoices: getFunctionName(api.invoices.myInvoices),
 		instructions: getFunctionName(api.billing.paymentInstructions),
 		supportWa: getFunctionName(api.contact.supportWhatsapp),
+		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -76,11 +89,19 @@ function mockQueries({
 			// Bank/DuitNow details only — the support number has its own query.
 			if (name === NAME.instructions) return { bankName: "Maybank" };
 			if (name === NAME.supportWa) return supportWa ?? undefined;
+			if (name === NAME.gateway) return gateway ?? undefined;
 			return undefined;
 		})();
 		return { data, isPending: false };
 	}) as unknown as typeof useQuery);
 }
+
+const GATEWAY_ON = {
+	payNow: true,
+	autoRenew: true,
+	methods: ["card", "touch_n_go"],
+	currency: "MYR",
+};
 
 /** Every wa.me href the tab renders. */
 function waLinks(): string[] {
@@ -192,6 +213,35 @@ describe("BillingTab pending invoice — how to pay", () => {
 		).toBeNull();
 	});
 
+	it("a pending invoice with a gateway link leads with Pay online now (86eyb6z4r)", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					...pendingInvoice("MYR"),
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_1",
+					},
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		const payNow = screen.getByText("Pay online now").closest("a");
+		expect(payNow?.getAttribute("href")).toBe(
+			"https://securecheckout.hit-pay.com/req_1",
+		);
+		// The manual rail stays underneath as the fallback.
+		expect(screen.getByText("How to pay")).toBeTruthy();
+	});
+
+	it("no gateway link → no Pay-now button, manual flow byte-identical", () => {
+		mockQueries({ isAdmin: false, invoices: [pendingInvoice("MYR")] });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.queryByText("Pay online now")).toBeNull();
+	});
+
 	it("a cross-border (SGD) invoice hides the MY rails and points at WhatsApp", () => {
 		// Fully-configured MY rails must STILL not render — they can't settle SGD.
 		vi.mocked(useQuery).mockImplementation(((opts: {
@@ -223,5 +273,371 @@ describe("BillingTab pending invoice — how to pay", () => {
 		).toBeGreaterThanOrEqual(2);
 		expect(screen.queryByText("Maybank")).toBeNull();
 		expect(screen.queryByText("DuitNow")).toBeNull();
+	});
+});
+
+describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
+	/** A trialing seller with nothing pending — the "choose a plan" state. */
+	const trialing = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "trialing",
+				comped: false,
+				trialEndsAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("gateway ON → the plan picker replaces the WhatsApp card", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={trialing()} />);
+		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
+		expect(screen.getByText(/Get my .* invoice/)).toBeTruthy();
+		expect(
+			screen.queryByText(/Message us on WhatsApp and we'll send your invoice/),
+		).toBeNull();
+		// Annual is pitched with its real hook, never a percentage.
+		expect(screen.getByText("2 months free")).toBeTruthy();
+	});
+
+	it("gateway OFF → the manual WhatsApp card renders exactly as before", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={trialing()} />);
+		expect(
+			screen.getByText(/Message us on WhatsApp and we'll send your invoice/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("gateway ON → the auto-renewal card offers the one-time setup", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={trialing()} />);
+		expect(screen.getByText("Auto-renewal")).toBeTruthy();
+		expect(screen.getByText("Turn on auto-renewal")).toBeTruthy();
+		// The trust line: Kedaipal never touches the card details.
+		expect(screen.getByText(/never\s+sees or stores your card/)).toBeTruthy();
+	});
+
+	it("an attached, failing method names the problem and keeps the off-switch", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+						autoRenew: {
+							method: "card",
+							methodLabel: "Visa ·· 4242",
+							failedAttempts: 1,
+							failing: true,
+						},
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(
+			screen.getByText(/couldn't charge your Visa ·· 4242/),
+		).toBeTruthy();
+		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
+	});
+
+	it("comped accounts and admins never see the gateway cards", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: true,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+	});
+});
+
+/**
+ * Annual billing (src/lib/annual-billing.ts). The eligibility ladder is unit
+ * tested there; these cover the WIRING — that the tab feeds the resolver the
+ * right seller and renders the state it gets back.
+ */
+describe("BillingTab annual billing", () => {
+	/** An active Pro seller — the default fixture is past_due, which is hidden. */
+	function activePro(overrides: Record<string, unknown> = {}) {
+		return retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				features: { crm: true, orderInbox: true, chargeablePickup: true },
+				active: true,
+				frozen: false,
+				...overrides,
+			},
+		} as never);
+	}
+
+	const settled = [
+		{
+			_id: "i1",
+			status: "paid",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-1",
+		},
+		{
+			_id: "i2",
+			status: "paid",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-2",
+		},
+	];
+
+	it("offers the year to a proven, active Pro seller", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		expect(
+			screen.getByText(/Pay for the year, get 2 months free/),
+		).toBeTruthy();
+		// The real invoice total — RM1,490, not the RM650 the pricing page used
+		// to derive from a rounded effective monthly.
+		expect(screen.getByText(/RM\s*1,490\.00/)).toBeTruthy();
+		expect(screen.getByText(/Save RM\s*298\.00/)).toBeTruthy();
+		expect(screen.getByText("Switch to annual billing")).toBeTruthy();
+	});
+
+	it("puts the store, plan and exact amount in the WhatsApp message", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		const href = waLinks().find((l) => l.includes("annual"));
+		expect(href).toBeTruthy();
+		const text = decodeURIComponent(href ?? "");
+		expect(text).toContain("/openmarket");
+		expect(text).toContain("Pro");
+		expect(text).toContain("1,490.00");
+		expect(text).toContain("12 months");
+	});
+
+	it("states the refund position before the seller commits", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText(/isn't refunded in cash/)).toBeTruthy();
+	});
+
+	it("hides from a seller with only one settled invoice", () => {
+		mockQueries({ isAdmin: false, invoices: [settled[0]] });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+	it("hides while past due — the renew card is the urgent thing", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={retailer()} />); // fixture is past_due
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+	it("hides from an admin on their own store", () => {
+		mockQueries({ isAdmin: true, invoices: settled });
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+
+	it("tells an annual seller they're on annual, and stops selling", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(
+			<BillingTab
+				retailer={activePro({
+					billingCycle: "annual",
+					currentPeriodEnd: Date.UTC(2027, 2, 12),
+				})}
+			/>,
+		);
+		expect(screen.getByText("You're on annual billing")).toBeTruthy();
+		// Locale-independent — the runner's default locale decides the date shape
+		// ("12 Mar 2027" vs "Mar 12, 2027"), so assert the year, not the order.
+		expect(screen.getByText(/Your current year runs to .*2027/)).toBeTruthy();
+		expect(screen.queryByText("Switch to annual billing")).toBeNull();
+	});
+
+	it("offers the swap while an invoice is still open, not after", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				...settled,
+				{
+					_id: "i3",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-3",
+					billingCycle: "monthly",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText("Pay for the year instead?")).toBeTruthy();
+		expect(screen.getByText("Ask for an annual invoice")).toBeTruthy();
+		const href = waLinks().find((l) => l.includes("annual"));
+		const swap = decodeURIComponent(href ?? "");
+		expect(swap).toContain("cancel that invoice");
+		// The invoice number the operator must void, and the seller's own
+		// assertion that nothing has been transferred yet.
+		expect(swap).toContain("INV-3");
+		expect(swap).toContain("haven't paid it yet");
+	});
+
+	it("quotes an SGD seller in SGD", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: settled.map((i) => ({ ...i, currency: "SGD" })),
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText(/S\$\s*590\.00/)).toBeTruthy();
+		expect(screen.queryByText(/RM\s*1,490\.00/)).toBeNull();
+	});
+
+	it("tells a Starter that Pro can be billed yearly", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro({ plan: "starter" })} />);
+		// The offer itself is Pro+, but the tier must still learn it exists.
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(
+			screen.getByText(/billed annually, with two months free/),
+		).toBeTruthy();
+		// The constraint is explained, not left as an unexplained absence.
+		expect(screen.getByText(/We don't offer annual on Starter/)).toBeTruthy();
+	});
+
+	it("stops selling once an annual invoice is already waiting", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				...settled,
+				{
+					_id: "i4",
+					status: "pending",
+					currency: "MYR",
+					billingCycle: "annual",
+					total: 149000,
+					invoiceNumber: "INV-4",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText("Your annual invoice is ready")).toBeTruthy();
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
+	});
+
+	it("defers the swap when the open invoice is nearly due", () => {
+		// Voiding this close to the due date can land the seller in past_due —
+		// the daily cron locks an active seller with no pending invoice.
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				...settled,
+				{
+					_id: "i5",
+					status: "pending",
+					currency: "MYR",
+					billingCycle: "monthly",
+					total: 14900,
+					invoiceNumber: "INV-5",
+					dueDate: Date.now() + 2 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={activePro()} />);
+		expect(screen.getByText("Moving to annual billing")).toBeTruthy();
+		expect(screen.getByText(/too soon to swap it safely/)).toBeTruthy();
+		expect(screen.getByText("Ask for annual next cycle")).toBeTruthy();
+		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
+	});
+
+	it("hides from Scale, which cannot be invoiced at all yet", () => {
+		mockQueries({ isAdmin: false, invoices: settled });
+		render(<BillingTab retailer={activePro({ plan: "scale" })} />);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+	});
+});
+
+/**
+ * Invoice history documents (z8r3fdcrzj): a PAID row carries two — the frozen
+ * bill and its payment receipt; a VOID row carries neither.
+ */
+describe("BillingTab invoice history documents", () => {
+	const history = [
+		{
+			_id: "p1",
+			status: "paid",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-PAID",
+			createdAt: Date.UTC(2026, 7, 1),
+		},
+		{
+			_id: "v1",
+			status: "void",
+			currency: "MYR",
+			total: 14900,
+			invoiceNumber: "INV-VOID",
+			createdAt: Date.UTC(2026, 6, 1),
+		},
+	];
+
+	it("offers invoice + receipt on a paid row, nothing on a void row", () => {
+		mockQueries({ isAdmin: false, invoices: history });
+		render(<BillingTab retailer={retailer()} />);
+		expect(
+			screen.getAllByRole("button", { name: /download invoice pdf/i }),
+		).toHaveLength(1);
+		expect(
+			screen.getAllByRole("button", { name: /download receipt pdf/i }),
+		).toHaveLength(1);
+	});
+
+	it("a spotlight target rings the history card, and only that card", () => {
+		// `spotlightHref("invoice_history")` — the "Download a receipt" note.
+		mockQueries({ isAdmin: false, invoices: history });
+		const { container } = render(
+			<BillingTab
+				retailer={retailer()}
+				target={{ anchor: "settings-invoice-history", highlight: "spotlight" }}
+			/>,
+		);
+		const ringed = container.querySelectorAll("[data-fix-highlight]");
+		expect(ringed).toHaveLength(1);
+		expect(ringed[0]?.id).toBe("settings-invoice-history");
+		expect(ringed[0]?.className).toMatch(/ring-accent/);
+	});
+
+	it("offers no receipt while the invoice is still pending", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [{ ...history[0], _id: "p2", status: "pending" as const }],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(
+			screen.queryByRole("button", { name: /download receipt pdf/i }),
+		).toBeNull();
 	});
 });

@@ -2,6 +2,7 @@ import { cn } from "../../lib/utils";
 
 export type OrderStatus =
 	| "pending"
+	| "booking_requested"
 	| "confirmed"
 	| "packed"
 	| "shipped"
@@ -11,6 +12,10 @@ export type OrderStatus =
 const STATUS_STYLES: Record<OrderStatus, string> = {
 	pending:
 		"bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300",
+	// Booking request — amber: the needs-action family (payment-claimed
+	// precedent), distinct from pending's orange so a mixed inbox still scans.
+	booking_requested:
+		"bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
 	confirmed: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
 	packed: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
 	shipped:

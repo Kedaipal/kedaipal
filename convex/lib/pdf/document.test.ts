@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	billingConfigToBlocks,
+	businessIdentityToLines,
 	formatDocDate,
 	formatMoney,
 	formatPeriodLabel,
@@ -267,5 +268,162 @@ describe("invoiceToSubscriptionData", () => {
 		});
 		expect(data.currency).toBe("SGD");
 		expect(data.issuerBank).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Seller legal identity on buyer documents (z8r3fdcrzj)
+// ---------------------------------------------------------------------------
+
+describe("businessIdentityToLines", () => {
+	const full = {
+		legalName: "Hermoolah Enterprise",
+		registrationNumber: "202403123456",
+		address: "12, Jalan Contoh 3/4\n40000 Shah Alam, Selangor",
+		contact: "billing@hermoolah.com",
+		taxNumber: "W10-1808-32100055",
+	};
+
+	test("fixed order: legal name, registration, address lines, tax, contact", () => {
+		expect(businessIdentityToLines(full, "MY")).toEqual([
+			"Hermoolah Enterprise",
+			"SSM no. 202403123456",
+			"12, Jalan Contoh 3/4",
+			"40000 Shah Alam, Selangor",
+			"Tax no. W10-1808-32100055",
+			"billing@hermoolah.com",
+		]);
+	});
+
+	test("registration label follows the store country (UEN for SG)", () => {
+		expect(businessIdentityToLines(full, "SG")[1]).toBe("UEN 202403123456");
+		// Unknown/future country degrades to a neutral label, never crashes.
+		expect(businessIdentityToLines(full, "ID")[1]).toBe(
+			"Reg. no. 202403123456",
+		);
+	});
+
+	test("absent identity and blank fields emit nothing — legacy From block unchanged", () => {
+		expect(businessIdentityToLines(undefined, "MY")).toEqual([]);
+		expect(
+			businessIdentityToLines(
+				{ legalName: "   ", registrationNumber: "" },
+				"MY",
+			),
+		).toEqual([]);
+		// A lone field prints alone — no stray labels for the empty ones.
+		expect(businessIdentityToLines({ legalName: "Bearcamp PLT" }, "MY")).toEqual(
+			["Bearcamp PLT"],
+		);
+	});
+
+	test("flows onto the receipt view-model via orderToReceiptData", () => {
+		const data = orderToReceiptData({
+			order: {
+				shortId: "ORD-ID01",
+				createdAt: JUN_30_MYT,
+				customer: {},
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+			},
+			storeName: "Hermoolah",
+			paymentMethods: [],
+			businessIdentity: { legalName: "Hermoolah Enterprise" },
+			country: "MY",
+		});
+		expect(data.sellerLines).toEqual(["Hermoolah Enterprise"]);
+		// Callers that don't pass identity keep the empty (legacy) block.
+		const legacy = orderToReceiptData({
+			order: {
+				shortId: "ORD-ID02",
+				createdAt: JUN_30_MYT,
+				customer: {},
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+			},
+			storeName: "Hermoolah",
+			paymentMethods: [],
+		});
+		expect(legacy.sellerLines).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Subscription invoice vs payment receipt — one mapper, two faces (z8r3fdcrzj)
+// ---------------------------------------------------------------------------
+
+describe("invoiceToSubscriptionData — receipt face", () => {
+	const paidInvoice = {
+		invoiceNumber: "INV-202609-PAID",
+		plan: "pro" as const,
+		billingCycle: "monthly" as const,
+		amount: 14900,
+		total: 14900,
+		currency: "MYR",
+		periodStart: JUN_30_MYT,
+		periodEnd: JUN_30_MYT,
+		dueDate: JUN_30_MYT,
+		createdAt: JUN_30_MYT,
+		markedPaidAt: JUN_30_MYT,
+		paymentMethod: "duitnow",
+	};
+	const retailer = { storeName: "Sweet Co", slug: "sweet" };
+	const billingConfig = { bankName: "Maybank", bankAccountNumber: "111" };
+
+	test("asReceipt carries the payment facts and drops the payment card", () => {
+		const data = invoiceToSubscriptionData({
+			invoice: paidInvoice,
+			retailer,
+			billingConfig,
+			asReceipt: true,
+		});
+		expect(data.paid).toEqual({ paidAt: JUN_30_MYT, methodLabel: "DuitNow" });
+		// A receipt must never print payment instructions — even with a full
+		// billingConfig on hand.
+		expect(data.issuerBank).toEqual([]);
+	});
+
+	test("the DEFAULT face ignores payment facts — a paid invoice re-renders as the bill it was", () => {
+		// The legacy on-demand path can regenerate the INVOICE blob after the row
+		// is already paid; that render must stay an invoice (frozen-at-issue
+		// posture), so the face is opt-in, never derived from row status.
+		const data = invoiceToSubscriptionData({
+			invoice: paidInvoice,
+			retailer,
+			billingConfig,
+		});
+		expect(data.paid).toBeUndefined();
+		expect(data.issuerBank).toHaveLength(1);
+	});
+
+	test("an unmapped freeform method prints verbatim; a missing one prints none", () => {
+		const custom = invoiceToSubscriptionData({
+			invoice: { ...paidInvoice, paymentMethod: "TNG eWallet" },
+			retailer,
+			billingConfig: null,
+			asReceipt: true,
+		});
+		expect(custom.paid?.methodLabel).toBe("TNG eWallet");
+		const none = invoiceToSubscriptionData({
+			invoice: { ...paidInvoice, paymentMethod: undefined },
+			retailer,
+			billingConfig: null,
+			asReceipt: true,
+		});
+		expect(none.paid?.methodLabel).toBeUndefined();
+	});
+
+	test("asReceipt without markedPaidAt yields the invoice face — no receipt for the unpaid", () => {
+		const data = invoiceToSubscriptionData({
+			invoice: { ...paidInvoice, markedPaidAt: undefined },
+			retailer,
+			billingConfig,
+			asReceipt: true,
+		});
+		expect(data.paid).toBeUndefined();
 	});
 });
