@@ -356,7 +356,16 @@ export function cycleDays(cycle: BillingCycle): number {
  * value); returns 0 once the period has lapsed, so it can never resurrect a
  * period that had already run out.
  */
-export function planChangeCarryoverDays(args: {
+export type PlanChangeCarryover = {
+	/** Whole days still unused on the plan being left. */
+	daysLeft: number;
+	/** What those days are worth, in minor units, at the OLD plan's rate. */
+	valueLeftSen: number;
+	/** What that value buys at the NEW plan's daily rate. */
+	days: number;
+};
+
+export type PlanChangeCarryoverArgs = {
 	fromPlan: Plan;
 	fromCycle: BillingCycle;
 	toPlan: Plan;
@@ -366,10 +375,25 @@ export function planChangeCarryoverDays(args: {
 	/** The period the seller already paid for. */
 	periodEnd: number | undefined;
 	now: number;
-}): number {
-	if (args.periodEnd === undefined) return 0;
+};
+
+/**
+ * The same conversion as `planChangeCarryoverDays`, with its WORKING shown.
+ *
+ * The seller-facing copy needs all three numbers, not just the answer: told
+ * only "16 days carry over" while their billing page says the plan runs
+ * another 30, the natural reading is that 14 days were confiscated. What
+ * actually carries is the MONEY — every sen of it — and the day count shrinks
+ * only because the tier they are moving to costs more per day. Quoting the
+ * days left and their value is what makes that land (Zaki, 13 Sep 2026).
+ */
+export function planChangeCarryover(
+	args: PlanChangeCarryoverArgs,
+): PlanChangeCarryover {
+	const none: PlanChangeCarryover = { daysLeft: 0, valueLeftSen: 0, days: 0 };
+	if (args.periodEnd === undefined) return none;
 	const msLeft = args.periodEnd - args.now;
-	if (msLeft <= 0) return 0;
+	if (msLeft <= 0) return none;
 	const fromPrice = planPrice(
 		args.fromPlan,
 		args.fromCycle,
@@ -382,10 +406,21 @@ export function planChangeCarryoverDays(args: {
 		args.founding,
 		args.currency,
 	);
-	if (fromPrice <= 0 || toPrice <= 0) return 0;
-	const valueLeft = (fromPrice * (msLeft / DAY_MS)) / cycleDays(args.fromCycle);
+	if (fromPrice <= 0 || toPrice <= 0) return none;
+	const daysLeftExact = msLeft / DAY_MS;
+	const valueLeft = (fromPrice * daysLeftExact) / cycleDays(args.fromCycle);
 	const newDailyRate = toPrice / cycleDays(args.toCycle);
-	return Math.round(valueLeft / newDailyRate);
+	return {
+		// Both rounded from the SAME fractional remainder, so "N days, worth RM X"
+		// always reconciles against the old plan's price.
+		daysLeft: Math.round(daysLeftExact),
+		valueLeftSen: Math.round(valueLeft),
+		days: Math.round(valueLeft / newDailyRate),
+	};
+}
+
+export function planChangeCarryoverDays(args: PlanChangeCarryoverArgs): number {
+	return planChangeCarryover(args).days;
 }
 
 /** Tier order, low to high. Plan changes are classified by RANK, never by

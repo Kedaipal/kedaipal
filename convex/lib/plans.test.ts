@@ -13,6 +13,7 @@ import {
 	foundingPricingApplies,
 	isPlanSelectable,
 	isPlanUpgrade,
+	planChangeCarryover,
 	planChangeCarryoverDays,
 	isUnlimited,
 	PLAN_MONTHLY_PRICE,
@@ -390,6 +391,71 @@ describe("plan changes — direction and carried-over days (86eyb6z4r)", () => {
 				now: NOW,
 			}),
 		).toBe(5);
+	});
+
+	test("the breakdown reconciles: days left, their value, what that buys", () => {
+		// The case a seller queried (Zaki, 13 Sep 2026): subscribed to Starter
+		// and upgraded the SAME day, all 30 days untouched, and the dialog said
+		// 16 days. Nothing is confiscated — RM79 is RM79; it just buys fewer
+		// days of a plan that costs RM4.97 a day instead of RM2.63.
+		const carry = planChangeCarryover({
+			fromPlan: "starter",
+			fromCycle: "monthly",
+			toPlan: "pro",
+			toCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 30 * DAY,
+			now: NOW,
+		});
+		expect(carry.daysLeft).toBe(30);
+		// A full untouched period is worth exactly what was paid for it.
+		expect(carry.valueLeftSen).toBe(PLAN_MONTHLY_PRICES.MYR.starter);
+		expect(carry.days).toBe(16);
+		// The seller ends up with 46 days of Pro for RM79 + RM149, which is
+		// what 46 days of Pro costs. No money appears or disappears.
+		const paid = PLAN_MONTHLY_PRICES.MYR.starter + PLAN_MONTHLY_PRICES.MYR.pro;
+		const served = ((30 + carry.days) * PLAN_MONTHLY_PRICES.MYR.pro) / 30;
+		expect(Math.abs(paid - served)).toBeLessThan(100); // within RM1 of rounding
+	});
+
+	test("the days it reports are the days planChangeCarryoverDays grants", () => {
+		// One conversion, two readers — the copy can never quote a number the
+		// settle path wouldn't grant.
+		const args = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		for (const daysLeft of [0, 1, 7, 10, 23, 30]) {
+			const periodEnd = NOW + daysLeft * DAY;
+			expect(planChangeCarryover({ ...args, periodEnd }).days).toBe(
+				planChangeCarryoverDays({ ...args, periodEnd }),
+			);
+		}
+	});
+
+	test("a lapsed or missing period reports nothing in every field", () => {
+		const args = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		for (const periodEnd of [NOW - DAY, NOW, undefined]) {
+			expect(planChangeCarryover({ ...args, periodEnd })).toEqual({
+				daysLeft: 0,
+				valueLeftSen: 0,
+				days: 0,
+			});
+		}
 	});
 
 	test("moving DOWN carries more days than were left, never fewer", () => {

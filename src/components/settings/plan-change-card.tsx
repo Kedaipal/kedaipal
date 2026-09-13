@@ -9,7 +9,7 @@ import {
 	isPlanUpgrade,
 	PLAN_FEATURES,
 	type Plan,
-	planChangeCarryoverDays,
+	planChangeCarryover,
 	planPrice,
 } from "../../../convex/lib/plans";
 import {
@@ -158,9 +158,9 @@ export function PlanChangeCard({
 			<div>
 				<p className="text-sm font-medium">Change your plan</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Moving up starts right away and the days you've already paid for carry
-					over. Moving down waits until your current period ends, so nothing
-					you've paid for is lost.
+					Moving up starts right away, and everything you've already paid for
+					carries over as extra days on the new plan. Moving down waits until
+					your current period ends, so nothing you've paid for is lost.
 				</p>
 			</div>
 			<div className="flex flex-col gap-2 sm:flex-row">
@@ -245,9 +245,9 @@ function upgradeCopy({
 		founding && target === "pro",
 		currency,
 	);
-	// Same pure helper the server applies at settle, so the number quoted here
-	// is the number granted — not an estimate that drifts.
-	const carried = planChangeCarryoverDays({
+	// Same pure helper the server applies at settle, so the numbers quoted here
+	// are the numbers granted — not an estimate that drifts.
+	const carry = planChangeCarryover({
 		fromPlan: current,
 		fromCycle: cycle,
 		toPlan: target,
@@ -257,11 +257,13 @@ function upgradeCopy({
 		periodEnd: sub.currentPeriodEnd,
 		now: Date.now(),
 	});
-	const carriedLine =
-		carried > 0
-			? ` The ${carried} day${carried === 1 ? "" : "s"} you've already paid for carry over, so your next bill moves back by the same amount.`
-			: "";
-	return `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid.${carriedLine} Nothing you've already paid for is lost.`;
+	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid.`;
+	if (carry.days <= 0) return opening;
+	// Say WHY the day count shrinks. "16 days carry over" beside a billing page
+	// promising another 30 reads as 14 days confiscated; what carries is every
+	// sen of it, and the tier being bought simply costs more per day.
+	const day = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
+	return `${opening} Your ${day(carry.daysLeft)} left on ${PLAN_LABEL[current]} aren't lost — they're worth ${formatPrice(carry.valueLeftSen, currency)}, and at ${PLAN_LABEL[target]}'s higher daily rate that buys ${day(carry.days)}, added on top of your new month.`;
 }
 
 function downgradeCopy({

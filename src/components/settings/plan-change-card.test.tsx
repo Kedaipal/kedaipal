@@ -57,20 +57,37 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		expect(screen.queryByRole("button", { name: /Move up to/ })).toBeNull();
 	});
 
-	it("an upgrade names the price AND the days that carry over", () => {
+	it("an upgrade names the price AND shows the carryover conversion", () => {
 		render(<PlanChangeCard sub={sub()} currency="MYR" />);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
-		// Full RM149 — never a prorated difference. 10 days of Starter left buys
-		// 5 days of Pro, and the dialog says so before anything is confirmed.
-		const copy = screen.getByText(/You'll be invoiced/);
-		expect(copy.textContent).toMatch(/RM\s*149\.00/);
-		expect(copy.textContent).toContain("The 5 days you've already paid for");
-		expect(copy.textContent).toContain(
-			"your next bill moves back by the same amount",
+		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
+		// Full RM149 — never a prorated difference.
+		expect(copy).toMatch(/RM\s*149\.00/);
+		// 10 unused Starter days are worth RM26.33, which at Pro's RM4.97/day
+		// buys 5. All three numbers are stated, because "5 days carry over" on
+		// its own reads as five of the ten being kept and five confiscated.
+		expect(copy).toContain("Your 10 days left on Starter aren't lost");
+		expect(copy).toMatch(/worth RM\s*26\.33/);
+		expect(copy).toContain("at Pro's higher daily rate that buys 5 days");
+		expect(copy).toContain("added on top of your new month");
+	});
+
+	it("the WHOLE remaining month converts, not a slice of it", () => {
+		// The case that prompted this copy (Zaki, 13 Sep 2026): subscribed to
+		// Starter today, upgrading the same day with all 30 days untouched.
+		// RM79 of Starter buys 16 days of Pro, and the seller must be able to
+		// see that no money went missing.
+		render(
+			<PlanChangeCard
+				sub={sub({ currentPeriodEnd: Date.now() + 30 * DAY })}
+				currency="MYR"
+			/>,
 		);
-		expect(copy.textContent).toContain(
-			"Nothing you've already paid for is lost",
-		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
+		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
+		expect(copy).toContain("Your 30 days left on Starter aren't lost");
+		expect(copy).toMatch(/worth RM\s*79\.00/);
+		expect(copy).toContain("buys 16 days");
 	});
 
 	it("says nothing about carryover when the period has already lapsed", () => {
@@ -81,10 +98,11 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			/>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
-		const copy = screen.getByText(/You'll be invoiced/);
-		expect(copy.textContent).toMatch(/RM\s*149\.00/);
-		// A lapsed period carries 0 days — the copy must not promise any.
-		expect(copy.textContent).not.toContain("moves back by the same amount");
+		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
+		expect(copy).toMatch(/RM\s*149\.00/);
+		// A lapsed period carries nothing — the copy must not promise any.
+		expect(copy).not.toContain("aren't lost");
+		expect(copy).not.toContain("added on top");
 	});
 
 	it("a downgrade says WHEN it lands, WHAT it costs, and WHAT is lost", () => {
@@ -136,9 +154,12 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			<PlanChangeCard sub={sub({ foundingIntent: true })} currency="MYR" />,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
-		const copy = screen.getByText(/You'll be invoiced/);
-		expect(copy.textContent).toMatch(/RM\s*104\.00/);
-		expect(copy.textContent).not.toMatch(/149/);
+		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
+		expect(copy).toMatch(/RM\s*104\.00/);
+		expect(copy).not.toMatch(/149/);
+		// Their own rate is the one the carryover is priced against too, so a
+		// founding member's remainder stretches further (10 days -> 8, not 5).
+		expect(copy).toContain("buys 8 days");
 	});
 
 	it("an SGD seller is quoted in SGD", () => {

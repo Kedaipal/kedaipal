@@ -297,6 +297,16 @@ year bought upfront is cheaper per day. Both prices are read at the seller's own
 founding rate and currency, and the result rounds to whole days (flooring would
 quietly shave up to a day of paid value).
 
+**Say the conversion out loud, never just the answer.** The upgrade dialog
+quotes all three numbers — days left, what they are worth, what that buys —
+because "16 days carry over" beside a billing page promising another 30 reads as
+14 days confiscated (Zaki, 13 Sep 2026, on a store that subscribed to Starter
+and upgraded the same day). Nothing is confiscated: RM79 is RM79, and it buys 16
+days of a plan costing RM4.97 a day rather than 30 of one costing RM2.63.
+`planChangeCarryover` returns that breakdown and `planChangeCarryoverDays` is a
+thin wrapper on it, so the number the copy quotes is by construction the number
+settle grants.
+
 **Applied at SETTLE, never at issue** — `daysLeft` must be the days genuinely
 unused when the money lands. It applies to ANY invoice settled while a paid
 period is still running, not just upgrades, so an early renewal no longer
