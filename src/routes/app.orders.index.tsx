@@ -75,6 +75,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { OrderTotal } from "../components/order/order-total";
 import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { Button } from "../components/ui/button";
 import {
@@ -1736,9 +1737,11 @@ function OrdersRoute() {
 											>
 												{orderCustomerLabel(o.customer)}
 											</span>
-											<span className="shrink-0 text-[15px] font-bold tabular-nums">
-												{formatPrice(o.total, o.currency)}
-											</span>
+											<OrderTotal
+												total={o.total}
+												securityDeposit={o.securityDeposit}
+												currency={o.currency}
+											/>
 										</div>
 										<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
 											<span className="font-mono">#{o.shortId}</span>
