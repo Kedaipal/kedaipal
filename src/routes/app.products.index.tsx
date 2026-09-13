@@ -489,11 +489,23 @@ function ProductsRoute() {
 				<div className="rounded-2xl border border-dashed border-border p-8 text-center">
 					<p className="font-medium">No products yet</p>
 					<p className="mt-1 text-sm text-muted-foreground">
-						Add your first product to start selling.
+						Add your first product to start selling — or, if you have 20+ items,
+						import your whole catalogue from a spreadsheet in one go.
 					</p>
-					<Button asChild className="mt-4 h-11">
-						<Link to="/app/products/new">+ New product</Link>
-					</Button>
+					{/* Both doors with equal billing: the onboarding checklist sends
+					    new sellers HERE to choose, so import can't hide in the
+					    header's icon menu for the zero-product state. */}
+					<div className="mt-4 flex flex-col justify-center gap-2 sm:flex-row">
+						<Button asChild className="h-11">
+							<Link to="/app/products/new">+ New product</Link>
+						</Button>
+						<Button asChild variant="outline" className="h-11">
+							<Link to="/app/products/import">
+								<FileSpreadsheet className="size-4" aria-hidden />
+								Import from spreadsheet
+							</Link>
+						</Button>
+					</div>
 				</div>
 			) : filtered.length === 0 ? (
 				<div className="rounded-2xl border border-dashed border-border p-8 text-center">
