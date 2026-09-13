@@ -80,6 +80,10 @@ export type AccessState = {
 	/** Founding onboard promise (86eyb6z4r): lets the self-serve plan picker
 	 * show the discounted Pro price this store was promised. Owner-only. */
 	foundingIntent?: boolean;
+	/** A downgrade scheduled for the end of the paid period (86eyb6z4r). The
+	 * seller keeps everything they bought until `effectiveAt`; the renewal
+	 * invoice then bills `plan`. Owner-only, and cancellable. */
+	pendingPlanChange?: { plan: Plan; effectiveAt: number };
 };
 
 /** Pure access resolution from a subscription doc (or null). Exported for tests
@@ -161,6 +165,14 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 				? true
 				: undefined,
 		foundingIntent: sub.foundingIntent === true ? true : undefined,
+		pendingPlanChange: sub.pendingPlanChange
+			? {
+					plan: sub.pendingPlanChange.plan,
+					// The change lands with the renewal invoice the cron issues
+					// once the paid period ends.
+					effectiveAt: sub.currentPeriodEnd ?? sub.pendingPlanChange.requestedAt,
+				}
+			: undefined,
 	};
 }
 

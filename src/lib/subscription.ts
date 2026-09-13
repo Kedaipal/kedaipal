@@ -27,6 +27,11 @@ export type SubscriptionView = {
 	};
 	autoRenewSetupPending?: boolean;
 	foundingIntent?: boolean;
+	/** A downgrade taking effect at the end of the paid period (86eyb6z4r). */
+	pendingPlanChange?: {
+		plan: "starter" | "pro" | "scale";
+		effectiveAt: number;
+	};
 };
 
 /**
@@ -121,6 +126,31 @@ export function trialDaysLeft(
 export function hasSubscribed(sub: SubscriptionView | undefined): boolean {
 	if (!sub) return true;
 	return sub.comped === true || sub.status !== "trialing";
+}
+
+/**
+ * True while the paid period has run out but the renewal has not settled yet.
+ *
+ * A narrow window — the daily cron issues the renewal (and auto-charges a saved
+ * method) within a day of the lapse — but the seller keeps full access through
+ * it by design, so `status` is still "active" while `currentPeriodEnd` is in
+ * the past. Rendered naively that reads "Active · expires 29 Aug 2026" beside
+ * "Next charge on 29 Aug 2026", both dates already gone (Zaki, 13 Sep 2026).
+ *
+ * Lives here rather than in either card so the plan pill and the auto-renewal
+ * line can never disagree about whether a seller is in it.
+ */
+export function isRenewing(
+	sub: SubscriptionView | undefined,
+	now: number,
+): boolean {
+	return (
+		sub !== undefined &&
+		sub.comped !== true &&
+		sub.status === "active" &&
+		sub.currentPeriodEnd !== undefined &&
+		sub.currentPeriodEnd <= now
+	);
 }
 
 export const PAYMENT_WARN_DAYS = 5;

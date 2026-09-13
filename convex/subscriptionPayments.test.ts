@@ -347,6 +347,36 @@ describe("mintInvoicePaymentRequest", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	test("a methodless mint stores NO link — a dead checkout is worse than no button", async () => {
+		// Sandbox-observed 11 Sep: an SGD request on an account with no SGD
+		// rails returns 201 with payment_methods: [] and its checkout page
+		// renders a dead "Awaiting customer present card" state.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_dead", "dead-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			currency: "SGD",
+			amount: 5900,
+			total: 5900,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					id: "req_dead_1",
+					url: "https://pay.example/req_dead_1",
+					payment_methods: [],
+				}),
+			),
+		);
+		await t.action(internal.subscriptionPayments.mintInvoicePaymentRequest, {
+			invoiceId,
+		});
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.gatewayRequestId).toBeUndefined();
+		expect(invoice?.gatewayPayment).toBeUndefined();
+	});
+
 	test("a failed mint leaves the invoice on the manual rail (never blocks)", async () => {
 		const t = setup();
 		stubBillingEnv();
@@ -385,7 +415,8 @@ describe("startAutoRenewSetup", () => {
 
 		const body = String(fetchMock.mock.calls[0]?.[1]?.body ?? "");
 		expect(body).toContain("save_payment_method=true");
-		expect(body).toContain("times_to_be_charged=100");
+		// save_payment_method sessions REJECT times_to_be_charged (sandbox 11 Sep).
+		expect(body).not.toContain("times_to_be_charged");
 
 		// A fresh unfinished session is RESUMED, not re-minted.
 		const again = await t
@@ -395,25 +426,224 @@ describe("startAutoRenewSetup", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	test("degrades to card-only when the full method list is rejected (422)", async () => {
+	test("a method-list 422 retries with the param OMITTED — the account's own set decides", async () => {
+		// The sandbox found this for real: a TnG-only account rejected our
+		// [card, touch_n_go] list, and a card-only fallback would have been the
+		// one method it doesn't have. The only assumption-free fallback is no
+		// payment_methods param at all.
 		const t = setup();
 		stubBillingEnv();
 		await seedRetailer(t, "u_422", "s422-store");
 		const fetchMock = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
 			const body = String(init?.body ?? "");
-			if (body.includes("touch_n_go")) {
-				return new Response(JSON.stringify({ message: "method not enabled" }), {
-					status: 422,
-				});
+			if (body.includes("payment_methods")) {
+				return new Response(
+					JSON.stringify({
+						error_code: "validation_error",
+						message:
+							"The selected payment methods is invalid. It must be one of: touch_n_go",
+						errors: { payment_methods: ["must be one of: touch_n_go"] },
+					}),
+					{ status: 422 },
+				);
 			}
-			return Response.json({ id: "rb_card", url: "https://auth.example/rb_card" });
+			return Response.json({ id: "rb_own", url: "https://auth.example/rb_own" });
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const { url } = await t
 			.withIdentity({ subject: "u_422", email: "u_422@x.com" })
 			.action(api.subscriptionPayments.startAutoRenewSetup, {});
-		expect(url).toBe("https://auth.example/rb_card");
+		expect(url).toBe("https://auth.example/rb_own");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+		// The retry must carry NO payment_methods at all — not a different guess.
+		const retryBody = String(fetchMock.mock.calls[1]?.[1]?.body ?? "");
+		expect(retryBody).not.toContain("payment_methods");
+		expect(retryBody).toContain("save_payment_method=true");
+	});
+
+	test("a non-method 422 (or 5xx) does NOT retry — one clean failure to the seller", async () => {
+		const t = setup();
+		stubBillingEnv();
+		await seedRetailer(t, "u_5xx", "s5xx-store");
+		const fetchMock = vi.fn(
+			async () => new Response("upstream down", { status: 502 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			t
+				.withIdentity({ subject: "u_5xx", email: "u_5xx@x.com" })
+				.action(api.subscriptionPayments.startAutoRenewSetup, {}),
+		).rejects.toThrow(/Couldn't reach the payment service/);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("with an open bill the session displays THAT amount and names the store (subscribe flow)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_sess", "sess-store");
+		await seedRenewalInvoice(t, retailerId, subId, {
+			origin: "self_serve" as const,
+			billingCycle: "annual" as const,
+			amount: 149000,
+			total: 149000,
+		});
+		const fetchMock = vi.fn(async (_url: unknown, _init?: { body?: unknown }) =>
+			Response.json({ id: "rb_sess", url: "https://auth.example/rb_sess" }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await t
+			.withIdentity({ subject: "u_sess", email: "u_sess@x.com" })
+			.action(api.subscriptionPayments.startAutoRenewSetup, {});
+		const body = String(fetchMock.mock.calls[0]?.[1]?.body ?? "");
+		// The page shows what attach will charge — the annual bill, not RM149.
+		expect(body).toContain("amount=1490.00");
+		// The store name is the customer identity on HitPay's dashboard
+		// (without it the Subscriptions list reads "N/A" — sandbox, 11 Sep).
+		expect(body).toContain("customer_name=Store+sess-store");
+	});
+
+	test("attach charges the open self-serve bill immediately — subscribe IS auto-renewal (Zaki, 11 Sep)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_nflx", "nflx-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			origin: "self_serve" as const,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_nflx",
+				// The consent record startAutoRenewSetup writes: this invoice, at
+				// this amount, is what the authorisation page showed.
+				autoRenewSetup: {
+					url: "https://auth.example/rb_nflx",
+					createdAt: Date.now(),
+					invoiceId,
+					amountSen: 14900,
+				},
+			}),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ payment_id: "pay_nflx_1", status: "succeeded" }),
+			),
+		);
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_nflx",
+			methodCode: "touch_n_go",
+		});
+		// Run the charge the attach scheduled (plus its follow-ups).
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.paymentMethod).toBe("hitpay_touch_n_go");
+		const sub = await getSub(t, subId);
+		expect(sub?.status).toBe("active");
+		expect(sub?.autoRenew?.method).toBe("touch_n_go");
+	});
+
+	test("attach does NOT charge a bill the authorisation page never showed", async () => {
+		// The page's amount IS the consent. A renewal issued while the seller sat
+		// on HitPay's page — or an admin bill voided and reissued at a different
+		// total — was never consented to, so it stays for the cron/Pay-now rail.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_drift", "drift-store");
+		const shownInvoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-SHOWN",
+			status: "void" as const,
+		});
+		// The bill that actually exists at attach time is a DIFFERENT, pricier one.
+		await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-REISSUED",
+			amount: 149000,
+			total: 149000,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_drift",
+				autoRenewSetup: {
+					url: "https://auth.example/rb_drift",
+					createdAt: Date.now(),
+					invoiceId: shownInvoiceId,
+					amountSen: 14900,
+				},
+			}),
+		);
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_drift",
+			methodCode: "card",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		// The method IS attached (that part of the authorisation was real)…
+		expect((await getSub(t, subId))?.autoRenew?.method).toBe("card");
+		// …but no charge was ever fired for the bill nobody agreed to.
+		const chargeCalls = fetchMock.mock.calls.filter((c) =>
+			String(c[0]).includes("/charge/"),
+		);
+		expect(chargeCalls).toHaveLength(0);
+	});
+
+	test("a duplicate attach signal never charges twice", async () => {
+		// applyMethodAttached runs for the webhook, its retries AND the redirect
+		// reconcile. Charging on each one races two charges onto one bill.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_dup2", "dup2-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_dup2",
+				autoRenewSetup: {
+					url: "https://auth.example/rb_dup2",
+					createdAt: Date.now(),
+					invoiceId,
+					amountSen: 14900,
+				},
+			}),
+		);
+		const fetchMock = vi.fn(async (url: unknown) =>
+			String(url).includes("/charge/")
+				? Response.json({ payment_id: "pay_dup2", status: "succeeded" })
+				: Response.json({ status: "active", times_charged: 1 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		// Webhook, then the redirect reconcile a beat later — both attach signals.
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_dup2",
+			methodCode: "touch_n_go",
+		});
+		await t.mutation(internal.subscriptionPayments.recordMethodAttached, {
+			billingId: "rb_dup2",
+			methodCode: "touch_n_go",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		const charges = fetchMock.mock.calls.filter((c) =>
+			String(c[0]).includes("/charge/"),
+		);
+		expect(charges).toHaveLength(1);
+		expect((await getInvoice(t, invoiceId))?.status).toBe("paid");
+	});
+
+	test("a second charge action stands down while one is in flight (mutex)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_mutex", "mutex-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await attachAutoRenew(t, subId);
+		// Someone already claimed the attempt moments ago.
+		const claimA: { claimed: boolean } = await t.mutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: subId, invoiceId },
+		);
+		expect(claimA.claimed).toBe(true);
+		const claimB: { claimed: boolean } = await t.mutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: subId, invoiceId },
+		);
+		expect(claimB.claimed).toBe(false);
 	});
 
 	test("without gateway credentials the action refuses with seller-facing copy", async () => {
@@ -861,5 +1091,223 @@ describe("verifyInvoicePayment (redirect-return reconcile)", () => {
 		const invoice = await getInvoice(t, invoiceId);
 		expect(invoice?.status).toBe("paid");
 		expect(invoice?.paymentMethod).toBe("hitpay_touch_n_go");
+	});
+});
+
+describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
+	/** An ACTIVE paid seller, mid-period. */
+	async function seedActive(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		plan: "starter" | "pro" = "starter",
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.patch(subId, {
+				plan,
+				status: "active" as const,
+				currentPeriodStart: now - 20 * 86400000,
+				currentPeriodEnd: now + 10 * 86400000,
+			});
+			// A paid invoice fixes the billing currency.
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: subId,
+				invoiceNumber: "INV-PAID-1",
+				plan,
+				billingCycle: "monthly" as const,
+				amount: 7900,
+				total: 7900,
+				currency: "MYR",
+				periodStart: now - 20 * 86400000,
+				periodEnd: now + 10 * 86400000,
+				dueDate: now - 20 * 86400000,
+				status: "paid" as const,
+				createdAt: now - 20 * 86400000,
+			});
+		});
+		return { retailerId, subId };
+	}
+
+	test("UP is immediate and billed at the ordinary full price", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_up", "up-store");
+		const res = await t
+			.withIdentity({ subject: "u_up" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res.kind).toBe("invoiced");
+		const invoice = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending");
+		});
+		// Full sticker price — NOT a prorated difference. That is what keeps the
+		// gateway amount check, the PDF totals and MRR all working untouched.
+		expect(invoice?.total).toBe(14900);
+		expect(invoice?.plan).toBe("pro");
+		// The tier does not move until they actually pay.
+		expect((await getSub(t, subId))?.plan).toBe("starter");
+	});
+
+	test("paying an upgrade CARRIES the unused days onto the new period", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_carry", "carry-store");
+		await t
+			.withIdentity({ subject: "u_carry" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		const invoiceId = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending")?._id;
+		});
+		if (!invoiceId) throw new Error("no invoice");
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId });
+		const after = await getSub(t, subId);
+		expect(after?.plan).toBe("pro");
+		// 10 days of Starter left → 5 days of Pro, on top of the fresh 30. The
+		// old behaviour granted a bare 30 and burned the remainder.
+		const grantedDays = Math.round(
+			((after?.currentPeriodEnd ?? 0) - Date.now()) / 86400000,
+		);
+		expect(grantedDays).toBe(35);
+		expect(grantedDays).toBeGreaterThan(30);
+	});
+
+	test("DOWN is scheduled, charges nothing, and changes nothing today", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_dn", "dn-store", "pro");
+		const res = await t
+			.withIdentity({ subject: "u_dn" })
+			.mutation(api.invoices.changePlan, { plan: "starter" });
+		expect(res.kind).toBe("scheduled");
+		const sub = await getSub(t, subId);
+		expect(sub?.pendingPlanChange?.plan).toBe("starter");
+		// Still Pro, still the Pro caps — they paid for them.
+		expect(sub?.plan).toBe("pro");
+		expect(sub?.orderCap).toBe(500);
+		// And no bill was raised.
+		const invoices = await t.run(async (ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect(),
+		);
+		expect(invoices.filter((i) => i.status === "pending")).toHaveLength(0);
+	});
+
+	test("the scheduled downgrade lands with the renewal, then clears itself", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_sch", "sch-store", "pro");
+		await t
+			.withIdentity({ subject: "u_sch" })
+			.mutation(api.invoices.changePlan, { plan: "starter" });
+		// The period runs out.
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		const issued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId: subId },
+		);
+		expect(issued.issued).toBe(true);
+		const renewal = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending");
+		});
+		expect(renewal?.plan).toBe("starter");
+		expect(renewal?.total).toBe(7900);
+		// Consumed — it must not re-apply to every future renewal.
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("a scheduled downgrade can be cancelled, and an upgrade supersedes it", async () => {
+		const t = setup();
+		const { subId } = await seedActive(t, "u_undo", "undo-store", "pro");
+		const asUser = t.withIdentity({ subject: "u_undo" });
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		await asUser.mutation(api.invoices.cancelPlanChange, {});
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+		// Schedule again, then move UP — the pending downgrade must not survive.
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		await t.run(async (ctx) => ctx.db.patch(subId, { plan: "starter" }));
+		await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("refuses the no-op, the non-active seller and an open invoice", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(t, "u_g", "g-store");
+		const asUser = t.withIdentity({ subject: "u_g" });
+		await expect(
+			asUser.mutation(api.invoices.changePlan, { plan: "starter" }),
+		).rejects.toThrow(/already on starter/);
+		// An open bill must be settled before moving up (single-pending invariant).
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: subId,
+				invoiceNumber: "INV-OPEN",
+				plan: "starter" as const,
+				billingCycle: "monthly" as const,
+				amount: 7900,
+				total: 7900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86400000,
+				dueDate: now + 14 * 86400000,
+				status: "pending" as const,
+				createdAt: now,
+			});
+		});
+		await expect(
+			asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/Settle your open invoice/);
+		// Not active → the picker's job, not this one.
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, { status: "past_due" as const }),
+		);
+		await expect(
+			asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/Choose a plan/);
+	});
+
+	test("an upgrade charges an already-attached saved method", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const { subId } = await seedActive(t, "u_sm", "sm-store");
+		await t.run(async (ctx) =>
+			ctx.db.patch(subId, {
+				autoRenewSessionId: "rb_sm",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			}),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ payment_id: "pay_sm", status: "succeeded" }),
+			),
+		);
+		const res = await t
+			.withIdentity({ subject: "u_sm" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res).toMatchObject({ kind: "invoiced", chargingSavedMethod: true });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		expect((await getSub(t, subId))?.plan).toBe("pro");
 	});
 });

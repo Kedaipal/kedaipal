@@ -92,6 +92,7 @@ import type * as lib_pdf_awb from "../lib/pdf/awb.js";
 import type * as lib_pdf_barcode from "../lib/pdf/barcode.js";
 import type * as lib_pdf_document from "../lib/pdf/document.js";
 import type * as lib_pdf_latin1 from "../lib/pdf/latin1.js";
+import type * as lib_pdf_lockup from "../lib/pdf/lockup.js";
 import type * as lib_pdf_logo from "../lib/pdf/logo.js";
 import type * as lib_pdf_qr from "../lib/pdf/qr.js";
 import type * as lib_pdf_render from "../lib/pdf/render.js";
@@ -225,6 +226,7 @@ declare const fullApi: ApiFromModules<{
   "lib/pdf/barcode": typeof lib_pdf_barcode;
   "lib/pdf/document": typeof lib_pdf_document;
   "lib/pdf/latin1": typeof lib_pdf_latin1;
+  "lib/pdf/lockup": typeof lib_pdf_lockup;
   "lib/pdf/logo": typeof lib_pdf_logo;
   "lib/pdf/qr": typeof lib_pdf_qr;
   "lib/pdf/render": typeof lib_pdf_render;
