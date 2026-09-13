@@ -510,7 +510,7 @@ the one total + policy-edit immunity + CRM spend excludes it; settle guards
 and both outcomes; depositless refusal. `convex/products.test.ts`: stored in
 sen, 0-clears, ceiling refusals. `convex/lib/insights.test.ts`: earned /
 trend / collected / payment slices / by-source rows all net of deposit, plus
-`depositsHeld` (S12); `src/components/insights/kpi-row.test.tsx`: the
+`depositsExcluded` (S12); `src/components/insights/kpi-row.test.tsx`: the
 exclusion sub-label.
 `convex/lib/orderCsv.test.ts`: the column + 0.00 default.
 

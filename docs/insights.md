@@ -76,7 +76,7 @@ to more than Revenue earned, and neither test could see it (the deposit test
 never asserted on `sources`; the by-source test had no deposit order). Both
 tests now carry the other's case.
 
-The amount netted out comes back as **`depositsHeld`** (Σ over the same
+The amount netted out comes back as **`depositsExcluded`** (Σ over the same
 revenue orders; both queries return it and `buildInsightsView` sums it like
 `earned`) so the page can say what it did. When it is > 0 the **Revenue
 earned** tile's sub-label reads "excl. RM X security deposits" (store currency
@@ -91,10 +91,14 @@ Gems'ite, Founding #7) had to ask "does the sales include security deposit?"
 Decided, not built here: **kept deposits stay out of revenue**
 (`securityDepositKeptAmount` is compensation, not sales — Arif, 4 Sep 2026),
 and a partial keep nets the whole deposit, not the returned remainder.
-`depositsHeld` counts a deposit whether or not it has been returned yet — it
-is "what this window excluded", not an outstanding-liability figure; that,
-plus a held / returned / kept tile, is the deposit reporting tail
-(`z8r3fdd07u`) once S5 has a month of real data.
+`depositsExcluded` counts a deposit whether or not it has been returned yet.
+The name is load-bearing: it answers "what did this window leave out?", never
+"what is still outstanding?". It was called `depositsHeld` in review and
+renamed before merge, because the outstanding-liability figure is a genuinely
+different number and `depositsHeld` is the obvious name for **it** — shipping
+the wrong one under that name would have forced the reporting tail to invent a
+worse one. That tail — a held / returned / kept tile — is `z8r3fdd07u`, once S5
+has a month of real data.
 
 ## Backend — two queries, one page (`convex/analytics.ts`)
 
@@ -112,7 +116,7 @@ re-run the heavy scan.** So the range is split in two, merged on the client:
   trend of its own; the client places today's earned into the right bucket.
 
 The client (`src/lib/insights-view.ts` `buildInsightsView`) merges the two onto
-one contiguous trend grid, summing KPIs (earned, `depositsHeld`, collected,
+one contiguous trend grid, summing KPIs (earned, `depositsExcluded`, collected,
 order count) and merging product/payment/source breakdowns via the shared pure
 helpers, so client and server never diverge.
 
@@ -157,7 +161,7 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 - Route: `src/routes/app.insights.tsx` (Pro: full page; Starter/non-Pro: teaser).
 - Components in `src/components/insights/`: `kpi-row` (the four tiles; the
   Revenue earned sub-label switches to the deposit exclusion when
-  `depositsHeld` > 0, see [Security deposits](#security-deposits)), `revenue-trend`,
+  `depositsExcluded` > 0, see [Security deposits](#security-deposits)), `revenue-trend`,
   `top-products` (bar list + revenue/quantity toggle + thumbnails),
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
   opacity, on-brand), `source-breakdown` (bar list of `attributionBucket` rows;
@@ -206,12 +210,12 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 
 - `convex/lib/insights.test.ts` — the reduce (revenue split, cancelled-after-
   paid, pending-but-paid, deposit netted out of every figure incl. the by-source
-  rows + `depositsHeld` (0 when the only deposit is on a non-revenue order;
+  rows + `depositsExcluded` (0 when the only deposit is on a non-revenue order;
   clamped when a deposit exceeds the total), product grouping, deleted-product
   snapshot, MYT 00:30 boundary, day/week bucketing, donut = collected
   invariant, Σ sources = earned with a deposit order present, merge helpers).
 - `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid
-  (`depositsHeld` sums like earned and is dropped with the today payload).
+  (`depositsExcluded` sums like earned and is dropped with the today payload).
 - `src/components/insights/kpi-row.test.tsx` — the Revenue earned sub-label:
   unchanged at 0 with no deposit copy anywhere, amount + hover sentence when
   > 0, store currency (SG), compact formatting on a large total.

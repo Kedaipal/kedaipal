@@ -56,7 +56,7 @@ function product(key: string, revenue: number, quantity: number): ProductStat {
 function rangePayload(over: Partial<RangePayload> = {}): RangePayload {
 	return {
 		earned: 0,
-		depositsHeld: 0,
+		depositsExcluded: 0,
 		collected: 0,
 		orderCount: 0,
 		products: [],
@@ -73,7 +73,7 @@ function todayPayload(over: Partial<TodayPayload> = {}): TodayPayload {
 	return {
 		today: D1 + 2 * DAY,
 		earned: 0,
-		depositsHeld: 0,
+		depositsExcluded: 0,
 		collected: 0,
 		orderCount: 0,
 		products: [],
@@ -91,7 +91,7 @@ describe("buildInsightsView — merge range + today", () => {
 			bucketing: "day",
 			range: rangePayload({
 				earned: 10_000,
-				depositsHeld: 3_000,
+				depositsExcluded: 3_000,
 				collected: 6_000,
 				orderCount: 2,
 				trend: [{ start: D1, earned: 10_000, orderCount: 2 }],
@@ -101,7 +101,7 @@ describe("buildInsightsView — merge range + today", () => {
 			today: todayPayload({
 				today: D1 + 2 * DAY,
 				earned: 4_000,
-				depositsHeld: 1_000,
+				depositsExcluded: 1_000,
 				collected: 4_000,
 				orderCount: 1,
 				products: [product("cake", 4_000, 1)],
@@ -112,7 +112,7 @@ describe("buildInsightsView — merge range + today", () => {
 
 		expect(view.earned).toBe(14_000);
 		// Netted-out deposits sum across both payloads like earned does.
-		expect(view.depositsHeld).toBe(4_000);
+		expect(view.depositsExcluded).toBe(4_000);
 		expect(view.collected).toBe(10_000);
 		expect(view.orderCount).toBe(3);
 		expect(view.aov).toBe(Math.round(14_000 / 3));
@@ -139,16 +139,20 @@ describe("buildInsightsView — merge range + today", () => {
 			from: D1,
 			to: D1 + 1 * DAY,
 			bucketing: "day",
-			range: rangePayload({ earned: 5_000, orderCount: 1, depositsHeld: 700 }),
+			range: rangePayload({
+				earned: 5_000,
+				orderCount: 1,
+				depositsExcluded: 700,
+			}),
 			today: todayPayload({
 				earned: 9_999,
 				orderCount: 9,
-				depositsHeld: 9_999,
+				depositsExcluded: 9_999,
 			}),
 			includeToday: false,
 		});
 		expect(view.earned).toBe(5_000);
-		expect(view.depositsHeld).toBe(700);
+		expect(view.depositsExcluded).toBe(700);
 		expect(view.orderCount).toBe(1);
 	});
 

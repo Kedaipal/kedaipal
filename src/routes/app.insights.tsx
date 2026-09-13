@@ -148,7 +148,7 @@ function InsightsRoute() {
 				<>
 					<KpiRow
 						earned={view.earned}
-						depositsHeld={view.depositsHeld}
+						depositsExcluded={view.depositsExcluded}
 						collected={view.collected}
 						orderCount={view.orderCount}
 						aov={view.aov}

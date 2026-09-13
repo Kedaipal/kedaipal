@@ -13,7 +13,7 @@
  *     payment therefore drops out of both earned and collected).
  *   - **Earned** = Σ total over revenue orders, NET of any refundable security
  *     deposit (order placed = revenue recognised; held money is never revenue
- *     — the amount netted out is reported back as `depositsHeld`).
+ *     — the amount netted out is reported back as `depositsExcluded`).
  *   - **Collected** = Σ deposit-net total over revenue orders whose paymentStatus is
  *     "received" (money actually in hand). The payment-method donut slices this
  *     same figure, so Σ slices === collected.
@@ -110,11 +110,14 @@ export type InsightsAggregate = {
 	/** Σ deposit-net total over revenue orders. */
 	earned: number;
 	/** Σ security deposit netted out of `earned` over the same revenue orders —
-	 * the amount the "Revenue earned" tile says it excludes. Whether the
-	 * deposit has since been returned makes no difference here (this is "what
-	 * this window excluded", not an outstanding-liability figure — that tail is
-	 * z8r3fdd07u). 0 on a store without deposits, so the tile stays silent. */
-	depositsHeld: number;
+	 * the amount the "Revenue earned" tile says it excludes. The name is
+	 * literal and deliberately NOT `depositsHeld`: a deposit already returned
+	 * still counts here, because this answers "what did this window leave
+	 * out?", never "what is still outstanding?". The held/returned/kept
+	 * liability figure is a different number under a name this must not
+	 * squat on (z8r3fdd07u). 0 on a store without deposits, so the tile stays
+	 * silent. */
+	depositsExcluded: number;
 	/** Σ deposit-net total over revenue orders with paymentStatus "received". */
 	collected: number;
 	/** Count of revenue orders (denominator for AOV). */
@@ -186,7 +189,7 @@ export function reduceInsights(
 	{ from, bucketing }: { from: number; bucketing: Bucketing },
 ): InsightsAggregate {
 	let earned = 0;
-	let depositsHeld = 0;
+	let depositsExcluded = 0;
 	let collected = 0;
 	let orderCount = 0;
 	const productMap = new Map<string, ProductStat>();
@@ -204,7 +207,7 @@ export function reduceInsights(
 		earned += revenue;
 		// What the clamp above actually removed — Σ securityDeposit on every real
 		// order (total = stay + deposit), and never more than total on a bad one.
-		depositsHeld += o.total - revenue;
+		depositsExcluded += o.total - revenue;
 
 		// By-source rows — every revenue order lands in exactly one bucket
 		// (stamped tag → counter → direct) and adds the SAME deposit-net revenue
@@ -270,7 +273,7 @@ export function reduceInsights(
 
 	return {
 		earned,
-		depositsHeld,
+		depositsExcluded,
 		collected,
 		orderCount,
 		products: [...productMap.values()].sort((a, b) => b.revenue - a.revenue),

@@ -86,7 +86,7 @@ export function bucketLabel(start: number): string {
 
 export type RangePayload = {
 	earned: number;
-	depositsHeld: number;
+	depositsExcluded: number;
 	collected: number;
 	orderCount: number;
 	products: ProductStat[];
@@ -100,7 +100,7 @@ export type RangePayload = {
 export type TodayPayload = {
 	today: number;
 	earned: number;
-	depositsHeld: number;
+	depositsExcluded: number;
 	collected: number;
 	orderCount: number;
 	products: ProductStat[];
@@ -112,7 +112,7 @@ export type InsightsView = {
 	earned: number;
 	/** Σ security deposit netted out of `earned` (0 unless a booking order with
 	 * a deposit sits in the window) — drives the Revenue earned sub-label. */
-	depositsHeld: number;
+	depositsExcluded: number;
 	collected: number;
 	orderCount: number;
 	aov: number;
@@ -142,7 +142,8 @@ export function buildInsightsView(opts: {
 	const today = includeToday ? opts.today : null;
 
 	const earned = (range?.earned ?? 0) + (today?.earned ?? 0);
-	const depositsHeld = (range?.depositsHeld ?? 0) + (today?.depositsHeld ?? 0);
+	const depositsExcluded =
+		(range?.depositsExcluded ?? 0) + (today?.depositsExcluded ?? 0);
 	const collected = (range?.collected ?? 0) + (today?.collected ?? 0);
 	const orderCount = (range?.orderCount ?? 0) + (today?.orderCount ?? 0);
 
@@ -183,7 +184,7 @@ export function buildInsightsView(opts: {
 
 	return {
 		earned,
-		depositsHeld,
+		depositsExcluded,
 		collected,
 		orderCount,
 		aov: computeAov(earned, orderCount),

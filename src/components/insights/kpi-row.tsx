@@ -53,7 +53,7 @@ function KpiTile({
 
 export function KpiRow({
 	earned,
-	depositsHeld,
+	depositsExcluded,
 	collected,
 	orderCount,
 	aov,
@@ -62,7 +62,7 @@ export function KpiRow({
 	earned: number;
 	/** Σ security deposit netted out of `earned` in this window (0 on a store
 	 * without booking deposits). */
-	depositsHeld: number;
+	depositsExcluded: number;
 	collected: number;
 	orderCount: number;
 	aov: number;
@@ -72,9 +72,9 @@ export function KpiRow({
 	// A booking order's total carries a refundable deposit that `earned` nets
 	// out (booking S5). Say so, with the amount, only when there is something to
 	// say — a store without deposits must see zero change.
-	const hasDeposits = depositsHeld > 0;
+	const hasDeposits = depositsExcluded > 0;
 	const earnedSub = hasDeposits
-		? `excl. ${formatPriceCompact(depositsHeld, currency)} security deposits`
+		? `excl. ${formatPriceCompact(depositsExcluded, currency)} security deposits`
 		: "confirmed → delivered";
 	return (
 		<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

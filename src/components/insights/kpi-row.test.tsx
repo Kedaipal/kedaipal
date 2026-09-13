@@ -24,14 +24,14 @@ const base = {
 
 describe("KpiRow — Revenue earned sub-label (z8r3fdcw70)", () => {
 	test("no deposits in the window: the status range, and no mention of deposits", () => {
-		render(<KpiRow {...base} depositsHeld={0} />);
+		render(<KpiRow {...base} depositsExcluded={0} />);
 		expect(screen.getByText("confirmed → delivered")).toBeTruthy();
 		expect(screen.queryByText(/security deposit/i)).toBeNull();
 		expect(screen.queryByTitle(DEPOSIT_EXCLUSION_HINT)).toBeNull();
 	});
 
 	test("deposits in the window: the excluded amount in store currency, the reason on hover", () => {
-		render(<KpiRow {...base} depositsHeld={10_000} />);
+		render(<KpiRow {...base} depositsExcluded={10_000} />);
 		const sub = screen.getByText(
 			shown(`excl. ${formatPriceCompact(10_000, "MYR")} security deposits`),
 		);
@@ -44,7 +44,7 @@ describe("KpiRow — Revenue earned sub-label (z8r3fdcw70)", () => {
 	});
 
 	test("an SG store states the amount in its own currency", () => {
-		render(<KpiRow {...base} currency="SGD" depositsHeld={5_000} />);
+		render(<KpiRow {...base} currency="SGD" depositsExcluded={5_000} />);
 		expect(
 			screen.getByText(
 				shown(`excl. ${formatPriceCompact(5_000, "SGD")} security deposits`),
@@ -55,7 +55,7 @@ describe("KpiRow — Revenue earned sub-label (z8r3fdcw70)", () => {
 	test("a large deposit total compacts like the tiles do", () => {
 		// RM 12,400.50 → whole ringgit in a tight slot; the sub-label follows the
 		// same rule as the value above it so the two never disagree on format.
-		render(<KpiRow {...base} depositsHeld={1_240_050} />);
+		render(<KpiRow {...base} depositsExcluded={1_240_050} />);
 		expect(
 			screen.getByText(
 				shown(
