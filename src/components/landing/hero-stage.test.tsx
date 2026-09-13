@@ -36,10 +36,14 @@ describe("HeroStage", () => {
 		expect(screen.getByText(m.hero_stage_alt()).className).toContain("sr-only");
 	});
 
-	it("opens on Pending with the order and the WhatsApp inbox", () => {
+	it("opens with the order still on top of the chat and nothing in the inbox yet", () => {
 		const { container } = render(<HeroStage />);
-		expect(container.textContent).toContain(m.hero_after_status_1());
-		expect(container.textContent).toContain(m.hero_after_order());
+		// Beat 0: Aina's order is the newest chat, no arrivals have buried it,
+		// and the Kedaipal side shows no status — the order hasn't crossed yet.
+		expect(container.textContent).toContain(m.hero_before_name_1());
+		expect(container.textContent).not.toContain(m.hero_before_name_5());
+		expect(screen.queryByText(m.hero_after_status_1())).toBeNull();
+		expect(screen.queryByText(m.hero_before_missed())).toBeNull();
 		expect(container.textContent).toContain(m.hero_before_label());
 		expect(container.textContent).toContain(m.hero_after_label());
 	});
@@ -50,6 +54,9 @@ describe("HeroStage", () => {
 		expect(container.textContent).toContain(m.hero_after_status_4());
 		expect(container.textContent).toContain(m.hero_before_missed());
 		expect(container.textContent).toContain(m.hero_after_toast_4());
+		// Both arrivals are in, so the order is buried under them.
+		expect(container.textContent).toContain(m.hero_before_name_5());
+		expect(container.textContent).toContain(m.hero_before_name_6());
 		// The pill itself, not the sr-only description (which narrates all four).
 		expect(screen.queryByText(m.hero_after_status_1())).toBeNull();
 		expect(screen.getByText(m.hero_after_status_4())).toBeTruthy();

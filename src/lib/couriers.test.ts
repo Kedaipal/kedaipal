@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { COUNTRIES } from "../../convex/lib/country";
@@ -22,7 +22,9 @@ const PUBLIC_DIR = join(process.cwd(), "public");
 describe("landing courier catalogue", () => {
 	it("gives every courier a unique id and a name", () => {
 		const ids = COURIERS.map((c) => c.id);
-		expect(new Set(ids).size, `duplicate ids in ${ids.join(", ")}`).toBe(ids.length);
+		expect(new Set(ids).size, `duplicate ids in ${ids.join(", ")}`).toBe(
+			ids.length,
+		);
 		expect(COURIERS.filter((c) => !c.name.trim()).map((c) => c.id)).toEqual([]);
 	});
 
@@ -30,22 +32,51 @@ describe("landing courier catalogue", () => {
 		for (const c of COURIERS) expect(COUNTRIES).toContain(c.country);
 	});
 
-	it("only ever points at SVG marks that exist", () => {
+	it("only ever points at marks that exist, vectors unless the brand publishes none", () => {
+		// SVG is the rule. Two couriers publish no vector at all (Line Clear,
+		// DD Express), so a small transparent PNG is allowed — capped, so a
+		// careless drop-in can't ship a 400 KB header image to the landing.
+		const RASTER_MAX_BYTES = 40_000;
 		const broken: string[] = [];
 		for (const c of COURIERS) {
 			if (!c.src) continue;
-			if (!c.src.endsWith(".svg")) broken.push(`${c.id}: not an SVG`);
-			if (!existsSync(join(PUBLIC_DIR, c.src))) broken.push(`${c.id}: missing ${c.src}`);
+			const path = join(PUBLIC_DIR, c.src);
+			if (!/\.(svg|png|webp)$/.test(c.src))
+				broken.push(`${c.id}: not svg/png/webp`);
+			if (!existsSync(path)) {
+				broken.push(`${c.id}: missing ${c.src}`);
+				continue;
+			}
 			if (!c.markClass) broken.push(`${c.id}: mark without markClass`);
+			if (!c.src.endsWith(".svg") && statSync(path).size > RASTER_MAX_BYTES)
+				broken.push(`${c.id}: raster over ${RASTER_MAX_BYTES} bytes`);
 		}
 		expect(broken, broken.join("\n")).toEqual([]);
 	});
 
 	it("rejects a raster wearing an .svg extension", () => {
 		for (const c of COURIERS) {
-			if (!c.src) continue;
+			if (!c.src?.endsWith(".svg")) continue;
 			const svg = readFileSync(join(PUBLIC_DIR, c.src), "utf8");
-			expect(svg, `${c.id} embeds a raster`).not.toMatch(/<image\b|data:image\/(png|jpe?g|webp);base64/i);
+			expect(svg, `${c.id} embeds a raster`).not.toMatch(
+				/<image\b|data:image\/(png|jpe?g|webp);base64/i,
+			);
+		}
+	});
+
+	it("keeps every borrowed mark pointed at a real parent in the same region", () => {
+		// A lane on its parent network's mark says which lane it is (the chip
+		// renders its own name) and must actually share the parent's file.
+		for (const c of COURIERS.filter((row) => row.borrowsMarkFrom)) {
+			const parent = COURIERS.find((row) => row.id === c.borrowsMarkFrom);
+			expect(
+				parent,
+				`${c.id} borrows from unknown ${c.borrowsMarkFrom}`,
+			).toBeTruthy();
+			expect(parent?.country).toBe(c.country);
+			expect(c.src, `${c.id} must share ${parent?.id}'s mark`).toBe(
+				parent?.src,
+			);
 		}
 	});
 
@@ -59,7 +90,9 @@ describe("landing courier catalogue", () => {
 	});
 
 	it("marks the two cold-chain lanes the ticket names", () => {
-		const cold = couriersFor("MY").filter((c) => c.group === "cold").map((c) => c.name);
+		const cold = couriersFor("MY")
+			.filter((c) => c.group === "cold")
+			.map((c) => c.name);
 		expect(cold).toContain("Ninja Cold");
 		expect(cold).toContain("Chill Freshbox");
 	});

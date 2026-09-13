@@ -72,29 +72,28 @@ function CourierChip({
 	courier: Courier;
 	hidden?: boolean;
 }) {
+	const showName = !courier.src || Boolean(courier.borrowsMarkFrom);
 	return (
-		<span className={cn(logoPillClass, "h-11 pl-1.5 pr-3.5")}>
+		<span className={cn(logoPillClass, "h-11 px-4")}>
 			{courier.src ? (
 				<AppImage
 					src={courier.src}
-					alt={hidden ? "" : courier.name}
+					// A borrowed mark is decorative here: the name beside it is the label.
+					alt={hidden || courier.borrowsMarkFrom ? "" : courier.name}
 					aspect={courier.markClass ?? "h-5 w-auto"}
 					fill={false}
-					className="ml-2"
 				/>
 			) : (
-				<>
-					<span
-						aria-hidden
-						className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-primary text-[11px] font-bold text-primary-foreground"
-					>
-						{initials(courier.name)}
-					</span>
-					<span className="text-sm font-bold text-slate-800">
-						{courier.name}
-					</span>
-				</>
+				<span
+					aria-hidden
+					className="-ml-2.5 flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-primary text-[11px] font-bold text-primary-foreground"
+				>
+					{initials(courier.name)}
+				</span>
 			)}
+			{showName ? (
+				<span className="text-sm font-bold text-slate-800">{courier.name}</span>
+			) : null}
 			{courier.group === "cold" ? (
 				<span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-emphasis">
 					<Snowflake className="size-3" />
@@ -105,12 +104,17 @@ function CourierChip({
 	);
 }
 
+/** Fewer chips than this and a looping rail just repeats one logo — show the grid. */
+const RAIL_MIN = 4;
+
 function CourierCatalogue({ couriers }: { couriers: Courier[] }) {
+	const rail = couriers.length >= RAIL_MIN;
 	return (
 		<>
-			{/* md+: the grid, every chip visible at once. */}
+			{/* md+: the grid, every chip visible at once (and every size, when the
+			    region has too few couriers for a rail to make sense). */}
 			<ul
-				className="hidden flex-wrap gap-2.5 md:flex"
+				className={cn("flex-wrap gap-2.5 md:flex", rail ? "hidden" : "flex")}
 				aria-label={m.delivery_label()}
 			>
 				{couriers.map((c) => (
@@ -119,27 +123,29 @@ function CourierCatalogue({ couriers }: { couriers: Courier[] }) {
 					</li>
 				))}
 			</ul>
-			{/* Below md: one rail, edge-faded so it reads as passing through. */}
-			{/* `contain-inline-size`: the rail's track must not feed the grid's
-			    intrinsic sizing — without it the column grew past the viewport by
-			    the chips' shadows and the page scrolled sideways at 390. */}
-			<div
-				className="-mx-5 overflow-hidden contain-inline-size md:hidden"
-				style={{
-					maskImage:
-						"linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
-					WebkitMaskImage:
-						"linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
-				}}
-			>
-				<LogoMarqueeRow className="px-5">
-					{(hidden) =>
-						couriers.map((c) => (
-							<CourierChip key={c.id} courier={c} hidden={hidden} />
-						))
-					}
-				</LogoMarqueeRow>
-			</div>
+			{/* Below md: one rail, edge-faded so it reads as passing through.
+			    `contain-inline-size`: the rail's track must not feed the grid's
+			    intrinsic sizing — without it the column grew past the viewport and
+			    the page scrolled sideways at 390. */}
+			{rail ? (
+				<div
+					className="-mx-5 overflow-hidden contain-inline-size md:hidden"
+					style={{
+						maskImage:
+							"linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
+						WebkitMaskImage:
+							"linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
+					}}
+				>
+					<LogoMarqueeRow className="px-5">
+						{(hidden) =>
+							couriers.map((c) => (
+								<CourierChip key={c.id} courier={c} hidden={hidden} />
+							))
+						}
+					</LogoMarqueeRow>
+				</div>
+			) : null}
 		</>
 	);
 }
@@ -265,8 +271,13 @@ function DispatchPlay({
 					})}
 				</span>
 			</div>
-			{/* Fixed height for three rows so the beats never resize the card. */}
-			<div className="mt-2 flex h-[13.75rem] flex-col gap-2">
+			{/* Fixed height per row count, so the beats never resize the card. */}
+			<div
+				className="mt-2 flex flex-col gap-2"
+				style={{
+					height: `${quotes.length * 4.25 + Math.max(quotes.length - 1, 0) * 0.5}rem`,
+				}}
+			>
 				{quotes.map((courier, index) => {
 					const active = chosen && index === 0;
 					return (

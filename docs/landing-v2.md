@@ -52,21 +52,33 @@ all left this section ("the text on top is too much info — make it concise so
 the animation takes half the viewport"); the guarantee still rides the pricing
 teaser and the closing CTA, where a visitor is deciding.
 
-**The stage** (`hero-stage.tsx`) is a navy 16:9 frame: on the left a WhatsApp
-inbox with orders buried under an unread count that only climbs (12 → 27 → 43
-→ 61) and a "Missed · RM 181" stamp; on the right the Kedaipal Orders inbox,
-grounded in the dashboard's own `status-badge.tsx` colours and `bottom-nav.tsx`
-tabs, where the same order walks **Pending → Buyer marked paid → Confirmed ·
-Paid → Shipped · J&T** with a toast per beat. RM 181 is the best seller's real
-average ticket (COMPANY_STATE, 8 Sep): one missed order costs more than the
-subscription.
+**The stage** (`hero-stage.tsx`) is a navy 16:9 frame that acts the order out
+twice, in six beats (~9 s, then a short fade and it loops):
+
+| Beat | WhatsApp alone (left) | Kedaipal (right) |
+|---|---|---|
+| 0 | Aina's order is the newest chat; 12 unread | inbox at rest, two settled orders |
+| 1 | a school group lands on top; 27 unread | the order **hands across** — a chip arcs from the chat into the inbox, the card slides in, *Pending*, toast "New order from Aina · RM 181" |
+| 2 | a supplier chat lands; Aina's row sinks and dims; 43 unread | *Buyer marked paid*, toast "Aina tapped I've paid" |
+| 3 | "Missed · RM 181" stamp slams on her row; 61 unread | *Confirmed · Paid*, toast "Payment confirmed · receipt sent" |
+| 4 | — | *Shipped · J&T* with the truck, toast "Tracking number sent on WhatsApp" |
+| 5 | fade | fade |
+
+The chat list has a fixed height, so each arrival pushes the bottom of the
+inbox out of the frame — that is the burying. Statuses use the dashboard's own
+`status-badge.tsx` colours over `bottom-nav.tsx` tabs; the live card's slot
+opens from `0fr` to `1fr` so the settled rows slide down rather than jump.
+RM 181 is the best seller's real average ticket (COMPANY_STATE, 8 Sep): one
+missed order costs more than the subscription.
 
 Decisions:
 
 - **CSS only.** The Lighthouse AC (mobile perf ≥ 90) rules out video, 3D and
   per-frame JS: `useBeatLoop` flips a beat index, `transition-*` classes move
-  things, and a keyed remount replays the `kp-pop` keyframe on the badge, stamp
-  and toast. Reduced motion renders the final beat as a still.
+  things, and keyed remounts replay the `kp-*` keyframes (`row-in`, `stamp`,
+  `handoff`, `card-in`, `toast-in`, `drive`, `pop` — all transform/opacity,
+  all stopped by the reduced-motion block). Reduced motion renders the last
+  story beat as a still: both arrivals in, the stamp down, the order shipped.
 - **Container-query units.** Every size inside the stage is `em` off a root
   font-size set in `cqw`, so the composition scales with the stage instead of
   overflowing it at `md` — the phone sits fully inside the frame at 390 and
@@ -92,18 +104,35 @@ that loops quotes → chosen → booked → shipped.
 
 **`src/lib/couriers.ts` is the same pattern as `payment-methods.ts`:** one
 config array, `couriersFor(country)`, `mockQuotes(country)`, and a test that
-stops a data edit shipping a broken mark. A row without `src` renders the
-initials avatar the real dispatch card uses for a courier we hold no logo for
-(the card "must render identically offline"), never a hot-linked PNG — the
-design mock's placeholders were exactly that, and the AC requires local
-brand-approved assets in `public/img/courier/`. **Drop the SVG in and add `src`
-to promote a chip to a mark; no component change.** Only Lalamove has a mark
-today; the Delyva partner logo pack is the ticket's open dependency.
+stops a data edit shipping a broken mark. Seventeen Malaysian rows (Delyva
+MY's public partner network — J&T, Ninja Van, Pos Malaysia, DHL eCommerce,
+City-Link, Flash, Line Clear, Pickupp, Teleport, Aramex, SF Express — the cold
+lanes Ninja Cold, Chill Freshbox and DD Express, and the riders Lalamove,
+GrabExpress and pandago), each row naming where its mark came from.
+
+**Marks (13 Sep 2026).** Every visible courier carries its own mark under
+`public/img/courier/`, found by one agent per courier with a fixed source
+order: the brand's site or press kit, then a Wikimedia Commons file that
+reproduces the official mark, then an official PNG. SVG wherever one exists.
+Two brands publish no vector at all (Line Clear, DD Express), so those are
+small transparent PNGs — the only rasters on the landing, capped at 40 KB by
+`couriers.test.ts`, which also still rejects a base64 raster wearing an
+`.svg` extension. Two identity findings from the hunt are encoded rather than
+papered over: **Ninja Cold has no mark of its own** (it is Ninja Van's
+cold-chain lane), so its row `borrowsMarkFrom` Ninja Van and the chip renders
+the lane's name beside the mark — a test pins that a borrowed mark points at a
+real parent in the same region and shares its file; and **"Chill Freshbox" is
+Delyva's label for Line Clear's FreshBox lane**, whose own FreshBox lockup is
+the mark. **Qxpress became TracX Logis in Nov 2024**, so the hidden SG row
+carries the new name. Marks are third-party trademarks used to state a fact
+("you can book X"), never to imply endorsement.
 
 **Catalogue:** grid on `md+`, one auto-scrolling rail below it (seventeen tiles
-two-up ran 1,300 px on a phone in the design review). Cold-chain rows carry a
-"COLD" pill. The rail and the payment wall render the identical chip —
-`logoPillClass` + `LogoMarqueeRow` in `landing-ui.tsx` are shared on purpose.
+two-up ran 1,300 px on a phone in the design review); a region with fewer than
+four couriers gets the grid at every size, because a rail looping one logo
+reads as broken. Cold-chain rows carry a "COLD" pill. The rail and the payment
+wall render the identical chip — `logoPillClass` + `LogoMarqueeRow` in
+`landing-ui.tsx` are shared on purpose.
 
 **Singapore, honestly.** The Delyva SG tenant had no service providers behind
 it on 3 Sep (`docs/delivery-delyva.md`), so every SG parcel row ships

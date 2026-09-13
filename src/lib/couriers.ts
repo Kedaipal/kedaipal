@@ -12,20 +12,25 @@ import type { Country } from "../../convex/lib/country";
  * account returns for that order — a list promising a courier the account
  * can't reach would be a lie on the surface where a seller is about to book.
  *
- * MY rows are the couriers the app has actually booked or quoted (Delyva
- * fixtures + the manual-tracking registry in `convex/lib/couriers.ts`).
- * SG rows are the Delyva Singapore partners as they are enabled: the SG tenant
- * had no service providers behind it on 3 Sep 2026 (`docs/delivery-delyva.md`),
- * so every SG parcel row ships `visible: false` until Delyva confirms it and a
- * brand-approved mark lands — the section then falls back to the Lalamove row
- * plus a one-line "being enabled" note rather than an empty grid.
+ * MY rows are Delyva Malaysia's public partner network (the couriers the app
+ * quotes and books through the seller's own account) plus the two cold-chain
+ * lanes sellers ask for by name. SG rows are the Delyva Singapore partners as
+ * they are enabled: the SG tenant had no service providers behind it on 3 Sep
+ * 2026 (`docs/delivery-delyva.md`), so every SG parcel row ships
+ * `visible: false` until Delyva confirms it — the section then shows the
+ * Lalamove row plus a one-line "being enabled" note rather than an empty grid.
  *
- * MARKS — `src` is an official SVG under `public/img/courier/`, from the
- * courier's own brand kit (Delyva's partner logo pack, requested by Arif). No
- * mark yet ⇒ a neutral name chip; never a raster, never a logo pulled off a
- * search result (`couriers.test.ts` enforces SVG-and-exists and rejects a
- * base64 PNG in an SVG shell). Names are proper nouns and are not translated —
- * the name doubles as the accessible label in every locale.
+ * MARKS — `src` is the courier's own mark under `public/img/courier/`, each
+ * row noting where it came from (the brand's site or press kit, or a Wikimedia
+ * Commons file that reproduces the official mark). Marks are third-party
+ * trademarks used to state a fact ("you can book X"), never to imply
+ * endorsement. SVG wherever one exists; two couriers publish no vector
+ * (Line Clear, DD Express), so those are small transparent PNGs — the only
+ * rasters on the landing, capped by `couriers.test.ts`. A service that has no
+ * mark of its own (Ninja Cold, Chill Freshbox) rides its parent network's mark
+ * with its own name beside it, so nobody mistakes the lane for the network.
+ * Names are proper nouns and are not translated — the name doubles as the
+ * accessible label in every locale.
  */
 
 export type CourierGroup = "parcel" | "cold" | "sameday";
@@ -38,10 +43,16 @@ export interface Courier {
 	country: Country;
 	/** Parcel network, cold-chain lane, or on-demand rider. */
 	group: CourierGroup;
-	/** Official SVG mark under `public/img/courier/`; absent ⇒ name chip. */
+	/** The courier's mark under `public/img/courier/`; absent ⇒ name chip. */
 	src?: string;
 	/** Intrinsic-ratio classes for the mark (`h-N w-auto`). */
 	markClass?: string;
+	/**
+	 * The parent network whose mark this lane rides (Ninja Cold on Ninja Van's).
+	 * The chip then shows the lane's own name beside the mark — the mark alone
+	 * would read as the parent.
+	 */
+	borrowsMarkFrom?: string;
 	/**
 	 * A representative quote for the landing mock, in the row's own currency
 	 * (minor units). Illustrative — the real card quotes live. Rows without
@@ -54,22 +65,178 @@ export interface Courier {
 	visible: boolean;
 }
 
+/** Most wordmarks sit well at the chip's 20px; squarer marks get a little more. */
+const MARK = "h-5 w-auto";
+const MARK_TALL = "h-6 w-auto";
+/** Lock-ups whose wordmark is small beside a mascot or emblem. */
+const MARK_XL = "h-7 w-auto";
 const LALAMOVE_MARK = "h-5 w-auto";
 
 export const COURIERS: readonly Courier[] = [
 	// ---- Malaysia — Delyva parcel network ----
-	{ id: "jt-my", name: "J&T Express", country: "MY", group: "parcel", mockQuote: 690, speed: "nextday", visible: true },
-	{ id: "ninjavan-my", name: "Ninja Van", country: "MY", group: "parcel", mockQuote: 760, speed: "nextday", visible: true },
-	{ id: "pos-my", name: "Pos Malaysia", country: "MY", group: "parcel", speed: "nextday", visible: true },
-	{ id: "dhl-my", name: "DHL eCommerce", country: "MY", group: "parcel", mockQuote: 740, speed: "nextday", visible: true },
-	{ id: "citylink-my", name: "City-Link Express", country: "MY", group: "parcel", speed: "nextday", visible: true },
-	{ id: "flash-my", name: "Flash Express", country: "MY", group: "parcel", speed: "nextday", visible: true },
-	{ id: "lineclear-my", name: "Line Clear", country: "MY", group: "parcel", speed: "nextday", visible: true },
+	// source: https://commons.wikimedia.org/wiki/File:J%26T_Express_logo.svg
+	{
+		id: "jt-my",
+		name: "J&T Express",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/jt.svg",
+		markClass: MARK,
+		mockQuote: 690,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://commons.wikimedia.org/wiki/File:Ninjavan.svg
+	{
+		id: "ninjavan-my",
+		name: "Ninja Van",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/ninjavan.svg",
+		markClass: MARK,
+		mockQuote: 760,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://www.pos.com.my/ (site header, assets.pos.com.my/pos-corporate/images/pos_logo.svg)
+	{
+		id: "pos-my",
+		name: "Pos Malaysia",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/pos.svg",
+		markClass: MARK_TALL,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://commons.wikimedia.org/wiki/File:DHL_Logo.svg
+	{
+		id: "dhl-my",
+		name: "DHL eCommerce",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/dhl.svg",
+		markClass: MARK,
+		mockQuote: 740,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://www.citylinkexpress.com/ (wp-content/uploads/2020/11/City-link-Logo.svg)
+	{
+		id: "citylink-my",
+		name: "City-Link Express",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/citylink.svg",
+		markClass: MARK_XL,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://commons.wikimedia.org/wiki/File:Flash_Express_Logo.svg
+	{
+		id: "flash-my",
+		name: "Flash Express",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/flash.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://lineclearexpress.com/my/aboutus (site header PNG; no vector published)
+	{
+		id: "lineclear-my",
+		name: "Line Clear",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/lineclear.png",
+		markClass: MARK,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://commons.wikimedia.org/wiki/File:Pickupp_logo_.svg
+	{
+		id: "pickupp-my",
+		name: "Pickupp",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/pickupp.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://www.teleport.it/media-library (press kit, "Teleport Logo TM Black.svg")
+	{
+		id: "teleport-my",
+		name: "Teleport",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/teleport.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://commons.wikimedia.org/wiki/File:Aramex_logo.svg
+	{
+		id: "aramex-my",
+		name: "Aramex",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/aramex.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://zh.wikipedia.org/wiki/File:SFExpress_logo_SC.svg (official emblem + wordmark)
+	{
+		id: "sf-my",
+		name: "SF Express",
+		country: "MY",
+		group: "parcel",
+		src: "/img/courier/sf.svg",
+		markClass: MARK_XL,
+		speed: "nextday",
+		visible: true,
+	},
 	// ---- Malaysia — cold chain (chilled / frozen lanes) ----
-	{ id: "ninjacold-my", name: "Ninja Cold", country: "MY", group: "cold", mockQuote: 1850, speed: "nextday", visible: true },
-	{ id: "chillfreshbox-my", name: "Chill Freshbox", country: "MY", group: "cold", speed: "nextday", visible: true },
-	{ id: "ddexpress-my", name: "DD Express", country: "MY", group: "cold", speed: "nextday", visible: true },
-	// ---- Malaysia — same-day rider ----
+	// Ninja Cold is Ninja Van's cold-chain lane and publishes no mark of its own.
+	{
+		id: "ninjacold-my",
+		name: "Ninja Cold",
+		country: "MY",
+		group: "cold",
+		src: "/img/courier/ninjavan.svg",
+		markClass: MARK,
+		borrowsMarkFrom: "ninjavan-my",
+		mockQuote: 1850,
+		speed: "nextday",
+		visible: true,
+	},
+	// Chill Freshbox is Delyva's label for Line Clear's FreshBox chilled lane; the
+	// mark is Line Clear's own FreshBox lockup (lineclearexpress.com rate brochure).
+	{
+		id: "chillfreshbox-my",
+		name: "Chill Freshbox",
+		country: "MY",
+		group: "cold",
+		src: "/img/courier/freshbox.svg",
+		markClass: MARK_TALL,
+
+		speed: "nextday",
+		visible: true,
+	},
+	// source: https://dd.express/ (site logo PNG; the consumer brand now reads "DD ColdChain")
+	{
+		id: "ddexpress-my",
+		name: "DD Express",
+		country: "MY",
+		group: "cold",
+		src: "/img/courier/ddexpress.png",
+		markClass: MARK,
+		speed: "nextday",
+		visible: true,
+	},
+	// ---- Malaysia — same-day riders ----
 	{
 		id: "lalamove-my",
 		name: "Lalamove",
@@ -77,6 +244,28 @@ export const COURIERS: readonly Courier[] = [
 		group: "sameday",
 		src: "/img/lalamove-logo.svg",
 		markClass: LALAMOVE_MARK,
+		speed: "sameday",
+		visible: true,
+	},
+	// source: https://merchant.grab.com/en-my/brand-centre/grab (GrabExpress uses the Grab wordmark)
+	{
+		id: "grabexpress-my",
+		name: "GrabExpress",
+		country: "MY",
+		group: "sameday",
+		src: "/img/courier/grab.svg",
+		markClass: MARK,
+		speed: "sameday",
+		visible: true,
+	},
+	// source: https://pandago.my/ (img-assets/logos/pandago_logo_pink.svg)
+	{
+		id: "pandago-my",
+		name: "pandago",
+		country: "MY",
+		group: "sameday",
+		src: "/img/courier/pandago.svg",
+		markClass: MARK,
 		speed: "sameday",
 		visible: true,
 	},
@@ -92,19 +281,54 @@ export const COURIERS: readonly Courier[] = [
 		speed: "sameday",
 		visible: true,
 	},
-	// ---- Singapore — Delyva parcel partners, hidden until enabled + marked ----
-	{ id: "ninjavan-sg", name: "Ninja Van", country: "SG", group: "parcel", speed: "nextday", visible: false },
-	{ id: "jt-sg", name: "J&T Express", country: "SG", group: "parcel", speed: "nextday", visible: false },
-	{ id: "qxpress-sg", name: "Qxpress", country: "SG", group: "parcel", speed: "nextday", visible: false },
+	// ---- Singapore — Delyva parcel partners, hidden until enabled ----
+	{
+		id: "ninjavan-sg",
+		name: "Ninja Van",
+		country: "SG",
+		group: "parcel",
+		src: "/img/courier/ninjavan.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: false,
+	},
+	{
+		id: "jt-sg",
+		name: "J&T Express",
+		country: "SG",
+		group: "parcel",
+		src: "/img/courier/jt.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: false,
+	},
+	// Qxpress (Qoo10's courier) became TracX Logis in Nov 2024 — the old name would date the page.
+	// source: https://www.tracxlogis.com/ (site logo SVG)
+	{
+		id: "tracx-sg",
+		name: "TracX Logis",
+		country: "SG",
+		group: "parcel",
+		src: "/img/courier/tracx.svg",
+		markClass: MARK,
+		speed: "nextday",
+		visible: false,
+	},
 ];
 
 /** Display order of the groups on the landing (parcels, then cold, then rider). */
-export const COURIER_GROUP_ORDER: readonly CourierGroup[] = ["parcel", "cold", "sameday"];
+export const COURIER_GROUP_ORDER: readonly CourierGroup[] = [
+	"parcel",
+	"cold",
+	"sameday",
+];
 
 /** Visible couriers for a region, in group order then config order. */
 export function couriersFor(country: Country): Courier[] {
 	return COURIER_GROUP_ORDER.flatMap((group) =>
-		COURIERS.filter((c) => c.visible && c.country === country && c.group === group),
+		COURIERS.filter(
+			(c) => c.visible && c.country === country && c.group === group,
+		),
 	);
 }
 
