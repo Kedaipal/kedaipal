@@ -1192,7 +1192,7 @@ describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
 		expect(sub?.pendingPlanChange?.plan).toBe("starter");
 		// Still Pro, still the Pro caps — they paid for them.
 		expect(sub?.plan).toBe("pro");
-		expect(sub?.orderCap).toBe(500);
+		expect(sub?.orderCap).toBe(200);
 		// And no bill was raised.
 		const invoices = await t.run(async (ctx) =>
 			ctx.db

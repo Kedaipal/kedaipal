@@ -53,9 +53,11 @@ import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	foundingPricingApplies,
+	HOLD_MONTHLY_PRICES,
 	planPrice,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
+import { HOLD_LABEL } from "./lib/seasonalHold";
 
 /** How long an unfinished authorisation session is offered for "resume" before
  * a new one is minted. */
@@ -563,6 +565,8 @@ export const autoRenewSetupContext = internalQuery({
 		notifyEmail: string | undefined;
 		currency: BillingCurrency;
 		plan: Doc<"subscriptions">["plan"];
+		/** Off-Season Hold (z8r3fday24): the next charge is the hold price. */
+		onHold: boolean;
 		comped: boolean;
 		founding: boolean;
 		attached: boolean;
@@ -576,6 +580,11 @@ export const autoRenewSetupContext = internalQuery({
 		/** The plan being BILLED (invoices carry it; the sub's own `plan` is
 		 * still the OLD tier until settle — every trial row says "pro"). */
 		pendingInvoicePlan: Doc<"subscriptions">["plan"] | undefined;
+		/** …and whether that bill is an Off-Season Hold rather than the tier —
+		 * a hold invoice carries the TIER in `plan` (it is what the seller
+		 * resumes to), so without this the page would title an RM19 hold charge
+		 * "Kedaipal Pro". */
+		pendingInvoiceKind: "plan" | "hold" | undefined;
 	} | null> => {
 		const retailer = await ctx.db
 			.query("retailers")
@@ -599,6 +608,7 @@ export const autoRenewSetupContext = internalQuery({
 			notifyEmail: retailer.notifyEmail,
 			currency: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"],
 			plan: sub.plan,
+			onHold: sub.status === "on_hold",
 			comped: sub.comped === true,
 			// Display amount on HitPay's page mirrors what the next bill will
 			// actually be — founding pricing honours the 3-month lapse window.
@@ -616,6 +626,7 @@ export const autoRenewSetupContext = internalQuery({
 			pendingInvoiceTotalSen: pending?.total,
 			pendingInvoiceCurrency: pending?.currency,
 			pendingInvoicePlan: pending?.plan,
+			pendingInvoiceKind: pending ? (pending.kind ?? "plan") : undefined,
 		};
 	},
 });
@@ -708,7 +719,16 @@ export const startAutoRenewSetup = action({
 		// settle (every trial row reads "pro"), so titling the authorisation
 		// page from it shows "Kedaipal Pro" above a Starter amount.
 		const billedPlan = context.pendingInvoicePlan ?? context.plan;
-		const planLabel = `${billedPlan.charAt(0).toUpperCase()}${billedPlan.slice(1)}`;
+		// …and an Off-Season Hold bill carries the TIER in `plan` (it is what
+		// the seller resumes to), so it needs naming as the hold it is — either
+		// the open bill IS a hold invoice, or there is no bill and the paused
+		// store's next charge will be one.
+		const billingHold =
+			context.pendingInvoiceKind === "hold" ||
+			(context.pendingInvoiceKind === undefined && context.onHold);
+		const planLabel = billingHold
+			? HOLD_LABEL
+			: `${billedPlan.charAt(0).toUpperCase()}${billedPlan.slice(1)}`;
 		const chargesToday = context.pendingInvoiceTotalSen !== undefined;
 		const inputs = {
 			planLabel,
@@ -726,11 +746,19 @@ export const startAutoRenewSetup = action({
 			customerName: context.storeName,
 			// Show the amount attach will actually charge: the open bill when one
 			// exists (the subscribe-with-auto-renewal flow — possibly an annual
-			// total), else the seller's current renewal price. Display-only
-			// either way; charges always pass the invoice total at charge time.
+			// total), else the next renewal price — which for a PAUSED store is
+			// the flat hold price, not the tier. Display-only either way; charges
+			// always pass the invoice total at charge time.
 			amountSen:
 				context.pendingInvoiceTotalSen ??
-				planPrice(context.plan, "monthly", context.founding, context.currency),
+				(context.onHold
+					? HOLD_MONTHLY_PRICES[context.currency]
+					: planPrice(
+							context.plan,
+							"monthly",
+							context.founding,
+							context.currency,
+						)),
 			currency:
 				context.pendingInvoiceCurrency === "SGD" ||
 				context.pendingInvoiceCurrency === "MYR"

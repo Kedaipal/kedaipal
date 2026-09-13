@@ -28,6 +28,7 @@ import {
 import { Button } from "../ui/button";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
+import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
 
 export type StorefrontVariant = StorefrontProduct["variants"][number];
 
@@ -758,13 +759,14 @@ function CustomOrderButton({
 }) {
 	const product = pp.product;
 	const customLine = pp.customLine;
+	const paused = useOrderingPaused();
 	if (!product || !customLine) return null;
 	const isTheProduct = !pp.sellsStandardLine;
 	return (
 		<Button
 			type="button"
 			variant={isTheProduct ? "default" : "outline"}
-			disabled={pp.uploadingImage}
+			disabled={pp.uploadingImage || paused}
 			onClick={() => {
 				onAdd(product, customLine, 1, {
 					note: pp.customNote.trim() || undefined,
@@ -774,7 +776,7 @@ function CustomOrderButton({
 			}}
 			className={isTheProduct ? "h-12 w-full text-base" : "mt-3 h-11 w-full"}
 		>
-			Request custom order
+			{paused ? ORDERING_PAUSED_CTA : "Request custom order"}
 		</Button>
 	);
 }
@@ -877,10 +879,13 @@ function AddToCartButton({
 	pp: ProductPurchase;
 	onAdd: OnAddVariant;
 }) {
+	// Off-Season Hold (z8r3fday24): disabled-with-reason beats a button that
+	// adds to a cart nobody can check out.
+	const paused = useOrderingPaused();
 	return (
 		<Button
 			type="button"
-			disabled={!pp.sellable || pp.minUnreachable}
+			disabled={paused || !pp.sellable || pp.minUnreachable}
 			onClick={() =>
 				pp.product &&
 				pp.selectedVariant &&
@@ -888,15 +893,17 @@ function AddToCartButton({
 			}
 			className="h-12 w-full text-base"
 		>
-			{pp.minUnreachable
-				? "Not enough stock"
-				: !pp.selectedVariant
-					? pp.hasOptions
-						? "Select options"
-						: "Unavailable"
-					: !pp.sellable
-						? "Out of stock"
-						: "Add to cart"}
+			{paused
+				? ORDERING_PAUSED_CTA
+				: pp.minUnreachable
+					? "Not enough stock"
+					: !pp.selectedVariant
+						? pp.hasOptions
+							? "Select options"
+							: "Unavailable"
+						: !pp.sellable
+							? "Out of stock"
+							: "Add to cart"}
 		</Button>
 	);
 }
@@ -916,7 +923,8 @@ export function GoToCheckoutBar({
 	currency: string;
 	onCheckout?: () => void;
 }) {
-	if (!onCheckout || cartItemCount <= 0) return null;
+	const paused = useOrderingPaused();
+	if (!onCheckout || cartItemCount <= 0 || paused) return null;
 	return (
 		<button
 			type="button"

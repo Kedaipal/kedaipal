@@ -9,10 +9,17 @@
 //  - A cancel decrements the month the order was CREATED in (not the current
 //    month), floored at zero, so late cancellations can't corrupt this
 //    month's count or drive it negative.
+//  - `recordOrderCreated` is ALSO the one seam every order-create channel
+//    funnels through (storefront, counter, claim link, booking), so it carries
+//    the start-when-you-sell trigger (z8r3fday24): the store's first order
+//    ends its free period and fires the first invoice. A stamp + a scheduled
+//    job — it can never refuse or fail the order. See
+//    subscriptions.endFreePeriodOnFirstOrder.
 
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { monthStartMyt } from "./lib/usagePeriod";
+import { endFreePeriodOnFirstOrder } from "./subscriptions";
 
 async function loadUsageRow(
 	ctx: QueryCtx | MutationCtx,
@@ -27,13 +34,16 @@ async function loadUsageRow(
 		.unique();
 }
 
-/** Count a freshly created order against the retailer's current month.
- * Called from every order-create site (storefront + counter checkout). */
+/** Count a freshly created order against the retailer's current month, and
+ * let the store's FIRST order end its free period (start-when-you-sell).
+ * Called from every order-create site (storefront, counter checkout, claim
+ * link, booking). */
 export async function recordOrderCreated(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	createdAt: number,
 ): Promise<void> {
+	await endFreePeriodOnFirstOrder(ctx, retailerId, createdAt);
 	const monthStart = monthStartMyt(createdAt);
 	const row = await loadUsageRow(ctx, retailerId, monthStart);
 	if (row) {

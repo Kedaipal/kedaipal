@@ -99,6 +99,14 @@ mid-dunning store without waiting for tomorrow's cron. Two guards keep
    cron/Pay-now rail. A stale session is likewise re-minted rather than
    resumed when that context has moved.
 
+**What attach does NOT charge**, by the same consent rule: a store's **first
+invoice** from start-when-you-sell (`z8r3fday24`) — a bill the seller has not
+seen is never charged unseen. Held subscriptions renew through this machine
+too (`internalIssueRenewalInvoice` picks `kind: "hold"`), so the setup page and
+the pre-charge notice quote the **hold** price while a store is paused, and a
+hold bill the authorisation page displayed is charged on attach like any other.
+
+
 **Pre-charge notice:** auto-renew sellers get `autoRenewUpcoming` once per
 cycle in the 3-day window before `currentPeriodEnd` (amount + method + date +
 how to turn it off) — the no-surprise-MIT rule card networks expect.
