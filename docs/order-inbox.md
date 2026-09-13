@@ -181,6 +181,25 @@ review: with **every leaf selected, "All statuses" stays lit even when period
 chips are on** — the union already matches every order, and the panel's Status
 select-all on a booking store produces exactly that state.
 
+**`top` and `off` are REMEMBERED per store; `only` is not.** The chip cycles
+three ways but they are not the same kind of thing. `top` vs `off` — whether a
+pin floats above the list or is filtered like any other order — is
+*presentation*, how this seller reads their inbox, so it lives in
+`localStorage` beside the layout (`useInboxView`) and the column set
+(`useOrderColumns`); a mode named in the URL still wins. `only` *narrows the
+list*, so it is a filter: URL-only, deliberately never remembered, because
+carrying it forward would silently hide the results of the seller's next
+drill-in. Precedence lives in one place, `resolvePinMode`
+(`src/hooks/useInboxPinMode.ts`).
+
+Without this, a seller who had turned pinning **off** got it switched back on
+every time they arrived from an Insights drill-in: a drill-in builds a fresh
+search object, so `pin` was absent, and absent meant the `top` default rather
+than "what I last chose". Note the scope of the fix — **ordinary filters are
+still URL state and are still replaced by a drill-in**, on purpose: arriving at
+Orders from the nav and finding last week's payment filter silently applied is
+the worse bug, and it would make every shared link a lie.
+
 **The Pinned chip renders whenever the mode is non-default, even at ZERO**
 (PR #243 re-review). Unpinning the last row while in "only" mode empties the
 list and used to take the chip away with it — leaving `?pin=only` in the URL, an

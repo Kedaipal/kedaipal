@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { isRevenueOrder } from "./insights";
 import {
 	BUCKET_LEAVES,
 	foldLegacyBuckets,
@@ -8,8 +9,10 @@ import {
 	isUnseenOrder,
 	leafBucket,
 	leafLabel,
+	leafStatus,
 	orderBucket,
 	orderLeaf,
+	REVENUE_LEAVES,
 	statusAgeMs,
 	statusAgeSeverity,
 	statusToBucket,
@@ -79,6 +82,42 @@ describe("status leaves — the one filterable atom", () => {
 		const shout = (st: string) => `RENAMED_${st}`;
 		expect(leafLabel("confirmed_unseen", shout)).toBe("Not yet opened");
 		expect(leafLabel("packed", shout)).toBe("RENAMED_packed");
+	});
+});
+
+describe("REVENUE_LEAVES — the status scope an Insights drill-in carries", () => {
+	test("is exactly the leaves Insights counts, both directions", () => {
+		// Total correspondence: no leaf can be in one list and not the other, which
+		// is the drift this constant exists to make impossible.
+		for (const leaf of INBOX_LEAF_KEYS) {
+			expect(REVENUE_LEAVES.includes(leaf)).toBe(
+				isRevenueOrder(leafStatus(leaf)),
+			);
+		}
+	});
+
+	test("includes the unseen leaf — the one a hand-written list would miss", () => {
+		// `confirmed_unseen` is a confirmed order nobody has opened. Insights
+		// counts it (its status IS confirmed); the inbox files it under New. Omit
+		// it and every drill-in is short by each unopened order.
+		expect(REVENUE_LEAVES).toContain("confirmed_unseen");
+		expect(REVENUE_LEAVES).toContain("confirmed");
+	});
+
+	test("excludes exactly the statuses Insights drops from every figure", () => {
+		// The reported bug: a trend bar said 2 orders and the inbox opened 3,
+		// the extra one cancelled.
+		expect(REVENUE_LEAVES).not.toContain("cancelled");
+		expect(REVENUE_LEAVES).not.toContain("pending");
+		expect(REVENUE_LEAVES).not.toContain("booking_requested");
+	});
+
+	test("leafStatus is identity apart from the unseen split", () => {
+		expect(leafStatus("confirmed_unseen")).toBe("confirmed");
+		for (const leaf of INBOX_LEAF_KEYS) {
+			if (leaf === "confirmed_unseen") continue;
+			expect(leafStatus(leaf)).toBe(leaf);
+		}
 	});
 });
 

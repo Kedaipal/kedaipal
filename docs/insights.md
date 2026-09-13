@@ -203,7 +203,9 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   (Apple-Health style), lights up solid mint while the rest dim, and a readout
   row above the chart shows the bucket's date, earned revenue and order count
   plus a **"View orders" deep link** into the inbox filtered to that bucket
-  (`/app/orders?from&to` on `createdAt`). No selection → the readout shows the
+  (`/app/orders?from&to` on `createdAt`, **plus `?st=` scoped to
+  `REVENUE_LEAVES`** — see [Drill-ins](#drill-ins-carry-the-status-scope)).
+  No selection → the readout shows the
   peak day/week + a "tap or drag" hint. Keyboard: focus + ←/→/Home/End move the
   selection, Esc clears (`role="slider"` with `aria-valuetext`). `touch-action:
   pan-y` keeps vertical page scroll working while horizontal drags scrub.
@@ -217,6 +219,26 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   [`docs/app-redesign.md`](./app-redesign.md#mobile-bottom-nav--5-tabs--more)),
   an **Insights** entry card on `/app` home (lock-badged for Starter) + a
   desktop sidebar link.
+
+### Drill-ins carry the status scope
+
+Both ways into the inbox from this page — the trend readout's **View orders**
+and every **Sources** row — carry `?st=` set to **`REVENUE_LEAVES`**
+(`convex/lib/orderBuckets.ts`), so the list that opens holds exactly the orders
+the figure was computed from.
+
+They used to pass only a date range (or only `?asrc=`), which asked the inbox a
+different question than the chart answered: a bar reading **"2 orders" opened a
+list of 3**, the extra one CANCELLED. Insights drops `pending`,
+`booking_requested` and `cancelled` from every figure; the inbox, told only
+"8 Sep", showed them.
+
+`REVENUE_LEAVES` is **derived** from `isRevenueOrder`, never typed out, because
+the two lists drifting is the failure. It includes **`confirmed_unseen`** — a
+confirmed order nobody has opened, which Insights counts while the inbox files
+it under New. A hand-written list would have missed exactly that leaf and the
+drill-in would have been short by every unopened order. Pinned in both
+directions by `convex/lib/orderBuckets.test.ts`.
 
 ### Empty states
 
