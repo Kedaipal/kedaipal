@@ -37,6 +37,31 @@ reason the toast names — matching its existing skip-list behaviour for the
 mockup, collection and rider gates, where a batch is expected to be partially
 applicable.
 
+### There is a FOURTH restore door, and a buyer can open it
+
+`declineMockupItem` reverses create-time effects too, and it was unguarded.
+Cancelling does **not** clear `mockupStatus`, so a cancelled order still
+satisfied its only two checks (`mockupStatus` set, not `approved`) and its
+restore handed the units back a second time.
+
+Two things make this the worst of the four:
+
+- it is reached with the buyer's **tracking token**, so it needs no seller
+  action and no auth at all — a stale track page left open is enough;
+- the aggregate and usage-meter decrements further down that function were
+  *already* written `order.status !== "cancelled"`. Someone had thought about
+  re-entry and guarded the two cheap counters while the stock restore sitting
+  between them went unguarded.
+
+Now it throws. Those two downstream conditions were **removed rather than
+left in place**: the terminal guard makes them unreachable, and TypeScript
+proves it — narrowing `status` so the comparison no longer type-checks. Leaving
+them would be dead code that reads like the case is still live.
+
+Found by an adversarial audit of the merged branch, not by a failing test, which
+is the point: each door was added by a different feature at a different time,
+and none of them shares a helper.
+
 ## Hole 2 — stock left the product save entirely
 
 `saveVariantGrid`, `updateVariant` and `bulkUpsert` all wrote `onHand` as an
@@ -66,6 +91,7 @@ else. (c) removes the coupling instead of managing it.
 | `products.create` / new grid combinations | **yes** — a brand-new row has no stock of its own to protect |
 | `products.adjustStock` | **yes** — the explicit control |
 | `orders.create`, cancel-restore | **yes** — the order lifecycle |
+| `orders.declineMockupItem` | **yes** — restores a dropped custom line (see below) |
 | `products.bulkUpsert` on an existing product | **only** with `updateStock: true` |
 | `saveVariantGrid` on an existing variant | **never** |
 | `updateVariant` | **never** — the argument no longer exists |
@@ -128,7 +154,7 @@ form's Save. Said out loud in both surfaces — otherwise a seller adjusts stock
 backs out of the editor without saving, and reasonably expects the count to have
 backed out too.
 
-### Two doors, on purpose
+### Two doors for the seller, on purpose
 
 Taking stock out of the product save is only an improvement if changing it got
 **easier**. Buried behind Products → open → scroll to Pricing & choices, a
@@ -141,7 +167,19 @@ correctness fix would read as a regression.
   variants (no count to move), nor on archived products (restore first).
 
 The sheet carries a shared mode toggle rather than a per-row one: a stock take
-counts the whole shelf, so the switch happens once. It is also the only way a
+counts the whole shelf, so the switch happens once. It reports `aria-pressed`,
+and tapping the mode already active is a **no-op** — it used to clear every
+typed count, which on two identical-looking segments read as the control
+breaking.
+
+The sheet also keeps its **own open-time baseline** per row. Every row reads
+live, so without one an exact count silently overwrote whatever sold while the
+seller was counting — and worse, `expectedOnHand` was resolved from the live
+value at Apply, refreshing the consent record on the way out so the server's
+stale-overwrite guard could never fire from the sheet at all. It now sends the
+number the seller was actually looking at, and warns per row when reality has
+moved. The single dialog was already protected by its own notice; the sheet was
+not, which is the kind of gap a second surface quietly introduces. It is also the only way a
 multi-variant product can express an exact count at all now — without it, a
 seller who counted three sizes would have to do the arithmetic themselves, which
 is the failure the exact-count path exists to prevent.

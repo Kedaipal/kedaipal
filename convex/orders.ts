@@ -5096,6 +5096,19 @@ export const declineMockupItem = mutation({
 			throw new ConvexError("This order has no custom item to decline");
 		if (order.mockupStatus === "approved")
 			throw new ConvexError("The custom item has already been approved");
+		// Cancelled is TERMINAL here too (86eypn8ye). This is the FOURTH door onto
+		// a stock restore and the only one a BUYER can open: cancelling does not
+		// clear `mockupStatus`, so a cancelled order still satisfies both guards
+		// above, and the restore below would hand its units back a second time —
+		// `onHand` has no ceiling, so the store then oversells against a count
+		// that never happened. The aggregate and usage-meter decrements further
+		// down were already written `order.status !== "cancelled"`; the stock
+		// restore between them was not, which is exactly the asymmetry this
+		// ticket exists to close.
+		if (order.status === "cancelled")
+			throw new ConvexError(
+				"This order was cancelled, so there is nothing left to approve or decline.",
+			);
 
 		// Resolve which lines are the made-to-order/custom ones (requiresProof
 		// resolves true: per-variant override ?? product default).
@@ -5145,15 +5158,21 @@ export const declineMockupItem = mutation({
 
 		// Custom-only order → declining is a cancellation.
 		if (kept.length === 0) {
-			if (order.status !== "cancelled" && order.customerId)
+			// These two were written `order.status !== "cancelled"` as a partial
+			// defence against re-entering this path on an already-cancelled order.
+			// The terminal guard at the top now makes that unreachable — TypeScript
+			// proves it, narrowing `status` so the comparison no longer type-checks
+			// — so the conditions are gone rather than left as dead code that reads
+			// like the case is still possible. The stock restore above them never
+			// had the same defence, which is the bug the guard closes.
+			if (order.customerId)
 				await decrementAggregatesForCancel(ctx, {
 					customerId: order.customerId,
 					orderTotal: revenueExcludingDeposit(order),
 				});
-			// Un-meter on the first transition into cancelled (mirrors
+			// Un-meter on the transition into cancelled (mirrors
 			// applyStatusTransition — this cancel path bypasses that helper).
-			if (order.status !== "cancelled")
-				await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+			await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 			await ctx.db.patch(order._id, {
 				status: "cancelled",
 				mockupStatus: undefined,

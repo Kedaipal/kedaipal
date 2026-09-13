@@ -1714,7 +1714,7 @@ type PreviewEntry = {
 	action: "create" | "update" | "error";
 	productId: Id<"products"> | null;
 	variantCount: number;
-	changedVariants: number; // create: new active variants; update: variants whose price/stock change
+	changedVariants: number; // create: new active variants; update: variants whose PRICE changes (stock is counted separately — it is opt-in)
 	skippedVariants: number; // update: provided variants with no matching existing variant
 	autoFilled: number; // inactive auto-filled combinations
 	warnings: string[];
@@ -1843,8 +1843,14 @@ export const bulkUpsertPreview = query({
 						);
 						continue;
 					}
-					if (existing.price !== variant.price || existing.onHand !== variant.onHand)
-						changed++;
+					// PRICE only. This used to count a stock-only difference as
+					// "changed", which was right when the update path always wrote
+					// both — but stock is now opt-in (86eypn8ye), so the default
+					// import would report "3 changed" and then write nothing,
+					// which is the silent no-op the whole import screen is trying
+					// to stop doing. Stock has its own counts below and its own
+					// line in the UI.
+					if (existing.price !== variant.price) changed++;
 					if (existing.onHand !== variant.onHand) {
 						stockChanges++;
 						if (variant.onHand > existing.onHand) {

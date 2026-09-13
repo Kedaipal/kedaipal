@@ -168,13 +168,16 @@ function LiveStockCell({
 	onAdjust: () => void;
 }) {
 	return (
-		<div className="flex h-11 items-center justify-between gap-2 rounded-lg bg-muted pr-1.5 pl-3">
+		<div className="flex h-11 items-center justify-between gap-2 rounded-lg bg-muted pr-1 pl-3">
 			<span className="text-[15px] font-bold tabular-nums">{onHand}</span>
 			<Button
 				type="button"
 				variant="outline"
 				onClick={onAdjust}
-				className="h-8 bg-background px-3 text-xs"
+				// 44px: this is the ONLY way to change a saved variant's stock, and
+				// it replaced an h-11 input. Mobile-first is a hard floor
+				// (CLAUDE.md), and the cell it sits in is h-11 anyway.
+				className="h-11 bg-background px-3 text-xs"
 			>
 				Adjust
 			</Button>
@@ -1372,7 +1375,9 @@ export function VariantEditor({
 									{/* Only offered while at least one tracked row is NEW. On a
 									    saved product every stock cell is read-only, so a bulk fill
 									    would type into nothing — an input that silently does
-									    nothing is worse than no input. */}
+									    nothing is worse than no input. Its absence is explained
+									    below rather than left as a control that quietly went
+									    missing. */}
 									{(allTrack ||
 										(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
 									rows.some(
@@ -1390,6 +1395,21 @@ export function VariantEditor({
 										/>
 									) : null}
 								</div>
+							) : null}
+							{/* The bulk stock fill is gone on a saved product, and a control
+							    that silently disappears reads as a bug. Say where stock went
+							    — the seller is looking at the row that used to hold it. */}
+							{rows.some(
+								(r) =>
+									r.blockWhenOutOfStock &&
+									findLiveStock(liveStock, r.optionValues),
+							) ? (
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									Stock now has its own control — use{" "}
+									<span className="font-medium text-foreground">Adjust</span> on
+									a choice to add what you made or take off what you sold. It
+									saves on its own, so a save here can never undo a sale.
+								</p>
 							) : null}
 							<ul className="flex flex-col gap-2">
 								{rows.map((row, i) => (

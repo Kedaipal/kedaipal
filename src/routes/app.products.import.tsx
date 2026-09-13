@@ -155,6 +155,11 @@ function ImportProductsRoute() {
 		if (!file) return;
 		setPreview(null);
 		setFileName(file.name);
+		// A tick made against one sheet must never carry to the next — the counts
+		// it was consented to no longer describe anything. `reset()` said this and
+		// enforced it, but only on the Clear button; swapping the file in place is
+		// the likelier route and skipped it entirely.
+		setUpdateStock(false);
 		try {
 			const lower = file.name.toLowerCase();
 			if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
@@ -179,6 +184,9 @@ function ImportProductsRoute() {
 
 	async function handlePreview() {
 		if (!parsed || parsed.products.length === 0 || !retailer) return;
+		// Same rule as picking a new file: the numbers the tick was consented to
+		// are about to be recomputed, so the consent restarts with them.
+		setUpdateStock(false);
 		setPreviewing(true);
 		try {
 			const plan: PlanEntry[] = [];

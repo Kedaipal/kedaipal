@@ -7,7 +7,7 @@ vi.mock("convex/react", () => ({ useMutation: () => adjustStock }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import type { Id } from "../../../convex/_generated/dataModel";
-import { StockAdjustDialog, type StockLine } from "./stock-adjust";
+import { StockAdjustDialog, type StockLine, StockSheet } from "./stock-adjust";
 
 afterEach(() => {
 	cleanup();
@@ -127,4 +127,83 @@ test("a sale landing mid-dialog informs a movement and warns an exact count", ()
 	// after those two went out the door.
 	fireEvent.click(screen.getByRole("button", { name: "Use 15 instead" }));
 	expect(screen.getByRole("button", { name: "Set to 15" })).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// StockSheet
+// ---------------------------------------------------------------------------
+
+const LINES = (a: number, b: number): StockLine[] => [
+	{ variantId: "v1" as Id<"productVariants">, label: "Original", onHand: a },
+	{ variantId: "v2" as Id<"productVariants">, label: "Pedas", onHand: b },
+];
+
+function sheet(lines: StockLine[]) {
+	return render(
+		<StockSheet
+			open
+			onOpenChange={() => {}}
+			productName="Keropok Lekor"
+			lines={lines}
+		/>,
+	);
+}
+
+test("the sheet sends one batched mutation, deltas only for touched rows", () => {
+	sheet(LINES(20, 8));
+	// One row moved; the untouched row must not appear in the batch at all.
+	fireEvent.click(screen.getByRole("button", { name: "One more Original" }));
+	fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
+	expect(adjustStock).toHaveBeenCalledWith({
+		adjustments: [{ variantId: "v1", delta: 1 }],
+	});
+});
+
+test("tapping the mode you are already in does not wipe typed counts", () => {
+	// The two segments look identical, so this read as the control breaking.
+	sheet(LINES(20, 8));
+	fireEvent.click(screen.getByRole("button", { name: "Set exact counts" }));
+	const field = screen.getByLabelText("Exact count for Original");
+	fireEvent.change(field, { target: { value: "17" } });
+	expect(screen.getByRole("button", { name: /^Apply/ })).toBeTruthy();
+
+	fireEvent.click(screen.getByRole("button", { name: "Set exact counts" }));
+	expect((screen.getByLabelText("Exact count for Original") as HTMLInputElement).value).toBe("17");
+});
+
+test("the mode toggle reports which mode is active", () => {
+	sheet(LINES(20, 8));
+	expect(
+		screen.getByRole("button", { name: "Adjust by" }).getAttribute("aria-pressed"),
+	).toBe("true");
+	expect(
+		screen.getByRole("button", { name: "Set exact counts" }).getAttribute("aria-pressed"),
+	).toBe("false");
+});
+
+test("a sale landing while the sheet is open warns an exact count and carries the seen number", () => {
+	// The sheet had NO live-change notice at all: every row reads live, so an
+	// exact count silently overwrote whatever sold while the seller was counting,
+	// and `expectedOnHand` refreshed itself on the way out so the server's
+	// stale-overwrite guard could never fire from here.
+	const { rerender } = sheet(LINES(20, 8));
+	fireEvent.click(screen.getByRole("button", { name: "Set exact counts" }));
+	fireEvent.change(screen.getByLabelText("Exact count for Original"), {
+		target: { value: "17" },
+	});
+
+	rerender(
+		<StockSheet
+			open
+			onOpenChange={() => {}}
+			productName="Keropok Lekor"
+			lines={LINES(18, 8)}
+		/>,
+	);
+	expect(screen.getByText(/2 units sold while you were counting/)).toBeTruthy();
+
+	fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
+	expect(adjustStock).toHaveBeenCalledWith({
+		adjustments: [{ variantId: "v1", setTo: 17, expectedOnHand: 20 }],
+	});
 });

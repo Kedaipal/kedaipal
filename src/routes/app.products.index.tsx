@@ -713,7 +713,11 @@ function ProductCard({
 			<>
 				<Button
 					variant="outline"
-					className="mr-2 h-9 shrink-0 bg-background px-3 text-xs"
+					// 44px on touch, per the mobile-first floor — this row is the
+					// primary stock surface on a phone. Released at `lg`, where the
+					// design system permits compact pointer-only controls and a
+					// 44px button would bloat every row in a 3-up grid.
+					className="mr-2 h-11 shrink-0 bg-background px-3 text-xs lg:h-9"
 					onClick={() => setStockOpen(true)}
 					title={`Adjust stock for ${p.name}`}
 				>

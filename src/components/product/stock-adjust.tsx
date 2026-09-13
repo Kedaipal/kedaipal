@@ -285,7 +285,7 @@ function StockAdjustBody({
 					</div>
 
 					<div className="flex flex-wrap justify-center gap-2">
-						{[-10, -5, -1, 1, 5, 10, 20].map((by) => (
+						{[-10, -5, -1, 1, 5, 10].map((by) => (
 							<button
 								key={by}
 								type="button"
@@ -305,9 +305,6 @@ function StockAdjustBody({
 					>
 						Counted your shelf? Set the exact number
 					</button>
-					<p className="text-center text-[11.5px] leading-relaxed text-muted-foreground">
-						{SAVES_ON_ITS_OWN}
-					</p>
 				</>
 			) : (
 				<div className="rounded-xl border-2 border-primary p-3.5">
@@ -336,7 +333,8 @@ function StockAdjustBody({
 					<p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300">
 						<strong className="font-bold">This replaces the count</strong>{" "}
 						rather than moving it — anything that sells before you tap is
-						written over. To correct a sale, use &minus; instead.
+						written over. To take off what you sold instead, go{" "}
+						<strong className="font-bold">back to + / &minus;</strong>.
 					</p>
 					<button
 						type="button"
@@ -347,6 +345,13 @@ function StockAdjustBody({
 					</button>
 				</div>
 			)}
+			{/* Outside the branch on purpose: this used to sit in the movement half
+			    only, so it disappeared in exact-count mode — the one mode that can
+			    overwrite a sale, and therefore the one where "this saves the moment
+			    you confirm" matters most. */}
+			<p className="text-center text-[11.5px] leading-relaxed text-muted-foreground">
+				{SAVES_ON_ITS_OWN}
+			</p>
 		</div>
 	);
 }
@@ -385,11 +390,20 @@ export function StockSheet({
 	const [mode, setMode] = useState<"delta" | "set">("delta");
 	const [drafts, setDrafts] = useState<Record<string, StockDraft>>({});
 	const [saving, setSaving] = useState(false);
+	// The counts when the sheet opened. Without this the sheet had no way to
+	// notice reality moving underneath it: every row reads live, so an exact
+	// count silently overwrote whatever sold while the seller was typing — the
+	// single dialog is protected by its own notice, and the sheet had none.
+	const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
 
+	// `lines` is a fresh array each render; keying on `open` captures the
+	// baseline once per opening, which is the whole point.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: open-time snapshot; lines must not re-seed it
 	useEffect(() => {
 		if (!open) return;
 		setMode("delta");
 		setDrafts({});
+		setOpenedAt(Object.fromEntries(lines.map((l) => [l.variantId, l.onHand])));
 	}, [open]);
 
 	function draftFor(line: StockLine): StockDraft {
@@ -408,7 +422,16 @@ export function StockSheet({
 		try {
 			await adjustStock({
 				adjustments: pending.map((l) =>
-					toAdjustment(l.variantId, l.onHand, draftFor(l)),
+					// `openedAt`, not the live count: an exact count is a claim about
+					// the number the seller was looking at when they typed it, so that
+					// is what the server must check against. Passing the live value
+					// would refresh the consent record on the way out and the stale-
+					// overwrite guard could never fire from here.
+					toAdjustment(
+						l.variantId,
+						openedAt[l.variantId] ?? l.onHand,
+						draftFor(l),
+					),
 				),
 			});
 			toast.success(
@@ -436,7 +459,12 @@ export function StockSheet({
 							<button
 								key={m}
 								type="button"
+								aria-pressed={mode === m}
 								onClick={() => {
+									// Tapping the mode you are already in used to wipe every
+									// typed count — the two segments look identical, so that
+									// read as the control breaking.
+									if (mode === m) return;
 									setMode(m);
 									setDrafts({});
 								}}
@@ -456,6 +484,15 @@ export function StockSheet({
 						const draft = draftFor(line);
 						const result = nextCount(line.onHand, draft);
 						const changed = hasChange(line.onHand, draft);
+						// Reality moving under an open sheet is the same race the whole
+						// ticket is about, compressed into the time it takes to count a
+						// shelf. A movement only needs telling; an exact count needs
+						// warning, because it is the one that can write a sale away.
+						const shift = liveShift(
+							openedAt[line.variantId] ?? line.onHand,
+							line.onHand,
+							draft,
+						);;
 						return (
 							<div
 								key={line.variantId}
@@ -549,6 +586,18 @@ export function StockSheet({
 								{changed ? (
 									<p className="mt-1.5 text-[12px] font-semibold text-accent-emphasis">
 										{movementLabel(line.onHand, draft)}
+									</p>
+								) : null}
+								{shift ? (
+									<p
+										className={cn(
+											"mt-1.5 text-[12px] leading-relaxed",
+											shift.tone === "info"
+												? "text-accent-emphasis"
+												: "font-semibold text-amber-700 dark:text-amber-400",
+										)}
+									>
+										{shift.message}
 									</p>
 								) : null}
 							</div>

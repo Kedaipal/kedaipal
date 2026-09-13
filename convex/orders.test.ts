@@ -2745,6 +2745,81 @@ describe("orders — custom quote + decline", () => {
 		expect(jobs.some((j) => j.name.includes("notifyPaymentDue"))).toBe(false);
 	});
 
+	test("decline on a CANCELLED order is refused — the fourth stock-restore door", async () => {
+		// 86eypn8ye. Cancelling does not clear `mockupStatus`, so a cancelled
+		// order still satisfied declineMockupItem's two guards, and its restore
+		// handed the units back a SECOND time — `onHand` has no ceiling, so the
+		// store then oversells against a count that never happened. This is the
+		// only one of the four doors a BUYER can open (token, no auth).
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		// A proof-gated line that ALSO reserves stock — the combination the
+		// defensive restore inside declineMockupItem exists for.
+		const productId = await asA(t).mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Engraved board",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [
+				{
+					optionValues: [],
+					price: 9000,
+					onHand: 10,
+					blockWhenOutOfStock: true,
+					requiresProof: true,
+				},
+			],
+		});
+		const variant = await t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("productVariants")
+					.withIndex("by_product", (q) => q.eq("productId", productId))
+					.collect()
+			)[0],
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: variant._id, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Buyer", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.unique(),
+		);
+		// 10 - 3 reserved.
+		expect((await t.run((ctx) => ctx.db.get(variant._id)))?.onHand).toBe(7);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order!._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Cancel restored the 3 — and deliberately left mockupStatus set.
+		expect((await t.run((ctx) => ctx.db.get(variant._id)))?.onHand).toBe(10);
+		expect(
+			(await t.run((ctx) => ctx.db.get(order!._id)))?.mockupStatus,
+		).toBeDefined();
+
+		await expect(
+			t.mutation(api.orders.declineMockupItem, { token: await tk(t, shortId) }),
+		).rejects.toThrow(/cancelled/i);
+
+		// The whole point: still 10, never 13.
+		expect((await t.run((ctx) => ctx.db.get(variant._id)))?.onHand).toBe(10);
+	});
+
 	test("decline is rejected once the mockup is approved", async () => {
 		const t = setup();
 		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
