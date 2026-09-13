@@ -14,6 +14,7 @@ import {
 	MAX_BOOKING_SPAN_DAYS,
 	maxPackageQuantity,
 } from "./lib/bookingAvailability";
+import { revenueExcludingDeposit } from "./lib/order";
 import {
 	addMytCalendarMonths,
 	DAY_MS,
@@ -608,6 +609,9 @@ describe("security deposit (S5)", () => {
 			}),
 		).rejects.toThrow(/reason/i);
 		// Partial keep records the split + reason.
+		const before = await asOwner.query(api.orders.get, {
+			shortId: order.shortId,
+		});
 		await asOwner.mutation(api.bookings.settleSecurityDeposit, {
 			orderId: order._id,
 			keptAmount: 4_000,
@@ -619,6 +623,16 @@ describe("security deposit (S5)", () => {
 		expect(settled?.securityDepositReturnedAt).toBeDefined();
 		expect(settled?.securityDepositKeptAmount).toBe(4_000);
 		expect(settled?.securityDepositKeptReason).toBe("Broken camp chair");
+		// A keep is compensation, not sales (owner call, 4 Sep 2026): settling
+		// touches neither `total` nor the frozen `securityDeposit`, so every
+		// revenue surface still nets out the WHOLE deposit and the kept part
+		// re-enters nothing. The Insights hover says exactly this, and said the
+		// opposite until z8r3fdcw70 — pinned here so the copy has a fact to sit on.
+		expect(settled?.total).toBe(before?.total);
+		expect(settled?.securityDeposit).toBe(before?.securityDeposit);
+		expect(revenueExcludingDeposit(settled!)).toBe(
+			revenueExcludingDeposit(before!),
+		);
 		// One shot.
 		await expect(
 			asOwner.mutation(api.bookings.settleSecurityDeposit, {
