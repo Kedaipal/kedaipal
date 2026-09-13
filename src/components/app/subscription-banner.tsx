@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { X } from "lucide-react";
+import { PauseCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -16,8 +16,13 @@ import {
  * Dashboard subscription banner (app shell). Escalates by urgency:
  *  - `past_due` → red, non-dismissable (the dashboard is soft-locked).
  *  - a pending invoice due within 5 days → amber warning, dismissable.
- *  - trial ending within 5 days → amber warning, dismissable (red + persistent
- *    once it's actually ended, before the cron flips it to past_due).
+ *  - Off-Season Hold → calm accent strip, persistent: ordering is paused and
+ *    the seller must not forget it (z8r3fday24).
+ *  - the first invoice is out (start-when-you-sell) → amber, dismissable,
+ *    keyed by its due date: "your first order is in / free period ended — pay
+ *    from Billing, or switch plan first".
+ *  - free period's backstop within 5 days → amber warning, dismissable (red +
+ *    persistent only if the period ended and no invoice is on file).
  *  - the SOFT monthly order cap → amber upgrade nudge: dismissable at ≥80%
  *    (keyed by month, so it returns next month), persistent once the cap is
  *    passed. Orders are NEVER blocked — this is the upsell lever, not a lock.
@@ -54,17 +59,44 @@ export function SubscriptionBanner({
 	const dismissKey =
 		state.kind === "invoiceWarn"
 			? `subwarn:inv:${pending?.dueDate}`
-			: state.kind === "trialWarn" && !state.ended
-				? `subwarn:trial:${subscription?.trialEndsAt}`
-				: state.kind === "orderCapNear"
-					? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
-					: null;
+			: state.kind === "firstInvoice"
+				? `subwarn:first:${pending?.dueDate}`
+				: state.kind === "trialWarn" && !state.ended
+					? `subwarn:trial:${subscription?.trialEndsAt}`
+					: state.kind === "orderCapNear"
+						? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
+						: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
 	// Read above the early returns — the past-due CTA that uses it is built inside
 	// a branch, where a hook can't go.
 	const supportWa = useSupportWaNumber();
 
 	if (state.kind === "none") return null;
+
+	// Off-Season Hold: not a warning — the seller chose this — but ordering is
+	// off, which is exactly the kind of state that gets forgotten. Persistent,
+	// calm, one tap to the switch.
+	if (state.kind === "held") {
+		return (
+			<div className="flex items-center gap-3 border-b border-accent/30 bg-accent/10 px-5 py-3 lg:px-8">
+				<PauseCircle className="size-5 shrink-0 text-accent" aria-hidden />
+				<p className="flex-1 text-sm text-foreground/90">
+					<span className="font-medium">
+						Ordering is paused — you're on Off-Season Hold.
+					</span>{" "}
+					Buyers still see your store, with a seasonal-break note; your catalog,
+					buyer list and orders stay live.
+				</p>
+				<Link
+					to="/app/settings"
+					search={{ tab: "billing" }}
+					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+				>
+					Resume
+				</Link>
+			</div>
+		);
+	}
 
 	// Soft order-cap nudge (amber) — upsell, not a lock. "Near" is dismissable
 	// for the month; "over" stays until the month rolls or they upgrade.
@@ -169,9 +201,23 @@ export function SubscriptionBanner({
 			? `Your invoice is due in ${dayLabel(state.daysLeft)}${
 					pending ? ` · ${formatPrice(pending.total, pending.currency)}` : ""
 				}. Pay to keep your store active.`
-			: isEndedTrial
-				? "Your free trial has ended. Choose a plan to continue — your storefront stays live."
-				: `Your free trial ends in ${dayLabel(state.kind === "trialWarn" ? state.daysLeft : 0)}. Choose a plan to continue.`;
+			: state.kind === "firstInvoice"
+				? `${
+						state.reason === "first_order"
+							? "Your first order is in — your first invoice is "
+							: "Your free period has ended — your first invoice is "
+					}${
+						state.daysLeft === undefined
+							? "on its way. It'll appear in Billing in a few minutes."
+							: `ready${
+									pending
+										? ` · ${formatPrice(pending.total, pending.currency)}`
+										: ""
+								}, due in ${dayLabel(state.daysLeft)}. Pay it from Billing, or switch plan there first.`
+					}`
+				: isEndedTrial
+					? "Your free period has ended. Choose a plan to continue — your storefront stays live."
+					: `Your free period ends in ${dayLabel(state.kind === "trialWarn" ? state.daysLeft : 0)} — or sooner, with your first order. Your first invoice arrives then; nothing to do before that.`;
 
 	return (
 		<div

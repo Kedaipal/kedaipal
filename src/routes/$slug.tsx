@@ -14,6 +14,10 @@ import {
 	AllProductsDivider,
 	ProductGrid,
 } from "../components/storefront/product-grid";
+import {
+	OrderingPausedProvider,
+	SeasonalBreakNotice,
+} from "../components/storefront/seasonal-break";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
@@ -281,52 +285,56 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Shared brand header (cover/logo/name) — identical on the category
+		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
+				{/* Shared brand header (cover/logo/name) — identical on the category
 			    pages so buyers always know whose store they're in. */}
-			<StorefrontHeader retailer={retailer} />
+				<StorefrontHeader retailer={retailer} />
+				{/* Off-Season Hold: the store is browsable, not orderable. */}
+				<SeasonalBreakNotice storeName={retailer.storeName} />
 
-			<section className="mt-2 px-5 lg:px-8">
-				{/* Search first (sticky inside the grid), then the merchandised lead:
+				<section className="mt-2 px-5 lg:px-8">
+					{/* Search first (sticky inside the grid), then the merchandised lead:
 				    the category rail + the "Popular this week" shelf, then
 				    the full grid (86eybrhrt PR3). Both lead pieces render nothing when
 				    they have nothing honest to show (no categories / no qualifying
 				    orders), so quiet stores stay search + grid. */}
-				<ProductGrid
-					retailerId={retailer._id}
-					cart={cart}
-					storeSlug={retailer.slug}
-					beforeGrid={
-						<>
-							{/* `gap-6` owns the rhythm between the two lead sections
+					<ProductGrid
+						retailerId={retailer._id}
+						cart={cart}
+						storeSlug={retailer.slug}
+						beforeGrid={
+							<>
+								{/* `gap-6` owns the rhythm between the two lead sections
 							    rather than either one carrying a trailing margin: each
 							    renders null on a store with no categories / no qualifying
 							    orders, and a gap only applies between siblings that
 							    actually exist — so neither can leave a dangling space.
 							    `peer` lets the divider below detect whether either one
 							    rendered at all. */}
-							<div className="peer flex flex-col gap-6">
-								<CategoryRail
-									retailerId={retailer._id}
-									storeSlug={retailer.slug}
-								/>
-								<FeaturedProduct
-									retailerId={retailer._id}
-									storeSlug={retailer.slug}
-									cart={cart}
-								/>
-							</div>
-							{/* Shows only when something above it rendered — otherwise the
+								<div className="peer flex flex-col gap-6">
+									<CategoryRail
+										retailerId={retailer._id}
+										storeSlug={retailer.slug}
+									/>
+									<FeaturedProduct
+										retailerId={retailer._id}
+										storeSlug={retailer.slug}
+										cart={cart}
+									/>
+								</div>
+								{/* Shows only when something above it rendered — otherwise the
 							    grid follows the search bar directly. */}
-							<AllProductsDivider />
-						</>
-					}
-				/>
-			</section>
+								<AllProductsDivider />
+							</>
+						}
+					/>
+				</section>
 
-			<StorefrontFooter slug={slug} />
+				<StorefrontFooter slug={slug} />
 
-			<CartBar cart={cart} storeSlug={retailer.slug} />
-		</div>
+				<CartBar cart={cart} storeSlug={retailer.slug} />
+			</div>
+		</OrderingPausedProvider>
 	);
 }

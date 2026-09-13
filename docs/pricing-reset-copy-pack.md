@@ -2,10 +2,14 @@
 
 > **Status: working handoff doc**, owned by ClickUp `z8r3fday21` (Arif, decision + copy)
 > with companion `z8r3fday24` (Zaki, backend). Wave 1 (the `/cost` Founding-anchor
-> retirement) shipped with this doc; **wave 2 below is GATED on the backend ticket**
-> — none of this copy may go live before the billing mechanism it describes exists.
-> When wave 2 ships, fold what's durable into [`pricing.md`](./pricing.md) and
-> delete this file.
+> retirement) shipped with this doc. **The backend landed 9 Sep 2026** (z8r3fday24,
+> stacked on the `86eyb6z4r` auto-renewal PR): constants, start-when-you-sell, the
+> Off-Season Hold status, and the dashboard/email copy from §4 — so **wave 2 is
+> unblocked**. Two backend decisions the copy must match: the first invoice bills
+> **Pro** (the trialed tier), switchable to Starter before paying; and a paused
+> store's ordering is refused **server-side** on every order-create path, not just
+> hidden in the UI. When wave 2 ships, fold what's durable into
+> [`pricing.md`](./pricing.md) and delete this file.
 
 All three moves confirmed by Arif, 1 Sep 2026, against the 30 Aug "Kedaipal
 Pricing Reset" artifact.
@@ -118,7 +122,8 @@ this copy lands **with the backend**, in `z8r3fday24`:
 
 ## 5. Coordination gates (before wave 2 merges)
 
-1. `z8r3fday24` constants + trial rework + hold status landed.
+1. ~~`z8r3fday24` constants + trial rework + hold status landed.~~ **Done 9 Sep 2026**
+   (merges behind PR #250, `86eyb6z4r`).
 2. `86eyb9zwt` (Scale reposition, production in review, still RM299) fast-followed
    with RM399 — must not close stale.
 3. Meta October service rates re-checked against the margin model (artifact lock

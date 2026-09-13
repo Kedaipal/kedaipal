@@ -4,16 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
-import {
-	bookingPriceSuffix,
-	weekendRateSuffix,
-} from "../../lib/booking-dates";
+import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
+import { SeasonalBreakNotice } from "./seasonal-break";
 import {
 	addVariantToCart,
 	CustomOrderCard,
@@ -94,6 +92,7 @@ export function ProductPageView({
 			    a buyer arriving from a shared WhatsApp link lands in the SELLER's
 			    store, not on an anonymous product card. */}
 			<StorefrontHeader retailer={retailer} asPageHeading={false} />
+			<SeasonalBreakNotice storeName={retailer.storeName} />
 
 			{/* Back to the catalog — mirrors the category page's affordance, so
 			    every level of the storefront has the same way out. The cart lives

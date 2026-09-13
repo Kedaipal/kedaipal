@@ -971,6 +971,82 @@ describe("retailers deleteUser (internal cascade)", () => {
 		});
 	});
 
+	test("cancels HitPay auto-renewal + kills the Pay-now link; pending invoice VOIDS, not deletes (86eyb6z4r)", async () => {
+		vi.useFakeTimers();
+		vi.stubEnv("HITPAY_BILLING_API_KEY", "test_del_key");
+		vi.stubEnv("HITPAY_BILLING_SALT", "del_salt");
+		const deleted: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown, init?: { method?: string }) => {
+				if (init?.method === "DELETE") deleted.push(String(url));
+				return new Response("{}", { status: 200 });
+			}),
+		);
+		const t = setup();
+		const ids = await seedFullTenant(t, USER_A, "del-money");
+		const invoiceId = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, {
+				autoRenewSessionId: "rb_del_1",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+			const now = Date.now();
+			return ctx.db.insert("invoices", {
+				retailerId: ids.retailerId,
+				subscriptionId: sub._id,
+				invoiceNumber: "INV-DEL-1",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86400000,
+				dueDate: now + 14 * 86400000,
+				status: "pending" as const,
+				gatewayRequestId: "req_del_1",
+				gatewayPayment: {
+					provider: "hitpay" as const,
+					url: "https://pay.example/req_del_1",
+				},
+				createdAt: now,
+			});
+		});
+
+		await t.mutation(internal.retailers.deleteUser, { userId: USER_A });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
+
+		await t.run(async (ctx) => {
+			// The retained financial record is VOIDED — never forever-payable.
+			const invoice = await ctx.db.get(invoiceId);
+			expect(invoice?.status).toBe("void");
+			expect(invoice?.voidReason).toBe("Account deleted");
+			// The subscription row (and with it the local charge capability) is gone.
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+				.first();
+			expect(sub).toBeNull();
+		});
+		// Both remote rails were killed: the saved-method session + the open link.
+		expect(deleted.some((u) => u.includes("/recurring-billing/rb_del_1"))).toBe(
+			true,
+		);
+		expect(deleted.some((u) => u.includes("/payment-requests/req_del_1"))).toBe(
+			true,
+		);
+		vi.unstubAllEnvs();
+		vi.unstubAllGlobals();
+	});
+
 	test("is idempotent — returns deleted:false when no retailer exists", async () => {
 		const t = setup();
 		const result = await t.mutation(internal.retailers.deleteUser, {
