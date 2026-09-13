@@ -3,7 +3,6 @@ import {
 	AUTO_CHARGE_MAX_ATTEMPTS,
 	AUTO_CHARGE_RETRY_DELAYS_MS,
 	AUTO_RENEW_METHODS,
-	AUTO_RENEW_TIMES_TO_BE_CHARGED,
 	autoRenewMethodLabel,
 	buildAutoRenewSessionParams,
 	buildInvoicePaymentRequestParams,
@@ -25,6 +24,8 @@ describe("resolveBillingGatewayCredentials", () => {
 		expect(creds).toEqual({
 			apiKey: "test_abc123",
 			salt: SALT,
+			// No dedicated webhook salt configured → falls back to the API salt.
+			webhookSalt: SALT,
 			mode: "sandbox",
 		});
 		expect(
@@ -33,6 +34,28 @@ describe("resolveBillingGatewayCredentials", () => {
 				HITPAY_BILLING_SALT: SALT,
 			})?.mode,
 		).toBe("production");
+	});
+
+	test("a dedicated webhook salt is kept SEPARATE from the API salt", () => {
+		// Dashboard-registered V2 endpoints sign with their own secret; the
+		// API-key salt signs the per-request v1 completion webhooks. Proved on
+		// live traffic — a real method_attached verified against neither HMAC
+		// form of the API salt.
+		const creds = resolveBillingGatewayCredentials({
+			HITPAY_BILLING_API_KEY: "test_abc123",
+			HITPAY_BILLING_SALT: SALT,
+			HITPAY_BILLING_WEBHOOK_SALT: "endpoint-secret-xyz",
+		});
+		expect(creds?.salt).toBe(SALT);
+		expect(creds?.webhookSalt).toBe("endpoint-secret-xyz");
+		// Blank is treated as unset, never as an empty secret.
+		expect(
+			resolveBillingGatewayCredentials({
+				HITPAY_BILLING_API_KEY: "test_abc123",
+				HITPAY_BILLING_SALT: SALT,
+				HITPAY_BILLING_WEBHOOK_SALT: "   ",
+			})?.webhookSalt,
+		).toBe(SALT);
 	});
 
 	test("half a credential (or blanks) → null, never a partial", () => {
@@ -56,6 +79,7 @@ describe("buildAutoRenewSessionParams", () => {
 	const inputs = {
 		planLabel: "Pro",
 		storeName: "Kek Mahsuri",
+		description: "Kedaipal subscription — pay & save your method for auto-renewal",
 		customerEmail: "seller@example.com",
 		customerName: "Mahsuri",
 		amountSen: 14900,
@@ -78,12 +102,21 @@ describe("buildAutoRenewSessionParams", () => {
 		expect(params.getAll("payment_methods[]")).not.toContain("duitnow");
 	});
 
-	test("times_to_be_charged is set explicitly — HitPay's default of 1 would kill the second renewal", () => {
-		const params = buildAutoRenewSessionParams(inputs);
-		expect(params.get("times_to_be_charged")).toBe(
-			String(AUTO_RENEW_TIMES_TO_BE_CHARGED),
-		);
-		expect(AUTO_RENEW_TIMES_TO_BE_CHARGED).toBe(100); // documented max
+	test("paymentMethods undefined omits the param — the account's own tokenisable set decides", () => {
+		const params = buildAutoRenewSessionParams({
+			...inputs,
+			paymentMethods: undefined,
+		});
+		expect(params.getAll("payment_methods[]")).toEqual([]);
+		expect(params.toString()).not.toContain("payment_methods");
+		expect(params.get("save_payment_method")).toBe("true");
+	});
+
+	test("times_to_be_charged is NEVER sent — save_payment_method sessions reject it", () => {
+		// Sandbox-verified 11 Sep 2026: "You cant set times_to_be_charged for
+		// save_card is true". The docs' default-of-1 worry doesn't apply to the
+		// tokenised path, and neither does the 100-charge ceiling.
+		expect(buildAutoRenewSessionParams(inputs).get("times_to_be_charged")).toBeNull();
 	});
 
 	test("HitPay's own receipt emails stay off (one voice per event)", () => {
@@ -196,6 +229,102 @@ describe("extractRecurringEvent", () => {
 		});
 	});
 
+	// ——— Payloads below are VERBATIM from live sandbox traffic (11 Sep 2026),
+	// trimmed of irrelevant keys. The docs' flat shape is kept in the tests
+	// after these so both forms stay supported.
+	const REAL_ATTACH = {
+		event: "recurring_billing.method_attached",
+		affected_method_id: "a2b80bb6-6ba2-4b7f-b4aa-d9657d4dfa82",
+		recurring_billing: {
+			id: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+			business_recurring_plans_id: null,
+			customer_email: "seller@example.com",
+			name: "Kedaipal Pro — IndoMart",
+			reference: "kd75c1h8xf1gvnk8jfdazehn0x8a4tgs",
+			cycle: "save_card",
+			currency: "myr",
+			amount: 149,
+			times_charged: null,
+			status: "active",
+			save_payment_method: 1,
+			payment_methods: ["touch_n_go"],
+			payment_provider_charge_method: "touch_n_go",
+			default_method: {
+				id: "a2b80bb6-6ba2-4b7f-b4aa-d9657d4dfa82",
+				payment_provider: "touch_n_go",
+				payment_provider_charge_method: "touch_n_go",
+				subscription_id: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+				status: "completed",
+			},
+			methods: [],
+		},
+	};
+
+	test("REAL attach envelope: nested object + the authorised rail (the 'shows Card' bug)", () => {
+		// This exact payload used to yield null (id is nested, so nothing
+		// resolved) — and before that, a default of "card" for a TnG wallet.
+		expect(
+			extractRecurringEvent(REAL_ATTACH, {
+				eventObject: "recurring_billing",
+				eventType: "method_attached",
+			}),
+		).toEqual({
+			kind: "method_attached",
+			billingId: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+			methodCode: "touch_n_go",
+			methodLabel: undefined,
+		});
+	});
+
+	test("REAL attach parses on the `event` field alone — headers are only a fallback", () => {
+		expect(
+			extractRecurringEvent(REAL_ATTACH, {
+				eventObject: null,
+				eventType: null,
+			}),
+		).toMatchObject({ kind: "method_attached", methodCode: "touch_n_go" });
+	});
+
+	test("REAL subscription_updated envelope → billing_status", () => {
+		expect(
+			extractRecurringEvent(
+				{
+					event: "recurring_billing.subscription_updated",
+					changed_fields: ["status"],
+					recurring_billing: {
+						id: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+						cycle: "save_card",
+						status: "active",
+					},
+				},
+				{ eventObject: "recurring_billing", eventType: "subscription_updated" },
+			),
+		).toEqual({
+			kind: "billing_status",
+			billingId: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+			status: "active",
+		});
+	});
+
+	test("REAL detach envelope clears the method", () => {
+		expect(
+			extractRecurringEvent(
+				{
+					event: "recurring_billing.method_detached",
+					recurring_billing: {
+						id: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+						cycle: "save_card",
+						status: "active",
+					},
+				},
+				{ eventObject: "recurring_billing", eventType: "method_detached" },
+			),
+		).toEqual({
+			kind: "method_detached",
+			billingId: "a2b80b9d-5203-432c-b3c3-8b5efdf802fc",
+		});
+	});
+
 	test("method_attached (billing object + attach header) carries method + label", () => {
 		const event = extractRecurringEvent(
 			{
@@ -238,6 +367,54 @@ describe("extractRecurringEvent", () => {
 			billingId: "rb_1",
 			status: "canceled",
 		});
+	});
+
+	test("ENVELOPED charge.created parses like its recurring siblings", () => {
+		// No live charge capture exists yet (the sync response settles first),
+		// but every captured V2 event was enveloped — reading only the docs'
+		// flat sample would ack real charge events into the void.
+		expect(
+			extractRecurringEvent(
+				{
+					event: "charge.created",
+					charge: {
+						id: "pay_env_1",
+						status: "succeeded",
+						amount: 149,
+						currency: "myr",
+						recurring_billing_id: "rb_1",
+						payment_provider: { charge: { method: "touch_n_go" } },
+					},
+				},
+				{ eventObject: "charge", eventType: "created" },
+			),
+		).toEqual({
+			kind: "charge",
+			paymentId: "pay_env_1",
+			recurringBillingId: "rb_1",
+			status: "succeeded",
+			amountSen: 14900,
+			currency: "MYR",
+			methodCode: "touch_n_go",
+		});
+	});
+
+	test("an enveloped charge resolves the billing id from a nested object too", () => {
+		expect(
+			extractRecurringEvent(
+				{
+					event: "charge.created",
+					charge: {
+						id: "pay_env_2",
+						status: "succeeded",
+						amount: 59,
+						currency: "sgd",
+						recurring_billing: { id: "rb_nested" },
+					},
+				},
+				{ eventObject: null, eventType: null },
+			),
+		).toMatchObject({ recurringBillingId: "rb_nested", amountSen: 5900 });
 	});
 
 	test("unrecognised payloads → null (acked + dropped by the route)", () => {

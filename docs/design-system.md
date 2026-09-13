@@ -80,7 +80,7 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Textarea | `Textarea` | |
 | Phone | `MyPhoneInput` (plain state) / `TextField prefix={<MyPhonePrefix />}` (form-bound) | **every** Malaysian phone field — see below. |
 | Composite control | `InputPrefixFrame` | one border owning a fixed plate + a `bare` input (the `+60` plate, an "RM"). |
-| Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. |
+| Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. **`DialogContent` caps itself at `calc(100dvh-2rem)` and scrolls** — put long content straight in, no hand-rolled `max-h`; see below. |
 | Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
@@ -132,6 +132,37 @@ This makes failure *recoverable* — it does not make the images small. The payl
 - **Disabled-with-reason > wrong-but-enabled** (CTO lens). A disabled Button + one-line why beats an enabled button that errors.
 - **Badges/urgency:** small pill, semantic color; count badges cap at `99+` (see bottom-nav).
 - **Empty states** get a one-line hint pointing at the next action, never a blank panel (discoverability rule in `CLAUDE.md`).
+- **A dialog is never taller than the screen.** `DialogContent` caps at
+  `calc(100dvh-2rem)` — a 1rem gutter, the same rule its `max-w` already used —
+  and scrolls the y-axis; `Sheet` has always done the same. Long content goes
+  straight in. Reach for your own `max-h` only when you want a *region* to
+  scroll while the rest holds still, and put it on that region, not the shell.
+  This is a rule because the shell used to have `overflow-hidden` and no cap:
+  a dialog is centred with `-translate-y-1/2`, so oversized content overflowed
+  at BOTH ends and was clipped, not scrolled, and `DialogFooter`'s Cancel and
+  confirm buttons became unreachable with nothing to scroll back. Measured on a
+  375x667 viewport: a 1457px dialog spanning -395 to 1062, its confirm button
+  at 1006 and failing a hit test. 17 of the app's 20 shared-shell dialogs were
+  exposed. `overflow-x` stays `hidden` — that is what rounds the full-bleed
+  footer's corners — so never collapse the pair back to bare `overflow-hidden`.
+  **Machine-enforced** by `src/lib/dialog-shell-overrides.test.ts`: `cn()` is
+  `twMerge`, so a call site passing `overflow-hidden` or `max-h-none` would
+  silently strip the shell's own classes and restore the bug. A *different*
+  `max-h-*` is fine — it is still a cap.
+- **Centred dialog: `calc(100dvh-2rem)`. Bottom sheet: `max-h-[90dvh]`.** Both
+  appear in the codebase and that is not drift. A centred modal is pushed off
+  BOTH edges by `-translate-y-1/2`, so it wants the same 1rem gutter its
+  `max-w` already uses; a sheet anchored to the bottom edge only has a top edge
+  to keep clear, and 90dvh leaves the header behind it visible. `Sheet` and the
+  eight hand-rolled bottom sheets take the second; anything through
+  `DialogContent` gets the first for free.
+- **A scrolling dialog shows its scrollbar, deliberately.** On classic-scrollbar
+  platforms (Windows/Linux Chrome; macOS uses overlay scrollbars) that inset
+  stops the full-bleed footer ~15px short of the right rounded corner while the
+  dialog is scrolling. Left alone on purpose: `scrollbar-gutter: stable` would
+  reserve the strip permanently — an unexplained gap on dialogs that never
+  scroll — and hiding the bar removes the only signal that there is more content
+  below, which is the exact failure the cap was added to fix.
 - **Don't** introduce new raw colors, arbitrary radii, or a second modal/toast implementation. Extend the token/primitive instead.
 - **Uniform cards (2026-07-13):** sibling cards on one page must be the SAME height with rows aligned across neighbours — variable content must never grow a card. The recipe: fixed zones, not free flow. (1) Reserve multi-line text zones (`line-clamp-2` + matching `min-h`) so a 1-line name doesn't lift the price row. (2) Meta lines **truncate, never wrap** (`truncate`, no `flex-wrap`) — give each fact its own fixed line (name / price·variants / stock word) instead of one wrapping row. (3) Pin actions with `mt-auto` in a `flex flex-col h-full` card so buttons align across a grid row. (4) Conditional badges overlay the image (`absolute` + scrim/backdrop) or sit in a fixed side column — never as an extra stacked row some cards have and others don't. (5) List rows get a `min-h` (e.g. `min-h-[84px]` category/product rows) so short content centers instead of shrinking. Live examples: `storefront/product-card.tsx`, `app.products.index.tsx` rows, `dashboard/customer-card.tsx`.
 

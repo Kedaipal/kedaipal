@@ -577,27 +577,32 @@ export const getAutoRenewEmailContext = internalQuery({
 			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
 				? lastPaid.currency
 				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		// A scheduled downgrade lands WITH the next renewal, so the heads-up must
+		// quote the plan and price the seller is actually about to be charged —
+		// not the tier they are on their way out of.
+		const renewingPlan = sub.pendingPlanChange?.plan ?? sub.plan;
 		const founding = foundingPricingApplies({
-			plan: sub.plan,
+			plan: renewingPlan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
 		});
-		// A held subscription's next charge is the hold price (z8r3fday24).
+		// A PAUSED subscription renews the hold, not the tier — the hold price
+		// outranks a scheduled plan change, which only lands when they resume
+		// (z8r3fday24 × 86eyb6z4r). Otherwise `renewingPlan` already accounts
+		// for a scheduled downgrade landing with this renewal.
 		const onHold = sub.status === "on_hold";
 		const amount = onHold
 			? HOLD_MONTHLY_PRICES[currency]
-			: planPrice(sub.plan, sub.billingCycle, founding, currency);
+			: planPrice(renewingPlan, sub.billingCycle, founding, currency);
 		return {
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
-			planLabel: planLabel(
-				sub.plan,
-				onHold ? "monthly" : sub.billingCycle,
-				onHold ? "hold" : "plan",
-			),
+			planLabel: onHold
+				? planLabel(sub.plan, "monthly", "hold")
+				: planLabel(renewingPlan, sub.billingCycle),
 			amountFormatted: formatMoney(amount, currency),
 			payNowUrl: pending?.gatewayPayment?.url,
 		};

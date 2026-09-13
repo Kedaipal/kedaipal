@@ -302,6 +302,37 @@ A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
   not "0 / 0"), admin console "Off-Season Hold" pill on hold invoices, the
   founder report counts `onHold` separately from churn.
 
+### The hold × mid-cycle tier changes (reconciled 14 Sep 2026)
+
+`86eyb6z4r` landed credit-as-days and scheduled downgrades while this was in
+review. Both merged **cleanly and silently wrongly**, so the two rules are
+pinned by tests in `convex/seasonalHold.test.ts`:
+
+- **Carryover is a TIER-to-TIER conversion and never crosses the hold rate.**
+  `planChangeCarryover` values the unused remainder at `fromPlan`'s price — but
+  a hold is not a `Plan`, so the tier's price is what it would read. Out of a
+  hold that is an exploit: 29 unused days bought for RM19 would be valued at
+  the Pro rate and hand back ~29 free Pro days. Into a hold it is a no-op
+  dressed as a credit. So `settleInvoicePaid` grants carryover only when the
+  invoice is a plan invoice **and** the running period was plan-bought
+  (`periodPaidBy`, absent = plan, the pre-hold default). A hold invoice always
+  buys exactly one flat month.
+- **A hold renewal never consumes a scheduled downgrade.** The renewal issuer
+  reads `pendingPlanChange` and clears it, because a tier renewal *is* the
+  first bill of the new tier. A hold renewal is not: it charges the flat hold
+  price and settle leaves the tier alone, so applying the change would bill
+  nothing for it and clearing the flag would delete a downgrade the seller
+  never received. It stays scheduled and lands on the first tier bill after
+  they resume.
+
+Also from the reconciliation: the pre-charge notice and the auto-renew
+authorisation page quote the **hold** price while a store is paused (a hold
+bill carries the TIER in `plan` — it is what the seller resumes to — so
+labelling it from that field would title an RM19 charge "Kedaipal Pro"), and
+Settings → Billing renders the tier-change card and the hold card as separate
+controls: change tier on a running plan, pause the subscription entirely. A
+paused seller sees only the resume switch — you cannot change tier on a hold.
+
 Pure rules: `convex/lib/seasonalHold.ts` (`canEnterHold`, `canResumeHold`,
 `holdBillsNow`, `resumeBillsNow`, the buyer message). Tests:
 `convex/startWhenYouSell.test.ts`, `convex/seasonalHold.test.ts`,

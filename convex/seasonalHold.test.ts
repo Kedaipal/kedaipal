@@ -489,6 +489,141 @@ describe("rate limiting", () => {
 	});
 });
 
+/**
+ * Where the hold meets the 86eyb6z4r mid-cycle machinery (reconciled 14 Sep).
+ * Both of these merged CLEANLY and were silently wrong — that is exactly why
+ * they are pinned.
+ */
+describe("hold × mid-cycle tier changes", () => {
+	test("resuming from a hold-bought period grants NO carryover — RM19 must not buy Pro days", async () => {
+		const t = setup();
+		// A hold-bought month with most of it still to run: the naive merge
+		// valued those days at the PRO rate (`fromPlan` reads the tier), handing
+		// back ~29 free Pro days for RM19.
+		const s = await seedPaidSeller(t, "u_carry", {
+			status: "on_hold",
+			heldAt: Date.now() - DAY,
+			periodPaidBy: "hold",
+			currentPeriodEnd: Date.now() + 29 * DAY,
+		});
+		await t.run((ctx) =>
+			ctx.db.patch(s.retailerId, { orderingPausedAt: Date.now() - DAY }),
+		);
+		await t
+			.withIdentity({ subject: s.userId })
+			.mutation(api.subscriptions.setSeasonalHold, {
+				retailerId: s.retailerId,
+				hold: false,
+			});
+		await issueForced(t, s.subId);
+		const inv = await pendingFor(t, s.retailerId);
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId: inv!._id });
+
+		const sub = await getSub(t, s.subId);
+		expect(sub?.status).toBe("active");
+		expect(sub?.periodPaidBy).toBe("plan");
+		// A flat month, not a month + 29 carried days.
+		const granted = ((sub?.currentPeriodEnd ?? 0) - Date.now()) / DAY;
+		expect(granted).toBeGreaterThan(29.9);
+		expect(granted).toBeLessThan(30.1);
+	});
+
+	test("settling a HOLD invoice never carries a running plan period into hold days", async () => {
+		const t = setup();
+		// Paid Pro well into the future, then paused with a bill already pending
+		// (the one path that bills the hold immediately).
+		const s = await seedPaidSeller(t, "u_carry2");
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.insert("invoices", {
+				retailerId: s.retailerId,
+				subscriptionId: s.subId,
+				invoiceNumber: "INV-PLAN-CARRY",
+				plan: "pro" as const,
+				billingCycle: "monthly" as const,
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * DAY,
+				dueDate: now + 10 * DAY,
+				status: "pending" as const,
+				origin: "auto_renewal" as const,
+				createdAt: now,
+			});
+		});
+		await t
+			.withIdentity({ subject: s.userId })
+			.mutation(api.subscriptions.setSeasonalHold, {
+				retailerId: s.retailerId,
+				hold: true,
+			});
+		await issueForced(t, s.subId);
+		const hold = await pendingFor(t, s.retailerId);
+		expect(hold?.kind).toBe("hold");
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId: hold!._id });
+
+		const sub = await getSub(t, s.subId);
+		expect(sub?.status).toBe("on_hold");
+		expect(sub?.periodPaidBy).toBe("hold");
+		// One flat hold month — the 20 unused Pro days are not converted.
+		const granted = ((sub?.currentPeriodEnd ?? 0) - Date.now()) / DAY;
+		expect(granted).toBeGreaterThan(29.9);
+		expect(granted).toBeLessThan(30.1);
+	});
+
+	test("a hold renewal leaves a SCHEDULED downgrade scheduled — it lands on the first tier bill after resume", async () => {
+		const t = setup();
+		const s = await seedPaidSeller(t, "u_sched", {
+			status: "on_hold",
+			heldAt: Date.now() - 40 * DAY,
+			periodPaidBy: "hold",
+			currentPeriodEnd: Date.now() - 1000,
+		});
+		await t.run((ctx) =>
+			ctx.db.patch(s.subId, {
+				pendingPlanChange: { plan: "starter" as const, requestedAt: Date.now() },
+			}),
+		);
+		// The hold renews as a HOLD — it charges the flat price and settle leaves
+		// the tier alone, so consuming the flag here would delete a downgrade the
+		// seller never actually received.
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId: s.subId,
+		});
+		const hold = await pendingFor(t, s.retailerId);
+		expect(hold?.kind).toBe("hold");
+		expect(hold?.plan).toBe("pro"); // the tier they resume to, not the target
+		expect((await getSub(t, s.subId))?.pendingPlanChange?.plan).toBe("starter");
+
+		// Settling the hold still doesn't apply or clear it.
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId: hold!._id });
+		const afterHold = await getSub(t, s.subId);
+		expect(afterHold?.plan).toBe("pro");
+		expect(afterHold?.pendingPlanChange?.plan).toBe("starter");
+
+		// The next TIER bill is the one that carries it.
+		await t.run((ctx) => ctx.db.patch(s.subId, { currentPeriodEnd: Date.now() - 1000 }));
+		await t
+			.withIdentity({ subject: s.userId })
+			.mutation(api.subscriptions.setSeasonalHold, {
+				retailerId: s.retailerId,
+				hold: false,
+			});
+		await issueForced(t, s.subId);
+		const tierBill = await pendingFor(t, s.retailerId);
+		expect(tierBill?.kind).toBeUndefined();
+		expect(tierBill?.plan).toBe("starter");
+		expect((await getSub(t, s.subId))?.pendingPlanChange).toBeUndefined();
+	});
+});
+
 describe("refusals + admin act-as", () => {
 	test("trials, comped rows, double-pause and resume-when-not-held are refused", async () => {
 		const t = setup();
