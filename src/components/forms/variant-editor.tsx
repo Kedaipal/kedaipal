@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
 import {
 	convexErrorMessage,
@@ -20,7 +21,13 @@ import {
 } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
-import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
+import {
+	cartesian,
+	type OptionAxis,
+	sameOptionValues,
+	variantLabel,
+} from "../../lib/variant";
+import { StockAdjustDialog, type StockLine } from "../product/stock-adjust";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -93,6 +100,25 @@ export type VariantIssue = {
 	message: string;
 };
 
+/**
+ * A variant that already exists server-side, with its LIVE count (86eypn8ye).
+ *
+ * Present only when editing a saved product. Rows matched against this list
+ * render their stock read-only with an Adjust button, because `saveVariantGrid`
+ * no longer writes `onHand` onto an existing variant — the form's copy of that
+ * number is minutes old by the time Save is tapped, and writing it back
+ * resurrects everything sold in between.
+ *
+ * A row with NO match is a combination the seller just added, which has no
+ * stock of its own to protect: it keeps a plain input and is inserted with it.
+ */
+export type LiveVariantStock = {
+	variantId: Id<"productVariants">;
+	optionValues: string[];
+	isCustom?: boolean;
+	onHand: number;
+};
+
 interface VariantEditorProps {
 	value: VariantEditorState;
 	onChange: (next: VariantEditorState) => void;
@@ -103,6 +129,60 @@ interface VariantEditorProps {
 	 * parcel-weight inputs out of Advanced into their own labelled block, since
 	 * a weightless item strands that store's checkout on "missing weights". */
 	weightMode?: boolean;
+	/** Saved variants + their live counts. Absent on create. See LiveVariantStock. */
+	liveStock?: LiveVariantStock[];
+	/** Product name, for the adjust dialog's subtitle. */
+	productName?: string;
+}
+
+/**
+ * Match a grid row to its saved variant the way the SERVER does — by
+ * `(isCustom, optionValues)`, positionally. Keeping the two rules identical is
+ * what makes "this row has live stock" mean the same thing on both sides.
+ */
+function findLiveStock(
+	liveStock: LiveVariantStock[] | undefined,
+	optionValues: string[],
+	isCustom = false,
+): LiveVariantStock | undefined {
+	return liveStock?.find(
+		(e) =>
+			Boolean(e.isCustom) === isCustom &&
+			sameOptionValues(e.optionValues, optionValues),
+	);
+}
+
+/**
+ * The stock cell for a variant that already exists: its live count, read-only,
+ * beside the one control that may move it.
+ *
+ * Read-only is the point. The number is a live read that ticks down as orders
+ * land, so an open form can no longer disagree with the shelf, and the seller
+ * cannot change it as a side effect of saving something else.
+ */
+function LiveStockCell({
+	onHand,
+	onAdjust,
+}: {
+	onHand: number;
+	onAdjust: () => void;
+}) {
+	return (
+		<div className="flex h-11 items-center justify-between gap-2 rounded-xl bg-muted pr-1 pl-3">
+			<span className="text-[15px] font-bold tabular-nums">{onHand}</span>
+			<Button
+				type="button"
+				variant="outline"
+				onClick={onAdjust}
+				// 44px: this is the ONLY way to change a saved variant's stock, and
+				// it replaced an h-11 input. Mobile-first is a hard floor
+				// (CLAUDE.md), and the cell it sits in is h-11 anyway.
+				className="h-11 bg-background px-3 text-xs"
+			>
+				Adjust
+			</Button>
+		</div>
+	);
 }
 
 /** Tiny inline error line under the offending input. */
@@ -291,6 +371,11 @@ export function PriceInput({
 }) {
 	return (
 		<Input
+			// `field`, not the compact default: this sits beside the h-11 stock
+			// control and under the h-11 name/description fields, so the default's
+			// 32px read as a broken input rather than a deliberate one. It is also
+			// the mobile-first tap target the rest of the form already uses.
+			variant="field"
 			inputMode="decimal"
 			placeholder="0.00"
 			value={value}
@@ -349,7 +434,7 @@ export function StockInput({
 	return (
 		<div
 			className={cn(
-				"flex h-11 items-center overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
+				"flex h-11 items-center overflow-hidden rounded-xl border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
 				invalid &&
 					"border-destructive ring-2 ring-destructive/20 focus-within:border-destructive",
 				className,
@@ -545,8 +630,13 @@ export function VariantEditor({
 	currency,
 	issues = [],
 	weightMode = false,
+	liveStock,
+	productName = "This product",
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
+	// The variant whose stock the seller asked to move. Held here (not per row)
+	// so one dialog serves every row and there is one author for the copy.
+	const [adjusting, setAdjusting] = useState<StockLine | null>(null);
 	const hasOptions = options.length > 0;
 	// Third product type (86eyfq04j) — derived from the rows, never stored, so
 	// the control and the data it describes can't drift apart.
@@ -835,7 +925,15 @@ export function VariantEditor({
 	}
 
 	function bulkFill(field: "price" | "stock", v: string) {
-		update({ rows: rows.map((r) => ({ ...r, [field]: v })) });
+		update({
+			rows: rows.map((r) =>
+				// A saved row's stock is read-only and ignored by the server, so
+				// filling it would look like it worked and change nothing.
+				field === "stock" && findLiveStock(liveStock, r.optionValues)
+					? r
+					: { ...r, [field]: v },
+			),
+		});
 	}
 
 	function bulkFillFlag(
@@ -1182,18 +1280,42 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("row", 0, "price")} />
 					</label>
-					{rows[0]?.blockWhenOutOfStock ? (
-						<label className="flex flex-col gap-1 text-sm font-medium">
-							In stock now
-							<StockInput
-								value={rows[0]?.stock ?? ""}
-								onChange={(v) => setRow(0, { stock: v })}
-								stepper
-								invalid={!!issueFor("row", 0, "stock")}
-							/>
-							<IssueText message={issueFor("row", 0, "stock")} />
-						</label>
-					) : null}
+					{rows[0]?.blockWhenOutOfStock
+						? (() => {
+								const live = findLiveStock(
+									liveStock,
+									rows[0]?.optionValues ?? [],
+								);
+								if (live)
+									return (
+										<div className="flex flex-col gap-1 text-sm font-medium">
+											<span>In stock</span>
+											<LiveStockCell
+												onHand={live.onHand}
+												onAdjust={() =>
+													setAdjusting({
+														variantId: live.variantId,
+														label: productName,
+														onHand: live.onHand,
+													})
+												}
+											/>
+										</div>
+									);
+								return (
+									<label className="flex flex-col gap-1 text-sm font-medium">
+										In stock now
+										<StockInput
+											value={rows[0]?.stock ?? ""}
+											onChange={(v) => setRow(0, { stock: v })}
+											stepper
+											invalid={!!issueFor("row", 0, "stock")}
+										/>
+										<IssueText message={issueFor("row", 0, "stock")} />
+									</label>
+								);
+							})()
+						: null}
 				</div>
 			) : (
 				<>
@@ -1255,8 +1377,19 @@ export function VariantEditor({
 											bulkFill("price", normalizePriceInput(e.target.value))
 										}
 									/>
-									{allTrack ||
-									(!allMto && rows.some((r) => r.blockWhenOutOfStock)) ? (
+									{/* Only offered while at least one tracked row is NEW. On a
+									    saved product every stock cell is read-only, so a bulk fill
+									    would type into nothing — an input that silently does
+									    nothing is worse than no input. Its absence is explained
+									    below rather than left as a control that quietly went
+									    missing. */}
+									{(allTrack ||
+										(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
+									rows.some(
+										(r) =>
+											r.blockWhenOutOfStock &&
+											!findLiveStock(liveStock, r.optionValues),
+									) ? (
 										<Input
 											inputMode="numeric"
 											placeholder="Fill all stock"
@@ -1267,6 +1400,21 @@ export function VariantEditor({
 										/>
 									) : null}
 								</div>
+							) : null}
+							{/* The bulk stock fill is gone on a saved product, and a control
+							    that silently disappears reads as a bug. Say where stock went
+							    — the seller is looking at the row that used to hold it. */}
+							{rows.some(
+								(r) =>
+									r.blockWhenOutOfStock &&
+									findLiveStock(liveStock, r.optionValues),
+							) ? (
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									Stock now has its own control — use{" "}
+									<span className="font-medium text-foreground">Adjust</span> on
+									a choice to add what you made or take off what you sold. It
+									saves on its own, so a save here can never undo a sale.
+								</p>
 							) : null}
 							<ul className="flex flex-col gap-2">
 								{rows.map((row, i) => (
@@ -1293,24 +1441,49 @@ export function VariantEditor({
 												<PriceInput
 													value={row.price}
 													onChange={(v) => setRow(i, { price: v })}
-													className="h-10"
 													invalid={!!issueFor("row", i, "price")}
 												/>
 												<IssueText message={issueFor("row", i, "price")} />
 											</label>
-											{row.blockWhenOutOfStock ? (
-												<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-													In stock now
-													<StockInput
-														value={row.stock}
-														onChange={(v) => setRow(i, { stock: v })}
-														className="h-11"
-														stepper
-														invalid={!!issueFor("row", i, "stock")}
-													/>
-													<IssueText message={issueFor("row", i, "stock")} />
-												</label>
-											) : null}
+											{row.blockWhenOutOfStock
+												? (() => {
+														const live = findLiveStock(
+															liveStock,
+															row.optionValues,
+														);
+														if (live)
+															return (
+																<div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																	<span>In stock</span>
+																	<LiveStockCell
+																		onHand={live.onHand}
+																		onAdjust={() =>
+																			setAdjusting({
+																				variantId: live.variantId,
+																				label: variantLabel(row.optionValues),
+																				onHand: live.onHand,
+																			})
+																		}
+																	/>
+																</div>
+															);
+														return (
+															<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																In stock now
+																<StockInput
+																	value={row.stock}
+																	onChange={(v) => setRow(i, { stock: v })}
+																	className="h-11"
+																	stepper
+																	invalid={!!issueFor("row", i, "stock")}
+																/>
+																<IssueText
+																	message={issueFor("row", i, "stock")}
+																/>
+															</label>
+														);
+													})()
+												: null}
 										</div>
 										{varyFulfilment ? (
 											<FulfilmentToggle
@@ -1717,6 +1890,26 @@ export function VariantEditor({
 					) : null}
 				</div>
 			)}
+			{/* One dialog for every row. Its count is re-read from `liveStock` on
+			    each render rather than frozen at open time — the whole reason stock
+			    left the Save button is that a held number goes stale. */}
+			<StockAdjustDialog
+				open={adjusting !== null}
+				onOpenChange={(next) => {
+					if (!next) setAdjusting(null);
+				}}
+				productName={productName}
+				line={
+					adjusting
+						? {
+								...adjusting,
+								onHand:
+									liveStock?.find((e) => e.variantId === adjusting.variantId)
+										?.onHand ?? adjusting.onHand,
+							}
+						: null
+				}
+			/>
 		</div>
 	);
 }

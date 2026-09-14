@@ -525,6 +525,40 @@ describe("orderClaims — commit", () => {
 		expect(customer?.orderCount).toBe(1);
 	});
 
+	test("a claim order freezes stockReserved — the THIRD create path (86eypn8ye)", async () => {
+		// Every create path builds its own item snapshot, so a frozen field has to
+		// be stamped in each one. Storefront and counter were done in 86eypn8ye;
+		// claim links landed afterwards and reproduced the gap. Unstamped, cancel
+		// re-resolves `blockWhenOutOfStock` from the CURRENT docs, so flipping a
+		// product to made-to-order after the sale strands its units forever.
+		const t = setup();
+		const { variantId, claimId, token } = await sendOne(t, {
+			block: true,
+			onHand: 10,
+		});
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+
+		const orderId = (await getClaim(t, claimId)).orderId as Id<"orders">;
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].stockReserved).toBe(true);
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(8);
+
+		// The seller switches the product to made-to-order AFTER the sale. The
+		// frozen flag is what makes the cancel give the units back anyway.
+		await t.run((ctx) =>
+			ctx.db.patch(variantId, { blockWhenOutOfStock: false }),
+		);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, { orderId, status: "cancelled" });
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(10);
+	});
+
 	test("confirm-push env set → the order commits confirmed with the push stamped", async () => {
 		vi.stubEnv("WHATSAPP_ORDER_CONFIRM_TEMPLATE", "order_confirmation_utility");
 		const t = setup();

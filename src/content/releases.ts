@@ -171,6 +171,51 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.09.5",
+		date: "2026-09-14",
+		// Notable, and not a close call: tomorrow a seller opens the product
+		// editor and the stock box they have always typed into is gone. The
+		// in-editor helper line only reaches someone already looking at that row,
+		// and nothing at all would tell them the products list grew a Stock
+		// button or that importing a sheet no longer touches their counts. A
+		// change that moves a daily job has to greet them.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Stock has its own button now — and a save can't undo your sales",
+				},
+				body: {
+					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+				icon: "package",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Importing a sheet won't overwrite your stock unless you say so",
+				},
+				body: {
+					en: "A sheet you exported this morning holds this morning's counts, so importing it in the afternoon used to undo everything sold in between. Now stock is left alone unless you tick \"Update stock too\" — and when you do, we tell you how many counts it replaces and how many would go up, so a stock take still works and a price change can't cost you sales.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A cancelled order stays cancelled",
+				},
+				body: {
+					en: "Marking a cancelled order as confirmed again used to hand its stock back a second time, so your counts could drift above what you actually had — and then the shop would keep taking orders for items you'd run out of. Cancelled orders can no longer be reopened; start a new order instead.",
+				},
+			},
+		],
+	},
+	{
 		version: "2026.09.4",
 		date: "2026-09-08",
 		// The modal, by owner call (Zaki, 8 Sep): the weekend rate was asked for
