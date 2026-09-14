@@ -888,8 +888,18 @@ export type AdminTemplateRow = {
 	}>;
 };
 
+/**
+ * The languages every template row always shows, even with no events yet —
+ * the two our sends can ask for (`TEMPLATE_LANGUAGE` in whatsappCopy maps all
+ * three store locales onto these). Any OTHER language Meta reports is shown
+ * too, discovered from the events themselves: a template approved in
+ * WhatsApp Manager under some other locale would otherwise be recorded and
+ * then never rendered, which is the one thing this panel exists to prevent.
+ */
 const TEMPLATE_LANGUAGES = ["en", "ms"] as const;
 const RECENT_TEMPLATE_EVENTS_CAP = 100;
+/** Per-template history scanned to derive its live state, newest first. */
+const TEMPLATE_HISTORY_CAP = 200;
 
 function summarizeTemplateEvent(row: Doc<"wabaTemplateEvents">): string {
 	if (row.kind === "status") {
@@ -936,22 +946,31 @@ export const adminListTemplates = query({
 		}
 		const rows: AdminTemplateRow[] = [];
 		for (const [templateName, meta] of names) {
+			// ONE bounded indexed read per template, covering every language it
+			// has events for (the index is [templateName, language, observedAt]).
+			// Grouped in JS rather than read per language: "current status" and
+			// "current category" ride DIFFERENT event kinds, so each language
+			// needs its whole recent history anyway, and this way a language we
+			// never send can still surface instead of being silently dropped.
+			const history = await ctx.db
+				.query("wabaTemplateEvents")
+				.withIndex("by_template", (q) => q.eq("templateName", templateName))
+				.order("desc")
+				.take(TEMPLATE_HISTORY_CAP);
+			const byLanguage = new Map<string, Array<Doc<"wabaTemplateEvents">>>();
+			for (const lang of TEMPLATE_LANGUAGES) byLanguage.set(lang, []);
+			for (const row of history) {
+				const bucket = byLanguage.get(row.language);
+				if (bucket) bucket.push(row);
+				else byLanguage.set(row.language, [row]);
+			}
 			const languages: AdminTemplateRow["languages"] = [];
-			for (const language of TEMPLATE_LANGUAGES) {
-				// Newest row of each kind for this (name, language) — three
-				// bounded indexed reads, because "current status" and "current
-				// category" are carried by DIFFERENT event kinds.
-				const history = await ctx.db
-					.query("wabaTemplateEvents")
-					.withIndex("by_template", (q) =>
-						q.eq("templateName", templateName).eq("language", language),
-					)
-					.order("desc")
-					.take(RECENT_TEMPLATE_EVENTS_CAP);
-				const latestStatus = history.find((h) => h.kind === "status");
-				const latestCategory = history.find((h) => h.kind === "category");
-				const latestQuality = history.find((h) => h.kind === "quality");
-				const last = history[0];
+			for (const [language, rowsForLang] of byLanguage) {
+				// `history` is newest-first, so each bucket preserves that order.
+				const latestStatus = rowsForLang.find((h) => h.kind === "status");
+				const latestCategory = rowsForLang.find((h) => h.kind === "category");
+				const latestQuality = rowsForLang.find((h) => h.kind === "quality");
+				const last = rowsForLang[0];
 				languages.push({
 					language,
 					status: latestStatus?.event,

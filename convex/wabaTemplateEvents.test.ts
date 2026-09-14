@@ -315,6 +315,39 @@ describe("adminListTemplates — the per-template live view", () => {
 		expect(result.recent.map((r) => r.alerted)).toEqual([true, true, true, false]);
 	});
 
+	test("a language we never send is still shown, not silently dropped", async () => {
+		const t = setup();
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		await t.run(async (ctx) => {
+			// Meta reporting a locale code our sends never ask for (a template
+			// approved in WhatsApp Manager under a different language). Recording
+			// it and then never rendering it is the exact blindness this panel
+			// exists to remove.
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "order_confirmation_utility",
+				language: "en_US",
+				kind: "status",
+				event: "PAUSED",
+				alerted: true,
+				observedAt: NOW - DAY_MS,
+			});
+		});
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const result = await asAdmin.query(api.wabaProtection.adminListTemplates, {});
+		const confirm = result.rows.find(
+			(r) => r.templateName === "order_confirmation_utility",
+		);
+		const langs = confirm?.languages.map((l) => l.language) ?? [];
+		// en + ms always present, and the unexpected one alongside them.
+		expect(langs).toContain("en");
+		expect(langs).toContain("ms");
+		expect(langs).toContain("en_US");
+		expect(
+			confirm?.languages.find((l) => l.language === "en_US")?.status,
+		).toBe("PAUSED");
+	});
+
 	test("with no webhook ever received, neverReceived flags the unsubscribed fields", async () => {
 		const t = setup();
 		const asAdmin = t.withIdentity({ subject: ADMIN });

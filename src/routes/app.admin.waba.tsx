@@ -38,6 +38,13 @@ import {
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { MASK_PII } from "../lib/analytics-privacy";
+import {
+	categoryChip,
+	qualityTone,
+	statusTone,
+	type Tone,
+	TONE_CLASS,
+} from "../lib/waba-template-chips";
 import { convexErrorMessage } from "../lib/format";
 
 export const Route = createFileRoute("/app/admin/waba")({
@@ -469,55 +476,22 @@ function OptOutRegister() {
  */
 type LanguageState = AdminTemplateRow["languages"][number];
 
-type Tone = "ok" | "warn" | "bad" | "muted";
-
-const TONE_CLASS: Record<Tone, string> = {
-	ok: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
-	warn: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
-	bad: "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300",
-	muted: "bg-muted text-muted-foreground",
-};
-
-const BAD_STATUS = new Set([
-	"PAUSED",
-	"DISABLED",
-	"REJECTED",
-	"PENDING_DELETION",
-	"FLAGGED",
-]);
-const LOW_RATE = new Set(["UTILITY", "AUTHENTICATION", "SERVICE"]);
-
-function statusTone(status: string | undefined): Tone {
-	if (!status) return "muted";
-	if (status === "APPROVED") return "ok";
-	if (BAD_STATUS.has(status)) return "bad";
-	return "warn"; // PENDING, IN_APPEAL, …
-}
-function categoryTone(category: string | undefined): Tone {
-	if (!category) return "muted";
-	return LOW_RATE.has(category) ? "ok" : "bad";
-}
-function qualityTone(quality: string | undefined): Tone {
-	if (!quality) return "muted";
-	if (quality === "GREEN") return "ok";
-	if (quality === "RED") return "bad";
-	if (quality === "YELLOW") return "warn";
-	return "muted";
-}
-
 /** "status · category · quality" chips for one language of one template. */
-function LanguageChips({ lang }: { lang: LanguageState }) {
+function LanguageChips({
+	lang,
+	configured,
+}: {
+	lang: LanguageState;
+	configured: boolean;
+}) {
+	const category = categoryChip(lang.category, configured);
 	const chips: Array<{ label: string; value: string; tone: Tone }> = [
 		{
 			label: "status",
 			value: lang.status ?? "no update yet",
 			tone: statusTone(lang.status),
 		},
-		{
-			label: "billed as",
-			value: lang.category ?? "unknown",
-			tone: categoryTone(lang.category),
-		},
+		{ label: "billed as", value: category.value, tone: category.tone },
 		{
 			label: "quality",
 			value: lang.quality ?? "unknown",
@@ -526,8 +500,10 @@ function LanguageChips({ lang }: { lang: LanguageState }) {
 	];
 	return (
 		// Two columns, not a flex row: on a phone the third chip wraps, and it
-		// must wrap UNDER its language, not into the language column.
-		<div className="grid grid-cols-[1.5rem_1fr] items-start gap-x-1.5">
+		// must wrap UNDER its language, not into the language column. The label
+		// column grows past its 1.5rem floor rather than clipping — "en"/"ms"
+		// stay aligned, and a longer code Meta reports (e.g. en_US) still fits.
+		<div className="grid grid-cols-[minmax(1.5rem,auto)_1fr] items-start gap-x-1.5">
 			<span className="pt-0.5 font-mono text-xs uppercase text-muted-foreground">
 				{lang.language}
 			</span>
@@ -562,7 +538,9 @@ function TemplatesPanel() {
 						time. A template billed outside <b>UTILITY</b> costs ~6× per send
 						from 1 Oct 2026 and can be appealed for a short window — ops is
 						emailed the moment Meta tells us. This is the live state per
-						template and language.
+						template and language. Meta reports a category only when it
+						<b> changes</b> one, so a template we registered as utility reads
+						“assumed” until it says otherwise.
 					</p>
 				</div>
 			</div>
@@ -615,7 +593,11 @@ function TemplatesPanel() {
 									) : null}
 								</div>
 								{row.languages.map((lang) => (
-									<LanguageChips key={lang.language} lang={lang} />
+									<LanguageChips
+										key={lang.language}
+										lang={lang}
+										configured={row.configured}
+									/>
 								))}
 							</li>
 						))}

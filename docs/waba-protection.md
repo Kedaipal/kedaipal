@@ -222,6 +222,24 @@ the same webhook, keyed by `field`:
 | `template_category_update` | `previous_category` → `new_category` | the template **leaves** UTILITY / AUTHENTICATION / SERVICE (the 6.1× case; an appeal window opens). Winning an appeal back is recorded, not alerted |
 | `message_template_quality_update` | `GREEN` / `YELLOW` / `RED` | YELLOW or RED — Meta's warning before it pauses |
 
+**Two things the panel has to get right, both found by rendering it against
+real webhook data:**
+
+- **Meta never announces the category a template was approved under** — only
+  the ones it *changes*. Left honest, the "billed as" chip would read
+  `unknown` for ever on every healthy template, which is the panel's headline
+  column permanently blank. Every template we register is a utility one (each
+  send goes out under `utility_template`), so a **configured** template reads
+  **`UTILITY (assumed)`**, muted rather than green because we were told
+  nothing; a real category event always beats the assumption, and a template
+  we do *not* configure stays `unknown`. Rules + truth table:
+  `src/lib/waba-template-chips.ts`.
+- **Languages are discovered, not assumed.** `en` and `ms` always show (the two
+  `TEMPLATE_LANGUAGE` can ask for), and any other language code Meta reports
+  is rendered alongside them. One bounded read per template over
+  `by_template` covers every language at once, so an event under a locale we
+  never send is surfaced rather than recorded and silently dropped.
+
 Every event is persisted to **`wabaTemplateEvents`** (`recordTemplateEvent`);
 alerting ones schedule `sendWabaTemplateAlert` → email to `ADMIN_ALERT_EMAIL`
 (fallback `EMAIL_FROM`) naming the template, the change and the fix
@@ -293,7 +311,9 @@ kept); `optOuts` is **never** purged — see
 - `convex/lib/wabaWebhook.test.ts` — health-event mapping.
 - `convex/lib/wabaTemplateWebhook.test.ts` — template status/category/quality
   parsing + the alert truth table; `convex/wabaTemplateEvents.test.ts` — signed
-  webhook → row → ops email, the admin per-template view, keep-the-newest purge.
+  webhook → row → ops email, the admin per-template view (including a language
+  we never send), keep-the-newest purge; `src/lib/waba-template-chips.test.ts`
+  — chip tone/label rules, including the assumed-utility case.
 - `convex/wabaProtection.test.ts` — category gating (transactional always sends;
   session blocked on pause/opt-out/quality/cap), opt-out lifecycle, health history,
   and end-to-end (paused transactional still sends; opted-out session suppressed
