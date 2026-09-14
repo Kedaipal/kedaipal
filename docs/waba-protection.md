@@ -251,6 +251,13 @@ send path is visible, surfaces templates Meta mentions that we don't
 configure, and keeps the last 20 raw events under a disclosure. Its empty
 state says which three fields to subscribe.
 
+**Testing it without waiting for Meta:** `node scripts/dev-template-webhook.mjs
+<scenario> [template] [language]` fires a correctly *signed* event at the
+deployment, so it exercises verify → parse → row → alert exactly as Meta
+would. `approved` / `pending` / `restore` / `quality-ok` are silent;
+`paused` / `disabled` / `downgrade` / `quality-red` alert **and send a real
+ops email**. Sits beside the existing Lalamove and Delyva webhook simulators.
+
 **Retention:** 90 days, but the newest row per (template, language) is always
 kept — Meta posts only on change, so a healthy template may go a year between
 events (`purgeExpiredWabaTemplateEvents`, 04:20 UTC daily).
