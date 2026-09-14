@@ -13,7 +13,6 @@ import {
 	demoVariantForViewport,
 	PORTRAIT_MEDIA_QUERY,
 } from "../../lib/demo-video";
-import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
@@ -27,15 +26,19 @@ import { Eyebrow } from "./landing-ui";
  * order." title cards. It IS the pitch, moving, which is why it sits ahead of
  * every prose section.
  *
- * Two cuts of the one edit (13 Sep): a 16:9 for md+ and a phone-framed 9:16
- * for narrower viewports, chosen off `PORTRAIT_MEDIA_QUERY` and swapped by
- * remounting the `<video>` (a `<source>` list can't change in place, and
- * `<source media>` isn't honoured). Before hydration the variant is unknown, so
- * the element renders with no poster and no sources inside the same navy box —
- * the box's aspect is pure CSS, so nothing shifts when the right cut arrives.
- * That costs the poster a few hundred ms after hydration and buys zero CLS and
- * no landscape-poster flash on a phone; the section is below the fold, so it
- * is never the LCP element.
+ * Two cuts of the one edit (13 Sep): a phone-framed 9:16 for a phone held
+ * upright and a 16:9 for everything else — md+, and a phone turned sideways,
+ * where a 9:16 box would be taller than the screen — chosen off
+ * `PORTRAIT_MEDIA_QUERY` and swapped by remounting the `<video>` (a `<source>`
+ * list can't change in place, and `<source media>` isn't honoured). The
+ * player's per-element state (playing, progress, autoplay verdict) is reset
+ * with it; the visitor's own choices (sound on, an explicit pause) survive.
+ * Before hydration the variant is unknown, so the element renders with no
+ * poster and no sources inside the same navy box — the box's aspect is pure
+ * CSS, so nothing shifts when the right cut arrives. That costs the poster a
+ * few hundred ms after hydration and buys zero CLS and no landscape-poster
+ * flash on a phone; the section is below the fold, so it is never the LCP
+ * element.
  *
  * The clip carries a music bed (no speech — the captions are burned in), so
  * there IS a mute control now. Playback still starts muted: that is what
@@ -45,8 +48,9 @@ import { Eyebrow } from "./landing-ui";
  * machine-readable copy and translates with the page.
  *
  * Loading posture (the reason `preload="none"` is load-bearing): the poster is
- * a ~9 KB WebP and nothing beyond it is fetched until the section enters the
- * viewport and playback starts. A visitor who bounces at the hero pays 9 KB.
+ * a 17 KB (16:9) or 22 KB (9:16) WebP and nothing beyond it is fetched until
+ * the section enters the viewport and playback starts. A visitor who bounces
+ * at the hero pays one poster.
  */
 
 /**
@@ -64,7 +68,9 @@ function subscribeToViewport(onChange: () => void): () => void {
 }
 
 function readViewportVariant(): DemoVariant {
-	return demoVariantForViewport(window.matchMedia(PORTRAIT_MEDIA_QUERY).matches);
+	return demoVariantForViewport(
+		window.matchMedia(PORTRAIT_MEDIA_QUERY).matches,
+	);
 }
 
 /**
@@ -109,6 +115,22 @@ export function VideoDemo() {
 	 */
 	const inViewRef = useRef(false);
 
+	// The <video> is keyed on `variant`, so a cut change mounts a fresh, paused
+	// element — but it fires no `pause` event on the way out, and this state
+	// would otherwise keep describing the old one: `playing` stuck true hides
+	// the centred play button and labels the corner control "Pause" over a
+	// stopped clip, in exactly the case (an unmuted remount that iOS refuses to
+	// autoplay) the button exists for. Reset during render, the way React
+	// resets state on a prop change; `muted` and `userPausedRef` are the
+	// visitor's choices and deliberately survive.
+	const [mountedVariant, setMountedVariant] = useState(variant);
+	if (variant !== mountedVariant) {
+		setMountedVariant(variant);
+		setPlaying(false);
+		setProgress(0);
+		setNeedsGesture(true);
+	}
+
 	const toggle = useCallback(() => {
 		const video = videoRef.current;
 		if (!video) return;
@@ -138,6 +160,30 @@ export function VideoDemo() {
 		if (!video || !variant) return;
 		if (shouldReduceMotion) return;
 
+		// One autoplay attempt. A refusal with sound ON (the visitor unmuted,
+		// then the element remounted on a rotation — iOS won't autoplay an
+		// unmuted element without a gesture) is retried muted: the demo keeps
+		// moving and the mute control shows sound is off, which beats a
+		// stopped frame. A muted refusal (Low Power Mode, data saver) is the
+		// real "needs a tap" and gets the centred button.
+		const autoplay = () => {
+			void video
+				.play()
+				.then(() => setNeedsGesture(false))
+				.catch(() => {
+					if (video.muted) {
+						setNeedsGesture(true);
+						return;
+					}
+					video.muted = true;
+					setMuted(true);
+					void video
+						.play()
+						.then(() => setNeedsGesture(false))
+						.catch(() => setNeedsGesture(true));
+				});
+		};
+
 		const observer = new IntersectionObserver(
 			(entries) => {
 				// The LAST entry, never `entries[0]`. A fast scroll delivers several
@@ -148,10 +194,7 @@ export function VideoDemo() {
 				inViewRef.current = Boolean(entry?.isIntersecting);
 				if (entry?.isIntersecting) {
 					if (userPausedRef.current) return;
-					void video
-						.play()
-						.then(() => setNeedsGesture(false))
-						.catch(() => setNeedsGesture(true));
+					autoplay();
 				} else if (!video.paused) {
 					video.pause();
 				}
@@ -168,10 +211,7 @@ export function VideoDemo() {
 		const onVisibility = () => {
 			if (document.visibilityState !== "visible") return;
 			if (!inViewRef.current || userPausedRef.current || !video.paused) return;
-			void video
-				.play()
-				.then(() => setNeedsGesture(false))
-				.catch(() => setNeedsGesture(true));
+			autoplay();
 		};
 		document.addEventListener("visibilitychange", onVisibility);
 		return () => {
@@ -207,16 +247,19 @@ export function VideoDemo() {
 
 				<FadeIn delay={0.12}>
 					<figure className="m-0 mt-10 md:mt-14">
-						{/* Phones get the 9:16 cut in a 9:16 box, md+ the 16:9 — CSS owns
-						    the ratio so the box is reserved before hydration, and the
-						    variant swap changes bytes, never geometry. The portrait box
-						    is capped so a tall phone's frame stays inside one screen. */}
-						<div className="relative mx-auto max-w-[24rem] overflow-hidden rounded-2xl border border-border/70 bg-primary shadow-2xl shadow-primary/20 md:max-w-none md:rounded-3xl">
+						{/* A phone held upright gets the 9:16 cut in a 9:16 box capped at
+						    24rem wide (so the frame stays inside one screen); everything
+						    else — md+, and a phone turned sideways — gets the 16:9 at
+						    full width. `max-md:portrait:` is PORTRAIT_MEDIA_QUERY in CSS,
+						    so the box and the bytes agree; CSS owns the ratio so the box
+						    is reserved before hydration and the variant swap changes
+						    bytes, never geometry. */}
+						<div className="relative mx-auto overflow-hidden rounded-2xl border border-border/70 bg-primary shadow-2xl shadow-primary/20 max-md:portrait:max-w-[24rem] md:rounded-3xl">
 							<video
 								// Remount on cut change: a <video>'s <source> list is read once.
 								key={variant ?? "pending"}
 								ref={videoRef}
-								className="block aspect-[9/16] w-full cursor-pointer object-cover md:aspect-video"
+								className="block aspect-video w-full cursor-pointer object-cover max-md:portrait:aspect-[9/16]"
 								poster={assets?.poster}
 								preload="none"
 								muted={muted}
@@ -274,10 +317,12 @@ export function VideoDemo() {
 									<button
 										type="button"
 										onClick={toggleMute}
+										// The name says the action ("Unmute…" / "Mute…"), like its
+										// play/pause sibling — no `aria-pressed` on top, which would
+										// announce the state twice.
 										aria-label={
 											muted ? m.demo_video_unmute() : m.demo_video_mute()
 										}
-										aria-pressed={!muted}
 										className={OVERLAY_BTN}
 									>
 										{muted ? (
@@ -308,7 +353,7 @@ export function VideoDemo() {
 								className="absolute inset-x-0 bottom-0 h-1 bg-white/15"
 							>
 								<div
-									className={cn("h-full bg-accent")}
+									className="h-full bg-accent"
 									style={{ width: `${Math.min(progress, 1) * 100}%` }}
 								/>
 							</div>
