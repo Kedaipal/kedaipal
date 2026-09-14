@@ -26,14 +26,24 @@ import type { Country } from "../../convex/lib/country";
  * trademarks used to state a fact ("you can book X"), never to imply
  * endorsement. SVG wherever one exists; two couriers publish no vector
  * (Line Clear, DD Express), so those are small transparent PNGs — the only
- * rasters on the landing, capped by `couriers.test.ts`. A service that has no
- * mark of its own (Ninja Cold, Chill Freshbox) rides its parent network's mark
- * with its own name beside it, so nobody mistakes the lane for the network.
- * Names are proper nouns and are not translated — the name doubles as the
- * accessible label in every locale.
+ * rasters on the landing, capped by `couriers.test.ts`. A lane that has no
+ * mark of its own (Ninja Cold) rides its parent network's mark with its own
+ * name beside it, so nobody mistakes the lane for the network; Chill Freshbox
+ * carries Line Clear's own FreshBox lockup. Names are proper nouns and are not
+ * translated — the name doubles as the accessible label in every locale.
+ *
+ * PROVIDER — who actually books the row. Every Delyva partner is quoted and
+ * booked through the seller's Delyva account (`docs/delivery-delyva.md`);
+ * Lalamove is a separate BYO integration paid from the seller's own Lalamove
+ * wallet (`docs/delivery-lalamove.md`), so the landing must never say
+ * "Delyva credit" beside a Lalamove quote — the mock card and the rider-only
+ * copy (Singapore today) read the provider off the row.
  */
 
 export type CourierGroup = "parcel" | "cold" | "sameday";
+
+/** The integration that quotes and books the row — see PROVIDER above. */
+export type CourierProvider = "delyva" | "lalamove";
 
 export interface Courier {
 	/** Stable handle — React key and test anchor. */
@@ -43,6 +53,8 @@ export interface Courier {
 	country: Country;
 	/** Parcel network, cold-chain lane, or on-demand rider. */
 	group: CourierGroup;
+	/** Whose account the booking runs on: the seller's Delyva or Lalamove. */
+	provider: CourierProvider;
 	/** The courier's mark under `public/img/courier/`; absent ⇒ name chip. */
 	src?: string;
 	/** Intrinsic-ratio classes for the mark (`h-N w-auto`). */
@@ -80,6 +92,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "J&T Express",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/jt.svg",
 		markClass: MARK,
 		mockQuote: 690,
@@ -92,6 +105,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Ninja Van",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/ninjavan.svg",
 		markClass: MARK,
 		mockQuote: 760,
@@ -104,6 +118,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Pos Malaysia",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/pos.svg",
 		markClass: MARK_TALL,
 		speed: "nextday",
@@ -115,6 +130,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "DHL eCommerce",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/dhl.svg",
 		markClass: MARK,
 		mockQuote: 740,
@@ -127,6 +143,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "City-Link Express",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/citylink.svg",
 		markClass: MARK_XL,
 		speed: "nextday",
@@ -138,6 +155,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Flash Express",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/flash.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -149,6 +167,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Line Clear",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/lineclear.png",
 		markClass: MARK,
 		speed: "nextday",
@@ -160,6 +179,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Pickupp",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/pickupp.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -171,6 +191,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Teleport",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/teleport.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -182,6 +203,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Aramex",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/aramex.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -193,6 +215,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "SF Express",
 		country: "MY",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/sf.svg",
 		markClass: MARK_XL,
 		speed: "nextday",
@@ -205,6 +228,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Ninja Cold",
 		country: "MY",
 		group: "cold",
+		provider: "delyva",
 		src: "/img/courier/ninjavan.svg",
 		markClass: MARK,
 		borrowsMarkFrom: "ninjavan-my",
@@ -219,9 +243,9 @@ export const COURIERS: readonly Courier[] = [
 		name: "Chill Freshbox",
 		country: "MY",
 		group: "cold",
+		provider: "delyva",
 		src: "/img/courier/freshbox.svg",
 		markClass: MARK_TALL,
-
 		speed: "nextday",
 		visible: true,
 	},
@@ -231,6 +255,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "DD Express",
 		country: "MY",
 		group: "cold",
+		provider: "delyva",
 		src: "/img/courier/ddexpress.png",
 		markClass: MARK,
 		speed: "nextday",
@@ -242,6 +267,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Lalamove",
 		country: "MY",
 		group: "sameday",
+		provider: "lalamove",
 		src: "/img/lalamove-logo.svg",
 		markClass: LALAMOVE_MARK,
 		speed: "sameday",
@@ -253,6 +279,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "GrabExpress",
 		country: "MY",
 		group: "sameday",
+		provider: "delyva",
 		src: "/img/courier/grab.svg",
 		markClass: MARK,
 		speed: "sameday",
@@ -264,6 +291,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "pandago",
 		country: "MY",
 		group: "sameday",
+		provider: "delyva",
 		src: "/img/courier/pandago.svg",
 		markClass: MARK,
 		speed: "sameday",
@@ -275,6 +303,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Lalamove",
 		country: "SG",
 		group: "sameday",
+		provider: "lalamove",
 		src: "/img/lalamove-logo.svg",
 		markClass: LALAMOVE_MARK,
 		mockQuote: 900,
@@ -287,6 +316,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "Ninja Van",
 		country: "SG",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/ninjavan.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -297,6 +327,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "J&T Express",
 		country: "SG",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/jt.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -309,6 +340,7 @@ export const COURIERS: readonly Courier[] = [
 		name: "TracX Logis",
 		country: "SG",
 		group: "parcel",
+		provider: "delyva",
 		src: "/img/courier/tracx.svg",
 		markClass: MARK,
 		speed: "nextday",
@@ -332,7 +364,12 @@ export function couriersFor(country: Country): Courier[] {
 	);
 }
 
-/** Whether the region has any Delyva parcel/cold lane live (vs rider only). */
+/**
+ * Whether the region has any Delyva parcel/cold lane live (vs rider only).
+ * False flips the Delivery section to its rider-only copy — heading, sub and
+ * first bullet name Lalamove, the cold-chain bullet drops — because a headline
+ * promising "cold chain included" above a one-courier catalogue is a lie.
+ */
 export function hasParcelCouriers(country: Country): boolean {
 	return couriersFor(country).some((c) => c.group !== "sameday");
 }

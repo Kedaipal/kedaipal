@@ -131,8 +131,11 @@
 	animation: kp-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Hero stage beats (hero-stage.tsx). All transform/opacity — no layout work
-   per frame — and every one is stopped by the reduced-motion block below. */
+/* Hero stage beats (hero-stage.tsx). Transform/opacity throughout, with one
+   deliberate exception: kp-row-in animates max-height so an arriving chat row
+   pushes the list down instead of overlapping it — layout work, but on a
+   four-row list once per beat. Every one is stopped by the reduced-motion
+   block below. */
 @keyframes kp-row-in {
 	0% {
 		max-height: 0;

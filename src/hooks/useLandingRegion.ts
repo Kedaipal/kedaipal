@@ -183,12 +183,20 @@ export function LandingRegionProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * The shared landing region. Falls back to a private hook instance when no
- * provider is mounted, so a section still renders correctly in isolation
- * (tests, storybook-style harnesses) — it just can't share its pick.
+ * The shared landing region. Provider-only, on purpose: an earlier draft fell
+ * back to a private `useLandingRegion()` when no provider was mounted, which
+ * meant every consumer ALSO ran its own router subscription and cookie/Intl
+ * effect even under the provider — hooks can't be called conditionally, so
+ * the fallback was never free. A section rendered outside the provider now
+ * fails loudly instead of quietly owning a second region; tests wrap in
+ * `LandingRegionProvider`.
  */
 export function useLandingRegionContext(): LandingRegionValue {
 	const shared = useContext(LandingRegionContext);
-	const own = useLandingRegion();
-	return shared ?? own;
+	if (!shared) {
+		throw new Error(
+			"useLandingRegionContext: no LandingRegionProvider above this section — mount one (index.tsx does) so both region toggles share one state.",
+		);
+	}
+	return shared;
 }

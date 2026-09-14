@@ -25,13 +25,16 @@ import { faqJsonLd } from "../lib/landing-faq";
 const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
 /**
  * Mirrors the hero: the locked 8 Sep 2026 tagline, then the promise. Kept
- * under ~155 chars — Google truncates around 155-160, so the structural
- * differentiator ("no Meta setup") must sit inside the cut. "Free until your
- * first order" is the start-when-you-sell framing (pricing reset, 30 Aug); the
- * page never says "trial" or a number of days again.
+ * under 155 chars — Google truncates around 155-160, so the structural
+ * differentiator ("no Meta setup") must sit inside the cut; a 173-char draft
+ * put it at char 159 and `landing-seo.test.ts` now measures it. The regions
+ * live in SEO_TITLE and the Organization description, not here — "for
+ * Malaysia & Singapore" was the 20 chars that pushed the differentiator out.
+ * "Free until your first order" is the start-when-you-sell framing (pricing
+ * reset, 30 Aug); the page never says "trial" or a number of days again.
  */
 const SEO_DESC =
-	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and courier bookings on one screen for Malaysia & Singapore. Free until your first order, no Meta setup.";
+	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.";
 const SITE_URL = "https://kedaipal.com";
 /**
  * The landing demo. `uploadDate` is the date the clip was cut, NOT "today" —
@@ -130,7 +133,8 @@ export const Route = createFileRoute("/")({
 			{ property: "og:image:height", content: "630" },
 			{
 				property: "og:image:alt",
-				content: "Kedaipal — Sell on WhatsApp. Never lose an order or a payment.",
+				content:
+					"Kedaipal — Sell on WhatsApp. Never lose an order or a payment.",
 			},
 			{ property: "og:locale", content: "en_MY" },
 			{ name: "twitter:card", content: "summary_large_image" },

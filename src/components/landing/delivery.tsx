@@ -9,6 +9,7 @@ import { useBeatLoop } from "../../hooks/useBeatLoop";
 import { useLandingRegionContext } from "../../hooks/useLandingRegion";
 import {
 	type Courier,
+	type CourierProvider,
 	couriersFor,
 	hasParcelCouriers,
 	mockQuotes,
@@ -46,7 +47,14 @@ import {
  * has no couriers enabled yet (docs/delivery-delyva.md, 3 Sep) — the
  * catalogue hides those rows, the rail shows what IS live (Lalamove), and a
  * one-line note says the rest is being enabled. Honest beats a logo wall for a
- * courier the seller can't book.
+ * courier the seller can't book — and honesty runs all the way up: with no
+ * parcel lane live (`hasParcelCouriers`) the heading, sub and first bullet
+ * switch to their rider-only variants and the cold-chain bullet drops, so the
+ * section never promises "20+ couriers, chilled or frozen" above a catalogue
+ * of one. The mock card reads the provider off the quoted row the same way:
+ * a Lalamove quote is booked on the seller's Lalamove wallet, not Delyva
+ * credit (`docs/delivery-lalamove.md`), and its badge, note and shipped line
+ * say so.
  *
  * Every courier mark is a brand-approved SVG under `public/img/courier/` or a
  * name chip with the same initials avatar the real dispatch card uses for a
@@ -55,7 +63,32 @@ import {
  */
 
 /** Beat durations, ms: quoting → quotes in → cheapest chosen → booked → shipped → clear. */
-const BEATS = [1100, 1400, 1100, 1300, 2600, 450] as const;
+export const DISPATCH_BEATS = [1100, 1400, 1100, 1300, 2600, 450] as const;
+/** The beat that shows the booked courier as shipped (`delivery.test.tsx` drives to it). */
+export const SHIPPED_BEAT = 4;
+
+/**
+ * The integration badge on the mock card follows the quoted row's provider.
+ * Delyva's emblem is square and needs the name beside it; Lalamove's mark is a
+ * wordmark and IS the name.
+ */
+const PROVIDER_BADGE: Record<
+	CourierProvider,
+	{ name: string; src: string; markClass: string; wordmark: boolean }
+> = {
+	delyva: {
+		name: "Delyva",
+		src: "/img/delyva-logo.png",
+		markClass: "size-3.5",
+		wordmark: false,
+	},
+	lalamove: {
+		name: "Lalamove",
+		src: "/img/lalamove-logo.svg",
+		markClass: "h-3 w-auto",
+		wordmark: true,
+	},
+};
 
 /** Two-letter mark — the real dispatch card's fallback for a courier with no logo. */
 function initials(name: string): string {
@@ -175,16 +208,18 @@ function DispatchPlay({
 	const stageRef = useRef<HTMLDivElement>(null);
 	const inView = useInView(stageRef, { margin: "-10% 0px" });
 	const reduced = useReducedMotion() ?? false;
-	const beat = useBeatLoop(!reduced && inView, BEATS);
+	const beat = useBeatLoop(!reduced && inView, DISPATCH_BEATS);
 
 	// Reduced motion: the whole story as one still — quotes in, cheapest
 	// chosen, booked.
 	const quotesIn = reduced || beat >= 1;
 	const chosen = reduced || beat >= 2;
 	const booked = reduced || beat >= 3;
-	const shipped = !reduced && beat === 4;
+	const shipped = !reduced && beat === SHIPPED_BEAT;
 	const cheapest = quotes[0];
 	const buyerPaid = cheapest ? cheapest.mockQuote * 1.15 : 800;
+	const badge = PROVIDER_BADGE[cheapest?.provider ?? "delyva"];
+	const rider = cheapest?.provider === "lalamove";
 
 	return (
 		<div
@@ -201,14 +236,18 @@ function DispatchPlay({
 					<Truck className="size-4 text-accent" />
 					{m.delivery_quote_title()}
 				</p>
-				<span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+				<span
+					className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground"
+					data-testid="dispatch-provider"
+					data-provider={cheapest?.provider ?? "delyva"}
+				>
 					<AppImage
-						src="/img/delyva-logo.png"
+						src={badge.src}
 						alt=""
-						aspect="size-3.5"
+						aspect={badge.markClass}
 						fill={false}
 					/>
-					Delyva
+					{badge.wordmark ? null : badge.name}
 				</span>
 			</div>
 
@@ -339,7 +378,7 @@ function DispatchPlay({
 				<Truck className="size-4" />
 				{cheapest
 					? shipped
-						? m.hero_after_status_4()
+						? m.delivery_quote_shipped({ courier: cheapest.name })
 						: m.delivery_quote_book({
 								courier: cheapest.name,
 								price: formatPrice(cheapest.mockQuote, currency),
@@ -347,7 +386,7 @@ function DispatchPlay({
 					: m.delivery_quote_title()}
 			</div>
 			<p className="mt-2.5 text-xs text-muted-foreground">
-				{m.delivery_quote_note()}
+				{rider ? m.delivery_quote_note_rider() : m.delivery_quote_note()}
 			</p>
 		</div>
 	);
@@ -383,16 +422,30 @@ export function Delivery() {
 								className="mt-4 max-w-xl text-3xl font-bold leading-[1.1] md:text-5xl"
 								style={{ letterSpacing: "-0.02em" }}
 							>
-								{m.delivery_heading()}
+								{/* Rider-only regions (SG today) get the honest heading: no
+								    "cold chain included" above a one-courier catalogue. */}
+								{parcelsLive
+									? m.delivery_heading()
+									: m.delivery_heading_rider()}
 							</h2>
 							<p className="mt-4 max-w-xl text-base leading-relaxed text-muted-foreground md:text-lg">
-								{m.delivery_sub()}
+								{parcelsLive ? m.delivery_sub() : m.delivery_sub_rider()}
 							</p>
 							<ul className="mt-6 flex flex-col gap-3">
 								{(
 									[
-										[Truck, m.delivery_point_1()],
-										[Snowflake, m.delivery_point_2()],
+										// Whose account the seller books on — Delyva where parcels
+										// are live, Lalamove where only the rider is.
+										[
+											Truck,
+											parcelsLive
+												? m.delivery_point_1()
+												: m.delivery_point_1_rider(),
+										],
+										// The cold-chain bullet only where a cold lane is bookable.
+										...(parcelsLive
+											? [[Snowflake, m.delivery_point_2()] as const]
+											: []),
 										// The rider bullet only where a rider is actually bookable.
 										...(riderLive
 											? [[Zap, m.delivery_point_3()] as const]

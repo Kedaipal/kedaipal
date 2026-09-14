@@ -91,7 +91,10 @@ describe("landing redesign — Founding 10 off the landing page", () => {
 					!key.startsWith("cost_")
 				)
 					continue;
-				if (typeof value === "string" && /founding|pengasas|创始/i.test(value)) {
+				if (
+					typeof value === "string" &&
+					/founding|pengasas|创始/i.test(value)
+				) {
 					offenders.push(`${locale}.${key} = ${value}`);
 				}
 			}
@@ -132,18 +135,45 @@ describe("landing redesign — new copy present in every locale", () => {
  * Their keys must stay gone in every catalog — a resurrected key is how a cut
  * section quietly comes back through a merge.
  */
-const REMOVED_PREFIXES = ["problem_", "how_", "bento_", "features_", "hero_chat_", "pay_group_"];
+const REMOVED_PREFIXES = [
+	"problem_",
+	"how_",
+	"bento_",
+	"features_",
+	"hero_chat_",
+	"pay_group_",
+];
 const REMOVED_LANDING_V2_KEYS = [
-	"mm_heading", "mm_line1", "mm_line2_pre", "mm_line2_zero", "mm_line2_post", "mm_line3", "mm_cta_note", "mm_note",
-	"hero_badge", "hero_pain_missed", "hero_pain_chase", "hero_pain_chase_sub", "hero_cta_primary", "hero_cta_secondary", "hero_phone_alt",
-	"nav_features", "nav_how", "pricing_see_full_breakdown", "pricing_feat_radius",
+	"mm_heading",
+	"mm_line1",
+	"mm_line2_pre",
+	"mm_line2_zero",
+	"mm_line2_post",
+	"mm_line3",
+	"mm_cta_note",
+	"mm_note",
+	"hero_badge",
+	"hero_pain_missed",
+	"hero_pain_chase",
+	"hero_pain_chase_sub",
+	"hero_cta_primary",
+	"hero_cta_secondary",
+	"hero_phone_alt",
+	"nav_features",
+	"nav_how",
+	"pricing_see_full_breakdown",
+	"pricing_feat_radius",
+	// The hero trust line's render site (TrustLine) went with the old hero.
+	"hero_trust",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {
 	it("keeps every retired key out of every catalog", () => {
 		for (const [locale, catalog] of catalogs) {
 			const resurrected = Object.keys(catalog).filter(
-				(k) => REMOVED_LANDING_V2_KEYS.includes(k) || REMOVED_PREFIXES.some((p) => k.startsWith(p)),
+				(k) =>
+					REMOVED_LANDING_V2_KEYS.includes(k) ||
+					REMOVED_PREFIXES.some((p) => k.startsWith(p)),
 			);
 			expect(resurrected, `${locale}: ${resurrected.join(", ")}`).toEqual([]);
 		}
@@ -152,7 +182,8 @@ describe("landing v2 — cut sections stay cut", () => {
 	it("never says 14-day or RM299 on a key the landing renders", () => {
 		// Start-when-you-sell replaced the calendar trial and Scale is RM399
 		// (pricing reset, 30 Aug 2026). Prefixes = every section on `/`.
-		const onLanding = /^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
+		const onLanding =
+			/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
 		const stale = /14[- ]day|14 hari|14 天|RM ?299|S\$ ?119/i;
 		for (const [locale, catalog] of catalogs) {
 			const hits = Object.entries(catalog)

@@ -44,7 +44,7 @@ backstop, the order is the trigger.
 | Key | en (new) | ms (new) | zh (new) |
 | --- | --- | --- | --- |
 | `nav_start_free` | Start free | Mula percuma | 免费开始 |
-| `hero_trust` | Free until your first order · No credit card · No Meta setup · Live in 5 minutes | Percuma sehingga pesanan pertama · Tiada kad kredit · Tiada setup Meta · Hidup dalam 5 minit | 收到第一笔订单前完全免费 · 无需信用卡 · 无需 Meta 设置 · 5 分钟即可上线 |
+| `hero_trust` _(retired in landing v2 — the trust line's render site was cut with the old hero; kept here as the record of the copy)_ | Free until your first order · No credit card · No Meta setup · Live in 5 minutes | Percuma sehingga pesanan pertama · Tiada kad kredit · Tiada setup Meta · Hidup dalam 5 minit | 收到第一笔订单前完全免费 · 无需信用卡 · 无需 Meta 设置 · 5 分钟即可上线 |
 | `pricing_sub` | Start free on every plan — your first bill only comes when your first live order does, or on day 15. No credit card to start. Kedaipal never touches your order money — your customers pay you directly. | Mula percuma untuk setiap pelan — bil pertama anda hanya tiba bila pesanan pertama masuk, atau pada hari ke-15. Tiada kad kredit untuk bermula. Kedaipal tidak pernah sentuh wang pesanan anda — pelanggan bayar terus kepada anda. | 每个方案都免费开始 —— 第一张账单只在您收到第一笔订单（或第 15 天）时才产生。开始不需要信用卡。随时取消，随时导出您的资料。 |
 | `pricing_cta` | Start free — pay when you sell | Mula percuma — bayar bila anda menjual | 免费开始 —— 有生意才付费 |
 | `faq_q_8` | When do I start paying? | Bila saya mula membayar? | 我什么时候开始付费？ |

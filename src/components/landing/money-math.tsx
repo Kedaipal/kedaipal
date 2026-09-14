@@ -16,7 +16,9 @@ import {
  * them 0%, so Kedaipal is an added cost on those orders — the page may say "we
  * never take a cut at any volume", it may NOT say "save RM900 vs Shopee".
  * Shopee leads (a marketplace, like us) rather than GrabFood, whose 15–22% also
- * buys a rider fleet we don't provide. `mm_note` carries that caveat in full.
+ * buys a rider fleet we don't provide. The `/cost` page carries that caveat in
+ * full; the landing block that used to (`mm_note`) was cut in landing v2 and
+ * only `MoneyMathRow` survives here, for `/pricing`.
  *
  * The calculator lives at the EXISTING `/cost` page rather than a second `/kira`
  * route — `/cost` already runs the exact formula (`src/lib/calculator.ts`), is
@@ -32,7 +34,8 @@ import {
  * TOP of each published range and only drives bar width — the visible label
  * is the honest range. Shopee and TikTok Shop are both "up to ~", never
  * flat: commissions are category-based and their biggest slices (Free
- * Shipping / Bonus Cashback) are opt-in, per `mm_note`.
+ * Shipping / Bonus Cashback) are opt-in — the rate labels say "up to" for
+ * exactly that reason.
  */
 const MARKETPLACE_RATES = [
 	{
@@ -68,7 +71,6 @@ const MARKETPLACE_RATES = [
 		rate: () => "12–20%",
 	},
 ] as const;
-
 
 /**
  * One-line variant for `/pricing`, where the tier cards are already the focus —

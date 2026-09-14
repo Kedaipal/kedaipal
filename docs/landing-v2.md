@@ -141,6 +141,23 @@ couriers for Singapore are being enabled". `couriers.test.ts` pins that SG
 never shows a Delyva courier that isn't enabled — flip a row's `visible` when
 Delyva confirms it and the test asks you to say so.
 
+The honesty runs all the way up the section (review on #275 — the first cut
+gated only the note and the rider bullet, and left "Cold chain included" and
+"20+ couriers, chilled or frozen" over a one-courier catalogue). With no parcel
+lane live (`hasParcelCouriers` false) the heading, sub and first bullet switch
+to `delivery_*_rider` variants that name Lalamove, and the cold-chain bullet
+drops. Each courier row now carries a `provider` (`delyva` | `lalamove`):
+Lalamove is a BYO integration paid from the seller's own Lalamove wallet
+(`docs/delivery-lalamove.md`), not a Delyva partner, so the mock card's badge,
+"charged to…" note and shipped line read the provider off the quoted row
+instead of saying "Delyva credit" beside a Lalamove quote. The shipped line is
+`delivery_quote_shipped` with the booked courier's name — it used to borrow the
+hero's literal "Shipped · J&T", which was right for MY only because J&T
+happens to be the cheapest mock quote, and wrong for SG every cycle.
+`delivery.test.tsx` now drives the beat loop (mocked `useInView`, one `act`
+per beat) to the shipped frame in both regions rather than freezing it at
+beat 0.
+
 ## One region for the page
 
 Two sections now react to MY/SG (Delivery, Pricing). Each owning its own
@@ -148,9 +165,11 @@ Two sections now react to MY/SG (Delivery, Pricing). Each owning its own
 render — the cookie write is shared, the React state was not. `index.tsx`
 mounts `LandingRegionProvider`; both sections read
 `useLandingRegionContext()`, so either toggle moves both. `/pricing`, `/cost`
-and onboarding keep the plain hook (one toggle each). The context hook falls
-back to a private hook instance with no provider, so a section still renders
-in isolation.
+and onboarding keep the plain hook (one toggle each). The context hook is
+provider-only and throws without one: the first cut fell back to a private
+hook instance, which — hooks being unconditional — ran a second router
+subscription and cookie/Intl effect in every consumer even under the provider.
+Tests wrap the section in `LandingRegionProvider`.
 
 ## Pricing, FAQ, structured data
 
@@ -159,11 +178,18 @@ in isolation.
   JSON-LD `AggregateOffer` range is now **derived** from the same constant — the
   previous literal `"299"` outlived the reprice by weeks because nothing tied
   it to what the teaser rendered.
-- **Start-when-you-sell copy** (`nav_start_free`, `hero_trust`, `pricing_sub`,
+- **Start-when-you-sell copy** (`nav_start_free`, `pricing_sub`,
   `pricing_cta`, `faq_q_8/a_8`, `final_sub`, `final_cta`, the landing
   `SEO_DESC` and offer description) is the wave-2 pack in
-  `docs/pricing-reset-copy-pack.md`, verbatim. `landing-redesign.test.ts` fails
-  on "14-day" / "RM299" in any key a landing section renders.
+  `docs/pricing-reset-copy-pack.md`, verbatim. `hero_trust` from that pack is
+  retired: its only render site (the old hero's trust line) was cut with the
+  old hero, so the key went with it. `landing-redesign.test.ts` fails on
+  "14-day" / "RM299" in any key a landing section renders, and on any retired
+  key coming back.
+- **Meta description** is held under 155 chars with "no Meta setup" inside the
+  cut by `landing-seo.test.ts` — the wave-2 redraft ran to 173 and pushed the
+  differentiator to char 159 while its comment claimed otherwise. The regions
+  live in the title and Organization description, not the snippet.
 - **FAQ** gains "Which couriers can I book?" (`faq_q_13`) as the third primary
   item; seven primary, six behind "See all". The `FAQPage` JSON-LD is built
   from the same `FAQ_PRIMARY_IDS` and message functions the component renders,

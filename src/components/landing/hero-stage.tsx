@@ -385,6 +385,9 @@ function AfterPhone({ beat, still }: { beat: number; still: boolean }) {
 							</span>
 						) : null}
 					</div>
+					{/* Tab labels stay English in every locale on purpose: this is a
+					    picture of the real dashboard, which ships English-only, and a
+					    translated mock would promise a UI the seller won't get. */}
 					<div className="mt-auto flex items-center justify-around border-t border-slate-200 bg-white px-[0.5em] pb-[0.9em] pt-[0.6em] text-[0.6em] font-semibold text-slate-400">
 						{(
 							[
