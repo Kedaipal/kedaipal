@@ -218,6 +218,20 @@ function ClaimRoute() {
 	const status =
 		payload.status === "open" && locallyExpired ? "expired" : payload.status;
 
+	// Off-Season Hold (z8r3fday24): the seller paused ordering after sending
+	// this link. Ranked ABOVE expiry — "they're on a break" is the truer, more
+	// actionable reason, and it's the one the commit would refuse on anyway.
+	// Not a withdrawal: the seller didn't release this order, their whole shop
+	// is resting, so the copy points at the season rather than at the buyer.
+	if (store.orderingPaused && status !== "completed") {
+		return (
+			<ClaimDeadEnd
+				store={store}
+				title={`${store.storeName} is on a seasonal break`}
+				body={`Ordering is paused for now, so this link can't be completed — nothing was charged. Message them to find out when they're back.`}
+			/>
+		);
+	}
 	if (status === "expired") {
 		return (
 			<ClaimDeadEnd

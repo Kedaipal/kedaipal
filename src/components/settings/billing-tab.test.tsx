@@ -29,7 +29,9 @@ type Retailer = Parameters<typeof BillingTab>[0]["retailer"];
  * that's past due, matching the screenshot the fix targets. */
 function retailer(overrides: Partial<Retailer> = {}): Retailer {
 	return {
+		_id: "r_openmarket",
 		slug: "openmarket",
+		country: "MY",
 		isFoundingMember: false,
 		ordersThisMonth: 0,
 		subscription: {
@@ -236,6 +238,29 @@ describe("BillingTab pending invoice — how to pay", () => {
 		expect(screen.getByText("How to pay")).toBeTruthy();
 	});
 
+	it("returning from HitPay holds the pay rails on a spinner — no double-pay window", () => {
+		// Landing back with ?paid=return (or ?autorenew=return): the settle is a
+		// beat behind the page load, and quick hands could pay the still-pending
+		// invoice a second time. The section shows "Confirming…" instead.
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					...pendingInvoice("MYR"),
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_1",
+					},
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} billingReturn="paid" />);
+		expect(screen.getByText("Confirming your payment…")).toBeTruthy();
+		expect(screen.queryByText("Pay online now")).toBeNull();
+		expect(screen.queryByText("How to pay")).toBeNull();
+	});
+
 	it("no gateway link → no Pay-now button, manual flow byte-identical", () => {
 		mockQueries({ isAdmin: false, invoices: [pendingInvoice("MYR")] });
 		render(<BillingTab retailer={retailer()} />);
@@ -295,7 +320,11 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
 		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
-		expect(screen.getByText(/Get my .* invoice/)).toBeTruthy();
+		expect(screen.getByText(/Subscribe to Pro/)).toBeTruthy();
+		// ONE door (Zaki, 11 Sep): no explicit get-an-invoice path — an abandoned
+		// authorisation still lands back on a pending invoice with Pay-now +
+		// bank details, so the manual rail survives implicitly.
+		expect(screen.queryByText(/Get an invoice instead/)).toBeNull();
 		expect(
 			screen.queryByText(/Message us on WhatsApp and we'll send your invoice/),
 		).toBeNull();
@@ -307,15 +336,34 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false });
 		render(<BillingTab retailer={trialing()} />);
 		expect(
-			screen.getByText(/Message us on WhatsApp and we'll send your invoice/),
+			screen.getByText(/message us on WhatsApp and we'll send your invoice/i),
 		).toBeTruthy();
-		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 	});
 
-	it("gateway ON → the auto-renewal card offers the one-time setup", () => {
+	it("pre-subscription the auto-renewal card is HIDDEN — the picker is the one door", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("an ACTIVE manual subscriber gets the opt-in auto-renewal card", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
 		expect(screen.getByText("Auto-renewal")).toBeTruthy();
 		expect(screen.getByText("Turn on auto-renewal")).toBeTruthy();
 		// The trust line: Kedaipal never touches the card details.
@@ -344,9 +392,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 				} as unknown as Partial<Retailer>)}
 			/>,
 		);
-		expect(
-			screen.getByText(/couldn't charge your Visa ·· 4242/),
-		).toBeTruthy();
+		expect(screen.getByText(/couldn't charge your Visa ·· 4242/)).toBeTruthy();
 		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
 	});
 
@@ -367,7 +413,175 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 			/>,
 		);
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
-		expect(screen.queryByText(/Get my .* invoice/)).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+	});
+});
+
+describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () => {
+	const lapsed = (over: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				// Paid period ran out yesterday; the cron has not issued the
+				// renewal yet. Access stays on, so status is still "active".
+				currentPeriodEnd: Date.now() - 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+				...over,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("says renewing instead of naming an expiry date that has gone by", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={lapsed()} />);
+		expect(screen.getByText("Active · renewing")).toBeTruthy();
+		expect(screen.queryByText(/expires/)).toBeNull();
+	});
+
+	it("still names the expiry while the period is actually running", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={lapsed({
+					currentPeriodEnd: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Active · expires/)).toBeTruthy();
+		expect(screen.queryByText("Active · renewing")).toBeNull();
+	});
+
+	it("the auto-renewal line says the charge is happening, not that it is due in the past", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "touch_n_go",
+						methodLabel: "Touch 'n Go",
+						failedAttempts: 0,
+						failing: false,
+						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Renewing now/)).toBeTruthy();
+		expect(screen.queryByText(/Next charge on/)).toBeNull();
+	});
+
+	it("a declined charge still outranks it — that message names the problem", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "touch_n_go",
+						methodLabel: "Touch 'n Go",
+						failedAttempts: 1,
+						failing: true,
+						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
+					},
+				})}
+			/>,
+		);
+		expect(
+			screen.getByText(/We couldn't charge your Touch 'n Go/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Renewing now/)).toBeNull();
+	});
+});
+
+/**
+ * WHO gets offered a tier change (86eyb6z4r). The card's own copy is covered in
+ * plan-change-card.test.tsx; this pins the gate, which has to agree with the
+ * server guards on `invoices.changePlan` exactly — an offered control that the
+ * server would refuse is a wrong-but-enabled button.
+ */
+describe("BillingTab plan change gating (86eyb6z4r)", () => {
+	const seller = (over: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				currentPeriodEnd: Date.now() + 12 * 24 * 60 * 60 * 1000,
+				caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+				active: true,
+				frozen: false,
+				...over,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("an ACTIVE paying seller is offered the other tier", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.getByText("Change your plan")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Move down to Starter/ }),
+		).toBeTruthy();
+	});
+
+	it("hides while TRIALING — choosing a plan is the picker's job", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={seller({
+					status: "trialing",
+					trialEndsAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				})}
+			/>,
+		);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides while PAST DUE — the server refuses, so nothing is offered", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller({ status: "past_due" })} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides from comped accounts and from an admin on their own store", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller({ comped: true })} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+		cleanup();
+
+		mockQueries({ isAdmin: true, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("hides when the gateway is off — there is no way to pay the upgrade", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={seller()} />);
+		expect(screen.queryByText("Change your plan")).toBeNull();
+	});
+
+	it("names the open invoice that is holding an upgrade back", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_open",
+					status: "pending",
+					invoiceNumber: "INV-202609-AB12",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(<BillingTab retailer={seller({ plan: "starter" })} />);
+		const up = screen.getByRole("button", { name: /Move up to Pro/ });
+		expect((up as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(/Moving up waits until invoice/)).toBeTruthy();
 	});
 });
 
@@ -639,5 +853,259 @@ describe("BillingTab invoice history documents", () => {
 		expect(
 			screen.queryByRole("button", { name: /download receipt pdf/i }),
 		).toBeNull();
+	});
+});
+
+/**
+ * Start-when-you-sell + Off-Season Hold (z8r3fday24). The rules live server-
+ * side (convex/startWhenYouSell.test.ts, convex/seasonalHold.test.ts); these
+ * cover that the tab tells the seller the truth about each state and offers
+ * the right switch.
+ */
+describe("BillingTab — free period, first invoice, Off-Season Hold (z8r3fday24)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const paidPro = (overrides: Record<string, unknown> = {}) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				periodPaidBy: "plan",
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				features: { crm: true, orderInbox: true, chargeablePickup: true },
+				active: true,
+				frozen: false,
+				held: false,
+				...overrides,
+			},
+		} as never);
+
+	it("a free store reads 'until your first order' and is told the invoice comes then", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "trialing",
+						comped: false,
+						trialEndsAt: Date.now() + 12 * DAY,
+						caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+						active: true,
+						frozen: false,
+						held: false,
+					},
+				} as never)}
+			/>,
+		);
+		expect(screen.getByText("Free · until your first order")).toBeTruthy();
+		expect(
+			screen.getByText(/free until your first live order, or day 15/),
+		).toBeTruthy();
+		// No hold card for a store that isn't paying yet.
+		expect(screen.queryByText("Pause for the season")).toBeNull();
+	});
+
+	it("the first invoice card names itself and offers the Starter switch; an admin-issued invoice does not", () => {
+		const first = {
+			_id: "i_first",
+			status: "pending",
+			currency: "MYR",
+			total: 14900,
+			amount: 14900,
+			plan: "pro",
+			billingCycle: "monthly",
+			origin: "free_period_end",
+			invoiceNumber: "INV-FIRST",
+			dueDate: Date.now() + 12 * DAY,
+			createdAt: Date.now(),
+		};
+		mockQueries({ isAdmin: false, invoices: [first] });
+		const ended = retailer({
+			subscription: {
+				plan: "pro",
+				status: "trialing",
+				comped: false,
+				trialEndsAt: Date.now() + 9 * DAY,
+				freePeriodEndedAt: Date.now() - DAY,
+				freePeriodEndReason: "first_order",
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: true,
+				frozen: false,
+				held: false,
+			},
+		} as never);
+		const { unmount } = render(<BillingTab retailer={ended} />);
+		expect(
+			screen.getByText("Free period over · first invoice due"),
+		).toBeTruthy();
+		expect(screen.getByText("Your first invoice")).toBeTruthy();
+		expect(screen.getByText("Switch to Starter")).toBeTruthy();
+		// The consequence is stated where the tap is.
+		expect(
+			screen.getByText(/no customer database, order inbox or insights/),
+		).toBeTruthy();
+		unmount();
+
+		mockQueries({ isAdmin: false, invoices: [{ ...first, origin: "admin" }] });
+		render(<BillingTab retailer={ended} />);
+		expect(screen.queryByText("Switch to Starter")).toBeNull();
+	});
+
+	it("a Starter invoice offers the switch back to Pro", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					_id: "i_st",
+					status: "pending",
+					currency: "MYR",
+					total: 7900,
+					amount: 7900,
+					plan: "starter",
+					billingCycle: "monthly",
+					origin: "self_serve",
+					invoiceNumber: "INV-ST",
+					dueDate: Date.now() + 10 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={paidPro({
+					status: "trialing",
+					freePeriodEndedAt: Date.now(),
+				})}
+			/>,
+		);
+		expect(screen.getByText("Switch to Pro")).toBeTruthy();
+	});
+
+	it("a paid seller is offered the pause, with the price and when it starts billing", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={paidPro()} />);
+		expect(screen.getByText("Off-Season Hold")).toBeTruthy();
+		expect(screen.getByText("Pause for the season")).toBeTruthy();
+		// The price is a header chip now — the headline fact, not mid-paragraph.
+		expect(screen.getByText(/RM\s*19\.00\/month/)).toBeTruthy();
+		// Paid through a future date → the hold bills after it, not today.
+		expect(screen.getByText(/the hold starts billing after that/)).toBeTruthy();
+	});
+
+	it("a held seller sees the resume switch, what a resume bills, and the status chip", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={paidPro({
+					status: "on_hold",
+					held: true,
+					heldAt: Date.now() - 3 * DAY,
+					periodPaidBy: "hold",
+					caps: { orderCap: 0, userCap: 2, broadcastQuota: 100 },
+				})}
+			/>,
+		);
+		expect(screen.getByText(/^On hold · since/)).toBeTruthy();
+		expect(screen.getByText("Resume Pro")).toBeTruthy();
+		expect(screen.getByText(/unused hold days aren't refunded/i)).toBeTruthy();
+		// The cap meter is meaningless at cap 0 — hidden, not "0 / 0".
+		expect(screen.queryByText("Orders this month")).toBeNull();
+	});
+
+	it("pause copy uses the SERVER billing rule — a hold-bought period or a pending plan invoice bills now, never 'after {date}'", () => {
+		const DAY2 = 24 * 60 * 60 * 1000;
+		// Resumed mid-hold-bought period: paid through a future date, but by the
+		// HOLD — pausing again bills the hold immediately (the live-found bug).
+		mockQueries({ isAdmin: false });
+		const { unmount } = render(
+			<BillingTab retailer={paidPro({ periodPaidBy: "hold" })} />,
+		);
+		expect(screen.queryByText(/the hold starts billing after that/)).toBeNull();
+		expect(
+			screen.getByText(/hold invoice \(RM\s*19\.00\) is issued right away/),
+		).toBeTruthy();
+		unmount();
+
+		// Active with a pending PLAN invoice: pausing voids it and bills the hold
+		// now — the copy must say both.
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					_id: "i_pend",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					amount: 14900,
+					plan: "pro",
+					billingCycle: "monthly",
+					origin: "self_serve",
+					invoiceNumber: "INV-PEND",
+					dueDate: Date.now() + 12 * DAY2,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(<BillingTab retailer={paidPro()} />);
+		expect(
+			screen.getByText(
+				/unpaid Pro invoice is cancelled and your first hold invoice/,
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/the hold starts billing after that/)).toBeNull();
+	});
+
+	it("a seller locked over the TIER invoice is offered 'pause instead'; comped and admins never see the card", () => {
+		mockQueries({ isAdmin: false });
+		const { unmount } = render(<BillingTab retailer={retailer()} />); // past_due fixture
+		expect(screen.getByText("Rather pause than pay for Pro?")).toBeTruthy();
+		expect(screen.getByText("Pause instead")).toBeTruthy();
+		unmount();
+
+		mockQueries({ isAdmin: false });
+		const { unmount: u2 } = render(
+			<BillingTab retailer={paidPro({ comped: true })} />,
+		);
+		expect(screen.queryByText("Pause for the season")).toBeNull();
+		u2();
+
+		mockQueries({ isAdmin: true });
+		render(<BillingTab retailer={paidPro()} />);
+		expect(screen.queryByText("Pause for the season")).toBeNull();
+	});
+
+	it("a hold invoice is labelled as the hold, not the tier", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					_id: "i_hold",
+					status: "pending",
+					kind: "hold",
+					currency: "MYR",
+					total: 1900,
+					amount: 1900,
+					plan: "pro",
+					billingCycle: "monthly",
+					origin: "auto_renewal",
+					invoiceNumber: "INV-HOLD",
+					dueDate: Date.now() + 10 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={paidPro({
+					status: "on_hold",
+					held: true,
+					periodPaidBy: "hold",
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Amount due · Off-Season Hold/)).toBeTruthy();
+		expect(screen.queryByText("Switch to Starter")).toBeNull();
 	});
 });
