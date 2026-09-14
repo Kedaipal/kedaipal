@@ -119,14 +119,27 @@ export function StockAdjustDialog({
 		setSaving(true);
 		try {
 			await adjustStock({
-				adjustments: [toAdjustment(line.variantId, live, draft)],
+				// `openedAt`, not `live`, as the consent record — the same rule the
+				// sheet follows. The amber notice is advisory: a seller who taps
+				// straight through it would otherwise send the CURRENT count as what
+				// they had seen, the server would compare that value to itself and
+				// agree, and the exact count would overwrite the sale that just
+				// landed. That is this ticket's own bug, on the one control built to
+				// stop it. `live` still clamps the movement branch, where the floor
+				// is about what is physically there.
+				adjustments: [
+					toAdjustment(line.variantId, live, draft, openedAt ?? live),
+				],
 			});
 			toast.success(`Stock updated — ${nextCount(live, draft)} in stock`);
 			onOpenChange(false);
 		} catch (err) {
-			// A refused exact count lands here. The dialog stays open on the live
-			// number, so confirming again is one tap against a figure the seller can
-			// now actually see.
+			// A refused exact count lands here. Advance the baseline to what is on
+			// screen NOW, or the seller is stuck: the refusal would repeat forever
+			// against a number they have already been shown and accepted. Re-confirm
+			// is one tap, and it is a tap against a figure they can actually see —
+			// which is the whole point of refusing the first one.
+			setOpenedAt(live);
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setSaving(false);
@@ -435,8 +448,9 @@ export function StockSheet({
 					// overwrite guard could never fire from here.
 					toAdjustment(
 						l.variantId,
-						openedAt[l.variantId] ?? l.onHand,
+						l.onHand,
 						draftFor(l),
+						openedAt[l.variantId] ?? l.onHand,
 					),
 				),
 			});
@@ -445,7 +459,23 @@ export function StockSheet({
 			);
 			onOpenChange(false);
 		} catch (err) {
-			toast.error(convexErrorMessage(err));
+			// The batch is all-or-nothing, so a refusal names the row it came from —
+			// on a six-choice sheet "stock changed while you were counting" with no
+			// label leaves the seller hunting for which one moved. The per-row
+			// banners show it visually; the message has to survive without them.
+			const stale = lines.filter(
+				(l) =>
+					openedAt[l.variantId] !== undefined &&
+					openedAt[l.variantId] !== l.onHand,
+			);
+			const named =
+				stale.length > 0
+					? `${stale.map((l) => l.label).join(", ")} — ${convexErrorMessage(err)}`
+					: convexErrorMessage(err);
+			// Same reason as the dialog: advance the baselines the seller has now
+			// been shown, or Apply refuses forever against numbers they've accepted.
+			setOpenedAt(Object.fromEntries(lines.map((l) => [l.variantId, l.onHand])));
+			toast.error(named);
 		} finally {
 			setSaving(false);
 		}
@@ -498,7 +528,7 @@ export function StockSheet({
 							openedAt[line.variantId] ?? line.onHand,
 							line.onHand,
 							draft,
-						);;
+						);
 						return (
 							<div
 								key={line.variantId}

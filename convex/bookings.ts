@@ -434,7 +434,17 @@ export const requestBooking = mutation({
 			retailerId: args.retailerId,
 			shortId,
 			trackingToken,
-			items,
+			// Stamped `false` rather than left absent (86eypn8ye). A booking holds
+			// its dates through `bookingsOverlapping` and never touches `onHand` —
+			// this path does no decrement at all — so `false` is the true answer,
+			// not a default. Left unstamped it would fall to `lineReservedStock`'s
+			// legacy re-resolve, which happens to return false today ONLY because
+			// every booking listing stores `blockWhenOutOfStock: false`; but
+			// `variantInputValidator` accepts `true` on a booking create, so that
+			// is an invariant of the form rather than of the mutation. Stamping
+			// here makes the answer independent of it, and makes the doc's
+			// "every create path stamps it" literally true of all four.
+			items: items.map((line) => ({ ...line, stockReserved: false })),
 			subtotal,
 			total,
 			currency: product.currency,

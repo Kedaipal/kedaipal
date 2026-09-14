@@ -236,17 +236,26 @@ create, so flipping the flag made restore asymmetric:
 Now frozen onto `orders.items[].stockReserved` at create, the way `price` and
 `variantLabel` already are.
 
-**Three create paths need the stamp, and each builds its own snapshot:**
+**Four create paths need the stamp, and each builds its own snapshot:**
 
 | path | file |
 | --- | --- |
 | storefront checkout | `convex/orders.ts` |
 | counter checkout | `convex/counterCheckout.ts` |
 | claim links (`86eyq0epn`) | `convex/orderClaims.ts` |
+| bookings (`86eyj70z1`) | `convex/bookings.ts` — always `false` |
 
 This is the trap worth remembering: none of them share a snapshot builder, so a
-new frozen order-item field is stamped in three places or it is silently wrong
-on the paths that were missed. Counter checkout was caught during the original
+new frozen order-item field is stamped in four places or it is silently wrong on
+the paths that were missed.
+
+The booking path stamps `false` rather than being left absent, even though it
+never decrements `onHand`. Unstamped it would fall to the legacy re-resolve,
+which returns false today ONLY because every booking listing happens to store
+`blockWhenOutOfStock: false` — an invariant of the FORM, not of the mutation
+(`variantInputValidator` will accept `true` on a booking create). Stamping makes
+the answer independent of that, and makes this table true of every path rather
+than true-by-luck of one. Counter checkout was caught during the original
 fix; **claim links landed afterwards and reproduced the gap exactly** — the
 commit decrements `onHand` but the line went out unstamped, so a claim order
 was born with the very asymmetry this field exists to prevent. Caught on the

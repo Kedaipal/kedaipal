@@ -559,7 +559,24 @@ function PreviewSection({
 							{p.action === "create"
 								? `${p.variantCount} variant${p.variantCount === 1 ? "" : "s"}${p.autoFilled > 0 ? ` · ${p.autoFilled} auto-filled inactive` : ""}`
 								: p.action === "update"
-									? `${p.changedVariants} changed${p.skippedVariants > 0 ? ` · ${p.skippedVariants} skipped` : ""}`
+									? // "changed" counts PRICE changes only — stock is its own
+										// opt-in choice with its own counts below. Saying
+										// "0 changed" on a row whose name or weight IS being
+										// patched under-states it, so the row names the price
+										// it is actually talking about and adds the stock
+										// figure beside it rather than folding the two into
+										// one number that means neither.
+										[
+											`${p.changedVariants} price${p.changedVariants === 1 ? "" : "s"} changed`,
+											p.stockChanges > 0
+												? `${p.stockChanges} stock${p.stockChanges === 1 ? "" : "s"} differ`
+												: null,
+											p.skippedVariants > 0
+												? `${p.skippedVariants} skipped`
+												: null,
+										]
+											.filter(Boolean)
+											.join(" · ")
 									: null}
 						</p>
 						{p.warnings.length > 0 ? (

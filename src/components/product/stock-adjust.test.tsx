@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 const adjustStock = vi.fn(async () => []);
@@ -127,6 +133,80 @@ test("a sale landing mid-dialog informs a movement and warns an exact count", ()
 	// after those two went out the door.
 	fireEvent.click(screen.getByRole("button", { name: "Use 15 instead" }));
 	expect(screen.getByRole("button", { name: "Set to 15" })).toBeTruthy();
+});
+
+test("an exact count confirmed THROUGH the warning still sends the count the seller saw", () => {
+	// The warning is advisory, so the guard has to hold for a seller who taps
+	// straight past it. Sending the LIVE count as `expectedOnHand` would have the
+	// server compare that value to itself, agree, and overwrite the sale that
+	// just landed — this ticket's own bug on the one control built to stop it.
+	// Asserting this needs live !== openedAt; where they are equal the assertion
+	// cannot tell the two behaviours apart.
+	const { rerender } = render(
+		<StockAdjustDialog
+			open
+			onOpenChange={() => {}}
+			productName="Keropok Lekor"
+			line={line(20)}
+		/>,
+	);
+	fireEvent.click(screen.getByRole("button", { name: /Counted your shelf/ }));
+	fireEvent.change(screen.getByRole("textbox"), { target: { value: "20" } });
+
+	// Two sell while the seller is typing.
+	rerender(
+		<StockAdjustDialog
+			open
+			onOpenChange={() => {}}
+			productName="Keropok Lekor"
+			line={line(18)}
+		/>,
+	);
+	// They tap through the amber notice without reading it.
+	fireEvent.click(screen.getByRole("button", { name: "Set to 20" }));
+
+	expect(adjustStock).toHaveBeenCalledWith({
+		adjustments: [{ variantId: "v1", setTo: 20, expectedOnHand: 20 }],
+	});
+});
+
+test("a refused exact count can be re-confirmed — it does not refuse forever", async () => {
+	// The baseline has to advance to what is on screen after a refusal, or the
+	// seller is stuck: the server keeps comparing against a number they have
+	// already been shown and accepted, and Confirm never succeeds.
+	adjustStock.mockRejectedValueOnce(
+		new Error("Stock changed to 18 while you were counting"),
+	);
+	const { rerender } = render(
+		<StockAdjustDialog
+			open
+			onOpenChange={() => {}}
+			productName="Keropok Lekor"
+			line={line(20)}
+		/>,
+	);
+	fireEvent.click(screen.getByRole("button", { name: /Counted your shelf/ }));
+	fireEvent.change(screen.getByRole("textbox"), { target: { value: "20" } });
+	rerender(
+		<StockAdjustDialog
+			open
+			onOpenChange={() => {}}
+			productName="Keropok Lekor"
+			line={line(18)}
+		/>,
+	);
+
+	fireEvent.click(screen.getByRole("button", { name: "Set to 20" }));
+	await waitFor(() => expect(adjustStock).toHaveBeenCalledTimes(1));
+	adjustStock.mockClear();
+
+	// Second tap: now confirming against the 18 they have been shown.
+	fireEvent.click(screen.getByRole("button", { name: "Set to 20" }));
+	await waitFor(() =>
+		expect(adjustStock).toHaveBeenCalledWith({
+			adjustments: [{ variantId: "v1", setTo: 20, expectedOnHand: 18 }],
+		}),
+	);
 });
 
 // ---------------------------------------------------------------------------

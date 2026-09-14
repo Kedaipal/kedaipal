@@ -87,12 +87,25 @@ export function toAdjustment<T>(
 	variantId: T,
 	live: number,
 	draft: StockDraft,
+	/**
+	 * The count the seller actually LOOKED at — the open-time baseline, which is
+	 * not the same as `live` the moment a sale lands mid-dialog. Defaults to
+	 * `live` for callers with no separate baseline.
+	 *
+	 * These are two different numbers doing two different jobs, which is why the
+	 * signature separates them: `live` is what a MOVEMENT clamps against (the
+	 * floor is about what is physically there right now), while `seen` is the
+	 * consent record an exact count is checked against. Passing `live` for both
+	 * silently disarms the server's stale-overwrite guard — it would compare the
+	 * current value to itself and always agree.
+	 */
+	seen: number = live,
 ):
 	| { variantId: T; delta: number }
 	| { variantId: T; setTo: number; expectedOnHand: number } {
 	if (draft.mode === "set") {
-		const setTo = draft.setTo ?? live;
-		return { variantId, setTo, expectedOnHand: live };
+		const setTo = draft.setTo ?? seen;
+		return { variantId, setTo, expectedOnHand: seen };
 	}
 	return { variantId, delta: clampDelta(live, draft.delta) };
 }
