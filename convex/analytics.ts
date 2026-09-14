@@ -155,6 +155,7 @@ export type InsightsRangeResult =
 	| {
 			gated: false;
 			earned: number;
+			depositsExcluded: number;
 			collected: number;
 			orderCount: number;
 			aov: number;
@@ -202,6 +203,7 @@ export const getInsightsRange = query({
 		return {
 			gated: false,
 			earned: agg.earned,
+			depositsExcluded: agg.depositsExcluded,
 			collected: agg.collected,
 			orderCount: agg.orderCount,
 			aov: computeAov(agg.earned, agg.orderCount),
@@ -221,6 +223,7 @@ export type InsightsTodayResult =
 			gated: false;
 			today: number;
 			earned: number;
+			depositsExcluded: number;
 			collected: number;
 			orderCount: number;
 			products: ProductStat[];
@@ -255,6 +258,7 @@ export const getTodayStats = query({
 			gated: false,
 			today,
 			earned: agg.earned,
+			depositsExcluded: agg.depositsExcluded,
 			collected: agg.collected,
 			orderCount: agg.orderCount,
 			products,

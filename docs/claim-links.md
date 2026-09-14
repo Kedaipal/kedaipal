@@ -468,6 +468,28 @@ outcome.
 - **Expired / cancelled:** calm dead-end — nothing charged, wa.me into the
   seller's chat with a prefilled ask, "Browse the store instead".
 
+## Off-Season Hold closes every claim door (z8r3fday24)
+
+A claim is the only order invitation that can already be sitting in a buyer's
+chat when the seller pauses ordering, so the hold has to reach all three of its
+doors, not just the send:
+
+| Door | While `retailers.orderingPausedAt` is set |
+| --- | --- |
+| `sendClaim` | refused — a paused store issues no new links |
+| `resendClaim` | refused — re-sending pushes a fresh link, i.e. a new invitation |
+| `commit` | refused — the stale-tab guard, so a link sent minutes before the pause can't land an order (stock untouched, claim stays `open` until its own TTL expires it) |
+| `getByToken` | carries `store.orderingPaused`, so the page renders the seasonal-break dead end **on load** — the buyer never fills a form the commit would reject |
+
+The one exception is deliberate: a buyer who **already completed** their claim
+still gets their order back on a re-open, because the idempotent branch runs
+before the guard. Their order exists; hiding it behind a break notice would be
+a lie about their own purchase.
+
+Ranking on the page: the pause outranks `expired` (it's the truer, more
+actionable reason) but never `completed`. It reads as the shop resting, not as
+the seller withdrawing this particular order — that's what `cancelled` says.
+
 ## WhatsApp send
 
 Every buyer- or seller-authored string entering `bodyParams` goes through

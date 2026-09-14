@@ -569,11 +569,14 @@ describe("reduceBusinessReport — counts, signups, founding", () => {
 					retailer({ id: "r1", userId: "u1" }),
 					retailer({ id: "r2", userId: "u2" }),
 					retailer({ id: "r3", userId: "u3" }),
+					retailer({ id: "r4", userId: "u4" }),
 				],
 				subscriptions: [
 					sub({ retailerId: "r1", status: "trialing" }),
 					sub({ retailerId: "r2", status: "active" }),
 					sub({ retailerId: "r3", status: "past_due" }),
+					// Off-Season Hold (z8r3fday24): a paused payer, not churn.
+					sub({ retailerId: "r4", status: "on_hold" }),
 				],
 			}),
 		);
@@ -582,6 +585,7 @@ describe("reduceBusinessReport — counts, signups, founding", () => {
 			active: 1,
 			pastDue: 1,
 			cancelled: 0,
+			onHold: 1,
 			comped: 0,
 		});
 	});

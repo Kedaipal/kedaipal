@@ -18,7 +18,7 @@ The five things to internalize:
 - **The pain we solve.** F&B sellers (a) miss orders buried in WhatsApp chat history and (b) waste hours chasing payment confirmation. Everything maps back to those two.
 - **The moat.** Kedaipal owns **one** Meta-verified WABA that sends for every retailer. Retailers need no WABA, no business verification, no SSM. "Live in 5 minutes" is structural, not marketing — it's the wedge vs. WATI / SleekFlow / EasyStore / Orderla.
 - **Positioning vs. Orderla.** Orderla is a *form*; Kedaipal is a *full storefront*. Public line: *"Where Orderla users graduate to when their order form falls apart."*
-- **Pricing (locked).** Starter RM79 / Pro RM149 ★ / Scale RM299, 14-day trial, no card. No free tier until 50 paying customers.
+- **Pricing (locked, reset 30 Aug 2026).** Starter RM79 / Pro RM149 ★ / Scale RM399 (Coming soon), free until the first live order or day 15, no card; Off-Season Hold RM19/mo for paid sellers between seasons. No free tier until 50 paying customers.
 - **Money boundary.** Subscription billing flows to Kedaipal (Stripe + HitPay/Billplz). **Customer payment money is retailer-owned** (HitPay Connect / Billplz / Stripe Connect) — Kedaipal is never merchant of record for shopper transactions.
 
 ---

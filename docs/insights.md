@@ -18,10 +18,11 @@ business**, not just the orders.
   and `cancelled` are excluded from **every** figure. So an order cancelled
   after payment drops out of both earned and collected (consistent with
   `decrementAggregatesForCancel` on customers).
-- **Earned** = Σ `order.total` over revenue orders (order placed = revenue
-  recognised). Revenue anchors on `createdAt`, **not** `fulfilmentDate` (that's
-  ops, not revenue).
-- **Collected** = Σ `order.total` over revenue orders whose `paymentStatus` is
+- **Earned** = Σ `order.total` over revenue orders, **net of any refundable
+  security deposit** (see [Security deposits](#security-deposits) below;
+  order placed = revenue recognised). Revenue anchors on `createdAt`, **not**
+  `fulfilmentDate` (that's ops, not revenue).
+- **Collected** = Σ deposit-net `order.total` over revenue orders whose `paymentStatus` is
   `"received"` (money actually in hand). "Delivered ≠ paid" is the whole reason
   for the split — F&B sellers routinely deliver on credit.
 - **AOV** = earned ÷ revenue-order count.
@@ -44,7 +45,7 @@ business**, not just the orders.
   lands in the right day.
 
 Product line-revenue (Σ `price × quantity`) can differ slightly from `earned`
-(Σ `order.total`) because the order total also carries delivery fees / order-level
+(Σ deposit-net `order.total`) because the order total also carries delivery fees / order-level
 adjustments — expected, they answer different questions. Mockup-quote changes
 mutate `order.total` after creation; aggregates read current doc state, so this
 is self-correcting.
@@ -53,11 +54,77 @@ is self-correcting.
   every revenue order by `attributionBucket` — the stamped
   `orders.attributionSource` (`?src=`/`utm_source` captured at the storefront),
   else `counter` for counter-checkout orders (derived from `orders.source`,
-  never stamped), else `direct`. Rows carry **earned** revenue + order count,
-  so Σ rows === earned (this is "which funnel produced the order", not "which
-  got paid"). Labels via `sourceLabel` (`convex/lib/attribution.ts`): known
-  tags prettified (TikTok, Poster QR, Parcel label QR…), free-form seller tags
-  verbatim, garbage bucketed to `other`.
+  never stamped), else `direct`. Rows carry **earned** revenue + order count —
+  the same deposit-net figure as the KPI, never `order.total` — so Σ rows ===
+  earned on a booking store too (this is "which funnel produced the order",
+  not "which got paid"). Labels via `sourceLabel` (`convex/lib/attribution.ts`):
+  known tags prettified (TikTok, Poster QR, Parcel label QR…), free-form seller
+  tags verbatim, garbage bucketed to `other`.
+
+### Security deposits
+
+A booking order's `total` carries the refundable security deposit (booking
+S5, [`docs/booking.md`](./booking.md#s5--security-deposit-end-to-end-86eyn4kee))
+— **held money, not a sale, so never revenue**. The seller may return it after
+check-out or keep part of it for damage, and **neither outcome re-enters any
+figure here** (a keep is compensation, not sales — Arif, 4 Sep 2026; pinned by
+`convex/bookings.test.ts`, which asserts that settling touches neither `total`
+nor the frozen `securityDeposit`). `reduceInsights`
+nets it out of **every** figure through the one rule `revenue = max(0, total −
+securityDeposit)` (`revenueExcludingDeposit` in `convex/lib/order.ts`, inlined
+so this module stays dependency-free): earned, the trend, collected, the
+payment slices **and the by-source rows**. The rows added `order.total` until
+`z8r3fdcw70` (booking S12), under a comment claiming Σ rows === earned — on a
+campsite running RM100–300 deposits on RM160–400 stays the Sources list summed
+to more than Revenue earned, and neither test could see it (the deposit test
+never asserted on `sources`; the by-source test had no deposit order). Both
+tests now carry the other's case.
+
+The amount netted out comes back as **`depositsExcluded`** (Σ over the same
+revenue orders; both queries return it and `buildInsightsView` sums it like
+`earned`) so the page can say what it did. It is stated by **`DepositNote`**
+(`src/components/insights/deposit-note.tsx`) — one line directly under the KPI
+row, rendered only when the amount is > 0, carrying the exact figure, the
+reason, and where a kept deposit is recorded. At 0 it renders **nothing**, so a
+store without booking deposits sees the page it has always seen. That line
+exists because Seng (Hidden Gems'ite, Founding #7) had to ask "does the sales
+include security deposit?" — a constraint is surfaced, never enforced silently.
+
+**Why a page-level line and not a sub-label in the "Revenue earned" tile**, which
+is what the ticket specified. Three reasons, all found by reviewing the built
+version rather than the plan:
+
+1. **Scope.** The deposit is netted out of *every* money figure on the page —
+   earned, the trend, collected, the payment donut, the by-source rows, and so
+   Avg order. A note inside one tile makes a claim about that tile and silently
+   implies its three neighbours are gross, which is the wrong conclusion and the
+   second-most-natural reading of the page. The exclusion is a property of the
+   page, so it is stated at the page.
+2. **Reach.** The tile had room for the amount but not the reason, so the reason
+   had to ride a hover `title` — mute on a phone, and unadvertised on desktop
+   (an 11px muted span with no affordance). This page's own trend chart is a
+   scrubber rather than a tooltip for exactly that reason (see *Frontend*
+   below); shipping the explanation hover-only here would have repeated the
+   mistake this same file warns about.
+3. **Precision.** Tiles compact money above RM 10,000 and pair it with a
+   full-precision hover. The note's amount is the only copy of itself, so it
+   uses `formatPrice` and is never rounded. A test pins both this and the
+   absence of any `title` in the note.
+
+The tile's sub-label therefore stays "confirmed → delivered" in every state —
+which also keeps the page's only on-screen statement of *which statuses count*
+visible to booking sellers, the one cohort that also has a `booking_requested`
+status deliberately excluded from revenue.
+
+Decided, not built here: a partial keep nets the whole deposit, not the returned
+remainder. `depositsExcluded` counts a deposit whether or not it has been returned yet.
+The name is load-bearing: it answers "what did this window leave out?", never
+"what is still outstanding?". It was called `depositsHeld` in review and
+renamed before merge, because the outstanding-liability figure is a genuinely
+different number and `depositsHeld` is the obvious name for **it** — shipping
+the wrong one under that name would have forced the reporting tail to invent a
+worse one. That tail — a held / returned / kept tile — is `z8r3fdd07u`, once S5
+has a month of real data.
 
 ## Backend — two queries, one page (`convex/analytics.ts`)
 
@@ -75,8 +142,9 @@ re-run the heavy scan.** So the range is split in two, merged on the client:
   trend of its own; the client places today's earned into the right bucket.
 
 The client (`src/lib/insights-view.ts` `buildInsightsView`) merges the two onto
-one contiguous trend grid, summing KPIs and merging product/payment breakdowns
-via the shared pure helpers, so client and server never diverge.
+one contiguous trend grid, summing KPIs (earned, `depositsExcluded`, collected,
+order count) and merging product/payment/source breakdowns via the shared pure
+helpers, so client and server never diverge.
 
 ### Scan
 
@@ -117,7 +185,10 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 ## Frontend
 
 - Route: `src/routes/app.insights.tsx` (Pro: full page; Starter/non-Pro: teaser).
-- Components in `src/components/insights/`: `kpi-row`, `revenue-trend`,
+- Components in `src/components/insights/`: `kpi-row` (the four tiles),
+  `deposit-note` (the one page-level line stating that refundable booking
+  deposits are excluded from every figure — renders nothing at 0, see
+  [Security deposits](#security-deposits)), `revenue-trend`,
   `top-products` (bar list + revenue/quantity toggle + thumbnails),
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
   opacity, on-brand), `source-breakdown` (bar list of `attributionBucket` rows;
@@ -132,7 +203,9 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   (Apple-Health style), lights up solid mint while the rest dim, and a readout
   row above the chart shows the bucket's date, earned revenue and order count
   plus a **"View orders" deep link** into the inbox filtered to that bucket
-  (`/app/orders?from&to` on `createdAt`). No selection → the readout shows the
+  (`/app/orders?from&to` on `createdAt`, **plus `?st=` scoped to
+  `REVENUE_LEAVES`** — see [Drill-ins](#drill-ins-carry-the-status-scope)).
+  No selection → the readout shows the
   peak day/week + a "tap or drag" hint. Keyboard: focus + ←/→/Home/End move the
   selection, Esc clears (`role="slider"` with `aria-valuetext`). `touch-action:
   pan-y` keeps vertical page scroll working while horizontal drags scrub.
@@ -146,6 +219,26 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   [`docs/app-redesign.md`](./app-redesign.md#mobile-bottom-nav--5-tabs--more)),
   an **Insights** entry card on `/app` home (lock-badged for Starter) + a
   desktop sidebar link.
+
+### Drill-ins carry the status scope
+
+Both ways into the inbox from this page — the trend readout's **View orders**
+and every **Sources** row — carry `?st=` set to **`REVENUE_LEAVES`**
+(`convex/lib/orderBuckets.ts`), so the list that opens holds exactly the orders
+the figure was computed from.
+
+They used to pass only a date range (or only `?asrc=`), which asked the inbox a
+different question than the chart answered: a bar reading **"2 orders" opened a
+list of 3**, the extra one CANCELLED. Insights drops `pending`,
+`booking_requested` and `cancelled` from every figure; the inbox, told only
+"8 Sep", showed them.
+
+`REVENUE_LEAVES` is **derived** from `isRevenueOrder`, never typed out, because
+the two lists drifting is the failure. It includes **`confirmed_unseen`** — a
+confirmed order nobody has opened, which Insights counts while the inbox files
+it under New. A hand-written list would have missed exactly that leaf and the
+drill-in would have been short by every unopened order. Pinned in both
+directions by `convex/lib/orderBuckets.test.ts`.
 
 ### Empty states
 
@@ -165,9 +258,18 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 ## Tests
 
 - `convex/lib/insights.test.ts` — the reduce (revenue split, cancelled-after-
-  paid, pending-but-paid, product grouping, deleted-product snapshot, MYT 00:30
-  boundary, day/week bucketing, donut = collected invariant, merge helpers).
-- `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid.
+  paid, pending-but-paid, deposit netted out of every figure incl. the by-source
+  rows + `depositsExcluded` (0 when the only deposit is on a non-revenue order;
+  clamped when a deposit exceeds the total), product grouping, deleted-product
+  snapshot, MYT 00:30 boundary, day/week bucketing, donut = collected
+  invariant, Σ sources = earned with a deposit order present, merge helpers).
+- `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid
+  (`depositsExcluded` sums like earned and is dropped with the today payload).
+- `src/components/insights/deposit-note.test.tsx` — renders nothing at 0 or
+  below; states the amount, that it governs the whole page, and where a kept
+  deposit lives; the figure is exact rather than compacted on a large total;
+  store currency (SG); and it carries **no** `title`, so the explanation can
+  never regress to hover-only.
 - `src/components/insights/revenue-trend.test.tsx` — the scrubber (pure
   `scrubIndex`/`bucketRange`, tap/drag selection, zero-order bucket hides the
   link, arrow-key navigation, Esc/✕ clear) on a real memory router.

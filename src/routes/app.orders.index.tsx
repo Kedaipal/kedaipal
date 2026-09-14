@@ -75,6 +75,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { OrderTotal } from "../components/order/order-total";
 import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { Button } from "../components/ui/button";
 import {
@@ -93,6 +94,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { resolvePinMode, useInboxPinMode } from "../hooks/useInboxPinMode";
 import {
 	type InboxView,
 	resolveInboxView,
@@ -463,7 +465,7 @@ function OrdersRoute() {
 		catunspec = false,
 		sort = "recent",
 		view: urlView,
-		pin: pinMode = "top",
+		pin: urlPin,
 		tsort,
 		tdesc = false,
 	} = Route.useSearch();
@@ -511,6 +513,9 @@ function OrdersRoute() {
 	const { stored: storedView, remember: rememberView } = useInboxView(
 		retailer?._id ?? "",
 	);
+	const { stored: storedPin, remember: rememberPin } = useInboxPinMode(
+		retailer?._id ?? "",
+	);
 	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
 	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
 	// export are the gated inbox surfaces — hidden below, and any stale URL filters
@@ -525,6 +530,11 @@ function OrdersRoute() {
 		retailer.actingAsAdmin === true ||
 		hasFeature(retailer.subscription, "orderInbox");
 	const view = resolveInboxView(urlView, storedView, inboxEnabled);
+	// What the pins DO, same posture as the layout above: a mode named in the
+	// URL wins, otherwise the seller resumes what they last chose. Without
+	// this, every Insights drill-in (which builds a fresh search object)
+	// silently reset a seller who had turned pinning off.
+	const pinMode = resolvePinMode(urlPin, storedPin);
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
@@ -822,6 +832,10 @@ function OrdersRoute() {
 	function cyclePinMode() {
 		const next: PinMode =
 			pinMode === "top" ? "only" : pinMode === "only" ? "off" : "top";
+		// "top"/"off" is how this seller reads their inbox, so it outlives the
+		// URL; "only" narrows the list, so it is a filter and is deliberately
+		// not remembered (see useInboxPinMode).
+		rememberPin(next);
 		navigate({
 			// The default stays out of the URL; only the two opt-outs persist.
 			search: (prev) => ({ ...prev, pin: next === "top" ? undefined : next }),
@@ -1097,6 +1111,12 @@ function OrdersRoute() {
 					: null,
 				res.skippedRiderManaged > 0
 					? `${res.skippedRiderManaged} with a rider on the way`
+					: null,
+				// Cancelled orders can't be reopened — their stock is already back
+				// (86eypn8ye). Named so the seller learns the rule rather than
+				// re-selecting the same rows and watching nothing happen.
+				res.skippedCancelled > 0
+					? `${res.skippedCancelled} already cancelled`
 					: null,
 			].filter(Boolean);
 			toast.success(
@@ -1723,9 +1743,11 @@ function OrdersRoute() {
 											>
 												{orderCustomerLabel(o.customer)}
 											</span>
-											<span className="shrink-0 text-[15px] font-bold tabular-nums">
-												{formatPrice(o.total, o.currency)}
-											</span>
+											<OrderTotal
+												total={o.total}
+												securityDeposit={o.securityDeposit}
+												currency={o.currency}
+											/>
 										</div>
 										<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
 											<span className="font-mono">#{o.shortId}</span>

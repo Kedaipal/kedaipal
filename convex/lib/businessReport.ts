@@ -20,8 +20,15 @@
  *     a seller who stops paying just sits at `past_due`. But `past_due` is
  *     reached four different ways and only ONE of them is churn; see
  *     `classifyPastDue`.
- *   - Order volume reuses `isRevenueOrder` so "revenue" means the same thing
- *     here as on /app/insights (see docs/insights.md).
+ *   - Order volume reuses `isRevenueOrder`, so which ORDERS count means the
+ *     same thing here as on /app/insights. The AMOUNT does not: `gmv` sums
+ *     raw `order.total` while every seller-facing revenue figure subtracts a
+ *     booking security deposit (`revenueExcludingDeposit`, booking S5), so on
+ *     a store with deposits this GMV runs high by the held money. Known and
+ *     ticketed as `z8r3fdd07u` (which also has to decide whether platform GMV
+ *     SHOULD net it out — a founder volume metric and a seller revenue metric
+ *     can legitimately differ). Stated here rather than silently inherited,
+ *     because the previous wording claimed the two agreed. See docs/insights.md.
  *
  * LOAD-BEARING INVARIANT — `updatedAt` as the lapse timestamp. The only writers
  * of a `subscriptions` row are `invoices.markPaid`, the backfill, and the three
@@ -156,6 +163,9 @@ export type SubscriptionCounts = {
 	 * anyway so the number starts moving on its own the day a cancellation flow
 	 * ships, instead of needing a report change to notice. */
 	cancelled: number;
+	/** Off-Season Hold (z8r3fday24) — paid sellers paused between seasons. Not
+	 * churn: they're billing RM19/S$9 and one tap from their tier. */
+	onHold: number;
 	/** Comped rows across every status (they're counted in their status bucket
 	 * too — this is an overlay, not a fifth status). */
 	comped: number;
@@ -446,6 +456,7 @@ export function reduceBusinessReport(
 		active: 0,
 		pastDue: 0,
 		cancelled: 0,
+		onHold: 0,
 		comped: 0,
 	};
 	const mrr: MrrSummary = {
@@ -472,6 +483,7 @@ export function reduceBusinessReport(
 		else if (sub.status === "active") counts.active += 1;
 		else if (sub.status === "past_due") counts.pastDue += 1;
 		else if (sub.status === "cancelled") counts.cancelled += 1;
+		else if (sub.status === "on_hold") counts.onHold += 1;
 
 		const lastPaid = latestPaid.get(sub.retailerId);
 		const slug = retailerById.get(sub.retailerId)?.slug ?? sub.retailerId;
