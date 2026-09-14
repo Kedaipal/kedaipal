@@ -404,6 +404,11 @@ function EditProductRoute() {
 						productId: product._id,
 						categoryIds: values.categoryIds,
 					});
+					// Saving navigated away in silence, so the only feedback was the
+					// page changing — and now that stock confirms its own writes with
+					// a toast, a silent product save read as the one that didn't
+					// land. Same confirmation as delete, which already had one.
+					toast.success("Product saved.");
 					navigate({ to: "/app/products" });
 				}}
 			/>

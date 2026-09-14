@@ -543,6 +543,24 @@ describe("stock left the product save (86eypn8ye)", () => {
 		expect(screen.queryByText("In stock now")).toBe(null);
 	});
 
+	it("price and stock are the same height — both on the 44px field size", () => {
+		// They sit side by side in one row, so a mismatch reads as a broken
+		// input rather than a deliberate one. PriceInput was the last control in
+		// this card still on the compact `default` variant (h-8) while the stock
+		// control beside it, and the name/description fields above it, were all
+		// h-11. Also the mobile-first tap-target floor.
+		render(
+			<VariantEditor value={singleVariant} onChange={() => {}} currency="RM" />,
+		);
+		const price = screen.getByPlaceholderText("0.00");
+		expect(price.className).toContain("min-h-11");
+		expect(price.className).not.toContain("h-8");
+
+		// Its partner control, for the pairing this test exists to protect.
+		const stock = screen.getByLabelText("Stock on hand");
+		expect(stock.closest("div")?.className).toContain("h-11");
+	});
+
 	it("a NEW row keeps its stock input", () => {
 		// No liveStock entry means the grid is INSERTING this combination: it has
 		// no stock of its own to protect, so the typed number is the only truth.

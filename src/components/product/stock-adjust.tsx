@@ -154,7 +154,13 @@ export function StockAdjustDialog({
 				) : null}
 
 				<DialogFooter>
-					<Button variant="outline" onClick={() => onOpenChange(false)}>
+					<Button
+						variant="outline"
+						// Matches the confirm beside it — and 44px is the floor for a
+						// control this dialog is regularly dismissed with on a phone.
+						className="h-11"
+						onClick={() => onOpenChange(false)}
+					>
 						Cancel
 					</Button>
 					<Button

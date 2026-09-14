@@ -168,7 +168,7 @@ function LiveStockCell({
 	onAdjust: () => void;
 }) {
 	return (
-		<div className="flex h-11 items-center justify-between gap-2 rounded-lg bg-muted pr-1 pl-3">
+		<div className="flex h-11 items-center justify-between gap-2 rounded-xl bg-muted pr-1 pl-3">
 			<span className="text-[15px] font-bold tabular-nums">{onHand}</span>
 			<Button
 				type="button"
@@ -371,6 +371,11 @@ export function PriceInput({
 }) {
 	return (
 		<Input
+			// `field`, not the compact default: this sits beside the h-11 stock
+			// control and under the h-11 name/description fields, so the default's
+			// 32px read as a broken input rather than a deliberate one. It is also
+			// the mobile-first tap target the rest of the form already uses.
+			variant="field"
 			inputMode="decimal"
 			placeholder="0.00"
 			value={value}
@@ -429,7 +434,7 @@ export function StockInput({
 	return (
 		<div
 			className={cn(
-				"flex h-11 items-center overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
+				"flex h-11 items-center overflow-hidden rounded-xl border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
 				invalid &&
 					"border-destructive ring-2 ring-destructive/20 focus-within:border-destructive",
 				className,
@@ -1436,7 +1441,6 @@ export function VariantEditor({
 												<PriceInput
 													value={row.price}
 													onChange={(v) => setRow(i, { price: v })}
-													className="h-10"
 													invalid={!!issueFor("row", i, "price")}
 												/>
 												<IssueText message={issueFor("row", i, "price")} />
