@@ -244,7 +244,10 @@ Every event is persisted to **`wabaTemplateEvents`** (`recordTemplateEvent`);
 alerting ones schedule `sendWabaTemplateAlert` → email to `ADMIN_ALERT_EMAIL`
 (fallback `EMAIL_FROM`) naming the template, the change and the fix
 (appeal / re-submit / review copy). The admin console
-(`/app/admin/waba` → **Message templates**, `adminListTemplates`) shows each
+(`/app/admin/waba` → **Message templates**, `adminListTemplates` — the LAST
+section on the page, below the vendor list and the opt-out register: it is
+reference state an operator consults, not one of the two things they came to
+do) shows each
 configured template per language with its newest **status · billed-as ·
 quality**, lists env vars that are *unset* as "not configured" so a silent
 send path is visible, surfaces templates Meta mentions that we don't

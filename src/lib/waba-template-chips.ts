@@ -66,8 +66,30 @@ export function qualityTone(quality: string | undefined): Tone {
 export function categoryChip(
 	category: string | undefined,
 	configured: boolean,
-): { value: string; tone: Tone } {
-	if (category) return { value: category, tone: categoryTone(category) };
-	if (configured) return { value: "UTILITY (assumed)", tone: "muted" };
-	return { value: "unknown", tone: "muted" };
+): { value: string; tone: Tone; hint: string } {
+	if (category) {
+		return {
+			value: category,
+			tone: categoryTone(category),
+			hint: `Meta told us this template is billed as ${category}.`,
+		};
+	}
+	if (configured) {
+		return {
+			value: "UTILITY (assumed)",
+			tone: "muted",
+			hint:
+				"We registered this template as a utility one, and Meta has not said otherwise. " +
+				"Meta only reports a category when it CHANGES one — it never confirms the " +
+				"category a template was approved under — so this stays an assumption until " +
+				"it moves. If it ever does, this chip turns red and ops is emailed.",
+		};
+	}
+	return {
+		value: "unknown",
+		tone: "muted",
+		hint:
+			"This deployment does not configure this template, so we have no registration " +
+			"to go on and Meta has reported no category for it.",
+	};
 }

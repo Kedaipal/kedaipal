@@ -71,24 +71,73 @@ helper copy reads from it: with the template it says the reminder "lands even
 if the buyer has never replied"; without it, it keeps the old caveat and points
 at the always-works direct-chat button.
 
-**Template registration (Meta, EN + BM).** Body params are the confirm
-template's three — `{{1}}` order id, `{{2}}` store name (through
-`templateParam`), `{{3}}` amount as `MYR 120.00` — and the URL button base is
-`https://kedaipal.com/track/{{1}}` ← the tracking **token** (added via Meta's
-*Add variable* control, never hand-typed braces). Proposed body, strictly
-transactional (a promotional word is how a template gets re-categorised to
-marketing at 6.1× the price — see the template-webhook section of
-[`waba-protection.md`](./waba-protection.md)):
+### Registering `payment_reminder_utility` in WhatsApp Manager
 
-> EN — *A reminder from {{2}}: order {{1}} is still awaiting payment ({{3}}).
-> Use the order number as your transfer reference. Tap below for how to pay and
-> to confirm once you have.*
->
-> BM — *Peringatan daripada {{2}}: pesanan {{1}} masih menunggu pembayaran
-> ({{3}}). Gunakan nombor pesanan sebagai rujukan pindahan. Tekan di bawah
-> untuk cara membayar dan sahkan setelah selesai.*
->
-> Button: **How to pay** / **Cara bayar** → `https://kedaipal.com/track/{{1}}`
+Everything Meta asks for, in the order its form asks for it. **Two language
+versions of the SAME template** (one name, two languages) — never two
+templates. `TEMPLATE_LANGUAGE` maps all three store locales onto these two, so
+a `zh` store rides the English one.
+
+| Field | Value |
+| --- | --- |
+| Name | `payment_reminder_utility` |
+| Category | **Utility** (never Marketing — that is the 6.1× rate) |
+| Languages | English (`en`) and Malay (`ms`) |
+| Header | **none** |
+| Footer | **none** — see the footer note below |
+| Buttons | one **Visit website** button, **Dynamic** URL |
+
+**Body** — three variables, in this order. They are positional, so the order is
+the contract: `convex/whatsapp.ts` passes `[shortId, storeName, amount]`.
+
+| Variable | Carries | Example Meta wants |
+| --- | --- | --- |
+| `{{1}}` | order id | `ORD-JLXA` |
+| `{{2}}` | store name (through `templateParam`, so no tabs or newlines) | `IndoMart` |
+| `{{3}}` | amount, currency code included, already formatted | `MYR 23.90` |
+
+> **EN** — Hi! A reminder from {{2}}: order {{1}} is still awaiting payment,
+> total {{3}}. Please use the order number as your transfer reference. Tap
+> below to see how to pay and to confirm once you have paid.
+
+> **BM** — Hai! Peringatan daripada {{2}}: pesanan {{1}} masih menunggu
+> pembayaran, jumlah {{3}}. Sila gunakan nombor pesanan sebagai rujukan
+> pindahan. Tekan di bawah untuk melihat cara membayar dan sahkan setelah anda
+> membuat pembayaran.
+
+**Button** — type **Visit website**, URL type **Dynamic**. Meta appends the
+variable to a fixed prefix, so the prefix must end with the slash:
+
+| Field | EN | BM |
+| --- | --- | --- |
+| Button text | `How to pay` | `Cara bayar` |
+| URL | `https://kedaipal.com/track/{{1}}` | `https://kedaipal.com/track/{{1}}` |
+| URL sample | `k7Qm2xR9vTb4Ls8Wd3Np` | same |
+
+⚠️ The button's `{{1}}` is **its own namespace** — it is NOT the body's `{{1}}`.
+It carries the order's **`trackingToken`** (the capability that opens
+`/track/<token>` with no login), never the `shortId`. Add it with Meta's **Add
+variable** control; hand-typing the braces is what broke a button once before
+(`86eyheqzv`).
+
+**Samples Meta requires before it will submit** — body `ORD-JLXA`, `IndoMart`,
+`MYR 23.90`; button `k7Qm2xR9vTb4Ls8Wd3Np`.
+
+**No footer.** The "Powered by Kedaipal" line rides buyer *pages* and the
+free-form confirmation, not this template: a template's words are frozen at
+approval, and a promotional-sounding footer is exactly what gets a utility
+template re-categorised to marketing at 6.1× the price. Every word above is
+transactional on purpose — no discounts, no "shop again", no urgency language.
+
+**After approval**, set the env var (Convex prod and dev):
+
+```
+npx convex env set WHATSAPP_PAYMENT_REMINDER_TEMPLATE payment_reminder_utility
+```
+
+Until then leave it **unset**: the reminder keeps working as the free-form
+message, which delivers whenever the buyer's 24h window happens to be open.
+Setting it to a name Meta has not approved makes every reminder fail.
 
 ## Tests
 

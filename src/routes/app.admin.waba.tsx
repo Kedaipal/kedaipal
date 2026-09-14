@@ -146,8 +146,6 @@ function AdminWabaContent() {
 
 			<HealthBanner />
 
-			<TemplatesPanel />
-
 			<div className="relative">
 				<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 				<Input
@@ -236,6 +234,11 @@ function AdminWabaContent() {
 			)}
 
 			<GlobalOptOutPanel />
+
+			{/* Last on purpose: this is reference state an operator consults, not
+			    something they act on. The vendor list and the opt-out register
+			    are the two things they came here to DO. */}
+			<TemplatesPanel />
 
 			{target ? (
 				<ConfirmDialog vendor={target} onClose={() => setTarget(null)} />
@@ -485,13 +488,23 @@ function LanguageChips({
 	configured: boolean;
 }) {
 	const category = categoryChip(lang.category, configured);
-	const chips: Array<{ label: string; value: string; tone: Tone }> = [
+	const chips: Array<{
+		label: string;
+		value: string;
+		tone: Tone;
+		hint?: string;
+	}> = [
 		{
 			label: "status",
 			value: lang.status ?? "no update yet",
 			tone: statusTone(lang.status),
 		},
-		{ label: "billed as", value: category.value, tone: category.tone },
+		{
+			label: "billed as",
+			value: category.value,
+			tone: category.tone,
+			hint: category.hint,
+		},
 		{
 			label: "quality",
 			value: lang.quality ?? "unknown",
@@ -511,7 +524,7 @@ function LanguageChips({
 				{chips.map((c) => (
 					<span
 						key={c.label}
-						title={`${c.label}: ${c.value}`}
+						title={c.hint ?? `${c.label}: ${c.value}`}
 						className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs ${TONE_CLASS[c.tone]}`}
 					>
 						<span className="opacity-70">{c.label}</span>
