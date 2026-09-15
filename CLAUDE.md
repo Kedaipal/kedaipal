@@ -106,10 +106,15 @@ operator work attached to it. Treat the two as one task:
    **including the ones that are empty.** "Env vars: none" is the information.
    The person merging must never have to ask "is there anything for me to do?".
 
+**`/prep-staging` runs all four steps** — it probes the version state, audits the
+diff, writes the notes with working deep links, runs the gates in a test-ready
+worktree, and opens both PRs for review. It never merges either one.
+
 The full table of checks, the exact grep for each, and the order of operations
-(env vars *before* the merge, backfills *after* the deploy, tag last) live in
+(env vars *before* the merge, backfills *after* the deploy) live in
 [`docs/release-checklist.md`](./docs/release-checklist.md). Read it before
-opening a release PR.
+opening a release PR. **Tagging is not a manual step** — `deploy.yml` tags
+`v<version>` after a successful deploy, so only what shipped gets tagged.
 
 ## WhatsApp Model — Shared WABA (permanent)
 
