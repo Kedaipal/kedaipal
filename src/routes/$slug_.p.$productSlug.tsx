@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
 import { ProductPageView } from "../components/storefront/product-page";
+import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -211,20 +212,23 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 function ProductNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Product not found</h1>
-			<p className="text-sm text-muted-foreground">
-				It may have sold out for good or been renamed — the store&apos;s full
-				catalog is still open.
-			</p>
-			<Link
-				to="/$slug"
-				params={{ slug }}
-				activeOptions={{ exact: true }}
-				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
-			>
-				Browse the store
-			</Link>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Product not found</h1>
+				<p className="text-sm text-muted-foreground">
+					It may have sold out for good or been renamed — the store&apos;s full
+					catalog is still open.
+				</p>
+				<Link
+					to="/$slug"
+					params={{ slug }}
+					activeOptions={{ exact: true }}
+					className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
+				>
+					Browse the store
+				</Link>
+			</div>
+			<StorefrontFooter slug={slug} />
 		</main>
 	);
 }
@@ -298,18 +302,20 @@ function ProductRoute() {
 		// bar publishes its measured height as --storefront-bar-h, so the
 		// reservation is exact rather than a guess with dead space under the
 		// badge. The fallback only applies for the frame before first measure.
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-			<ProductPageView
-				product={product}
-				retailerId={retailer._id}
-				retailer={retailer}
-				storeSlug={retailer.slug}
-				cart={cart}
-				canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
-			/>
-			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
+		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+				<ProductPageView
+					product={product}
+					retailerId={retailer._id}
+					retailer={retailer}
+					storeSlug={retailer.slug}
+					cart={cart}
+					canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
+				/>
+				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-			<StorefrontFooter />
-		</div>
+				<StorefrontFooter slug={slug} />
+			</div>
+		</OrderingPausedProvider>
 	);
 }

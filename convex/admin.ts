@@ -64,6 +64,10 @@ export type AdminSellerRow = {
 	 * Kedaipal's own acquisition tags (`powered-by`, `spotlight-<member>`, …),
 	 * not the buyer-side labels. */
 	signupSource?: string;
+	/** The store whose "Powered by Kedaipal" badge brought this seller in
+	 * (`retailers.signupReferrerId`, z8r3fdcwd0), resolved to its CURRENT slug
+	 * + name. Absent = no badge referrer, or one that has since been purged. */
+	signupReferrer?: { slug: string; storeName: string };
 	createdAt: number;
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
@@ -89,6 +93,11 @@ export const listSellersForAdmin = query({
 		const rows: AdminSellerRow[] = [];
 		for (const r of retailers) {
 			const sub = await loadSubscription(ctx, r._id);
+			// Dangling once the referrer is purged (no referential integrity) —
+			// a missing doc simply reads as "no referrer".
+			const referrer = r.signupReferrerId
+				? await ctx.db.get(r.signupReferrerId)
+				: null;
 			rows.push({
 				_id: r._id,
 				storeName: r.storeName,
@@ -100,6 +109,14 @@ export const listSellersForAdmin = query({
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
 				signupSource: r.signupSource,
+				...(referrer
+					? {
+							signupReferrer: {
+								slug: referrer.slug,
+								storeName: referrer.storeName,
+							},
+						}
+					: {}),
 				createdAt: r._creationTime,
 				purging: r.purgeStartedAt !== undefined,
 			});

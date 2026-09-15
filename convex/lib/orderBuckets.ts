@@ -4,6 +4,8 @@
 // status is deliberately NOT a bucket (it's an orthogonal filter + badge). See
 // docs/order-inbox.md.
 
+import { isRevenueOrder } from "./insights";
+
 export type OrderStatus =
 	| "pending"
 	// Booking kind only (86eyj70z1): a date-range request awaiting the
@@ -85,6 +87,33 @@ export function leafBucket(leaf: InboxStatusLeaf): OrderBucket {
 	if (leaf === "cancelled") return "cancelled";
 	return "in_progress"; // confirmed (seen) / packed / shipped
 }
+
+/** The `OrderStatus` behind a leaf — identity except for the unseen split,
+ * which is a `confirmed` order the seller has not opened yet. */
+export function leafStatus(leaf: InboxStatusLeaf): OrderStatus {
+	return leaf === "confirmed_unseen" ? "confirmed" : leaf;
+}
+
+/**
+ * The leaves whose orders Insights counts as revenue — the status scope every
+ * drill-in from `/app/insights` carries, so the inbox it opens holds exactly
+ * the orders the figure was computed from.
+ *
+ * Without it a drill-in passed only a date range, so the inbox answered a
+ * different question than the chart asked: "2 orders" on a trend bar opened a
+ * list of 3, the extra one CANCELLED. Insights excludes `pending`,
+ * `booking_requested` and `cancelled` from every figure; the inbox, told only
+ * "8 Sep", showed them.
+ *
+ * DERIVED from `isRevenueOrder`, never typed out, because the two lists
+ * drifting is the whole failure. Note `confirmed_unseen` is in here: it is a
+ * `confirmed` order nobody has opened, which Insights counts while the inbox
+ * files it under New. A hand-written list would have missed it and the
+ * drill-in would have been short by every unopened order.
+ */
+export const REVENUE_LEAVES: InboxStatusLeaf[] = INBOX_LEAF_KEYS.filter(
+	(leaf) => isRevenueOrder(leafStatus(leaf)),
+);
 
 /**
  * Seller-facing label for a leaf. Takes the caller's status resolver rather than

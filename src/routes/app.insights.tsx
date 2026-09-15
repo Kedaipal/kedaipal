@@ -9,6 +9,7 @@ import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
 import type { ProductMetric } from "../../convex/lib/insights";
 import { PageHeader } from "../components/dashboard/page-header";
 import { DateRangeControl } from "../components/insights/date-range-control";
+import { DepositNote } from "../components/insights/deposit-note";
 import { KpiRow } from "../components/insights/kpi-row";
 import { LockedTeaser } from "../components/insights/locked-teaser";
 import { PaymentDonut } from "../components/insights/payment-donut";
@@ -151,6 +152,10 @@ function InsightsRoute() {
 						collected={view.collected}
 						orderCount={view.orderCount}
 						aov={view.aov}
+						currency={currency}
+					/>
+					<DepositNote
+						depositsExcluded={view.depositsExcluded}
 						currency={currency}
 					/>
 					<RevenueTrend

@@ -1,8 +1,9 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ShoppingBag } from "lucide-react";
+import { PauseCircle, ShoppingBag } from "lucide-react";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
+import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
 
 interface CartBarProps {
 	cart: UseCart;
@@ -18,7 +19,35 @@ interface CartBarProps {
  */
 export function CartBar({ cart, storeSlug }: CartBarProps) {
 	const navigate = useNavigate();
+	const paused = useOrderingPaused();
 	const empty = cart.itemCount === 0;
+
+	// Off-Season Hold: the bar stays (the cart persists — nothing is lost when
+	// the store reopens) but checkout is disabled with the reason on it.
+	if (paused) {
+		return (
+			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+				<div className="mx-auto flex max-w-6xl items-center gap-3">
+					<div className="flex flex-1 items-center gap-3">
+						<div className="flex size-11 items-center justify-center rounded-full bg-accent/10">
+							<PauseCircle className="size-5 text-accent" aria-hidden />
+						</div>
+						<div className="flex flex-col">
+							<span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+								Seasonal break
+							</span>
+							<span className="text-sm font-semibold">
+								Not taking orders right now
+							</span>
+						</div>
+					</div>
+					<Button type="button" disabled className="h-12 px-6 text-sm">
+						{ORDERING_PAUSED_CTA}
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))]">

@@ -9,13 +9,21 @@ import {
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	FOUNDING_MONTHLY_PRICES,
+	FOUNDING_PRICE_LAPSE_MS,
+	foundingPricingApplies,
+	HOLD_MONTHLY_PRICES,
 	isPlanSelectable,
+	isPlanUpgrade,
+	planChangeCarryover,
+	planChangeCarryoverDays,
 	isUnlimited,
+	OUTLET_ADDON_MONTHLY_PRICES,
+	PLAN_CAPS,
 	PLAN_MONTHLY_PRICE,
 	PLAN_MONTHLY_PRICES,
-	PLANS,
 	planPrice,
 	planQualifiesForFounding,
+	PLANS,
 	starterPricePerDay,
 	UNLIMITED,
 } from "./plans";
@@ -73,7 +81,7 @@ describe("plans — pricing", () => {
 	test("monthly price is the table price", () => {
 		expect(planPrice("starter", "monthly")).toBe(7900);
 		expect(planPrice("pro", "monthly")).toBe(14900);
-		expect(planPrice("scale", "monthly")).toBe(29900);
+		expect(planPrice("scale", "monthly")).toBe(39900);
 	});
 
 	test("annual = monthly × 10 (10 months paid, 12 received)", () => {
@@ -96,10 +104,18 @@ describe("plans — pricing", () => {
 		expect(planPrice("starter", "monthly", true)).toBe(PLAN_MONTHLY_PRICE.starter);
 	});
 
-	test("SGD table prices per the Aug 2026 SG deck (S$29 / S$59 / S$119)", () => {
+	test("Scale is RM399 / S$149 — the 30 Aug 2026 reset (Arif, FINAL 6 Sep)", () => {
+		expect(planPrice("scale", "monthly")).toBe(39900);
+		expect(planPrice("scale", "monthly", false, "SGD")).toBe(14900);
+		// Starter / Pro did not move.
+		expect(planPrice("starter", "monthly")).toBe(7900);
+		expect(planPrice("pro", "monthly")).toBe(14900);
+	});
+
+	test("SGD table prices — S$29 / S$59 (Aug 2026 SG deck) and S$149 (reset)", () => {
 		expect(planPrice("starter", "monthly", false, "SGD")).toBe(2900);
 		expect(planPrice("pro", "monthly", false, "SGD")).toBe(5900);
-		expect(planPrice("scale", "monthly", false, "SGD")).toBe(11900);
+		expect(planPrice("scale", "monthly", false, "SGD")).toBe(14900);
 		// Annual keeps the same 10-months-charged rule in every currency.
 		expect(planPrice("pro", "annual", false, "SGD")).toBe(5900 * 10);
 	});
@@ -113,9 +129,28 @@ describe("plans — pricing", () => {
 
 	test("SGD founding prices — same ~30%-rounded-down rule as MYR", () => {
 		expect(planPrice("pro", "monthly", true, "SGD")).toBe(4100); // S$41
-		expect(FOUNDING_MONTHLY_PRICES.SGD.scale).toBe(8300); // S$83
+		expect(FOUNDING_MONTHLY_PRICES.SGD.scale).toBe(10400); // S$104 (0.7 × S$149, floored)
+		expect(FOUNDING_MONTHLY_PRICES.MYR.scale).toBe(27900); // RM279 (0.7 × RM399, floored)
 		// Starter has no founding price → falls back to its standard SGD price.
 		expect(planPrice("starter", "monthly", true, "SGD")).toBe(2900);
+	});
+
+	test("Off-Season Hold is RM19 / S$9 — priced in every billing currency, below Starter", () => {
+		expect(HOLD_MONTHLY_PRICES.MYR).toBe(1900);
+		expect(HOLD_MONTHLY_PRICES.SGD).toBe(900);
+		for (const currency of BILLING_CURRENCIES) {
+			expect(HOLD_MONTHLY_PRICES[currency]).toBeGreaterThan(0);
+			expect(HOLD_MONTHLY_PRICES[currency]).toBeLessThan(
+				PLAN_MONTHLY_PRICES[currency].starter,
+			);
+		}
+		// A hold is a status, not a tier — the Plan union must not have grown.
+		expect(PLANS).toEqual(["starter", "pro", "scale"]);
+	});
+
+	test("additional-outlet add-on: RM49 / S$18 (S$18 confirmed 1 Sep 2026)", () => {
+		expect(OUTLET_ADDON_MONTHLY_PRICES.MYR).toBe(4900);
+		expect(OUTLET_ADDON_MONTHLY_PRICES.SGD).toBe(1800);
 	});
 
 	test("every billing currency prices every plan (exhaustive tables)", () => {
@@ -180,18 +215,26 @@ describe("plans — gating helpers", () => {
 			userCap: 1,
 			broadcastQuota: 0,
 		});
+		// Pro 200 / Scale 400 — the allowances /pricing had advertised ahead of
+		// enforcement (86eye2ccu), landed with the pricing reset (z8r3fday24).
 		expect(capsForPlan("pro")).toEqual({
-			orderCap: 500,
+			orderCap: 200,
 			userCap: 2,
 			broadcastQuota: 100,
 		});
-		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28):
-		// orders 2,000/mo (~4× Pro), broadcasts 500/mo (~5× Pro). All finite now.
+		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28);
+		// broadcasts stay 500/mo (~5× Pro). All finite.
 		expect(capsForPlan("scale")).toEqual({
-			orderCap: 2000,
+			orderCap: 400,
 			userCap: 5,
 			broadcastQuota: 500,
 		});
+	});
+
+	test("the order allowances match what /pricing advertises (100 / 200 / 400)", () => {
+		expect(PLAN_CAPS.starter.orderCap).toBe(100);
+		expect(PLAN_CAPS.pro.orderCap).toBe(200);
+		expect(PLAN_CAPS.scale.orderCap).toBe(400);
 	});
 
 	// The UNLIMITED/isUnlimited sentinel is retained for a future Enterprise tier
@@ -200,6 +243,65 @@ describe("plans — gating helpers", () => {
 		expect(isUnlimited(UNLIMITED)).toBe(true);
 		expect(isUnlimited(2000)).toBe(false);
 		expect(isUnlimited(500)).toBe(false);
+	});
+});
+
+describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const base = {
+		plan: "pro" as const,
+		isFoundingMember: true,
+		foundingIntent: true, // never cleared after the claim — must not bypass the window
+		now: NOW,
+	};
+
+	test("claimed member inside the window keeps the founding price", () => {
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW - 89 * DAY }),
+		).toBe(true);
+		// The renewal-cron case: paid through the future (active).
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW + 30 * DAY }),
+		).toBe(true);
+	});
+
+	test("claimed member lapsed past 3 months bills at list — intent flag can't rescue it", () => {
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW - 91 * DAY }),
+		).toBe(false);
+		expect(FOUNDING_PRICE_LAPSE_MS).toBe(90 * DAY);
+	});
+
+	test("unclaimed onboard intent always qualifies (no lapse to measure)", () => {
+		expect(
+			foundingPricingApplies({
+				...base,
+				isFoundingMember: false,
+				paidThrough: undefined,
+			}),
+		).toBe(true);
+	});
+
+	test("a claimed member with no paid period fails toward the promise", () => {
+		expect(foundingPricingApplies({ ...base, paidThrough: undefined })).toBe(
+			true,
+		);
+	});
+
+	test("only founding-priced tiers qualify; plain stores never do", () => {
+		expect(
+			foundingPricingApplies({ ...base, plan: "starter", paidThrough: undefined }),
+		).toBe(false);
+		expect(
+			foundingPricingApplies({
+				plan: "pro",
+				isFoundingMember: false,
+				foundingIntent: false,
+				paidThrough: NOW - DAY,
+				now: NOW,
+			}),
+		).toBe(false);
 	});
 });
 
@@ -291,5 +393,201 @@ describe("plans — annualQuote", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("plan changes — direction and carried-over days (86eyb6z4r)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+
+	test("direction is tier RANK, never price", () => {
+		expect(isPlanUpgrade("starter", "pro")).toBe(true);
+		expect(isPlanUpgrade("pro", "starter")).toBe(false);
+		expect(isPlanUpgrade("pro", "scale")).toBe(true);
+		// Same tier is not an upgrade in either direction.
+		expect(isPlanUpgrade("pro", "pro")).toBe(false);
+		// The trap price comparison falls into: an ANNUAL Starter (RM790) moving
+		// to a MONTHLY Pro (RM149) is unmistakably a tier upgrade, but costs less.
+		expect(planPrice("starter", "annual")).toBeGreaterThan(
+			planPrice("pro", "monthly"),
+		);
+		expect(isPlanUpgrade("starter", "pro")).toBe(true);
+	});
+
+	test("unused Starter days buy proportionally fewer Pro days", () => {
+		// 10 of 30 days left on RM79 Starter = RM26.33 of value; Pro costs
+		// RM149/30 = RM4.97 a day → 5.3 → 5 days.
+		expect(
+			planChangeCarryoverDays({
+				fromPlan: "starter",
+				fromCycle: "monthly",
+				toPlan: "pro",
+				toCycle: "monthly",
+				founding: false,
+				currency: "MYR",
+				periodEnd: NOW + 10 * DAY,
+				now: NOW,
+			}),
+		).toBe(5);
+	});
+
+	test("the breakdown reconciles: days left, their value, what that buys", () => {
+		// The case a seller queried (Zaki, 13 Sep 2026): subscribed to Starter
+		// and upgraded the SAME day, all 30 days untouched, and the dialog said
+		// 16 days. Nothing is confiscated — RM79 is RM79; it just buys fewer
+		// days of a plan that costs RM4.97 a day instead of RM2.63.
+		const carry = planChangeCarryover({
+			fromPlan: "starter",
+			fromCycle: "monthly",
+			toPlan: "pro",
+			toCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 30 * DAY,
+			now: NOW,
+		});
+		expect(carry.daysLeft).toBe(30);
+		// A full untouched period is worth exactly what was paid for it.
+		expect(carry.valueLeftSen).toBe(PLAN_MONTHLY_PRICES.MYR.starter);
+		expect(carry.days).toBe(16);
+		// The seller ends up with 46 days of Pro for RM79 + RM149, which is
+		// what 46 days of Pro costs. No money appears or disappears.
+		const paid = PLAN_MONTHLY_PRICES.MYR.starter + PLAN_MONTHLY_PRICES.MYR.pro;
+		const served = ((30 + carry.days) * PLAN_MONTHLY_PRICES.MYR.pro) / 30;
+		expect(Math.abs(paid - served)).toBeLessThan(100); // within RM1 of rounding
+	});
+
+	test("the days it reports are the days planChangeCarryoverDays grants", () => {
+		// One conversion, two readers — the copy can never quote a number the
+		// settle path wouldn't grant.
+		const args = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		for (const daysLeft of [0, 1, 7, 10, 23, 30]) {
+			const periodEnd = NOW + daysLeft * DAY;
+			expect(planChangeCarryover({ ...args, periodEnd }).days).toBe(
+				planChangeCarryoverDays({ ...args, periodEnd }),
+			);
+		}
+	});
+
+	test("a lapsed or missing period reports nothing in every field", () => {
+		const args = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		for (const periodEnd of [NOW - DAY, NOW, undefined]) {
+			expect(planChangeCarryover({ ...args, periodEnd })).toEqual({
+				daysLeft: 0,
+				valueLeftSen: 0,
+				days: 0,
+			});
+		}
+	});
+
+	test("moving DOWN carries more days than were left, never fewer", () => {
+		// RM124 of Pro left buys a lot of RM79 Starter.
+		const days = planChangeCarryoverDays({
+			fromPlan: "pro",
+			fromCycle: "monthly",
+			toPlan: "starter",
+			toCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 25 * DAY,
+			now: NOW,
+		});
+		expect(days).toBeGreaterThan(25);
+	});
+
+	test("crossing cycles uses DAY RATES, not a price ratio", () => {
+		// RM26.33 left on monthly Starter, spent at annual Pro's daily rate
+		// (149000/365 = RM4.08) → 6 days. A naive price ratio would have said
+		// 10 × 7900/149000 ≈ 0.5 → 1 day, robbing the seller of five days.
+		const crossed = planChangeCarryoverDays({
+			fromPlan: "starter",
+			fromCycle: "monthly",
+			toPlan: "pro",
+			toCycle: "annual",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 10 * DAY,
+			now: NOW,
+		});
+		expect(crossed).toBe(6);
+		// And it must exceed the same-cycle answer, because a year bought
+		// upfront is cheaper per day than a month is.
+		expect(crossed).toBeGreaterThan(
+			planChangeCarryoverDays({
+				fromPlan: "starter",
+				fromCycle: "monthly",
+				toPlan: "pro",
+				toCycle: "monthly",
+				founding: false,
+				currency: "MYR",
+				periodEnd: NOW + 10 * DAY,
+				now: NOW,
+			}),
+		);
+	});
+
+	test("a lapsed or missing period carries nothing — never resurrects time", () => {
+		const base = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		expect(planChangeCarryoverDays({ ...base, periodEnd: NOW - DAY })).toBe(0);
+		expect(planChangeCarryoverDays({ ...base, periodEnd: NOW })).toBe(0);
+		expect(planChangeCarryoverDays({ ...base, periodEnd: undefined })).toBe(0);
+	});
+
+	test("a founding member's carryover is computed at THEIR prices", () => {
+		const shared = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			currency: "MYR" as const,
+			periodEnd: NOW + 10 * DAY,
+			now: NOW,
+		};
+		// Founding Pro is cheaper (RM104), so the same leftover Starter value
+		// buys MORE days of it than at list price.
+		const founding = planChangeCarryoverDays({ ...shared, founding: true });
+		const list = planChangeCarryoverDays({ ...shared, founding: false });
+		expect(founding).toBeGreaterThan(list);
+	});
+
+	test("SGD is computed in SGD, not converted from ringgit", () => {
+		// Both tiers scale together, so the day count matches MYR's — what must
+		// NOT happen is an FX-shaped number.
+		expect(
+			planChangeCarryoverDays({
+				fromPlan: "starter",
+				fromCycle: "monthly",
+				toPlan: "pro",
+				toCycle: "monthly",
+				founding: false,
+				currency: "SGD",
+				periodEnd: NOW + 10 * DAY,
+				now: NOW,
+			}),
+		).toBe(5);
 	});
 });

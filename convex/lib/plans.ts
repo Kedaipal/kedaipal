@@ -29,12 +29,14 @@ export function planQualifiesForFounding(plan: Plan): boolean {
 export type PlanCaps = {
 	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
 	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
-	 * Scale's "unlimited"). NOTE: the pricing page advertises the *decided*
-	 * allowances 100/200/400 (caps ticket 86eye2ccu) ahead of enforcement. These
-	 * constants still read Pro 500 / Scale 2,000 until 86eye2ccu ships the lower
-	 * caps — and this is the value the shipped billing-tab order meter renders as
-	 * its denominator — so the advertised copy and this constant deliberately
-	 * diverge for BOTH Pro and Scale in the meantime. */
+	 * Scale's "unlimited"). Starter 100 / Pro 200 / Scale 400 — the allowances
+	 * `/pricing` advertises (caps ticket 86eye2ccu; the numbers landed with the
+	 * 30 Aug 2026 pricing reset, z8r3fday24, so the billing-tab meter's
+	 * denominator and the page finally agree). Rows carry the cap denormalized,
+	 * so a change here needs `migrations.resyncSubscriptionCaps` on prod.
+	 *
+	 * While a subscription is ON HOLD the EFFECTIVE cap is 0 (ordering off) —
+	 * resolved by `resolveAccess`, never stored, so resuming needs no rewrite. */
 	orderCap: number;
 	/** Hard cap on dashboard users. */
 	userCap: number;
@@ -45,8 +47,8 @@ export type PlanCaps = {
 // Per CLAUDE.md pricing table.
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
 	starter: { orderCap: 100, userCap: 1, broadcastQuota: 0 },
-	pro: { orderCap: 500, userCap: 2, broadcastQuota: 100 },
-	scale: { orderCap: 2000, userCap: 5, broadcastQuota: 500 },
+	pro: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+	scale: { orderCap: 400, userCap: 5, broadcastQuota: 500 },
 };
 
 /** Boolean feature entitlements per plan — the pricing table's ✓/– rows for
@@ -173,13 +175,16 @@ export const BILLING_CURRENCY_FOR_COUNTRY: Record<Country, BillingCurrency> = {
 };
 
 // Standard monthly price per billing currency (minor units — sen / cents).
-// SGD numbers come from the Aug 2026 SG pricing deck (S$29 / S$59 / S$119).
+// Starter/Pro: locked May 2026 (MYR) + the Aug 2026 SG pricing deck (SGD).
+// Scale: RM399 / S$149 per the 30 Aug 2026 pricing reset (z8r3fday24 — Arif
+// locked RM399 FINAL on 6 Sep after an RM299/RM300 wobble; earlier numbers are
+// void). Scale is still "Coming soon", so nobody was repriced by the move.
 export const PLAN_MONTHLY_PRICES: Record<
 	BillingCurrency,
 	Record<Plan, number>
 > = {
-	MYR: { starter: 7900, pro: 14900, scale: 29900 },
-	SGD: { starter: 2900, pro: 5900, scale: 11900 },
+	MYR: { starter: 7900, pro: 14900, scale: 39900 },
+	SGD: { starter: 2900, pro: 5900, scale: 14900 },
 };
 
 // MYR shorthand for the table above.
@@ -187,14 +192,16 @@ export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
 
 // Founding Member monthly price — 30% lifetime discount (manual v1), per
 // billing currency, rounded DOWN to a whole unit the same way in each (MYR
-// RM104.30 → RM104; SGD S$41.30 → S$41, S$83.30 → S$83). Only the Pro number
-// is reachable at launch; Scale kept for when it activates.
+// RM104.30 → RM104, RM279.30 → RM279; SGD S$41.30 → S$41, S$104.30 → S$104).
+// Founding pricing was RETIRED for new signups in the 30 Aug 2026 reset — no
+// public surface advertises it — but every claimed member keeps their rate, so
+// the table stays in billing. Scale kept for when it activates.
 export const FOUNDING_MONTHLY_PRICES: Record<
 	BillingCurrency,
 	Record<"pro" | "scale", number>
 > = {
-	MYR: { pro: 10400, scale: 20900 },
-	SGD: { pro: 4100, scale: 8300 },
+	MYR: { pro: 10400, scale: 27900 },
+	SGD: { pro: 4100, scale: 10400 },
 };
 
 // MYR shorthand for the founding table above.
@@ -209,13 +216,29 @@ export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
  * message catalogs because the catalogs used to spell "RM49" into the sentence,
  * which quoted ringgit at a Singaporean reading S$ tier prices two lines above.
  *
- * SGD follows the tier ratio (SGD ≈ 0.4 × MYR across all three plans) and keeps
- * the same just-under-a-round-number shape. UNCONFIRMED — swap in a decided
- * number when Scale is priced for sale.
+ * SGD S$18 is the number in the 30 Aug 2026 pricing reset artifact (confirmed
+ * by Arif, 1 Sep — it replaced the S$19 ratio guess); MYR RM49 holds.
  */
 export const OUTLET_ADDON_MONTHLY_PRICES: Record<BillingCurrency, number> = {
 	MYR: 4900,
-	SGD: 1900,
+	SGD: 1800,
+};
+
+/**
+ * Off-Season Hold — the monthly price of a PAUSED subscription (minor units).
+ * RM19 / S$9 per the 30 Aug 2026 pricing reset (z8r3fday24).
+ *
+ * A hold is a subscription STATUS (`on_hold`), not a `Plan`: the seller keeps
+ * their tier (`subscriptions.plan` is what they resume to), ordering switches
+ * off, and the storefront / catalog / buyer list / order history stay live.
+ * Not on `PLAN_MONTHLY_PRICES` on purpose — widening the `Plan` union would
+ * drag a non-tier through every feature matrix and picker. Every surface that
+ * quotes the hold price reads it from here (the `pricing-copy.test.ts`
+ * currency-literal guard forbids spelling it into copy).
+ */
+export const HOLD_MONTHLY_PRICES: Record<BillingCurrency, number> = {
+	MYR: 1900,
+	SGD: 900,
 };
 
 /**
@@ -319,11 +342,174 @@ export function annualQuote(
 	};
 }
 
+/** Days in a billing cycle — the flat slabs `nextPeriodEnd` grants. */
+export function cycleDays(cycle: BillingCycle): number {
+	return cycle === "annual" ? 365 : 30;
+}
+
+/**
+ * Extra days granted on the new plan for value the seller had already paid for
+ * — the "credit as days" model for a mid-cycle change.
+ *
+ * The seller pays the ordinary full price for the new plan, so the invoice
+ * stays a bog-standard service bill: the gateway amount check, the saved-method
+ * consent guard, the PDF totals and the MRR figure all keep working untouched.
+ * What they had left over comes back as TIME rather than as a discount.
+ *
+ *   valueLeft   = fromPrice × daysLeft / fromCycleDays
+ *   carryover   = valueLeft ÷ (toPrice / toCycleDays)
+ *
+ * Day-rates rather than a naive price ratio, so crossing cycles is right too:
+ * RM26 left on a monthly Starter buys 5 days of monthly Pro but only hours of
+ * an annual Pro, because an annual plan's daily rate is far lower per ringgit
+ * paid. Both prices are read at the seller's OWN founding rate and currency.
+ *
+ * Deliberately called at SETTLE, never at issue: on the manual rail a seller
+ * can pay up to 14 days after the invoice is cut, and `daysLeft` must be the
+ * days genuinely still unused when the money lands. Priced at issue, a
+ * late-paid upgrade would buy days that had already elapsed — the flaw that
+ * sank the charge-the-difference design.
+ *
+ * Applies to ANY invoice settled while a paid period is still running, not
+ * just upgrades: the rule is simply that a seller never loses time they have
+ * already bought. That also fixes early renewals, which used to forfeit the
+ * remainder silently.
+ *
+ * Rounds to the nearest whole day (flooring quietly shaves up to a day of paid
+ * value); returns 0 once the period has lapsed, so it can never resurrect a
+ * period that had already run out.
+ */
+export type PlanChangeCarryover = {
+	/** Whole days still unused on the plan being left. */
+	daysLeft: number;
+	/** What those days are worth, in minor units, at the OLD plan's rate. */
+	valueLeftSen: number;
+	/** What that value buys at the NEW plan's daily rate. */
+	days: number;
+};
+
+export type PlanChangeCarryoverArgs = {
+	fromPlan: Plan;
+	fromCycle: BillingCycle;
+	toPlan: Plan;
+	toCycle: BillingCycle;
+	founding: boolean;
+	currency: BillingCurrency;
+	/** The period the seller already paid for. */
+	periodEnd: number | undefined;
+	now: number;
+};
+
+/**
+ * The same conversion as `planChangeCarryoverDays`, with its WORKING shown.
+ *
+ * The seller-facing copy needs all three numbers, not just the answer: told
+ * only "16 days carry over" while their billing page says the plan runs
+ * another 30, the natural reading is that 14 days were confiscated. What
+ * actually carries is the MONEY — every sen of it — and the day count shrinks
+ * only because the tier they are moving to costs more per day. Quoting the
+ * days left and their value is what makes that land (Zaki, 13 Sep 2026).
+ */
+export function planChangeCarryover(
+	args: PlanChangeCarryoverArgs,
+): PlanChangeCarryover {
+	const none: PlanChangeCarryover = { daysLeft: 0, valueLeftSen: 0, days: 0 };
+	if (args.periodEnd === undefined) return none;
+	const msLeft = args.periodEnd - args.now;
+	if (msLeft <= 0) return none;
+	const fromPrice = planPrice(
+		args.fromPlan,
+		args.fromCycle,
+		args.founding,
+		args.currency,
+	);
+	const toPrice = planPrice(
+		args.toPlan,
+		args.toCycle,
+		args.founding,
+		args.currency,
+	);
+	if (fromPrice <= 0 || toPrice <= 0) return none;
+	const daysLeftExact = msLeft / DAY_MS;
+	const valueLeft = (fromPrice * daysLeftExact) / cycleDays(args.fromCycle);
+	const newDailyRate = toPrice / cycleDays(args.toCycle);
+	return {
+		// Both rounded from the SAME fractional remainder, so "N days, worth RM X"
+		// always reconciles against the old plan's price.
+		daysLeft: Math.round(daysLeftExact),
+		valueLeftSen: Math.round(valueLeft),
+		days: Math.round(valueLeft / newDailyRate),
+	};
+}
+
+export function planChangeCarryoverDays(args: PlanChangeCarryoverArgs): number {
+	return planChangeCarryover(args).days;
+}
+
+/** Tier order, low to high. Plan changes are classified by RANK, never by
+ * price: a founding Pro (RM104) undercuts a list Starter… no it doesn't, but a
+ * promo or a price reset could, and a seller on an ANNUAL Starter (RM790)
+ * moving to a MONTHLY Pro (RM149) would read as a "downgrade" on price while
+ * being an unmistakable tier upgrade. Rank is total and survives any repricing. */
+export function planRank(plan: Plan): number {
+	return PLANS.indexOf(plan);
+}
+
+/** True when `to` is a higher tier than `from` (the immediate, pay-now
+ * direction); false for same-tier or lower (the scheduled direction). */
+export function isPlanUpgrade(from: Plan, to: Plan): boolean {
+	return planRank(to) > planRank(from);
+}
+
+/**
+ * The free period's BACKSTOP, in days (start-when-you-sell, z8r3fday24). A new
+ * store is free until its FIRST LIVE ORDER — any channel — or until this many
+ * days pass, whichever comes first; that moment issues the first invoice
+ * (`invoices.internalIssueFirstInvoice`). So this is no longer "the trial
+ * length": most stores end their free period earlier, by selling. Copy calls it
+ * "day 15" (the invoice lands the day after 14 full free days).
+ */
 export const TRIAL_DAYS = 14;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Founding cohort size — first 10 paying Pro retailers. */
 export const FOUNDING_MEMBER_LIMIT = 10;
+
+/**
+ * Founding-price retention window (Zaki, 3 Sep 2026): the 30% founding price
+ * survives a subscription lapse of up to 3 months; sit unpaid longer and NEW
+ * bills are at list price. The rank + badge never revert (existing rule —
+ * `isFoundingMember` is permanent); only the *pricing* is forfeited. Surfaced
+ * on the billing tab's founding ribbon and the plan picker — never enforced
+ * silently.
+ */
+export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
+
+/**
+ * Whether a NEW invoice (renewal or self-serve) bills at the founding price.
+ * One rule for every automated issuer — the admin issue form keeps its
+ * explicit founding checkbox (Arif's judgment can override either way).
+ *
+ * Order matters: a CLAIMED member is judged on the lapse window even though
+ * their `foundingIntent` flag is never cleared after the claim — intent alone
+ * only covers the unclaimed first conversion, which has no lapse to measure.
+ * `paidThrough` is the subscription's `currentPeriodEnd` (undefined = never
+ * had a paid period → fail toward the promise).
+ */
+export function foundingPricingApplies(args: {
+	plan: Plan;
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	paidThrough: number | undefined;
+	now: number;
+}): boolean {
+	if (args.plan !== "pro" && args.plan !== "scale") return false;
+	if (args.isFoundingMember) {
+		if (args.paidThrough === undefined) return true;
+		return args.now - args.paidThrough <= FOUNDING_PRICE_LAPSE_MS;
+	}
+	return args.foundingIntent;
+}
 
 /** Caps to denormalize onto a subscription for a plan. Resolves `Infinity` to a
  * large sentinel so it survives Convex's number storage + JSON. */

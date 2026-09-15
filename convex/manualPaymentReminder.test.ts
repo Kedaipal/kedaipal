@@ -250,6 +250,120 @@ describe("manual payment reminder — the day-11–14 window, enforced server-si
 	});
 });
 
+describe("manual payment reminder — the utility template path (z8r3fddtkh)", () => {
+	const TEMPLATE = "payment_reminder_utility";
+	let prev: string | undefined;
+	beforeEach(() => {
+		prev = process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE;
+		process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE = TEMPLATE;
+	});
+	afterEach(() => {
+		if (prev === undefined) delete process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE;
+		else process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE = prev;
+	});
+
+	test("with the template configured, day 12 sends the TEMPLATE (delivers with no open window) and logs it as utility_template", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		try {
+			const { shortId, orderId } = await seedAgedOrder(t, "tmpl", 11 * DAY);
+			const asUser = t.withIdentity({ subject: USER });
+
+			const res = await asUser.action(api.orders.sendPaymentReminder, {
+				shortId,
+			});
+			expect(res).toEqual({ ok: true });
+
+			const wa = fetchMock.waCalls();
+			expect(wa).toHaveLength(1);
+			const body = wa[0].body as {
+				type: string;
+				to: string;
+				template: {
+					name: string;
+					language: { code: string };
+					components: Array<{
+						type: string;
+						sub_type?: string;
+						parameters: Array<{ type: string; text: string }>;
+					}>;
+				};
+			};
+			expect(body.type).toBe("template");
+			expect(body.to).toBe("60123456789");
+			expect(body.template.name).toBe(TEMPLATE);
+			expect(body.template.language.code).toBe("en");
+			const bodyComponent = body.template.components.find((c) => c.type === "body");
+			expect(bodyComponent?.parameters.map((p) => p.text)).toEqual([
+				shortId,
+				"Reminder Test Store",
+				"MYR 120.00",
+			]);
+			// The button carries the tracking TOKEN (the capability), never the shortId.
+			const button = body.template.components.find((c) => c.type === "button");
+			const order = await t.run((ctx) => ctx.db.get(orderId));
+			expect(button?.sub_type).toBe("url");
+			expect(button?.parameters[0].text).toBe(order?.trackingToken);
+			expect(order?.lastManualReminderAt).toBeDefined();
+
+			// Logged under the template category — the cost ledger, not "session".
+			const log = await t.run((ctx) =>
+				ctx.db.query("outboundMessageLog").collect(),
+			);
+			const reminderLog = log.find((l) => l.templateName === TEMPLATE);
+			expect(reminderLog).toMatchObject({
+				category: "utility_template",
+				status: "sent",
+			});
+		} finally {
+			fetchMock.restore();
+		}
+	});
+
+	test("the seller's order payload says which shape this deployment sends", async () => {
+		const t = setup();
+		const { shortId } = await seedAgedOrder(t, "flag", 11 * DAY);
+		const asUser = t.withIdentity({ subject: USER });
+		const withTemplate = await asUser.query(api.orders.get, { shortId });
+		expect(withTemplate?.paymentReminderViaTemplate).toBe(true);
+
+		delete process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE;
+		const without = await asUser.query(api.orders.get, { shortId });
+		expect(without?.paymentReminderViaTemplate).toBe(false);
+
+		// Never on the buyer's token read — a deployment fact with no buyer use.
+		const token = without?.trackingToken;
+		const buyer = await t.query(api.orders.get, { token });
+		expect(buyer?.paymentReminderViaTemplate).toBeUndefined();
+	});
+
+	test("a Meta rejection of the template is best-effort: no throw, the cooldown stamp stands", async () => {
+		const t = setup();
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(async (url: unknown) => {
+			if (String(url).includes("graph.facebook.com")) {
+				return new Response(
+					JSON.stringify({ error: { code: 132001, message: "template missing" } }),
+					{ status: 400 },
+				);
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		try {
+			const { shortId, orderId } = await seedAgedOrder(t, "reject", 11 * DAY);
+			const asUser = t.withIdentity({ subject: USER });
+			const res = await asUser.action(api.orders.sendPaymentReminder, {
+				shortId,
+			});
+			expect(res).toEqual({ ok: true });
+			const order = await t.run((ctx) => ctx.db.get(orderId));
+			expect(order?.lastManualReminderAt).toBeDefined();
+		} finally {
+			globalThis.fetch = original;
+		}
+	});
+});
+
 describe("manual payment reminder — stays manual", () => {
 	test("nothing in the system ever SCHEDULES the reminder — no cron, no order-flow hook", async () => {
 		const t = setup();

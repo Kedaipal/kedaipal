@@ -13,6 +13,7 @@ import {
 	Landmark,
 	ListChecks,
 	ReceiptText,
+	RefreshCw,
 	Send,
 	ShieldX,
 	UserPlus,
@@ -52,7 +53,7 @@ import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
-import { slugify } from "../lib/slug";
+import { slugify, validateStoreName } from "../lib/slug";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -151,6 +152,7 @@ function AdminBillingContent() {
 					<OnboardClientCard />
 					<IssueInvoiceForm />
 					<PendingInvoices />
+					<AutoRenewOverview />
 					<FoundingMembersList />
 				</div>
 			) : (
@@ -316,6 +318,7 @@ function OnboardClientCard() {
 	// and check availability live so we never hand out a link to a taken slug.
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
 	const availability = useSlugAvailability(derivedSlug);
+	const nameCheck = validateStoreName(storeName);
 
 	// Live email pre-check (debounced) — Clerk allows one account per email and
 	// we're 1 store per login, so a duplicate email means the invite would dead-end.
@@ -335,9 +338,7 @@ function OnboardClientCard() {
 	const emailTaken = emailCheck?.exists === true;
 
 	const ready =
-		storeName.trim().length >= 2 &&
-		availability.status === "available" &&
-		!emailTaken;
+		nameCheck.ok && availability.status === "available" && !emailTaken;
 
 	const link =
 		typeof window === "undefined"
@@ -382,6 +383,11 @@ function OnboardClientCard() {
 					placeholder="e.g. Mak Cik Kuih"
 					variant="field"
 				/>
+				{storeName.trim().length > 0 && !nameCheck.ok ? (
+					<p className="text-sm font-normal text-destructive">
+						✗ {nameCheck.message}
+					</p>
+				) : null}
 			</label>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
@@ -530,10 +536,11 @@ function SlugHint({
 }
 
 const STATUS_LABEL: Record<string, string> = {
-	trialing: "Trial",
+	trialing: "Free period",
 	active: "Active",
 	past_due: "Past due",
 	cancelled: "Cancelled",
+	on_hold: "On hold",
 };
 
 /** Human-readable dropdown label: "Mak Kuih (/mak-kuih) · Pro · Trial · Founding · has pending". */
@@ -879,12 +886,46 @@ function PendingInvoices() {
 									<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium uppercase text-accent">
 										{inv.plan}
 									</span>
+									{/* Off-Season Hold (z8r3fday24): this bill is the RM19/S$9
+									    hold, not the tier — the tier pill above is what they
+									    resume to. */}
+									{inv.kind === "hold" ? (
+										<span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+											Off-Season Hold
+										</span>
+									) : null}
 									{/* Marking this paid grants 365 days instead of 30. Without
 									    the pill an annual and a monthly pending invoice look
 									    identical apart from the amount. */}
 									{inv.billingCycle === "annual" ? (
 										<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium uppercase text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
 											Annual
+										</span>
+									) : null}
+									{/* Which RAIL this bill is on (86eyb6z4r) — so "who needs
+									    chasing vs who settles themselves" is a glance. */}
+									{inv.autoRenew ? (
+										inv.autoRenew.failedAttempts > 0 ? (
+											<span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+												Auto-charge failed ×{inv.autoRenew.failedAttempts}
+											</span>
+										) : (
+											<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+												Auto-renew
+											</span>
+										)
+									) : inv.hasPayNowLink ? (
+										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+											Pay-now link
+										</span>
+									) : null}
+									{inv.origin !== "admin" ? (
+										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+											{inv.origin === "self_serve"
+												? "Self-serve"
+												: inv.origin === "free_period_end"
+													? "First invoice"
+													: "Renewal"}
 										</span>
 									) : null}
 								</div>
@@ -899,6 +940,23 @@ function PendingInvoices() {
 										})}
 									</span>
 								</div>
+								{inv.gatewayIssue ? (
+									<p className="text-xs font-medium text-red-600 dark:text-red-400">
+										{inv.gatewayIssue.kind === "amount_mismatch"
+											? `⚠ A HitPay payment landed that doesn't match this total (${formatPrice(inv.gatewayIssue.amountSen ?? 0, inv.currency)}) — check the HitPay dashboard before settling.`
+											: "⚠ A HitPay payment landed AFTER this invoice was settled/voided — possible double payment, check the HitPay dashboard."}
+									</p>
+								) : null}
+								{inv.autoRenew && inv.autoRenew.failedAttempts > 0 ? (
+									<p className="text-xs text-muted-foreground">
+										{inv.autoRenew.lastChargeError
+											? `Last error: ${inv.autoRenew.lastChargeError}. `
+											: ""}
+										{inv.autoRenew.nextRetryAt
+											? `Next retry ${new Date(inv.autoRenew.nextRetryAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}.`
+											: "Retries exhausted — seller is on the manual rail."}
+									</p>
+								) : null}
 							</div>
 							<div className="flex items-center justify-between gap-3 sm:justify-end">
 								<span className="text-sm font-semibold tabular-nums">
@@ -1038,6 +1096,67 @@ function foundingStatus(m: { status?: string; paid: boolean }): {
 		label: m.status ?? "—",
 		className: "bg-muted text-muted-foreground",
 	};
+}
+
+/** Which retailers are on the auto-renewal rail + who is failing (86eyb6z4r).
+ * Failing rows sort first (the query orders them), so trouble is the first
+ * thing on screen. */
+function AutoRenewOverview() {
+	const rows = useQuery(
+		convexQuery(api.subscriptionPayments.listAutoRenewForAdmin, {}),
+	).data;
+
+	return (
+		<AdminCard>
+			<AdminSectionHeading
+				icon={<RefreshCw className="size-5" />}
+				title="Auto-renewal"
+				description="Retailers with a saved payment method. Their renewals charge themselves; failures dun by email and fall back to the Pay-now link."
+			/>
+			{rows === undefined ? (
+				<Skeleton className="h-16 w-full rounded-xl" />
+			) : rows.length === 0 ? (
+				<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+					Nobody is on auto-renewal yet — sellers turn it on in Settings →
+					Billing.
+				</p>
+			) : (
+				<ul className="flex flex-col gap-2">
+					{rows.map((row) => (
+						<li
+							key={row.retailerId}
+							className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-background p-3"
+						>
+							<div className="min-w-0 space-y-1">
+								<div className="flex flex-wrap items-center gap-2">
+									<p className="min-w-0 truncate text-sm font-semibold">
+										{row.storeName}
+									</p>
+									<span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+										/{row.slug}
+									</span>
+									{row.failedAttempts > 0 ? (
+										<span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+											Failing ×{row.failedAttempts}
+										</span>
+									) : null}
+								</div>
+								<p className="text-xs text-muted-foreground">
+									{row.methodLabel}
+									{row.lastChargeAt
+										? ` · last charged ${new Date(row.lastChargeAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+										: " · no charge yet"}
+									{row.failedAttempts > 0 && row.lastChargeError
+										? ` · ${row.lastChargeError}`
+										: ""}
+								</p>
+							</div>
+						</li>
+					))}
+				</ul>
+			)}
+		</AdminCard>
+	);
 }
 
 function FoundingMembersList() {
