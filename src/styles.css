@@ -65,38 +65,26 @@
    the existing theme palette (navy + mint).
    ============================================= */
 
-/* Marquee strip */
+/* Logo-wall marquee rows (payment rails, couriers) — Mobbin-style, slow, and
+   the reverse direction is a property of the animation, not a second keyframe
+   set to keep in sync. */
 @keyframes kp-marquee {
 	to {
 		transform: translateX(-50%);
 	}
 }
 
+/* The hero's seller-kinds strip (28s); the logo walls use the slow variants. */
 @utility animate-kp-marquee {
 	animation: kp-marquee 28s linear infinite;
 }
 
-/* Slower + reversed — the payment logo wall's alternating rows (Mobbin-style).
-   Same keyframes: reverse direction is a property of the animation, not a
-   second keyframe set to keep in sync. */
 @utility animate-kp-marquee-slow {
 	animation: kp-marquee 45s linear infinite;
 }
 
 @utility animate-kp-marquee-slow-reverse {
 	animation: kp-marquee 45s linear infinite reverse;
-}
-
-/* Slow push-in for photo backdrops (the how-it-works step collages) —
-   alternate direction so the loop breathes instead of snapping back. */
-@keyframes kp-kenburns {
-	to {
-		transform: scale(1.08);
-	}
-}
-
-@utility animate-kp-kenburns {
-	animation: kp-kenburns 14s ease-in-out infinite alternate;
 }
 
 /* Spotlight glow for a card a What's-new note deep-linked to (docs/whats-new.md).
@@ -122,11 +110,149 @@
 	animation: kp-spotlight 1.6s ease-out 3;
 }
 
+/* Pop-in for a badge or stamp that just changed (hero stage): one quick
+   overshoot from small, then rest. Keyed remounts retrigger it. */
+@keyframes kp-pop {
+	0% {
+		transform: scale(0.6);
+		opacity: 0;
+	}
+	70% {
+		transform: scale(1.08);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+}
+
+@utility animate-kp-pop {
+	animation: kp-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Hero stage beats (hero-stage.tsx). Transform/opacity throughout, with one
+   deliberate exception: kp-row-in animates max-height so an arriving chat row
+   pushes the list down instead of overlapping it — layout work, but on a
+   four-row list once per beat. Every one is stopped by the reduced-motion
+   block below. */
+@keyframes kp-row-in {
+	0% {
+		max-height: 0;
+		opacity: 0;
+		transform: translateY(-0.6em);
+	}
+	60% {
+		max-height: 5em;
+		opacity: 0;
+		transform: translateY(-0.2em);
+	}
+	100% {
+		max-height: 5em;
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+@utility animate-kp-row-in {
+	animation: kp-row-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes kp-stamp {
+	0% {
+		transform: rotate(-14deg) scale(1.9);
+		opacity: 0;
+	}
+	55% {
+		transform: rotate(-6deg) scale(0.96);
+		opacity: 1;
+	}
+	100% {
+		transform: rotate(-6deg) scale(1);
+		opacity: 1;
+	}
+}
+@utility animate-kp-stamp {
+	animation: kp-stamp 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* The order leaving the chat for the inbox: an arc across the stage gap.
+   Container-query units, so the distance is a fraction of the stage. */
+@keyframes kp-handoff {
+	0% {
+		transform: translate(0, 0) scale(0.85);
+		opacity: 0;
+	}
+	12% {
+		opacity: 1;
+	}
+	50% {
+		transform: translate(12cqw, -24cqh) scale(1);
+	}
+	88% {
+		opacity: 1;
+	}
+	100% {
+		transform: translate(25cqw, -27cqh) scale(0.9);
+		opacity: 0;
+	}
+}
+@utility animate-kp-handoff {
+	animation: kp-handoff 1.15s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes kp-card-in {
+	0% {
+		transform: translateY(-0.6em) scale(0.97);
+		opacity: 0;
+	}
+	100% {
+		transform: translateY(0) scale(1);
+		opacity: 1;
+	}
+}
+@utility animate-kp-card-in {
+	animation: kp-card-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes kp-toast-in {
+	0% {
+		transform: translateY(0.9em);
+		opacity: 0;
+	}
+	100% {
+		transform: translateY(0);
+		opacity: 1;
+	}
+}
+@utility animate-kp-toast-in {
+	animation: kp-toast-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes kp-drive {
+	0% {
+		transform: translateX(-1.2em);
+		opacity: 0;
+	}
+	100% {
+		transform: translateX(0);
+		opacity: 1;
+	}
+}
+@utility animate-kp-drive {
+	animation: kp-drive 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+	.animate-kp-row-in,
+	.animate-kp-stamp,
+	.animate-kp-handoff,
+	.animate-kp-card-in,
+	.animate-kp-toast-in,
+	.animate-kp-drive,
+	.animate-kp-pop,
 	.animate-kp-marquee,
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
-	.animate-kp-kenburns,
 	.animate-kp-highlight-sweep,
 	.animate-kp-spotlight {
 		animation: none;
