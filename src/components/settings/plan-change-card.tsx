@@ -12,6 +12,8 @@ import {
 	planChangeCarryover,
 	planPrice,
 } from "../../../convex/lib/plans";
+import type { FixHighlight } from "../../lib/country-setup-copy";
+import { highlightRingClass } from "../../lib/country-setup-copy";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -55,10 +57,15 @@ function featuresLost(from: Plan, to: Plan): string[] {
  *    kind of thing a seller only discovers when they need it.
  */
 export function PlanChangeCard({
+	id,
+	highlight,
 	sub,
 	currency,
 	openInvoiceNumber,
 }: {
+	/** Anchor + ring for `?spot=plan_change`, on both rendered states. */
+	id?: string;
+	highlight?: FixHighlight;
 	sub: SubscriptionView;
 	currency: BillingCurrency;
 	/** The seller's unsettled invoice, if any. Moving UP writes a second bill,
@@ -122,7 +129,11 @@ export function PlanChangeCard({
 
 	if (scheduled) {
 		return (
-			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
+			<section
+				id={id}
+				data-fix-highlight={highlight ?? undefined}
+				className={`flex flex-col gap-3 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+			>
 				<div className="flex items-start gap-3">
 					<CalendarClock className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
 					<div>
@@ -154,7 +165,11 @@ export function PlanChangeCard({
 	}
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-3 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			<div>
 				<p className="text-sm font-medium">Change your plan</p>
 				<p className="mt-1 text-xs text-muted-foreground">

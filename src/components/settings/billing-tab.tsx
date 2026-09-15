@@ -372,6 +372,8 @@ export function BillingTab({
 			sub.status === "active" &&
 			gateway?.payNow ? (
 				<PlanChangeCard
+					id={SPOTLIGHT_ANCHOR.plan_change.anchor}
+					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
 					currency={gateway.currency}
 					openInvoiceNumber={pending?.invoiceNumber}
@@ -385,6 +387,8 @@ export function BillingTab({
 			    which of its four states to render. */}
 			{!adminOwnAccount && sub && !sub.comped ? (
 				<SeasonalHoldCard
+					id={SPOTLIGHT_ANCHOR.seasonal_hold.anchor}
+					highlight={ring(SPOTLIGHT_ANCHOR.seasonal_hold.anchor)}
 					retailerId={retailer._id}
 					country={retailer.country}
 					sub={sub}
@@ -645,6 +649,8 @@ export function BillingTab({
 				// applyMethodAttached's heal path exists for.
 				pending !== undefined) ? (
 				<AutoRenewalCard
+					id={SPOTLIGHT_ANCHOR.auto_renewal.anchor}
+					highlight={ring(SPOTLIGHT_ANCHOR.auto_renewal.anchor)}
 					sub={sub}
 					methods={gateway.methods}
 					returnFromSetup={billingReturn === "autorenew"}

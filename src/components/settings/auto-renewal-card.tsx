@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
+import type { FixHighlight } from "../../lib/country-setup-copy";
+import { highlightRingClass } from "../../lib/country-setup-copy";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { isRenewing, type SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -17,11 +19,16 @@ import { ConfirmDialog } from "../ui/confirm-dialog";
  * The parent renders this only when the gateway is configured.
  */
 export function AutoRenewalCard({
+	id,
+	highlight,
 	sub,
 	methods,
 	returnFromSetup,
 	onReturnHandled,
 }: {
+	/** Anchor + ring for `?spot=auto_renewal`, on both rendered states. */
+	id?: string;
+	highlight?: FixHighlight;
 	sub: SubscriptionView;
 	/** Tokenisable methods for the store's billing currency ("card",
 	 * "touch_n_go"). Display only — HitPay's page is the truth. */
@@ -101,10 +108,14 @@ export function AutoRenewalCard({
 
 	return (
 		<section
-			className={`flex flex-col gap-3 rounded-2xl border p-5 lg:p-6 ${
-				failing
-					? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40"
-					: "border-input bg-background"
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-3 rounded-2xl border p-5 scroll-mt-24 lg:p-6 ${
+				highlight
+					? highlightRingClass(highlight)
+					: failing
+						? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40"
+						: "border-input bg-background"
 			}`}
 		>
 			<div className="flex items-start justify-between gap-3">
