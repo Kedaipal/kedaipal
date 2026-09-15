@@ -241,6 +241,23 @@ pause flow) is a sensible next step but not yet implemented.
   for storeless-admin mode; sidebar's Admin group ends the session.
 - `convex/admin.test.ts` — access, subscription bypass, audit, directory, counter-checkout.
 
+## Comp accounts (z8r3fdeub2)
+
+The sellers directory is also where a store is **comped** — admin-granted free
+access for partner/sponsor/pilot/internal deals. A Gift button beside each row
+opens one dialog that is both the **create and edit** surface (kind, seller-
+facing label, admin-only note, free-for-life vs an end date) and carries "End
+comp" behind its own confirm; comped rows show a violet chip (kind · label ·
+until) with the note on hover. Admin-owned rows keep the button visible but
+disabled-with-reason ("always free already"). Both mutations
+(`subscriptions.setComp` / `clearComp`) are `requireAdmin`-gated and **always**
+write an `adminAuditLog` row (`subscriptions.setComp` / `.clearComp`, targetId
+= the retailer) — a billing-state grant is never untraced, and the act-as
+no-op doesn't apply because an admin's own store can't be comped. Ending a
+comp (by hand or by expiry) drops the store into a fresh 14-day Pro trial and
+emails the seller. Full lifecycle, edge cases and the "never charged"
+guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
+
 ## Deliberate scope / follow-ups
 
 - Admin allowlist stays in `ADMIN_USER_IDS` env (graduates to a Clerk role later, same as

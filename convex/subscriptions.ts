@@ -27,8 +27,14 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	requireAdmin,
 	requireRetailerAccess,
 } from "./lib/auth";
+import {
+	COMP_LABEL_MAX,
+	COMP_NOTE_MAX,
+	type CompKind,
+} from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
 import { autoRenewMethodLabel } from "./lib/hitpayBilling";
 import {
@@ -69,6 +75,12 @@ export type AccessState = {
 	 * payload. */
 	billingCycle: BillingCycle;
 	comped: boolean;
+	/** Admin-granted comp metadata (z8r3fdeub2) — the SELLER-FACING slice only
+	 * (kind, sponsor label, expiry) so the billing tab can say "Sponsored by X
+	 * · until {date}". `note`/`grantedBy` are admin-internal and never ride a
+	 * seller payload. Absent on fail-open comped rows (missing row / legacy
+	 * backfill) — those render the generic "on the house" line. */
+	comp?: { kind: CompKind; label?: string; expiresAt?: number };
 	/** The free period's BACKSTOP deadline (signup + TRIAL_DAYS). */
 	trialEndsAt?: number;
 	/** Start-when-you-sell (z8r3fday24): set once the free period ENDED — at
@@ -175,6 +187,13 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 		status: sub.status,
 		billingCycle: sub.billingCycle,
 		comped,
+		comp: sub.comp
+			? {
+					kind: sub.comp.kind,
+					label: sub.comp.label,
+					expiresAt: sub.comp.expiresAt,
+				}
+			: undefined,
 		trialEndsAt: sub.trialEndsAt,
 		freePeriodEndedAt: sub.freePeriodEndedAt,
 		freePeriodEndReason: sub.freePeriodEndReason,
@@ -396,10 +415,10 @@ async function pendingInvoiceFor(
 		.first();
 }
 
-/** Void a pending invoice the hold flow is replacing (a plan bill on pause, a
- * hold bill on resume) and kill its Pay-now link. Nothing has been collected
- * — a pending invoice is a request, not money. */
-async function voidForHoldFlow(
+/** Void a pending invoice a lifecycle flow is replacing (a plan bill on pause,
+ * a hold bill on resume, any bill on an admin comp) and kill its Pay-now link.
+ * Nothing has been collected — a pending invoice is a request, not money. */
+async function voidPendingInvoice(
 	ctx: MutationCtx,
 	invoice: Doc<"invoices">,
 	by: string,
@@ -472,7 +491,7 @@ export const setSeasonalHold = mutation({
 						: "Off-Season Hold is for paid plans. Finish your free period first — a store that isn't selling yet simply doesn't convert.",
 				);
 			if (pending) {
-				await voidForHoldFlow(
+				await voidPendingInvoice(
 					ctx,
 					pending,
 					access.userId,
@@ -517,7 +536,7 @@ export const setSeasonalHold = mutation({
 					: "Your subscription isn't on hold.",
 			);
 		if (pending && pendingIsHold) {
-			await voidForHoldFlow(
+			await voidPendingInvoice(
 				ctx,
 				pending,
 				access.userId,
@@ -554,6 +573,230 @@ export const setSeasonalHold = mutation({
 		});
 		await logAdminAction(ctx, access, "subscriptions.setSeasonalHold", sub._id);
 		return { status: "active", invoiceIssued: billNow };
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Comp accounts (z8r3fdeub2) — admin-granted free access for partners/sponsors
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONE comp-ending path: convert a comped row into a fresh 14-day Pro trial
+ * — the same start-when-you-sell lifecycle a brand-new signup gets (free until
+ * the first live order or the backstop, first invoice then, its dueDate the
+ * only lock). Shared by the admin's `clearComp` and the daily cron's expiry
+ * pass so the two can never drift.
+ *
+ * Every trace of the old billing life is cleared (trial stamps, free-period
+ * stamps, paid-period fields) — a stale `freePeriodEndedAt` would make the
+ * cron treat the new trial as already billed and issue an invoice on day one.
+ * A saved auto-renew method is deliberately KEPT: it charges nothing until a
+ * renewal invoice exists, and the seller shouldn't have to re-authorise
+ * because their sponsorship ended.
+ */
+async function convertCompToTrial(
+	ctx: MutationCtx,
+	sub: Doc<"subscriptions">,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro");
+	await ctx.db.patch(sub._id, {
+		comped: false,
+		comp: undefined,
+		plan: "pro",
+		status: "trialing",
+		trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+		trialReminderSentAt: undefined,
+		freePeriodEndedAt: undefined,
+		freePeriodEndReason: undefined,
+		currentPeriodStart: undefined,
+		currentPeriodEnd: undefined,
+		periodPaidBy: undefined,
+		heldAt: undefined,
+		pendingPlanChange: undefined,
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		updatedAt: now,
+	});
+}
+
+/**
+ * Admin: mark a store complimentary (partner / sponsor / pilot / internal) —
+ * full Pro access, never charged, no founder in the billing loop. Also the
+ * EDIT path: re-granting overwrites the comp metadata (extend an expiry,
+ * reword the label) without dropping the store into a trial in between.
+ *
+ * What one grant does, atomically:
+ *  - `comped: true` + the `comp` stamp (who/why/until) — the stamp is what
+ *    keeps the backfill from healing this row into a trial;
+ *  - status → `active`, plan → Pro + Pro caps (Scale isn't released; the cap
+ *    is moot anyway — comped rows hide the meter and never nudge);
+ *  - every trial / free-period stamp cleared, a pending plan change dropped;
+ *  - any pending invoice VOIDED (its Pay-now link killed) — comping a
+ *    `past_due` store lifts the lock in the same beat, because the overdue
+ *    invoice is gone and the status is `active`;
+ *  - an `on_hold` store is released (ordering reopens — a sponsor deal means
+ *    the store should be selling, and comped rows can never re-enter hold);
+ *  - an `adminAuditLog` row, always (targetId = the retailer).
+ *
+ * A store with NO subscription row (pre-backfill fail-open) gets a real row
+ * minted so the comp has somewhere to live. Admin-owned stores are refused —
+ * they already run free via ADMIN_USER_IDS, and a comp would just shadow it.
+ * `updatedAt` moves: this IS a status flip (→ active), the same moment every
+ * settle stamps.
+ */
+export const setComp = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		kind: v.union(
+			v.literal("partner"),
+			v.literal("sponsor"),
+			v.literal("pilot"),
+			v.literal("internal"),
+		),
+		label: v.optional(v.string()),
+		note: v.optional(v.string()),
+		/** Unset = free for life. Set = the daily cron ends the comp past this
+		 * moment and the store drops into a fresh 14-day trial. */
+		expiresAt: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, kind, label, note, expiresAt },
+	): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (adminUserIds().includes(retailer.userId))
+			throw new ConvexError(
+				"This is an admin store — it already runs free, nothing to comp.",
+			);
+		const trimmedLabel = label?.trim() || undefined;
+		const trimmedNote = note?.trim() || undefined;
+		if (trimmedLabel !== undefined && trimmedLabel.length > COMP_LABEL_MAX)
+			throw new ConvexError(
+				`Keep the label under ${COMP_LABEL_MAX} characters — it renders as one line on the seller's billing tab.`,
+			);
+		if (trimmedNote !== undefined && trimmedNote.length > COMP_NOTE_MAX)
+			throw new ConvexError(
+				`Keep the note under ${COMP_NOTE_MAX} characters.`,
+			);
+		const now = Date.now();
+		if (expiresAt !== undefined && expiresAt <= now)
+			throw new ConvexError("The end date must be in the future.");
+
+		const comp = {
+			kind,
+			label: trimmedLabel,
+			note: trimmedNote,
+			grantedBy: adminSubject,
+			grantedAt: now,
+			expiresAt,
+		};
+		const caps = capsForPlan("pro");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!sub) {
+			// Pre-backfill store, fail-open today — mint the row the comp lives on.
+			await ctx.db.insert("subscriptions", {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				status: "active",
+				comped: true,
+				comp,
+				orderCap: caps.orderCap,
+				userCap: caps.userCap,
+				broadcastQuota: caps.broadcastQuota,
+				createdAt: now,
+				updatedAt: now,
+			});
+		} else {
+			const pending = await pendingInvoiceFor(ctx, retailerId);
+			if (pending) {
+				await voidPendingInvoice(
+					ctx,
+					pending,
+					adminSubject,
+					"Comped — this store is on the house",
+					now,
+				);
+			}
+			if (sub.status === "on_hold") {
+				// Release the hold's storefront pause — a comped store should be
+				// selling, and `canEnterHold` refuses comped rows from here on.
+				await ctx.db.patch(retailerId, {
+					orderingPausedAt: undefined,
+					updatedAt: now,
+				});
+			}
+			await ctx.db.patch(sub._id, {
+				comped: true,
+				comp,
+				status: "active",
+				plan: "pro",
+				orderCap: caps.orderCap,
+				userCap: caps.userCap,
+				broadcastQuota: caps.broadcastQuota,
+				trialEndsAt: undefined,
+				trialReminderSentAt: undefined,
+				freePeriodEndedAt: undefined,
+				freePeriodEndReason: undefined,
+				// A comp has no billing period — a leftover paid-through date would
+				// make the billing tab pill claim "Active · expires {date}" under a
+				// sponsor line. clearComp starts a fresh trial either way, so the
+				// old period is never read again.
+				currentPeriodStart: undefined,
+				currentPeriodEnd: undefined,
+				periodPaidBy: undefined,
+				heldAt: undefined,
+				pendingPlanChange: undefined,
+				updatedAt: now,
+			});
+		}
+		// Always recorded: an admin store can't be comped (refused above), so this
+		// is by construction an admin acting on someone else's store.
+		await logAdminAction(
+			ctx,
+			{ retailer, actingAsAdmin: true, userId: adminSubject },
+			"subscriptions.setComp",
+			retailerId,
+		);
+		return { ok: true };
+	},
+});
+
+/**
+ * Admin: end a comp. The store drops into a fresh 14-day Pro trial (the exact
+ * lifecycle a new signup gets — free until its first live order or the
+ * backstop, first invoice then) and the seller is told their sponsored period
+ * ended. Works on legacy fail-safe comped rows too (no `comp` stamp).
+ */
+export const clearComp = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!sub || sub.comped !== true)
+			throw new ConvexError("This store isn't comped.");
+		const sponsorLabel = sub.comp?.label;
+		await convertCompToTrial(ctx, sub, Date.now());
+		// Same notice as a cron expiry — a comp ending is the same seller-facing
+		// event whether a date fired it or an admin did.
+		await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
+			retailerId,
+			key: "compEnded",
+			sponsorLabel,
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, actingAsAdmin: true, userId: adminSubject },
+			"subscriptions.clearComp",
+			retailerId,
+		);
+		return { ok: true };
 	},
 });
 
@@ -609,8 +852,9 @@ export { PLAN_CAPS };
  * Convergent + idempotent:
  *  - no subscription → create a trialing one (`created`).
  *  - a leftover `comped` row from an earlier backfill run → convert it to the
- *    same 14-day trial (`converted`). At v1 `comped` is only ever produced by an
- *    earlier backfill, so this safely heals a re-run without touching real subs.
+ *    same 14-day trial (`converted`). Only STAMPLESS rows (`comp` undefined)
+ *    qualify — an admin-granted comp (z8r3fdeub2) carries a `comp` stamp and
+ *    survives a re-run untouched.
  *  - any other (real) subscription → leave untouched (`skipped`).
  *
  * Run once between the schema deploy and gating enable (see
@@ -631,8 +875,10 @@ export const internalBackfillSubscriptions = internalMutation({
 		for (const r of retailers) {
 			const existing = await loadSubscription(ctx, r._id);
 			if (existing) {
-				// Heal a stale comped row from a previous backfill into the trial.
-				if (existing.comped === true) {
+				// Heal a stale comped row from a previous backfill into the trial —
+				// but ONLY the stampless legacy fail-safe rows. An admin-granted
+				// comp carries a `comp` stamp (z8r3fdeub2) and survives a re-run.
+				if (existing.comped === true && existing.comp === undefined) {
 					await ctx.db.patch(existing._id, {
 						plan: "pro",
 						status: "trialing",
@@ -694,7 +940,7 @@ export const internalDailyBillingStatus = internalMutation({
 	handler: async (
 		ctx,
 	): Promise<{
-		/** Trials locked over an OVERDUE first invoice (+ the legacy comped flip). */
+		/** Trials locked over an OVERDUE first invoice. */
 		trialExpired: number;
 		/** Free periods the backstop ended → first invoices scheduled. */
 		firstInvoicesIssued: number;
@@ -705,6 +951,8 @@ export const internalDailyBillingStatus = internalMutation({
 		renewalsDue: number;
 		remindersSent: number;
 		trialReminders: number;
+		/** Dated comps past their end → converted to fresh trials (z8r3fdeub2). */
+		compsExpired: number;
 	}> => {
 		const now = Date.now();
 		let trialExpired = 0;
@@ -716,6 +964,7 @@ export const internalDailyBillingStatus = internalMutation({
 		let renewalsDue = 0;
 		let remindersSent = 0;
 		let trialReminders = 0;
+		let compsExpired = 0;
 
 		// Trials — start-when-you-sell (z8r3fday24). The free period ends at the
 		// store's first live order (stamped by endFreePeriodOnFirstOrder from the
@@ -728,16 +977,15 @@ export const internalDailyBillingStatus = internalMutation({
 			.withIndex("by_status", (q) => q.eq("status", "trialing"))
 			.collect();
 		for (const sub of trialing) {
+			// A comped row is never billed and never flipped. The legacy
+			// comped→past_due "keep the status honest" flip is retired
+			// (z8r3fdeub2): stamped comps are always `active`, and a leftover
+			// backfill row just waits for internalBackfillSubscriptions to heal
+			// it into a real trial.
+			if (sub.comped === true) continue;
 			if (sub.freePeriodEndedAt === undefined) {
 				if (sub.trialEndsAt === undefined) continue;
 				if (sub.trialEndsAt < now) {
-					if (sub.comped === true) {
-						// A comped row can't be billed; the legacy flip keeps its status
-						// honest (comped is never frozen, so nothing actually locks).
-						await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
-						trialExpired++;
-						continue;
-					}
 					// Backstop: end the free period + issue the first invoice. No lock,
 					// no status change — `updatedAt` stays the flip moment it was.
 					await ctx.db.patch(sub._id, {
@@ -766,7 +1014,6 @@ export const internalDailyBillingStatus = internalMutation({
 				continue;
 			}
 			// Free period over → the first invoice is the clock.
-			if (sub.comped === true) continue;
 			const invoices = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
@@ -815,7 +1062,24 @@ export const internalDailyBillingStatus = internalMutation({
 				.collect()),
 		];
 		for (const sub of active) {
-			if (sub.comped === true) continue;
+			if (sub.comped === true) {
+				// Comp expiry (z8r3fdeub2): a dated comp past its end drops into a
+				// fresh 14-day Pro trial (the clearComp path) and the seller gets
+				// the "sponsored period ended" notice. Free-for-life comps (no
+				// expiresAt) and legacy stampless rows just skip — nothing below
+				// (overdue lock, dunning, renewal issuance) may touch a comped row.
+				if (sub.comp?.expiresAt !== undefined && sub.comp.expiresAt < now) {
+					const sponsorLabel = sub.comp.label;
+					await convertCompToTrial(ctx, sub, now);
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyTrialEmail,
+						{ retailerId: sub.retailerId, key: "compEnded", sponsorLabel },
+					);
+					compsExpired++;
+				}
+				continue;
+			}
 			const invoices = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
@@ -937,6 +1201,7 @@ export const internalDailyBillingStatus = internalMutation({
 			renewalsDue,
 			remindersSent,
 			trialReminders,
+			compsExpired,
 		};
 	},
 });

@@ -172,6 +172,9 @@ export function BillingTab({
 	const held = sub?.status === "on_hold" || sub?.held === true;
 	const statusLine = (() => {
 		if (!sub) return "Active";
+		// A comped store has no billing clock at all — never "expires", never a
+		// free-period countdown (a legacy comped trial's backstop fires nothing).
+		if (sub.comped) return "On the house";
 		if (sub.status === "trialing") {
 			// Start-when-you-sell: free until the first order or day 15; then
 			// the first invoice (pending card below) is the clock.
@@ -282,8 +285,15 @@ export function BillingTab({
 						</span>
 					</div>
 					{sub?.comped ? (
+						// Sponsored stores (z8r3fdeub2) read who is sponsoring them and
+						// until when — a comped seller must never be surprised by a bill,
+						// including the one that follows an expiry.
 						<p className="text-xs text-muted-foreground">
-							Your account is on the house — no invoices to settle.
+							{sub.comp?.expiresAt
+								? `${sub.comp.label ? `${sub.comp.label} — ` : "Your account is "}free until ${formatShortDate(sub.comp.expiresAt)}. After that you'll start a fresh 14-day free period; a bill only arrives if you keep selling.`
+								: sub.comp?.label
+									? `${sub.comp.label} — your account is on the house. No invoices to settle.`
+									: "Your account is on the house — no invoices to settle."}
 						</p>
 					) : null}
 					{held ? (

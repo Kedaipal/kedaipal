@@ -500,17 +500,21 @@ const render: Record<
 	},
 };
 
-/** Retailer notices with no invoice attached (the free-period nudge + a
- * lapsed-subscription notice), so a separate (smaller) var shape. The old
- * `trialEnded` lock notice is gone (z8r3fday24): a free period ending now
- * ISSUES the first invoice (`firstInvoice*` above); only that invoice going
- * overdue locks, and that sends the ordinary `invoiceOverdue`. */
-export type TrialEmailKey = "trialEndingSoon" | "subscriptionLapsed";
+/** Retailer notices with no invoice attached (the free-period nudge, a
+ * lapsed-subscription notice, and the comp-ended notice), so a separate
+ * (smaller) var shape. The old `trialEnded` lock notice is gone (z8r3fday24):
+ * a free period ending now ISSUES the first invoice (`firstInvoice*` above);
+ * only that invoice going overdue locks, and that sends the ordinary
+ * `invoiceOverdue`. `compEnded` (z8r3fdeub2) tells a sponsored store its
+ * complimentary access is over and a fresh 14-day free period has started —
+ * no bill exists yet, so it belongs with these, not the invoice emails. */
+export type TrialEmailKey = "trialEndingSoon" | "subscriptionLapsed" | "compEnded";
 
 export type TrialEmailVars = {
 	storeName: string;
 	billingUrl: string;
 	daysLeft?: number; // only for trialEndingSoon
+	sponsorLabel?: string; // only for compEnded, e.g. "Sponsored by Maybank SME"
 };
 
 const trialRender: Record<
@@ -541,6 +545,17 @@ const trialRender: Record<
 			const text = `🔒 Your Kedaipal subscription has lapsed\n${t.en.storeStaysLive}\nMessage us to renew and we'll send your invoice.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		compEnded: (v) => {
+			const via = v.sponsorLabel ? ` (${escapeHtml(v.sponsorLabel)})` : "";
+			const subject = "🎁 Your sponsored access has ended — a fresh free period starts now";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your complimentary Kedaipal access${via} has come to an end.`,
+				"Nothing stops today. You're on a fresh <strong>14-day free period</strong>, exactly like a new store: your first invoice arrives at your first live order — or on day 15 — with 14 days to pay. Your storefront and orders stay live throughout.",
+			];
+			const html = wrapHtml("🎁", "Your sponsored access has ended", lines, v.billingUrl, t.en.choosePlan);
+			const text = `🎁 Your sponsored access has ended${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""}.\nNothing stops today — you're on a fresh 14-day free period, exactly like a new store: your first invoice arrives at your first live order (or on day 15), with 14 days to pay. Your storefront and orders stay live throughout.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	ms: {
 		trialEndingSoon: (v) => {
@@ -566,6 +581,17 @@ const trialRender: Record<
 			const text = `🔒 Langganan Kedaipal anda telah luput\n${t.ms.storeStaysLive}\nHubungi kami untuk memperbaharui.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		compEnded: (v) => {
+			const via = v.sponsorLabel ? ` (${escapeHtml(v.sponsorLabel)})` : "";
+			const subject = "🎁 Akses tajaan anda telah tamat — tempoh percuma baharu bermula sekarang";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, akses percuma Kedaipal anda${via} telah berakhir.`,
+				"Tiada apa yang terhenti hari ini. Anda kini dalam <strong>tempoh percuma 14 hari</strong> yang baharu, sama seperti kedai baru: bil pertama anda tiba pada pesanan pertama — atau pada hari ke-15 — dengan 14 hari untuk membayar. Etalase dan pesanan anda kekal aktif sepanjang masa.",
+			];
+			const html = wrapHtml("🎁", "Akses tajaan anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
+			const text = `🎁 Akses tajaan anda telah tamat${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""}.\nTiada apa yang terhenti hari ini — anda kini dalam tempoh percuma 14 hari yang baharu, sama seperti kedai baru: bil pertama tiba pada pesanan pertama (atau hari ke-15), dengan 14 hari untuk membayar. Etalase anda kekal aktif.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	zh: {
 		trialEndingSoon: (v) => {
@@ -589,6 +615,17 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("🔒", "您的订阅已失效", lines, v.billingUrl, t.zh.choosePlan);
 			const text = `🔒 您的 Kedaipal 订阅已失效\n${t.zh.storeStaysLive}\n联系我们续订，我们会把账单发给您。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		compEnded: (v) => {
+			const via = v.sponsorLabel ? `（${escapeHtml(v.sponsorLabel)}）` : "";
+			const subject = "🎁 您的赞助权益已结束 —— 全新免费期现已开始";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 免费权益${via}已经结束。`,
+				"今天不会有任何中断。您已进入全新的 <strong>14 天免费期</strong>，和新商店完全一样：第一张账单会在您收到第一笔订单时送达 —— 最迟第 15 天 —— 并有 14 天的付款时间。在此期间您的商店和订单保持在线。",
+			];
+			const html = wrapHtml("🎁", "您的赞助权益已结束", lines, v.billingUrl, t.zh.choosePlan);
+			const text = `🎁 您的赞助权益已结束${v.sponsorLabel ? `（${v.sponsorLabel}）` : ""}。\n今天不会有任何中断 —— 您已进入全新的 14 天免费期，和新商店完全一样：第一张账单在您的第一笔订单时送达（最迟第 15 天），有 14 天付款时间。您的商店保持在线。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},
