@@ -552,6 +552,7 @@ function retailerOptionLabel(r: {
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
 	hasPending: boolean;
+	comped: boolean;
 }): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	const parts = [`${r.storeName} (/${r.slug})`];
@@ -560,6 +561,9 @@ function retailerOptionLabel(r: {
 	if (r.isFoundingMember) parts.push("Founding");
 	else if (r.foundingIntent) parts.push("Founding (trial)");
 	if (r.hasPending) parts.push("has pending");
+	// Comped stores can't be billed (issueInvoice refuses, z8r3fdeub2) — say so
+	// in the picker rather than letting the admin draft a bill that bounces.
+	if (r.comped) parts.push("on the house");
 	return parts.join(" · ");
 }
 
@@ -586,6 +590,9 @@ function IssueInvoiceForm() {
 
 	const selected = retailers?.find((r) => r._id === retailerId);
 	const blocked = selected?.hasPending === true;
+	// On the house (z8r3fdeub2) — issueInvoice refuses these server-side; the
+	// button is disabled with the reason instead of bouncing on click.
+	const compedStore = selected?.comped === true;
 	// Auto-apply (and lock) the founding discount when the store is already a
 	// Founding Member OR was onboarded as one (foundingIntent, still on the 14-day
 	// trial) — so the conversion/renewal invoice always carries their discount.
@@ -794,7 +801,7 @@ function IssueInvoiceForm() {
 				<Button
 					type="button"
 					onClick={handleIssue}
-					disabled={!retailerId || busy || blocked}
+					disabled={!retailerId || busy || blocked || compedStore}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
 					{busy ? "Issuing…" : "Issue invoice"}
@@ -803,6 +810,13 @@ function IssueInvoiceForm() {
 			{blocked ? (
 				<p className="text-xs text-amber-700">
 					This retailer already has a pending invoice — settle it first.
+				</p>
+			) : null}
+			{compedStore ? (
+				<p className="text-xs text-amber-700">
+					This store is on the house
+					{selected?.compLabel ? ` (${selected.compLabel})` : ""} — it can't be
+					billed. End the comp from Admin · Sellers first.
 				</p>
 			) : null}
 		</AdminCard>

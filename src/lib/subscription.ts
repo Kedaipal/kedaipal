@@ -2,6 +2,7 @@
 // pill, banner, plan-feature gates). Mirrors the server `AccessState` shape
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
+import type { CompKind } from "../../convex/lib/comp";
 import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -13,6 +14,10 @@ export type SubscriptionView = {
 	 * from an older cache degrades to "monthly" rather than throwing. */
 	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
+	/** Admin-granted comp (z8r3fdeub2) — seller-facing slice only: sponsor
+	 * label + optional end date for the billing tab's "Sponsored by X · free
+	 * until Y" line. Absent on legacy/fail-open comped rows. */
+	comp?: { kind: CompKind; label?: string; expiresAt?: number };
 	/** The free period's backstop deadline (signup + 14 days). */
 	trialEndsAt?: number;
 	/** Start-when-you-sell (z8r3fday24): set once the free period ended (first
