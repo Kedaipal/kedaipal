@@ -104,6 +104,69 @@ export function sellerPaymentReceivedTemplateName(): string | undefined {
 }
 
 /**
+ * The seller's manual payment reminder (docs/payment-reminder.md) as a Meta
+ * utility template (ClickUp z8r3fddtkh). By day 11 the buyer's 24h service
+ * window is almost always closed, so the free-form reminder silently failed
+ * to deliver (131047); a template is the ONLY message shape Meta delivers
+ * with no open window. Same env-gating posture as the confirm template: unset
+ * ⇒ the reminder stays a free-form session message (best-effort, as before),
+ * so the code ships decoupled from Meta template review. Body params are the
+ * confirm template's three — {{1}} shortId, {{2}} store name, {{3}} amount —
+ * and the button URL base is `https://kedaipal.com/track/{{1}}` ← tracking
+ * token (added via Meta's **Add variable** control, never hand-typed braces).
+ */
+export function paymentReminderTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * Every Meta template this deployment is configured to send, keyed by the
+ * env var that names it — the ONE registry the admin console's template
+ * panel reads, so a new template can't be sent without also being watched.
+ * `name` is undefined when the env var is unset (the panel shows it as "not
+ * configured" rather than hiding it, so the operator sees what's missing).
+ */
+export function configuredTemplates(): Array<{
+	envVar: string;
+	purpose: string;
+	name: string | undefined;
+}> {
+	return [
+		{
+			envVar: "WHATSAPP_ORDER_CONFIRM_TEMPLATE",
+			purpose: "Buyer order confirmation (the one message per order)",
+			name: orderConfirmTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_PAYMENT_REMINDER_TEMPLATE",
+			purpose: "Buyer payment reminder (seller-tapped, day 11–14)",
+			name: paymentReminderTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CLAIM_LINK_TEMPLATE",
+			purpose: "Buyer claim link (price-locked checkout)",
+			name: claimLinkTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_SELLER_NEW_ORDER_TEMPLATE",
+			purpose: "Seller alert — new order",
+			name: sellerNewOrderTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE",
+			purpose: "Seller alert — buyer says they've paid",
+			name: sellerPaymentClaimTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE",
+			purpose: "Seller alert — gateway payment settled",
+			name: sellerPaymentReceivedTemplateName(),
+		},
+	];
+}
+
+/**
  * A failed Cloud API send, carrying the machine-readable bits a caller needs to
  * decide whether retrying could ever help: the HTTP status and Meta's own error
  * code. Without these a caller can only regex the message text, and the two

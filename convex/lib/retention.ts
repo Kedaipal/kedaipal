@@ -35,6 +35,16 @@ export const OUTBOUND_MESSAGE_LOG_RETENTION_MS = 90 * DAY_MS;
 export const WABA_HEALTH_RETENTION_MS = 90 * DAY_MS;
 
 /**
+ * `wabaTemplateEvents` — per-template status/category/quality history is kept
+ * for **90 days**, EXCEPT the newest row per (templateName, language), which
+ * is retained regardless of age: the admin console reads it as that
+ * template's live state (is it paused? what category is it billed at?), and
+ * Meta only posts when something changes — a healthy template may go a year
+ * between events. Same keep-the-newest posture as `wabaHealth`.
+ */
+export const WABA_TEMPLATE_EVENTS_RETENTION_MS = 90 * DAY_MS;
+
+/**
  * `adminAuditLog` — admin-on-behalf write trail kept for **24 months** (stated
  * decision: a compliance-friendly window — long enough to answer "who at
  * Kedaipal touched my store?" for any plausible dispute or PDPA access request,
