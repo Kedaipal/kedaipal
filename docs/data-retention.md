@@ -66,8 +66,13 @@ Four daily jobs in [`convex/crons.ts`](../convex/crons.ts) (04:05 / 04:15 /
 | --- | --- |
 | `purge expired outbound message log` | `wabaProtection.purgeExpiredOutboundLog` |
 | `purge expired waba health history` | `wabaProtection.purgeExpiredWabaHealth` |
-| `purge expired waba template events` | `wabaProtection.purgeExpiredWabaTemplateEvents` |
+| `purge expired waba template events` | `wabaProtection.purgeExpiredWabaTemplateEvents` (takes an `observedAt` cursor — see below) |
 | `purge expired admin audit log` | `admin.purgeExpiredAdminAudit` |
+
+`purgeExpiredWabaTemplateEvents` chains on a **moving `observedAt` cursor**, not
+on "did this page delete anything": it keeps the newest row per (template,
+language), so a whole page can be keep-rows, and stopping there would strand
+the expired rows behind them. The other three delete every row they read.
 
 All four are paginated, self-chaining `internalMutation`s — the
 `counterCheckout.purgeStaleSessions` / `migrations.ts` house pattern: delete up

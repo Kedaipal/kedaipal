@@ -2681,8 +2681,9 @@ export default defineSchema({
 	// re-classifications (UTILITY → MARKETING is a 6.1× per-send price jump
 	// from 1 Oct 2026, with an appeal window) and quality-score moves (the
 	// warning before a pause). The admin console reads the NEWEST row per
-	// (templateName, language) as that template's live state; `by_template`
-	// serves that read and the purge's keep-the-newest rule. Retention: 90
+	// (templateName, language) as that template's live state; `by_template_kind`
+	// serves the panel's per-chip reads and `by_template` the language discovery
+	// walk and the purge's keep-the-newest rule. Retention: 90
 	// days, but the newest row per template is ALWAYS kept — same posture as
 	// wabaHealth (convex/lib/retention.ts).
 	wabaTemplateEvents: defineTable({
@@ -2703,7 +2704,21 @@ export default defineSchema({
 		observedAt: v.number(),
 	})
 		.index("by_observed", ["observedAt"])
-		.index("by_template", ["templateName", "language", "observedAt"]),
+		.index("by_template", ["templateName", "language", "observedAt"])
+		// The admin panel's actual question is "newest row of THIS kind for this
+		// template+language" — status, category and quality are three different
+		// kinds and each is the live value of a different chip. Without `kind` in
+		// the index that read is a scan with a budget, and a noisy kind starves
+		// the others: 200 quality events would hide an older PAUSED and an older
+		// UTILITY→MARKETING, so the panel would report a paused, marketing-billed
+		// template as healthy utility (PR #267 review). With it, each chip is one
+		// indexed `.first()`.
+		.index("by_template_kind", [
+			"templateName",
+			"language",
+			"kind",
+			"observedAt",
+		]),
 
 	// Per-retailer kill switch + cap overrides. Lazily created — absent row means
 	// "tier/age defaults, not paused" (see lib/wabaLimits.ts resolveSendingLimits).

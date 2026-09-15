@@ -24,9 +24,17 @@
  *
  * Reads WHATSAPP_APP_SECRET and CONVEX_SITE_URL from the deployment via the
  * Convex CLI, so there is nothing to paste and no secret on the command line.
+ *
+ * DEV ONLY. It refuses to run unless the deployment it resolves to is the one
+ * named `dev:…` in .env.local — same posture as
+ * scripts/lalamove-simulate-webhook.mjs refusing a non-`pk_test_` key. Against
+ * prod this would write a FABRICATED template event, and the purge keeps the
+ * newest row per template for ever, so that fiction would become a template's
+ * permanent "live state" in the admin console.
  */
-import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 const [, , scenario = "approved", templateArg, langArg] = process.argv;
 
@@ -84,6 +92,37 @@ const secret = convexEnv("WHATSAPP_APP_SECRET");
 const site = convexEnv("CONVEX_SITE_URL");
 if (!secret || !site) {
 	console.error("Could not read WHATSAPP_APP_SECRET / CONVEX_SITE_URL.");
+	process.exit(1);
+}
+
+// --- dev-only guard -------------------------------------------------------
+// The CLI targets whatever deployment is selected (--prod, CONVEX_DEPLOY_KEY,
+// …), which is not necessarily the one in .env.local. So: read the dev
+// deployment's NAME from .env.local and require the resolved site URL to be
+// that deployment. A prod-selected run resolves elsewhere and is refused.
+let localDeployment = "";
+try {
+	const envFile = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
+	// Convex writes a trailing `# team: …, project: …` comment on this line.
+	localDeployment = (envFile.match(/^CONVEX_DEPLOYMENT=([^\s#]+)/m)?.[1] ?? "").trim();
+} catch {
+	// handled below
+}
+if (!localDeployment.startsWith("dev:")) {
+	console.error(
+		"Refusing to run: .env.local has no `CONVEX_DEPLOYMENT=dev:…`, so this " +
+			"cannot confirm it is pointed at a development deployment.",
+	);
+	process.exit(1);
+}
+const devName = localDeployment.slice("dev:".length);
+if (!new URL(site).host.startsWith(`${devName}.`)) {
+	console.error(
+		`Refusing to run: resolved deployment is ${new URL(site).host}, not the ` +
+			`dev deployment ${devName} from .env.local. This writes a fabricated ` +
+			`template event, which the purge would keep for ever as that ` +
+			`template's live state — never point it at production.`,
+	);
 	process.exit(1);
 }
 

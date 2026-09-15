@@ -366,6 +366,130 @@ describe("adminListTemplates — the per-template live view", () => {
 	});
 });
 
+describe("adminListTemplates — a noisy kind must not bury a quieter one", () => {
+	/** Insert `count` quality events, newest last. */
+	async function seedQuality(
+		t: ReturnType<typeof setup>,
+		templateName: string,
+		language: string,
+		count: number,
+		startAt: number,
+	) {
+		await t.run(async (ctx) => {
+			for (let i = 0; i < count; i++) {
+				await ctx.db.insert("wabaTemplateEvents", {
+					templateName,
+					language,
+					kind: "quality",
+					newQuality: "GREEN",
+					alerted: false,
+					observedAt: startAt + i * 1000,
+				});
+			}
+		});
+	}
+
+	test("200+ newer quality rows do not hide an older PAUSED or an older MARKETING", async () => {
+		// The dangerous shape: quality events are the chatty kind, and Meta
+		// retries re-insert. A shared read budget spent on them would render a
+		// paused, marketing-billed template as healthy utility — the panel
+		// asserting a fact it holds contrary evidence for.
+		const t = setup();
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		await t.run(async (ctx) => {
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "order_confirmation_utility",
+				language: "en",
+				kind: "status",
+				event: "PAUSED",
+				alerted: true,
+				observedAt: NOW - 60 * DAY_MS,
+			});
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "order_confirmation_utility",
+				language: "en",
+				kind: "category",
+				previousCategory: "UTILITY",
+				newCategory: "MARKETING",
+				alerted: true,
+				observedAt: NOW - 59 * DAY_MS,
+			});
+		});
+		await seedQuality(t, "order_confirmation_utility", "en", 205, NOW - 10 * DAY_MS);
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const result = await asAdmin.query(api.wabaProtection.adminListTemplates, {});
+		const en = result.rows
+			.find((r) => r.templateName === "order_confirmation_utility")
+			?.languages.find((l) => l.language === "en");
+
+		expect(en?.status).toBe("PAUSED");
+		expect(en?.category).toBe("MARKETING");
+		expect(en?.quality).toBe("GREEN");
+	});
+
+	test("a language with thousands of rows does not bury a quieter one", async () => {
+		// `by_template` is [templateName, language, observedAt] and sorts
+		// language-descending, so "ms" comes first: a page-scan budget spent on
+		// ms rows would drop `en` entirely.
+		const t = setup();
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		await seedQuality(t, "order_confirmation_utility", "ms", 210, NOW - 10 * DAY_MS);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "order_confirmation_utility",
+				language: "en",
+				kind: "status",
+				event: "PAUSED",
+				alerted: true,
+				observedAt: NOW - 30 * DAY_MS,
+			});
+		});
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const result = await asAdmin.query(api.wabaProtection.adminListTemplates, {});
+		const confirm = result.rows.find(
+			(r) => r.templateName === "order_confirmation_utility",
+		);
+		expect(
+			confirm?.languages.find((l) => l.language === "en")?.status,
+		).toBe("PAUSED");
+		expect(
+			confirm?.languages.find((l) => l.language === "ms")?.quality,
+		).toBe("GREEN");
+	});
+
+	test("an exotic language is still discovered when a chattier one outranks it", async () => {
+		// "zz" sorts above "ms"/"en"; the walk must not stop at the first one.
+		const t = setup();
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		await seedQuality(t, "order_confirmation_utility", "zz", 150, NOW - 10 * DAY_MS);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "order_confirmation_utility",
+				language: "en_US",
+				kind: "status",
+				event: "DISABLED",
+				alerted: true,
+				observedAt: NOW - 20 * DAY_MS,
+			});
+		});
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const result = await asAdmin.query(api.wabaProtection.adminListTemplates, {});
+		const langs =
+			result.rows
+				.find((r) => r.templateName === "order_confirmation_utility")
+				?.languages.map((l) => l.language) ?? [];
+		expect(langs).toEqual(expect.arrayContaining(["en", "ms", "en_US", "zz"]));
+		expect(
+			result.rows
+				.find((r) => r.templateName === "order_confirmation_utility")
+				?.languages.find((l) => l.language === "en_US")?.status,
+		).toBe("DISABLED");
+	});
+});
+
 describe("wabaTemplateEvents purge — the newest row per template is never deleted", () => {
 	test("keeps each template's newest row past the cutoff; purges the rest", async () => {
 		const t = setup();
@@ -425,5 +549,56 @@ describe("wabaTemplateEvents purge — the newest row per template is never dele
 			.map((r) => `${r.templateName}/${r.language}/${r.kind}`)
 			.sort();
 		expect(keys).toEqual(["a/en/category", "a/ms/status", "b/en/quality"]);
+	});
+
+	test("a full page of keep-rows does not end the sweep", async () => {
+		// 100 distinct templates whose ONLY row is expired: every one is that
+		// template's live state, so the first page deletes nothing. Stopping
+		// there would strand the genuinely expired rows behind them for ever.
+		const t = setup();
+		await t.run(async (ctx) => {
+			for (let i = 0; i < 100; i++) {
+				await ctx.db.insert("wabaTemplateEvents", {
+					templateName: `keep_${String(i).padStart(3, "0")}`,
+					language: "en",
+					kind: "status",
+					event: "APPROVED",
+					alerted: false,
+					observedAt: NOW - 200 * DAY_MS + i,
+				});
+			}
+			// Behind them: a template with a live row AND an expired one.
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "purge_me",
+				language: "en",
+				kind: "status",
+				event: "APPROVED",
+				alerted: false,
+				observedAt: NOW - 150 * DAY_MS,
+			});
+			await ctx.db.insert("wabaTemplateEvents", {
+				templateName: "purge_me",
+				language: "en",
+				kind: "quality",
+				newQuality: "GREEN",
+				alerted: false,
+				observedAt: NOW - DAY_MS,
+			});
+		});
+
+		await t.mutation(internal.wabaProtection.purgeExpiredWabaTemplateEvents, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const remaining = await t.run((ctx) =>
+			ctx.db.query("wabaTemplateEvents").collect(),
+		);
+		// Every keep-row survives…
+		expect(remaining.filter((r) => r.templateName.startsWith("keep_"))).toHaveLength(
+			100,
+		);
+		// …and the expired row behind them is gone, leaving only the live one.
+		const purgeMe = remaining.filter((r) => r.templateName === "purge_me");
+		expect(purgeMe).toHaveLength(1);
+		expect(purgeMe[0].kind).toBe("quality");
 	});
 });

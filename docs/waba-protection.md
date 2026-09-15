@@ -236,9 +236,19 @@ real webhook data:**
   `src/lib/waba-template-chips.ts`.
 - **Languages are discovered, not assumed.** `en` and `ms` always show (the two
   `TEMPLATE_LANGUAGE` can ask for), and any other language code Meta reports
-  is rendered alongside them. One bounded read per template over
-  `by_template` covers every language at once, so an event under a locale we
-  never send is surfaced rather than recorded and silently dropped.
+  is rendered alongside them, so an event under a locale we never send is
+  surfaced rather than recorded and silently dropped.
+- **No chip is ever derived from a scan with a shared budget.** The three
+  kinds arrive at very different rates — quality events are the chatty ones,
+  and a Meta retry re-inserts — so a shared page budget lets the noisy kind
+  bury the others: 200 quality rows would hide an older `PAUSED` and an older
+  `UTILITY→MARKETING`, and the panel would render a paused, marketing-billed
+  template as healthy utility, with the `(assumed)` fallback asserting a fact
+  it holds contrary evidence for (found in PR #267 review). Each chip is one
+  indexed `.first()` on **`by_template_kind`**, and languages are found by
+  walking `by_template` downwards one single-document read at a time, so
+  neither a noisy kind nor a noisy language can starve anything. Cost per
+  template is ~9 single-document reads, not a 200-row page.
 
 Every event is persisted to **`wabaTemplateEvents`** (`recordTemplateEvent`);
 alerting ones schedule `sendWabaTemplateAlert` → email to `ADMIN_ALERT_EMAIL`
@@ -261,9 +271,13 @@ would. `approved` / `pending` / `restore` / `quality-ok` are silent;
 `paused` / `disabled` / `downgrade` / `quality-red` alert **and send a real
 ops email**. Sits beside the existing Lalamove and Delyva webhook simulators.
 
-**Retention:** 90 days, but the newest row per (template, language) is always
-kept — Meta posts only on change, so a healthy template may go a year between
-events (`purgeExpiredWabaTemplateEvents`, 04:20 UTC daily).
+**Retention:** 90 days (`purgeExpiredWabaTemplateEvents`, 04:20 UTC daily), but
+the newest row per (template, language) is always kept — Meta posts only on
+change, so a healthy template may go a year between events. The sweep advances
+an `observedAt` cursor instead of re-reading from the start and stopping once a
+page deletes nothing: a page can legitimately be all keep-rows, and stopping
+there would strand genuinely expired rows behind them (PR #267 review).
+Termination comes from the moving window, not from having deleted something.
 
 ## Alerts
 

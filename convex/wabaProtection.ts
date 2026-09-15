@@ -24,7 +24,7 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { ActionCtx, MutationCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 import {
 	internalAction,
 	internalMutation,
@@ -898,8 +898,15 @@ export type AdminTemplateRow = {
  */
 const TEMPLATE_LANGUAGES = ["en", "ms"] as const;
 const RECENT_TEMPLATE_EVENTS_CAP = 100;
-/** Per-template history scanned to derive its live state, newest first. */
-const TEMPLATE_HISTORY_CAP = 200;
+/**
+ * Ceiling on distinct languages walked per template. The walk costs one
+ * single-document read per language and stops on its own when a template has
+ * no more; this only bounds a pathological case (Meta reporting dozens of
+ * locales for one template).
+ */
+const MAX_TEMPLATE_LANGUAGES = 12;
+/** The three kinds, each the live value of its own chip. */
+const TEMPLATE_EVENT_KINDS = ["status", "category", "quality"] as const;
 
 function summarizeTemplateEvent(row: Doc<"wabaTemplateEvents">): string {
 	if (row.kind === "status") {
@@ -909,6 +916,59 @@ function summarizeTemplateEvent(row: Doc<"wabaTemplateEvents">): string {
 		return `category ${row.previousCategory ?? "?"} → ${row.newCategory ?? "?"}`;
 	}
 	return `quality ${row.previousQuality ?? "?"} → ${row.newQuality ?? "?"}`;
+}
+
+/** Newest event of one kind for one template+language — a single indexed read. */
+async function newestTemplateEvent(
+	ctx: QueryCtx,
+	templateName: string,
+	language: string,
+	kind: Doc<"wabaTemplateEvents">["kind"],
+): Promise<Doc<"wabaTemplateEvents"> | null> {
+	return ctx.db
+		.query("wabaTemplateEvents")
+		.withIndex("by_template_kind", (q) =>
+			q
+				.eq("templateName", templateName)
+				.eq("language", language)
+				.eq("kind", kind),
+		)
+		.order("desc")
+		.first();
+}
+
+/**
+ * Every language this template has events for, plus the two we can send
+ * (`TEMPLATE_LANGUAGES`) so they always render even with no history.
+ *
+ * Walks the `by_template` index downwards one language at a time — each step
+ * is a single-document read for "the highest language below the last one" —
+ * rather than scanning a page of rows and collecting distinct values. A page
+ * scan is what lets a language with thousands of rows hide a quieter one
+ * (`ms` burying `en`), which is the same starvation the per-kind reads above
+ * exist to avoid.
+ */
+async function discoverTemplateLanguages(
+	ctx: QueryCtx,
+	templateName: string,
+): Promise<string[]> {
+	const found = new Set<string>(TEMPLATE_LANGUAGES);
+	let below: string | undefined;
+	for (let step = 0; step < MAX_TEMPLATE_LANGUAGES; step++) {
+		const next: Doc<"wabaTemplateEvents"> | null = await ctx.db
+			.query("wabaTemplateEvents")
+			.withIndex("by_template", (q) =>
+				below === undefined
+					? q.eq("templateName", templateName)
+					: q.eq("templateName", templateName).lt("language", below),
+			)
+			.order("desc")
+			.first();
+		if (!next) break;
+		found.add(next.language);
+		below = next.language;
+	}
+	return [...found].sort();
 }
 
 export const adminListTemplates = query({
@@ -946,31 +1006,28 @@ export const adminListTemplates = query({
 		}
 		const rows: AdminTemplateRow[] = [];
 		for (const [templateName, meta] of names) {
-			// ONE bounded indexed read per template, covering every language it
-			// has events for (the index is [templateName, language, observedAt]).
-			// Grouped in JS rather than read per language: "current status" and
-			// "current category" ride DIFFERENT event kinds, so each language
-			// needs its whole recent history anyway, and this way a language we
-			// never send can still surface instead of being silently dropped.
-			const history = await ctx.db
-				.query("wabaTemplateEvents")
-				.withIndex("by_template", (q) => q.eq("templateName", templateName))
-				.order("desc")
-				.take(TEMPLATE_HISTORY_CAP);
-			const byLanguage = new Map<string, Array<Doc<"wabaTemplateEvents">>>();
-			for (const lang of TEMPLATE_LANGUAGES) byLanguage.set(lang, []);
-			for (const row of history) {
-				const bucket = byLanguage.get(row.language);
-				if (bucket) bucket.push(row);
-				else byLanguage.set(row.language, [row]);
-			}
 			const languages: AdminTemplateRow["languages"] = [];
-			for (const [language, rowsForLang] of byLanguage) {
-				// `history` is newest-first, so each bucket preserves that order.
-				const latestStatus = rowsForLang.find((h) => h.kind === "status");
-				const latestCategory = rowsForLang.find((h) => h.kind === "category");
-				const latestQuality = rowsForLang.find((h) => h.kind === "quality");
-				const last = rowsForLang[0];
+			for (const language of await discoverTemplateLanguages(
+				ctx,
+				templateName,
+			)) {
+				// One indexed `.first()` per chip. NOT a scan with a budget: the
+				// three kinds arrive at wildly different rates (quality events are
+				// the noisy ones), so any shared budget lets the noisy kind bury
+				// the others and the panel then reports a paused, marketing-billed
+				// template as healthy utility — asserting a fact it holds contrary
+				// evidence for (PR #267 review).
+				const [latestStatus, latestCategory, latestQuality] =
+					await Promise.all(
+						TEMPLATE_EVENT_KINDS.map((kind) =>
+							newestTemplateEvent(ctx, templateName, language, kind),
+						),
+					);
+				// "Last event" is whichever of the three is newest — derived from
+				// rows we already hold rather than a fourth read.
+				const last = [latestStatus, latestCategory, latestQuality]
+					.filter((r): r is Doc<"wabaTemplateEvents"> => r !== null)
+					.sort((a, b) => b.observedAt - a.observedAt)[0];
 				languages.push({
 					language,
 					status: latestStatus?.event,
@@ -1217,14 +1274,24 @@ export const purgeExpiredWabaHealth = internalMutation({
  * template and may be the only row it ever gets (Meta posts on change only).
  */
 export const purgeExpiredWabaTemplateEvents = internalMutation({
-	args: {},
-	handler: async (ctx): Promise<void> => {
+	// `after` advances the window instead of restarting it. Deleting rows is
+	// NOT what makes this terminate — a page can legitimately be all
+	// keep-rows — so chaining on "did we delete anything" would stop the sweep
+	// early and strand genuinely expired rows behind ~100 live-state ones
+	// (PR #267 review). Chaining on "was the page full" plus a moving cursor
+	// makes progress unconditional and termination guaranteed.
+	args: { after: v.optional(v.number()) },
+	handler: async (ctx, { after }): Promise<void> => {
 		const cutoff = Date.now() - WABA_TEMPLATE_EVENTS_RETENTION_MS;
 		const page = await ctx.db
 			.query("wabaTemplateEvents")
-			.withIndex("by_observed", (q) => q.lt("observedAt", cutoff))
+			.withIndex("by_observed", (q) =>
+				after === undefined
+					? q.lt("observedAt", cutoff)
+					: q.gt("observedAt", after).lt("observedAt", cutoff),
+			)
 			.take(LOG_PURGE_PAGE_SIZE);
-		let deleted = 0;
+		if (page.length === 0) return;
 		for (const row of page) {
 			const newest = await ctx.db
 				.query("wabaTemplateEvents")
@@ -1235,15 +1302,15 @@ export const purgeExpiredWabaTemplateEvents = internalMutation({
 				.first();
 			if (newest?._id === row._id) continue; // that template's live state
 			await ctx.db.delete(row._id);
-			deleted++;
 		}
-		// Self-chain only while progress is being made: a page made entirely of
-		// kept live-state rows would otherwise re-schedule itself forever.
-		if (page.length === LOG_PURGE_PAGE_SIZE && deleted > 0) {
+		if (page.length === LOG_PURGE_PAGE_SIZE) {
+			// Rows sharing the last row's exact millisecond are skipped by the
+			// strict `gt`; the daily cron restarts from the beginning, so they
+			// are picked up on the next run rather than stranded.
 			await ctx.scheduler.runAfter(
 				0,
 				internal.wabaProtection.purgeExpiredWabaTemplateEvents,
-				{},
+				{ after: page[page.length - 1].observedAt },
 			);
 		}
 	},
