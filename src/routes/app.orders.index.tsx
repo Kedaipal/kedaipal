@@ -39,7 +39,12 @@ import {
 	type InboxStatusLeaf,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
-import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
+import {
+	FULFILMENT_KEYS,
+	type FulfilmentKey,
+	ORDER_COLUMNS,
+	type OrderColumnKey,
+} from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	type PinMode,
@@ -184,6 +189,10 @@ type InboxSearch = {
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
 	 * so old bookmarks keep working. */
 	sources?: OrderSource[];
+	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values, repeated in
+	 * the URL like `pay`/`method` (`?ful=delivery&ful=drop_off`). The twin of
+	 * `sources`: that one is the surface it came in through. */
+	ful?: FulfilmentKey[];
 	/**
 	 * THE status axis — status LEAVES, repeated in the URL like `pay`/`method`.
 	 * Written by the chip row (a whole bucket's leaves at a tap), the Filters
@@ -236,6 +245,12 @@ function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 
 function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
+}
+
+/** Narrowed against the registry, so a hand-edited or stale URL can't push a
+ * value `searchOrders`' validator would reject outright. */
+function isFulfilmentKey(x: unknown): x is FulfilmentKey {
+	return (FULFILMENT_KEYS as readonly string[]).includes(x as string);
 }
 
 function isInboxLeaf(x: unknown): x is InboxStatusLeaf {
@@ -342,6 +357,7 @@ export const Route = createFileRoute("/app/orders/")({
 				),
 			),
 		];
+		const ful = [...new Set(toList(search.ful).filter(isFulfilmentKey))];
 		// Legacy `?bucket=` folds into `st` right here, so the rest of the route
 		// only ever sees ONE status field and a stale bookmark heals on the next
 		// navigate. Same helper the server folds with, so a link and the query it
@@ -387,6 +403,7 @@ export const Route = createFileRoute("/app/orders/")({
 			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
 			// link shared before this shipped still filters (86eyrtz74).
 			sources: sources.length > 0 ? sources : undefined,
+			ful: ful.length > 0 ? ful : undefined,
 			st: st.length > 0 ? st : undefined,
 			cat: cat.length > 0 ? cat : undefined,
 			catunspec:
@@ -466,6 +483,7 @@ function OrdersRoute() {
 		mockup = false,
 		fwin,
 		sources = [],
+		ful = [],
 		st = [],
 		cat = [],
 		catunspec = false,
@@ -560,6 +578,7 @@ function OrdersRoute() {
 	const asrcKey = asrc.join(",");
 	const periodKey = period.join(",");
 	const sourcesKey = sources.join(",");
+	const fulKey = ful.join(",");
 	const stKey = st.join(",");
 	const catKey = cat.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
@@ -587,6 +606,7 @@ function OrdersRoute() {
 		mockup,
 		fwin,
 		sourcesKey,
+		fulKey,
 		stKey,
 		catKey,
 		catunspec,
@@ -642,6 +662,7 @@ function OrdersRoute() {
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
 							sources: sources.length > 0 ? sources : undefined,
+							fulfilments: ful.length > 0 ? ful : undefined,
 							statuses: st.length > 0 ? st : undefined,
 							categories: cat.length > 0 ? cat : undefined,
 							categoriesUnspecified: catunspec || undefined,
@@ -789,6 +810,7 @@ function OrdersRoute() {
 			categories: cat,
 			categoriesUnspecified: catunspec,
 			sources,
+			fulfilments: ful,
 			paymentStatuses: pay,
 			paymentMethods: munspec ? [...method, METHOD_UNSPECIFIED] : method,
 			attributionSources: asrc,
@@ -831,6 +853,7 @@ function OrdersRoute() {
 		mockup ||
 		fwin != null ||
 		sources.length > 0 ||
+		ful.length > 0 ||
 		cat.length > 0 ||
 		catunspec ||
 		asrc.length > 0;
@@ -983,6 +1006,11 @@ function OrdersRoute() {
 						? true
 						: undefined;
 				}
+				if (patch.fulfilments)
+					next.ful =
+						patch.fulfilments.length > 0
+							? (patch.fulfilments as FulfilmentKey[])
+							: undefined;
 				if (patch.attributionSources)
 					next.asrc =
 						patch.attributionSources.length > 0
@@ -1010,6 +1038,7 @@ function OrdersRoute() {
 				mockup: undefined,
 				fwin: undefined,
 				sources: undefined,
+				ful: undefined,
 				// The status axis clears too — BOTH halves. This is the table's
 				// "start over below" button, and in table view the axis is set from
 				// the Status column's own filter funnel, so leaving it would strand
@@ -1045,6 +1074,10 @@ function OrdersRoute() {
 						? next.attributionSources
 						: undefined,
 				sources: next.sources.length > 0 ? next.sources : undefined,
+				ful:
+					next.fulfilments.length > 0
+						? (next.fulfilments as FulfilmentKey[])
+						: undefined,
 				st:
 					next.statuses.length > 0
 						? (next.statuses as InboxStatusLeaf[])
@@ -1308,6 +1341,7 @@ function OrdersRoute() {
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
 					sources: sources.length > 0 ? sources : undefined,
+					fulfilments: ful.length > 0 ? ful : undefined,
 					statuses: st.length > 0 ? st : undefined,
 					categories: cat.length > 0 ? cat : undefined,
 					categoriesUnspecified: catunspec || undefined,
@@ -1600,6 +1634,7 @@ function OrdersRoute() {
 								mockup,
 								fwin,
 								sources,
+								fulfilments: ful,
 								statuses: st,
 								bookingPeriods: period,
 								categories: cat,

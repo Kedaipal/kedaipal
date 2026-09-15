@@ -2,6 +2,8 @@ import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
+	FULFILMENT_KEYS,
+	FULFILMENT_LABELS,
 	ORDER_SOURCE_KEYS,
 	ORDER_SOURCE_LABELS,
 	type OrderColumnKey,
@@ -14,10 +16,7 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import {
-	INBOX_LEAF_KEYS,
-	leafLabel,
-} from "../../../convex/lib/orderBuckets";
+import { INBOX_LEAF_KEYS, leafLabel } from "../../../convex/lib/orderBuckets";
 import type { OrderStatus } from "../../lib/orderStatus";
 import type { ColumnFilterOption } from "../ui/column-filter-menu";
 
@@ -51,8 +50,10 @@ export interface OrderColumnFilterState {
 	 * "Uncategorized" option via `CATEGORY_UNCATEGORIZED`, split back out on
 	 * apply — exactly how `paymentMethods` carries its own absence. */
 	categoriesUnspecified: boolean;
-	/** Checkout surface. */
+	/** Checkout surface — how the order came IN. */
 	sources: string[];
+	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values. */
+	fulfilments: string[];
 	paymentStatuses: string[];
 	/**
 	 * Settlement methods, with `""` standing for "no method recorded". The URL
@@ -72,6 +73,9 @@ export interface OrderFilterFacets {
 	statusLeaf: Record<string, number>;
 	category: Record<string, number>;
 	source: Record<string, number>;
+	/** Keyed by `fulfilmentKey`, so a count here is the count of rows whose
+	 * Fulfilment cell shows that word (z8r3fdfau9). */
+	fulfilment: Record<string, number>;
 	paymentStatus: Record<string, number>;
 	paymentMethod: Record<string, number>;
 	attribution: Record<string, number>;
@@ -134,6 +138,41 @@ function opt(
 	facet: Record<string, number> | undefined,
 ): ColumnFilterOption {
 	return { value, label, count: facet?.[value] ?? 0 };
+}
+
+/**
+ * Which fulfilment kinds to offer (z8r3fdfau9): the ones this seller's window
+ * actually contains, plus anything already selected. In registry order, never
+ * by count, so the list doesn't reshuffle as orders land.
+ *
+ * Presence-driven rather than the full five because most stores only ever do
+ * one or two: a delivery-only seller has no business being shown permanently-
+ * zero "Booking" and "We collect" rows — the rule `showBookingPeriods` and the
+ * category/attribution sections already follow. A SELECTED kind is folded back
+ * in even when nothing matches it, because a lit filter the seller can't see is
+ * a filter they can't switch off (`methodChoicesFor`'s rule, and the reason
+ * this is one exported helper rather than a copy in each surface).
+ *
+ * **Fewer than two entries means neither surface renders** — see
+ * `fulfilmentFilterApplies`. One option can only narrow to what you already
+ * have, which is a control that does nothing.
+ */
+export function fulfilmentChoicesFrom(
+	facets: OrderFilterFacets | undefined,
+	selected: readonly string[] = [],
+): string[] {
+	return FULFILMENT_KEYS.filter(
+		(key) => (facets?.fulfilment[key] ?? 0) > 0 || selected.includes(key),
+	);
+}
+
+/** Whether the fulfilment dimension is worth showing at all — the ONE rule, so
+ * the panel section and the column funnel appear and disappear together. */
+export function fulfilmentFilterApplies(
+	facets: OrderFilterFacets | undefined,
+	selected: readonly string[] = [],
+): boolean {
+	return fulfilmentChoicesFrom(facets, selected).length > 1;
 }
 
 /**
@@ -201,6 +240,25 @@ export function buildOrderColumnFilters({
 		selected: state.sources,
 		onChange: (sources) => onApply({ sources }),
 	});
+
+	// Fulfilment (z8r3fdfau9) — immediately after Order type on purpose: one is
+	// how the order came in, the other how it goes out, and a seller planning a
+	// day reaches for them together.
+	//
+	// Registered only when there is more than one kind to choose between, so the
+	// funnel icon itself is the honest signal: on a delivery-only store the
+	// column has no funnel rather than a funnel that opens onto a single row.
+	// Same call as the panel's section, from the same helper.
+	if (fulfilmentFilterApplies(facets, state.fulfilments)) {
+		map.set("fulfilment", {
+			label: "Fulfilment",
+			options: fulfilmentChoicesFrom(facets, state.fulfilments).map((key) =>
+				opt(key, FULFILMENT_LABELS[key] ?? key, facets?.fulfilment),
+			),
+			selected: state.fulfilments,
+			onChange: (fulfilments) => onApply({ fulfilments }),
+		});
+	}
 
 	map.set("attribution", {
 		label: "Came from",

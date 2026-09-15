@@ -7,6 +7,9 @@ import {
 	type CsvOrder,
 	DEFAULT_ORDER_COLUMN_KEYS,
 	escapeCsvField,
+	FULFILMENT_KEYS,
+	FULFILMENT_LABELS,
+	fulfilmentKey,
 	fulfilmentMomentSortKey,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
@@ -91,6 +94,82 @@ describe("orderToCsvRow", () => {
 				CSV_COLUMNS.indexOf("Fulfilment")
 			],
 		).toBe("self_collect");
+	});
+
+	test("a drop-off order is its own fulfilment kind, not flattened into self-collect (z8r3fdfau9)", () => {
+		const dropOff = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: {
+				label: "Pasar Chow Kit",
+				address: "Jalan Raja Alang",
+				locationType: "drop_off" as const,
+			},
+		};
+		expect(orderToCsvRow(dropOff)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"drop_off",
+		);
+		// A pickup point at the seller's OWN place, and a legacy snapshot from
+		// before drop-off existed, both stay self-collect.
+		const ownPlace = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: {
+				label: "Shop",
+				address: "Jalan 1",
+				locationType: "self_collect" as const,
+			},
+		};
+		expect(orderToCsvRow(ownPlace)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"self_collect",
+		);
+		const legacy = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: { label: "Shop", address: "Jalan 1" },
+		};
+		expect(orderToCsvRow(legacy)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"self_collect",
+		);
+	});
+
+	test("fulfilmentKey precedence: collection beats the method, drop-off beats self-collect, legacy reads as delivery", () => {
+		const csv = (o: Partial<CsvOrder>) => fulfilmentKey({ ...base, ...o });
+		// A collection order is a DELIVERY order in the schema — the direction is
+		// what makes it the opposite trip, so it has to win.
+		expect(
+			csv({ deliveryMethod: "delivery", deliveryDirection: "collection" }),
+		).toBe("collection");
+		// ...and it wins even over a pickup snapshot, which a collection order has
+		// no business carrying but could through a mid-flight settings change.
+		expect(
+			csv({
+				deliveryMethod: "self_collect",
+				deliveryDirection: "collection",
+				pickupSnapshot: {
+					label: "X",
+					address: "Y",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("collection");
+		expect(csv({ deliveryMethod: "booking" })).toBe("booking");
+		// No method at all — every order created before the field existed. It
+		// reads as delivery (the schema's own default) rather than going blank,
+		// so the Delivery filter row keeps them instead of silently hiding them.
+		expect(csv({ deliveryMethod: undefined })).toBe("delivery");
+	});
+
+	test("every fulfilment key has a real label — none falls through to humanizeEnum", () => {
+		for (const key of FULFILMENT_KEYS) {
+			expect(FULFILMENT_LABELS[key]).toBeTruthy();
+		}
+		// The two the fallback would have got wrong: `humanizeEnum` produces
+		// "Self collect" (no hyphen) and "Collection" (which reads as the opposite
+		// direction next to "Self-collect").
+		expect(FULFILMENT_LABELS.self_collect).toBe("Self-collect");
+		expect(FULFILMENT_LABELS.collection).toBe("We collect");
+		expect(FULFILMENT_LABELS.drop_off).toBe("Drop-off");
 	});
 
 	test("summarizes items as 'qty x name (variant)'", () => {

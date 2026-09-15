@@ -7,6 +7,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { FULFILMENT_KEYS } from "./lib/orderCsv";
 import { rateLimiter } from "./lib/rateLimiter";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
 import schema from "./schema";
@@ -9847,6 +9848,49 @@ describe("orders — export gaps (86eyrtz74)", () => {
 		expect(csv.split("\r\n")[0]).toBe("Order ID,Total");
 	});
 
+	test("the exported Fulfilment cell says drop_off, matching the table (z8r3fdfau9)", async () => {
+		// `orderToCsvSource` projects the order down to the column registry's
+		// shape. Drop `pickupSnapshot.locationType` there and the CSV quietly
+		// calls these orders "self_collect" while the seller's screen calls them
+		// "Drop-off" — the export diverging from the view, which is the single
+		// thing the shared-predicate/shared-registry design exists to prevent.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const doc = await ctx.db
+				.query("orders")
+				.filter((q) => q.eq(q.field("shortId"), shortId))
+				.first();
+			if (!doc) throw new Error("seed failed");
+			await ctx.db.patch(doc._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Pasar Chow Kit",
+					address: "Jalan Raja Alang",
+					locationType: "drop_off",
+				},
+			});
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		const [header, row] = csv.split("\r\n");
+		expect(header).toBe("Order ID,Fulfilment");
+		expect(row.endsWith(",drop_off")).toBe(true);
+	});
+
 	test("never exports the buyer's tracking token", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -10231,6 +10275,77 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			categories: ["Cakes"],
 		});
 		expect(res.facets.category.Cakes).toBe(res.total);
+	});
+
+	test("filters and tallies by fulfilment, over the unfiltered window (z8r3fdfau9)", async () => {
+		const t = setup();
+		const { retailer, asA, a, b, mixed } = await seedForFilters(t);
+		// The seed places delivery orders; re-point three of them so the window
+		// holds four different trips. Patched directly rather than placed through
+		// `orders.create` because the create-time invariants (a pickup location
+		// must exist, a booking needs a listing) are not what this test is about —
+		// the facet and the wire are.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(a._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: { label: "Kedai", address: "Jalan 1" },
+			});
+			await ctx.db.patch(b._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Pasar Chow Kit",
+					address: "Jalan Raja Alang",
+					locationType: "drop_off",
+				},
+			});
+			await ctx.db.patch(mixed._id, { deliveryDirection: "collection" });
+		});
+
+		const all = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(all.facets.fulfilment).toEqual({
+			delivery: 1,
+			self_collect: 1,
+			drop_off: 1,
+			collection: 1,
+		});
+
+		// Narrowing keeps the tally intact — the picker must not shrink as it is
+		// used, the same rule every other facet follows.
+		const pickups = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["self_collect", "drop_off"],
+		});
+		expect(pickups.total).toBe(2);
+		expect(pickups.facets.fulfilment).toEqual(all.facets.fulfilment);
+		// A collection run is NOT a delivery, even though the schema calls it one.
+		const deliveries = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["delivery"],
+		});
+		expect(deliveries.total).toBe(1);
+		expect(deliveries.orders[0]?.deliveryDirection).toBeUndefined();
+	});
+
+	test("every fulfilment key the registry can produce is accepted on the wire", async () => {
+		// The registry and the Convex validator are two lists. A sixth kind added
+		// to one and forgotten in the other would reach the seller as an
+		// unexplained failure the moment they ticked it — this is what notices.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		for (const key of FULFILMENT_KEYS) {
+			await expect(
+				asA.query(api.orders.searchOrders, {
+					retailerId: retailer._id,
+					bucket: "all",
+					fulfilments: [key],
+				}),
+			).resolves.toBeDefined();
+		}
 	});
 
 	test("buckets are multi-select — 'everything closed' in one view", async () => {

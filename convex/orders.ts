@@ -93,6 +93,7 @@ import {
 } from "./lib/orderBuckets";
 import {
 	type CsvOrder,
+	fulfilmentKey,
 	orderCategoryNames,
 	ordersToCsv,
 } from "./lib/orderCsv";
@@ -2492,6 +2493,20 @@ const orderSourceValidator = v.union(
 	v.literal("claim"),
 );
 
+// How the order LEAVES (z8r3fdfau9) — every value `fulfilmentKey` can return.
+// A closed set, so a literal union rather than the free-form v.string() the
+// seller-invented dimensions (categories, attribution tags) need. Held to
+// FULFILMENT_KEYS by a test that pushes each member through this validator: a
+// sixth kind added to the registry and forgotten here would otherwise reach a
+// seller as an unexplained failure the moment they ticked it.
+const fulfilmentKeyValidator = v.union(
+	v.literal("delivery"),
+	v.literal("self_collect"),
+	v.literal("drop_off"),
+	v.literal("collection"),
+	v.literal("booking"),
+);
+
 // THE status axis on the wire (1 Sep) — leaves, not raw statuses. `confirmed`
 // here means confirmed AND SEEN; `confirmed_unseen` is its own member. See
 // INBOX_LEAF_KEYS in lib/orderBuckets.ts for why the split exists.
@@ -2581,6 +2596,12 @@ export const searchOrders = query({
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
+		// How the order LEAVES, MULTI (z8r3fdfau9) — the twin of `sources` above
+		// and its neighbour on purpose: that one is which checkout surface the
+		// order came in through, this one is the trip out. Matched via the column
+		// registry's `fulfilmentKey`, so the filter and the Fulfilment cell can
+		// never name the same order two different things.
+		fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
 		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
 		// ANDs with the rest. Free-form by design (sellers invent their own
@@ -2621,6 +2642,7 @@ export const searchOrders = query({
 			mockupPending,
 			source,
 			sources,
+			fulfilments,
 			statuses,
 			categories,
 			categoriesUnspecified,
@@ -2660,6 +2682,7 @@ export const searchOrders = query({
 			mockupPending,
 			source,
 			sources,
+			fulfilments,
 			statuses,
 			categories,
 			categoriesUnspecified,
@@ -2739,6 +2762,10 @@ export const searchOrders = query({
 		const leafTally = new Map<string, number>();
 		const categoryTally = new Map<string, number>();
 		const checkoutSourceTally = new Map<string, number>();
+		// How each order LEAVES (z8r3fdfau9) — keyed by `fulfilmentKey`, the same
+		// function the column renders and the predicate matches on, so the number
+		// beside an option is exactly the number of rows ticking it will show.
+		const fulfilmentTally = new Map<string, number>();
 		const paymentStatusTally = new Map<string, number>();
 		// "" is the count of orders with no recorded method, which the picker
 		// offers as "Unspecified" — a real answer, not a gap.
@@ -2778,6 +2805,7 @@ export const searchOrders = query({
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
 			bump(checkoutSourceTally, o.source ?? "storefront");
+			bump(fulfilmentTally, fulfilmentKey(o));
 			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
 			bump(paymentMethodTally, o.paymentMethod ?? "");
 			// An order counts ONCE per category it contains, never once per line —
@@ -2844,6 +2872,7 @@ export const searchOrders = query({
 				statusLeaf: Object.fromEntries(leafTally),
 				category: Object.fromEntries(categoryTally),
 				source: Object.fromEntries(checkoutSourceTally),
+				fulfilment: Object.fromEntries(fulfilmentTally),
 				paymentStatus: Object.fromEntries(paymentStatusTally),
 				paymentMethod: Object.fromEntries(paymentMethodTally),
 				attribution: Object.fromEntries(sourceTally),
@@ -2917,6 +2946,10 @@ const exportFilterValidators = {
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
+	// How the order LEAVES (z8r3fdfau9) — in the shared set for the same reason
+	// every other filter is: an export of a filtered view must contain exactly
+	// the rows the seller was looking at.
+	fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 	searchText: v.optional(v.string()),
 	// Pin mode (86eyrtz74) — kept in the SHARED validator set so an export of a
 	// filtered view contains exactly the rows the seller was looking at, forced-in
@@ -2981,7 +3014,16 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 				}
 			: undefined,
 		pickupSnapshot: o.pickupSnapshot
-			? { label: o.pickupSnapshot.label, address: o.pickupSnapshot.address }
+			? {
+					label: o.pickupSnapshot.label,
+					address: o.pickupSnapshot.address,
+					// Carried because `fulfilmentKey` reads it (z8r3fdfau9): drop it
+					// here and the CSV's Fulfilment cell says "Self-collect" for the
+					// very orders the table calls "Drop-off" — the export diverging
+					// from the screen, which is the one thing this whole path exists
+					// to prevent.
+					locationType: o.pickupSnapshot.locationType,
+				}
 			: undefined,
 		courierName: o.courierName,
 		trackingNo: o.trackingNo,

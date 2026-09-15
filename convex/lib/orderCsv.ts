@@ -16,7 +16,11 @@ import { sourceLabel } from "./attribution";
 import { formatItemAnswers } from "./buyerQuestions";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
-import { ORDER_STATUS_KEYS, type OrderStatus } from "./orderStatus";
+import {
+	orderFlowKind,
+	ORDER_STATUS_KEYS,
+	type OrderStatus,
+} from "./orderStatus";
 import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
 import { orderPickupNotes } from "./pickupNote";
 
@@ -44,14 +48,6 @@ function csvFlag(on: boolean | undefined): string {
 	return on ? "Yes" : "";
 }
 
-/** Which fulfilment key a row reads as — the collection DIRECTION wins over the
- * method, since it is the opposite trip (86eyg0n8e). */
-function fulfilmentKey(o: CsvOrder): string {
-	return o.deliveryDirection === "collection"
-		? "collection"
-		: (o.deliveryMethod ?? "");
-}
-
 /**
  * A stored enum value as a person reads it: `payment_window_expired` →
  * `Payment window expired` (86eyrtz74).
@@ -61,6 +57,44 @@ function fulfilmentKey(o: CsvOrder): string {
  * attribution through `sourceLabel`. The raw enums were the inconsistency, not
  * this. Idempotent, so a value that is already prose passes through unchanged.
  */
+/**
+ * Which fulfilment key a row reads as — **the single source for the Fulfilment
+ * column, its header filter and the Filters panel** (z8r3fdfau9), the same rule
+ * `ORDER_SOURCE_LABELS` follows and for the same reason.
+ *
+ * Built ON `orderFlowKind`, never on `deliveryMethod` directly. That is not
+ * tidiness: an **event RSVP is STORED `self_collect`** (it is collected at the
+ * venue) and identified only by the frozen `eventRsvp` marker, so reading the
+ * method would file every RSVP under "Self-collect" — the same flattening this
+ * function exists to undo for drop-off. `orderStatus.ts` says it in one line:
+ * derive with `orderFlowKind`, never by re-reading products.
+ *
+ * On top of the flow kind, two REFINEMENTS the stage flow doesn't care about
+ * but the seller's day does — both cases where the method names the wrong trip:
+ *  - `collection` — the rider goes buyer → store, the opposite direction
+ *    (86eyg0n8e);
+ *  - `drop_off` — pickup at an agreed meetup point (pasar/surau/LRT) rather
+ *    than the seller's own place (86ey30yhr). It is already its own word in
+ *    buyer emails, WhatsApp copy and the Settings badges; flattening it to
+ *    "Self-collect" here meant a seller running three pasar meetups could not
+ *    tell them apart in the table without also adding the Pickup-location
+ *    column, and could not filter to them at all.
+ *
+ * Neither refinement can apply to a booking or an RSVP — nothing is shipped or
+ * ridden for either — so the flow kind is answered first and those two return
+ * immediately. Legacy orders carry no `deliveryMethod` and read as `delivery`,
+ * the schema's own default, so the cell names the trip that actually happened
+ * instead of going blank.
+ */
+export function fulfilmentKey(o: CsvOrder): string {
+	const kind = orderFlowKind(o);
+	if (kind === "booking" || kind === "event") return kind;
+	if (o.deliveryDirection === "collection") return "collection";
+	if (kind === "self_collect" && o.pickupSnapshot?.locationType === "drop_off")
+		return "drop_off";
+	return kind;
+}
+
 export function humanizeEnum(raw: string): string {
 	const spaced = raw.replace(/[_-]+/g, " ").trim();
 	if (spaced === "") return "";
@@ -110,16 +144,48 @@ export const PAYMENT_STATUS_LABELS: Record<string, string> = {
 
 export const PAYMENT_STATUS_KEYS = ["unpaid", "claimed", "received"] as const;
 
+/**
+ * Every value `fulfilmentKey` can return, in the order a picker offers them:
+ * the two common trips first, then the two that only some stores ever see.
+ *
+ * Exported because the Fulfilment filter is built from exactly this list
+ * (z8r3fdfau9) — an option the column can never print is the `storefront` /
+ * "Online" drift all over again, so the picker doesn't get to hold its own copy.
+ */
+export const FULFILMENT_KEYS = [
+	"delivery",
+	"self_collect",
+	"drop_off",
+	"collection",
+	"booking",
+	"event",
+] as const;
+
+export type FulfilmentKey = (typeof FULFILMENT_KEYS)[number];
+
 /** How the order reaches the buyer. `self_collect` humanizes to "Self collect";
- * the app has always written it hyphenated, so it is spelled out here. */
-const FULFILMENT_LABELS: Record<string, string> = {
+ * the app has always written it hyphenated, so it is spelled out here. Every
+ * key is listed rather than left to `humanizeEnum` — a label that is only
+ * accidentally right is a label nobody will think to change. */
+export const FULFILMENT_LABELS: Record<string, string> = {
 	delivery: "Delivery",
-	// The buyer collects from the seller.
+	// The buyer collects from the seller's own place.
 	self_collect: "Self-collect",
+	// The buyer collects from an agreed meetup point — pasar, surau, LRT
+	// (86ey30yhr). Both are "Pickup" to the buyer, but to the SELLER they are
+	// different days out, which is the whole reason to filter on them.
+	drop_off: "Drop-off",
 	// The seller collects from the BUYER (86eyg0n8e) — the opposite trip. Named
 	// "We collect", the buyer-facing wording, because "Collection" sitting next
 	// to "Self-collect" in a column is two words for opposite directions.
 	collection: "We collect",
+	// Nothing ships and nothing is collected: the guest turns up on check-in day
+	// (86eyj70z1).
+	booking: "Booking",
+	// An RSVP to a fixed-moment event (z8r3fdff9u). Stored `self_collect`
+	// because the buyer collects at the venue, but to the seller it is neither a
+	// counter pickup nor a stay — the guest arrives at a time the SELLER set.
+	event: "Event",
 };
 
 export type CsvOrder = {
@@ -142,6 +208,10 @@ export type CsvOrder = {
 	 * accounting is keyed on the date PAID, not the date ordered. */
 	paymentReceivedAt?: number;
 	deliveryMethod?: string;
+	/** Frozen "this is an RSVP" marker (z8r3fdff9u). An RSVP is STORED
+	 * `deliveryMethod: "self_collect"`, so this is the only thing that tells it
+	 * apart — `fulfilmentKey` reads it through `orderFlowKind`. */
+	eventRsvp?: boolean;
 	/** Frozen trip direction (86eyg0n8e). A collection order's rider went
 	 * buyer -> store, so the Fulfilment CELL reads "collection" instead of
 	 * "delivery". Deliberately a value, not a column: one export can hold
@@ -210,7 +280,15 @@ export type CsvOrder = {
 	/** Frozen pickup location for self-collect orders. The sibling of the address
 	 * gap: without it a multi-outlet seller cannot split self-collect orders by
 	 * outlet. Survives the location being deleted later (it's a snapshot). */
-	pickupSnapshot?: { label: string; address: string };
+	pickupSnapshot?: {
+		label: string;
+		address: string;
+		/** Which kind of pickup point this was, frozen at create (86ey30yhr).
+		 * Read by `fulfilmentKey` so a meetup point reads "Drop-off" rather than
+		 * being flattened into "Self-collect"; `undefined` on pre-drop-off orders
+		 * reads as the seller's own place, matching the schema. */
+		locationType?: "self_collect" | "drop_off";
+	};
 	/** Manual parcel-courier shipment info (delivery orders marked shipped via
 	 * J&T/DD Cold Chain/etc). Blank when not attached — most orders. */
 	courierName?: string;
