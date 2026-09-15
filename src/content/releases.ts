@@ -146,7 +146,7 @@ export interface ReleaseEntry {
 	 * of the tab.
 	 */
 	href?: string;
-	/** Link text. Defaults to "Take a look" when omitted. */
+	/** Link text. Defaults to "Set it up" when omitted — but always write one. */
 	hrefLabel?: Localized;
 	/** Optional icon tile. Omit for the neutral default — a wrong icon is worse than none. */
 	icon?: ReleaseIconName;

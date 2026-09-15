@@ -85,9 +85,17 @@ describe("docs/release-checklist.md", () => {
 		// The checklist's whole promise is that the merger never has to ask "is
 		// there anything for me to do?" — which only holds if no category can
 		// quietly fall out of the table.
+		//
+		// This list is deliberately hand-maintained rather than derived from the
+		// doc: a derived list would delete itself along with the row it was
+		// meant to protect, and pass. The count assertion below is what keeps
+		// the two in step — a row added to the table without a name added here
+		// fails, which is exactly how "Env vars CI does not sync" slipped
+		// through its own PR (#276 review).
 		const markdown = readFileSync(CHECKLIST, "utf8");
-		for (const category of [
+		const CATEGORIES = [
 			"Environment variables",
+			"Env vars CI does not sync",
 			"Backfills / migrations",
 			"Schema + indexes",
 			"Crons",
@@ -97,10 +105,20 @@ describe("docs/release-checklist.md", () => {
 			"Privacy policy",
 			"Plan gating",
 			"Assets",
-		]) {
+		];
+
+		for (const category of CATEGORIES) {
 			expect(markdown, `checklist lost its "${category}" row`).toContain(
 				`| **${category}**`,
 			);
 		}
+
+		const rowCount = (markdown.match(/^\| \*\*/gm) ?? []).length;
+		expect(
+			rowCount,
+			`the §2 table has ${rowCount} rows but only ${CATEGORIES.length} are ` +
+				`pinned here. An unpinned row can be deleted with a green build — ` +
+				`add its name to CATEGORIES.`,
+		).toBe(CATEGORIES.length);
 	});
 });

@@ -132,15 +132,22 @@ when unset must stay **unset** until Meta approves the template.
 
 ## Step 4 — write the notes
 
-All authoring happens in `$WT`. First **enumerate what is actually seller-facing**
-rather than working from the PR titles you happen to remember:
+All authoring happens in `$WT`. First **enumerate the whole release** rather than
+working from the PR titles you happen to remember:
 
 ```bash
-git -C "$WT" log origin/main..origin/staging --no-merges --oneline -- \
-  'src/routes/app*' src/components convex/lib/plans.ts src/lib/subscription.ts
+git -C "$WT" log origin/main..origin/staging --no-merges --oneline
 ```
 
-Account for **every** commit it returns as either covered-by-a-note or
+**Read every line — do not filter by pathspec.** A net over `src/` looks like a
+shortcut and is a silent miss: on a real release it returned 37 of 56 commits and
+dropped `fix(billing): a paid invoice states the period the money actually
+bought` — backend-only (`convex/invoices.ts`) and squarely seller-facing. Adding
+`convex/lib/` does not catch it either, because the fix was not in `lib`. A
+release is a few dozen one-line subjects; reading all of them costs less than one
+missed note.
+
+Account for **every** commit as either covered-by-a-note or
 excluded-with-its-reason, and put that list in the notes PR body — the same
 "never leave a row out because it is empty" discipline the operator table gets.
 A release that quietly ships a rebuilt billing lifecycle because nobody
