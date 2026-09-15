@@ -26,6 +26,7 @@ import {
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
 import { redactPhone } from "./lib/logRedaction";
+import { extractWabaTemplateEvents } from "./lib/wabaTemplateWebhook";
 import { extractWabaHealthEvents } from "./lib/wabaWebhook";
 
 const http = httpRouter();
@@ -150,6 +151,35 @@ http.route({
 				await ctx.scheduler.runAfter(0, internal.wabaProtection.sendWabaAlert, {
 					summary: result.summary,
 				});
+			}
+		}
+
+		// Template lifecycle events ride the same webhook too (z8r3fddtkh):
+		// message_template_status_update / template_category_update /
+		// message_template_quality_update. Every one is persisted for the admin
+		// console; a pause/disable/rejection, a category flip OUT of utility
+		// (6.1× per send from 1 Oct 2026, with an appeal window) or a
+		// YELLOW/RED quality score pages ops the same way a health drop does.
+		for (const ev of extractWabaTemplateEvents(parsedBody)) {
+			console.warn("WABA template webhook", ev.summary);
+			await ctx.runMutation(internal.wabaProtection.recordTemplateEvent, {
+				kind: ev.kind,
+				templateName: ev.templateName,
+				language: ev.language,
+				event: ev.event,
+				previousCategory: ev.previousCategory,
+				newCategory: ev.newCategory,
+				previousQuality: ev.previousQuality,
+				newQuality: ev.newQuality,
+				reason: ev.reason,
+				alerted: ev.shouldAlert,
+			});
+			if (ev.shouldAlert) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.wabaProtection.sendWabaTemplateAlert,
+					{ summary: ev.summary, kind: ev.kind },
+				);
 			}
 		}
 
@@ -373,6 +403,7 @@ http.route({
 			const credentials = resolveBillingGatewayCredentials({
 				HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
 				HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
+				HITPAY_BILLING_WEBHOOK_SALT: process.env.HITPAY_BILLING_WEBHOOK_SALT,
 			});
 			if (!credentials) {
 				// We only receive these if we registered the endpoint — a missing
@@ -382,13 +413,27 @@ http.route({
 				);
 				return new Response("server misconfigured", { status: 500 });
 			}
+			// Dashboard-registered events are signed with the ENDPOINT's own
+			// secret, not the API-key salt (see BillingGatewayCredentials).
 			const valid = await verifyEventSignature(
 				rawBody,
 				eventSignature,
-				credentials.salt,
+				credentials.webhookSalt,
 			);
 			if (!valid) {
-				console.warn("HitPay event webhook rejected: invalid signature");
+				console.warn(
+					"HitPay event webhook rejected: invalid signature — if this is every event, HITPAY_BILLING_WEBHOOK_SALT is missing or wrong (it is the signing secret of the registered endpoint, NOT the API-key salt)",
+					{
+						eventObject: req.headers.get("hitpay-event-object"),
+						eventType: req.headers.get("hitpay-event-type"),
+						// Derived from the value actually used — a blank env var
+						// resolves to the API-salt fallback, and re-reading the raw
+						// env here would claim a dedicated salt was in play during
+						// exactly the misconfiguration this log exists to diagnose.
+						usingDedicatedSalt:
+							credentials.webhookSalt !== credentials.salt,
+					},
+				);
 				return new Response("invalid signature", { status: 401 });
 			}
 			let payload: unknown;

@@ -479,3 +479,34 @@ describe("migrateLalamoveModeToLive (z8r3fdbvdy)", () => {
 		expect(second.migrated).toBe(0);
 	});
 })
+
+describe("resyncSubscriptionCaps (z8r3fday24 — Pro 200 / Scale 400)", () => {
+	test("re-syncs stale denormalized caps, skips canonical rows, never touches updatedAt", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		// Simulate a row denormalized under the OLD table (Pro 500) carrying a
+		// past_due flip moment on updatedAt — the founder report reads that.
+		const flippedAt = 1_700_000_000_000;
+		const subId = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, { orderCap: 500, updatedAt: flippedAt });
+			return sub._id;
+		});
+
+		const first = await t.mutation(internal.migrations.resyncSubscriptionCaps, {});
+		expect(first).toEqual({ scanned: 1, patched: 1 });
+		const after = await t.run((ctx) => ctx.db.get(subId));
+		expect(after?.orderCap).toBe(200);
+		expect(after?.userCap).toBe(2);
+		expect(after?.broadcastQuota).toBe(100);
+		expect(after?.updatedAt).toBe(flippedAt);
+
+		// Idempotent: a second run finds nothing to patch.
+		const second = await t.mutation(internal.migrations.resyncSubscriptionCaps, {});
+		expect(second).toEqual({ scanned: 1, patched: 0 });
+	});
+});

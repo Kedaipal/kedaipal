@@ -450,9 +450,14 @@ parked partial-payment deposit `86eyhwb03`). Held money, never revenue.
 - **`revenueExcludingDeposit`** (`convex/lib/order.ts`) — the ONE author of
   the revenue figure: CRM `totalSpent` (link / cancel-decrement /
   `moveOrderToPhone` / backfill) and Insights (earned, trend, collected,
-  payment slices via `InsightsOrderInput.securityDeposit`) all subtract the
-  deposit. Recompute-delta sites (`total - order.total`) need no netting —
-  the deposit is frozen, so it cancels out of any difference.
+  payment slices **and by-source rows** via `InsightsOrderInput.securityDeposit`)
+  all subtract the deposit. Recompute-delta sites (`total - order.total`)
+  need no netting — the deposit is frozen, so it cancels out of any
+  difference. **S12 (`z8r3fdcw70`)** closed the one leak (the by-source rows
+  added `total`) and made the Insights page *say* the deposit is excluded —
+  one line under the KPI row naming the exact amount whenever the window
+  netted any out, and nothing at all when it did not; see
+  [`docs/insights.md#security-deposits`](./insights.md#security-deposits).
 
 ### Stated before, lined everywhere after
 
@@ -504,7 +509,11 @@ the one total + policy-edit immunity + CRM spend excludes it; settle guards
 (pre-checkout / unpaid / over-deposit / keep-without-reason / double-settle)
 and both outcomes; depositless refusal. `convex/products.test.ts`: stored in
 sen, 0-clears, ceiling refusals. `convex/lib/insights.test.ts`: earned /
-trend / collected / payment slices all net of deposit.
+trend / collected / payment slices / by-source rows all net of deposit, plus
+`depositsExcluded` (S12); `src/components/insights/deposit-note.test.tsx`: the
+exclusion line. The settle test additionally pins that keeping part of a
+deposit changes neither `total` nor `securityDeposit`, so a kept amount
+re-enters no revenue figure — the fact the Insights copy rests on.
 `convex/lib/orderCsv.test.ts`: the column + 0.00 default.
 
 ## S6 — ICS calendar feed + Settings connect card (`86eyn4kf2`)

@@ -702,6 +702,14 @@ export default defineSchema({
 		// checklist's activation states. See docs/activation-checklist.md.
 		activatedAt: v.optional(v.number()),
 		linkSharedAt: v.optional(v.number()),
+		// Off-Season Hold (z8r3fday24): set while the store's subscription is
+		// `on_hold`, cleared on resume. Denormalized HERE, on the store, so the
+		// buyer-facing storefront payload and every order-create path (storefront,
+		// counter, claim link, booking) read a STORE setting — never the
+		// subscription row. The billing invariant holds: the order pipeline still
+		// never reads subscription status; it refuses on the seller's own
+		// "ordering is paused" switch, like opening hours or a minimum order.
+		orderingPausedAt: v.optional(v.number()),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would
@@ -1183,6 +1191,23 @@ export default defineSchema({
 				categoryNames: v.optional(v.array(v.string())),
 				price: v.number(),
 				quantity: v.number(),
+				// Whether this line actually RESERVED stock at create — the resolved
+				// `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock`,
+				// frozen the way `price` and `variantLabel` already are (86eypn8ye).
+				//
+				// Restore used to re-resolve this from the CURRENT docs, so flipping
+				// the flag between create and cancel made the reversal asymmetric:
+				// ordered-while-tracked then flag off → units never come back;
+				// ordered-while-untracked then flag on → phantom units appear out of
+				// nothing. The flag is a property of the ORDER's moment, not of the
+				// product today.
+				//
+				// Optional for orders created before this field existed. Those fall
+				// back to re-resolving, which is the old behaviour — deliberately NOT
+				// backfilled, because backfilling from today's flag would bake in
+				// exactly the wrong answer for any product whose flag has since
+				// changed, and we cannot know what was true then.
+				stockReserved: v.optional(v.boolean()),
 			}),
 		),
 		subtotal: v.number(),
@@ -2298,11 +2323,41 @@ export default defineSchema({
 			v.literal("active"),
 			v.literal("past_due"),
 			v.literal("cancelled"),
+			// Off-Season Hold (z8r3fday24): a PAID seller paused between seasons.
+			// Ordering is off (effective orderCap 0 — resolved, never stored), the
+			// storefront / catalog / buyer list / order history stay live, and the
+			// row bills HOLD_MONTHLY_PRICES (RM19 / S$9) each period instead of the
+			// tier price. `plan` keeps the tier they resume to. A status literal,
+			// not a flag: it is mutually exclusive with the others and the cron
+			// already scans `by_status`. Reachable from active / past_due only.
+			v.literal("on_hold"),
 		),
+		// The free period's BACKSTOP deadline (signup + TRIAL_DAYS). Since the
+		// start-when-you-sell reset (z8r3fday24) the free period usually ends
+		// EARLIER, at the store's first live order — see freePeriodEndedAt.
 		trialEndsAt: v.optional(v.number()),
-		// Stamped when the "trial ends in 3 days" email is sent, so the daily cron
-		// sends it at most once.
+		// Stamped when the "free period ends in 3 days" email is sent, so the daily
+		// cron sends it at most once.
 		trialReminderSentAt: v.optional(v.number()),
+		// Start-when-you-sell (z8r3fday24): when the free period ENDED and why —
+		// `first_order` (any order-create channel; stamped from the usage seam)
+		// or `backstop` (the daily cron at trialEndsAt). Set exactly once; the
+		// first invoice is issued in the same beat (invoices.internalIssueFirst
+		// Invoice). The status stays `trialing` until that invoice is paid
+		// (→ active) or overdue (→ past_due) — the invoice's dueDate is the only
+		// lock, exactly like a renewal. Absent = still free.
+		freePeriodEndedAt: v.optional(v.number()),
+		freePeriodEndReason: v.optional(
+			v.union(v.literal("first_order"), v.literal("backstop")),
+		),
+		// Off-Season Hold bookkeeping. `heldAt` = when the current hold began
+		// (cleared on resume). `periodPaidBy` = what bought the CURRENT period —
+		// stamped at settle from the invoice's `kind`; a resume mid-period issues
+		// the tier invoice at once when the period was bought by a hold invoice,
+		// and nothing when it was bought by the plan (they already paid for the
+		// month). Absent = plan (every row that predates holds).
+		heldAt: v.optional(v.number()),
+		periodPaidBy: v.optional(v.union(v.literal("plan"), v.literal("hold"))),
 		currentPeriodStart: v.optional(v.number()),
 		currentPeriodEnd: v.optional(v.number()),
 		cancelledAt: v.optional(v.number()),
@@ -2361,7 +2416,38 @@ export default defineSchema({
 		// "finish setting up" instead of minting a second session. Cleared on
 		// attach or cancel.
 		autoRenewSetup: v.optional(
-			v.object({ url: v.string(), createdAt: v.number() }),
+			v.object({
+				url: v.string(),
+				createdAt: v.number(),
+				// What the authorisation page at `url` actually DISPLAYS. Attach
+				// charges the open bill only when the pending invoice still matches
+				// both of these — the page's amount IS the consent, so a bill that
+				// appeared, changed or was reissued after the page was minted must
+				// never be charged off it. Absent invoiceId ⇒ the page said
+				// "nothing is charged today", so attach charges nothing.
+				invoiceId: v.optional(v.id("invoices")),
+				amountSen: v.optional(v.number()),
+			}),
+		),
+		// A tier change the seller asked for that takes effect at the END of the
+		// period they already paid for (86eyb6z4r). DOWNGRADES only: they keep
+		// the tier they bought — caps, features and all — until the period runs
+		// out, and the renewal invoice the cron issues then bills the new plan
+		// and clears this. An UPGRADE never lands here; it is immediate, billed
+		// at full price, with the unused remainder credited back as days
+		// (planChangeCarryoverDays). No `billingCycle` on purpose — a cycle
+		// change is a different conversation (the annual offer's void-and-
+		// reissue runbook), and a field that could express it would eventually
+		// be set by a picker that defaults to monthly.
+		pendingPlanChange: v.optional(
+			v.object({
+				plan: v.union(
+					v.literal("starter"),
+					v.literal("pro"),
+					v.literal("scale"),
+				),
+				requestedAt: v.number(),
+			}),
 		),
 		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent
 		// for — one notice per cycle, reset naturally when the period rolls.
@@ -2436,10 +2522,17 @@ export default defineSchema({
 		origin: v.optional(
 			v.union(
 				v.literal("admin"), // Arif, from the admin console
-				v.literal("self_serve"), // the seller's own plan picker
+				v.literal("self_serve"), // the seller's own plan picker / plan switch / hold
 				v.literal("auto_renewal"), // the daily cron's renewal issuance
+				v.literal("free_period_end"), // start-when-you-sell: the first invoice
 			),
 		),
+		// What is being billed (z8r3fday24): the tier (`plan`, the default and
+		// every pre-existing row) or an Off-Season Hold period (`hold`, priced
+		// from HOLD_MONTHLY_PRICES; `plan` then names the tier the seller resumes
+		// to). Settle reads it: a paid hold invoice keeps the sub `on_hold` and
+		// stamps periodPaidBy "hold" instead of activating the tier.
+		kind: v.optional(v.union(v.literal("plan"), v.literal("hold"))),
 		// --- HitPay Pay-now link + gateway settle (86eyb6z4r) ------------------
 		// One-off payment request minted against KEDAIPAL's own HitPay account so
 		// the seller can pay this invoice online. Top-level + indexed so the v1
@@ -2582,6 +2675,50 @@ export default defineSchema({
 		observedAt: v.number(),
 		notes: v.optional(v.string()),
 	}).index("by_observed", ["observedAt"]),
+
+	// Per-TEMPLATE lifecycle history (ClickUp z8r3fddtkh), one row per Meta
+	// template webhook: status changes (APPROVED/PAUSED/DISABLED/…), category
+	// re-classifications (UTILITY → MARKETING is a 6.1× per-send price jump
+	// from 1 Oct 2026, with an appeal window) and quality-score moves (the
+	// warning before a pause). The admin console reads the NEWEST row per
+	// (templateName, language) as that template's live state; `by_template_kind`
+	// serves the panel's per-chip reads and `by_template` the language discovery
+	// walk and the purge's keep-the-newest rule. Retention: 90
+	// days, but the newest row per template is ALWAYS kept — same posture as
+	// wabaHealth (convex/lib/retention.ts).
+	wabaTemplateEvents: defineTable({
+		templateName: v.string(),
+		language: v.string(),
+		kind: v.union(
+			v.literal("status"),
+			v.literal("category"),
+			v.literal("quality"),
+		),
+		event: v.optional(v.string()),
+		previousCategory: v.optional(v.string()),
+		newCategory: v.optional(v.string()),
+		previousQuality: v.optional(v.string()),
+		newQuality: v.optional(v.string()),
+		reason: v.optional(v.string()),
+		alerted: v.boolean(),
+		observedAt: v.number(),
+	})
+		.index("by_observed", ["observedAt"])
+		.index("by_template", ["templateName", "language", "observedAt"])
+		// The admin panel's actual question is "newest row of THIS kind for this
+		// template+language" — status, category and quality are three different
+		// kinds and each is the live value of a different chip. Without `kind` in
+		// the index that read is a scan with a budget, and a noisy kind starves
+		// the others: 200 quality events would hide an older PAUSED and an older
+		// UTILITY→MARKETING, so the panel would report a paused, marketing-billed
+		// template as healthy utility (PR #267 review). With it, each chip is one
+		// indexed `.first()`.
+		.index("by_template_kind", [
+			"templateName",
+			"language",
+			"kind",
+			"observedAt",
+		]),
 
 	// Per-retailer kill switch + cap overrides. Lazily created — absent row means
 	// "tier/age defaults, not paused" (see lib/wabaLimits.ts resolveSendingLimits).

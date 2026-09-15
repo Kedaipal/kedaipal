@@ -1,10 +1,11 @@
 import { useAction, useMutation } from "convex/react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
-import type { SubscriptionView } from "../../lib/subscription";
+import { isRenewing, type SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 
 /**
@@ -27,13 +28,17 @@ export function AutoRenewalCard({
 	methods: string[];
 	/** True when the URL carries ?autorenew=return (back from HitPay). */
 	returnFromSetup: boolean;
-	onReturnHandled: () => void;
+	/** `attached === false` ⇒ the seller abandoned setup (nothing will charge);
+	 * undefined ⇒ outcome unknown, the webhook may still land it. */
+	onReturnHandled: (attached?: boolean) => void;
 }) {
 	const startSetup = useAction(api.subscriptionPayments.startAutoRenewSetup);
 	const finishSetup = useAction(api.subscriptionPayments.finishAutoRenewSetup);
 	const cancelAutoRenew = useMutation(api.subscriptionPayments.cancelAutoRenew);
 	const [busy, setBusy] = useState(false);
 	const [confirmingOff, setConfirmingOff] = useState(false);
+	// Back from HitPay's authorisation page — re-arm the button.
+	useResetOnBfcache(useCallback(() => setBusy(false), []));
 
 	// Back from HitPay's authorisation page: reconcile once (the webhook may
 	// have already recorded the attach — then this just confirms instantly).
@@ -42,8 +47,10 @@ export function AutoRenewalCard({
 		if (!returnFromSetup || reconciled.current) return;
 		reconciled.current = true;
 		void (async () => {
+			let attached: boolean | undefined;
 			try {
 				const result = await finishSetup({});
+				attached = result.attached;
 				if (result.attached) {
 					toast.success("Auto-renewal is on", {
 						description: "Your renewals will be charged automatically.",
@@ -56,7 +63,7 @@ export function AutoRenewalCard({
 			} catch {
 				// The webhook path may still land it; the card re-renders reactively.
 			} finally {
-				onReturnHandled();
+				onReturnHandled(attached);
 			}
 		})();
 	}, [returnFromSetup, finishSetup, onReturnHandled]);
@@ -90,6 +97,7 @@ export function AutoRenewalCard({
 
 	const on = sub.autoRenew !== undefined;
 	const failing = sub.autoRenew?.failing === true;
+	const renewing = isRenewing(sub, Date.now());
 
 	return (
 		<section
@@ -118,9 +126,13 @@ export function AutoRenewalCard({
 							) : (
 								<p className="mt-1 text-xs text-muted-foreground">
 									On, using {sub.autoRenew?.methodLabel}.
-									{sub.autoRenew?.nextChargeAt
-										? ` Next charge on ${formatShortDate(sub.autoRenew.nextChargeAt)} — you'll get a heads-up email first, and a receipt after.`
-										: " You'll get a heads-up email before each charge, and a receipt after."}
+									{/* Once the period has lapsed the charge is happening NOW,
+									    so the stored next-charge date is behind us. */}
+									{renewing
+										? " Renewing now — we're charging your saved method, and you'll get a receipt once it goes through."
+										: sub.autoRenew?.nextChargeAt
+											? ` Next charge on ${formatShortDate(sub.autoRenew.nextChargeAt)} — you'll get a heads-up email first, and a receipt after.`
+											: " You'll get a heads-up email before each charge, and a receipt after."}
 								</p>
 							)
 						) : sub.autoRenewSetupPending ? (
@@ -176,8 +188,8 @@ export function AutoRenewalCard({
 			</div>
 			{!on && !sub.autoRenewSetupPending ? (
 				<p className="text-[11px] text-muted-foreground">
-					You'll authorise it once on HitPay's secure page — Kedaipal never
-					sees or stores your card or wallet details.
+					You'll authorise it once on HitPay's secure page — Kedaipal never sees
+					or stores your card or wallet details.
 				</p>
 			) : null}
 

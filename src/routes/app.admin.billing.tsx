@@ -536,10 +536,11 @@ function SlugHint({
 }
 
 const STATUS_LABEL: Record<string, string> = {
-	trialing: "Trial",
+	trialing: "Free period",
 	active: "Active",
 	past_due: "Past due",
 	cancelled: "Cancelled",
+	on_hold: "On hold",
 };
 
 /** Human-readable dropdown label: "Mak Kuih (/mak-kuih) · Pro · Trial · Founding · has pending". */
@@ -885,6 +886,14 @@ function PendingInvoices() {
 									<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium uppercase text-accent">
 										{inv.plan}
 									</span>
+									{/* Off-Season Hold (z8r3fday24): this bill is the RM19/S$9
+									    hold, not the tier — the tier pill above is what they
+									    resume to. */}
+									{inv.kind === "hold" ? (
+										<span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+											Off-Season Hold
+										</span>
+									) : null}
 									{/* Marking this paid grants 365 days instead of 30. Without
 									    the pill an annual and a monthly pending invoice look
 									    identical apart from the amount. */}
@@ -912,7 +921,11 @@ function PendingInvoices() {
 									) : null}
 									{inv.origin !== "admin" ? (
 										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-											{inv.origin === "self_serve" ? "Self-serve" : "Renewal"}
+											{inv.origin === "self_serve"
+												? "Self-serve"
+												: inv.origin === "free_period_end"
+													? "First invoice"
+													: "Renewal"}
 										</span>
 									) : null}
 								</div>

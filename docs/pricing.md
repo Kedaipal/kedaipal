@@ -179,16 +179,24 @@ today's is.
 
 | Tier | Price | Positioning | Orders (display) | Seats | Outlets |
 | --- | --- | --- | --- | --- | --- |
-| **Starter** | RM79/mo | Single home seller, just starting | 100/mo | 1 | 1 |
-| **Pro** | RM149/mo | Established single shop | 200/mo | 2 | 1 |
-| **Scale** | **RM299/mo flat — Coming soon** | Multi-outlet / high-volume seller | ~400/mo | 5 | Up to 3 (+RM49/mo each additional) |
+| **Starter** | RM79/mo · S$29 | Single home seller, just starting | 100/mo | 1 | 1 |
+| **Pro** | RM149/mo · S$59 | Established single shop | 200/mo | 2 | 1 |
+| **Scale** | **RM399/mo · S$149 flat — Coming soon** | Multi-outlet / high-volume seller | 400/mo | 5 | Up to 3 (+RM49 · S$18/mo each additional) |
+| *Off-Season Hold* | **RM19/mo · S$9** — a status, not a tier | A paid seller paused between seasons: ordering off, everything else live, one tap back | 0 | — | — |
 
 **Founding pricing (RM104/S$41) is retired** (30 Aug 2026 pricing reset,
 ClickUp z8r3fday21): no public surface advertises it any more — a guard in
 `landing-redesign.test.ts` now covers `cost_*` too — and existing Founding
 Members simply keep their rate (`FOUNDING_MONTHLY_PRICES` stays in billing for
-them). Scale's launch price moves to **RM399/S$149** with the companion backend
-ticket (z8r3fday24); this table updates when that constant lands.
+them). Scale's launch price **is RM399/S$149** as of the companion backend
+ticket (z8r3fday24, Arif's FINAL 6 Sep number; the S$19 outlet guess became the
+confirmed S$18). The order allowances are now enforced at the advertised
+100/200/400 — the meter and the page finally agree. Every store is **free until
+its first live order or day 15**, and a paid seller can pause for the hold price —
+both mechanisms are documented in
+[`manual-subscription.md`](./manual-subscription.md#start-when-you-sell--off-season-hold-sep-2026-clickup-z8r3fday24).
+The public copy for both (landing, `/pricing`, the Hold card, SEO strings) is
+Arif's wave 2 (z8r3fday21), gated on this backend and now unblocked.
 
 All three prices are **flat** — no metering (Arif, 19 Jul 2026). The 1 Jul ICP
 audit disqualified reseller/wholesale networks; our real payers outgrow Pro on
@@ -262,10 +270,10 @@ by a test.
 | --- | --- | --- | --- | --- | --- | --- |
 | Starter | RM790 | RM65.84 | RM158 | S$290 | S$24.17 | S$58 |
 | Pro | RM1,490 | RM124.17 | RM298 | S$590 | S$49.17 | S$118 |
-| Scale | RM2,990 | RM249.17 | RM598 | S$1,190 | S$99.17 | S$238 |
+| Scale | RM3,990 | RM332.50 | RM798 | S$1,490 | S$124.17 | S$298 |
 
-(Scale moves with the pricing reset — RM399/S$149 → RM3,990/S$1,490 — when
-`z8r3fday24` lands. The table derives, so it needs no edit here.)
+(Scale's row moved with the pricing reset — RM399/S$149 → RM3,990/S$1,490 —
+when `z8r3fday24` landed; the table derives from `annualQuote`.)
 
 **One helper because the surfaces disagreed.** `/pricing` computed its yearly
 total as `floor(monthly × 10 / 12) × 10` — a year priced at 8.33 months — so a

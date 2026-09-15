@@ -525,6 +525,40 @@ describe("orderClaims — commit", () => {
 		expect(customer?.orderCount).toBe(1);
 	});
 
+	test("a claim order freezes stockReserved — the THIRD create path (86eypn8ye)", async () => {
+		// Every create path builds its own item snapshot, so a frozen field has to
+		// be stamped in each one. Storefront and counter were done in 86eypn8ye;
+		// claim links landed afterwards and reproduced the gap. Unstamped, cancel
+		// re-resolves `blockWhenOutOfStock` from the CURRENT docs, so flipping a
+		// product to made-to-order after the sale strands its units forever.
+		const t = setup();
+		const { variantId, claimId, token } = await sendOne(t, {
+			block: true,
+			onHand: 10,
+		});
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+
+		const orderId = (await getClaim(t, claimId)).orderId as Id<"orders">;
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].stockReserved).toBe(true);
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(8);
+
+		// The seller switches the product to made-to-order AFTER the sale. The
+		// frozen flag is what makes the cancel give the units back anyway.
+		await t.run((ctx) =>
+			ctx.db.patch(variantId, { blockWhenOutOfStock: false }),
+		);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, { orderId, status: "cancelled" });
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(10);
+	});
+
 	test("confirm-push env set → the order commits confirmed with the push stamped", async () => {
 		vi.stubEnv("WHATSAPP_ORDER_CONFIRM_TEMPLATE", "order_confirmation_utility");
 		const t = setup();
@@ -656,6 +690,131 @@ describe("orderClaims — commit", () => {
 				deliveryMethod: "delivery",
 			}),
 		).rejects.toThrow(/address/i);
+	});
+});
+
+/**
+ * Off-Season Hold (z8r3fday24) on the claim path. A claim sent minutes before
+ * the seller pauses is a live link in a buyer's chat — the one create path the
+ * first cut of the hold missed, found in review. The invariant is "every
+ * order-create path refuses while paused", so it has to hold here too.
+ */
+describe("orderClaims — Off-Season Hold (z8r3fday24)", () => {
+	async function sentClaimThenPause(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 8900 }],
+				windowMinutes: 60,
+			});
+		// The seller pauses AFTER the link went out.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, { orderingPausedAt: Date.now() }),
+		);
+		return { retailer, variantId, claimId, token };
+	}
+
+	test("commit refuses a claim sent before the pause — stock untouched, no order", async () => {
+		const t = setup();
+		const { variantId, claimId, token } = await sentClaimThenPause(t);
+		const before = await t.run((ctx) => ctx.db.get(variantId));
+
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "delivery",
+				deliveryAddress: MY_ADDRESS,
+			}),
+		).rejects.toThrow(/seasonal break/i);
+
+		// The refusal is total: no order, no stock movement, claim still open.
+		const claim = await getClaim(t, claimId);
+		expect(claim.status).toBe("open");
+		expect(claim.orderId).toBeUndefined();
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(
+			before?.onHand,
+		);
+	});
+
+	test("an ALREADY completed claim still returns its order while paused (idempotent re-open)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 8900 }],
+				windowMinutes: 60,
+			});
+		const committed = await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		// Pause AFTER the buyer already completed — reopening their link must
+		// still hand back the order they placed, never the break notice.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, { orderingPausedAt: Date.now() }),
+		);
+		const again = await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		expect(again.shortId).toBe(committed.shortId);
+	});
+
+	test("resend refuses while paused — a fresh link is a new invitation", async () => {
+		const t = setup();
+		const { claimId } = await sentClaimThenPause(t);
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.orderClaims.resendClaim, { claimId }),
+		).rejects.toThrow(/seasonal break/i);
+		// Send count untouched — nothing was pushed to the buyer.
+		expect((await getClaim(t, claimId)).sentCount).toBe(1);
+	});
+
+	test("the buyer page learns on LOAD: getByToken carries orderingPaused", async () => {
+		const t = setup();
+		const { token } = await sentClaimThenPause(t);
+		const payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.store.orderingPaused).toBe(true);
+		// Still "open" as a claim — the page ranks the pause above it and renders
+		// the dead end, so the buyer never fills a form the commit would refuse.
+		expect(payload?.status).toBe("open");
+	});
+
+	test("an open store is unaffected — commit works and the flag is false", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 8900 }],
+				windowMinutes: 60,
+			});
+		expect(
+			(await t.query(api.orderClaims.getByToken, { token }))?.store
+				.orderingPaused,
+		).toBe(false);
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "delivery",
+				deliveryAddress: MY_ADDRESS,
+			}),
+		).resolves.toBeDefined();
 	});
 });
 
