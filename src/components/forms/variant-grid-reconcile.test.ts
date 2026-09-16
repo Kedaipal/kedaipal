@@ -8,7 +8,6 @@
  * didn't derive (a seeded product, a wizard handoff) and by the wizard's
  * the step-2 answer acting as a second source of truth for "has axes".
  */
-import { EMPTY_EVENT_DRAFT } from "./event-fields";
 import { describe, expect, it } from "vitest";
 import { normalizeOptions } from "../../../convex/lib/variant";
 import { cartesian, type OptionAxis } from "../../lib/variant";

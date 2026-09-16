@@ -1552,22 +1552,35 @@ function TrackingRoute() {
 			    A booking's fulfilmentDate IS its check-in, already printed above
 			    under its own word, so this would duplicate it as "Delivery on". */}
 			{!isBooking && order.fulfilmentDate !== undefined ? (
-				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
-					<CalendarDays className="size-4 text-accent" />
-					{isSelfCollect
-						? order.pickupSnapshot?.locationType === "drop_off"
-							? "Meet on "
-							: "Collect on "
-						: isCollection
-							? order.collectedAt !== undefined
-								? "Collected on "
-								: "We collect on "
-							: "Delivery on "}
-					<span className="font-semibold">
-						{formatFulfilmentDateTime(
-							order.fulfilmentDate,
-							order.fulfilmentTimeMinutes,
-						)}
+				<div className="mt-2 flex items-start gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="mt-0.5 size-4 shrink-0 text-accent" />
+					<span>
+						{/* An RSVP's moment is the EVENT's (`z8r3fdff9u`), not a slot
+						    the guest picked — "Collect on" would misdescribe it, and
+						    "Event" is the word they'll be looking for on this page. */}
+						{order.eventLocked
+							? "Event: "
+							: isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Meet on "
+									: "Collect on "
+								: isCollection
+									? order.collectedAt !== undefined
+										? "Collected on "
+										: "We collect on "
+									: "Delivery on "}
+						<span className="font-semibold">
+							{formatFulfilmentDateTime(
+								order.fulfilmentDate,
+								order.fulfilmentTimeMinutes,
+							)}
+						</span>
+						{order.eventLocked ? (
+							<span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+								Set by the store for this event — same for every guest. Where to
+								go is below.
+							</span>
+						) : null}
 					</span>
 				</div>
 			) : null}

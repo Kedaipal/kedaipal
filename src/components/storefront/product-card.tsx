@@ -1,12 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
+	CalendarClock,
 	CalendarRange,
 	ImagePlus,
 	Plus,
 	SlidersHorizontal,
 } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
+import { formatEventBadge } from "../../../convex/lib/productEvent";
 import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
@@ -95,9 +97,16 @@ export function ProductCard({
 	// trap the buyer discovers at checkout. The custom line (its own CTA on the
 	// product page) is unaffected, so cards with one keep their Choose button live.
 	const minUnreachable = minQuantityUnreachable(minQuantity, product.variants);
+	// Event RSVP (`z8r3fdff9u`). The date IS the product's identity here — a
+	// guest scanning the grid decides on "Thu 25 Sep" before anything else — so
+	// it leads the chip row rather than sitting among the micro-rules.
+	const event = product.event;
+	const seatsLeft = product.eventSeatsLeft;
+	const eventFull = event !== undefined && seatsLeft !== undefined && seatsLeft <= 0;
 	// A live custom line keeps Choose usable (its own CTA on the page is exempt
 	// from the minimum) even when the standard variants can't reach it.
-	const chooseDisabled = outOfStock || (minUnreachable && !hasCustom);
+	const chooseDisabled =
+		outOfStock || eventFull || (minUnreachable && !hasCustom);
 	const pageLink = {
 		to: "/$slug/p/$productSlug",
 		params: { slug: storeSlug, productSlug: product.slug },
@@ -145,7 +154,14 @@ export function ProductCard({
 				{firstImage && (
 					<div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/20 to-transparent" />
 				)}
-				{outOfStock ? (
+				{eventFull ? (
+					// Outranks "Out of stock": the seats are the binding constraint on
+					// an event, and a guest reading "out of stock" would go looking for
+					// a restock that isn't what's happening.
+					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+						Fully booked
+					</span>
+				) : outOfStock ? (
 					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
 						Out of stock
 					</span>
@@ -162,8 +178,22 @@ export function ProductCard({
 				) : null}
 				{/* Overlaid on the image (not a text-zone row) so cards with chips
 				    stay exactly the same height as their neighbours. */}
-				{hasCustom || minQuantity >= 2 ? (
-					<span className="absolute bottom-2 left-2 flex flex-wrap gap-1">
+				{event !== undefined || hasCustom || minQuantity >= 2 ? (
+					<span className="absolute bottom-2 left-2 flex flex-wrap items-center gap-1">
+						{event !== undefined ? (
+							// Accent, normal case, a size up: this is the headline fact,
+							// not a micro-rule. Overlaid on the image like its neighbours
+							// so an event card stays exactly as tall as the rest of its row.
+							<span className="flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-accent-foreground shadow-sm">
+								<CalendarClock className="size-3" aria-hidden />
+								{formatEventBadge(event)}
+							</span>
+						) : null}
+						{event !== undefined && seatsLeft !== undefined && seatsLeft > 0 ? (
+							<span className="rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+								{seatsLeft} {seatsLeft === 1 ? "seat" : "seats"} left
+							</span>
+						) : null}
 						{minQuantity >= 2 ? (
 							// The order rule must be visible BEFORE the buyer adds — a
 							// checkout-only surprise is a silent failure. See minOrderRules.

@@ -3,7 +3,12 @@ import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Package, ShoppingBag, Truck } from "lucide-react";
+import {
+	CalendarClock,
+	Package,
+	ShoppingBag,
+	Truck,
+} from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
@@ -21,6 +26,7 @@ import type { Country } from "../../../convex/lib/country";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
+	formatFulfilmentDateTime,
 	fulfilmentDateBounds,
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
@@ -28,6 +34,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { pickLocale } from "../../../convex/lib/locale";
+import { formatEventBadge } from "../../../convex/lib/productEvent";
 import {
 	collectMinQuantityShortfalls,
 	minOrderValueShortfall,
@@ -357,14 +364,28 @@ export function CheckoutPage({
 		};
 	}, [noticeDays, nowDayKey]);
 	const noCheckoutPhone = !checkoutPhone;
+	// Event lock (`z8r3fdff9u`). One RSVP line in the cart fixes the WHOLE
+	// order's fulfilment moment and forces self-collect — the venue is the
+	// store's pickup point. Derived from the cart lines, so removing the RSVP
+	// releases the lock with no extra state to reset.
+	const eventLock = cart.cartEvent;
+	const eventLocked = eventLock !== undefined;
+
 	// Self-collect surfaces on the storefront only when the retailer opted in
 	// AND has at least one active pickup location. Both gates must be open or
 	// the buyer never sees a non-functional option.
 	const selfCollectAvailable = offerSelfCollect && pickupLocations.length > 0;
+	// An event with nowhere to collect from is a dead end for the guest — the
+	// server refuses it too. Surfaced as its own explained state rather than a
+	// silent failure at submit.
+	const eventVenueMissing = eventLocked && !selfCollectAvailable;
 	// Delivery is zero-config (buyer types an address) so it only depends on the
 	// retailer's opt-in. The settings invariant guarantees at least one of these
 	// is true, so `neitherAvailable` is a defensive fallback, not a normal state.
-	const deliveryAvailable = offerDelivery;
+	// An event order is collected at the venue, so delivery is off the table
+	// regardless of what the store offers — the method picker disappears rather
+	// than offering a choice the server would refuse.
+	const deliveryAvailable = offerDelivery && !eventLocked;
 	const bothAvailable = deliveryAvailable && selfCollectAvailable;
 	const neitherAvailable = !deliveryAvailable && !selfCollectAvailable;
 	// Default to delivery when offered, otherwise self-collect — so a pickup-only
@@ -437,7 +458,13 @@ export function CheckoutPage({
 		return minYmd;
 	};
 	const defaultSchedule = scheduleFor(defaultMethod, "");
-	const defaultYmd = firstSelectableYmd(defaultSchedule);
+	// An event's date isn't a default, it's the ANSWER — and it deliberately
+	// ignores opening hours, the notice window and the cart's prep, exactly as
+	// orders.create does (the seller fixed this moment when she published the
+	// event, the same authority that exempts her own reschedules).
+	const defaultYmd = eventLock
+		? ymdFromEpoch(eventLock.date)
+		: firstSelectableYmd(defaultSchedule);
 
 	const form = useAppForm({
 		defaultValues: {
@@ -499,15 +526,21 @@ export function CheckoutPage({
 				);
 				return;
 			}
+			// An RSVP is always collected at the venue (`z8r3fdff9u`), whatever
+			// the form last held — derive the method ONCE here so the address,
+			// the pickup point and the submitted value can't disagree about it.
+			const effectiveMethod: "delivery" | "self_collect" = eventLock
+				? "self_collect"
+				: value.deliveryMethod;
 			const sanitizedAddress =
-				value.deliveryMethod === "delivery"
+				effectiveMethod === "delivery"
 					? sanitizeAddress(value.address, country)
 					: undefined;
 
 			// Resolve the chosen pickup location id. For the single-location case
 			// we never asked the buyer to pick — auto-fill from the (only) option.
 			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-			if (value.deliveryMethod === "self_collect" && selfCollectAvailable) {
+			if (effectiveMethod === "self_collect" && selfCollectAvailable) {
 				if (singlePickup) {
 					resolvedPickupLocationId = singlePickup._id;
 				} else {
@@ -528,60 +561,75 @@ export function CheckoutPage({
 			// non-empty string; here we convert to a MYT-midnight epoch and confirm
 			// it's inside the live [min, max] window before sending. Mirrors the
 			// server (which re-validates) so the buyer sees the error inline.
-			const fulfilmentEpoch = mytMidnightFromYmd(value.fulfilmentDate);
+			//
+			// An event REPLACES this entirely (`z8r3fdff9u`): the date comes from
+			// the RSVP rather than the picker, and both the notice window and the
+			// opening-hours check are skipped — exactly what the server does,
+			// because the seller fixed this moment when she published the event.
+			// Read from the cart, never from the form, so a buyer who chose
+			// delivery and a date BEFORE adding an RSVP can't send stale values.
+			const fulfilmentEpoch = eventLock
+				? eventLock.date
+				: mytMidnightFromYmd(value.fulfilmentDate);
 			if (Number.isNaN(fulfilmentEpoch)) {
 				refuseFulfilment("That date isn't valid — pick a day from the picker.");
 				return;
 			}
-			try {
-				// The effective notice — store AND cart, the max orders.create
-				// applies (the store notice alone let a cart item's stricter
-				// notice through to a server refusal).
-				assertValidFulfilmentDate(fulfilmentEpoch, noticeDays);
-			} catch (err) {
-				refuseFulfilment((err as Error).message);
-				return;
-			}
-			// The day, then the time, in the words the inline notice already
-			// showed: opening hours (a closed day rejects for every method), the
-			// cart's prep window, and the day's pickable slots — T1's shared
-			// ladder (`fulfilmentTimeIssue`) with the prep floor threaded in
-			// (src/lib/checkout-fulfilment.ts). A time is judged whenever this
-			// fulfilment asks for one: delivery, and pickup when it matters
-			// (z8r3fdff97). The dispatch rule absorbs near-past moments (books
-			// "now"), so only what's nonsense to promise is refused, and the
-			// input's own min/max never gets to speak for us.
-			const schedule = scheduleFor(
-				value.deliveryMethod,
-				value.pickupLocationId,
-			);
-			const judged = {
-				hours: openingHours,
-				dateEpoch: fulfilmentEpoch,
-				now: Date.now(),
-				prep: schedule.prep,
-				kind: schedule.kind,
-				storeName,
-			};
-			const dayCopy = fulfilmentDayCopy({ ...judged, timed: schedule.timed });
-			if (dayCopy) {
-				refuseFulfilment(dayCopy);
-				return;
-			}
+			// An EVENT order's moment is the seller's, not the buyer's: the server
+			// overwrites both from the lock, and hours, notice and prep are all
+			// exempt there (z8r3fdff9u). Judging a pick the buyer never made would
+			// refuse her own event — so the whole ladder sits behind this.
 			let fulfilmentTimeMinutes: number | undefined;
-			if (schedule.timed) {
-				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
-				const timeCopy = fulfilmentTimeCopy({
-					...judged,
-					timeMinutes: Number.isNaN(parsed) ? undefined : parsed,
-				});
-				if (timeCopy) {
-					// Parts, never flattened: T1 keeps the CTA line's copy whole on a
-					// phone, and a prep refusal carries a time too.
-					refuseFulfilment(timeCopy);
+			if (!eventLock) {
+				try {
+					// The effective notice — store AND cart, the max orders.create
+					// applies (the store notice alone let a cart item's stricter
+					// notice through to a server refusal).
+					assertValidFulfilmentDate(fulfilmentEpoch, noticeDays);
+				} catch (err) {
+					refuseFulfilment((err as Error).message);
 					return;
 				}
-				fulfilmentTimeMinutes = parsed;
+				// The day, then the time, in the words the inline notice already
+				// showed: opening hours (a closed day rejects for every method), the
+				// cart's prep window, and the day's pickable slots — T1's shared
+				// ladder (`fulfilmentTimeIssue`) with the prep floor threaded in
+				// (src/lib/checkout-fulfilment.ts). A time is judged whenever this
+				// fulfilment asks for one: delivery, and pickup when it matters
+				// (z8r3fdff97). The dispatch rule absorbs near-past moments (books
+				// "now"), so only what's nonsense to promise is refused, and the
+				// input's own min/max never gets to speak for us.
+				const schedule = scheduleFor(
+					value.deliveryMethod,
+					value.pickupLocationId,
+				);
+				const judged = {
+					hours: openingHours,
+					dateEpoch: fulfilmentEpoch,
+					now: Date.now(),
+					prep: schedule.prep,
+					kind: schedule.kind,
+					storeName,
+				};
+				const dayCopy = fulfilmentDayCopy({ ...judged, timed: schedule.timed });
+				if (dayCopy) {
+					refuseFulfilment(dayCopy);
+					return;
+				}
+				if (schedule.timed) {
+					const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
+					const timeCopy = fulfilmentTimeCopy({
+						...judged,
+						timeMinutes: Number.isNaN(parsed) ? undefined : parsed,
+					});
+					if (timeCopy) {
+						// Parts, never flattened: T1 keeps the CTA line's copy whole on a
+						// phone, and a prep refusal carries a time too.
+						refuseFulfilment(timeCopy);
+						return;
+					}
+					fulfilmentTimeMinutes = parsed;
+				}
 			}
 
 			const trimmedNote = value.note?.trim();
@@ -614,7 +662,7 @@ export function CheckoutPage({
 						// counter manual bind uses.
 						waPhone: value.waPhone.trim(),
 					},
-					deliveryMethod: value.deliveryMethod,
+					deliveryMethod: effectiveMethod,
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
 					fulfilmentDate: fulfilmentEpoch,
@@ -626,14 +674,14 @@ export function CheckoutPage({
 					// the server refuses the order (strict: no quote, no order — the
 					// submit gate above should never let that happen).
 					deliveryQuoteId:
-						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
+						effectiveMethod === "delivery" && liveQuote.state === "quoted"
 							? liveQuote.quoteId
 							: undefined,
 					// The session's captured ?src=/utm_source tag (86eyq0eq9) —
 					// undefined = direct. Server re-sanitizes; never blocks the order.
 					attributionSource: readAttributionSource(storeSlug),
 				});
-				if (value.deliveryMethod === "delivery")
+				if (effectiveMethod === "delivery")
 					saveAddress(country, value.address);
 				setSubmitted(true);
 				cart.clearCart();
@@ -1351,6 +1399,49 @@ export function CheckoutPage({
 
 				{/* Form sections — small numbered decisions instead of a field wall. */}
 				<div className="flex min-w-0 flex-1 flex-col gap-4 lg:order-1">
+					{/* The event lock, stated FIRST (`z8r3fdff9u`). Adding an RSVP
+					    changes the terms of the whole order — the date stops being
+					    the buyer's to pick and delivery disappears — so a buyer who
+					    also has two boxes of puffs in the cart must be told at the
+					    top, not left to notice a missing date picker. The escape is
+					    in the same sentence as the constraint. */}
+					{eventLock ? (
+						<div className="flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+							<p className="flex items-center gap-2 text-sm font-semibold">
+								<CalendarClock
+									className="size-4 shrink-0 text-accent"
+									aria-hidden
+								/>
+								RSVP for {formatEventBadge(eventLock)}
+							</p>
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								{cart.items.length > cart.items.filter((i) => i.event).length
+									? "Everything in this order is collected together at the event — so there's no delivery option and no date to pick."
+									: "Collected at the venue below — there's no delivery option and no date to pick."}
+							</p>
+							<button
+								type="button"
+								onClick={cart.removeEventLines}
+								className="tap-target w-fit text-xs font-semibold text-accent-emphasis underline underline-offset-2"
+							>
+								Remove the RSVP and order the rest normally
+							</button>
+						</div>
+					) : null}
+
+					{/* An event whose store has no active pickup point can't say where
+					    to go. Refused here with the cause named, so the seller can be
+					    told what to fix — never a silent failure at submit. */}
+					{eventVenueMissing ? (
+						<p
+							role="alert"
+							className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive"
+						>
+							This event doesn&apos;t have a collection point set up yet, so
+							RSVPs can&apos;t be taken. Please message {storeName}.
+						</p>
+					) : null}
+
 					<CheckoutSection step={1} title="Who's ordering?">
 						<form.AppField name="name">
 							{(field) => (
@@ -1639,6 +1730,41 @@ export function CheckoutPage({
 								const schedule = scheduleFor(deliveryMethod, pickupLocationId);
 								const selectedPickup = schedule.point;
 								const isDropOff = schedule.isDropOff;
+								// The event answers this section rather than asking it:
+								// the moment is read back, not picked. The picker, the
+								// quick-day chips and the notice copy are all replaced —
+								// leaving a disabled picker would still read as a choice.
+								if (eventLock) {
+									return (
+										<CheckoutSection step={3} title="When it happens">
+											<div className="flex items-center gap-2.5 rounded-xl border border-border bg-muted/50 px-3 py-3">
+												<CalendarClock
+													className="size-5 shrink-0 text-accent"
+													aria-hidden
+												/>
+												<div className="min-w-0">
+													<p className="text-sm font-semibold leading-tight">
+														{formatFulfilmentDateTime(
+															eventLock.date,
+															eventLock.timeMinutes,
+														)}
+													</p>
+													<p className="mt-0.5 text-xs text-muted-foreground">
+														Set by {storeName} for this event — the same for
+														every guest.
+													</p>
+												</div>
+											</div>
+											{selectedPickup?.scheduleNote ? (
+												<p className="text-xs text-muted-foreground">
+													{selectedPickup.label} is normally available{" "}
+													{selectedPickup.scheduleNote} — the event date above
+													takes precedence.
+												</p>
+											) : null}
+										</CheckoutSection>
+									);
+								}
 								return (
 									<CheckoutSection
 										step={3}

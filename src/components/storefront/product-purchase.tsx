@@ -2,6 +2,7 @@ import { useMutation } from "convex/react";
 import {
 	ArrowRight,
 	Clock,
+	CalendarClock,
 	ImagePlus,
 	Link as LinkIcon,
 	Loader2,
@@ -15,6 +16,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrepDuration } from "../../../convex/lib/fulfilmentDate";
+import { formatEventBadge } from "../../../convex/lib/productEvent";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
@@ -248,10 +250,25 @@ export function useProductPurchase({
 		selectedVariant && selectedVariant.imageUrls.length > 0
 			? selectedVariant.imageUrls
 			: (product?.imageUrls ?? []);
+	// Seats are a SECOND ceiling alongside per-variant stock (`z8r3fdff9u`) —
+	// whichever is tighter wins, exactly as the server enforces both. Counted
+	// against what this cart already holds for the product, so the stepper can
+	// never offer a seat the checkout would then refuse. Uncapped events and
+	// every normal product have no ceiling here.
+	const eventSeatsLeft = product?.eventSeatsLeft;
+	const seatCeiling =
+		eventSeatsLeft === undefined
+			? Number.POSITIVE_INFINITY
+			: Math.max(0, eventSeatsLeft - cartQuantity);
+	const eventFull = eventSeatsLeft !== undefined && eventSeatsLeft <= 0;
 	const maxQty = selectedVariant
-		? variantBlocks
-			? Math.max(1, selectedVariant.onHand)
-			: 99
+		? Math.max(
+				1,
+				Math.min(
+					variantBlocks ? Math.max(1, selectedVariant.onHand) : 99,
+					seatCeiling,
+				),
+			)
 		: 1;
 	// Minimum-order-quantity easement (86ey9unyx): the amount still needed to
 	// reach the product's minimum, given what's already in the cart. On a
@@ -350,6 +367,8 @@ export function useProductPurchase({
 		sellsStandardLine,
 		images,
 		maxQty,
+		eventSeatsLeft,
+		eventFull,
 		minQuantity,
 		minFloor,
 		minUnreachable,
@@ -393,7 +412,7 @@ export function addVariantToCart(
 	const updatingCustom =
 		variant.isCustom === true &&
 		cart.items.some((i) => i.variantId === variant._id);
-	cart.addItem(
+	const result = cart.addItem(
 		{
 			variantId: variant._id,
 			productId: p._id,
@@ -412,9 +431,19 @@ export function addVariantToCart(
 			minQuantity: p.minQuantity,
 			note: custom?.note,
 			customImageStorageId: custom?.imageStorageId,
+			// Frozen event moment (`z8r3fdff9u`) — makes this an RSVP, which locks
+			// the whole order's fulfilment date.
+			event: p.event,
 		},
 		qty,
 	);
+	// The cart can REFUSE: an order carries one fulfilment date, so a second
+	// event can't join one that's already in there. Surfaced as the toast the
+	// buyer was expecting anyway — never a silently dead button.
+	if (!result.ok) {
+		toast.error(result.reason);
+		return;
+	}
 	toast.success(
 		updatingCustom
 			? "Custom request updated"
@@ -443,11 +472,18 @@ export function quickAddProductToCart(cart: UseCart, p: StorefrontProduct) {
 		variant.blockWhenOutOfStock === true
 			? Math.max(1, variant.onHand - inCart)
 			: Number.POSITIVE_INFINITY;
+	// Seats cap the top-up the same way stock does (`z8r3fdff9u`) — a min-20
+	// event with 6 seats left must not put 20 in the cart for the server to
+	// refuse at checkout. Uncapped events return undefined, so no clamp.
+	const seatsLeft =
+		p.eventSeatsLeft === undefined
+			? Number.POSITIVE_INFINITY
+			: Math.max(1, p.eventSeatsLeft - inCart);
 	addVariantToCart(
 		cart,
 		p,
 		variant,
-		Math.max(1, Math.min(remainingToMin, stockLeft)),
+		Math.max(1, Math.min(remainingToMin, stockLeft, seatsLeft)),
 	);
 }
 
@@ -530,6 +566,39 @@ export function OptionPills({ pp }: { pp: ProductPurchase }) {
 					</div>
 				</div>
 			))}
+		</div>
+	);
+}
+
+/**
+ * The event's terms, stated on the product page BEFORE the buyer commits
+ * (`z8r3fdff9u`).
+ *
+ * A guest tapping "RSVP" is agreeing to a date they can't change and a pickup
+ * they can't swap for delivery. Discovering either at checkout is exactly the
+ * silent surprise the min-order hint above already exists to prevent — so the
+ * same treatment, one card, above the buy box.
+ */
+export function EventNotice({ pp }: { pp: ProductPurchase }) {
+	const event = pp.product?.event;
+	if (!event) return null;
+	const left = pp.eventSeatsLeft;
+	return (
+		<div className="mt-3 flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
+			<p className="flex items-center gap-2 text-sm font-semibold">
+				<CalendarClock className="size-4 shrink-0 text-accent" aria-hidden />
+				{formatEventBadge(event)}
+			</p>
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{pp.eventFull
+					? "This event is fully booked."
+					: left !== undefined
+						? `${left} ${left === 1 ? "seat" : "seats"} left. `
+						: ""}
+				{pp.eventFull
+					? " Message the store to ask about a cancellation."
+					: "RSVP and you're booked for this date — it's collected at the venue, so there's no delivery and no date to pick at checkout."}
+			</p>
 		</div>
 	);
 }
@@ -925,10 +994,13 @@ function AddToCartButton({
 	// Off-Season Hold (z8r3fday24): disabled-with-reason beats a button that
 	// adds to a cart nobody can check out.
 	const paused = useOrderingPaused();
+	// An RSVP's CTA says RSVP — "Add to cart" for a seat at a breakfast reads
+	// like a shipping product and is the wrong mental model for what happens next.
+	const isEvent = pp.product?.event !== undefined;
 	return (
 		<Button
 			type="button"
-			disabled={paused || !pp.sellable || pp.minUnreachable}
+			disabled={paused || !pp.sellable || pp.minUnreachable || pp.eventFull}
 			onClick={() =>
 				pp.product &&
 				pp.selectedVariant &&
@@ -938,15 +1010,19 @@ function AddToCartButton({
 		>
 			{paused
 				? ORDERING_PAUSED_CTA
-				: pp.minUnreachable
-					? "Not enough stock"
-					: !pp.selectedVariant
-						? pp.hasOptions
-							? "Select options"
-							: "Unavailable"
-						: !pp.sellable
-							? "Out of stock"
-							: "Add to cart"}
+				: pp.eventFull
+					? "Fully booked"
+					: pp.minUnreachable
+						? "Not enough stock"
+						: !pp.selectedVariant
+							? pp.hasOptions
+								? "Select options"
+								: "Unavailable"
+							: !pp.sellable
+								? "Out of stock"
+								: isEvent
+									? "RSVP"
+									: "Add to cart"}
 		</Button>
 	);
 }

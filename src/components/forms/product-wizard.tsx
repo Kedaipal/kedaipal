@@ -556,6 +556,8 @@ export function wizardStepIssues(
 			issues.push({
 				field: "pickupNote",
 				message: `Keep it to ${MAX_PICKUP_NOTE_LENGTH} characters or fewer.`,
+			});
+		}
 		// Nothing can have RSVP'd to a product that doesn't exist yet, so the
 		// wizard never allows a past date.
 		if (!eventDraftValid(state.event)) {

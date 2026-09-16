@@ -1634,7 +1634,34 @@ export const countActionable = query({
 // already carries `deliveryMethod`; we fold in the retailer's `statusLabels` +
 // `locale` so the client resolver (src/lib/orderStatus.ts) has everything to
 // render relabelled stages. See docs/order-status-customization.md.
+/**
+ * Is this order an RSVP to a fixed-date event (`z8r3fdff9u`)?
+ *
+ * Asked by looking the products up rather than by denormalizing a flag onto the
+ * order: an order carries at most a handful of lines, both callers already run
+ * per-order work, and a stored copy would be one more thing to keep true
+ * through every write. (The seat TALLY keys on `fulfilmentDate`, which IS
+ * frozen — this only answers "is it locked?", not "which event".)
+ */
+async function orderHoldsEvent(
+	ctx: QueryCtx | MutationCtx,
+	order: Doc<"orders">,
+): Promise<boolean> {
+	const seen = new Set<string>();
+	for (const item of order.items) {
+		if (seen.has(item.productId)) continue;
+		seen.add(item.productId);
+		const product = await ctx.db.get(item.productId);
+		if (product?.event !== undefined) return true;
+	}
+	return false;
+}
+
 export type OrderWithStatusLabels = Doc<"orders"> & {
+	/** RSVP to a fixed-date event — the fulfilment moment belongs to the event,
+	 * not to this order, so the reschedule affordance disables with the reason
+	 * (and the buyer's tracking page says the date is the event's). */
+	eventLocked?: boolean;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -1833,6 +1860,11 @@ export const get = query({
 			podImageUrls,
 			collectionRider,
 			bookingContext,
+			// RSVP (`z8r3fdff9u`) — both sides need it: the seller's Reschedule
+			// disables with the reason instead of erroring on submit, and the
+			// buyer's tracking page says the date is the event's, not theirs.
+			// `undefined` (not `false`) on a normal order: one spelling for "no".
+			eventLocked: (await orderHoldsEvent(ctx, order)) || undefined,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -4330,6 +4362,15 @@ export const rescheduleFulfilment = mutation({
 		// backstop, so a stale tab can't move the date under a paying buyer.
 		if (isPaymentWindowLocked(order))
 			throw new ConvexError(PAYMENT_WINDOW_LOCK_REASON);
+		// An RSVP's date belongs to the EVENT, not to this order (`z8r3fdff9u`).
+		// Moving one guest to a different day would drop them out of the event's
+		// headcount (which keys on the event date) while telling them to turn up
+		// on a day nobody else is coming. The seller moves the event, or cancels
+		// this RSVP — both of which say so to everyone affected.
+		if (await orderHoldsEvent(ctx, order))
+			throw new ConvexError(
+				"This is an RSVP — its date is set by the event. Change the event's date, or cancel this RSVP.",
+			);
 		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
 		// will NOT follow the order — rescheduling under it would desync the
 		// buyer's promise from the trip actually booked. The dialog says so and

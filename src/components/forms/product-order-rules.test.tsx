@@ -56,6 +56,7 @@ function renderForm({
 		<ProductForm
 			retailerId={"r1" as never}
 			categoriesLocked={false}
+			eventsLocked={false}
 			currency="RM"
 			submitLabel="Save"
 			mode="edit"
