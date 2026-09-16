@@ -759,3 +759,48 @@ describe("narrowsTheInbox — the Pro gate", () => {
 		expect(narrowsTheInbox({})).toBe(false);
 	});
 });
+
+describe("compareInboxOrder — same-day ties break by TIME (z8r3fdff97)", () => {
+	const DAY = 1_000;
+	test("two orders due the same day run in time order, not placement order", () => {
+		expect(
+			compareInboxOrder(
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 17 * 60 },
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 11 * 60 },
+			),
+		).toBeGreaterThan(0);
+	});
+
+	test("a timed order comes before an untimed one on the same day", () => {
+		const timed = { fulfilmentDate: DAY, fulfilmentTimeMinutes: 15 * 60 };
+		const untimed = { fulfilmentDate: DAY };
+		expect(compareInboxOrder(timed, untimed)).toBe(-1);
+		expect(compareInboxOrder(untimed, timed)).toBe(1);
+	});
+
+	test("two untimed orders on the same day keep the incoming (createdAt) order", () => {
+		expect(compareInboxOrder({ fulfilmentDate: DAY }, { fulfilmentDate: DAY })).toBe(0);
+	});
+
+	test("the DATE still decides first — a late time tomorrow never beats an early one today", () => {
+		expect(
+			compareInboxOrder(
+				{ fulfilmentDate: DAY + 1, fulfilmentTimeMinutes: 1 },
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 23 * 60 },
+			),
+		).toBeGreaterThan(0);
+	});
+
+	test("sortInboxOrders applies it end to end under `due`", () => {
+		const orders = [
+			{ id: "evening", fulfilmentDate: DAY, fulfilmentTimeMinutes: 18 * 60 },
+			{ id: "anytime", fulfilmentDate: DAY },
+			{ id: "morning", fulfilmentDate: DAY, fulfilmentTimeMinutes: 9 * 60 },
+		];
+		expect(sortInboxOrders(orders, "due").map((o) => o.id)).toEqual([
+			"morning",
+			"evening",
+			"anytime",
+		]);
+	});
+});

@@ -51,6 +51,7 @@ import {
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
 import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
+import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
@@ -65,6 +66,7 @@ import {
 	BookingResolutionNote,
 } from "../components/order/booking-request-card";
 import { DispatchHub } from "../components/order/dispatch-hub";
+import { PickupNotes } from "../components/order/pickup-notes";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
@@ -106,6 +108,7 @@ import { MASK_PII } from "../lib/analytics-privacy";
 import { describeBookingSpan } from "../lib/booking-dates";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import { shipsAsParcel } from "../lib/dispatch-surface";
+import { buildNotifyManagerMessage } from "../lib/notify-manager-message";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -551,6 +554,9 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// The one gate for buyer-facing collection notes, shared with /track and
+	// WhatsApp (self-collect only, never a counter sale).
+	const sellerPickupNotes = orderPickupNotes(order);
 	const isBooking = deliveryMethod === "booking";
 	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
 	// facing labels in EN — a retailer's EN custom labels still flow through.
@@ -1651,6 +1657,15 @@ function OrderDetailRoute() {
 						) : null}
 					</div>
 				) : null}
+				{/* What the buyer was told to do before collecting (z8r3fdff97).
+				    No status gate, unlike /track: this page is the record, and a
+				    seller answering "what did I tell them?" after collection still
+				    needs the answer. */}
+				{sellerPickupNotes.length > 0 ? (
+					<div className="border-t border-border pt-3">
+						<PickupNotes audience="seller" notes={sellerPickupNotes} />
+					</div>
+				) : null}
 			</section>
 
 			{/* Items */}
@@ -1834,6 +1849,8 @@ function OrderDetailRoute() {
 					items={order.items}
 					total={order.total}
 					currency={order.currency}
+					fulfilmentDate={order.fulfilmentDate}
+					fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
 				/>
 			) : null}
 
@@ -2695,55 +2712,6 @@ function formatPickupInline(snapshot: PickupSnapshot): string {
 	return lines.join("\n");
 }
 
-function buildNotifyManagerMessage({
-	shortId,
-	location,
-	customerName,
-	customerWaPhone,
-	items,
-	total,
-	currency,
-}: {
-	shortId: string;
-	location: PickupSnapshot;
-	customerName: string | undefined;
-	customerWaPhone: string | undefined;
-	items: ReadonlyArray<{
-		name: string;
-		quantity: number;
-		price: number;
-		variantLabel?: string;
-	}>;
-	total: number;
-	currency: string;
-}): string {
-	const lines: string[] = [];
-	lines.push(`📦 New pickup order ${shortId} — ${location.label}`);
-	const customerLine = customerName
-		? customerWaPhone
-			? `Customer: ${customerName} (${formatPhone(customerWaPhone)})`
-			: `Customer: ${customerName}`
-		: customerWaPhone
-			? `Customer: ${formatPhone(customerWaPhone)}`
-			: "Customer: Anonymous";
-	lines.push(customerLine);
-	lines.push("");
-	lines.push("Items:");
-	for (const item of items) {
-		const name = item.variantLabel
-			? `${item.name} (${item.variantLabel})`
-			: item.name;
-		lines.push(
-			`• ${item.quantity}× ${name} (${formatPrice(item.price * item.quantity, currency)})`,
-		);
-	}
-	lines.push("");
-	lines.push(`Total: ${formatPrice(total, currency)}`);
-	lines.push("");
-	lines.push("Please prepare for collection.");
-	return lines.join("\n");
-}
-
 function NotifyManagerCard({
 	shortId,
 	location,
@@ -2753,6 +2721,8 @@ function NotifyManagerCard({
 	items,
 	total,
 	currency,
+	fulfilmentDate,
+	fulfilmentTimeMinutes,
 }: {
 	shortId: string;
 	location: PickupSnapshot;
@@ -2773,6 +2743,8 @@ function NotifyManagerCard({
 	}>;
 	total: number;
 	currency: string;
+	fulfilmentDate?: number;
+	fulfilmentTimeMinutes?: number;
 }) {
 	const [copied, setCopied] = useState(false);
 	// Fetch live manager contact. Skipped when there's no pickupLocationId on
@@ -2799,6 +2771,8 @@ function NotifyManagerCard({
 		items,
 		total,
 		currency,
+		fulfilmentDate,
+		fulfilmentTimeMinutes,
 	});
 
 	const notifyHref = hasManagerPhone
@@ -2839,7 +2813,7 @@ function NotifyManagerCard({
 					{copied ? "Copied!" : "Copy"}
 				</button>
 			</div>
-			<pre className="whitespace-pre-wrap wrap-break-words rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
+			<pre className="whitespace-pre-wrap wrap-break-word rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
 				{message}
 			</pre>
 			{notifyHref ? (

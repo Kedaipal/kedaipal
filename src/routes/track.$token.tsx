@@ -40,6 +40,7 @@ import {
 	formatFulfilmentDateTime,
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
+import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
@@ -49,6 +50,7 @@ import {
 	OrderItemLine,
 } from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
+import { PickupNotes } from "../components/order/pickup-notes";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -497,6 +499,11 @@ function TrackingRoute() {
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
+	// "Before you collect" is only useful before collecting: gone once the
+	// order is collected (delivered) or cancelled. The gate on method + source
+	// is shared with WhatsApp — see orderPickupNotes.
+	const buyerPickupNotes =
+		isCancelled || order.status === "delivered" ? [] : orderPickupNotes(order);
 	// Pending-only, deliberately — and that now excludes fee-pending orders,
 	// since the confirmation push commits them as `confirmed` at create
 	// (86eyfq0w5). Locked call (Zaki, 31 Jul): a `deliveryFeePending` order is
@@ -1442,6 +1449,27 @@ function TrackingRoute() {
 							{order.pickupSnapshot.notes}
 						</p>
 					) : null}
+					{/* The PRODUCTS' collection instructions (z8r3fdff97), beside the
+					    point's own notes above: those describe the place, these
+					    describe what to bring or do for what was bought. */}
+					<PickupNotes
+						audience="buyer"
+						locale={order.retailerLocale}
+						notes={buyerPickupNotes}
+					/>
+				</section>
+			) : null}
+
+			{/* A self-collect order with notes but no snapshot (placed before
+			    pickup points were frozen onto orders) still gets its notes, in
+			    the card's position — the instruction matters more than the card. */}
+			{isSelfCollect && !order.pickupSnapshot && buyerPickupNotes.length > 0 ? (
+				<section className="mt-6 rounded-2xl border border-border bg-card p-4">
+					<PickupNotes
+						audience="buyer"
+						locale={order.retailerLocale}
+						notes={buyerPickupNotes}
+					/>
 				</section>
 			) : null}
 
