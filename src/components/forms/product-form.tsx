@@ -918,10 +918,11 @@ export function ProductForm({
 					// booking listing never carries one — request-to-book IS the
 					// preparation, so its input is not rendered.
 					prepMinutes: isBooking ? 0 : prepParsed,
-					// "" clears. Always sent, even when the store has self-collect
-					// off: the note is already written and turning collection back
-					// on should not have silently dropped it.
-					pickupNote: pickupNoteDraft,
+					// "" clears. Still sent when the store has self-collect OFF —
+					// the note is already written and turning collection back on
+					// should not find it silently dropped — but never for a
+					// booking, whose orders can't carry one.
+					pickupNote: isBooking ? "" : pickupNoteDraft,
 					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
 					// A booking listing never carries one (its input isn't rendered).
 					minQuantity: isBooking ? 0 : minQtyParsed,
@@ -1628,8 +1629,8 @@ export function ProductForm({
 						</p>
 						{!prepValid ? (
 							<p className="text-xs text-destructive">
-								Enter a whole number of minutes between 0 and{" "}
-								{MAX_PREP_MINUTES}, or leave blank.
+								Enter a whole number of minutes between 0 and {MAX_PREP_MINUTES}
+								, or leave blank.
 							</p>
 						) : null}
 						{prepInertUnderNotice ? (
@@ -1643,58 +1644,64 @@ export function ProductForm({
 				)}
 
 				{/* Pickup note — an INSTRUCTION, not a rule, so it comes after the
-				    three limits rather than between them. */}
-				<div className="flex flex-col gap-2 border-t border-border pt-4">
-					<div className="flex flex-col gap-1.5">
-						<label htmlFor="pickup-note" className="text-sm font-medium">
-							Pickup note{" "}
-							<span className="font-normal text-muted-foreground">
-								(optional)
-							</span>
-						</label>
-						{offerSelfCollect ? (
-							<>
-								<Textarea
-									id="pickup-note"
-									value={pickupNoteDraft}
-									onChange={(e) => setPickupNoteDraft(e.target.value)}
-									placeholder="e.g. Collect from the side counter — bring an ice bag, these melt in 20 minutes."
-									className="min-h-20"
-									aria-invalid={!pickupNoteValid}
-								/>
-								<p
-									className={`self-end text-xs tabular-nums ${
-										pickupNoteValid
-											? "text-muted-foreground"
-											: "text-destructive"
-									}`}
-								>
-									{pickupNoteLength}/{MAX_PICKUP_NOTE_LENGTH}
+				    three limits rather than between them. Hidden on a booking
+				    listing: convex/bookings.ts writes those orders with
+				    deliveryMethod "booking", never self_collect, so a note set
+				    here could never reach a guest. An input that can do nothing
+				    is worse than an absent one. */}
+				{isBooking ? null : (
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="pickup-note" className="text-sm font-medium">
+								Pickup note{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</label>
+							{offerSelfCollect ? (
+								<>
+									<Textarea
+										id="pickup-note"
+										value={pickupNoteDraft}
+										onChange={(e) => setPickupNoteDraft(e.target.value)}
+										placeholder="e.g. Collect from the side counter — bring an ice bag, these melt in 20 minutes."
+										className="min-h-20"
+										aria-invalid={!pickupNoteValid}
+									/>
+									<p
+										className={`self-end text-xs tabular-nums ${
+											pickupNoteValid
+												? "text-muted-foreground"
+												: "text-destructive"
+										}`}
+									>
+										{pickupNoteLength}/{MAX_PICKUP_NOTE_LENGTH}
+									</p>
+								</>
+							) : (
+								// Disabled-with-reason beats a field that quietly isn't there:
+								// the seller learns the note exists AND what switches it on.
+								<p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+									Pickup notes appear once your store offers self-collect. Turn
+									it on in Settings &rarr; Fulfilment and this becomes editable.
 								</p>
-							</>
-						) : (
-							// Disabled-with-reason beats a field that quietly isn't there:
-							// the seller learns the note exists AND what switches it on.
-							<p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-								Pickup notes appear once your store offers self-collect. Turn it
-								on in Settings &rarr; Fulfilment and this becomes editable.
+							)}
+						</div>
+						{offerSelfCollect ? (
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								One line collecting buyers see on the product page, at checkout,
+								in their WhatsApp confirmation and on their order page.
+								It&apos;s copied onto each order as it&apos;s placed, so editing
+								it later never rewrites what earlier buyers were told.
 							</p>
-						)}
+						) : null}
+						{!pickupNoteValid ? (
+							<p className="text-xs text-destructive">
+								Keep it to {MAX_PICKUP_NOTE_LENGTH} characters or fewer.
+							</p>
+						) : null}
 					</div>
-					{offerSelfCollect ? (
-						<p className="text-xs leading-relaxed text-muted-foreground">
-							One line collecting buyers see on the product page, at checkout,
-							in their WhatsApp confirmation and on their order page. It&apos;s
-							copied onto each order as it&apos;s placed, so editing it later
-							never rewrites what earlier buyers were told.
-						</p>
-					) : null}
-					{!pickupNoteValid ? (
-						<p className="text-xs text-destructive">
-							Keep it to {MAX_PICKUP_NOTE_LENGTH} characters or fewer.
-						</p>
-					) : null}
-				</div>
+				)}
 			</ProductStepCard>
 
 			{/* Publishing concerns — where the product appears — come after what

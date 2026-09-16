@@ -188,6 +188,15 @@ describe("Order rules — pickup note", () => {
 		).toBeTruthy();
 	});
 
+	it("a booking listing never meets it — its orders can't carry one", () => {
+		// convex/bookings.ts writes booking orders with deliveryMethod
+		// "booking", never self_collect, so a note set here could reach nobody.
+		// An input that can do nothing is worse than an absent one.
+		renderForm({ kind: "booking" });
+		expect(noteInput()).toBeNull();
+		expect(screen.queryByText(/Pickup note/i)).toBeNull();
+	});
+
 	it("a delivery-only store is TOLD why, and where to switch it on", () => {
 		// The rule that matters: a constraint is surfaced, never enforced by a
 		// silent gap where a field should be.
@@ -242,5 +251,6 @@ describe("Order rules — what the card submits", () => {
 		const [values] = onSubmit.mock.lastCall ?? [];
 		if (!values) throw new Error("form never submitted");
 		expect(values.prepMinutes).toBe(0);
+		expect(values.pickupNote).toBe("");
 	});
 });
