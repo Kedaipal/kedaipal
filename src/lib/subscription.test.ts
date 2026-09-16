@@ -110,6 +110,37 @@ describe("tierPill", () => {
 		expect(tierPill(sub({ status: "cancelled" }), NOW).label).toBe("Cancelled");
 	});
 
+	test("comped → 'Sponsored' (z8r3fdeub2), never a tier, countdown or 'expires'", () => {
+		expect(
+			tierPill(sub({ status: "active", plan: "pro", comped: true }), NOW),
+		).toEqual({ label: "Sponsored", tone: "sponsored" });
+		// Whatever the row's leftover status/plan says.
+		expect(
+			tierPill(
+				sub({ status: "trialing", trialEndsAt: NOW + DAY, comped: true }),
+				NOW,
+			).label,
+		).toBe("Sponsored");
+		expect(tierPill(sub({ comped: true }), NOW, 4).label).toBe(
+			"Founding #4 · Sponsored",
+		);
+		// An admin on their own store still reads Admin.
+		expect(tierPill(sub({ comped: true }), NOW, undefined, true).label).toBe(
+			"Admin",
+		);
+	});
+
+	test("a comp that ENDED reads 'Expired', not 'Past due' — there's no bill behind it", () => {
+		const ended = sub({
+			status: "past_due",
+			compEnded: { at: NOW - DAY, reason: "revoked" },
+		});
+		expect(tierPill(ended, NOW)).toEqual({ label: "Expired", tone: "warn" });
+		expect(tierPill(ended, NOW, 2).label).toBe("Founding #2 · Expired");
+		// An ordinary lapse is still "Past due".
+		expect(tierPill(sub({ status: "past_due" }), NOW).label).toBe("Past due");
+	});
+
 	test("admin → 'Admin', overrides every subscription state", () => {
 		// A Kedaipal admin runs the app for free, so no trial/past-due countdown is
 		// ever shown — even a past_due or founding store reads "Admin".
@@ -199,6 +230,20 @@ describe("resolveBannerState", () => {
 		expect(resolveBannerState(sub({ comped: true }), NOW + DAY, NOW).kind).toBe(
 			"none",
 		);
+		// A comp that isn't ending soon: no nudges of any kind, even over the cap.
+		expect(
+			resolveBannerState(
+				sub({
+					comped: true,
+					comp: { kind: "sponsor", expiresAt: NOW + 30 * DAY },
+					caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				}),
+				undefined,
+				NOW,
+				undefined,
+				999,
+			).kind,
+		).toBe("none");
 		expect(
 			resolveBannerState(sub({ status: "active" }), undefined, NOW).kind,
 		).toBe("none");
@@ -208,6 +253,36 @@ describe("resolveBannerState", () => {
 		expect(
 			resolveBannerState(sub({ status: "past_due" }), NOW + DAY, NOW).kind,
 		).toBe("pastDue");
+	});
+
+	test("comp accounts (z8r3fdeub2): a week's warning before a dated comp ends, then 'ended' instead of 'past due'", () => {
+		const comped = (expiresAt?: number) =>
+			sub({ comped: true, comp: { kind: "sponsor", expiresAt } });
+		expect(resolveBannerState(comped(NOW + 7 * DAY), undefined, NOW)).toEqual({
+			kind: "compEnding",
+			daysLeft: 7,
+			endsAt: NOW + 7 * DAY,
+		});
+		expect(
+			resolveBannerState(comped(NOW + 2 * 60 * 60 * 1000), undefined, NOW),
+		).toMatchObject({ kind: "compEnding", daysLeft: 1 });
+		expect(resolveBannerState(comped(NOW + 8 * DAY), undefined, NOW).kind).toBe(
+			"none",
+		);
+		expect(resolveBannerState(comped(undefined), undefined, NOW).kind).toBe(
+			"none",
+		);
+		// Ended: the same lock, named for what it is.
+		expect(
+			resolveBannerState(
+				sub({
+					status: "past_due",
+					compEnded: { at: NOW - DAY, reason: "expired" },
+				}),
+				undefined,
+				NOW,
+			).kind,
+		).toBe("compEnded");
 	});
 
 	test("a failing auto-charge outranks the invoice countdown, but not past_due (86eyb6z4r)", () => {

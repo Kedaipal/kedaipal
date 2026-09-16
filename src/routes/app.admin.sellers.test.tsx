@@ -17,7 +17,9 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn(() => ({})) }));
-vi.mock("../hooks/useActAs", () => ({ useActAs: () => ({ setActAs: vi.fn() }) }));
+vi.mock("../hooks/useActAs", () => ({
+	useActAs: () => ({ setActAs: vi.fn() }),
+}));
 
 const mutationSpies = new Map<string, ReturnType<typeof vi.fn>>();
 vi.mock("convex/react", () => ({
@@ -34,8 +36,8 @@ import { CompDialog } from "./app.admin.sellers";
 
 const setCompSpy = () =>
 	mutationSpies.get(getFunctionName(api.subscriptions.setComp));
-const clearCompSpy = () =>
-	mutationSpies.get(getFunctionName(api.subscriptions.clearComp));
+const revokeCompSpy = () =>
+	mutationSpies.get(getFunctionName(api.subscriptions.revokeComp));
 
 beforeEach(() => mutationSpies.clear());
 afterEach(cleanup);
@@ -136,30 +138,31 @@ describe("CompDialog — edit", () => {
 			},
 		});
 
-	it("prefills the current comp and offers End comp", () => {
+	it("prefills the current comp and offers Revoke", () => {
 		render(<CompDialog seller={compedSeller()} onClose={vi.fn()} />);
 		expect(screen.getByText("Edit comp — Mak Kuih")).toBeTruthy();
-		expect(
-			(screen.getByLabelText(/Label/) as HTMLInputElement).value,
-		).toBe("Sponsored by Bearcamp");
+		expect((screen.getByLabelText(/Label/) as HTMLInputElement).value).toBe(
+			"Sponsored by Bearcamp",
+		);
 		// Dated comp → the toggle is off and the date is prefilled.
 		expect(
 			(screen.getByLabelText("Ends on") as HTMLInputElement).value,
 		).toMatch(/-06-01$/);
-		expect(screen.getByRole("button", { name: "End comp…" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Revoke…" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
 	});
 
-	it("End comp goes through its own confirm, then calls clearComp and closes", async () => {
+	it("Revoke goes through its own confirm naming the consequence, then calls revokeComp and closes", async () => {
 		const onClose = vi.fn();
 		render(<CompDialog seller={compedSeller()} onClose={onClose} />);
-		fireEvent.click(screen.getByRole("button", { name: "End comp…" }));
-		// The confirm names the consequence before anything happens.
-		expect(screen.getByText(/exactly like a new signup/)).toBeTruthy();
-		expect(clearCompSpy()).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "End comp" }));
-		await vi.waitFor(() => expect(clearCompSpy()).toHaveBeenCalledTimes(1));
-		expect(clearCompSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
+		fireEvent.click(screen.getByRole("button", { name: "Revoke…" }));
+		// The confirm says what the store becomes before anything happens.
+		expect(screen.getByText(/straight\s+away/)).toBeTruthy();
+		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
+		expect(revokeCompSpy()).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Revoke access" }));
+		await vi.waitFor(() => expect(revokeCompSpy()).toHaveBeenCalledTimes(1));
+		expect(revokeCompSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
 		await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
 	});
 });

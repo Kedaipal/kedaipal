@@ -2386,9 +2386,24 @@ export default defineSchema({
 				grantedBy: v.string(),
 				grantedAt: v.number(),
 				// Unset = free for life. Set = the daily cron ends the comp past this
-				// moment and drops the store into a fresh 14-day trial.
+				// moment and the store becomes an expired seller (see compEndedAt).
 				expiresAt: v.optional(v.number()),
+				// When the "your sponsored access ends soon" email went out, so the
+				// cron sends it once. Lives INSIDE the comp: an edit rewrites the
+				// object, so extending the end date re-arms the reminder.
+				endingSoonSentAt: v.optional(v.number()),
 			}),
+		),
+		// The comp that ENDED this store's free access (z8r3fdeub2): stamped on
+		// revoke / expiry, when the row flips to `past_due` with no invoice — the
+		// same lock a lapsed subscription is in. Lets the seller's dashboard say
+		// "your sponsored access ended" instead of "your subscription is past due"
+		// (they never had one), and files the store under its own founder-report
+		// bucket rather than as churn. Cleared by every path OUT of past_due
+		// (settle, hold, re-comp), so a later ordinary lapse reads as one.
+		compEndedAt: v.optional(v.number()),
+		compEndReason: v.optional(
+			v.union(v.literal("revoked"), v.literal("expired")),
 		),
 		// Set at a Founding-10 onboard (1-month trial). Flags the store so the
 		// conversion invoice auto-applies the founding discount + claims the rank,

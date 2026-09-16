@@ -150,6 +150,16 @@ describe("mytWeekWindow", () => {
 describe("classifyPastDue", () => {
 	const now = NOW;
 
+	test("a comp that ended → comp_ended, whatever else is true (z8r3fdeub2)", () => {
+		// Never paid, paid before the sponsorship, or picked a plan but hasn't
+		// paid it yet — the lock is still the comp ending until a settle clears it.
+		for (const hasPaidInvoice of [false, true])
+			for (const pending of [undefined, pendingInvoice({ dueDate: now - DAY_MS })])
+				expect(
+					classifyPastDue({ hasPaidInvoice, pending, now, compEnded: true }),
+				).toBe("comp_ended");
+	});
+
 	test("never paid → trial_expired, with or without a pending invoice", () => {
 		expect(
 			classifyPastDue({ hasPaidInvoice: false, pending: undefined, now }),
@@ -469,8 +479,25 @@ describe("reduceBusinessReport — past_due breakdown", () => {
 		});
 	});
 
+	test("a store whose comp ENDED gets its own bucket — not churn, not a lapsed trial", () => {
+		const report = reduceBusinessReport(
+			input({
+				retailers: [retailer({ slug: "huff-puff" })],
+				subscriptions: [
+					sub({ status: "past_due", compEndedAt: NOW - DAY_MS }),
+				],
+			}),
+		);
+		expect(report.pastDue.compEnded.count).toBe(1);
+		expect(report.pastDue.compEnded.slugs).toEqual(["huff-puff"]);
+		expect(report.pastDue.trialExpired.count).toBe(0);
+		expect(report.pastDue.lapsedCustomer.count).toBe(0);
+		expect(report.pastDue.lapsedThisWeek).toBe(0);
+		expect(report.pastDue.total).toBe(1);
+	});
+
 	test("a comped past_due row is surfaced separately, never as churn", () => {
-		// The cron's trial path flips comped rows too, unlike the other two.
+		// Only legacy rows — the cron's old trial path flipped comped rows too.
 		const report = reduceBusinessReport(
 			input({
 				retailers: [retailer()],
@@ -495,13 +522,22 @@ describe("reduceBusinessReport — past_due breakdown", () => {
 				],
 				subscriptions: [
 					sub({ retailerId: "r1", status: "past_due" }),
-					sub({ retailerId: "r2", status: "past_due" }),
+					sub({ retailerId: "r2", status: "past_due", compEndedAt: NOW }),
 					sub({ retailerId: "r3", status: "past_due", comped: true }),
 				],
 			}),
 		);
 		expect(report.subscriptions.pastDue).toBe(3);
 		expect(report.pastDue.total).toBe(2);
+		// …and `total` is still the sum of the buckets, the new one included.
+		const p = report.pastDue;
+		expect(
+			p.lapsedCustomer.count +
+				p.awaitingPayment.count +
+				p.awaitingInvoice.count +
+				p.trialExpired.count +
+				p.compEnded.count,
+		).toBe(p.total);
 		expect(report.pastDue.compedExcluded).toBe(1);
 		expect(report.pastDue.total + report.pastDue.compedExcluded).toBe(
 			report.subscriptions.pastDue,

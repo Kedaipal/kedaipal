@@ -272,6 +272,7 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("firstInvoiceOrder"),
 			v.literal("firstInvoiceBackstop"),
 			v.literal("trialEndingSoon"),
+			v.literal("compEndingSoon"),
 			v.literal("compEnded"),
 			v.literal("holdStarted"),
 			v.literal("holdResumed"),
@@ -313,13 +314,17 @@ export const sendSampleBillingEmail = internalAction({
 						totalFormatted: sampleTotal,
 						dashboardUrl: url,
 					})
-				: key === "trialEndingSoon" || key === "compEnded"
+				: key === "trialEndingSoon" ||
+						key === "compEndingSoon" ||
+						key === "compEnded"
 					? renderTrialEmail(loc, key, {
 							storeName: "Sample Store",
 							billingUrl: url,
-							daysLeft: 3,
+							daysLeft: key === "compEndingSoon" ? 7 : 3,
 							sponsorLabel:
-								key === "compEnded" ? "Sponsored by Maybank SME" : undefined,
+								key === "trialEndingSoon" ? undefined : "Sponsored by Maybank SME",
+							endsOnFormatted:
+								key === "compEndingSoon" ? "30 Sep 2026" : undefined,
 						})
 					: key === "holdStarted" || key === "holdResumed"
 						? renderHoldEmail(loc, key, {
@@ -363,14 +368,14 @@ export const sendSampleBillingEmail = internalAction({
 	},
 });
 
-/** Send a retailer-only (no invoice) notice — trial nudges, the lapsed notice
- * or the comp-ended notice. Shared by the named actions below. Fire-and-forget. */
+/** Send a retailer-only (no invoice) notice — the free-period nudge, the
+ * lapsed notice, or a comp ending soon / ended. Shared by the named actions
+ * below. Fire-and-forget. */
 async function sendRetailerNotice(
 	ctx: ActionCtx,
 	retailerId: Id<"retailers">,
 	key: TrialEmailKey,
-	daysLeft?: number,
-	sponsorLabel?: string,
+	extra: { daysLeft?: number; sponsorLabel?: string; endsAt?: number } = {},
 ): Promise<void> {
 	let meta: {
 		notifyEmail: string | undefined;
@@ -389,8 +394,10 @@ async function sendRetailerNotice(
 	const { subject, html, text } = renderTrialEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		billingUrl: billingPageUrl(),
-		daysLeft,
-		sponsorLabel,
+		daysLeft: extra.daysLeft,
+		sponsorLabel: extra.sponsorLabel,
+		endsOnFormatted:
+			extra.endsAt !== undefined ? formatDueDate(extra.endsAt) : undefined,
 	});
 	try {
 		await sendEmail(meta.notifyEmail, subject, html, text);
@@ -403,26 +410,41 @@ async function sendRetailerNotice(
 	}
 }
 
-/** Free-period nudges (no invoice): `trialEndingSoon` (~3 days before the
- * backstop) and `compEnded` (a sponsored store's comp ran out or was ended by
- * an admin — a fresh 14-day free period starts, z8r3fdeub2). Scheduled by the
- * daily cron + subscriptions.clearComp. The old `trialEnded` lock notice is
- * gone with start-when-you-sell: the free period ending now ISSUES a first
- * invoice (`firstInvoice*` keys above), and only that invoice going overdue
- * locks — which sends the ordinary `invoiceOverdue`. */
+/** Retailer notices with no invoice attached, scheduled by the daily cron and
+ * the comp mutations:
+ *  - `trialEndingSoon` — ~3 days before the free period's backstop.
+ *  - `compEndingSoon` — a dated comp ends within a week (z8r3fdeub2): what
+ *    stays live, what locks, and that a plan is how they keep editing.
+ *  - `compEnded` — a comp was revoked or passed its end date: the store is an
+ *    expired seller now (storefront + ordering live, editing locked until they
+ *    pick a plan).
+ * The old `trialEnded` lock notice is gone with start-when-you-sell: the free
+ * period ending now ISSUES a first invoice (`firstInvoice*` keys above), and
+ * only that invoice going overdue locks — which sends the ordinary
+ * `invoiceOverdue`. */
 export const notifyTrialEmail = internalAction({
 	args: {
 		retailerId: v.id("retailers"),
-		key: v.union(v.literal("trialEndingSoon"), v.literal("compEnded")),
+		key: v.union(
+			v.literal("trialEndingSoon"),
+			v.literal("compEndingSoon"),
+			v.literal("compEnded"),
+		),
 		daysLeft: v.optional(v.number()),
-		/** compEnded only: the comp's seller-facing label, named in the email. */
+		/** Comp notices: the comp's seller-facing label, named in the email. */
 		sponsorLabel: v.optional(v.string()),
+		/** compEndingSoon: when the comp ends. */
+		endsAt: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, key, daysLeft, sponsorLabel },
+		{ retailerId, key, daysLeft, sponsorLabel, endsAt },
 	): Promise<void> => {
-		await sendRetailerNotice(ctx, retailerId, key, daysLeft, sponsorLabel);
+		await sendRetailerNotice(ctx, retailerId, key, {
+			daysLeft,
+			sponsorLabel,
+			endsAt,
+		});
 	},
 });
 

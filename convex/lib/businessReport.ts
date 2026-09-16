@@ -37,7 +37,9 @@
  * a row CURRENTLY in `past_due`, `updatedAt` is exactly the moment it flipped,
  * which is what makes `lapsedThisWeek` computable with no schema change.
  * Anyone adding a fourth `db.patch` on `subscriptions` that touches
- * `updatedAt` silently breaks that figure.
+ * `updatedAt` silently breaks that figure. (Comp accounts, z8r3fdeub2, keep
+ * it: `setComp` moves a row AWAY from `past_due`, and a comp ending flips a
+ * row INTO it with `updatedAt` = that moment — filed as `comp_ended`.)
  *
  * All windowing is MYT (UTC+8, no DST), reusing `todayMytMidnight` as the
  * day-flooring primitive exactly as `insights.ts` does.
@@ -128,7 +130,12 @@ export type PastDueClass =
 	 * out and no renewal has been issued yet — an ACTION ITEM for Arif. */
 	| "awaiting_invoice"
 	/** Never had a paid invoice. A trial that lapsed, never a customer. */
-	| "trial_expired";
+	| "trial_expired"
+	/** A sponsored store whose comp was revoked or reached its end date
+	 * (z8r3fdeub2) and hasn't paid for a plan yet. Not churn — it never paid
+	 * for what it lost — but the conversion moment of a partner deal, so it
+	 * gets its own line instead of hiding among lapsed trials. */
+	| "comp_ended";
 
 export type PastDueBucket = {
 	count: number;
@@ -139,7 +146,7 @@ export type PastDueBucket = {
 };
 
 export type PastDueBreakdown = {
-	/** Non-comped `past_due` rows — the sum of the four buckets. Note this is
+	/** Non-comped `past_due` rows — the sum of the five buckets. Note this is
 	 * SMALLER than `SubscriptionCounts.pastDue`, which is the raw status count
 	 * and includes comped rows. The invariant that reconciles them (pinned by
 	 * test) is: `subscriptions.pastDue === total + compedExcluded`. */
@@ -148,10 +155,12 @@ export type PastDueBreakdown = {
 	awaitingPayment: PastDueBucket;
 	awaitingInvoice: PastDueBucket;
 	trialExpired: PastDueBucket;
+	compEnded: PastDueBucket;
 	/** `lapsed_customer` rows whose flip (`updatedAt`) fell inside the window. */
 	lapsedThisWeek: number;
 	/** `past_due` rows skipped for being comped. Surfaced, not vanished — the
-	 * cron's trial path flips comped rows too, unlike the other two paths. */
+	 * cron's old trial path flipped legacy comped rows too (retired with comp
+	 * accounts, z8r3fdeub2 — so this should only ever count those leftovers). */
 	compedExcluded: number;
 };
 
@@ -219,6 +228,8 @@ export type ReportSubscriptionInput = {
 	retailerId: string;
 	status: string;
 	comped?: boolean;
+	/** Set while the row is locked because a comp ENDED (z8r3fdeub2). */
+	compEndedAt?: number;
 	updatedAt: number;
 };
 
@@ -390,7 +401,13 @@ export function classifyPastDue(args: {
 	hasPaidInvoice: boolean;
 	pending?: ReportPendingInvoiceInput;
 	now: number;
+	/** The lock came from a comp ending, not an unpaid bill (z8r3fdeub2). */
+	compEnded?: boolean;
 }): PastDueClass {
+	// First: whatever the store paid before its sponsorship, the lock it's in
+	// now is the comp ending — and a plan it picked but hasn't paid for doesn't
+	// change that until it settles (which clears the marker).
+	if (args.compEnded) return "comp_ended";
 	if (!args.hasPaidInvoice) return "trial_expired";
 	if (args.pending === undefined) return "awaiting_invoice";
 	// `<` matches the cron's own overdue test, so the boundary day agrees with
@@ -470,6 +487,7 @@ export function reduceBusinessReport(
 		awaitingPayment: emptyBucket(),
 		awaitingInvoice: emptyBucket(),
 		trialExpired: emptyBucket(),
+		compEnded: emptyBucket(),
 		lapsedThisWeek: 0,
 		compedExcluded: 0,
 	};
@@ -512,6 +530,7 @@ export function reduceBusinessReport(
 			hasPaidInvoice: lastPaid !== undefined,
 			pending: soonestPending.get(sub.retailerId),
 			now: input.now,
+			compEnded: sub.compEndedAt !== undefined,
 		});
 		if (klass === "lapsed_customer") {
 			addToBucket(pastDue.lapsedCustomer, slug, lastPaid);
@@ -520,6 +539,8 @@ export function reduceBusinessReport(
 			addToBucket(pastDue.awaitingPayment, slug, lastPaid);
 		} else if (klass === "awaiting_invoice") {
 			addToBucket(pastDue.awaitingInvoice, slug, lastPaid);
+		} else if (klass === "comp_ended") {
+			addToBucket(pastDue.compEnded, slug, lastPaid);
 		} else {
 			addToBucket(pastDue.trialExpired, slug, lastPaid);
 		}

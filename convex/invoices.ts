@@ -197,6 +197,11 @@ async function settleInvoicePaid(
 		userCap: caps.userCap,
 		broadcastQuota: caps.broadcastQuota,
 		updatedAt: now,
+		// A store that was locked by a comp ending (z8r3fdeub2) is a paying
+		// seller again — drop the marker so a future lapse reads "past due",
+		// not "your sponsored access ended".
+		compEndedAt: undefined,
+		compEndReason: undefined,
 		...(sub.autoRenew
 			? {
 					autoRenew: {

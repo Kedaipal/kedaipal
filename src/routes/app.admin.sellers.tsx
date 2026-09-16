@@ -267,9 +267,32 @@ export function SellerCard({
 										no subscription
 									</span>
 								)}
-								{seller.plan ? (
+								{seller.plan && !seller.comped ? (
 									<span className="text-[11px] capitalize text-muted-foreground">
 										{seller.plan}
+									</span>
+								) : null}
+								{seller.compEnded && status === "past_due" ? (
+									// Why this store is past due: its comp ended, not an unpaid
+									// bill — so nobody chases an invoice that doesn't exist.
+									// Short enough for the ~135px text column at 375px; the full
+									// date rides the title.
+									<span
+										className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground"
+										title={`Comp ${seller.compEnded.reason} on ${formatShortDate(seller.compEnded.at)}`}
+									>
+										<Gift className="size-3 shrink-0" />
+										{seller.compEnded.reason === "expired"
+											? "Expired"
+											: "Revoked"}{" "}
+										·{" "}
+										{new Date(seller.compEnded.at).toLocaleDateString(
+											undefined,
+											{
+												day: "numeric",
+												month: "short",
+											},
+										)}
 									</span>
 								) : null}
 								{seller.comped ? (
@@ -411,10 +434,10 @@ function toDateInputValue(epochMs: number): string {
 /**
  * Grant / edit a comp (z8r3fdeub2). Mounted only while open, so the fields
  * initialise from the row's current comp on every open — the same dialog is
- * the create AND edit surface (extending an expiry must not require ending
- * the comp and re-granting through a trial). Ending the comp lives here too,
- * behind its own confirm that says exactly what happens next. Exported for
- * the dialog-states test.
+ * the create AND edit surface (extending an end date must not require
+ * revoking the comp and re-granting it). Revoking lives here too, behind its
+ * own confirm that says exactly what happens next: the store becomes an
+ * expired seller. Exported for the dialog-states test.
  */
 export function CompDialog({
 	seller,
@@ -424,7 +447,7 @@ export function CompDialog({
 	onClose: () => void;
 }) {
 	const setComp = useMutation(api.subscriptions.setComp);
-	const clearComp = useMutation(api.subscriptions.clearComp);
+	const revokeComp = useMutation(api.subscriptions.revokeComp);
 	const editing = seller.comped;
 	const [kind, setKind] = useState<CompKind>(seller.comp?.kind ?? "sponsor");
 	const [label, setLabel] = useState(seller.comp?.label ?? "");
@@ -436,7 +459,7 @@ export function CompDialog({
 		seller.comp?.expiresAt ? toDateInputValue(seller.comp.expiresAt) : "",
 	);
 	const [saving, setSaving] = useState(false);
-	const [endOpen, setEndOpen] = useState(false);
+	const [revokeOpen, setRevokeOpen] = useState(false);
 
 	const expiresAt = !forLife && dateStr ? endOfDayLocal(dateStr) : undefined;
 	// Disabled-with-reason, and the reason is VISIBLE (not just a title attr).
@@ -461,7 +484,7 @@ export function CompDialog({
 			toast.success(
 				editing
 					? `Comp updated for ${seller.storeName}.`
-					: `${seller.storeName} is on the house — no invoices from here on.`,
+					: `${seller.storeName} is sponsored — unlimited orders, nothing to pay.`,
 			);
 			onClose();
 		} catch (err) {
@@ -471,13 +494,17 @@ export function CompDialog({
 		}
 	}
 
-	async function endComp() {
+	async function revoke() {
 		try {
-			await clearComp({ retailerId: seller._id });
+			await revokeComp({ retailerId: seller._id });
 			toast.success(
-				`Comp ended — ${seller.storeName} starts a fresh 14-day trial.`,
+				`Comp revoked — ${seller.storeName} is now an expired store.`,
+				{
+					description:
+						"Storefront stays live; editing is locked until they choose a plan. They've been emailed.",
+				},
 			);
-			setEndOpen(false);
+			setRevokeOpen(false);
 			onClose();
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -497,9 +524,10 @@ export function CompDialog({
 								: `Comp ${seller.storeName}`}
 						</DialogTitle>
 						<DialogDescription>
-							Full Pro access, never billed — the machine skips this store
-							entirely. Any pending invoice is voided (a past-due lock lifts),
-							and a paused store reopens for orders.
+							Every feature and unlimited orders, like an admin store — never
+							billed, and the seller can't subscribe, change plan or pause. Any
+							pending invoice is voided (a past-due lock lifts), and a paused
+							store reopens for orders.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-4">
@@ -564,7 +592,7 @@ export function CompDialog({
 							<div className="min-w-0">
 								<p className="text-sm font-medium">Free for life</p>
 								<p className="text-xs text-muted-foreground">
-									No end date — the comp runs until you end it here.
+									No end date — the comp runs until you revoke it here.
 								</p>
 							</div>
 							<ToggleSwitch
@@ -586,9 +614,10 @@ export function CompDialog({
 									onChange={(e) => setDateStr(e.target.value)}
 								/>
 								<p className="text-xs text-muted-foreground">
-									Free through the end of that day. The store then starts a
-									fresh 14-day free period — first invoice at its first live
-									order — and the seller gets an email about it.
+									Free through the end of that day, then the store becomes an
+									expired seller: storefront stays live, editing locks until
+									they choose a plan. The seller gets a reminder email in the
+									final week, and another when it ends.
 								</p>
 							</div>
 						) : null}
@@ -600,11 +629,11 @@ export function CompDialog({
 						{editing ? (
 							<Button
 								variant="destructive"
-								onClick={() => setEndOpen(true)}
+								onClick={() => setRevokeOpen(true)}
 								disabled={saving}
 								className="sm:mr-auto"
 							>
-								End comp…
+								Revoke…
 							</Button>
 						) : null}
 						<Button variant="outline" onClick={onClose} disabled={saving}>
@@ -622,20 +651,21 @@ export function CompDialog({
 				</DialogContent>
 			</Dialog>
 			<ConfirmDialog
-				open={endOpen}
-				onOpenChange={setEndOpen}
+				open={revokeOpen}
+				onOpenChange={setRevokeOpen}
 				destructive
-				title={`End the comp for ${seller.storeName}?`}
+				title={`Revoke ${seller.storeName}'s sponsored access?`}
 				description={
 					<>
-						The store drops into a fresh <strong>14-day Pro trial</strong>,
-						exactly like a new signup — their first invoice arrives at their
-						first live order (or day 15). The seller gets an email saying the
-						sponsored period has ended. You can re-comp any time.
+						The store becomes an <strong>expired seller</strong> straight away:
+						the storefront stays live and buyers can still order, but the seller
+						can't edit products, settings or bookings until they choose a plan
+						and pay. No free period, and they're emailed that their sponsored
+						access has ended. You can re-comp any time.
 					</>
 				}
-				confirmLabel="End comp"
-				onConfirm={endComp}
+				confirmLabel="Revoke access"
+				onConfirm={revoke}
 			/>
 		</>
 	);

@@ -88,6 +88,8 @@ describe("pure rules", () => {
 		expect(canEnterHold("cancelled", false)).toBe(false);
 		expect(canEnterHold("on_hold", false)).toBe(false);
 		expect(canEnterHold("active", true)).toBe(false);
+		// A lock from a comp ending (z8r3fdeub2) has no plan behind it to pause.
+		expect(canEnterHold("past_due", false, true)).toBe(false);
 	});
 
 	test("canResumeHold: from the hold, or from a lock over an unpaid HOLD invoice", () => {

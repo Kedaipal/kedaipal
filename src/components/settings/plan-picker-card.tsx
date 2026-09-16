@@ -79,6 +79,15 @@ export function PlanPickerCard({
 	);
 
 	const founding = foundingPricing;
+	// A seller who still has a saved method (auto-renewal left on through a
+	// lapse, a voided bill, or a sponsorship that ended) never sees HitPay's
+	// page: subscribeSelf charges the method on file straight away. The words
+	// before the tap must say THAT — the amount and the method are the consent.
+	const savedMethod = sub.autoRenew?.methodLabel;
+	const price = formatPrice(
+		planPrice(plan, cycle, founding && plan === "pro", currency),
+		currency,
+	);
 
 	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
 	// like every mainstream subscription: invoice created, then straight to
@@ -134,8 +143,9 @@ export function PlanPickerCard({
 					{renewing ? "Renew your subscription" : "Ready to choose a plan?"}
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Pick a plan — you'll pay on HitPay's secure page and your plan
-					activates straight away.
+					{savedMethod
+						? `Pick a plan — we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
+						: "Pick a plan — you'll pay on HitPay's secure page and your plan activates straight away."}
 				</p>
 				{foundingPricingLapsed ? (
 					<p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
@@ -231,19 +241,15 @@ export function PlanPickerCard({
 					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
 					{busy
-						? "Opening secure payment…"
+						? savedMethod
+							? "Charging your saved method…"
+							: "Opening secure payment…"
 						: `Subscribe to ${PLAN_PITCH[plan].name}`}
 				</button>
 				<p className="text-[11px] text-muted-foreground">
-					You'll authorise a card or Touch 'n Go once on HitPay's secure page
-					and be charged{" "}
-					{formatPrice(
-						planPrice(plan, cycle, founding && plan === "pro", currency),
-						currency,
-					)}{" "}
-					now — then it renews automatically each{" "}
-					{cycle === "annual" ? "year" : "month"}. Turn it off any time;
-					Kedaipal never sees your card or wallet details.
+					{savedMethod
+						? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
+						: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
 				</p>
 			</div>
 		</section>

@@ -2,7 +2,12 @@
 // pill, banner, plan-feature gates). Mirrors the server `AccessState` shape
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
-import type { CompKind } from "../../convex/lib/comp";
+import {
+	type CompEndReason,
+	type CompKind,
+	compDaysLeft,
+	compEndingSoon,
+} from "../../convex/lib/comp";
 import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +23,10 @@ export type SubscriptionView = {
 	 * label + optional end date for the billing tab's "Sponsored by X · free
 	 * until Y" line. Absent on legacy/fail-open comped rows. */
 	comp?: { kind: CompKind; label?: string; expiresAt?: number };
+	/** Set while an expired seller's lock came from a comp ENDING (z8r3fdeub2)
+	 * — revoked by an admin, or past its end date — not from an unpaid bill.
+	 * Only meaningful with `status: "past_due"`. */
+	compEnded?: { at: number; reason: CompEndReason };
 	/** The free period's backstop deadline (signup + 14 days). */
 	trialEndsAt?: number;
 	/** Start-when-you-sell (z8r3fday24): set once the free period ended (first
@@ -232,13 +241,21 @@ export function orderCapState(
  * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
  * concrete "pay me" — applies whether trialing or active) → a trial ending soon
  * → the soft order-cap nudge (over, then near — upsell ranks below any payment
- * deadline). Comped/paid-with-nothing-due → nothing. `pendingDueAt` is the
+ * deadline). Paid-with-nothing-due → nothing. A comped store only ever sees
+ * its comp's end coming (z8r3fdeub2); once ended, its lock reads `compEnded`
+ * instead of `pastDue` — no bill sits behind it. `pendingDueAt` is the
  * soonest pending invoice's due date (undefined when none); `ordersThisMonth`
  * is the usage meter (undefined → no cap nudge).
  */
 export type BannerState =
 	| { kind: "none" }
 	| { kind: "pastDue" }
+	/** An expired seller whose lock came from a comp ending (z8r3fdeub2): same
+	 * lock as past-due, but there is no bill to pay — they choose a plan. */
+	| { kind: "compEnded" }
+	/** A dated comp ends within COMP_ENDING_WARN_DAYS — the only banner a
+	 * comped store can see, because a comp ending locks editing that day. */
+	| { kind: "compEnding"; daysLeft: number; endsAt: number }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
@@ -263,8 +280,20 @@ export function resolveBannerState(
 	warnDays = PAYMENT_WARN_DAYS,
 	ordersThisMonth?: number,
 ): BannerState {
-	if (!sub || sub.comped) return { kind: "none" };
-	if (sub.status === "past_due") return { kind: "pastDue" };
+	if (!sub) return { kind: "none" };
+	if (sub.comped) {
+		// A comp has no bill, trial or cap to warn about — only its end date.
+		const endsAt = sub.comp?.expiresAt;
+		if (endsAt !== undefined && compEndingSoon(endsAt, now))
+			return {
+				kind: "compEnding",
+				daysLeft: compDaysLeft(endsAt, now),
+				endsAt,
+			};
+		return { kind: "none" };
+	}
+	if (sub.status === "past_due")
+		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still
@@ -311,7 +340,13 @@ export function resolveBannerState(
 	return { kind: "none" };
 }
 
-export type TierTone = "neutral" | "trial" | "warn" | "founding" | "admin";
+export type TierTone =
+	| "neutral"
+	| "trial"
+	| "warn"
+	| "founding"
+	| "admin"
+	| "sponsored";
 
 export type TierPill = { label: string; tone: TierTone };
 
@@ -326,7 +361,9 @@ const PILL_COUNTDOWN_DAYS = PAYMENT_WARN_DAYS;
  * read "Founding #N · …" instead. A held store reads "On hold". When `isAdmin`
  * is set (a Kedaipal admin viewing their OWN store), the pill reads "Admin"
  * instead of any state — admins run the app for free and are never
- * soft-locked, so a countdown would be a lie. */
+ * soft-locked, so a countdown would be a lie. A comped store reads
+ * "Sponsored" for the same reason (z8r3fdeub2), and once its comp has ended
+ * it reads "Expired" rather than "Past due" — there's no bill behind it. */
 export function tierPill(
 	sub: SubscriptionView,
 	now: number,
@@ -335,6 +372,8 @@ export function tierPill(
 ): TierPill {
 	if (isAdmin) return { label: "Admin", tone: "admin" };
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
+	if (sub.comped)
+		return { label: fm ? `${fm} · Sponsored` : "Sponsored", tone: "sponsored" };
 	switch (sub.status) {
 		case "trialing": {
 			const free = freePeriodState(sub, now);
@@ -354,8 +393,10 @@ export function tierPill(
 		}
 		case "on_hold":
 			return { label: fm ? `${fm} · On hold` : "On hold", tone: "trial" };
-		case "past_due":
-			return { label: fm ? `${fm} · Past due` : "Past due", tone: "warn" };
+		case "past_due": {
+			const state = sub.compEnded ? "Expired" : "Past due";
+			return { label: fm ? `${fm} · ${state}` : state, tone: "warn" };
+		}
 		case "cancelled":
 			return { label: fm ? `${fm} · Cancelled` : "Cancelled", tone: "warn" };
 		default:

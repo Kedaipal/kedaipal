@@ -5,6 +5,7 @@ import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
 import { DEFAULT_SUPPORT_WA_NUMBER } from "../../lib/contact";
+import { formatShortDate } from "../../lib/format";
 import { BillingTab } from "./billing-tab";
 
 // Reads go via `useQuery(convexQuery(api.x, args)).data` — mock the adapter
@@ -414,6 +415,130 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		);
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+	});
+});
+
+describe("BillingTab comp accounts (z8r3fdeub2)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const comped = (comp?: Record<string, unknown>) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: true,
+				comp,
+				caps: { orderCap: 1_000_000_000, userCap: 5, broadcastQuota: 500 },
+				active: true,
+				frozen: false,
+			},
+			ordersThisMonth: 350,
+		} as unknown as Partial<Retailer>);
+
+	it("a sponsored store sees who, until when and what happens after — and nothing to buy, change, pause or cancel", () => {
+		const endsAt = Date.now() + 40 * DAY;
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={comped({
+					kind: "sponsor",
+					label: "Sponsored by Maybank SME",
+					expiresAt: endsAt,
+				})}
+			/>,
+		);
+		expect(screen.getByText("Sponsored account")).toBeTruthy();
+		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
+		expect(screen.getByText(`Until ${formatShortDate(endsAt)}`)).toBeTruthy();
+		expect(screen.getByText(/orders are unlimited/)).toBeTruthy();
+		expect(
+			screen.getByText(/editing your store pauses until you choose a plan/),
+		).toBeTruthy();
+		// Not a plan: no tier, meter or any billing door.
+		expect(screen.queryByText("Current plan")).toBeNull();
+		expect(screen.queryByText("Orders this month")).toBeNull();
+		expect(screen.queryByText("Change your plan")).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+		expect(screen.queryByText(/Off-Season Hold/)).toBeNull();
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("a free-for-life comp says so, with no end-of-comp warning", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={comped({ kind: "partner" })} />);
+		expect(screen.getByText("No end date")).toBeTruthy();
+		expect(screen.queryByText(/pauses until you choose a plan/)).toBeNull();
+	});
+
+	const ended = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "past_due",
+				comped: false,
+				compEnded: { at: Date.now() - DAY, reason: "revoked" },
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: false,
+				frozen: true,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("once the comp ends: 'Expired', what still works, and CHOOSING a plan — never 'renew' or a hold offer", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={ended()} />);
+		expect(screen.getByText("Sponsored access")).toBeTruthy();
+		expect(
+			screen.getByText(`Ended ${formatShortDate(Date.now() - DAY)}`),
+		).toBeTruthy();
+		expect(screen.getByText("Expired")).toBeTruthy();
+		expect(screen.queryByText("Past due")).toBeNull();
+		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
+		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
+		expect(screen.queryByText("Renew your subscription")).toBeNull();
+		expect(screen.queryByText(/Rather pause than pay/)).toBeNull();
+		// No plan, so no "included orders on your plan" meter either.
+		expect(screen.queryByText("Orders this month")).toBeNull();
+	});
+
+	it("with a method still on file, the picker names the saved method and amount — never a HitPay page that won't appear", () => {
+		// subscribeSelf charges a saved method at once (no redirect). A sponsored
+		// store that had auto-renew before its comp lands here every time.
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "past_due",
+						comped: false,
+						compEnded: { at: Date.now() - DAY, reason: "expired" },
+						autoRenew: {
+							method: "touch_n_go",
+							methodLabel: "Touch 'n Go",
+							failedAttempts: 0,
+							failing: false,
+						},
+						caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+						active: false,
+						frozen: true,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(screen.getByText(/we'll charge your saved Touch 'n Go/)).toBeTruthy();
+		expect(
+			screen.getByText(/We'll charge RM 149\.00 to your saved Touch 'n Go now/),
+		).toBeTruthy();
+		expect(screen.queryByText(/HitPay's secure page/)).toBeNull();
+	});
+
+	it("gateway off: the manual card asks them to choose a plan, not renew", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={ended()} />);
+		expect(screen.getByText("Choose a plan to keep editing")).toBeTruthy();
+		expect(screen.queryByText("Renew your subscription")).toBeNull();
+		expect(waLinks().some((href) => href.includes("choose%20a%20plan"))).toBe(
+			true,
+		);
 	});
 });
 

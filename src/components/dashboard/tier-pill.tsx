@@ -23,6 +23,8 @@ function toneClass(tone: TierTone): string {
 			return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300";
 		case "admin":
 			return "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300";
+		case "sponsored":
+			return "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300";
 		case "trial":
 			return "border border-accent/20 bg-accent/10 text-accent dark:bg-accent/15";
 		default:
@@ -92,8 +94,9 @@ export function TierPill({
 	// the plan stays visible (the status chip alone would hide it). One link, two
 	// chips that wrap together rather than overflow on a narrow screen. `className`
 	// (e.g. the mobile header's smaller text) sits on the wrapper only — the chips
-	// carry no font size, so they inherit the wrapper's down to both.
-	if (foundingRank) {
+	// carry no font size, so they inherit the wrapper's down to both. A comped
+	// founding member has no tier to show — "Founding #N · Sponsored" says it all.
+	if (foundingRank && !subscription.comped) {
 		return (
 			<Link
 				to="/app/settings"

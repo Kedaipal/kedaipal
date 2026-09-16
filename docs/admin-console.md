@@ -244,18 +244,30 @@ pause flow) is a sensible next step but not yet implemented.
 ## Comp accounts (z8r3fdeub2)
 
 The sellers directory is also where a store is **comped** — admin-granted free
-access for partner/sponsor/pilot/internal deals. A Gift button beside each row
-opens one dialog that is both the **create and edit** surface (kind, seller-
-facing label, admin-only note, free-for-life vs an end date) and carries "End
-comp" behind its own confirm; comped rows show a violet chip (kind · label ·
-until) with the note on hover. Admin-owned rows keep the button visible but
-disabled-with-reason ("always free already"). Both mutations
-(`subscriptions.setComp` / `clearComp`) are `requireAdmin`-gated and **always**
-write an `adminAuditLog` row (`subscriptions.setComp` / `.clearComp`, targetId
-= the retailer) — a billing-state grant is never untraced, and the act-as
-no-op doesn't apply because an admin's own store can't be comped. Ending a
-comp (by hand or by expiry) drops the store into a fresh 14-day Pro trial and
-emails the seller. Full lifecycle, edge cases and the "never charged"
+access for partner/sponsor/pilot/internal deals. A comped store gets what an
+admin's own store gets: every feature and **unlimited orders**, never billed,
+and no way for the seller to subscribe, change plan, pause or cancel. A Gift
+button beside each row opens one dialog that is both the **create and edit**
+surface (kind, seller-facing label, admin-only note, free-for-life vs an end
+date) and carries **Revoke…** behind its own confirm, which names the
+consequence: the store becomes an **expired seller** straight away — storefront
+live, buyers still ordering, editing locked until the seller picks a plan and
+pays (no free period), and the seller is emailed. Comped rows show a violet
+chip (kind · label · until) with the note on hover; a store whose comp ended
+shows a muted "Revoked · {date}" / "Expired · {date}" chip beside its past-due
+status, so nobody chases an invoice that doesn't exist. Admin-owned rows keep
+the Gift button visible but disabled-with-reason ("always free already").
+
+Both mutations (`subscriptions.setComp` / `revokeComp`) are
+`requireAdmin`-gated and **always** write an `adminAuditLog` row
+(`subscriptions.setComp` / `.revokeComp`, targetId = the retailer) — a
+billing-state change is never untraced, and the act-as no-op doesn't apply
+because an admin's own store can't be comped. An end date works like a
+scheduled revoke: the seller gets a reminder email in the final week and the
+daily cron ends the comp once the date passes. **Note for testing:** revoking
+while acting-as a store won't show you the lock — admins bypass
+`assertSubscriptionActive` — so the growth-write refusal is only visible to the
+seller's own login. Full lifecycle, edge cases and the "never charged"
 guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
 
 ## Deliberate scope / follow-ups

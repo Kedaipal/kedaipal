@@ -72,6 +72,10 @@ export type AdminSellerRow = {
 		grantedAt: number;
 		expiresAt?: number;
 	};
+	/** The comp that ended this store's free access — revoked or expired — while
+	 * the store is still an expired seller (cleared once it pays or is
+	 * re-comped). Lets the directory say why a store is past due. */
+	compEnded?: { at: number; reason: "revoked" | "expired" };
 	/** Marketing tag the seller signed up with (`retailers.signupSource`,
 	 * z8r3fdd1v0). Absent = untagged/direct. Rendered verbatim — these are
 	 * Kedaipal's own acquisition tags (`powered-by`, `spotlight-<member>`, …),
@@ -131,6 +135,10 @@ export const listSellersForAdmin = query({
 							expiresAt: sub.comp.expiresAt,
 						}
 					: undefined,
+				compEnded:
+					sub?.compEndedAt !== undefined
+						? { at: sub.compEndedAt, reason: sub.compEndReason ?? "revoked" }
+						: undefined,
 				signupSource: r.signupSource,
 				...(referrer
 					? {
@@ -305,6 +313,7 @@ export const businessReport = internalQuery({
 					retailerId: s.retailerId,
 					status: s.status,
 					comped: s.comped,
+					compEndedAt: s.compEndedAt,
 					updatedAt: s.updatedAt,
 				}),
 			),
