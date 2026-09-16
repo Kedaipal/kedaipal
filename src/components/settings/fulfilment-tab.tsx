@@ -2716,7 +2716,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 						// seller never sees one wording here and another on save.
 						<p className="text-xs text-destructive">
 							{mode === "same"
-								? capitalizeFirst(dayErrors[invalidDays[0]] as string)
+								? `${capitalizeFirst(dayErrors[invalidDays[0]] as string)}.`
 								: `${WEEKDAY_NAMES[invalidDays[0]]}: ${dayErrors[invalidDays[0]]}.`}
 						</p>
 					) : allClosed ? (
