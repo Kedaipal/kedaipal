@@ -41,8 +41,10 @@ Two deliberate details:
   `npx convex run migrations:backfillOrderCategoryNames` — see
   [product-categories.md](./product-categories.md).
 
-The haystack is built lazily (only when there IS a term), since it allocates ~36
-strings per order. Expect broader matches than before: a term appearing in a
+The haystack is built lazily (only when there IS a term), since it allocates a
+string per column, per order. Pickup notes participate (`z8r3fdff97`) through the
+same gate as the column — a self-collect order matches "ice bag", a delivery
+order whose line froze the same note does not. Expect broader matches than before: a term appearing in a
 shared field — a city every order ships to — now legitimately matches all of
 them. That breadth is the point.
 
@@ -688,7 +690,7 @@ WhatsApp.
   the already-sorted model keeps the active sort applying inside both halves.
   Pinning stays a partition, never a competing sort key.
 - **Export honours the view.** In table view the Export button becomes a
-  two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
+  two-item menu — *Export visible columns (N)* / *Export all columns (N)* —
   rather than a dialog, which would tax a path sellers hit often. In cards view
   there is no column selection to honour, so it stays a one-tap button that
   exports everything.

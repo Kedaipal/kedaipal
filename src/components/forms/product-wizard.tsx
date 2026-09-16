@@ -21,6 +21,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
+	parsePrepMinutesText,
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	MAX_PICKUP_NOTE_LENGTH,
@@ -531,15 +532,11 @@ export function wizardStepIssues(
 		// Prep time + pickup note ride the same step, and only on the
 		// non-booking route — a booking's preparation IS the acceptance, and
 		// its orders can never carry a pickup note.
-		const prep = state.prepMinutes.trim();
-		if (prep.length > 0) {
-			const n = Number(prep);
-			if (!Number.isInteger(n) || n < 0 || n > MAX_PREP_MINUTES) {
-				issues.push({
-					field: "prepMinutes",
-					message: `Enter a whole number of minutes between 0 and ${MAX_PREP_MINUTES}, or leave blank.`,
-				});
-			}
+		if (!parsePrepMinutesText(state.prepMinutes).ok) {
+			issues.push({
+				field: "prepMinutes",
+				message: `Enter a whole number of minutes between 0 and ${MAX_PREP_MINUTES}, or leave blank.`,
+			});
 		}
 		if (!pickupNoteFits(state.pickupNote)) {
 			issues.push({
@@ -573,7 +570,7 @@ export function buildWizardSubmitValues(
 	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
-	const prep = Number(state.prepMinutes.trim());
+	const prep = parsePrepMinutesText(state.prepMinutes);
 	const kind = wizardKind(state);
 	const capacity = Number(state.capacityPerNight.trim());
 	const packageLengthValue = (() => {
@@ -640,12 +637,7 @@ export function buildWizardSubmitValues(
 				: undefined,
 		// Both are non-booking-only, like minQuantity: a booking's preparation
 		// IS the acceptance, and its orders can never carry a pickup note.
-		prepMinutes:
-			kind !== "booking" &&
-			state.prepMinutes.trim().length > 0 &&
-			Number.isInteger(prep)
-				? prep
-				: undefined,
+		prepMinutes: kind !== "booking" && prep.ok ? prep.minutes : undefined,
 		pickupNote:
 			kind !== "booking" && state.pickupNote.trim().length > 0
 				? state.pickupNote
@@ -665,14 +657,14 @@ export function wizardHandoff(state: WizardState): {
 	initialValues: ProductFormInitialValues;
 	initialEditor: VariantEditorState;
 } {
-	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger), so a
-	// value the wizard rejects can never arrive silently truncated in the form.
+	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger; prep
+	// through parsePrepMinutesText), so a value the wizard rejects can never
+	// arrive silently truncated in the form.
 	const minQtyRaw = state.minQuantity.trim();
 	const noticeRaw = state.minNoticeDays.trim();
-	const prepRaw = state.prepMinutes.trim();
 	const minQty = minQtyRaw.length > 0 ? Number(minQtyRaw) : Number.NaN;
 	const notice = noticeRaw.length > 0 ? Number(noticeRaw) : Number.NaN;
-	const prep = prepRaw.length > 0 ? Number(prepRaw) : Number.NaN;
+	const prep = parsePrepMinutesText(state.prepMinutes);
 	return {
 		initialValues: {
 			name: state.name,
@@ -693,7 +685,10 @@ export function wizardHandoff(state: WizardState): {
 			minQuantity: Number.isInteger(minQty) && minQty > 0 ? minQty : undefined,
 			minNoticeDays:
 				Number.isInteger(notice) && notice > 0 ? notice : undefined,
-			prepMinutes: Number.isInteger(prep) && prep > 0 ? prep : undefined,
+			prepMinutes:
+				prep.ok && prep.minutes !== undefined && prep.minutes > 0
+					? prep.minutes
+					: undefined,
 			pickupNote:
 				state.pickupNote.trim().length > 0 ? state.pickupNote : undefined,
 		},

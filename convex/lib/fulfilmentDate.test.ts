@@ -6,6 +6,8 @@ import {
 	assertValidFulfilmentTime,
 	clampPrepMinutes,
 	formatPrepDuration,
+	isValidPrepMinutes,
+	parsePrepMinutesText,
 	EARLIEST_FULFILMENT_LEAD_MINUTES,
 	MAX_PREP_MINUTES,
 	composeFulfilmentMoment,
@@ -493,6 +495,45 @@ describe("formatPrepDuration — minutes stored, hours spoken", () => {
 		// broken. Anchored, because "30 min" legitimately contains "0 min".
 		for (const minutes of [30, 60, 120, 240]) {
 			expect(formatPrepDuration(minutes)).not.toMatch(/\s0 min$/);
+		}
+	});
+});
+
+describe("prep time as typed — one rule for the form, the wizard and the import", () => {
+	test("isValidPrepMinutes: whole minutes from 0 to one day", () => {
+		for (const ok of [0, 1, 120, MAX_PREP_MINUTES]) {
+			expect(isValidPrepMinutes(ok)).toBe(true);
+		}
+		for (const bad of [-1, 90.5, MAX_PREP_MINUTES + 1, Number.NaN]) {
+			expect(isValidPrepMinutes(bad)).toBe(false);
+		}
+	});
+
+	test("blank is no answer, not zero — the caller decides what blank means", () => {
+		// The form reads blank as "none"; the spreadsheet import reads it as
+		// "keep what the product has". Both need to tell it apart from "0".
+		expect(parsePrepMinutesText(undefined)).toEqual({
+			ok: true,
+			minutes: undefined,
+		});
+		expect(parsePrepMinutesText("")).toEqual({ ok: true, minutes: undefined });
+		expect(parsePrepMinutesText("   ")).toEqual({
+			ok: true,
+			minutes: undefined,
+		});
+		expect(parsePrepMinutesText("0")).toEqual({ ok: true, minutes: 0 });
+	});
+
+	test("reads whole minutes with surrounding space", () => {
+		expect(parsePrepMinutesText(" 120 ")).toEqual({ ok: true, minutes: 120 });
+		expect(parsePrepMinutesText("1440")).toEqual({ ok: true, minutes: 1440 });
+	});
+
+	test("refuses anything a seller didn't type as whole minutes", () => {
+		// Number() would have read "1e2" as 100 and "0x10" as 16 — a value the
+		// seller never typed, saved without a word.
+		for (const bad of ["1e2", "0x10", "2 hours", "90.5", "-5", "1441"]) {
+			expect(parsePrepMinutesText(bad)).toEqual({ ok: false });
 		}
 	});
 });

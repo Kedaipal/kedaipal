@@ -7,6 +7,7 @@ import {
 	type CsvOrder,
 	DEFAULT_ORDER_COLUMN_KEYS,
 	escapeCsvField,
+	fulfilmentMomentSortKey,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
 	humanizeEnum,
@@ -373,6 +374,102 @@ describe("categories column — frozen per line at sale time", () => {
 	});
 });
 
+describe("pickup notes column (z8r3fdff97)", () => {
+	const puffs: CsvOrder = {
+		...minimal,
+		deliveryMethod: "self_collect",
+		pickupSnapshot: { label: "Huff & Puff SS2", address: "22 Jalan SS2/64" },
+		items: [
+			{ name: "Ice cream puff", quantity: 6, pickupNote: "Bring an ice bag." },
+			{ name: "Cream puff", quantity: 6, pickupNote: "Side counter." },
+			{ name: "Choux", quantity: 2, pickupNote: "Bring an ice bag." },
+		],
+	};
+
+	test("a self-collect order exports its frozen notes, deduped in cart order", () => {
+		expect(cell(puffs, "Pickup notes")).toBe(
+			"Bring an ice bag. | Side counter.",
+		);
+	});
+
+	test("a delivery order prints blank even though its lines froze a note", () => {
+		// orders.create freezes the note on EVERY order; the column follows what
+		// the buyer was told, and a delivery buyer was never told to collect.
+		expect(cell({ ...puffs, deliveryMethod: "delivery" }, "Pickup notes")).toBe(
+			"",
+		);
+		expect(
+			cell(
+				{ ...puffs, deliveryMethod: "delivery", deliveryDirection: "collection" },
+				"Pickup notes",
+			),
+		).toBe("");
+	});
+
+	test("a counter sale prints blank — the buyer was standing at the counter", () => {
+		expect(cell({ ...puffs, source: "counter" }, "Pickup notes")).toBe("");
+	});
+
+	test("no notes, or lines predating the field, read blank — never 'undefined'", () => {
+		expect(cell({ ...minimal, deliveryMethod: "self_collect" }, "Pickup notes")).toBe(
+			"",
+		);
+	});
+
+	test("sits right after Pickup address, in the fulfilment group, opt-in", () => {
+		expect(CSV_COLUMNS.indexOf("Pickup notes")).toBe(
+			CSV_COLUMNS.indexOf("Pickup address") + 1,
+		);
+		expect(ORDER_COLUMNS_BY_KEY.get("pickupNotes")?.group).toBe("fulfilment");
+		expect(DEFAULT_ORDER_COLUMN_KEYS).not.toContain("pickupNotes");
+	});
+
+	test("a note that starts like a formula is escaped", () => {
+		const hostile: CsvOrder = {
+			...puffs,
+			items: [{ name: "Puff", quantity: 1, pickupNote: "=HYPERLINK(1)" }],
+		};
+		expect(ordersToCsv([hostile])).toContain("'=HYPERLINK(1)");
+	});
+});
+
+describe("fulfilment date sorts by the moment (z8r3fdff97)", () => {
+	const JUL_1_MYT = JUN_30_MYT + 24 * 60 * 60 * 1000;
+	const at = (date: number, minutes?: number): CsvOrder => ({
+		...minimal,
+		fulfilmentDate: date,
+		fulfilmentTimeMinutes: minutes,
+	});
+
+	test("same-day orders fall in time order, untimed after them", () => {
+		const nine = fulfilmentMomentSortKey(at(JUN_30_MYT, 540)) as number;
+		const threeThirty = fulfilmentMomentSortKey(at(JUN_30_MYT, 930)) as number;
+		const lastSlot = fulfilmentMomentSortKey(at(JUN_30_MYT, 1439)) as number;
+		const untimed = fulfilmentMomentSortKey(at(JUN_30_MYT)) as number;
+		expect(nine).toBeLessThan(threeThirty);
+		expect(lastSlot).toBeLessThan(untimed);
+	});
+
+	test("an untimed order never slides into the next day", () => {
+		const untimedToday = fulfilmentMomentSortKey(at(JUN_30_MYT)) as number;
+		const midnightTomorrow = fulfilmentMomentSortKey(at(JUL_1_MYT, 0)) as number;
+		expect(untimedToday).toBeLessThan(midnightTomorrow);
+	});
+
+	test("a dateless order has no value, so it sinks either way", () => {
+		expect(fulfilmentMomentSortKey(minimal)).toBeUndefined();
+		expect(fulfilmentMomentSortKey({ ...minimal, fulfilmentTimeMinutes: 600 })).toBeUndefined();
+	});
+
+	test("the Fulfilment date column sorts on it", () => {
+		const column = ORDER_COLUMNS_BY_KEY.get("fulfilmentDate");
+		if (!column) throw new Error("missing fulfilmentDate column");
+		expect(orderColumnSortValue(column, at(JUN_30_MYT, 930))).toBe(
+			fulfilmentMomentSortKey(at(JUN_30_MYT, 930)),
+		);
+	});
+});
+
 describe("the rest of the missing fields", () => {
 	test("payment reference and paid-on date export", () => {
 		const o: CsvOrder = {
@@ -393,6 +490,15 @@ describe("the rest of the missing fields", () => {
 		expect(cell(o, "Fulfilment time")).toBe("3:30 PM");
 		expect(cell(o, "Order type")).toBe("counter");
 		expect(cell(o, "Came from")).toBe("TikTok");
+	});
+	test("a self-collect pickup time exports like a delivery slot (z8r3fdff97)", () => {
+		const o: CsvOrder = {
+			...minimal,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: JUN_30_MYT,
+			fulfilmentTimeMinutes: 690,
+		};
+		expect(cell(o, "Fulfilment time")).toBe("11:30 AM");
 	});
 	test("a legacy order with no stamped source reads as storefront", () => {
 		expect(cell(minimal, "Order type")).toBe("storefront");
@@ -514,7 +620,7 @@ describe("the registry never leaks a secret", () => {
 });
 
 describe("default column set", () => {
-	test("is a real subset — the table opens readable, not with 36 columns", () => {
+	test("is a real subset — the table opens readable, not with every column", () => {
 		expect(DEFAULT_ORDER_COLUMN_KEYS.length).toBeGreaterThan(0);
 		expect(DEFAULT_ORDER_COLUMN_KEYS.length).toBeLessThan(
 			ALL_ORDER_COLUMN_KEYS.length,

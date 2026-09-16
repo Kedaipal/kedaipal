@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import {
 	isMytMidnight,
+	isValidPrepMinutes,
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
 } from "./lib/fulfilmentDate";
@@ -79,7 +80,7 @@ function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
  * across cart items and floor the fulfilment TIME with it. */
 function sanitizePrepMinutes(raw: number | undefined): number | undefined {
 	if (raw === undefined) return undefined;
-	if (!Number.isInteger(raw) || raw < 0 || raw > MAX_PREP_MINUTES) {
+	if (!isValidPrepMinutes(raw)) {
 		throw new ConvexError(
 			`Prep time must be a whole number of minutes between 0 and ${MAX_PREP_MINUTES}`,
 		);
@@ -1539,6 +1540,11 @@ const importProductValidator = v.object({
 	// a client that predates the column, or any hand-made sheet, still imports —
 	// absent reads as active on the create path below.
 	active: v.optional(v.boolean()),
+	// Order rules (z8r3fdff97), from the sheet's `prep_minutes` / `pickup_note`.
+	// Absent = the cell was blank = KEEP what an existing product has; `0`
+	// clears prep. See `importOrderRules`.
+	prepMinutes: v.optional(v.number()),
+	pickupNote: v.optional(v.string()),
 	options: v.array(optionAxisValidator),
 	variants: v.array(importVariantValidator),
 });
@@ -1547,9 +1553,60 @@ type ImportProduct = {
 	name: string;
 	description?: string;
 	active?: boolean;
+	prepMinutes?: number;
+	pickupNote?: string;
 	options: OptionAxis[];
 	variants: VariantInput[];
 };
+
+type ImportOrderRules = {
+	/** Keys present only for the cells the sheet filled. A present key whose
+	 * value is `undefined` CLEARS the field (patch reads it as "remove"). */
+	patch: { prepMinutes?: number; pickupNote?: string };
+	/** The sheet carried a value that a booking listing can't hold, so it was
+	 * left out of `patch` — the preview names the skip. */
+	skippedOnBooking: boolean;
+};
+
+/**
+ * What an import writes of a product's order rules (z8r3fdff97) — through the
+ * SAME sanitizers as products.create/update, so a bad cell is refused with the
+ * same message the form would give.
+ *
+ * Blank keeps: a blank cell reaches here as `undefined` and stays out of the
+ * patch, so a price-update sheet built from the template (which now carries
+ * both columns) can never wipe a kitchen's prep windows. `0` clears prep. A
+ * note is added or replaced by import, never removed — that is done on the
+ * product, and the import screen says so.
+ *
+ * A booking listing is never written: its form hides both fields and its
+ * orders can never carry a note, so a value the seller can't see would be a
+ * setting that lies. `target` is the matched product; `undefined` on create,
+ * where the import only ever makes plain products.
+ *
+ * Validates BEFORE the booking check, so a bad cell is an error wherever it
+ * lands — one rule for the sheet, not one per matched product.
+ */
+function importOrderRules(
+	product: ImportProduct,
+	target: Doc<"products"> | undefined,
+): ImportOrderRules {
+	const patch: ImportOrderRules["patch"] = {};
+	if (product.prepMinutes !== undefined)
+		patch.prepMinutes = sanitizePrepMinutes(product.prepMinutes);
+	if (product.pickupNote !== undefined)
+		patch.pickupNote = sanitizePickupNote(product.pickupNote);
+	if (target !== undefined && effectiveKind(target.kind) === "booking") {
+		return {
+			patch: {},
+			// Only a value that would DO something counts — a `0` prep cell on a
+			// booking listing clears nothing and deserves no warning.
+			skippedOnBooking:
+				patch.prepMinutes !== undefined || patch.pickupNote !== undefined,
+		};
+	}
+	return { patch, skippedOnBooking: false };
+}
 
 type ImportClassification =
 	| { mode: "create" }
@@ -1658,12 +1715,23 @@ export const bulkUpsert = mutation({
 
 		assertNoDuplicateSkusInBatch(products);
 
-		// Classify every product (create vs update) before any writes.
-		const classified: { product: ImportProduct; c: ImportClassification }[] = [];
+		// Classify every product (create vs update) and resolve its order rules
+		// before any writes, so a bad prep or note cell refuses the chunk before
+		// the first insert rather than partway through it.
+		const classified: {
+			product: ImportProduct;
+			c: ImportClassification;
+			rules: ImportOrderRules;
+		}[] = [];
 		for (const product of products) {
+			const c = await classifyImportProduct(ctx, args.retailerId, product);
 			classified.push({
 				product,
-				c: await classifyImportProduct(ctx, args.retailerId, product),
+				c,
+				rules: importOrderRules(
+					product,
+					c.mode === "update" ? c.product : undefined,
+				),
 			});
 		}
 
@@ -1681,7 +1749,7 @@ export const bulkUpsert = mutation({
 		let created = 0;
 		let updated = 0;
 
-		for (const { product, c } of classified) {
+		for (const { product, c, rules } of classified) {
 			if (c.mode === "create") {
 				// Same validation as the single-product create: full cartesian,
 				// integer price/stock, per-retailer SKU uniqueness.
@@ -1710,6 +1778,10 @@ export const bulkUpsert = mutation({
 					// path — and archived products came back live on the storefront.
 					// `?? true` keeps every hand-made sheet behaving as before.
 					active: product.active ?? true,
+					// Sanitized; `0` / blank store nothing — the same "no rule" spelling
+					// products.create uses.
+					prepMinutes: rules.patch.prepMinutes,
+					pickupNote: rules.patch.pickupNote,
 					channel: "whatsapp",
 					createdAt: now,
 					updatedAt: now,
@@ -1721,6 +1793,8 @@ export const bulkUpsert = mutation({
 					name: product.name.trim(),
 					description: product.description,
 					currency: args.currency,
+					// Only the cells the sheet filled — see `importOrderRules`.
+					...rules.patch,
 					updatedAt: now,
 				});
 				// Update matched variants in place; skip unmatched (never add a new
@@ -1777,7 +1851,74 @@ type PreviewEntry = {
 	 * number. Capped per product — the point is to make the risk concrete, not
 	 * to render a spreadsheet. */
 	stockIncreaseSamples: { sku: string; from: number; to: number }[];
+	/** What the import does to the prep window (z8r3fdff97), in minutes; `null`
+	 * on either side = none. `null` overall = no change (a blank cell keeps, or
+	 * the sheet repeats the stored value). */
+	prepChange: { from: number | null; to: number | null } | null;
+	/** Whether the import adds or replaces the pickup note. Never "removed" —
+	 * a blank cell keeps the note; removing one is done on the product. */
+	pickupNoteChange: "added" | "changed" | null;
 };
+
+/** A plan entry for a product the import can't apply — every count zeroed, the
+ * reason carried as its only warning. */
+function previewErrorEntry(
+	product: ImportProduct,
+	autoFilled: number,
+	err: unknown,
+): PreviewEntry {
+	return {
+		name: product.name,
+		action: "error",
+		productId: null,
+		variantCount: product.variants.length,
+		changedVariants: 0,
+		skippedVariants: 0,
+		autoFilled,
+		warnings: [(err as Error).message],
+		stockChanges: 0,
+		stockIncreases: 0,
+		stockIncreaseSamples: [],
+		prepChange: null,
+		pickupNoteChange: null,
+	};
+}
+
+/**
+ * The order-rule half of a preview entry (z8r3fdff97): the diff against what
+ * the product holds, plus the warnings that say where a value won't bite —
+ * a booking listing skips both fields, and a product needing a day or more of
+ * notice has no same-day clock for prep to move (the form's amber note, said
+ * again where the import sets it).
+ */
+function previewOrderRules(
+	rules: ImportOrderRules,
+	target: Doc<"products"> | undefined,
+): Pick<PreviewEntry, "prepChange" | "pickupNoteChange"> & {
+	warnings: string[];
+} {
+	const warnings: string[] = [];
+	if (rules.skippedOnBooking)
+		warnings.push(
+			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+	let prepChange: PreviewEntry["prepChange"] = null;
+	if ("prepMinutes" in rules.patch) {
+		const from = target?.prepMinutes ?? null;
+		const to = rules.patch.prepMinutes ?? null;
+		if (from !== to) prepChange = { from, to };
+		const notice = target?.minNoticeDays ?? 0;
+		if (to !== null && notice > 0)
+			warnings.push(
+				`Needs ${notice} day${notice === 1 ? "" : "s"}' notice, so prep time won't change what buyers can pick`,
+			);
+	}
+	let pickupNoteChange: PreviewEntry["pickupNoteChange"] = null;
+	const note = rules.patch.pickupNote;
+	if (note !== undefined && note !== target?.pickupNote)
+		pickupNoteChange = target?.pickupNote === undefined ? "added" : "changed";
+	return { prepChange, pickupNoteChange, warnings };
+}
 
 /** Per-product cap on `stockIncreaseSamples`. */
 const MAX_STOCK_SAMPLES_PER_PRODUCT = 5;
@@ -1813,22 +1954,17 @@ export const bulkUpsertPreview = query({
 			autoFilledTotal += autoFilled;
 
 			let c: ImportClassification;
+			let rules: ImportOrderRules;
 			try {
 				c = await classifyImportProduct(ctx, args.retailerId, product);
+				// The same sanitizers bulkUpsert runs, so a bad prep or note cell
+				// is this product's error line here — never a thrown preview.
+				rules = importOrderRules(
+					product,
+					c.mode === "update" ? c.product : undefined,
+				);
 			} catch (err) {
-				plan.push({
-					name: product.name,
-					action: "error",
-					productId: null,
-					variantCount: product.variants.length,
-					changedVariants: 0,
-					skippedVariants: 0,
-					autoFilled,
-					warnings: [(err as Error).message],
-					stockChanges: 0,
-					stockIncreases: 0,
-					stockIncreaseSamples: [],
-				});
+				plan.push(previewErrorEntry(product, autoFilled, err));
 				continue;
 			}
 
@@ -1838,22 +1974,11 @@ export const bulkUpsertPreview = query({
 					const options = normalizeOptionsOrThrow(product.options);
 					validateVariantSet(options, product.variants);
 				} catch (err) {
-					plan.push({
-						name: product.name,
-						action: "error",
-						productId: null,
-						variantCount: product.variants.length,
-						changedVariants: 0,
-						skippedVariants: 0,
-						autoFilled,
-						warnings: [(err as Error).message],
-						stockChanges: 0,
-						stockIncreases: 0,
-						stockIncreaseSamples: [],
-					});
+					plan.push(previewErrorEntry(product, autoFilled, err));
 					continue;
 				}
 				creates++;
+				const orderRules = previewOrderRules(rules, undefined);
 				plan.push({
 					name: product.name,
 					action: "create",
@@ -1862,12 +1987,14 @@ export const bulkUpsertPreview = query({
 					changedVariants: product.variants.filter((vr) => vr.active).length,
 					skippedVariants: 0,
 					autoFilled,
-					warnings: [],
+					warnings: orderRules.warnings,
 					// A new product has no stored count to overwrite — its stock comes
 					// from the sheet regardless of the `updateStock` choice.
 					stockChanges: 0,
 					stockIncreases: 0,
 					stockIncreaseSamples: [],
+					prepChange: orderRules.prepChange,
+					pickupNoteChange: orderRules.pickupNoteChange,
 				});
 			} else {
 				updates++;
@@ -1912,6 +2039,7 @@ export const bulkUpsertPreview = query({
 						}
 					}
 				}
+				const orderRules = previewOrderRules(rules, c.product);
 				plan.push({
 					name: product.name,
 					action: "update",
@@ -1920,10 +2048,12 @@ export const bulkUpsertPreview = query({
 					changedVariants: changed,
 					skippedVariants: skipped,
 					autoFilled,
-					warnings,
+					warnings: [...orderRules.warnings, ...warnings],
 					stockChanges,
 					stockIncreases,
 					stockIncreaseSamples,
+					prepChange: orderRules.prepChange,
+					pickupNoteChange: orderRules.pickupNoteChange,
 				});
 			}
 		}

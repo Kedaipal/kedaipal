@@ -643,6 +643,21 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 		expect(hits("changed mind")).toBe(true);
 	});
 
+	test("finds a self-collect order by its pickup note — not a delivery order carrying the same frozen note (z8r3fdff97)", () => {
+		const lines = [
+			{
+				name: "Ice cream puff",
+				quantity: 6,
+				pickupNote: "Bring an ice bag.",
+			},
+		];
+		const collect = order({ deliveryMethod: "self_collect", items: lines });
+		const delivered = order({ deliveryMethod: "delivery", items: lines });
+		const search = buildInboxPredicate({ searchText: "ice bag" });
+		expect(search(collect)).toBe(true);
+		expect(search(delivered)).toBe(false);
+	});
+
 	test("is case-insensitive and still rejects a genuine miss", () => {
 		expect(hits("PUCHONG")).toBe(true);
 		expect(hits("kuala lumpur")).toBe(false);

@@ -285,6 +285,32 @@ export function clampPrepMinutes(minutes: number | undefined): number {
 	return i;
 }
 
+/** Whether a submitted prep window is one the server stores: a whole number of
+ * minutes in [0, MAX_PREP_MINUTES]. The judge `sanitizePrepMinutes` uses, so
+ * the seller-side doors (form, wizard, spreadsheet import) cannot drift from it. */
+export function isValidPrepMinutes(minutes: number): boolean {
+	return (
+		Number.isInteger(minutes) && minutes >= 0 && minutes <= MAX_PREP_MINUTES
+	);
+}
+
+/**
+ * A prep window typed as TEXT — a form field or a spreadsheet cell. Blank is
+ * `minutes: undefined` (the caller decides what blank means: "none" in the
+ * form, "keep what the product has" in an import). Digits only, so `1e2`,
+ * `0x10`, `90.5` and `2 hours` are refused rather than quietly read as a number
+ * the seller never typed.
+ */
+export function parsePrepMinutesText(
+	raw: string | undefined,
+): { ok: true; minutes: number | undefined } | { ok: false } {
+	const trimmed = (raw ?? "").trim();
+	if (trimmed.length === 0) return { ok: true, minutes: undefined };
+	if (!/^\d+$/.test(trimmed)) return { ok: false };
+	const minutes = Number.parseInt(trimmed, 10);
+	return isValidPrepMinutes(minutes) ? { ok: true, minutes } : { ok: false };
+}
+
 /** Minutes since MYT midnight for an arbitrary instant. */
 export function mytMinutesOfDay(now: number = Date.now()): number {
 	return Math.floor(((now + MYT_OFFSET_MS) % DAY_MS) / MINUTE_MS);

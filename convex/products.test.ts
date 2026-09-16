@@ -62,11 +62,20 @@ const baseProduct = (retailerId: string, opts: BaseOpts = {}) => ({
 /** Build a single-variant import product (the grouped bulkUpsert shape). */
 function importSingle(
 	name: string,
-	opts: { sku?: string; price: number; stock: number; description?: string },
+	opts: {
+		sku?: string;
+		price: number;
+		stock: number;
+		description?: string;
+		prepMinutes?: number;
+		pickupNote?: string;
+	},
 ) {
 	return {
 		name,
 		description: opts.description,
+		prepMinutes: opts.prepMinutes,
+		pickupNote: opts.pickupNote,
 		options: [] as { name: string; values: string[] }[],
 		variants: [
 			{
@@ -3060,5 +3069,218 @@ describe("prep time + pickup note (z8r3fdff97)", () => {
 		expect(row?.prepMinutes).toBe(90);
 		expect(row?.pickupNote).toBe("Collect from the side counter.");
 		expect(row?.orderedAt).toBeUndefined();
+	});
+});
+
+describe("prep time + pickup note — spreadsheet import (z8r3fdff97)", () => {
+	async function seedPuff(
+		t: ReturnType<typeof setup>,
+		extra: { prepMinutes?: number; pickupNote?: string; minNoticeDays?: number } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Ice Cream Puff", sku: "PUFF-1" }),
+			...extra,
+		});
+		return { retailer, asA, productId };
+	}
+	const puffRow = (opts: { prepMinutes?: number; pickupNote?: string }) =>
+		importSingle("Ice Cream Puff", { sku: "PUFF-1", price: 450, stock: 40, ...opts });
+
+	test("a created product stores both through the same sanitizers as the form", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				importSingle("Puff", {
+					price: 450,
+					stock: 40,
+					prepMinutes: 120,
+					pickupNote: "  Side counter.\n\nBring an ice bag.  ",
+				}),
+				importSingle("Tart", { price: 300, stock: 20, prepMinutes: 0, pickupNote: "" }),
+			],
+		});
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
+		const puff = all.find((p) => p.name === "Puff");
+		expect(puff?.prepMinutes).toBe(120);
+		expect(puff?.pickupNote).toBe("Side counter. Bring an ice bag.");
+		// 0 and "" store nothing — the one spelling for "no rule".
+		const tart = all.find((p) => p.name === "Tart");
+		expect(tart?.prepMinutes).toBeUndefined();
+		expect(tart?.pickupNote).toBeUndefined();
+	});
+
+	test("blank cells KEEP what an existing product has", async () => {
+		// The template now carries both columns, so a price-update sheet built
+		// from it arrives with them blank. That must never wipe a kitchen's
+		// prep windows.
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t, {
+			prepMinutes: 90,
+			pickupNote: "Side counter.",
+		});
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [puffRow({})],
+		});
+		const row = await asA.query(api.products.get, { productId });
+		expect(row?.variants[0]?.price).toBe(450);
+		expect(row?.prepMinutes).toBe(90);
+		expect(row?.pickupNote).toBe("Side counter.");
+	});
+
+	test("0 clears prep; a new note replaces the old one", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t, {
+			prepMinutes: 90,
+			pickupNote: "Side counter.",
+		});
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [puffRow({ prepMinutes: 0, pickupNote: "Front counter." })],
+		});
+		const row = await asA.query(api.products.get, { productId });
+		expect(row?.prepMinutes).toBeUndefined();
+		expect(row?.pickupNote).toBe("Front counter.");
+	});
+
+	test("a bad prep or note refuses the whole chunk before anything is written", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t, { prepMinutes: 90 });
+		for (const [bad, message] of [
+			[{ prepMinutes: 1441 }, /Prep time must be/],
+			[{ pickupNote: "x".repeat(201) }, /200 characters or fewer/],
+		] as const) {
+			await expect(
+				asA.mutation(api.products.bulkUpsert, {
+					retailerId: retailer._id,
+					currency: "MYR",
+					products: [
+						importSingle("Fresh Tart", { price: 300, stock: 5 }),
+						puffRow(bad),
+					],
+				}),
+			).rejects.toThrow(message);
+		}
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
+		expect(all.map((p) => p.name)).toEqual(["Ice Cream Puff"]);
+		const row = await asA.query(api.products.get, { productId });
+		expect(row?.prepMinutes).toBe(90);
+	});
+
+	test("a booking listing matched by SKU never takes either value", async () => {
+		// Its form hides both and its orders can never carry a note — a value
+		// written here would be a setting the seller can't see.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot", sku: "PLOT-1" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				importSingle("Riverside Plot", {
+					sku: "PLOT-1",
+					price: 9000,
+					stock: 5,
+					prepMinutes: 120,
+					pickupNote: "Gate on the left.",
+				}),
+			],
+		});
+		const listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.variants[0]?.price).toBe(9000);
+		expect(listing?.prepMinutes).toBeUndefined();
+		expect(listing?.pickupNote).toBeUndefined();
+	});
+
+	test("preview: an invalid value is that product's error line, never a thrown query", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t);
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [
+				puffRow({ prepMinutes: 90.5 }),
+				importSingle("Fresh Tart", { price: 300, stock: 5, prepMinutes: 30 }),
+			],
+		});
+		expect(preview.plan[0]?.action).toBe("error");
+		expect(preview.plan[0]?.warnings[0]).toMatch(/Prep time must be/);
+		expect(preview.plan[1]?.action).toBe("create");
+		expect(preview.plan[1]?.prepChange).toEqual({ from: null, to: 30 });
+	});
+
+	test("preview: reports what changes, and nothing for a repeated value", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t, { prepMinutes: 30 });
+		const changed = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ prepMinutes: 120, pickupNote: "Side counter." })],
+		});
+		expect(changed.plan[0]?.prepChange).toEqual({ from: 30, to: 120 });
+		expect(changed.plan[0]?.pickupNoteChange).toBe("added");
+
+		const repeated = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ prepMinutes: 30 })],
+		});
+		expect(repeated.plan[0]?.prepChange).toBeNull();
+		expect(repeated.plan[0]?.pickupNoteChange).toBeNull();
+
+		const cleared = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ prepMinutes: 0 })],
+		});
+		expect(cleared.plan[0]?.prepChange).toEqual({ from: 30, to: null });
+	});
+
+	test("preview: a replaced note reads 'changed'", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t, { pickupNote: "Side counter." });
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ pickupNote: "Front counter." })],
+		});
+		expect(preview.plan[0]?.pickupNoteChange).toBe("changed");
+	});
+
+	test("preview: says where a value won't bite — a booking listing, a product needing days of notice", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t, { minNoticeDays: 2 });
+		await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot", sku: "PLOT-1" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [
+				puffRow({ prepMinutes: 120 }),
+				importSingle("Riverside Plot", {
+					sku: "PLOT-1",
+					price: 9000,
+					stock: 5,
+					pickupNote: "Gate on the left.",
+				}),
+			],
+		});
+		expect(preview.plan[0]?.warnings).toContain(
+			"Needs 2 days' notice, so prep time won't change what buyers can pick",
+		);
+		expect(preview.plan[1]?.warnings).toContain(
+			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+		expect(preview.plan[1]?.pickupNoteChange).toBeNull();
 	});
 });

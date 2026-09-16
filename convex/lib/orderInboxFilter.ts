@@ -27,7 +27,7 @@ import {
  *
  * Built from the SAME registry the table renders and the CSV writes, so a
  * seller can search anything they can see. Built lazily (only when there IS a
- * term) because it allocates ~36 strings per order.
+ * term) because it allocates a string per column, per order.
  *
  * Every column participates, categories included — they are frozen onto the
  * order at checkout, so no lookup is needed. Sellers who want the precise

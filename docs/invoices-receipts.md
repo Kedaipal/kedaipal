@@ -67,7 +67,7 @@ Pure, render-free (unit-tested):
 
 ### The column registry (86eyrtz74)
 
-`ORDER_COLUMNS` is the single definition of "an order as a row": 36 entries,
+`ORDER_COLUMNS` is the single definition of "an order as a row": 38 entries,
 each with a `key`, a `label` (used as BOTH the CSV header and the table header),
 a `group` (sections the table's column picker), a `width`, and a `value(order)`
 accessor. **The CSV and the dashboard table render from the same array** — the
@@ -85,14 +85,24 @@ and in the column picker with no other change.
   `Subtotal + Custom work + Pickup fee + Delivery fee = Total`. Before
   86eyrtz74 there was no `Custom work` column while `computeOrderTotals` folded
   the mockup quote into `total`, so a made-to-order row silently failed to
-  reconcile. The five columns are kept **adjacent** so a human can check it by
-  eye, and a test pins that adjacency.
-- **`Categories (current)` is a LIVE lookup**, not a snapshot — categories are
-  deliberately never frozen onto an order line (see
-  [`product-categories.md`](./product-categories.md)), so the cell is what those
-  products are filed under *today*. Deduped and sorted across all lines, comma-
-  separated. Resolved by `attachOrderCategories`, batched by distinct
-  `productId` per page.
+  reconcile. The six money columns (with `Security deposit`) are kept
+  **adjacent** so a human can check it by eye, and a test pins that adjacency.
+- **`Categories` is frozen per line at sale time** (`orders.items[].categoryNames`),
+  not looked up — the cell is what those products were filed under when the
+  order was placed. Deduped and sorted across all lines, comma-separated. See
+  [`product-categories.md`](./product-categories.md).
+- **`Fulfilment time` covers self-collect too** (`z8r3fdff97`): a pickup time
+  prints like a delivery slot. The `Fulfilment date` column **sorts by the
+  moment** (`fulfilmentMomentSortKey`) — same-day orders in time order, untimed
+  after them — the same order as the inbox's "due" sort.
+- **`Pickup notes`** (`z8r3fdff97`) sits right after `Pickup address`: the
+  instruction the buyer was given, frozen per line at create
+  (`orders.items[].pickupNote`), deduped in cart order and joined with ` | `
+  (notes are sentences with their own commas). It goes through
+  `orderPickupNotes`, the same gate WhatsApp and /track use, so it is **blank on
+  delivery and counter orders** even though their lines froze a note. Not
+  default-visible in the table (it would repeat the seller's own sentence down
+  every row of that product); searchable like every column.
 - **`orders.trackingToken` is deliberately absent**, along with internal ids,
   storage ids and the `gateway*` / `confirmationPush*` plumbing. The token is
   the capability that unlocks the buyer's no-auth tracking page and exports get

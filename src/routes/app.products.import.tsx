@@ -22,6 +22,7 @@ import {
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage } from "../lib/format";
 import {
+	describeOrderRuleChanges,
 	type GroupedImportResult,
 	type GroupedProductImport,
 	VARIANT_IMPORT_COLUMNS,
@@ -84,6 +85,18 @@ const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
 			required: false,
 			notes: "Parcel weight (for delivery). Defaults to 0.",
 		},
+		{
+			column: "prep_minutes",
+			required: false,
+			notes:
+				"Minutes it takes to make, 0–1440 (120 = 2 hours). Buyers can't pick a same-day time sooner. Blank keeps the current value; 0 removes it.",
+		},
+		{
+			column: "pickup_note",
+			required: false,
+			notes:
+				"One line buyers read before collecting, max 200 characters. Blank keeps the current note — remove a note on the product itself.",
+		},
 	];
 
 type PreviewResult = FunctionReturnType<typeof api.products.bulkUpsertPreview>;
@@ -97,6 +110,8 @@ function toApiProduct(p: GroupedProductImport) {
 		name: p.name,
 		description: p.description,
 		active: p.active,
+		prepMinutes: p.prepMinutes,
+		pickupNote: p.pickupNote,
 		options: p.options,
 		variants: p.variants.map((vr) => ({
 			optionValues: vr.optionValues,
@@ -387,7 +402,12 @@ function ImportProductsRoute() {
 				) : null}
 			</section>
 
-			{parsed ? <ParseSummary parsed={parsed} /> : null}
+			{parsed ? (
+				<ParseSummary
+					parsed={parsed}
+					offerSelfCollect={retailer.offerSelfCollect !== false}
+				/>
+			) : null}
 
 			{preview ? (
 				<PreviewSection plan={preview.plan} summary={preview.summary} />
@@ -463,7 +483,24 @@ function ImportProductsRoute() {
 	);
 }
 
-function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
+function ParseSummary({
+	parsed,
+	offerSelfCollect,
+}: {
+	parsed: GroupedImportResult;
+	/** `retailers.offerSelfCollect` — a pickup note reaches no buyer without it. */
+	offerSelfCollect: boolean;
+}) {
+	const withPrep = parsed.products.filter(
+		(p) => (p.prepMinutes ?? 0) > 0,
+	).length;
+	const withNote = parsed.products.filter(
+		(p) => p.pickupNote !== undefined,
+	).length;
+	// Drift between a product's rows ("Multiple prep times; using 2 hours").
+	// Computed by the grouping all along and never shown until z8r3fdff97 —
+	// a warning nobody can read is a silent last-row-wins.
+	const warned = parsed.products.filter((p) => p.warnings.length > 0);
 	return (
 		<section className="flex flex-col gap-3">
 			<div className="flex flex-wrap items-center gap-3 text-xs">
@@ -476,6 +513,16 @@ function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 				{parsed.summary.autoFilledCount > 0 ? (
 					<span className="text-muted-foreground">
 						{parsed.summary.autoFilledCount} auto-filled
+					</span>
+				) : null}
+				{withPrep > 0 ? (
+					<span className="text-muted-foreground">
+						Prep time on {withPrep}
+					</span>
+				) : null}
+				{withNote > 0 ? (
+					<span className="text-muted-foreground">
+						Pickup note on {withNote}
 					</span>
 				) : null}
 				{parsed.errorRows.length > 0 ? (
@@ -499,7 +546,8 @@ function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 						This file came from an export, so it carries{" "}
 						{parsed.summary.ignoredColumns.length} extra column
 						{parsed.summary.ignoredColumns.length === 1 ? "" : "s"} for
-						reference. Import updates prices, names and weight —{" "}
+						reference. Import updates names, descriptions, prices, weights,
+						prep times and pickup notes —{" "}
 						<span className="font-medium text-foreground">
 							changes to {parsed.summary.ignoredColumns.join(", ")} won't be
 							applied.
@@ -507,6 +555,39 @@ function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 						Edit those on the product itself. Stock is its own choice below.
 					</p>
 				</div>
+			) : null}
+			{withNote > 0 && !offerSelfCollect ? (
+				<div className="flex gap-2.5 rounded-xl border border-border bg-muted/40 p-3 text-sm">
+					<Info
+						className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+						aria-hidden="true"
+					/>
+					<p className="text-muted-foreground">
+						Pickup notes are saved, but buyers only see them once your store
+						offers self-collect —{" "}
+						<Link
+							to="/app/settings"
+							search={{ tab: "fulfilment" }}
+							className="font-medium text-foreground underline underline-offset-2"
+						>
+							Settings → Fulfilment
+						</Link>
+						.
+					</p>
+				</div>
+			) : null}
+			{warned.length > 0 ? (
+				<ul className="flex flex-col gap-1 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+					{warned.map((p) => (
+						<li
+							key={p.name}
+							className="text-[13px] text-amber-800 dark:text-amber-300"
+						>
+							<span className="font-medium">{p.name}:</span>{" "}
+							{p.warnings.join("; ")}
+						</li>
+					))}
+				</ul>
 			) : null}
 			{parsed.errorRows.length > 0 ? (
 				<ul className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3">
@@ -557,7 +638,15 @@ function PreviewSection({
 						</div>
 						<p className="mt-1 text-xs text-muted-foreground">
 							{p.action === "create"
-								? `${p.variantCount} variant${p.variantCount === 1 ? "" : "s"}${p.autoFilled > 0 ? ` · ${p.autoFilled} auto-filled inactive` : ""}`
+								? [
+										`${p.variantCount} variant${p.variantCount === 1 ? "" : "s"}`,
+										p.autoFilled > 0
+											? `${p.autoFilled} auto-filled inactive`
+											: null,
+										...describeOrderRuleChanges(p),
+									]
+										.filter(Boolean)
+										.join(" · ")
 								: p.action === "update"
 									? // "changed" counts PRICE changes only — stock is its own
 										// opt-in choice with its own counts below. Saying
@@ -574,6 +663,7 @@ function PreviewSection({
 											p.skippedVariants > 0
 												? `${p.skippedVariants} skipped`
 												: null,
+											...describeOrderRuleChanges(p),
 										]
 											.filter(Boolean)
 											.join(" · ")
@@ -699,7 +789,8 @@ function StockChoice({
 							<>
 								Off — your sheet's <strong>stock</strong> column is ignored for
 								products you already have, so sales made since you exported are
-								kept. Prices, names, descriptions and weights update either way.
+								kept. Prices, names, descriptions, weights, prep times and pickup
+								notes update either way.
 							</>
 						)}
 					</span>

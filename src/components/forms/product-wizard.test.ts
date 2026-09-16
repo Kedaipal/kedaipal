@@ -231,6 +231,25 @@ describe("wizardStepIssues", () => {
 			wizardStepIssues({ ...base, minQuantity: "20", minNoticeDays: "0" }, 5),
 		).toHaveLength(0);
 	});
+
+	it("prep time takes whole minutes as TYPED — '1e2' is not 100 (z8r3fdff97)", () => {
+		const base = browniesState();
+		for (const bad of ["1e2", "0x10", "90.5", "1441"]) {
+			expect(
+				wizardStepIssues({ ...base, prepMinutes: bad }, 5).map((i) => i.field),
+			).toEqual(["prepMinutes"]);
+		}
+		expect(wizardStepIssues({ ...base, prepMinutes: " 120 " }, 5)).toHaveLength(
+			0,
+		);
+		// Nothing the step refuses can reach the submit values either.
+		expect(
+			buildWizardSubmitValues({ ...base, prepMinutes: "1e2" }).prepMinutes,
+		).toBeUndefined();
+		expect(
+			buildWizardSubmitValues({ ...base, prepMinutes: "120" }).prepMinutes,
+		).toBe(120);
+	});
 });
 
 describe("buildWizardSubmitValues", () => {

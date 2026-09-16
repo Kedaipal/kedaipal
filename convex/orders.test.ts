@@ -10042,4 +10042,48 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		// The buyer is still holding the old instruction in their chat.
 		expect(o?.items[0]?.pickupNote).toBe("Side counter — ring the bell.");
 	});
+
+	test("the export carries the pickup time and the note AS TOLD — and never on a delivery", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(
+			t,
+			0,
+			"Side counter, ring the bell.",
+		);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId: collectId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+			fulfilmentTimeMinutes: 11 * 60 + 30,
+		});
+		const { shortId: deliveryId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Edited after both orders were placed — the export must not follow it.
+		await asA.mutation(api.products.update, {
+			productId,
+			pickupNote: "Front door now.",
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilmentTime", "pickupNotes"],
+		});
+		const lines = csv.split("\r\n");
+		expect(lines[0]).toBe("Order ID,Fulfilment time,Pickup notes");
+		expect(lines).toContain(
+			`${collectId},11:30 AM,"Side counter, ring the bell."`,
+		);
+		expect(lines).toContain(`${deliveryId},,`);
+	});
 });

@@ -23,6 +23,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
+	parsePrepMinutesText,
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	MAX_PICKUP_NOTE_LENGTH,
@@ -1056,22 +1057,18 @@ export function ProductForm({
 		0,
 	);
 	// Prep window (z8r3fdff97) — blank = none; else whole minutes in
-	// (0, MAX_PREP_MINUTES]. Mirrors the server's sanitizePrepMinutes, which is
-	// the judge; this exists so the seller is told BEFORE the round trip.
+	// [0, MAX_PREP_MINUTES], digits only — the same parser the spreadsheet
+	// import uses. The server's sanitizePrepMinutes is the judge; this exists so
+	// the seller is told BEFORE the round trip.
 	const prepTrimmed = prepDraft.trim();
-	const prepParsed = prepTrimmed.length === 0 ? 0 : Number(prepTrimmed);
-	const prepValid =
-		prepTrimmed.length === 0 ||
-		(Number.isInteger(prepParsed) &&
-			prepParsed >= 0 &&
-			prepParsed <= MAX_PREP_MINUTES);
+	const prepText = parsePrepMinutesText(prepDraft);
+	const prepValid = prepText.ok;
+	const prepParsed = prepText.ok ? (prepText.minutes ?? 0) : 0;
 	// A notice of a day or more removes same-day ordering entirely, and prep
 	// only ever moves the clock WITHIN today — so the two together leave the
 	// prep value inert. Said out loud rather than enforced: a seller loosening
 	// notice back to 0 should find their prep window still there.
 	const prepInertUnderNotice =
-		prepValid &&
-		prepTrimmed.length > 0 &&
 		prepParsed > 0 &&
 		Number.parseInt(minNoticeDraft, 10) > 0;
 	const pickupNoteLength = pickupNoteDraft.replace(/\s+/g, " ").trim().length;

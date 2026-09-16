@@ -2,6 +2,59 @@
 
 Review of the current bulk import flow and a prioritized list of features that would measurably help retailers. Not a plan — a reference menu to pull from when we pick up the next round of work.
 
+## Shipped — prep time + pickup note are importable (2026-09, `z8r3fdff97`)
+
+A product's two newest order rules — **prep time in minutes** and the **pickup
+note** buyers read before collecting (see
+[`fulfilment-date.md`](./fulfilment-date.md)) — are the first order rules the
+sheet can **write**, not just report.
+
+- **Columns 12–13 of the template**, appended after `weight_grams`:
+  `prep_minutes`, `pickup_note`. Appended because columns 1–11 promise their
+  names and positions forever; they sit in the template block (not the report)
+  because they are importable. The downloadable template carries a
+  made-to-order example row (`120` / "Bring an ice bag…"), which is how a seller
+  learns the unit is minutes.
+- **Blank keeps.** A blank cell never changes the product, so a price-update
+  sheet built from the template — which now carries both columns — cannot wipe
+  a kitchen's prep windows. `0` clears prep. A note is added or replaced by
+  import but never removed; that is done on the product, and the schema table
+  says so. The same precedent as `weight_grams`.
+- **Last non-blank wins across a product's rows.** A seller fills prep once on
+  the first row of a six-flavour product; the five blank rows after it must not
+  erase it. Non-blank values that disagree raise a drift warning ("Multiple prep
+  times; using 2 hours").
+- **One rule on every door.** Cells parse through `parsePrepMinutesText`
+  (digits only — `1e2` is refused, not read as 100) and `collapseNote` /
+  `pickupNoteFits`, the helpers the product form and wizard use, so a bad cell
+  is a row error with its spreadsheet row number. The server re-validates
+  through `sanitizePrepMinutes` / `sanitizePickupNote`, the create/update
+  sanitizers (`importOrderRules` in `convex/products.ts`).
+- **Booking listings are skipped.** Their form hides both fields and their
+  orders never carry a note, so a SKU-matched booking listing takes neither
+  value and the preview says so. The export writes both blank for bookings, so a
+  round trip never produces that warning.
+- **The preview says what changes and where it won't bite:** "prep time 30 min →
+  2 hours · pickup note added" per product, plus a warning when a product needs
+  a day or more of notice (prep can't move a same-day clock that doesn't exist).
+  The import screen adds a "Prep time on N · Pickup note on M" count and, when
+  the store doesn't offer self-collect, a notice that notes are saved but no
+  buyer sees them until it does.
+- **The grouping warnings finally render.** `products[].warnings` (name and
+  description drift, and now these) were computed since the variant rework and
+  never shown — a silent last-row-wins. The parse summary lists them.
+
+`min_notice_days` stays report-only for now — a deliberate scope line, not an
+oversight: it has its own calendar semantics and booking interplay. The import
+screen still names it as ignored.
+
+**Known sibling, NOT changed here:** the update path writes
+`description: product.description`, and a patch reads `undefined` as "remove",
+so a hand-made sheet with blank description cells clears those descriptions.
+Exports always fill the column, so the round trip is safe; a template-based
+price update is not. It predates this change and wants its own decision (blank
+keeps, like the order rules, is the likely answer).
+
 ## Shipped — the export became a catalogue report (2026-08-28, `86eyrtz74`)
 
 The export used to be *only* an import template: eleven columns, the exact shape
@@ -13,14 +66,16 @@ It now does **two jobs in one file**, in a deliberate order:
 
 1. **Columns 1–11 are unchanged** (`PRODUCT_IMPORT_ROUNDTRIP_COLUMNS`), same
    names, same positions, forever. The export → edit → re-import round-trip is
-   untouched.
-2. **Columns 12–24 are the report** (`EXPORT_ONLY_COLUMNS`): `currency`,
+   untouched. (Since `z8r3fdff97` the template block is 1–13 — see above.)
+2. **Columns 12–24 are the report** (`EXPORT_ONLY_COLUMNS`; 14–26 since
+   `z8r3fdff97`): `currency`,
    `categories`, `product_status`, `variant_status`, `storefront`,
    `product_url`, `min_order_qty`, `min_notice_days`, `stock_policy`,
    `needs_mockup`, `custom_line`, `reserved`, `photos`.
 
-**The import ignores every report column but one** — `bulkUpsert` only ever
-patches name/description/currency and price/onHand/parcelWeightG, so
+**The import ignores every report column but one** (two since `product_status`
+was fixed, below) — `bulkUpsert` only ever patches name/description/currency and
+price/onHand/parcelWeightG (plus prep time and pickup note since `z8r3fdff97`), so
 re-importing an edited sheet can never clobber them, but it also cannot apply an
 edit to them. That would be a silent no-op, so `exportOnlyColumnsPresent()`
 detects them and the import screen says out loud which columns won't be applied.
@@ -53,12 +108,10 @@ Three rules keep it safe and narrow:
 - The import screen's ignored-columns notice correctly omits it, since it is not
   ignored.
 
-**Known sibling, NOT fixed here:** `product_status` has the same shape —
-`bulkUpsert` hardcodes `active: true` when creating a product, so re-importing
-an exported *archived* product brings it back live. That predates this change
-(archived products were already exported whenever the page filter included
-them), so it is left alone rather than silently altering behaviour under a
-different ticket. Worth a follow-up.
+**Known sibling, since fixed:** `product_status` had the same shape —
+`bulkUpsert` hardcoded `active: true` when creating a product, so re-importing
+an exported *archived* product brought it back live. It is now read back too
+(`active: product.active ?? true` on the create path), with a test.
 
 **Categories** come from `categories.namesByProduct` — a query of its own, not a
 field on `products.listAll`, because that list is a hot read on every dashboard
@@ -119,7 +172,8 @@ The importer + exporter were reworked for the variant schema (subtask of
   imported (avoids a dual storage-id/URL model) — added per product in the editor.
 - **Caps:** `MAX_BULK_IMPORT_BATCH = 50` now counts **variant rows** (the client
   chunks products to stay under it); `MAX_VARIANTS_PER_PRODUCT = 50`;
-  `MAX_PRODUCTS_PER_RETAILER = 50` (current cap).
+  `MAX_PRODUCTS_PER_RETAILER = 50` (the cap then; 200 since `86eyjmf4q`, in
+  `convex/lib/productCap.ts`).
 
 **Files:** parser/grouping `src/lib/product-import.ts`; CSV `src/lib/csv.ts`; XLSX
 `src/lib/xlsx.ts`; export `src/lib/product-export.ts`; UI
@@ -335,5 +389,5 @@ If only 2 days available this week: ship **#1 (Export) + #14 (Vertical Templates
 
 - **Mobile-first** — most retailers will import from their phone; drop-zone and preview table must survive narrow viewports.
 - **Multi-tenant from day one** — every feature must respect `retailerId` ownership checks already in `convex/products.ts`.
-- **Caps** — `MAX_PRODUCTS_PER_RETAILER = 50` and `MAX_BULK_IMPORT_BATCH = 50` in `convex/products.ts` will need to lift before this roadmap is worth fully executing.
+- **Caps** — `MAX_PRODUCTS_PER_RETAILER = 200` (`convex/lib/productCap.ts`) and `MAX_BULK_IMPORT_BATCH = 50` (`convex/products.ts`) will need to lift before this roadmap is worth fully executing.
 - **Channel field** — bulk-created rows currently hardcode `channel: "whatsapp"`. Leave room for marketplace channels as that schema evolves.

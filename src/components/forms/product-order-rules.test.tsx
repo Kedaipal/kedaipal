@@ -146,6 +146,18 @@ describe("Order rules — prep time", () => {
 		).toBeTruthy();
 	});
 
+	it("reads what the seller typed — '1e2' is refused, not saved as 100", () => {
+		// The spreadsheet import and this field share one parser, so a value is
+		// never valid in one door and junk in the other.
+		renderForm();
+		fireEvent.change(prepInput() as HTMLInputElement, {
+			target: { value: "1e2" },
+		});
+		expect(
+			screen.getByText(/whole number of minutes between 0 and 1440/i),
+		).toBeTruthy();
+	});
+
 	it("says when a notice period has already made prep inert", () => {
 		// The state the two-field shape allows: notice ≥ 1 day removes same-day
 		// entirely, and prep only moves the clock WITHIN a day. Surfaced, not
