@@ -3,12 +3,7 @@ import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import {
-	CalendarClock,
-	Package,
-	ShoppingBag,
-	Truck,
-} from "lucide-react";
+import { Package, ShoppingBag, Truck } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
@@ -26,7 +21,6 @@ import type { Country } from "../../../convex/lib/country";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
-	formatFulfilmentDateTime,
 	fulfilmentDateBounds,
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
@@ -34,7 +28,6 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { pickLocale } from "../../../convex/lib/locale";
-import { formatEventBadge } from "../../../convex/lib/productEvent";
 import {
 	collectMinQuantityShortfalls,
 	minOrderValueShortfall,
@@ -98,6 +91,7 @@ import {
 	CheckoutTotals,
 	pendingTotalParts,
 } from "./checkout-summary";
+import { EventLockBanner, EventMomentRow } from "./event-checkout";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -1406,27 +1400,11 @@ export function CheckoutPage({
 					    top, not left to notice a missing date picker. The escape is
 					    in the same sentence as the constraint. */}
 					{eventLock ? (
-						<div className="flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
-							<p className="flex items-center gap-2 text-sm font-semibold">
-								<CalendarClock
-									className="size-4 shrink-0 text-accent"
-									aria-hidden
-								/>
-								RSVP for {formatEventBadge(eventLock)}
-							</p>
-							<p className="text-xs leading-relaxed text-muted-foreground">
-								{cart.items.length > cart.items.filter((i) => i.event).length
-									? "Everything in this order is collected together at the event — so there's no delivery option and no date to pick."
-									: "Collected at the venue below — there's no delivery option and no date to pick."}
-							</p>
-							<button
-								type="button"
-								onClick={cart.removeEventLines}
-								className="tap-target w-fit text-xs font-semibold text-accent-emphasis underline underline-offset-2"
-							>
-								Remove the RSVP and order the rest normally
-							</button>
-						</div>
+						<EventLockBanner
+							event={eventLock}
+							mixedCart={cart.items.some((i) => i.event === undefined)}
+							onRemove={cart.removeEventLines}
+						/>
 					) : null}
 
 					{/* An event whose store has no active pickup point can't say where
@@ -1737,24 +1715,7 @@ export function CheckoutPage({
 								if (eventLock) {
 									return (
 										<CheckoutSection step={3} title="When it happens">
-											<div className="flex items-center gap-2.5 rounded-xl border border-border bg-muted/50 px-3 py-3">
-												<CalendarClock
-													className="size-5 shrink-0 text-accent"
-													aria-hidden
-												/>
-												<div className="min-w-0">
-													<p className="text-sm font-semibold leading-tight">
-														{formatFulfilmentDateTime(
-															eventLock.date,
-															eventLock.timeMinutes,
-														)}
-													</p>
-													<p className="mt-0.5 text-xs text-muted-foreground">
-														Set by {storeName} for this event — the same for
-														every guest.
-													</p>
-												</div>
-											</div>
+											<EventMomentRow event={eventLock} storeName={storeName} />
 											{selectedPickup?.scheduleNote ? (
 												<p className="text-xs text-muted-foreground">
 													{selectedPickup.label} is normally available{" "}
