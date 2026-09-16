@@ -12,7 +12,6 @@ import {
 	defaultFulfilmentTimeMinutes,
 	formatFulfilmentDateTime,
 	formatFulfilmentTime,
-	hasSelectableTimeToday,
 	hhmmFromMinutes,
 	minSelectableTimeMinutes,
 	timeMinutesFromHhmm,
@@ -30,6 +29,12 @@ import {
 } from "./fulfilmentDate";
 
 const DAY = 24 * 60 * 60 * 1000;
+
+/** Does the given day still have a pickable slot at `now`? The property the
+ * deleted `hasSelectableTimeToday` wrapped (it had no production caller left
+ * once the prep floor went hours-aware) — asserted on the floor itself now. */
+const slotLeftToday = (day: number, now: number, prep = 0) =>
+	minSelectableTimeMinutes(day, now, prep) < 1440;
 
 // A reference "now": 2026-06-26 09:00 MYT == 2026-06-26 01:00 UTC.
 const NOW = Date.UTC(2026, 5, 26, 1, 0, 0);
@@ -216,7 +221,7 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		// an invented wait.
 		for (let minute = 0; minute < 1440; minute += 1) {
 			const now = AUG4 + minute * 60_000;
-			if (!hasSelectableTimeToday(now)) continue;
+			if (!slotLeftToday(AUG4, now)) continue;
 			const out = defaultFulfilmentTimeMinutes(AUG4, now) - minute;
 			expect(out).toBeGreaterThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES);
 			expect(out).toBeLessThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES + 5);
@@ -255,9 +260,9 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 			const now = AUG4 + minute * 60_000;
 			for (const day of [AUG4, AUG4 + 86_400_000]) {
 				// Skip the last minutes of the day, where no valid slot exists at
-				// all — hasSelectableTimeToday is false and the form pushes the
+				// all — no slot is left today and the form pushes the
 				// buyer to tomorrow instead.
-				if (!hasSelectableTimeToday(now) && day === AUG4) continue;
+				if (!slotLeftToday(AUG4, now) && day === AUG4) continue;
 				const def = defaultFulfilmentTimeMinutes(day, now);
 				expect(def).toBeGreaterThanOrEqual(minSelectableTimeMinutes(day, now));
 				expect(def).toBeLessThan(1440);
@@ -273,8 +278,8 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 	});
 
 	test("the last minutes of the day have no bookable slot left", () => {
-		expect(hasSelectableTimeToday(NOW_1412)).toBe(true);
-		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 50) * 60_000)).toBe(false);
+		expect(slotLeftToday(AUG4, NOW_1412)).toBe(true);
+		expect(slotLeftToday(AUG4, AUG4 + (23 * 60 + 50) * 60_000)).toBe(false);
 	});
 
 	test("HH:MM round-trips; garbage becomes NaN", () => {
@@ -411,21 +416,21 @@ describe("per-product prep time (z8r3fdff97)", () => {
 	test("prep that runs past midnight leaves today with no slot", () => {
 		// 22:00 + 4h is tomorrow, so today is out — the caller moves the buyer
 		// on, exactly as it already does in the last minutes before midnight.
-		expect(hasSelectableTimeToday(at(22), 240)).toBe(false);
-		expect(hasSelectableTimeToday(at(10), 240)).toBe(true);
+		expect(slotLeftToday(AUG4, at(22), 240)).toBe(false);
+		expect(slotLeftToday(AUG4, at(10), 240)).toBe(true);
 		// Unchanged for a store with no prep window at all.
-		expect(hasSelectableTimeToday(at(22))).toBe(true);
+		expect(slotLeftToday(AUG4, at(22))).toBe(true);
 	});
 
 	test("at the CAP, today is unselectable at every minute of the day", () => {
 		// Raised by the split-hours branch: a 24h prep makes the floor exceed
-		// the day from midnight onwards, so `hasSelectableTimeToday` is the only
+		// the day from midnight onwards, so the floor itself is the only
 		// thing standing between that seller and a checkout offering no time at
 		// all. The sweep above SKIPS today when this is false, so it would never
 		// have caught the property going wrong — this asserts it directly.
 		for (let minute = 0; minute < 1440; minute += 1) {
 			const now = AUG4 + minute * 60_000;
-			expect(hasSelectableTimeToday(now, MAX_PREP_MINUTES)).toBe(false);
+			expect(slotLeftToday(AUG4, now, MAX_PREP_MINUTES)).toBe(false);
 			expect(
 				minSelectableTimeMinutes(AUG4, now, MAX_PREP_MINUTES),
 			).toBeGreaterThanOrEqual(1440);
@@ -443,7 +448,7 @@ describe("per-product prep time (z8r3fdff97)", () => {
 			for (let minute = 0; minute < 1440; minute += 1) {
 				const now = AUG4 + minute * 60_000;
 				for (const day of [AUG4, TOMORROW]) {
-					if (day === AUG4 && !hasSelectableTimeToday(now, prep)) continue;
+					if (day === AUG4 && !slotLeftToday(AUG4, now, prep)) continue;
 					const def = defaultFulfilmentTimeMinutes(day, now, prep);
 					expect(def).toBeGreaterThanOrEqual(
 						minSelectableTimeMinutes(day, now, prep),
@@ -459,9 +464,6 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		// checkout-form.tsx and claim-checkout-page.tsx all still pass two.
 		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(
 			minSelectableTimeMinutes(AUG4, NOW_1412, 0),
-		);
-		expect(hasSelectableTimeToday(NOW_1412)).toBe(
-			hasSelectableTimeToday(NOW_1412, 0),
 		);
 		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(
 			defaultFulfilmentTimeMinutes(AUG4, NOW_1412, 0),

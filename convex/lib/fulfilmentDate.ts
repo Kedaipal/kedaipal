@@ -336,9 +336,9 @@ export function defaultFulfilmentTimeMinutes(
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 10 * 60;
 	const floor = minSelectableTimeMinutes(dateEpoch, now, prepMinutes);
-	// The day has run out of bookable slots (see hasSelectableTimeToday) —
-	// nothing valid exists to return, so hand back the last time of day and
-	// let the caller push the buyer to tomorrow.
+	// The day has run out of bookable slots — nothing valid exists to return,
+	// so hand back the last time of day and let the caller push the buyer to
+	// tomorrow (`selectableTimeWindows` comes back empty for the same case).
 	if (floor >= MINUTES_PER_DAY) return MINUTES_PER_DAY - 5;
 	// The floor IS the default: earliest possible, and by construction never
 	// below itself. The checkout's repair keeps it tracking the clock while
@@ -350,8 +350,8 @@ export function defaultFulfilmentTimeMinutes(
  * Earliest selectable time for a chosen day: the checkout lead from now
  * (rounded up to 5) when the day is today, else free. Drives the
  * `<input type="time">` floor + the submit check; near midnight the floor can
- * exceed the day — `hasSelectableTimeToday` tells the form to push the buyer
- * to tomorrow.
+ * exceed the day, which `selectableTimeWindows` reports as no slot left (and
+ * `prepFloorIssue` as "too late for today" when prep is the reason).
  *
  * `prepMinutes` (z8r3fdff97) raises that lead where the CART needs longer
  * than the flat checkout lead — the slowest item's prep time. It belongs
@@ -385,18 +385,6 @@ export function minSelectableTimeMinutes(
 		clampPrepMinutes(prepMinutes),
 	);
 	return Math.ceil((mytMinutesOfDay(now) + lead) / 5) * 5;
-}
-
-/** False only in the last half-hour before midnight, when "today" has no
- * bookable slot left. */
-export function hasSelectableTimeToday(
-	now: number = Date.now(),
-	prepMinutes = 0,
-): boolean {
-	return (
-		minSelectableTimeMinutes(todayMytMidnight(now), now, prepMinutes) <
-		MINUTES_PER_DAY
-	);
 }
 
 /** "HH:MM" (the native time-input value) → minutes since midnight, or NaN. */

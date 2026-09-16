@@ -9905,7 +9905,69 @@ describe("per-product prep time (z8r3fdff97)", () => {
 				fulfilmentDate: todayMyt(),
 				fulfilmentTimeMinutes: 23 * 60,
 			}),
-		).rejects.toThrow(/earliest day you can pick is tomorrow/);
+		).rejects.toThrow(/too late for today, pick a later day/);
+	});
+
+	test("the floor is HOURS-AWARE: a store closing before prep finishes is too late today", async () => {
+		// The first server floor counted to midnight, so an 18:00 close with a
+		// 16:30 order and 2h prep named "earliest pickup is 6:30 PM" — after
+		// the shutters were down. Build that shape relative to now.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		const now = nowMinutes();
+		const closeAt = now + 60;
+		if (closeAt > 1439) return; // too near midnight to build the shape
+		const weekday = new Date(todayMyt() + 8 * 3600_000).getUTCDay();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: Array.from({ length: 7 }, (_, i) =>
+					i === weekday ? { open: 0, close: closeAt } : { open: 0, close: 1439 },
+				),
+			},
+		);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				// Inside today's hours — only prep makes it impossible.
+				fulfilmentTimeMinutes: Math.min(closeAt, now + 30),
+			}),
+		).rejects.toThrow(/too late for today/);
+	});
+
+	test("a COLLECTION trip is exempt: the rider collects first, prep comes after", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 240);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE",
+					deliveryDirection: "collection",
+				},
+			});
+		});
+		const soon = Math.min(1439, nowMinutes() + 20);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMyt(),
+			fulfilmentTimeMinutes: soon,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.deliveryDirection).toBe("collection");
+		expect(o?.fulfilmentTimeMinutes).toBe(soon);
 	});
 
 	test("the SLOWEST item in a mixed cart sets the floor and is named", async () => {

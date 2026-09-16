@@ -46,15 +46,11 @@ import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
 	DAY_MS,
-	formatFulfilmentTime,
-	formatPrepDuration,
-	hasSelectableTimeToday,
 	hhmmFromMinutes,
 	matchesFulfilmentWindow,
-	minSelectableTimeMinutes,
-	todayMytMidnight,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
+import { prepFloorIssue, slowestPrep } from "./lib/prepFloor";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -972,11 +968,11 @@ export const create = mutation({
 		let requiresMockup = false;
 		// Strictest per-product notice override across the cart (0 = none).
 		let maxItemNoticeDays = 0;
-		// The SLOWEST item sets the whole order's time floor, the way the
-		// strictest sets its date floor. Its name is kept so the refusal can
-		// say WHICH product is the reason.
-		let maxPrepMinutes = 0;
-		let slowestProductName = "";
+		// Each line's prep window, folded after the loop by `slowestPrep` — the
+		// slowest item sets the whole order's TIME floor, the way the strictest
+		// sets its DATE floor, and its name is what the refusal quotes. The same
+		// helper the claim commit and the storefront checkout use.
+		const prepLines: { name: string; prepMinutes?: number }[] = [];
 		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
@@ -1022,10 +1018,7 @@ export const create = mutation({
 			if ((product.minNoticeDays ?? 0) > maxItemNoticeDays) {
 				maxItemNoticeDays = product.minNoticeDays ?? 0;
 			}
-			if ((product.prepMinutes ?? 0) > maxPrepMinutes) {
-				maxPrepMinutes = product.prepMinutes ?? 0;
-				slowestProductName = product.name;
-			}
+			prepLines.push({ name: product.name, prepMinutes: product.prepMinutes });
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -1173,44 +1166,35 @@ export const create = mutation({
 		// live products, never trusted from the client — the cart line carries a
 		// copy only so the buyer is stopped at the picker instead of here.
 		//
-		// ONE boolean owns whether the floor applies, so an exemption is added in
-		// one place rather than repeated across the two checks below. It is false
-		// for a seller-fixed moment: counter checkout never reaches this path,
-		// and an EVENT order (ClickUp z8r3fdff9u, landing after this) must add
-		// `&& eventLock === undefined` here — the seller set that time herself,
-		// and a prep floor refusing guests for her own 8 AM breakfast is the same
-		// bug min-notice and opening hours are already exempted from.
-		const prepFloorApplies = maxPrepMinutes > 0;
+		// Hours-aware (`prepFloorIssue` reads the store's selectable windows), so
+		// the refusal never names a time after closing or inside a lunch break,
+		// and a prep that swallows the rest of the day says "too late for today"
+		// rather than pointing at an impossible slot.
+		//
+		// ONE boolean owns whether the floor applies, so an exemption is one
+		// clause in one place:
+		//  - a COLLECTION trip is exempt: the rider collects FROM the buyer, and
+		//    the service is prepared after that, so a prep floor on the
+		//    collection time would refuse something the seller never needed;
+		//  - counter checkout never reaches this path (seller-fixed moment);
+		//  - an EVENT order (ClickUp z8r3fdff9u, landing after this) must add
+		//    `&& eventLock === undefined` here — the seller set that time
+		//    herself, the same reason min-notice and opening hours exempt it.
+		const cartPrep = slowestPrep(prepLines);
+		const isCollectionTrip =
+			effectiveDeliveryMethod === "delivery" &&
+			retailer.deliveryBooking?.deliveryDirection === "collection";
+		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
-			const now = Date.now();
-			const isToday = sanitizedFulfilmentDate === todayMytMidnight(now);
-			const prepLabel = formatPrepDuration(maxPrepMinutes);
-			// Prep is absorbed overnight, so it only ever bites on TODAY.
-			if (isToday) {
-				// A window long enough to swallow the rest of the day moves the
-				// DATE, not the time — otherwise the buyer picks today and finds
-				// no selectable time, which is a dead end rather than an answer.
-				if (!hasSelectableTimeToday(now, maxPrepMinutes)) {
-					throw new ConvexError(
-						`"${slowestProductName}" needs ${prepLabel} to prepare — the earliest day you can pick is tomorrow`,
-					);
-				}
-				const floor = minSelectableTimeMinutes(
-					sanitizedFulfilmentDate,
-					now,
-					maxPrepMinutes,
-				);
-				if (
-					sanitizedFulfilmentTime !== undefined &&
-					sanitizedFulfilmentTime < floor
-				) {
-					const verb =
-						effectiveDeliveryMethod === "self_collect" ? "pickup" : "delivery";
-					throw new ConvexError(
-						`"${slowestProductName}" needs ${prepLabel} to prepare — earliest ${verb} is ${formatFulfilmentTime(floor)}`,
-					);
-				}
-			}
+			const issue = prepFloorIssue({
+				hours: retailer.openingHours,
+				dateEpoch: sanitizedFulfilmentDate,
+				timeMinutes: sanitizedFulfilmentTime,
+				now: Date.now(),
+				prep: cartPrep,
+				kind: effectiveDeliveryMethod === "self_collect" ? "pickup" : "delivery",
+			});
+			if (issue !== null) throw new ConvexError(issue);
 		}
 		// Store opening hours (86eyp5rav): the fulfilment moment must fall inside
 		// them — a closed day rejects for BOTH methods, the time window applies
@@ -1265,11 +1249,9 @@ export const create = mutation({
 		// confirm) stay true to what this order promised even if the seller
 		// toggles the mode later — the pickupSnapshot posture. Standard stays
 		// unset (one spelling for the default; every pre-existing order).
-		const deliveryDirection =
-			effectiveDeliveryMethod === "delivery" &&
-			retailer.deliveryBooking?.deliveryDirection === "collection"
-				? ("collection" as const)
-				: undefined;
+		const deliveryDirection = isCollectionTrip
+			? ("collection" as const)
+			: undefined;
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
