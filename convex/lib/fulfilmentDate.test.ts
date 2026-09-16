@@ -5,6 +5,7 @@ import {
 	DAY_MS,
 	assertValidFulfilmentTime,
 	clampPrepMinutes,
+	formatPrepDuration,
 	EARLIEST_FULFILMENT_LEAD_MINUTES,
 	MAX_PREP_MINUTES,
 	composeFulfilmentMoment,
@@ -446,5 +447,31 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(
 			defaultFulfilmentTimeMinutes(AUG4, NOW_1412, 0),
 		);
+	});
+});
+
+describe("formatPrepDuration — minutes stored, hours spoken", () => {
+	test("says it the way a buyer would", () => {
+		expect(formatPrepDuration(30)).toBe("30 min");
+		expect(formatPrepDuration(45)).toBe("45 min");
+		expect(formatPrepDuration(60)).toBe("1 hour");
+		expect(formatPrepDuration(90)).toBe("1 hour 30 min");
+		expect(formatPrepDuration(120)).toBe("2 hours");
+		expect(formatPrepDuration(240)).toBe("4 hours");
+		expect(formatPrepDuration(1440)).toBe("24 hours");
+	});
+
+	test("no window renders as nothing, so callers need no branch", () => {
+		expect(formatPrepDuration(undefined)).toBe("");
+		expect(formatPrepDuration(0)).toBe("");
+		expect(formatPrepDuration(-5)).toBe("");
+	});
+
+	test("every preset the form offers reads as a round phrase", () => {
+		// If a preset ever formatted as "1 hour 0 min" the chip would look
+		// broken. Anchored, because "30 min" legitimately contains "0 min".
+		for (const minutes of [30, 60, 120, 240]) {
+			expect(formatPrepDuration(minutes)).not.toMatch(/\s0 min$/);
+		}
 	});
 });

@@ -43,6 +43,16 @@ export type CartItem = {
 	// raises the earliest pickable date to the strictest item in the cart.
 	// Absent on legacy persisted carts → treated as 0 (no override).
 	minNoticeDays?: number;
+	// Per-product prep window in MINUTES, frozen at add time — checkout raises
+	// the earliest pickable TIME to the slowest item in the cart, the way
+	// minNoticeDays raises the earliest DATE. Absent on legacy persisted carts
+	// → treated as 0 (no window). The server re-derives both from the live
+	// products at create and is the judge; these exist so the buyer is stopped
+	// at the picker rather than at the error.
+	prepMinutes?: number;
+	// The product's pickup note as it read when added. Shown on the cart line
+	// and the checkout summary, then frozen onto the order at create.
+	pickupNote?: string;
 	// Optional buyer reference image for a custom line. Uploaded on attach (Convex
 	// storage id; serializable so it survives cart persistence) and passed to
 	// orders.create at checkout. See docs/custom-option.md.

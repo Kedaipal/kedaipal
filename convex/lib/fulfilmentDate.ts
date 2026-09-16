@@ -257,6 +257,23 @@ export const EARLIEST_FULFILMENT_LEAD_MINUTES = 15;
  */
 export const MAX_PREP_MINUTES = MINUTES_PER_DAY;
 
+/**
+ * A prep window in the words a buyer uses — "30 min", "1 hour", "2 hours",
+ * "1 hour 30 min". Minutes is the storage unit because the floor arithmetic
+ * needs it; nobody reads "Ready in ~240 minutes" and pictures four hours.
+ *
+ * Empty string for no window, so a caller can render it unconditionally.
+ */
+export function formatPrepDuration(minutes: number | undefined): string {
+	const total = clampPrepMinutes(minutes);
+	if (total === 0) return "";
+	const hours = Math.floor(total / 60);
+	const rest = total % 60;
+	if (hours === 0) return `${rest} min`;
+	const hourPart = `${hours} hour${hours === 1 ? "" : "s"}`;
+	return rest === 0 ? hourPart : `${hourPart} ${rest} min`;
+}
+
 /** Normalise a submitted prep window into [0, MAX_PREP_MINUTES]. 0 = none. */
 export function clampPrepMinutes(minutes: number | undefined): number {
 	if (minutes === undefined || !Number.isFinite(minutes)) return 0;
