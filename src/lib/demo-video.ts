@@ -17,6 +17,9 @@
  * `<source media="…">` inside `<video>` is not honoured by modern Chrome, so the
  * swap is done in JS off `PORTRAIT_MEDIA_QUERY` — `video-demo.tsx` reads it via
  * `useSyncExternalStore` and remounts the element on change.
+ *
+ * `width`/`height` are the shipped pixels, checked against the files' own
+ * headers by `demo-video.test.ts` — the JSON-LD and the aspect rule read them.
  */
 
 export type DemoVariant = "landscape" | "portrait";
@@ -50,11 +53,16 @@ export const DEMO_VIDEO: Record<DemoVariant, DemoVideoAssets> = {
 };
 
 /**
- * Tailwind's `md` breakpoint is 768px; below it the landing is one column and
- * the phone-framed cut is the right one. Matches the CSS aspect switch on the
- * `<video>` (`aspect-[9/16] md:aspect-video`) so the box and the bytes agree.
+ * A phone held upright: narrower than Tailwind's `md` (768px) AND taller than
+ * wide. Width alone is not enough — a phone turned sideways (667×375, 740×360)
+ * is under `md` too, and a 9:16 box there is ~1.8× the height of the screen,
+ * so the captions and the phone frame can never be on screen together. That
+ * viewport keeps the 16:9 cut, which fits it the way it did before the
+ * portrait cut existed. Mirrors the CSS on the `<video>` and its wrapper
+ * (`max-md:portrait:`) so the box and the bytes always agree.
  */
-export const PORTRAIT_MEDIA_QUERY = "(max-width: 767px)";
+export const PORTRAIT_MEDIA_QUERY =
+	"(max-width: 767px) and (orientation: portrait)";
 
 export function demoVariantForViewport(portraitViewport: boolean): DemoVariant {
 	return portraitViewport ? "portrait" : "landscape";

@@ -18,7 +18,7 @@ page's "how it works": the timeline section that used to restate it is gone.
 | Copy (en / ms / zh) | `messages/*.json`, `demo_video_*` keys |
 | Encoded assets | `public/video/kedaipal-demo{,-portrait}.{webm,mp4}`, `public/img/landing/demo-poster{,-portrait}.webp` |
 | Masters (not in the repo) | `~/Workspaces/Documents/Kedaipal/10_Assets/landing/` — `use-case-demo-desktop/use-case-demo-desktop.mp4` (16:9 + music), `Use Case Demo 9x16.mp4` (9:16, silent), `use-case-demo-desktop/use-case-demo-desktop.MP3` (the music bed) |
-| Tests | `src/lib/demo-video.test.ts` (assets exist, transcript carries every beat, copy guards), `src/components/landing/video-demo.test.tsx` (cut per viewport, mute control) |
+| Tests | `src/lib/demo-video.test.ts` (assets exist and their headers match the table — WebP canvas, MP4 size + duration; transcript carries every beat; copy guards), `src/components/landing/video-demo.test.tsx` (cut per viewport, mute control, state reset + muted retry on a rotation) |
 
 ## The clip (13 Sep 2026)
 
@@ -58,29 +58,50 @@ The 29 Aug doc measured and rejected a mobile centre-crop (the wide dashboard
 shot spanned 95% of the frame) and said the real fix was **a second cut of the
 source framed for phones, served by a JS source swap**. This cut ships that:
 
-- `landscape` — 16:9, 1280×720, for `md` and up (the frame paints up to ~1000
-  CSS px inside `max-w-5xl`).
-- `portrait` — 9:16, 720×1280, below `md`. Same scenes, same soundtrack; the
-  captions sit above the phone instead of beside it. At 375 px the frame is
-  ~335×596 instead of the old 335×187 with a phone floating in navy.
+- `portrait` — 9:16, 720×1280, for **a phone held upright**: narrower than
+  `md` (768 px) *and* `(orientation: portrait)`. Same scenes, same soundtrack;
+  the captions sit above the phone instead of beside it. At 375 px the frame
+  is ~335×596 instead of the old 335×187 with a phone floating in navy.
+- `landscape` — 16:9, 1280×720, for everything else: `md` and up (the frame
+  paints up to ~1000 CSS px inside `max-w-5xl`), **and a phone turned
+  sideways**. Width alone would put a 9:16 box on a 667×375 or 740×360
+  viewport — ~1.8× the height of the screen, so the captions and the phone
+  frame could never be on screen together (caught in review, PR #274). The
+  16:9 fits that viewport the way it did before the portrait cut existed.
 
 **How the swap works, and why it is a remount.** `<source media="…">` inside
 `<video>` is not honoured by modern Chrome, and a `<video>`'s `<source>` list
 is read once at load — changing it in place does nothing without `load()`. So
-`video-demo.tsx` reads `PORTRAIT_MEDIA_QUERY` (`(max-width: 767px)`, i.e.
-Tailwind's `md`) through `useSyncExternalStore` and **keys the `<video>` on the
-variant**: rotate a phone across 768 px and the element remounts with the other
-cut, poster and observer re-armed.
+`video-demo.tsx` reads `PORTRAIT_MEDIA_QUERY` (`(max-width: 767px) and
+(orientation: portrait)`) through `useSyncExternalStore` and **keys the
+`<video>` on the variant**: rotate a phone and the element remounts with the
+other cut, poster and observer re-armed.
+
+**What survives the remount, and what doesn't.** The fresh element mounts
+paused and the old one fires no `pause` on its way out, so the player's
+per-element state — `playing`, the progress rail, the autoplay verdict — is
+reset in the same render (the React "reset state on a prop change" pattern,
+not an effect). Without that, `playing` stayed true and the corner control
+read "Pause" over a stopped clip while the centred play button, the one thing
+built for a refused autoplay, stayed hidden (review, PR #274). The visitor's
+own choices survive on purpose: sound on (`muted`) and an explicit pause
+(`userPausedRef`). An unmuted remount is the one case iOS refuses to autoplay
+without a gesture; the player then **retries muted** and the mute control
+flips to "Unmute", so the demo keeps moving and the visitor can see why it
+went quiet, rather than sitting on a stopped frame.
 
 **The server snapshot is `null`, on purpose.** Before hydration the viewport
 is unknown. Guessing landscape would paint the 16:9 poster into a phone's 9:16
 box for a frame and then swap it — a visible glitch on the one section that is
 supposed to look finished. Instead the element renders with no poster and no
 sources inside the same navy box; the box's ratio is pure CSS
-(`aspect-[9/16] md:aspect-video`, capped at `max-w-[24rem]` on phones so a tall
-frame stays inside one screen), so **nothing shifts** when the right cut
-arrives a few hundred milliseconds later. The section is below the fold, so it
-is never the LCP element and this costs no Core Web Vital.
+(`aspect-video max-md:portrait:aspect-[9/16]`, with the same
+`max-md:portrait:` variant capping the box at `max-w-[24rem]` so a tall frame
+stays inside one screen — the CSS and `PORTRAIT_MEDIA_QUERY` are the same rule
+spelled twice, and `demo-video.test.ts` pins the query), so **nothing shifts**
+when the right cut arrives a few hundred milliseconds later. The section is
+below the fold, so it is never the LCP element and this costs no Core Web
+Vital.
 
 ## Encoding
 
@@ -97,7 +118,7 @@ content; H.264 crf 30 High for Safari).
 | `kedaipal-demo.mp4` | H.264 High 1280×720 + AAC 96 kb/s, `+faststart`, 34.4 s | 1.51 MB | md+, Safari / fallback |
 | `kedaipal-demo-portrait.webm` | VP9 720×1280 + Opus 64 kb/s, 35.0 s | 1.16 MB | phones, first `<source>` |
 | `kedaipal-demo-portrait.mp4` | H.264 High 720×1280 + AAC 96 kb/s, `+faststart`, 35.0 s | 1.37 MB | phones, Safari / fallback |
-| `demo-poster.webp` / `demo-poster-portrait.webp` | WebP q72, frame 0 (the lit title card) | 15 KB / 14 KB | `poster` |
+| `demo-poster.webp` / `demo-poster-portrait.webp` | WebP q72, frame 0 (the lit title card) | 17 KB / 22 KB | `poster` |
 
 Reproduce (`$D` = the 16:9 master with music, `$P` = the 9:16 master, `$M` =
 the MP3 music bed; the 9:16 export is silent, so its audio is muxed from `$M`,
@@ -129,8 +150,8 @@ Decisions worth keeping:
   frame). The rule that the poster must be frame 0 still holds — any other
   frame jumps backwards on first play — so the head is trimmed instead: the
   poster is the lit "One link. Every order, out of the chat." card in both
-  cuts (2.7 KB → 14 KB is the text arriving), and the loop cuts from one navy
-  title card to another. The alternative measured and rejected: keep the fade
+  cuts (the dead frame was 2.7 KB; the lit card is 17 / 22 KB — that is the
+  text arriving), and the loop cuts from one navy title card to another. The alternative measured and rejected: keep the fade
   and take the poster at 0.5 s — a visible blink to dark on every first play.
   The 35 s master becomes a 34.4 s clip; the eyebrow keeps saying
   "35-second" (the edit's length) while the `VideoObject` declares the exact
@@ -152,7 +173,8 @@ Decisions worth keeping:
 
 `preload="none"` + `poster` is the whole optimisation, and it is load-bearing:
 
-- A visitor who bounces at the hero pays **~9 KB** (one poster), not 1.3 MB.
+- A visitor who bounces at the hero pays **one poster** (17 KB landscape,
+  22 KB portrait), not 1.3 MB.
 - The `<source>` elements are static once mounted — nothing is fetched until
   `play()` is called, which only happens once an `IntersectionObserver`
   (threshold 0.25) says the frame is actually on screen.
@@ -171,8 +193,10 @@ ones, in one cluster bottom-right:
   playable: a control you must hover to discover is a hidden control
   (CLAUDE.md § discoverability). Mute sits *left* of play/pause — it is the
   newer, less expected control, and the thumb lands on play/pause in the corner
-  it has always been in. The mute button carries `aria-pressed` (on = sound on)
-  and a named label in every locale (`demo_video_mute` / `demo_video_unmute`).
+  it has always been in. The mute button's name says the action, like its
+  play/pause sibling — "Unmute the soundtrack" / "Mute the soundtrack" in every
+  locale (`demo_video_mute` / `demo_video_unmute`) — with no `aria-pressed` on
+  top, which would announce the state twice.
 - **Playback starts muted, always.** That is what autoplay policy allows, and a
   landing page that starts making noise is the one thing worse than one that
   autoplays. Unmuting is a tap, which is also the only context a browser lets
@@ -187,7 +211,9 @@ ones, in one cluster bottom-right:
 - **A refused `play()` is handled, not ignored.** iOS Low Power Mode blocks
   even muted autoplay; that rejection (and reduced motion) both surface the
   same large centred play button over the poster, so the demo is never a dead
-  frame.
+  frame. A refusal while *unmuted* (only reachable after a rotation, see
+  above) is first retried muted; the centred button is for the case a tap is
+  genuinely the only way forward.
 - **A background-tab load re-arms on `visibilitychange`.** Found while
   verifying in a hidden preview pane: the observer fires while the document is
   hidden, `play()` resolves, the clip never advances, and nothing fires again
@@ -225,8 +251,10 @@ the two can't drift.
 ## When the video is replaced
 
 1. Re-run the `ffmpeg` commands above over the new masters (both cuts).
-2. Update `DEMO_UPLOAD_DATE` in `src/routes/index.tsx` and `DEMO_DURATION_ISO`
-   in `src/lib/demo-video.ts` if the length changed.
+2. Update `DEMO_UPLOAD_DATE` in `src/routes/index.tsx`, and in
+   `src/lib/demo-video.ts` the `DEMO_DURATION_ISO` and each cut's
+   `width`/`height` if they changed — `demo-video.test.ts` reads the new
+   files' headers and fails on any of the three drifting.
 3. Update `demo_video_transcript` in all three catalogs to the new captions,
    then the `CAPTION_BEATS` list in `demo-video.test.ts` — the test is the
    thing that makes a stale transcript fail instead of ship.
