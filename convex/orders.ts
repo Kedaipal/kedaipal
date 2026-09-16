@@ -1136,7 +1136,7 @@ export const create = mutation({
 			}
 		}
 		// Fulfilment time (86eyg0n8e follow-up): kept only where it means
-		// something — a delivery order WITH a date. Range-only validation by
+		// something — a delivery or self-collect order WITH a date. Range-only validation by
 		// design (see assertValidFulfilmentTime): "is the moment still ahead"
 		// is judged at checkout client-side and again at dispatch, where a past
 		// moment simply books "now" — a strict server check here would let
@@ -4127,16 +4127,30 @@ export const setDeliveryFee = mutation({
  * exists to protect the seller's lead time, and here the seller is the one
  * moving the date. The [today, +30d] range still holds (checkout's ceiling).
  *
+ * The TIME applies to delivery and self-collect alike (z8r3fdff97 — a pickup
+ * carries a time since then). A self-collect time can be cleared ("come any
+ * time that day"); a delivery's can't, because dispatch composes the rider's
+ * moment from it. Neither buyer-side clock rule binds the seller here, on
+ * purpose: opening hours (the vendor is the authority on her own exceptions)
+ * and the per-product prep floor ("the puffs are done early, come in 30 min"
+ * is exactly what this is for — and prep isn't frozen on the order, so it
+ * would judge an old order by today's product settings). A self-collect time
+ * never reaches dispatch: both providers refuse `not_delivery` before reading
+ * it.
+ *
+ * Refused on counter sales, bookings (their dates ARE the check-in and
+ * check-out) and while a claim link's payment window is live.
+ *
  * All-tier: this is a correctness escape hatch, not a feature to upsell.
  */
 export const rescheduleFulfilment = mutation({
 	args: {
 		orderId: v.id("orders"),
 		fulfilmentDate: v.number(),
-		// Only meaningful on delivery orders (mirrors create — self-collect and
-		// counter orders are date-only). Omitted → the order's existing time is
-		// kept, so a date-only change can never silently drop the clock.
-		fulfilmentTimeMinutes: v.optional(v.number()),
+		// A number sets the time (delivery or self-collect). `null` clears it —
+		// self-collect only. Omitted keeps the order's existing time, so a
+		// date-only change can never silently drop the clock.
+		fulfilmentTimeMinutes: v.optional(v.union(v.number(), v.null())),
 	},
 	handler: async (
 		ctx,
@@ -4155,6 +4169,13 @@ export const rescheduleFulfilment = mutation({
 		if (order.source === "counter")
 			throw new ConvexError(
 				"Counter orders are fulfilled on the spot — there's no date to move",
+			);
+		// A booking's fulfilment date IS its check-in (bookings.ts), so moving it
+		// here would desync the two. The order page hides the trigger; this is
+		// the backstop for a direct call.
+		if (order.deliveryMethod === "booking")
+			throw new ConvexError(
+				"This is a booking — its dates are the check-in and check-out, which can't be moved here",
 			);
 		// Collection (86eyg0n8e): the date answers "when do we collect?" — once
 		// the goods are with the seller that question is history, and moving the
@@ -4189,18 +4210,20 @@ export const rescheduleFulfilment = mutation({
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
-		const isDelivery = (order.deliveryMethod ?? "delivery") === "delivery";
-		let sanitizedTime: number | undefined;
-		if (fulfilmentTimeMinutes !== undefined && isDelivery) {
+		let nextTime = order.fulfilmentTimeMinutes;
+		if (fulfilmentTimeMinutes === null) {
+			if ((order.deliveryMethod ?? "delivery") === "delivery")
+				throw new ConvexError(
+					"A delivery keeps a time — pick a new one instead of clearing it",
+				);
+			nextTime = undefined;
+		} else if (fulfilmentTimeMinutes !== undefined) {
 			try {
-				sanitizedTime = assertValidFulfilmentTime(fulfilmentTimeMinutes);
+				nextTime = assertValidFulfilmentTime(fulfilmentTimeMinutes);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
 		}
-		const nextTime = isDelivery
-			? (sanitizedTime ?? order.fulfilmentTimeMinutes)
-			: order.fulfilmentTimeMinutes;
 
 		const now = Date.now();
 		// Audit trail in the delivery_fee_set style — compact, ASCII, greppable.

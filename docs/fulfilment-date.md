@@ -443,14 +443,16 @@ chat and records it on the order.
 
 - **`orders.rescheduleFulfilment`** (owner-or-admin via `requireRetailerAccess`,
   admin act-as audited): patches `fulfilmentDate` (+ `fulfilmentTimeMinutes` on
-  delivery orders) and writes a `fulfilment_rescheduled (from … to …)`
-  orderEvent in the `delivery_fee_set` note style. Omitting the time keeps the
-  existing one — a date-only change can never silently drop the clock. A
-  passed time on a self-collect order is ignored (mirrors create). A dateless
-  legacy order may be *given* a date (`from unset`).
+  delivery and, since `z8r3fdff97`, self-collect orders) and writes a
+  `fulfilment_rescheduled (from … to …)` orderEvent in the `delivery_fee_set`
+  note style. Omitting the time keeps the existing one — a date-only change can
+  never silently drop the clock. `null` clears a self-collect time (see the
+  update below). A dateless legacy order may be *given* a date (`from unset`).
 - **Window**: `pending`/`confirmed`/`packed` only; refused on
-  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), and
-  once a collection order's goods have arrived (`collectedAt`).
+  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), on
+  bookings (their fulfilment date IS the check-in — server backstop added in
+  `z8r3fdff97`; the order page never showed the trigger), and once a collection
+  order's goods have arrived (`collectedAt`).
 - **The hard guard is the ACTIVE Lalamove job**: a booking is frozen against
   its `quotationId` and will NOT follow the order, so rescheduling under it
   would desync the buyer's promise from the trip. Server throws; the dialog
@@ -493,3 +495,35 @@ chat and records it on the order.
   deliberately NOT bound by opening hours (the vendor is the authority on
   their own exceptions), which is also why the canonical rebook bug
   (86eyp63xn, Wagyu Walid) is fixed by this pair and not by hours alone.
+
+### Update (Sep 2026, `z8r3fdff97`): a pickup time moves too
+
+Self-collect orders carry a pickup time since the prep-time ticket (see the
+section below), so the reschedule dialog and mutation stopped treating pickup
+as date-only.
+
+- **Self-collect: set, keep or clear.** The dialog shows an optional **Pickup
+  time**, prefilled from the order, with "Optional — leave blank for any time
+  that day" and a **Clear time** button. Clearing states its consequence
+  ("Removes the 3:00 PM pickup time — the buyer can come any time that day")
+  and sends `fulfilmentTimeMinutes: null`; a blank field on an order that never
+  had a time sends nothing (keep), so the dialog never invents a time.
+- **Delivery keeps a time.** The server refuses `null` on a delivery —
+  dispatch composes the rider's moment from it. The dialog used to preview an
+  emptied delivery time as date-only while the save quietly kept the old one;
+  it now disables Save with "A delivery keeps a time — pick a new one rather
+  than clearing it", so the preview, the saved value and the toast agree.
+- **Drop-off meet-ups stay date-only**, exactly as checkout offers them: no
+  time input, and the point's frozen `scheduleNote` shows beside the date
+  ("Drop-off schedule: Every Sat 3–5pm").
+- **Neither buyer-side clock rule binds the seller.** Opening hours were
+  already exempt (above). The per-product **prep floor** is too: "the puffs
+  are done early, come in 30 min" is what this dialog is for, and
+  `prepMinutes` is not frozen on the order, so enforcing it would judge an old
+  order by today's product settings. The dialog's own passed-moment refusal is
+  the only clock rule a seller needs.
+- **A pickup time never reaches dispatch.** Lalamove and Delyva both return
+  `not_delivery` before reading the moment (`dispatchBlockReason`), and a
+  self-collect order never fires the dialog's slot-price quote. Pinned by
+  tests in `lalamove.test.ts` and `delyva.test.ts`.
+
