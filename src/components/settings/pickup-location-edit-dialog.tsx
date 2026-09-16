@@ -403,7 +403,7 @@ export function PickupLocationEditDialog({
 										placeholder="Unit 3-1, Block B"
 										autoComplete="off"
 										maxLength={UNIT_LINE_MAX_LENGTH}
-										description="Shown to buyers in front of the address, on checkout, their order page and the reminder message. Keeps the map pin intact."
+										description="Shown to buyers in front of the address — at checkout, on their order page and in their WhatsApp confirmation. Keeps the map pin intact."
 									/>
 								)}
 							</form.AppField>
