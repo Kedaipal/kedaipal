@@ -344,6 +344,7 @@ function ProductsRoute() {
 				prepMinutes: p.prepMinutes,
 				pickupNote: p.pickupNote,
 				kind: p.kind,
+				event: p.event,
 				imageCount: p.imageUrls?.length ?? 0,
 				variants: p.variants.map((vr) => ({
 					optionValues: vr.optionValues,

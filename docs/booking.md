@@ -25,6 +25,25 @@ follow the core independently.
 
 ---
 
+## Why an EVENT is not a booking (`z8r3fdff9u`)
+
+A fixed-date event guests RSVP to — "BNI Breakfast, 25 Sep, Set A or Set B" —
+looks like a booking and is deliberately **not** one.
+
+A booking listing has no variants: S1 below gives it **one implicit variant**,
+and the availability index is keyed on `productId`. A food choice would have to
+become variants, which splits capacity per variant and reopens that index — the
+exact trap S1 names. A booking also asks the guest for a date RANGE, while an
+event's whole point is that the date is the seller's, not theirs.
+
+So an event is a normal `physical`/`service` product carrying one extra field
+(`products.event = { date, timeMinutes?, seats? }`) that checkout locks to.
+Option axes are the food choice, `items[].variantLabel` is the per-dish tally,
+and `by_retailer_fulfilment` is the seat count. `products.create`/`update`
+refuse an `event` on `kind === "booking"`, in both directions.
+
+See [`event-rsvp.md`](./event-rsvp.md).
+
 ## S1 — product kind + booking listing setup (`86eyn4kap`)
 
 ### The kind primitive
