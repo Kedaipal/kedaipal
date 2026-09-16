@@ -18,7 +18,14 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import {
+	MAX_NOTICE_DAYS,
+	MAX_PREP_MINUTES,
+} from "../../../convex/lib/fulfilmentDate";
+import {
+	MAX_PICKUP_NOTE_LENGTH,
+	pickupNoteFits,
+} from "../../../convex/lib/pickupNote";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	DEFAULT_WEEKEND_DAYS,
@@ -44,12 +51,14 @@ import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import { CategoryPicker } from "./category-picker";
 import {
 	buildSubmitVariants,
 	collectOptionIssues,
+	PREP_PRESETS,
 	type ProductFormDraft,
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
@@ -166,6 +175,10 @@ export type WizardState = {
 	/** Review "More options" — order rules, as typed (blank = no rule). */
 	minQuantity: string;
 	minNoticeDays: string;
+	/** Prep window in minutes, as typed; blank = none (z8r3fdff97). */
+	prepMinutes: string;
+	/** One line a collecting buyer reads; blank = none. */
+	pickupNote: string;
 };
 
 export function emptyWizardState(defaultKind?: ProductKind): WizardState {
@@ -201,6 +214,8 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		categoryIds: [],
 		minQuantity: "",
 		minNoticeDays: "",
+		prepMinutes: "",
+		pickupNote: "",
 	};
 }
 
@@ -513,6 +528,25 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// Prep time + pickup note ride the same step, and only on the
+		// non-booking route — a booking's preparation IS the acceptance, and
+		// its orders can never carry a pickup note.
+		const prep = state.prepMinutes.trim();
+		if (prep.length > 0) {
+			const n = Number(prep);
+			if (!Number.isInteger(n) || n < 0 || n > MAX_PREP_MINUTES) {
+				issues.push({
+					field: "prepMinutes",
+					message: `Enter a whole number of minutes between 0 and ${MAX_PREP_MINUTES}, or leave blank.`,
+				});
+			}
+		}
+		if (!pickupNoteFits(state.pickupNote)) {
+			issues.push({
+				field: "pickupNote",
+				message: `Keep it to ${MAX_PICKUP_NOTE_LENGTH} characters or fewer.`,
+			});
+		}
 	}
 	return issues;
 }
@@ -539,6 +573,7 @@ export function buildWizardSubmitValues(
 	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
+	const prep = Number(state.prepMinutes.trim());
 	const kind = wizardKind(state);
 	const capacity = Number(state.capacityPerNight.trim());
 	const packageLengthValue = (() => {
@@ -568,9 +603,7 @@ export function buildWizardSubmitValues(
 						// No unit without a length — a bare unit on a free-range
 						// listing is config that describes nothing.
 						packageUnit:
-							packageLengthValue !== undefined
-								? state.packageUnit
-								: undefined,
+							packageLengthValue !== undefined ? state.packageUnit : undefined,
 						autoAccept: state.autoAccept || undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
@@ -605,6 +638,18 @@ export function buildWizardSubmitValues(
 			state.minNoticeDays.trim().length > 0 && Number.isInteger(notice)
 				? notice
 				: undefined,
+		// Both are non-booking-only, like minQuantity: a booking's preparation
+		// IS the acceptance, and its orders can never carry a pickup note.
+		prepMinutes:
+			kind !== "booking" &&
+			state.prepMinutes.trim().length > 0 &&
+			Number.isInteger(prep)
+				? prep
+				: undefined,
+		pickupNote:
+			kind !== "booking" && state.pickupNote.trim().length > 0
+				? state.pickupNote
+				: undefined,
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: reconciled.options,
@@ -624,8 +669,10 @@ export function wizardHandoff(state: WizardState): {
 	// value the wizard rejects can never arrive silently truncated in the form.
 	const minQtyRaw = state.minQuantity.trim();
 	const noticeRaw = state.minNoticeDays.trim();
+	const prepRaw = state.prepMinutes.trim();
 	const minQty = minQtyRaw.length > 0 ? Number(minQtyRaw) : Number.NaN;
 	const notice = noticeRaw.length > 0 ? Number(noticeRaw) : Number.NaN;
+	const prep = prepRaw.length > 0 ? Number(prepRaw) : Number.NaN;
 	return {
 		initialValues: {
 			name: state.name,
@@ -646,6 +693,9 @@ export function wizardHandoff(state: WizardState): {
 			minQuantity: Number.isInteger(minQty) && minQty > 0 ? minQty : undefined,
 			minNoticeDays:
 				Number.isInteger(notice) && notice > 0 ? notice : undefined,
+			prepMinutes: Number.isInteger(prep) && prep > 0 ? prep : undefined,
+			pickupNote:
+				state.pickupNote.trim().length > 0 ? state.pickupNote : undefined,
 		},
 		initialEditor: state.editor,
 	};
@@ -689,6 +739,8 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		categoryIds: draft.categoryIds,
 		minQuantity: draft.minQuantity,
 		minNoticeDays: draft.minNoticeDays,
+		prepMinutes: draft.prepMinutes,
+		pickupNote: draft.pickupNote,
 	};
 }
 
@@ -1778,7 +1830,9 @@ export function ProductWizard({
 						    in its place, so the seller never wonders where it went. */}
 						{isPackageListing ? (
 							<p className="text-xs text-muted-foreground">
-								<span className="font-medium text-foreground">Weekend rate</span>{" "}
+								<span className="font-medium text-foreground">
+									Weekend rate
+								</span>{" "}
 								— a package has one flat price. Clear the package length to
 								charge weekend nights differently.
 							</p>
@@ -2709,6 +2763,103 @@ export function ProductWizard({
 												<span className="text-xs font-normal text-muted-foreground">
 													Lead time you need — buyers can&apos;t pick a delivery
 													or pickup date sooner than this.
+												</span>
+											</label>
+											{/* Prep time — the same question at a smaller scale, so
+											    it follows notice here exactly as it does in the full
+											    form. Same presets, same order, one control. */}
+											<label className="flex flex-col gap-1 text-sm font-medium">
+												Prep time{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
+												<span className="flex items-center gap-1.5">
+													<Input
+														type="number"
+														inputMode="numeric"
+														min={0}
+														max={MAX_PREP_MINUTES}
+														placeholder="0"
+														value={state.prepMinutes}
+														onChange={(e) =>
+															patch({ prepMinutes: e.target.value })
+														}
+														isError={!!issueFor("prepMinutes")}
+														className="h-11 w-24 text-center"
+													/>
+													<span className="text-sm font-normal text-muted-foreground">
+														minutes
+													</span>
+												</span>
+												<span className="flex flex-wrap gap-1.5 pt-0.5">
+													{PREP_PRESETS.map((preset) => {
+														const active =
+															state.prepMinutes.trim() ===
+															String(preset.minutes);
+														return (
+															<button
+																key={preset.minutes}
+																type="button"
+																aria-pressed={active}
+																onClick={() =>
+																	patch({
+																		prepMinutes: active
+																			? ""
+																			: String(preset.minutes),
+																	})
+																}
+																className={`h-11 rounded-xl border px-3 text-sm font-normal transition-colors ${
+																	active
+																		? "border-accent bg-accent/10 font-medium text-accent-emphasis"
+																		: "border-input text-muted-foreground hover:bg-muted"
+																}`}
+															>
+																{preset.label}
+															</button>
+														);
+													})}
+												</span>
+												<IssueText message={issueFor("prepMinutes")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													How long you need to make it. Buyers can&apos;t pick a
+													collection or delivery time sooner than this.
+												</span>
+											</label>
+											{/* Pickup note — an instruction, not a limit, so it is
+											    last. Offered here regardless of the store's
+											    self-collect setting: the wizard is the CREATE flow,
+											    and a seller turning collection on next week should
+											    not have to come back for it. */}
+											{/* htmlFor rather than a wrapping label: the control is
+											    a component, and the a11y rule (rightly) can't see
+											    an <input> through it. */}
+											<label
+												htmlFor="wizard-pickup-note"
+												className="flex flex-col gap-1 text-sm font-medium"
+											>
+												Pickup note{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
+												<Textarea
+													id="wizard-pickup-note"
+													value={state.pickupNote}
+													onChange={(e) =>
+														patch({ pickupNote: e.target.value })
+													}
+													placeholder="e.g. Collect from the side counter — bring an ice bag."
+													className="min-h-20 font-normal"
+													aria-invalid={!!issueFor("pickupNote")}
+												/>
+												<span className="self-end text-xs font-normal tabular-nums text-muted-foreground">
+													{state.pickupNote.replace(/\s+/g, " ").trim().length}/
+													{MAX_PICKUP_NOTE_LENGTH}
+												</span>
+												<IssueText message={issueFor("pickupNote")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													Collecting buyers see this at checkout and on their
+													order page. It&apos;s copied onto each order, so
+													editing it later never changes past orders.
 												</span>
 											</label>
 										</div>
