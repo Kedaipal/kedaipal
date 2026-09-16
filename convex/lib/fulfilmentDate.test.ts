@@ -417,6 +417,25 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		expect(hasSelectableTimeToday(at(22))).toBe(true);
 	});
 
+	test("at the CAP, today is unselectable at every minute of the day", () => {
+		// Raised by the split-hours branch: a 24h prep makes the floor exceed
+		// the day from midnight onwards, so `hasSelectableTimeToday` is the only
+		// thing standing between that seller and a checkout offering no time at
+		// all. The sweep above SKIPS today when this is false, so it would never
+		// have caught the property going wrong — this asserts it directly.
+		for (let minute = 0; minute < 1440; minute += 1) {
+			const now = AUG4 + minute * 60_000;
+			expect(hasSelectableTimeToday(now, MAX_PREP_MINUTES)).toBe(false);
+			expect(
+				minSelectableTimeMinutes(AUG4, now, MAX_PREP_MINUTES),
+			).toBeGreaterThanOrEqual(1440);
+		}
+		// Which makes the cap behaviourally "same-day is gone" — the same thing
+		// minNoticeDays 1 says, reached from the other end. Tomorrow is wide
+		// open, so the caller's job is to move the DATE, not to find a time.
+		expect(minSelectableTimeMinutes(TOMORROW, at(12), MAX_PREP_MINUTES)).toBe(0);
+	});
+
 	test("THE INVARIANT still holds with a prep window in the cart", () => {
 		// The same sweep the plain floor gets: a prefill that sits under the
 		// floor is what the browser blocks submit on, with its own message.

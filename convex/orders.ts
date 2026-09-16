@@ -46,8 +46,13 @@ import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
 	DAY_MS,
+	formatFulfilmentTime,
+	formatPrepDuration,
+	hasSelectableTimeToday,
 	hhmmFromMinutes,
 	matchesFulfilmentWindow,
+	minSelectableTimeMinutes,
+	todayMytMidnight,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
 import { assertWithinOpeningHours } from "./lib/openingHours";
@@ -437,6 +442,8 @@ type OrderItemSnapshot = {
 	stockReserved: boolean;
 	/** Categories the product was filed under at sale time (86eyrtz74). */
 	categoryNames?: string[];
+	/** The product's pickup note as it read when sold (z8r3fdff97). */
+	pickupNote?: string;
 };
 
 /**
@@ -965,6 +972,11 @@ export const create = mutation({
 		let requiresMockup = false;
 		// Strictest per-product notice override across the cart (0 = none).
 		let maxItemNoticeDays = 0;
+		// The SLOWEST item sets the whole order's time floor, the way the
+		// strictest sets its date floor. Its name is kept so the refusal can
+		// say WHICH product is the reason.
+		let maxPrepMinutes = 0;
+		let slowestProductName = "";
 		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
@@ -1010,6 +1022,10 @@ export const create = mutation({
 			if ((product.minNoticeDays ?? 0) > maxItemNoticeDays) {
 				maxItemNoticeDays = product.minNoticeDays ?? 0;
 			}
+			if ((product.prepMinutes ?? 0) > maxPrepMinutes) {
+				maxPrepMinutes = product.prepMinutes ?? 0;
+				slowestProductName = product.name;
+			}
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -1047,6 +1063,10 @@ export const create = mutation({
 				variantLabel: label || undefined,
 				price: variant.price,
 				quantity: item.quantity,
+				// Frozen like `name` and `price`: a seller who later edits "side
+				// counter" to "front door" must not rewrite the instruction this
+				// buyer is already holding in their WhatsApp thread.
+				pickupNote: product.pickupNote,
 				// Filled in below, once per distinct product.
 				categoryNames: undefined as string[] | undefined,
 			});
@@ -1132,7 +1152,13 @@ export const create = mutation({
 		if (
 			args.fulfilmentTimeMinutes !== undefined &&
 			sanitizedFulfilmentDate !== undefined &&
-			effectiveDeliveryMethod === "delivery"
+			// Self-collect joined delivery here (z8r3fdff97): a buyer collecting
+			// a made-to-order item needs to say WHEN, and the seller needs to
+			// know. Still optional on both — a legacy client that sends no time
+			// is accepted exactly as before. Counter and booking orders never
+			// reach this path.
+			(effectiveDeliveryMethod === "delivery" ||
+				effectiveDeliveryMethod === "self_collect")
 		) {
 			try {
 				sanitizedFulfilmentTime = assertValidFulfilmentTime(
@@ -1140,6 +1166,50 @@ export const create = mutation({
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
+			}
+		}
+		// Prep floor (z8r3fdff97): the slowest item in the cart decides the
+		// earliest moment this order can be handed over. Re-derived from the
+		// live products, never trusted from the client — the cart line carries a
+		// copy only so the buyer is stopped at the picker instead of here.
+		//
+		// ONE boolean owns whether the floor applies, so an exemption is added in
+		// one place rather than repeated across the two checks below. It is false
+		// for a seller-fixed moment: counter checkout never reaches this path,
+		// and an EVENT order (ClickUp z8r3fdff9u, landing after this) must add
+		// `&& eventLock === undefined` here — the seller set that time herself,
+		// and a prep floor refusing guests for her own 8 AM breakfast is the same
+		// bug min-notice and opening hours are already exempted from.
+		const prepFloorApplies = maxPrepMinutes > 0;
+		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
+			const now = Date.now();
+			const isToday = sanitizedFulfilmentDate === todayMytMidnight(now);
+			const prepLabel = formatPrepDuration(maxPrepMinutes);
+			// Prep is absorbed overnight, so it only ever bites on TODAY.
+			if (isToday) {
+				// A window long enough to swallow the rest of the day moves the
+				// DATE, not the time — otherwise the buyer picks today and finds
+				// no selectable time, which is a dead end rather than an answer.
+				if (!hasSelectableTimeToday(now, maxPrepMinutes)) {
+					throw new ConvexError(
+						`"${slowestProductName}" needs ${prepLabel} to prepare — the earliest day you can pick is tomorrow`,
+					);
+				}
+				const floor = minSelectableTimeMinutes(
+					sanitizedFulfilmentDate,
+					now,
+					maxPrepMinutes,
+				);
+				if (
+					sanitizedFulfilmentTime !== undefined &&
+					sanitizedFulfilmentTime < floor
+				) {
+					const verb =
+						effectiveDeliveryMethod === "self_collect" ? "pickup" : "delivery";
+					throw new ConvexError(
+						`"${slowestProductName}" needs ${prepLabel} to prepare — earliest ${verb} is ${formatFulfilmentTime(floor)}`,
+					);
+				}
 			}
 		}
 		// Store opening hours (86eyp5rav): the fulfilment moment must fall inside

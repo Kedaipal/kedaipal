@@ -78,6 +78,8 @@ async function seedProduct(
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
 		minNoticeDays: number;
+		prepMinutes: number;
+		pickupNote: string;
 		parcelWeightG: number;
 	}> = {},
 ): Promise<Id<"products">> {
@@ -91,6 +93,8 @@ async function seedProduct(
 		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
 		requiresProof: overrides.requiresProof ?? false,
 		minNoticeDays: overrides.minNoticeDays,
+		prepMinutes: overrides.prepMinutes,
+		pickupNote: overrides.pickupNote,
 		variants: [
 			{
 				optionValues: [],
@@ -7916,7 +7920,13 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 		expect(o?.fulfilmentTimeMinutes).toBe(930);
 	});
 
-	test("self-collect ignores a stray time — the point's schedule governs pickup hours", async () => {
+	test("self-collect now KEEPS a pickup time (z8r3fdff97 reverses this)", async () => {
+		// This test used to assert the opposite: a stray time on a self-collect
+		// order was dropped, because pickup was date-only and the point's own
+		// schedule note carried the detail. That left a made-to-order seller
+		// with no idea when the buyer was coming, which is the whole reason
+		// z8r3fdff97 exists. Kept rather than deleted, inverted rather than
+		// rewritten, so the behaviour change is visible in the diff.
 		const t = setup();
 		const { retailer, productId } = await store(t);
 		const { shortId } = await t.mutation(api.orders.create, {
@@ -7928,6 +7938,24 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 			deliveryMethod: "self_collect",
 			fulfilmentDate: tomorrowMidnight(),
 			fulfilmentTimeMinutes: 930,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(930);
+	});
+
+	test("a self-collect order with no time is still accepted", async () => {
+		// The time is OPTIONAL on both methods. A buyer on a stale tab, or any
+		// client that predates the picker, must not be refused.
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMidnight(),
 		});
 		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
@@ -9775,3 +9803,181 @@ describe("orders — column header filters (86eyrtz74)", () => {
 	});
 });
 
+
+describe("per-product prep time (z8r3fdff97)", () => {
+	const customer = { name: "Aisyah", waPhone: "60123456789" };
+
+	async function storeWithPrep(
+		t: ReturnType<typeof setup>,
+		prepMinutes: number,
+		pickupNote?: string,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes,
+			pickupNote,
+		});
+		return { retailer, productId };
+	}
+
+	const todayMyt = () =>
+		Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+		8 * 3600_000;
+	const tomorrowMyt = () => todayMyt() + 86_400_000;
+	/** Minutes since MYT midnight, right now. */
+	const nowMinutes = () =>
+		Math.floor(((Date.now() + 8 * 3600_000) % 86_400_000) / 60_000);
+
+	test("refuses a same-day pickup inside the prep window, and names the product", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		// A minute from now is comfortably inside a two-hour window.
+		const tooSoon = Math.min(1439, nowMinutes() + 1);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: tooSoon,
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*2 hours to prepare.*earliest pickup/s);
+	});
+
+	test("accepts the same order once the time clears the window", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		const clear = nowMinutes() + 130;
+		// Near midnight the floor spills past the day; that case has its own
+		// test below, so only run the happy path when today still has room.
+		if (clear < 1440) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: clear,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(o?.fulfilmentTimeMinutes).toBe(clear);
+		}
+	});
+
+	test("prep is absorbed overnight — tomorrow takes any open time", async () => {
+		// The deliberate semantic: prep moves the CLOCK within today and then
+		// stops. Ordering at 11 PM for tomorrow 9 AM is fine.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 240);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(9 * 60);
+	});
+
+	test("a prep window that swallows the day moves the DATE, not the time", async () => {
+		// Without this the buyer picks today, finds no selectable time, and has
+		// a dead end instead of an answer.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 1440);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: 23 * 60,
+			}),
+		).rejects.toThrow(/earliest day you can pick is tomorrow/);
+	});
+
+	test("the SLOWEST item in a mixed cart sets the floor and is named", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const quick = await seedProduct(t, USER_A, retailer._id, {
+			name: "Kuih",
+			prepMinutes: 15,
+		});
+		const slow = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes: 240,
+		});
+		const tooSoon = Math.min(1439, nowMinutes() + 30);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ productId: quick, quantity: 1 },
+					{ productId: slow, quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: tooSoon,
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*4 hours/s);
+	});
+
+	test("a product with no prep window is untouched", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 0);
+		const soon = Math.min(1439, nowMinutes() + 20);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: todayMyt(),
+			fulfilmentTimeMinutes: soon,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the pickup note is FROZEN onto the line, and a later edit never rewrites it", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(
+			t,
+			0,
+			"Side counter — ring the bell.",
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.update, {
+			productId,
+			pickupNote: "Front door now.",
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// The buyer is still holding the old instruction in their chat.
+		expect(o?.items[0]?.pickupNote).toBe("Side counter — ring the bell.");
+	});
+});
