@@ -1464,17 +1464,15 @@ export function ProductForm({
 								variant="field"
 								className="w-24 text-center"
 							/>
-							<select
-								aria-label="Package length unit"
-								value={packageUnit}
-								onChange={(e) =>
-									setPackageUnit(e.target.value === "day" ? "day" : "month")
-								}
-								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
-							>
-								<option value="month">months</option>
-								<option value="day">days</option>
-							</select>
+							{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
+							    `MAX_NOTICE_DAYS`). A copy-paste had left the PACKAGE LENGTH's
+							    unit dropdown sitting in this row — bound to `packageUnit`, so a
+							    seller adjusting their notice period silently flipped a 1-month
+							    membership into a 1-day pass, and on a normal product met a unit
+							    the save path drops on the floor. The wizard was swept for this;
+							    THIS form was missed — and it is the copy a seller editing a live
+							    product actually meets. */}
+							<span className="text-sm text-muted-foreground">days</span>
 						</div>
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">

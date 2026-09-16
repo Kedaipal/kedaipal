@@ -862,6 +862,16 @@ label (now `Unlimited`, via a new `StockInput` `placeholder` prop); and the
 `state.packageUnit`, so a seller adjusting their notice period silently flipped
 a 1-month membership into a 1-day pass. Notice is measured in days, full stop.
 
+> **Swept again, Sep 2026.** That pass fixed the *wizard* and left the *edit
+> form* — `product-form.tsx` kept the stray `<select>`, which is the copy a
+> seller editing an already-published product meets, and the one Huff & Puff
+> hit. Both rows now read `days` as static text. `9a935d7` had replaced BOTH
+> `<span>days</span>` suffixes in `product-form.tsx` in one find-and-replace, so
+> "fixed the row I was looking at" was never going to be enough. The guard is
+> `product-form-min-notice.test.tsx`: a `packageUnit` picker may exist exactly
+> where a unit is a real, saved field — the Package length row — and nowhere
+> else.
+
 ### Blocking states its consequence; it does not refuse
 
 Blocking never cancels anything — locked at S4, it stops NEW requests only. The
