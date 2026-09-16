@@ -233,6 +233,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
+			events: true,
 			waOrderAlerts: true,
 		});
 
@@ -247,6 +248,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
+			events: false,
 			waOrderAlerts: false,
 		});
 	});
@@ -270,6 +272,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
+		events: true,
 		waOrderAlerts: true,
 		});
 		// subscriptions.current (billing nav) resolves the same way.

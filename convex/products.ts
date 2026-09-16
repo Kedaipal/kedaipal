@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import {
+	formatFulfilmentDate,
 	isMytMidnight,
 	isValidPrepMinutes,
 	MAX_NOTICE_DAYS,
@@ -26,6 +27,15 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
+import { tallyEventSeats } from "./lib/eventSeats";
+import {
+	type EventInput,
+	hiddenFromStorefront,
+	isEventPassed,
+	type ProductEvent,
+	sanitizeEvent,
+	seatsLeft,
+} from "./lib/productEvent";
 import {
 	effectiveKind,
 	sanitizeCapacityPerNight,
@@ -49,6 +59,7 @@ import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import {
 	assertOwnStoreActive,
+	assertPlanFeature,
 	assertSubscriptionActive,
 } from "./subscriptions";
 import {
@@ -179,8 +190,11 @@ async function requireRetailerOwnership(
 	return requireRetailerAccess(ctx, retailerId);
 }
 
+// Widened to accept a QueryCtx (the `requireRetailerOwnership` shape) so
+// owner-gated READS — `eventHeadcount` — share the same ownership check the
+// mutations use, rather than growing a second, drifting copy of it.
 async function requireProductOwnership(
-	ctx: MutationCtx,
+	ctx: QueryCtx | MutationCtx,
 	productId: Id<"products">,
 ): Promise<{ product: Doc<"products">; access: RetailerAccess }> {
 	const product = await ctx.db.get(productId);
@@ -284,8 +298,31 @@ export async function productWithVariants(
 	const inStock = resolved
 		.filter((vr) => vr.active)
 		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
+	// Seat counts for an event product (`z8r3fdff9u`). Only ONE extra read, and
+	// only for the handful of products that are events — the tally scans a single
+	// day of this seller's orders on `by_retailer_fulfilment`, which is why this
+	// is affordable on the public storefront grid.
+	//
+	// `eventSeatsLeft` is public (a buyer must see "12 seats left" and the
+	// sold-out state before committing) and is `undefined` for an UNCAPPED
+	// event — nothing to show, nothing to leak. `eventSeatsTaken` is the raw
+	// headcount and stays owner-only, next to `orderedAt` in the seller-only
+	// bucket: it's sales volume, the line `popularProducts` already draws.
+	let eventSeatsLeft: number | undefined;
+	let eventSeatsTaken: number | undefined;
+	if (product.event !== undefined) {
+		const tally = await tallyEventSeats(ctx, {
+			retailerId: product.retailerId,
+			productId: product._id,
+			date: product.event.date,
+		});
+		eventSeatsLeft = seatsLeft(product.event, tally.taken);
+		if (opts.forOwner === true) eventSeatsTaken = tally.taken;
+	}
 	return {
 		...visibleBase,
+		eventSeatsLeft,
+		eventSeatsTaken,
 		// Always usable by the storefront's product-page links, even before the
 		// slug backfill has stamped this row.
 		slug: effectiveSlug(product),
@@ -624,7 +661,12 @@ export const list = query({
 			.collect();
 		rows.sort(bySortOrder);
 		return Promise.all(
-			rows.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
+			// A finished event takes itself off the storefront the morning after
+			// (`hiddenFromStorefront`) — no cron, no seller action. Filtered in
+			// memory beside the hidden flags for the same reason they are.
+			rows
+				.filter((row) => !hiddenFromStorefront(row))
+				.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
 		);
 	},
 });
@@ -724,6 +766,9 @@ export const get = query({
 		// in the PR #155 review.
 		if ((!row.active || row.hidden || row.hiddenByCategory) && !canEdit)
 			return null;
+		// A finished event is off the storefront but still readable by its owner
+		// (the RSVPs panel is a history view).
+		if (hiddenFromStorefront(row) && !canEdit) return null;
 		// Shared endpoint: the same `canEdit` that decides whether inactive variants
 		// are visible also decides whether seller-only fields are. An
 		// unauthenticated buyer hitting this by id gets the public shape.
@@ -757,6 +802,15 @@ export const create = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
+		// Event RSVP config (`z8r3fdff9u`). Present = this product is a
+		// fixed-date event every RSVP locks to. Refused on the booking kind.
+		event: v.optional(
+			v.object({
+				date: v.number(),
+				timeMinutes: v.optional(v.number()),
+				seats: v.optional(v.number()),
+			}),
+		),
 		// Kind + booking config land together at create and the kind is immutable
 		// after (update deliberately has no kind arg) — see schema comment.
 		kind: v.optional(
@@ -868,6 +922,27 @@ export const create = mutation({
 			);
 		}
 
+		// Event config (`z8r3fdff9u`). Refused on a booking listing: a stay is
+		// already a date RANGE the guest picks, so a second fixed date would be
+		// two availability models arguing — and a booking has no variants to hang
+		// a food choice off (docs/booking.md S1, the whole reason events aren't
+		// bookings). Pro-gated like `categories`; admin act-as bypasses so
+		// white-glove onboarding can set one up on a Starter store.
+		let event: ProductEvent | undefined;
+		if (args.event !== undefined) {
+			if (effectiveKind(kind) === "booking")
+				throw new ConvexError(
+					"A booking listing already takes its own dates — events are for products and services",
+				);
+			if (!access.actingAsAdmin)
+				await assertPlanFeature(ctx, args.retailerId, "events");
+			try {
+				event = sanitizeEvent(args.event);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
 		for (const variant of variants) {
 			if (variant.sku)
@@ -895,6 +970,7 @@ export const create = mutation({
 			// 0-normalizes-to-unset posture.
 			kind: kind === "physical" ? undefined : kind,
 			booking,
+			event,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -943,6 +1019,88 @@ async function insertVariants(
 
 /** Product-level scalar fields only. Option/variant restructuring goes through
  * `saveVariantGrid`; per-row stock/price edits through `updateVariant`. */
+/**
+ * Resolve an event-config edit, enforcing the two rules that protect guests who
+ * have already RSVP'd.
+ *
+ * **The date is immutable once a live RSVP exists**, and so is turning the
+ * event OFF — moving 18 confirmed guests from Thursday to Friday, or quietly
+ * un-locking the date so the next buyer picks their own, is not an edit. The
+ * seller cancels or archives instead, which tells the guests.
+ *
+ * Gated on the LIVE (non-cancelled) headcount, deliberately NOT on
+ * `products.orderedAt` (the `kind`-immutability posture): `orderedAt` is never
+ * cleared, not even when every order is cancelled, so using it would leave a
+ * seller who typo'd a date and cancelled the two test RSVPs permanently unable
+ * to fix it.
+ *
+ * **A seat cap may be raised freely but never lowered below what's taken** —
+ * a cap under the headcount would render "−3 seats left" and refuse the guests
+ * who are already coming.
+ */
+async function resolveEventUpdate(
+	ctx: MutationCtx,
+	product: Doc<"products">,
+	access: RetailerAccess,
+	next: EventInput | null,
+): Promise<ProductEvent | undefined> {
+	const current = product.event;
+	const live = current
+		? await tallyEventSeats(ctx, {
+				retailerId: product.retailerId,
+				productId: product._id,
+				date: current.date,
+			})
+		: undefined;
+	const taken = live?.taken ?? 0;
+
+	// Turning the event off.
+	if (next === null) {
+		if (current !== undefined && taken > 0)
+			throw new ConvexError(
+				`${guestsAlready(taken)} already RSVP'd for ${formatFulfilmentDate(current.date)} — cancel or archive this event instead.`,
+			);
+		// Un-gated by plan on purpose: clearing config must never trap a seller
+		// who downgraded (the `categories`/`radiusDelivery` posture).
+		return undefined;
+	}
+
+	if (effectiveKind(product.kind) === "booking")
+		throw new ConvexError(
+			"A booking listing already takes its own dates — events are for products and services",
+		);
+	if (!access.actingAsAdmin)
+		await assertPlanFeature(ctx, product.retailerId, "events");
+
+	const dateUnchanged = current !== undefined && current.date === next.date;
+	if (current !== undefined && !dateUnchanged && taken > 0)
+		throw new ConvexError(
+			`${guestsAlready(taken)} already RSVP'd for ${formatFulfilmentDate(current.date)} — cancel or archive this event instead.`,
+		);
+
+	let event: ProductEvent;
+	try {
+		// Re-saving an event that has already run (fixing the seat cap the
+		// morning after) must not be refused for being in the past — only a
+		// CHANGE of date is held to "not before today".
+		event = sanitizeEvent(next, { allowPastDate: dateUnchanged })!;
+	} catch (err) {
+		throw new ConvexError((err as Error).message);
+	}
+
+	if (event.seats !== undefined && event.seats < taken)
+		throw new ConvexError(
+			`${guestsAlready(taken)} already RSVP'd — the seat cap can't go below ${taken}.`,
+		);
+	return event;
+}
+
+/** "18 guests have" / "1 guest has" — the subject of every event-edit refusal,
+ * spelled once so the grammar can't drift between them. */
+function guestsAlready(taken: number): string {
+	return taken === 1 ? "1 guest has" : `${taken} guests have`;
+}
+
 export const update = mutation({
 	args: {
 		productId: v.id("products"),
@@ -962,6 +1120,20 @@ export const update = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
+		// Event RSVP config (`z8r3fdff9u`). `undefined` = no change; `null` turns
+		// the event OFF (the `description` posture — a toggle a seller can
+		// un-tick needs a spelling for "off", which an optional object alone
+		// can't express). Whole-object replace like `booking`.
+		event: v.optional(
+			v.union(
+				v.object({
+					date: v.number(),
+					timeMinutes: v.optional(v.number()),
+					seats: v.optional(v.number()),
+				}),
+				v.null(),
+			),
+		),
 		// Booking config edit. The kind itself is immutable (no kind arg here,
 		// by design); capacity, package length, instant-book and the deposit are
 		// the knobs a seller re-tunes. Rejected on non-booking products. A
@@ -1042,6 +1214,14 @@ export const update = mutation({
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+		if (fields.event !== undefined) {
+			updates.event = await resolveEventUpdate(
+				ctx,
+				ownedProduct,
+				access,
+				fields.event,
+			);
+		}
 		if (fields.booking !== undefined) {
 			if (effectiveKind(ownedProduct.kind) !== "booking")
 				throw new ConvexError(
@@ -2223,10 +2403,63 @@ export const getPublicBySlug = query({
 			!row ||
 			!row.active ||
 			row.hidden === true ||
-			row.hiddenByCategory === true
+			row.hiddenByCategory === true ||
+			hiddenFromStorefront(row)
 		)
 			return null;
 		return productWithVariants(ctx, row, { activeOnly: true });
+	},
+});
+
+/**
+ * The seller's live headcount for one event: seats taken, seats left, and the
+ * split per chosen option ("Set A ×11, Set B ×7").
+ *
+ * This query is the whole point of the feature — the alternative is opening 18
+ * orders and counting by hand, which is what she does in WhatsApp today.
+ * Cancelled RSVPs drop out live (the tally's own rule), so cancelling frees a
+ * seat with no extra bookkeeping.
+ *
+ * Owner-gated: the split is sales detail. The buyer's public read gets
+ * `eventSeatsLeft` only.
+ */
+export const eventHeadcount = query({
+	args: { productId: v.id("products") },
+	handler: async (
+		ctx,
+		{ productId },
+	): Promise<{
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		taken: number;
+		left?: number;
+		passed: boolean;
+		options: Array<{ label: string; seats: number }>;
+	} | null> => {
+		const { product } = await requireProductOwnership(ctx, productId);
+		if (product.event === undefined) return null;
+		const tally = await tallyEventSeats(ctx, {
+			retailerId: product.retailerId,
+			productId,
+			date: product.event.date,
+		});
+		return {
+			date: product.event.date,
+			timeMinutes: product.event.timeMinutes,
+			seats: product.event.seats,
+			taken: tally.taken,
+			left: seatsLeft(product.event, tally.taken),
+			passed: isEventPassed(product.event),
+			// Map → array at the boundary (a Map doesn't survive the Convex wire).
+			// Insertion order preserved, so the panel lists options in the order
+			// guests picked them; the unlabelled single-variant case keeps its
+			// empty label and the UI renders a plain total instead.
+			options: [...tally.byOption.entries()].map(([label, seats]) => ({
+				label,
+				seats,
+			})),
+		};
 	},
 });
 
@@ -2274,6 +2507,8 @@ export const listForSitemap = query({
 				.collect();
 			for (const row of rows) {
 				if (row.slug === undefined) continue;
+				// Never hand a crawler a finished event's URL — the page 404s.
+				if (hiddenFromStorefront(row)) continue;
 				out.push({
 					storeSlug: retailer.slug,
 					productSlug: row.slug,
@@ -2344,7 +2579,9 @@ export const popularProducts = query({
 				),
 			)
 			.collect();
-		const listableIds = new Set<string>(listable.map((p) => p._id));
+		const listableIds = new Set<string>(
+			listable.filter((p) => !hiddenFromStorefront(p)).map((p) => p._id),
+		);
 		return ranked
 			.filter((id) => listableIds.has(id))
 			.slice(0, POPULAR_TOP_CANDIDATES);

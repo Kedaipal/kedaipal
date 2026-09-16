@@ -45,6 +45,17 @@ import {
 } from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
+	seatsExhaustedMessage,
+	seatsRequested,
+	tallyEventSeats,
+} from "./lib/eventSeats";
+import {
+	formatEventBadge,
+	isEventPassed,
+	type ProductEvent,
+	seatsLeft,
+} from "./lib/productEvent";
+import {
 	effectiveClaimStatus,
 	SESSION_CLAIM_LOCK_REASON,
 } from "./lib/orderClaims";
@@ -772,6 +783,13 @@ export const createOrderFromSession = mutation({
 			Id<"productVariants">,
 			{ qty: number; block: boolean; onHand: number }
 		>();
+		// Walk-in RSVPs (`z8r3fdff9u`): a guest who turns up at the counter and
+		// signs up for the event is the same RSVP as one from the storefront, so
+		// it takes the event's date and counts against the same seat cap.
+		const eventProducts = new Map<
+			Id<"products">,
+			{ event: ProductEvent; name: string }
+		>();
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -811,6 +829,11 @@ export const createOrderFromSession = mutation({
 			} else {
 				unitPrice = variant.price;
 			}
+			if (product.event !== undefined)
+				eventProducts.set(variant.productId, {
+					event: product.event,
+					name: product.name,
+				});
 			const block =
 				(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(item.variantId);
@@ -835,6 +858,43 @@ export const createOrderFromSession = mutation({
 				price: unitPrice,
 				quantity: item.quantity,
 			});
+		}
+
+		// Event lock + seat cap for a walk-in RSVP (`z8r3fdff9u`). The counter is
+		// exempt from min-notice and opening hours (the seller is standing there),
+		// but NOT from the event's own date or its cap: a seat sold at the counter
+		// is a seat the storefront can no longer sell, and the seller keying it in
+		// is the one person who must not be able to oversell her own room.
+		//
+		// The date is FORCED here rather than refused, unlike the storefront: the
+		// counter's date field is a convenience the seller may simply not have
+		// filled, and there is exactly one date this order can mean.
+		let sanitizedFulfilmentTime: number | undefined;
+		const eventLock = [...eventProducts.values()][0]?.event;
+		if (eventLock !== undefined) {
+			if (
+				new Set([...eventProducts.values()].map((e) => e.event.date)).size > 1
+			)
+				throw new ConvexError(
+					"This order has RSVPs for two different events — ring them up separately.",
+				);
+			if (isEventPassed(eventLock))
+				throw new ConvexError(
+					`This event (${formatEventBadge(eventLock)}) has already taken place.`,
+				);
+			sanitizedFulfilmentDate = eventLock.date;
+			sanitizedFulfilmentTime = eventLock.timeMinutes;
+		}
+		for (const [productId, { event, name }] of eventProducts) {
+			if (event.seats === undefined) continue;
+			const tally = await tallyEventSeats(ctx, {
+				retailerId: retailer._id,
+				productId,
+				date: event.date,
+			});
+			const left = seatsLeft(event, tally.taken) ?? 0;
+			if (seatsRequested(snapshotItems, productId) > left)
+				throw new ConvexError(seatsExhaustedMessage(name, left));
 		}
 
 		const { subtotal, total } = computeOrderTotals(snapshotItems);
@@ -876,6 +936,7 @@ export const createOrderFromSession = mutation({
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
 			fulfilmentDate: sanitizedFulfilmentDate,
+			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			paymentStatus: args.paidInPerson ? "received" : "unpaid",
 			paymentReceivedAt: args.paidInPerson ? now : undefined,
 			paymentMethod: args.paidInPerson

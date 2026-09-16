@@ -1020,6 +1020,34 @@ export default defineSchema({
 				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
+		// Event RSVP config (`z8r3fdff9u`): a FIXED fulfilment date this product's
+		// orders lock to, instead of each buyer picking their own at checkout.
+		// Present = this product is an event ("BNI Breakfast · 25 Sep"); absent =
+		// every existing product, zero migration.
+		//
+		// An event is deliberately a FLAG on a normal physical/service product,
+		// not a fourth `kind` and not variants-on-booking: the food choice is the
+		// product's existing option axes, the per-dish headcount is derived from
+		// `orders.items[].variantLabel`, and a booking listing has no variants to
+		// hang a choice off (docs/booking.md S1). Refused on `kind === "booking"`.
+		//
+		// Public-safe — buyers read the date, the time and the seats-left count.
+		// See convex/lib/productEvent.ts + docs/event-rsvp.md.
+		event: v.optional(
+			v.object({
+				// MYT midnight epoch (`isMytMidnight`). Immutable once a live
+				// (non-cancelled) RSVP exists — moving the date under 18 guests who
+				// already confirmed a Thursday is not an edit, it's a new event.
+				date: v.number(),
+				// 0..1439. Display + frozen onto every RSVP's
+				// `fulfilmentTimeMinutes`. Unset = an all-day event (date only).
+				timeMinutes: v.optional(v.number()),
+				// Total seats across ALL options; unset = uncapped (per-variant
+				// stock still applies). 0 normalizes to unset at the sanitizer, so
+				// "no limit" has one spelling and can never read as "sold out".
+				seats: v.optional(v.number()),
+			}),
+		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both
