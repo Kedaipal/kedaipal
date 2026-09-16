@@ -337,6 +337,20 @@ when nobody is there) or dropped breakfast.
   still normalises to unset.
 - **Still v1 limits:** at most two windows per day, no overnight wrap, no
   holiday/exception dates.
+- **Prep-floor seam for T2 (`z8r3fdff97`).** Every selectable-time helper —
+  `selectableTimeWindows`, `selectableTimeWindow`, `isTimeSelectable`,
+  `defaultTimeWithinHours` — takes an optional trailing **`prepMinutes`** and
+  hands it to `minSelectableTimeMinutes(dateEpoch, now, prepMinutes = 0)`,
+  which floors today at `now + max(15, prepMinutes)` rounded up to 5. It is
+  **threaded, not applied by the caller**: a second floor further down the
+  chain would be a second source of truth for "the earliest moment a buyer
+  may pick", and the two would drift. Defaults to 0 everywhere, so every
+  pre-existing caller is byte-identical (test-pinned by equality against the
+  no-arg call). A **future day returns 0** — prep is absorbed overnight, the
+  min-notice posture; that is a semantic call living inside
+  `minSelectableTimeMinutes`, so changing it later moves no caller. On a
+  split day a long prep can swallow the first window whole, and the prefill
+  follows into the second rather than into the break.
 
 ## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
 

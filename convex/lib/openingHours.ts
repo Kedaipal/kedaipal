@@ -27,6 +27,12 @@
  * 9?"), and prep headroom already has explicit levers (min notice, the
  * checkout lead floor, or simply tighter hours).
  *
+ * PREP FLOOR: every selectable-time helper takes an optional trailing
+ * `prepMinutes` and hands it to `minSelectableTimeMinutes` — the cart's
+ * slowest item raising the checkout lead (z8r3fdff97). It is threaded rather
+ * than applied by the caller so there is ONE answer to "the earliest moment a
+ * buyer may pick"; defaults to 0, so a caller that doesn't care is unchanged.
+ *
  * SPLIT DAYS (z8r3fdff8r): a day may carry a SECOND window — a cafe open
  * 7:30–10:00 for breakfast then 12:00–18:00, a kitchen that shuts between
  * lunch and dinner. Stored as an optional `open2`/`close2` pair beside the
@@ -340,10 +346,11 @@ export function selectableTimeWindows(
 	hours: OpeningHours | undefined,
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): DayWindow[] {
 	const day = hoursForDate(hours, dateEpoch);
 	if (day === null) return [];
-	const floor = minSelectableTimeMinutes(dateEpoch, now);
+	const floor = minSelectableTimeMinutes(dateEpoch, now, prepMinutes);
 	return dayWindows(day)
 		.map((window) => ({
 			open: Math.max(window.open, floor),
@@ -365,8 +372,9 @@ export function selectableTimeWindow(
 	hours: OpeningHours | undefined,
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): { min: number; max: number } | null {
-	const windows = selectableTimeWindows(hours, dateEpoch, now);
+	const windows = selectableTimeWindows(hours, dateEpoch, now, prepMinutes);
 	if (windows.length === 0) return null;
 	return { min: windows[0].open, max: windows[windows.length - 1].close };
 }
@@ -379,8 +387,9 @@ export function isTimeSelectable(
 	dateEpoch: number,
 	timeMinutes: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): boolean {
-	return selectableTimeWindows(hours, dateEpoch, now).some(
+	return selectableTimeWindows(hours, dateEpoch, now, prepMinutes).some(
 		(window) => timeMinutes >= window.open && timeMinutes <= window.close,
 	);
 }
@@ -398,8 +407,9 @@ export function defaultTimeWithinHours(
 	hours: OpeningHours | undefined,
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): number | null {
-	const windows = selectableTimeWindows(hours, dateEpoch, now);
+	const windows = selectableTimeWindows(hours, dateEpoch, now, prepMinutes);
 	if (windows.length === 0) return null;
 	const plain = dateEpoch === todayMytMidnight(now) ? windows[0].open : 10 * 60;
 	for (const window of windows) {

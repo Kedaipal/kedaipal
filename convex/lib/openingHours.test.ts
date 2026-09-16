@@ -618,3 +618,76 @@ describe("single-window behaviour is untouched", () => {
 		});
 	});
 });
+
+
+// ---------------------------------------------------------------------------
+// Prep floor — the T2 seam (z8r3fdff97)
+// ---------------------------------------------------------------------------
+
+describe("prepMinutes raises the selectable floor", () => {
+	test("omitting it is byte-identical to before — every existing caller", () => {
+		const hours = week({ 5: NINE_TO_SIX, 6: NINE_TO_SIX });
+		expect(selectableTimeWindows(hours, FRI_JUN_26, NOW)).toEqual(
+			selectableTimeWindows(hours, FRI_JUN_26, NOW, 0),
+		);
+		expect(defaultTimeWithinHours(hours, SAT_JUN_27, NOW)).toBe(
+			defaultTimeWithinHours(hours, SAT_JUN_27, NOW, 0),
+		);
+	});
+
+	test("today: the floor is now + the LONGER of the flat lead and prep", () => {
+		const hours = week({ 5: NINE_TO_SIX });
+		// NOW = 09:00. Flat lead 15 → 09:15. A 90-minute prep → 10:30.
+		expect(selectableTimeWindows(hours, FRI_JUN_26, NOW, 90)).toEqual([
+			{ open: 10 * 60 + 30, close: 18 * 60 },
+		]);
+		// A prep SHORTER than the flat lead never shortens it.
+		expect(selectableTimeWindows(hours, FRI_JUN_26, NOW, 5)).toEqual([
+			{ open: 9 * 60 + 15, close: 18 * 60 },
+		]);
+		// Neither does a nonsense one.
+		expect(selectableTimeWindows(hours, FRI_JUN_26, NOW, -60)).toEqual([
+			{ open: 9 * 60 + 15, close: 18 * 60 },
+		]);
+		expect(
+			selectableTimeWindows(hours, FRI_JUN_26, NOW, Number.NaN),
+		).toEqual([{ open: 9 * 60 + 15, close: 18 * 60 }]);
+	});
+
+	test("a future day is untouched — prep is absorbed overnight", () => {
+		const hours = week({ 6: NINE_TO_SIX });
+		expect(selectableTimeWindows(hours, SAT_JUN_27, NOW, 600)).toEqual([
+			{ open: 9 * 60, close: 18 * 60 },
+		]);
+		expect(defaultTimeWithinHours(hours, SAT_JUN_27, NOW, 600)).toBe(10 * 60);
+	});
+
+	test("prep can swallow a SPLIT day's first window whole", () => {
+		const hours = week({ 5: SPLIT_DAY });
+		// NOW = 09:00 + 150 min prep = 11:30, past the 10:00 breakfast close.
+		expect(selectableTimeWindows(hours, FRI_JUN_26, NOW, 150)).toEqual([
+			{ open: 12 * 60, close: 18 * 60 },
+		]);
+		// The prefill follows it into window 2 rather than into the break.
+		expect(defaultTimeWithinHours(hours, FRI_JUN_26, NOW, 150)).toBe(12 * 60);
+		expect(isTimeSelectable(hours, FRI_JUN_26, 9 * 60 + 30, NOW, 150)).toBe(
+			false,
+		);
+		expect(isTimeSelectable(hours, FRI_JUN_26, 13 * 60, NOW, 150)).toBe(true);
+	});
+
+	test("prep past the last close leaves the day unpickable", () => {
+		const hours = week({ 5: SPLIT_DAY });
+		expect(selectableTimeWindows(hours, FRI_JUN_26, NOW, 12 * 60)).toEqual([]);
+		expect(selectableTimeWindow(hours, FRI_JUN_26, NOW, 12 * 60)).toBeNull();
+		expect(defaultTimeWithinHours(hours, FRI_JUN_26, NOW, 12 * 60)).toBeNull();
+	});
+
+	test("the hull still bounds a prep-trimmed split day", () => {
+		const hours = week({ 5: SPLIT_DAY });
+		expect(selectableTimeWindow(hours, FRI_JUN_26, NOW, 30)).toEqual({
+			min: 9 * 60 + 30,
+			max: 18 * 60,
+		});
+	});
+});
