@@ -29,6 +29,7 @@ import {
 } from "../../lib/country-setup-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { AiAssistantCard } from "./ai-assistant-card";
 import { DelyvaCard } from "./delyva-card";
 import { LalamoveIntegrationCard } from "./lalamove-integration-card";
 import { OnlinePaymentsCard } from "./online-payments-card";
@@ -122,6 +123,14 @@ export function IntegrationsTab({
 					country={country}
 					onSave={onSave}
 				/>
+			</AccountCard>
+
+			{/* Not a pasted-key integration like the three above — the "account"
+			    here is the seller's own AI app, connected via OAuth from that
+			    app's side — but it IS a third-party connection, which is this
+			    tab's meaning. No spotlight anchor yet (nothing deep-links here). */}
+			<AccountCard id="ai-assistant" highlight={undefined}>
+				<AiAssistantCard canUse={hasFeature(subscription, "mcp")} />
 			</AccountCard>
 		</div>
 	);

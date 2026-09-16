@@ -103,6 +103,15 @@ export type PlanFeatures = {
 	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
 	 * number stay un-gated so a downgraded seller is never trapped. */
 	waOrderAlerts: boolean;
+	/** Seller MCP server (z8r3fdff6p): connecting the store to the seller's own
+	 * AI assistant (Claude/ChatGPT) for read-only business numbers. Pro as a
+	 * size signal — serving reads costs ~nothing, so calls are free and
+	 * rate-limited, never credit-metered (decided 16 Sep 2026). Unlike other
+	 * read surfaces this one ALSO refuses while the subscription is frozen:
+	 * MCP access is a vendor action, and the explicit decision is that an
+	 * expired sub locks vendor actions (the gate lives in
+	 * `sellerTools.resolveMcpContext`, not here). */
+	mcp: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -118,6 +127,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: false,
 		onlinePayments: false,
 		waOrderAlerts: false,
+		mcp: false,
 	},
 	pro: {
 		crm: true,
@@ -129,6 +139,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: true,
 		onlinePayments: true,
 		waOrderAlerts: true,
+		mcp: true,
 	},
 	scale: {
 		crm: true,
@@ -140,6 +151,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: true,
 		onlinePayments: true,
 		waOrderAlerts: true,
+		mcp: true,
 	},
 };
 

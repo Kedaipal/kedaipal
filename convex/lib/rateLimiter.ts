@@ -185,6 +185,26 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Seller MCP tool calls (z8r3fdff6p) — the /mcp HTTP endpoint, keyed by
+	// retailerId. Calls are FREE (never credit-metered), so this pair IS the
+	// cost guard, sized for agent chattiness, not humans: one seller question
+	// fans out into 5–20 tool calls the seller doesn't control, so the burst
+	// must absorb a whole question (30) while the refill (60/min) throttles a
+	// runaway agent loop. The daily bound caps total Convex read exposure the
+	// way orderCreateDaily caps send exposure — no legitimate assistant session
+	// approaches 2,000 reads/day, an unattended loop does.
+	mcpToolCall: {
+		kind: "token bucket",
+		rate: 60,
+		period: MINUTE,
+		capacity: 30,
+	},
+	mcpToolCallDaily: {
+		kind: "token bucket",
+		rate: 2000,
+		period: 24 * 60 * MINUTE,
+		capacity: 2000,
+	},
 	// Seller self-serve billing (86eyb6z4r): subscribeSelf + the auto-renewal
 	// setup/reconcile actions. Authenticated, keyed by retailer/Clerk subject;
 	// each accepted call is at most one outbound HitPay API call on KEDAIPAL's

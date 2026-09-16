@@ -62,8 +62,9 @@ const PRODUCTS_PER_METRIC = 15;
 
 type OrderDoc = Doc<"orders">;
 
-/** Project an order doc down to the pure-reduce input shape. */
-function toInput(o: OrderDoc): InsightsOrderInput {
+/** Project an order doc down to the pure-reduce input shape. Exported for the
+ * seller MCP tool layer (`convex/sellerTools.ts`) — one projection, one author. */
+export function toInput(o: OrderDoc): InsightsOrderInput {
 	return {
 		createdAt: o.createdAt,
 		status: o.status,
@@ -81,8 +82,11 @@ function toInput(o: OrderDoc): InsightsOrderInput {
  * Indexed `_creationTime` range read on `by_retailer`, widened by the skew buffer
  * and then filtered precisely on `createdAt ∈ [from, toExclusive)`. Returns the
  * matching orders (newest first) and whether the scan hit the cap.
+ *
+ * Exported (not moved) for the seller MCP tool layer (`convex/sellerTools.ts`),
+ * which must produce numbers that agree with this page — one scan, two readers.
  */
-async function scanRange(
+export async function scanRange(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
 	from: number,
