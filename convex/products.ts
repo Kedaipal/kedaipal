@@ -4,6 +4,7 @@ import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
 } from "./lib/fulfilmentDate";
+import { collapseNote, MAX_PICKUP_NOTE_LENGTH } from "./lib/pickupNote";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -72,11 +73,6 @@ function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
 	return raw === 0 ? undefined : raw;
 }
 
-/** How long a buyer's pickup note may be. Long enough for a real instruction
- * ("Collect from the side counter, ring the bell"), short enough that it can
- * sit on a cart line and in a WhatsApp message without becoming the message. */
-export const MAX_PICKUP_NOTE_LENGTH = 200;
-
 /** Per-product prep window in MINUTES (z8r3fdff97). Integer in
  * [0, MAX_PREP_MINUTES]; 0 normalizes to unset so "no window" has one
  * spelling, the sanitizeMinNoticeDays posture. Checkout/create take the MAX
@@ -96,10 +92,8 @@ function sanitizePrepMinutes(raw: number | undefined): number | undefined {
  * WhatsApp message, a PDF); empty → unset. Stored as plain text and rendered
  * as escaped text everywhere — never markup. */
 function sanitizePickupNote(raw: string | undefined): string | undefined {
-	if (raw === undefined) return undefined;
-	const collapsed = raw.replace(/\s+/g, " ").trim();
-	if (collapsed.length === 0) return undefined;
-	if (collapsed.length > MAX_PICKUP_NOTE_LENGTH) {
+	const collapsed = collapseNote(raw);
+	if (collapsed !== undefined && collapsed.length > MAX_PICKUP_NOTE_LENGTH) {
 		throw new ConvexError(
 			`Pickup note must be ${MAX_PICKUP_NOTE_LENGTH} characters or fewer`,
 		);

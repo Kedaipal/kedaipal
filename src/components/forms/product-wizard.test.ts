@@ -362,6 +362,8 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 			hidden: true,
 			kind: "physical" as const,
 			capacityPerNight: "1",
+			prepMinutes: "90",
+			pickupNote: "Side counter.",
 			categoryIds: [],
 			images: [{ id: "st1", url: "blob:p1" }],
 			editor: {
@@ -412,6 +414,8 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 			editor: handoff.initialEditor,
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 		};
 		const back = formDraftToWizardState(draft);
 		expect(back.editor).toEqual(s.editor);
@@ -717,6 +721,8 @@ describe("wizard — made-to-order product type", () => {
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 			editor: madeToOrderState().editor,
 		};
 		expect(formDraftToWizardState(draft).shape).toBe("made_to_order");
@@ -733,6 +739,8 @@ describe("wizard — made-to-order product type", () => {
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 			editor: {
 				options: [],
 				rows: [row({ price: "20" })],
@@ -753,6 +761,8 @@ describe("wizard — made-to-order product type", () => {
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 			editor: {
 				options: [],
 				// Made fresh, but priced and NOT mockup-gated.
