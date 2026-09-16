@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import {
+	CalendarClock,
 	Camera,
 	CheckCircle2,
 	ClipboardList,
@@ -79,6 +80,15 @@ export const PREP_PRESETS = [
 	{ minutes: 240, label: "4 hours" },
 ] as const;
 import { CategoryPicker } from "./category-picker";
+import {
+	EMPTY_EVENT_DRAFT,
+	type EventDraft,
+	eventDraftFrom,
+	eventDraftValid,
+	EventFields,
+	type EventSubmitValue,
+	eventSubmitValue,
+} from "./event-fields";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
@@ -128,6 +138,10 @@ export interface ProductFormSubmitValues {
 	// Minimum order quantity (summed across variants). undefined = no minimum;
 	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
 	minQuantity?: number;
+	// Fixed event date (`z8r3fdff9u`). `null` CLEARS a stored event (the toggle
+	// turned off); an object sets/replaces it. Never `undefined` from this form
+	// — that spelling means "no change", which would strand a cleared event.
+	event: EventSubmitValue;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -197,6 +211,9 @@ export type ProductFormDraft = {
 	minNoticeDays: string;
 	prepMinutes: string;
 	pickupNote: string;
+	/** Event block, as typed. Optional so pre-event draft literals (tests,
+	 * stored wizard handoffs) stay valid. */
+	event?: EventDraft;
 };
 
 interface ProductFormProps {
@@ -205,6 +222,12 @@ interface ProductFormProps {
 	/** Client mirror of the `categories` plan gate: when true, the picker only
 	 * allows deselection (server enforces the same add-gated rule). */
 	categoriesLocked: boolean;
+	/** Client mirror of the `events` plan gate (`z8r3fdff9u`): when true the
+	 * "This is an event" toggle disables with the Pro hint. Server enforces it. */
+	eventsLocked: boolean;
+	/** Live (non-cancelled) RSVPs on this product — locks the date + the toggle
+	 * once > 0, matching the server's refusal. Undefined on create. */
+	eventRsvpCount?: number;
 	initialValues?: {
 		name?: string;
 		description?: string;
@@ -230,6 +253,12 @@ interface ProductFormProps {
 		prepMinutes?: number;
 		pickupNote?: string;
 		minQuantity?: number;
+		/** Stored event config (`z8r3fdff9u`) — seeds the toggle + three inputs. */
+		event?: { date: number; timeMinutes?: number; seats?: number };
+		/** Event block as an already-built draft — the wizard handoff's spelling,
+		 * which must survive a round-trip with half-typed values intact. Wins
+		 * over `event` when both are present. */
+		eventDraft?: EventDraft;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -723,6 +752,8 @@ function VisibilityControl({
 export function ProductForm({
 	retailerId,
 	categoriesLocked,
+	eventsLocked,
+	eventRsvpCount,
 	initialValues,
 	currency,
 	submitLabel,
@@ -809,6 +840,12 @@ export function ProductForm({
 	const [minQty, setMinQty] = useState(
 		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
 	);
+	const [eventDraft, setEventDraft] = useState<EventDraft>(
+		() =>
+			initialValues?.eventDraft ??
+			eventDraftFrom(initialValues?.event) ??
+			EMPTY_EVENT_DRAFT,
+	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
@@ -869,6 +906,12 @@ export function ProductForm({
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
 			if (!minQtyValid || !prepValid || !pickupNoteValid) return;
+			if (!minQtyValid) return;
+			// An event that already has guests may be re-saved on its own past
+			// date (the seller fixing a seat cap the morning after) — the same
+			// allowance the server makes.
+			if (!eventDraftValid(eventDraft, { allowPastDate: (eventRsvpCount ?? 0) > 0 }))
+				return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)
@@ -927,6 +970,9 @@ export function ProductForm({
 					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
 					// A booking listing never carries one (its input isn't rendered).
 					minQuantity: isBooking ? 0 : minQtyParsed,
+					// `null` when off — the spelling that CLEARS. A booking listing
+					// never renders the block, so it always sends null.
+					event: isBooking ? null : eventSubmitValue(eventDraft),
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					// Derived from the SAME reconciled pair as `variants` above, so the
@@ -965,6 +1011,7 @@ export function ProductForm({
 			minNoticeDays: minNoticeDraft,
 			prepMinutes: prepDraft,
 			pickupNote: pickupNoteDraft,
+			event: eventDraft,
 		});
 		return () => {
 			draftRef.current = null;
@@ -1452,6 +1499,28 @@ export function ProductForm({
 				</ProductStepCard>
 			)}
 
+			{/* Event mode (`z8r3fdff9u`). Its OWN card, above Order rules, because
+			    it isn't a limit on how a buyer may order — it changes what the
+			    product is (a date, a venue, a seat count, and a listing that
+			    retires itself). It also overrides the minimum notice in the card
+			    below, which is why it comes first and says so. Never on a booking
+			    listing: a stay already takes its own dates. */}
+			{isBooking ? null : (
+				<ProductStepCard
+					icon={<CalendarClock className="size-5" />}
+					kicker="Selling"
+					title="Event"
+					description="Turn this into a fixed-date event guests RSVP to."
+				>
+					<EventFields
+						draft={eventDraft}
+						onChange={setEventDraft}
+						locked={eventsLocked}
+						rsvpCount={eventRsvpCount}
+					/>
+				</ProductStepCard>
+			)}
+
 			{/* Order rules — what governs HOW a buyer may order this product (how
 			    many, how soon, how long it takes to make) and the one line they
 			    need when they collect it. Grouped in one card because they're the
@@ -1544,6 +1613,10 @@ export function ProductForm({
 								onChange={(e) => setMinNoticeDraft(e.target.value)}
 								placeholder="0"
 								variant="field"
+								// An event fixes the date the seller chose, so notice is
+								// dead config here. Disabled with the reason rather than
+								// left enabled and silently ignored.
+								disabled={eventDraft.on}
 								className="w-24 text-center"
 							/>
 							{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
@@ -1558,9 +1631,11 @@ export function ProductForm({
 						</div>
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">
-						{isBooking
-							? "Days of lead time a booking needs — guests can't request a check-in sooner than this. Leave 0 to allow same-day requests."
-							: "Days of lead time this product needs (custom / made-to-order items). Buyers can't pick a delivery or pickup date sooner than this — it raises your store-level notice when higher, and the strictest item in a cart sets the whole order's earliest date. Leave 0 for no extra notice."}
+						{eventDraft.on
+							? "Not used on an event — guests RSVP to the fixed date you set above, so there's no date for notice to push."
+							: isBooking
+								? "Days of lead time a booking needs — guests can't request a check-in sooner than this. Leave 0 to allow same-day requests."
+								: "Days of lead time this product needs (custom / made-to-order items). Buyers can't pick a delivery or pickup date sooner than this — it raises your store-level notice when higher, and the strictest item in a cart sets the whole order's earliest date. Leave 0 for no extra notice."}
 					</p>
 				</div>
 

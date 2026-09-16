@@ -37,6 +37,7 @@ function renderWizard({
 		<ProductWizard
 			retailerId={"r1" as never}
 			categoriesLocked={false}
+			eventsLocked={false}
 			currency="RM"
 			defaultKind={defaultKind}
 			onSubmit={onSubmit as never}

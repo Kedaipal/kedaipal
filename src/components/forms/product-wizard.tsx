@@ -58,6 +58,13 @@ import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import { CategoryPicker } from "./category-picker";
 import {
+	EMPTY_EVENT_DRAFT,
+	type EventDraft,
+	eventDraftValid,
+	EventFields,
+	eventSubmitValue,
+} from "./event-fields";
+import {
 	buildSubmitVariants,
 	collectOptionIssues,
 	PREP_PRESETS,
@@ -181,6 +188,11 @@ export type WizardState = {
 	prepMinutes: string;
 	/** One line a collecting buyer reads; blank = none. */
 	pickupNote: string;
+	/** Review "More options" — fixed-date event (`z8r3fdff9u`). Lives in the
+	 * optional drawer, not as a step: the wizard's steps are the questions
+	 * every product must answer, and "is this an event?" is a no for almost
+	 * every one of them. Never offered on a booking listing. */
+	event: EventDraft;
 };
 
 export function emptyWizardState(defaultKind?: ProductKind): WizardState {
@@ -218,6 +230,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		minNoticeDays: "",
 		prepMinutes: "",
 		pickupNote: "",
+		event: { ...EMPTY_EVENT_DRAFT },
 	};
 }
 
@@ -543,6 +556,13 @@ export function wizardStepIssues(
 			issues.push({
 				field: "pickupNote",
 				message: `Keep it to ${MAX_PICKUP_NOTE_LENGTH} characters or fewer.`,
+		// Nothing can have RSVP'd to a product that doesn't exist yet, so the
+		// wizard never allows a past date.
+		if (!eventDraftValid(state.event)) {
+			issues.push({
+				field: "event",
+				message:
+					"Set an event date of today or later, and a seat limit between 1 and 500 (or leave it blank).",
 			});
 		}
 	}
@@ -643,6 +663,8 @@ export function buildWizardSubmitValues(
 			kind !== "booking" && state.pickupNote.trim().length > 0
 				? state.pickupNote
 				: undefined,
+		// A booking listing already takes its own dates — never an event.
+		event: kind === "booking" ? null : eventSubmitValue(state.event),
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: reconciled.options,
@@ -692,6 +714,9 @@ export function wizardHandoff(state: WizardState): {
 					: undefined,
 			pickupNote:
 				state.pickupNote.trim().length > 0 ? state.pickupNote : undefined,
+			// Handed over as the DRAFT, not the parsed value: a half-typed seat
+			// cap must survive the jump to the full editor intact.
+			eventDraft: state.event,
 		},
 		initialEditor: state.editor,
 	};
@@ -718,6 +743,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		securityDeposit: draft.securityDeposit ?? "",
 		weekendPrice: draft.weekendPrice ?? "",
 		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
+		event: draft.event ?? { ...EMPTY_EVENT_DRAFT },
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
 		// the buyer picks; one never-out-of-stock, mockup-gated row = made to
 		// order; anything else = a single item.
@@ -855,6 +881,7 @@ function AnswerCard({
 export function ProductWizard({
 	retailerId,
 	categoriesLocked,
+	eventsLocked,
 	currency,
 	defaultKind,
 	onSubmit,
@@ -867,6 +894,9 @@ export function ProductWizard({
 	retailerId: Id<"retailers">;
 	/** Client mirror of the `categories` plan gate (same as the full form). */
 	categoriesLocked: boolean;
+	/** Client mirror of the `events` plan gate — the toggle disables with the
+	 * Pro hint. Server enforces it too. */
+	eventsLocked: boolean;
 	currency: string;
 	/** The store's `storeType`, when set — pre-answers step 0's kind card
 	 * ("Your store type" badge); the seller can still tap another. */
@@ -2734,6 +2764,22 @@ export function ProductWizard({
 										</div>
 									)}
 
+									{/* Event (`z8r3fdff9u`) — above Order rules for the same
+									    reason the full form puts it in its own card first: it
+									    overrides the minimum notice below it. Optional config,
+									    so it lives in this drawer rather than costing every
+									    seller a wizard step. Never on a booking listing. */}
+									{isBooking ? null : (
+										<div className="flex flex-col gap-3 border-t border-border pt-3">
+											<EventFields
+												draft={state.event}
+												onChange={(event) => patch({ event })}
+												locked={eventsLocked}
+											/>
+											<IssueText message={issueFor("event")} />
+										</div>
+									)}
+
 									{/* Order rules — the same two constraints the full form
 									    groups in its "Order rules" card. Blank = no rule. A
 									    booking listing shows neither: min quantity is meaningless
@@ -2783,6 +2829,7 @@ export function ProductWizard({
 															patch({ minNoticeDays: e.target.value })
 														}
 														isError={!!issueFor("minNoticeDays")}
+														disabled={state.event.on}
 														className="h-11 w-24 text-center"
 													/>
 													<span className="text-sm font-normal text-muted-foreground">
@@ -2791,8 +2838,9 @@ export function ProductWizard({
 												</span>
 												<IssueText message={issueFor("minNoticeDays")} />
 												<span className="text-xs font-normal text-muted-foreground">
-													Lead time you need — buyers can&apos;t pick a delivery
-													or pickup date sooner than this.
+													{state.event.on
+														? "Not used on an event — guests RSVP to the fixed date you set above."
+														: "Lead time you need — buyers can't pick a delivery or pickup date sooner than this."}
 												</span>
 											</label>
 											{/* Prep time — the same question at a smaller scale, so

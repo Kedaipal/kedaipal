@@ -22,6 +22,7 @@ import {
 	ProductForm,
 	type ProductFormDraft,
 } from "../components/forms/product-form";
+import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
 import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -149,6 +150,14 @@ function EditProductRoute() {
 			productId: productId as Id<"products">,
 		}),
 	).data;
+	// Live RSVP headcount for an event product (`z8r3fdff9u`). Returns null for
+	// every normal product, so the panel simply doesn't render — no second
+	// "is this an event" round trip.
+	const headcount = useQuery(
+		convexQuery(api.products.eventHeadcount, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
 	const update = useMutation(api.products.update);
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
@@ -247,6 +256,13 @@ function EditProductRoute() {
 					</>
 				}
 			/>
+			{/* The headcount leads on an event product: tapping into "BNI
+			    Breakfast" the morning of the event, "18 RSVPs · 11 Set A" is what
+			    she came for — not the name field. Absent on every other product. */}
+			{headcount ? (
+				<EventRsvpPanel headcount={headcount} productName={product.name} />
+			) : null}
+
 			{/* Mobile header — back button, title, storefront preview + the honest
 			    status chip (Live / Sold out / Hidden / Archived), visible from the
 			    top of a long form. */}
@@ -282,6 +298,13 @@ function EditProductRoute() {
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
 				}
+				eventsLocked={
+					!retailer.actingAsAdmin &&
+					!hasFeature(retailer.subscription, "events")
+				}
+				// Live RSVPs lock the date + the toggle, mirroring the server's
+				// refusal so the seller never types a change that can't save.
+				eventRsvpCount={headcount?.taken}
 				currency={product.currency}
 				initialValues={{
 					name: product.name,
@@ -310,6 +333,7 @@ function EditProductRoute() {
 					prepMinutes: product.prepMinutes,
 					pickupNote: product.pickupNote,
 					minQuantity: product.minQuantity,
+					event: product.event,
 					categoryIds,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
@@ -399,6 +423,9 @@ function EditProductRoute() {
 						// Booking capacity (kind itself is immutable — update has no
 						// kind arg by design). undefined on non-booking = no change.
 						booking: values.booking,
+						// `null` clears a stored event (toggle off); the form never
+						// sends undefined, so an event can always be turned off.
+						event: values.event,
 					});
 					await saveVariantGrid({
 						productId: product._id,
