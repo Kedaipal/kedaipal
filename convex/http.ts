@@ -22,6 +22,27 @@ import {
 } from "./lib/hitpayBilling";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
+	isMcpPeriod,
+	isMcpToolName,
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
+	JSONRPC_PARSE_ERROR,
+	type JsonRpcId,
+	jsonRpcError,
+	jsonRpcResult,
+	MCP_CORS_HEADERS,
+	MCP_GATE_COPY,
+	MCP_PROTOCOL_VERSION,
+	MCP_SERVER_INFO,
+	MCP_SERVER_INSTRUCTIONS,
+	MCP_SUPPORTED_VERSIONS,
+	MCP_TOOLS,
+	rateLimitCopy,
+	resolvePeriod,
+	toolResult,
+} from "./lib/mcp";
+import {
 	parseLalamoveWebhookEnvelope,
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
@@ -745,6 +766,407 @@ http.route({
 		return new Response(JSON.stringify(report), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
+		});
+	}),
+});
+
+// ---------------------------------------------------------------------------
+// Seller MCP server (z8r3fdff6p) — remote MCP over stateless streamable HTTP.
+//
+// A seller connects their own AI assistant (Claude/ChatGPT custom connector)
+// via "Sign in with Kedaipal": the client discovers our OAuth setup through
+// the .well-known routes below, runs the OAuth flow against CLERK (Kedaipal's
+// auth server — dynamic client registration must be enabled on the Clerk
+// dashboard's OAuth applications page), then calls POST /mcp with a Bearer
+// token. Clerk's OAuth access tokens are OPAQUE (not JWTs), so `ctx.auth`
+// can't validate them — we verify each one against Clerk's `oauth/userinfo`
+// and resolve the Clerk user to THEIR OWN retailer server-side. The client
+// never supplies a retailerId; that resolution is the tenant boundary.
+//
+// Read-only by construction: every tool dispatches to an internal QUERY in
+// `convex/sellerTools.ts` (the shared tool layer). Calls are free — never
+// credit-metered — with the per-store limiter pair as the cost guard, and
+// gate refusals (Starter plan / past-due sub) are seller-facing sentences the
+// assistant relays verbatim. See docs/seller-mcp.md.
+
+function mcpJsonResponse(body: string, status = 200): Response {
+	return new Response(body, {
+		status,
+		headers: { "Content-Type": "application/json", ...MCP_CORS_HEADERS },
+	});
+}
+
+/** 401 whose WWW-Authenticate header points the client at our protected-
+ * resource metadata — this is what kicks off the OAuth flow in MCP clients. */
+function mcpUnauthorized(): Response {
+	const site = process.env.CONVEX_SITE_URL ?? "";
+	return new Response(null, {
+		status: 401,
+		headers: {
+			...MCP_CORS_HEADERS,
+			"WWW-Authenticate": `Bearer resource_metadata="${site}/.well-known/oauth-protected-resource/mcp"`,
+		},
+	});
+}
+
+/** CLERK_JWT_ISSUER_DOMAIN (already required by auth.config.ts — reused, not a
+ * new env var) normalized to an origin. */
+function clerkIssuer(): string | null {
+	const domain = process.env.CLERK_JWT_ISSUER_DOMAIN?.trim();
+	if (!domain) return null;
+	const origin = domain.startsWith("http") ? domain : `https://${domain}`;
+	return origin.replace(/\/+$/, "");
+}
+
+/** Verify an opaque Clerk OAuth access token by asking Clerk who it belongs
+ * to. Returns the Clerk user id, or null for anything invalid/expired. */
+async function verifyClerkOauthToken(
+	issuer: string,
+	token: string,
+): Promise<string | null> {
+	const res = await fetch(`${issuer}/oauth/userinfo`, {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!res.ok) return null;
+	const info: unknown = await res.json().catch(() => null);
+	if (typeof info !== "object" || info === null) return null;
+	const record = info as { user_id?: unknown; sub?: unknown };
+	const userId = record.user_id ?? record.sub;
+	return typeof userId === "string" && userId.length > 0 ? userId : null;
+}
+
+async function handleMcpToolCall(
+	ctx: ActionCtx,
+	id: JsonRpcId,
+	params: unknown,
+	clerkUserId: string,
+): Promise<Response> {
+	const p =
+		typeof params === "object" && params !== null
+			? (params as { name?: unknown; arguments?: unknown })
+			: {};
+	if (!isMcpToolName(p.name)) {
+		return mcpJsonResponse(
+			jsonRpcError(id, JSONRPC_INVALID_PARAMS, `Unknown tool: ${String(p.name)}`),
+		);
+	}
+	const args =
+		typeof p.arguments === "object" && p.arguments !== null
+			? (p.arguments as Record<string, unknown>)
+			: {};
+
+	// Tenant boundary: the token's user resolves to THEIR retailer, gates
+	// applied (frozen sub outranks the plan pitch — see resolveMcpContext).
+	// Gate refusals are tool results with isError, not protocol errors, so the
+	// assistant relays the sentence to the seller instead of showing a fault.
+	const context = await ctx.runQuery(internal.sellerTools.resolveMcpContext, {
+		clerkUserId,
+	});
+	if (!context.ok) {
+		return mcpJsonResponse(
+			jsonRpcResult(id, toolResult(MCP_GATE_COPY[context.reason], true)),
+		);
+	}
+
+	const limit = await ctx.runMutation(internal.sellerTools.checkMcpRateLimit, {
+		retailerId: context.retailerId,
+	});
+	if (!limit.ok) {
+		return mcpJsonResponse(
+			jsonRpcResult(
+				id,
+				toolResult(rateLimitCopy(limit.retryAfterMs ?? 60_000), true),
+			),
+		);
+	}
+
+	const retailerId = context.retailerId;
+	let payload: unknown;
+	switch (p.name) {
+		case "sales_summary": {
+			const period = isMcpPeriod(args.period) ? args.period : "last_7_days";
+			const { from, toExclusive } = resolvePeriod(period);
+			payload = await ctx.runQuery(internal.sellerTools.salesSummary, {
+				retailerId,
+				from,
+				toExclusive,
+			});
+			break;
+		}
+		case "top_products": {
+			const period = isMcpPeriod(args.period) ? args.period : "last_7_days";
+			const { from, toExclusive } = resolvePeriod(period);
+			payload = await ctx.runQuery(internal.sellerTools.productRanking, {
+				retailerId,
+				from,
+				toExclusive,
+				by: args.by === "quantity" ? "quantity" : "revenue",
+			});
+			break;
+		}
+		case "order_counts": {
+			payload = await ctx.runQuery(internal.sellerTools.orderCounts, {
+				retailerId,
+			});
+			break;
+		}
+		case "top_customers": {
+			payload = await ctx.runQuery(internal.sellerTools.topCustomers, {
+				retailerId,
+				by: args.by === "orders" ? "orders" : "spend",
+			});
+			break;
+		}
+		case "unpaid_orders": {
+			payload = await ctx.runQuery(internal.sellerTools.unpaidOrders, {
+				retailerId,
+				limit: typeof args.limit === "number" ? args.limit : 20,
+			});
+			break;
+		}
+		case "upcoming_fulfilments": {
+			const window =
+				args.window === "tomorrow" || args.window === "this_week"
+					? args.window
+					: "today";
+			payload = await ctx.runQuery(internal.sellerTools.upcomingFulfilments, {
+				retailerId,
+				window,
+			});
+			break;
+		}
+		case "low_stock": {
+			payload = await ctx.runQuery(internal.sellerTools.lowStock, {
+				retailerId,
+				threshold: typeof args.threshold === "number" ? args.threshold : 3,
+			});
+			break;
+		}
+		case "credit_balance": {
+			payload = await ctx.runQuery(internal.sellerTools.creditBalance, {
+				retailerId,
+			});
+			break;
+		}
+	}
+
+	// Stamp the store identity + currency onto every payload so the assistant
+	// always knows whose numbers these are and what "123.50" means.
+	const enriched =
+		typeof payload === "object" && payload !== null
+			? { store: context.storeName, currency: context.currency, ...payload }
+			: payload;
+	return mcpJsonResponse(jsonRpcResult(id, toolResult(enriched)));
+}
+
+async function handleMcpPost(ctx: ActionCtx, req: Request): Promise<Response> {
+	const issuer = clerkIssuer();
+	if (!issuer) {
+		console.error("mcp rejected: CLERK_JWT_ISSUER_DOMAIN is not configured");
+		return new Response("server misconfigured", {
+			status: 500,
+			headers: MCP_CORS_HEADERS,
+		});
+	}
+
+	// Auth on EVERY request, initialize included — the 401 (+ metadata pointer)
+	// is what tells a fresh client to run the OAuth flow.
+	const authHeader = req.headers.get("Authorization") ?? "";
+	const token = authHeader.startsWith("Bearer ")
+		? authHeader.slice("Bearer ".length).trim()
+		: "";
+	if (!token) return mcpUnauthorized();
+	const clerkUserId = await verifyClerkOauthToken(issuer, token);
+	if (!clerkUserId) return mcpUnauthorized();
+
+	const raw = await req.text();
+	let message: unknown;
+	try {
+		message = JSON.parse(raw);
+	} catch {
+		return mcpJsonResponse(
+			jsonRpcError(null, JSONRPC_PARSE_ERROR, "Invalid JSON"),
+			400,
+		);
+	}
+	if (
+		Array.isArray(message) ||
+		typeof message !== "object" ||
+		message === null
+	) {
+		return mcpJsonResponse(
+			jsonRpcError(
+				null,
+				JSONRPC_INVALID_REQUEST,
+				"Expected a single JSON-RPC 2.0 request object",
+			),
+			400,
+		);
+	}
+	const rpc = message as {
+		jsonrpc?: unknown;
+		id?: unknown;
+		method?: unknown;
+		params?: unknown;
+	};
+	if (rpc.jsonrpc !== "2.0" || typeof rpc.method !== "string") {
+		return mcpJsonResponse(
+			jsonRpcError(null, JSONRPC_INVALID_REQUEST, "Not a JSON-RPC 2.0 request"),
+			400,
+		);
+	}
+
+	// Notifications (no id — e.g. notifications/initialized): acknowledge.
+	if (rpc.id === undefined || rpc.id === null) {
+		return new Response(null, { status: 202, headers: MCP_CORS_HEADERS });
+	}
+	const id = rpc.id as JsonRpcId;
+
+	switch (rpc.method) {
+		case "initialize": {
+			const requested =
+				typeof rpc.params === "object" && rpc.params !== null
+					? (rpc.params as { protocolVersion?: unknown }).protocolVersion
+					: undefined;
+			const protocolVersion = (
+				MCP_SUPPORTED_VERSIONS as readonly string[]
+			).includes(requested as string)
+				? (requested as string)
+				: MCP_PROTOCOL_VERSION;
+			return mcpJsonResponse(
+				jsonRpcResult(id, {
+					protocolVersion,
+					capabilities: { tools: {} },
+					serverInfo: MCP_SERVER_INFO,
+					instructions: MCP_SERVER_INSTRUCTIONS,
+				}),
+			);
+		}
+		case "ping":
+			return mcpJsonResponse(jsonRpcResult(id, {}));
+		case "tools/list":
+			return mcpJsonResponse(jsonRpcResult(id, { tools: MCP_TOOLS }));
+		case "tools/call":
+			return handleMcpToolCall(ctx, id, rpc.params, clerkUserId);
+		default:
+			return mcpJsonResponse(
+				jsonRpcError(
+					id,
+					JSONRPC_METHOD_NOT_FOUND,
+					`Method not supported: ${rpc.method}`,
+				),
+			);
+	}
+}
+
+http.route({
+	path: "/mcp",
+	method: "POST",
+	handler: httpAction(handleMcpPost),
+});
+
+// Browser-based MCP clients preflight; a bearer-token JSON API is safe to
+// answer permissively (no cookies, no ambient auth).
+http.route({
+	path: "/mcp",
+	method: "OPTIONS",
+	handler: httpAction(async () => {
+		return new Response(null, { status: 204, headers: MCP_CORS_HEADERS });
+	}),
+});
+
+// Stateless server: no SSE stream to resume, so GET is explicitly 405 per the
+// streamable-HTTP spec (clients treat that as "POST-only server", not a fault).
+http.route({
+	path: "/mcp",
+	method: "GET",
+	handler: httpAction(async () => {
+		return new Response(null, {
+			status: 405,
+			headers: { ...MCP_CORS_HEADERS, Allow: "POST, OPTIONS" },
+		});
+	}),
+});
+
+/** OAuth protected-resource metadata (RFC 9728) — how an MCP client discovers
+ * that CLERK is the authorization server for this resource. Served on both the
+ * bare path and the /mcp-suffixed one (different client generations probe
+ * different spellings). */
+function protectedResourceMetadata(): Response {
+	const issuer = clerkIssuer();
+	if (!issuer) {
+		console.error(
+			"mcp metadata rejected: CLERK_JWT_ISSUER_DOMAIN is not configured",
+		);
+		return new Response("server misconfigured", {
+			status: 500,
+			headers: MCP_CORS_HEADERS,
+		});
+	}
+	const site = process.env.CONVEX_SITE_URL ?? "";
+	return new Response(
+		JSON.stringify({
+			resource: `${site}/mcp`,
+			authorization_servers: [issuer],
+			bearer_methods_supported: ["header"],
+			scopes_supported: ["openid", "profile", "email"],
+		}),
+		{
+			status: 200,
+			headers: {
+				"Content-Type": "application/json",
+				"Cache-Control": "public, max-age=300",
+				...MCP_CORS_HEADERS,
+			},
+		},
+	);
+}
+
+http.route({
+	path: "/.well-known/oauth-protected-resource",
+	method: "GET",
+	handler: httpAction(async () => protectedResourceMetadata()),
+});
+
+http.route({
+	path: "/.well-known/oauth-protected-resource/mcp",
+	method: "GET",
+	handler: httpAction(async () => protectedResourceMetadata()),
+});
+
+/** Authorization-server metadata passthrough for OLDER MCP clients that probe
+ * the resource's own domain instead of following `authorization_servers`. We
+ * proxy Clerk's live metadata rather than hardcoding it so Clerk dashboard
+ * changes (e.g. enabling dynamic client registration, which adds
+ * `registration_endpoint`) surface without a deploy. */
+http.route({
+	path: "/.well-known/oauth-authorization-server",
+	method: "GET",
+	handler: httpAction(async () => {
+		const issuer = clerkIssuer();
+		if (!issuer) {
+			console.error(
+				"mcp metadata rejected: CLERK_JWT_ISSUER_DOMAIN is not configured",
+			);
+			return new Response("server misconfigured", {
+				status: 500,
+				headers: MCP_CORS_HEADERS,
+			});
+		}
+		const res = await fetch(`${issuer}/.well-known/oauth-authorization-server`);
+		if (!res.ok) {
+			return new Response("authorization server metadata unavailable", {
+				status: 502,
+				headers: MCP_CORS_HEADERS,
+			});
+		}
+		return new Response(await res.text(), {
+			status: 200,
+			headers: {
+				"Content-Type": "application/json",
+				"Cache-Control": "public, max-age=300",
+				...MCP_CORS_HEADERS,
+			},
 		});
 	}),
 });

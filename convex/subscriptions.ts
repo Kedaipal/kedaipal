@@ -341,6 +341,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	delivery: "Lalamove delivery booking",
 	onlinePayments: "Online payments (HitPay)",
 	waOrderAlerts: "WhatsApp order alerts",
+	mcp: "The AI assistant connection",
 };
 
 /**
