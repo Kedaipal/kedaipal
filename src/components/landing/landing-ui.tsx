@@ -48,44 +48,6 @@ export function GuaranteeLine({ className }: { className?: string }) {
 }
 
 /**
- * Mobile-only horizontal snap carousel (86eye3p6z follow-up: the stacked
- * landing sections made the mobile page enormously long). Below `md` the
- * track is a full-bleed snap scroller — same mechanics as the storefront's
- * category rail: `-mx-5/px-5` slides cards under the screen edge, and
- * `scroll-pl-5` keeps the snapped rest position aligned with the section
- * padding (snap measures from the padding box). At `md` it resets to whatever
- * the caller's `desktop` classes say (usually the original grid), so desktop
- * is untouched.
- *
- * Slides are sized at 85% so the next card always peeks — that peek IS the
- * "swipe for more" affordance, which is also why carousel slides must NOT be
- * individually FadeIn-wrapped: a peeking slide sits inside FadeIn's -80px
- * viewport inset and would hold at opacity 0 until swiped, hiding the
- * affordance. Wrap the whole track in one FadeIn instead.
- */
-export function carouselTrackClass(desktop: string) {
-	return cn(
-		"-mx-5 flex snap-x snap-mandatory scroll-pl-5 gap-4 overflow-x-auto px-5 pb-3 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-		"md:mx-0 md:snap-none md:overflow-visible md:px-0 md:pb-0 md:pt-0",
-		desktop,
-	);
-}
-
-/**
- * A slide inside `carouselTrackClass` — full-size again at `md`.
- *
- * `relative` is load-bearing: slides carry absolutely-positioned descendants
- * (`sr-only` spans, mockup badges), and with no positioned ancestor inside the
- * track those resolve their containing block ABOVE the scroller — an absolute
- * element escapes an ancestor's overflow clip unless that ancestor chain
- * contains its containing block, so a slide scrolled to x≈900 widened the
- * whole PAGE to 978px. Positioning the slide pins them inside it.
- */
-export function carouselSlideClass(extra?: string) {
-	return cn("relative w-[85%] shrink-0 snap-start sm:w-[60%] md:w-auto", extra);
-}
-
-/**
  * Mobile centered carousel (Embla — the engine under shadcn's Carousel),
  * for rails whose CENTER slide is the centerpiece (the pricing tiers, owner
  * call 29 Aug: Pro dead-center with neighbours peeking both sides). CSS
@@ -132,29 +94,6 @@ export function centerSnapSlideClass(extra?: string) {
 	return cn(
 		"min-w-0 shrink-0 grow-0 basis-[80%] px-2 first:pl-4 last:pr-4 sm:basis-[60%] md:basis-auto md:px-0 md:first:pl-0 md:last:pr-0",
 		extra,
-	);
-}
-
-/** Decorative QR pattern — a grid of squares standing in for a real code. */
-export function QrPattern({ className }: { className?: string }) {
-	return (
-		<div
-			className={cn(
-				"grid grid-cols-8 grid-rows-8 gap-0.5 rounded-xl bg-foreground p-2",
-				className,
-			)}
-		>
-			{Array.from({ length: 64 }).map((_, i) => (
-				<span
-					// biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid, never reorders
-					key={i}
-					className={cn(
-						"rounded-[1px]",
-						i % 3 === 0 || i % 7 === 0 ? "bg-background" : "bg-transparent",
-					)}
-				/>
-			))}
-		</div>
 	);
 }
 
@@ -215,38 +154,6 @@ export function Eyebrow({ children, className }: EyebrowProps) {
 	);
 }
 
-interface MarqueeProps {
-	items: string[];
-	className?: string;
-	separator?: string;
-}
-
-function MarqueeRow({
-	items,
-	separator,
-	hidden = false,
-}: {
-	items: string[];
-	separator: string;
-	hidden?: boolean;
-}) {
-	return (
-		<div
-			aria-hidden={hidden || undefined}
-			className="flex shrink-0 items-center gap-6 pr-6"
-		>
-			{items.map((item) => (
-				<span key={item} className="flex items-center gap-6">
-					<span className="whitespace-nowrap">{item}</span>
-					<span aria-hidden className="text-accent">
-						{separator}
-					</span>
-				</span>
-			))}
-		</div>
-	);
-}
-
 interface RegionToggleProps {
 	region: Country;
 	onChange: (next: Country) => void;
@@ -295,6 +202,90 @@ export function RegionToggle({ region, onChange, className }: RegionToggleProps)
 				</button>
 			))}
 		</fieldset>
+	);
+}
+
+/**
+ * White pill shared by every third-party brand mark on the landing (payment
+ * rails, couriers) so each chip has one silhouette in both themes: official
+ * marks may not be recoloured and most carry their own colours, so a white
+ * ground is the only treatment that stays legible and compliant when the page
+ * flips to dark. One idea, one control — the payment wall and the courier rail
+ * render the identical chip.
+ */
+export const logoPillClass =
+	"inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-white shadow-sm transition-transform duration-200 hover:-translate-y-0.5";
+
+/**
+ * One auto-scrolling row of chips (the Mobbin logo-wall rows). Renders the
+ * children twice — the second copy `aria-hidden` — so the loop is seamless;
+ * hovering the ROW pauses it, so a reader can chase a chip without it
+ * escaping. Reduced motion stops it via the shared `animate-kp-marquee*` CSS.
+ *
+ * `children` is a render function so the duplicate copy can pass `hidden` to
+ * its images (empty `alt`) and the names aren't announced twice.
+ */
+export function LogoMarqueeRow({
+	children,
+	reverse = false,
+	className,
+}: {
+	children: (hidden: boolean) => ReactNode;
+	reverse?: boolean;
+	className?: string;
+}) {
+	const copy = (hidden: boolean) => (
+		<div
+			aria-hidden={hidden || undefined}
+			className="flex shrink-0 items-center gap-2.5 pr-2.5"
+		>
+			{children(hidden)}
+		</div>
+	);
+	return (
+		<div className={cn("flex overflow-hidden py-1", className)}>
+			<div
+				className={cn(
+					"flex hover:[animation-play-state:paused]",
+					reverse ? "animate-kp-marquee-slow-reverse" : "animate-kp-marquee-slow",
+				)}
+			>
+				{copy(false)}
+				{copy(true)}
+			</div>
+		</div>
+	);
+}
+
+interface MarqueeProps {
+	items: string[];
+	className?: string;
+	separator?: string;
+}
+
+function MarqueeRow({
+	items,
+	separator,
+	hidden = false,
+}: {
+	items: string[];
+	separator: string;
+	hidden?: boolean;
+}) {
+	return (
+		<div
+			aria-hidden={hidden || undefined}
+			className="flex shrink-0 items-center gap-6 pr-6"
+		>
+			{items.map((item) => (
+				<span key={item} className="flex items-center gap-6">
+					<span className="whitespace-nowrap">{item}</span>
+					<span aria-hidden className="text-accent">
+						{separator}
+					</span>
+				</span>
+			))}
+		</div>
 	);
 }
 
