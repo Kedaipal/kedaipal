@@ -4,7 +4,9 @@ import {
 	addMytCalendarMonths,
 	DAY_MS,
 	assertValidFulfilmentTime,
+	clampPrepMinutes,
 	EARLIEST_FULFILMENT_LEAD_MINUTES,
+	MAX_PREP_MINUTES,
 	composeFulfilmentMoment,
 	defaultFulfilmentTimeMinutes,
 	formatFulfilmentDateTime,
@@ -348,5 +350,101 @@ describe("addMytCalendarMonths (S7 — what 'monthly' actually means)", () => {
 		expect(readBack(addMytCalendarMonths(myt(2026, 2, 1), 1))).toEqual([
 			2026, 3, 1,
 		]);
+	});
+});
+
+describe("per-product prep time (z8r3fdff97)", () => {
+	const AUG4 = Date.UTC(2026, 7, 3, 16, 0, 0); // MYT midnight 4 Aug
+	const at = (h: number, m = 0) => AUG4 + (h * 60 + m) * 60_000;
+	const NOW_1412 = at(14, 12);
+	const TOMORROW = AUG4 + DAY;
+
+	test("clampPrepMinutes: blank, junk and 0 all mean no rule", () => {
+		// One spelling for "no prep window", so a stored 0 and an absent field
+		// can never describe different products.
+		expect(clampPrepMinutes(undefined)).toBe(0);
+		expect(clampPrepMinutes(Number.NaN)).toBe(0);
+		expect(clampPrepMinutes(0)).toBe(0);
+		expect(clampPrepMinutes(-30)).toBe(0);
+	});
+
+	test("clampPrepMinutes: truncates fractions and caps at one day", () => {
+		expect(clampPrepMinutes(120)).toBe(120);
+		expect(clampPrepMinutes(90.9)).toBe(90);
+		expect(clampPrepMinutes(MAX_PREP_MINUTES)).toBe(MAX_PREP_MINUTES);
+		expect(clampPrepMinutes(99_999)).toBe(MAX_PREP_MINUTES);
+		expect(MAX_PREP_MINUTES).toBe(1440);
+	});
+
+	test("prep raises TODAY's floor: order at 10:00, collect from 12:00", () => {
+		// The done criterion on the ticket, in one line.
+		expect(minSelectableTimeMinutes(AUG4, at(10), 120)).toBe(12 * 60);
+	});
+
+	test("a prep shorter than the lead time never LOWERS the floor", () => {
+		// Both are "now + something"; the floor is the later of the two, so a
+		// 5-minute prep must not undercut the 15-minute dispatch lead.
+		const plain = minSelectableTimeMinutes(AUG4, NOW_1412);
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412, 5)).toBe(plain);
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412, 0)).toBe(plain);
+		expect(plain).toBe(14 * 60 + 30);
+	});
+
+	test("the raised floor still rounds up to 5", () => {
+		// 10:04 + 61 = 11:05 exactly; 10:06 + 61 = 11:07 → 11:10.
+		expect(minSelectableTimeMinutes(AUG4, at(10, 4), 61)).toBe(11 * 60 + 5);
+		expect(minSelectableTimeMinutes(AUG4, at(10, 6), 61)).toBe(11 * 60 + 10);
+		for (let minute = 0; minute < 1440; minute += 7) {
+			expect(minSelectableTimeMinutes(AUG4, at(0, minute), 95) % 5).toBe(0);
+		}
+	});
+
+	test("a FUTURE day absorbs prep overnight — its floor stays 0", () => {
+		// Deliberate, and the same posture as min notice: notice moves the DATE
+		// and then stops caring about the clock. Stacking prep onto tomorrow
+		// would push a breakfast order past a time the buyer could explain.
+		expect(minSelectableTimeMinutes(TOMORROW, at(10), 120)).toBe(0);
+		expect(minSelectableTimeMinutes(TOMORROW, at(23, 55), MAX_PREP_MINUTES)).toBe(0);
+	});
+
+	test("prep that runs past midnight leaves today with no slot", () => {
+		// 22:00 + 4h is tomorrow, so today is out — the caller moves the buyer
+		// on, exactly as it already does in the last minutes before midnight.
+		expect(hasSelectableTimeToday(at(22), 240)).toBe(false);
+		expect(hasSelectableTimeToday(at(10), 240)).toBe(true);
+		// Unchanged for a store with no prep window at all.
+		expect(hasSelectableTimeToday(at(22))).toBe(true);
+	});
+
+	test("THE INVARIANT still holds with a prep window in the cart", () => {
+		// The same sweep the plain floor gets: a prefill that sits under the
+		// floor is what the browser blocks submit on, with its own message.
+		for (const prep of [0, 15, 30, 120, 240, MAX_PREP_MINUTES]) {
+			for (let minute = 0; minute < 1440; minute += 1) {
+				const now = AUG4 + minute * 60_000;
+				for (const day of [AUG4, TOMORROW]) {
+					if (day === AUG4 && !hasSelectableTimeToday(now, prep)) continue;
+					const def = defaultFulfilmentTimeMinutes(day, now, prep);
+					expect(def).toBeGreaterThanOrEqual(
+						minSelectableTimeMinutes(day, now, prep),
+					);
+					expect(def).toBeLessThan(1440);
+				}
+			}
+		}
+	});
+
+	test("every widened signature is backward-compatible", () => {
+		// Every existing call site omits the third argument — openingHours.ts,
+		// checkout-form.tsx and claim-checkout-page.tsx all still pass two.
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(
+			minSelectableTimeMinutes(AUG4, NOW_1412, 0),
+		);
+		expect(hasSelectableTimeToday(NOW_1412)).toBe(
+			hasSelectableTimeToday(NOW_1412, 0),
+		);
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(
+			defaultFulfilmentTimeMinutes(AUG4, NOW_1412, 0),
+		);
 	});
 });

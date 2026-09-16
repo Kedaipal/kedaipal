@@ -242,6 +242,30 @@ const MINUTE_MS = 60 * 1000;
  */
 export const EARLIEST_FULFILMENT_LEAD_MINUTES = 15;
 
+/**
+ * Per-product PREP time (ClickUp `z8r3fdff97`) — the made-to-order window a
+ * seller needs before an order can be collected, measured in MINUTES.
+ *
+ * `minNoticeDays` could not express this. Notice 0 lets a buyer order at 9:00
+ * and collect at 9:15 (the lead floor above); notice 1 removes same-day
+ * entirely. "Ready in 2 hours" is neither, and it is the normal case for a
+ * kitchen — Huff & Puff's ice-cream puffs, a decorated cake, a bento run.
+ *
+ * Capped at one full day: past that a seller means "notice days", which has
+ * its own field and its own calendar semantics. 0 / blank / junk → unset, the
+ * `minQuantity` and `securityDeposit` posture (one spelling for "no rule").
+ */
+export const MAX_PREP_MINUTES = MINUTES_PER_DAY;
+
+/** Normalise a submitted prep window into [0, MAX_PREP_MINUTES]. 0 = none. */
+export function clampPrepMinutes(minutes: number | undefined): number {
+	if (minutes === undefined || !Number.isFinite(minutes)) return 0;
+	const i = Math.trunc(minutes);
+	if (i <= 0) return 0;
+	if (i > MAX_PREP_MINUTES) return MAX_PREP_MINUTES;
+	return i;
+}
+
 /** Minutes since MYT midnight for an arbitrary instant. */
 export function mytMinutesOfDay(now: number = Date.now()): number {
 	return Math.floor(((now + MYT_OFFSET_MS) % DAY_MS) / MINUTE_MS);
@@ -291,9 +315,10 @@ export function composeFulfilmentMoment(
 export function defaultFulfilmentTimeMinutes(
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 10 * 60;
-	const floor = minSelectableTimeMinutes(dateEpoch, now);
+	const floor = minSelectableTimeMinutes(dateEpoch, now, prepMinutes);
 	// The day has run out of bookable slots (see hasSelectableTimeToday) —
 	// nothing valid exists to return, so hand back the last time of day and
 	// let the caller push the buyer to tomorrow.
@@ -327,17 +352,34 @@ export function minSelectableTimeMinutes(
 	now: number = Date.now(),
 	prepMinutes = 0,
 ): number {
+	// A FUTURE day absorbs prep overnight, so its floor stays 0 — the same
+	// posture as min notice, which moves the DATE and then stops caring about
+	// the clock. Stacking a 2-hour prep onto tomorrow would push a breakfast
+	// order to 2 AM-plus-two-hours for no reason a buyer could follow.
 	if (dateEpoch !== todayMytMidnight(now)) return 0;
-	// A negative or non-finite prep never shortens the flat lead.
-	const prep = Number.isFinite(prepMinutes) ? prepMinutes : 0;
-	const lead = Math.max(EARLIEST_FULFILMENT_LEAD_MINUTES, prep);
+	// Both terms are "now + something", so the max of the two offsets is the
+	// max of the two moments; rounded up to 5 so the native time input's
+	// stepping and the floor agree. Normalised through `clampPrepMinutes` —
+	// the SAME function products.ts sanitizes writes with, so a negative, a
+	// non-finite, a fractional or an over-cap prep can never shorten the flat
+	// lead, and "what counts as a prep window" has exactly one definition.
+	const lead = Math.max(
+		EARLIEST_FULFILMENT_LEAD_MINUTES,
+		clampPrepMinutes(prepMinutes),
+	);
 	return Math.ceil((mytMinutesOfDay(now) + lead) / 5) * 5;
 }
 
 /** False only in the last half-hour before midnight, when "today" has no
  * bookable slot left. */
-export function hasSelectableTimeToday(now: number = Date.now()): boolean {
-	return minSelectableTimeMinutes(todayMytMidnight(now), now) < MINUTES_PER_DAY;
+export function hasSelectableTimeToday(
+	now: number = Date.now(),
+	prepMinutes = 0,
+): boolean {
+	return (
+		minSelectableTimeMinutes(todayMytMidnight(now), now, prepMinutes) <
+		MINUTES_PER_DAY
+	);
 }
 
 /** "HH:MM" (the native time-input value) → minutes since midnight, or NaN. */

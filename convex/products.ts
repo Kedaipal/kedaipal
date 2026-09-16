@@ -1,5 +1,9 @@
 import { ConvexError, v } from "convex/values";
-import { isMytMidnight, MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import {
+	isMytMidnight,
+	MAX_NOTICE_DAYS,
+	MAX_PREP_MINUTES,
+} from "./lib/fulfilmentDate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -66,6 +70,41 @@ function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
 		);
 	}
 	return raw === 0 ? undefined : raw;
+}
+
+/** How long a buyer's pickup note may be. Long enough for a real instruction
+ * ("Collect from the side counter, ring the bell"), short enough that it can
+ * sit on a cart line and in a WhatsApp message without becoming the message. */
+export const MAX_PICKUP_NOTE_LENGTH = 200;
+
+/** Per-product prep window in MINUTES (z8r3fdff97). Integer in
+ * [0, MAX_PREP_MINUTES]; 0 normalizes to unset so "no window" has one
+ * spelling, the sanitizeMinNoticeDays posture. Checkout/create take the MAX
+ * across cart items and floor the fulfilment TIME with it. */
+function sanitizePrepMinutes(raw: number | undefined): number | undefined {
+	if (raw === undefined) return undefined;
+	if (!Number.isInteger(raw) || raw < 0 || raw > MAX_PREP_MINUTES) {
+		throw new ConvexError(
+			`Prep time must be a whole number of minutes between 0 and ${MAX_PREP_MINUTES}`,
+		);
+	}
+	return raw === 0 ? undefined : raw;
+}
+
+/** Per-product pickup note. Trimmed; inner newlines collapse to single
+ * spaces so one line stays one line wherever it lands (a cart row, a
+ * WhatsApp message, a PDF); empty → unset. Stored as plain text and rendered
+ * as escaped text everywhere — never markup. */
+function sanitizePickupNote(raw: string | undefined): string | undefined {
+	if (raw === undefined) return undefined;
+	const collapsed = raw.replace(/\s+/g, " ").trim();
+	if (collapsed.length === 0) return undefined;
+	if (collapsed.length > MAX_PICKUP_NOTE_LENGTH) {
+		throw new ConvexError(
+			`Pickup note must be ${MAX_PICKUP_NOTE_LENGTH} characters or fewer`,
+		);
+	}
+	return collapsed;
 }
 
 const MAX_IMAGES_PER_PRODUCT = 5;
@@ -713,6 +752,10 @@ export const create = mutation({
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		requiresProof: v.optional(v.boolean()),
 		minNoticeDays: v.optional(v.number()),
+		// Prep window in minutes + the buyer's collection note. 0/blank normalize
+		// to unset (z8r3fdff97).
+		prepMinutes: v.optional(v.number()),
+		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
@@ -845,6 +888,8 @@ export const create = mutation({
 			blockWhenOutOfStock: args.blockWhenOutOfStock,
 			requiresProof: args.requiresProof,
 			minNoticeDays: sanitizeMinNoticeDays(args.minNoticeDays),
+			prepMinutes: sanitizePrepMinutes(args.prepMinutes),
+			pickupNote: sanitizePickupNote(args.pickupNote),
 			hidden: args.hidden,
 			minQuantity: sanitizeMinQuantity(args.minQuantity),
 			// "physical" stays UNSET (the legacy default) so pre-kind and post-kind
@@ -913,6 +958,9 @@ export const update = mutation({
 		requiresProof: v.optional(v.boolean()),
 		// 0 clears the override (normalized to unset); undefined = no change.
 		minNoticeDays: v.optional(v.number()),
+		// 0 clears the prep window; "" clears the note. undefined = no change.
+		prepMinutes: v.optional(v.number()),
+		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
@@ -985,6 +1033,12 @@ export const update = mutation({
 			updates.requiresProof = fields.requiresProof;
 		if (fields.minNoticeDays !== undefined)
 			updates.minNoticeDays = sanitizeMinNoticeDays(fields.minNoticeDays);
+		// Both sanitize to undefined on 0 / "", which patch reads as "remove the
+		// field" — so the seller clearing the input clears the rule.
+		if (fields.prepMinutes !== undefined)
+			updates.prepMinutes = sanitizePrepMinutes(fields.prepMinutes);
+		if (fields.pickupNote !== undefined)
+			updates.pickupNote = sanitizePickupNote(fields.pickupNote);
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
 		if (fields.minQuantity !== undefined)
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —

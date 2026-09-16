@@ -2958,3 +2958,107 @@ describe("product kind + booking config", () => {
 		).rejects.toThrow(/booking listing/);
 	});
 });
+
+describe("prep time + pickup note (z8r3fdff97)", () => {
+	test("both store, and 0 / blank are the one spelling for 'no rule'", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Ice Cream Puff" }),
+			prepMinutes: 120,
+			pickupNote: "  Bring an ice bag — these melt in 20 min.  ",
+		});
+		let row = await asA.query(api.products.get, { productId: id });
+		expect(row?.prepMinutes).toBe(120);
+		// Trimmed on the way in, so no surface has to trim on the way out.
+		expect(row?.pickupNote).toBe("Bring an ice bag — these melt in 20 min.");
+
+		// 0 and "" CLEAR, rather than storing a falsy value that every reader
+		// would then have to special-case (the minQuantity / securityDeposit
+		// posture — one spelling for "no rule").
+		await asA.mutation(api.products.update, {
+			productId: id,
+			prepMinutes: 0,
+			pickupNote: "",
+		});
+		row = await asA.query(api.products.get, { productId: id });
+		expect(row?.prepMinutes).toBeUndefined();
+		expect(row?.pickupNote).toBeUndefined();
+	});
+
+	test("a note's inner newlines collapse — one line stays one line", async () => {
+		// It rides a cart row, a WhatsApp message and a PDF; a seller pasting a
+		// paragraph must not be able to break any of those layouts.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Bento Set" }),
+			pickupNote: "Side counter.\n\nAsk for Amirah.",
+		});
+		const row = await asA.query(api.products.get, { productId: id });
+		expect(row?.pickupNote).toBe("Side counter. Ask for Amirah.");
+	});
+
+	test("refuses a prep window that is not whole minutes inside the cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		for (const bad of [-1, 90.5, 1441]) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id, { name: `Bad ${bad}` }),
+					prepMinutes: bad,
+				}),
+			).rejects.toThrow(/Prep time must be/);
+		}
+		// The cap itself is allowed — a full day of prep is a real answer.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Wedding tier" }),
+			prepMinutes: 1440,
+		});
+		const row = await asA.query(api.products.get, { productId: id });
+		expect(row?.prepMinutes).toBe(1440);
+	});
+
+	test("refuses a note longer than the cap, counted AFTER collapsing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id, { name: "Chatty" }),
+				pickupNote: "x".repeat(201),
+			}),
+		).rejects.toThrow(/200 characters or fewer/);
+		// 201 chars of padding that collapse to 200 real ones must PASS — the
+		// limit is on what we store, not on what the seller happened to type.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Padded" }),
+			pickupNote: `${"y".repeat(200)}   `,
+		});
+		const row = await asA.query(api.products.get, { productId: id });
+		expect(row?.pickupNote?.length).toBe(200);
+	});
+
+	test("both reach the BUYER — they are useless anywhere else", async () => {
+		// The whole point is that a buyer reads them before ordering, so the
+		// public read must carry them (unlike orderedAt, which it strips).
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Cream Puff Box" }),
+			prepMinutes: 90,
+			pickupNote: "Collect from the side counter.",
+		});
+		const pub = await t.query(api.products.list, {
+			retailerId: retailer._id,
+		});
+		const row = pub.find((r) => r.name === "Cream Puff Box");
+		expect(row?.prepMinutes).toBe(90);
+		expect(row?.pickupNote).toBe("Collect from the side counter.");
+		expect(row?.orderedAt).toBeUndefined();
+	});
+});
