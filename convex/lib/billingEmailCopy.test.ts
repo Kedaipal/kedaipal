@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	type AutoRenewEmailVars,
 	type BillingEmailVars,
+	renderAutoRenewEmail,
 	renderBillingEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
@@ -121,30 +123,28 @@ describe("renderTrialEmail", () => {
 		billingUrl: "https://kedaipal.com/app/settings?tab=billing",
 	};
 
-	it("trialEndingSoon shows the days left + a choose-a-plan CTA", () => {
-		const { subject, html } = renderTrialEmail("en", "trialEndingSoon", {
+	it("trialEndingSoon shows the days left, names the first-order trigger, promises the store stays live", () => {
+		const { subject, html, text } = renderTrialEmail("en", "trialEndingSoon", {
 			...tv,
 			daysLeft: 3,
 		});
 		expect(subject).toContain("3 days");
-		expect(html).toContain("Choose a plan");
+		// Start-when-you-sell framing: the deadline is the backstop, the order
+		// is the trigger — never "trial with a deadline".
+		expect(html).toContain("first live order");
+		expect(html).toContain("storefront stays live");
+		expect(text).toContain("first live order");
+		expect(html).not.toMatch(/editing pauses/i);
 		expect(html).toContain(tv.billingUrl);
 	});
 
-	it("trialEnded reads as a lock + does not mention an invoice", () => {
-		const { subject, html } = renderTrialEmail("en", "trialEnded", tv);
-		expect(subject.toLowerCase()).toContain("ended");
-		expect(html.toLowerCase()).not.toContain("invoice");
-	});
-
-	it("renders Malay trial copy", () => {
-		const { subject } = renderTrialEmail("ms", "trialEnded", tv);
-		expect(subject.toLowerCase()).toContain("percubaan");
-	});
-
-	it("renders Chinese trial copy", () => {
-		const { subject } = renderTrialEmail("zh", "trialEnded", tv);
-		expect(subject).toContain("试用期");
+	it("renders Malay + Chinese free-period copy", () => {
+		expect(
+			renderTrialEmail("ms", "trialEndingSoon", { ...tv, daysLeft: 2 }).subject,
+		).toContain("Tempoh percuma");
+		expect(
+			renderTrialEmail("zh", "trialEndingSoon", { ...tv, daysLeft: 2 }).subject,
+		).toContain("免费期");
 	});
 
 	it("subscriptionLapsed reads as a lapsed-renewal notice (no invoice)", () => {
@@ -152,6 +152,48 @@ describe("renderTrialEmail", () => {
 		expect(subject.toLowerCase()).toContain("lapsed");
 		expect(html.toLowerCase()).not.toContain("invoice no");
 		expect(html).toContain("Message us to renew");
+	});
+});
+
+describe("first-invoice emails (start-when-you-sell, z8r3fday24)", () => {
+	it("first order: celebrates, names the plan + due date, says the store keeps running and the plan can be switched", () => {
+		const { subject, html, text } = renderBillingEmail("en", "firstInvoiceOrder", base);
+		expect(subject).toContain("first order");
+		expect(subject).toContain(base.invoiceNumber);
+		expect(html).toContain("Pro · Monthly");
+		expect(html).toContain("5 Jul 2026");
+		expect(html).toMatch(/keep running as normal/);
+		expect(html).toMatch(/switch to a different plan/);
+		// It is still a real invoice email: the pay panel + CTA are there.
+		expect(html).toContain("Maybank");
+		expect(html).toContain("View invoice &amp; pay");
+		expect(text).toContain("switch plan");
+	});
+
+	it("backstop: says the free period ended, nothing is locked, plan can be switched", () => {
+		const { subject, html } = renderBillingEmail("en", "firstInvoiceBackstop", base);
+		expect(subject).toContain("free period has ended");
+		expect(html).toMatch(/Nothing is locked/);
+		expect(html).toContain("storefront stays live");
+		expect(html).toMatch(/Switch from your billing page/);
+		// Never the old lock framing.
+		expect(html).not.toMatch(/past due|editing (is )?paused/i);
+	});
+
+	it("both carry the Pay-now link when one exists", () => {
+		const url = "https://securecheckout.sandbox.hit-pay.com/payment-request/x";
+		for (const key of ["firstInvoiceOrder", "firstInvoiceBackstop"] as const) {
+			const { html, text } = renderBillingEmail("en", key, { ...base, payNowUrl: url });
+			expect(html).toContain(url);
+			expect(text).toContain(url);
+		}
+	});
+
+	it("renders in Malay and Chinese for both keys", () => {
+		expect(renderBillingEmail("ms", "firstInvoiceOrder", base).subject).toContain("Pesanan pertama");
+		expect(renderBillingEmail("ms", "firstInvoiceBackstop", base).subject).toContain("Tempoh percuma");
+		expect(renderBillingEmail("zh", "firstInvoiceOrder", base).subject).toContain("第一笔订单");
+		expect(renderBillingEmail("zh", "firstInvoiceBackstop", base).subject).toContain("免费期");
 	});
 });
 
@@ -184,5 +226,112 @@ describe("renderPaymentEmail", () => {
 	it("renders Chinese payment copy", () => {
 		const { subject } = renderPaymentEmail("zh", "welcome", pv);
 		expect(subject).toContain("欢迎");
+	});
+});
+
+describe("invoice emails carry the Pay-now link (86eyb6z4r)", () => {
+	const payNowUrl = "https://securecheckout.hit-pay.com/req_1";
+
+	it("payNowUrl leads the pay panel and the text body; manual rails stay below", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceIssued", {
+			...base,
+			payNowUrl,
+		});
+		expect(html).toContain(payNowUrl);
+		expect(html).toContain("Pay online now");
+		// The manual bank rail survives as the fallback, reframed.
+		expect(html).toContain("5123 4567 8901");
+		expect(html).toContain("Prefer a bank transfer?");
+		expect(text).toContain(`Pay online now: ${payNowUrl}`);
+	});
+
+	it("cross-border invoices get the link too — it's their ONLY self-serve rail", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceReminder", {
+			storeName: "SG Store",
+			invoiceNumber: "INV-SG-1",
+			planLabel: "Pro · Monthly",
+			totalFormatted: "SGD 59.00",
+			dueDateFormatted: "5 Jul 2026",
+			crossBorder: true,
+			payNowUrl,
+			billingUrl: base.billingUrl,
+		});
+		expect(html).toContain(payNowUrl);
+		expect(text).toContain(payNowUrl);
+	});
+
+	it("without a link the panel renders exactly as before", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceIssued", base);
+		expect(html).not.toContain("Pay online now");
+		expect(html).toContain("How to pay");
+		expect(text).not.toContain("Pay online now");
+	});
+});
+
+describe("renderAutoRenewEmail (86eyb6z4r)", () => {
+	const av: AutoRenewEmailVars = {
+		storeName: "Mak Kuih",
+		methodLabel: "Visa ·· 4242",
+		billingUrl: "https://kedaipal.com/app/settings?tab=billing",
+		planLabel: "Pro · Monthly",
+		amountFormatted: "MYR 104.00",
+		chargeDateFormatted: "5 Oct 2026",
+	};
+
+	it("enabled: names the method and the always-on off-switch", () => {
+		const { subject, html } = renderAutoRenewEmail("en", "autoRenewEnabled", av);
+		expect(subject.toLowerCase()).toContain("auto-renewal is on");
+		expect(html).toContain("Visa ·· 4242");
+		expect(html).toContain("turn this off any time");
+	});
+
+	it("upcoming: date + amount + method — the no-surprise-debit notice", () => {
+		const { subject, html, text } = renderAutoRenewEmail(
+			"en",
+			"autoRenewUpcoming",
+			av,
+		);
+		expect(subject).toContain("5 Oct 2026");
+		expect(html).toContain("MYR 104.00");
+		expect(html).toContain("Visa ·· 4242");
+		expect(text).toContain("Turn off auto-renewal");
+	});
+
+	it("failed: CTA goes to the Pay-now link when one exists, else billing", () => {
+		const withLink = renderAutoRenewEmail("en", "autoRenewFailed", {
+			...av,
+			payNowUrl: "https://pay.example/x",
+		});
+		expect(withLink.html).toContain("https://pay.example/x");
+		const withoutLink = renderAutoRenewEmail("en", "autoRenewFailed", av);
+		expect(withoutLink.html).toContain(av.billingUrl);
+		// The final notice says retries stopped; the interim one promises a retry.
+		const final = renderAutoRenewEmail("en", "autoRenewFailed", {
+			...av,
+			final: true,
+		});
+		expect(final.html.toLowerCase()).toContain("stopped retrying");
+		expect(withoutLink.html.toLowerCase()).toContain("retry automatically");
+	});
+
+	it("renders in Malay and Chinese for every key", () => {
+		for (const key of [
+			"autoRenewEnabled",
+			"autoRenewUpcoming",
+			"autoRenewFailed",
+		] as const) {
+			expect(renderAutoRenewEmail("ms", key, av).subject.length).toBeGreaterThan(
+				0,
+			);
+			expect(renderAutoRenewEmail("zh", key, av).subject.length).toBeGreaterThan(
+				0,
+			);
+		}
+		expect(
+			renderAutoRenewEmail("ms", "autoRenewUpcoming", av).subject,
+		).toContain("diperbaharui");
+		expect(renderAutoRenewEmail("zh", "autoRenewUpcoming", av).subject).toContain(
+			"续订",
+		);
 	});
 });

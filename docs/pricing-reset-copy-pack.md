@@ -2,10 +2,14 @@
 
 > **Status: working handoff doc**, owned by ClickUp `z8r3fday21` (Arif, decision + copy)
 > with companion `z8r3fday24` (Zaki, backend). Wave 1 (the `/cost` Founding-anchor
-> retirement) shipped with this doc; **wave 2 below is GATED on the backend ticket**
-> — none of this copy may go live before the billing mechanism it describes exists.
-> When wave 2 ships, fold what's durable into [`pricing.md`](./pricing.md) and
-> delete this file.
+> retirement) shipped with this doc. **The backend landed 9 Sep 2026** (z8r3fday24,
+> stacked on the `86eyb6z4r` auto-renewal PR): constants, start-when-you-sell, the
+> Off-Season Hold status, and the dashboard/email copy from §4 — so **wave 2 is
+> unblocked**. Two backend decisions the copy must match: the first invoice bills
+> **Pro** (the trialed tier), switchable to Starter before paying; and a paused
+> store's ordering is refused **server-side** on every order-create path, not just
+> hidden in the UI. When wave 2 ships, fold what's durable into
+> [`pricing.md`](./pricing.md) and delete this file.
 
 All three moves confirmed by Arif, 1 Sep 2026, against the 30 Aug "Kedaipal
 Pricing Reset" artifact.
@@ -31,6 +35,9 @@ catalog + buyer list + order history stay live, one-tap resume to the prior tier
 
 ## 2. Start-when-you-sell — public copy replacements (wave 2, this ticket)
 
+> **Landing rows shipped 13 Sep 2026** in `z8r3fdegej` (landing v2), verbatim.
+> The `/pricing` rows below are still open here.
+
 Framing rule: the promise is **"free until you sell"** — full product from day
 one, the first invoice fires on the **first live order or day 15, whichever
 comes first**. Never call it a trial-with-a-deadline; the deadline is the
@@ -41,7 +48,7 @@ backstop, the order is the trigger.
 | Key | en (new) | ms (new) | zh (new) |
 | --- | --- | --- | --- |
 | `nav_start_free` | Start free | Mula percuma | 免费开始 |
-| `hero_trust` | Free until your first order · No credit card · No Meta setup · Live in 5 minutes | Percuma sehingga pesanan pertama · Tiada kad kredit · Tiada setup Meta · Hidup dalam 5 minit | 收到第一笔订单前完全免费 · 无需信用卡 · 无需 Meta 设置 · 5 分钟即可上线 |
+| `hero_trust` _(retired in landing v2 — the trust line's render site was cut with the old hero; kept here as the record of the copy)_ | Free until your first order · No credit card · No Meta setup · Live in 5 minutes | Percuma sehingga pesanan pertama · Tiada kad kredit · Tiada setup Meta · Hidup dalam 5 minit | 收到第一笔订单前完全免费 · 无需信用卡 · 无需 Meta 设置 · 5 分钟即可上线 |
 | `pricing_sub` | Start free on every plan — your first bill only comes when your first live order does, or on day 15. No credit card to start. Kedaipal never touches your order money — your customers pay you directly. | Mula percuma untuk setiap pelan — bil pertama anda hanya tiba bila pesanan pertama masuk, atau pada hari ke-15. Tiada kad kredit untuk bermula. Kedaipal tidak pernah sentuh wang pesanan anda — pelanggan bayar terus kepada anda. | 每个方案都免费开始 —— 第一张账单只在您收到第一笔订单（或第 15 天）时才产生。开始不需要信用卡。随时取消，随时导出您的资料。 |
 | `pricing_cta` | Start free — pay when you sell | Mula percuma — bayar bila anda menjual | 免费开始 —— 有生意才付费 |
 | `faq_q_8` | When do I start paying? | Bila saya mula membayar? | 我什么时候开始付费？ |
@@ -118,7 +125,8 @@ this copy lands **with the backend**, in `z8r3fday24`:
 
 ## 5. Coordination gates (before wave 2 merges)
 
-1. `z8r3fday24` constants + trial rework + hold status landed.
+1. ~~`z8r3fday24` constants + trial rework + hold status landed.~~ **Done 9 Sep 2026**
+   (merges behind PR #250, `86eyb6z4r`).
 2. `86eyb9zwt` (Scale reposition, production in review, still RM299) fast-followed
    with RM399 — must not close stale.
 3. Meta October service rates re-checked against the margin model (artifact lock

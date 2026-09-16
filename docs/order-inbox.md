@@ -181,6 +181,39 @@ review: with **every leaf selected, "All statuses" stays lit even when period
 chips are on** — the union already matches every order, and the panel's Status
 select-all on a booking store produces exactly that state.
 
+**A card's total NAMES the refundable deposit inside it.** `OrderTotal`
+(`src/components/order/order-total.tsx`) keeps the bold figure at
+`order.total` — what the buyer paid and what lands in the bank — and adds
+"incl. RM X refundable deposit" beneath it when the order carries one. The
+headline is deliberately **not** netted down to the seller's share: it has to
+match the receipt PDF, the CSV `Total` column, the order detail, the WhatsApp
+confirmation and the actual transfer, and netting it here would be the
+Insights by-source leak pointing the other way. What the deposit needed was a
+NAME, not a subtraction — without it RM110 reads as revenue when RM20 of it is
+held money. Wording matches `booking-request-card.tsx`, trimmed because a card
+is scanned rather than read. Table view needs nothing: the column registry
+already carries a separate **Security deposit** column beside `Total`.
+Renders exactly as before on any order without one.
+
+**`top` and `off` are REMEMBERED per store; `only` is not.** The chip cycles
+three ways but they are not the same kind of thing. `top` vs `off` — whether a
+pin floats above the list or is filtered like any other order — is
+*presentation*, how this seller reads their inbox, so it lives in
+`localStorage` beside the layout (`useInboxView`) and the column set
+(`useOrderColumns`); a mode named in the URL still wins. `only` *narrows the
+list*, so it is a filter: URL-only, deliberately never remembered, because
+carrying it forward would silently hide the results of the seller's next
+drill-in. Precedence lives in one place, `resolvePinMode`
+(`src/hooks/useInboxPinMode.ts`).
+
+Without this, a seller who had turned pinning **off** got it switched back on
+every time they arrived from an Insights drill-in: a drill-in builds a fresh
+search object, so `pin` was absent, and absent meant the `top` default rather
+than "what I last chose". Note the scope of the fix — **ordinary filters are
+still URL state and are still replaced by a drill-in**, on purpose: arriving at
+Orders from the nav and finding last week's payment filter silently applied is
+the worse bug, and it would make every shared link a lie.
+
 **The Pinned chip renders whenever the mode is non-default, even at ZERO**
 (PR #243 re-review). Unpinning the last row while in "only" mode empties the
 list and used to take the chip away with it — leaving `?pin=only` in the URL, an

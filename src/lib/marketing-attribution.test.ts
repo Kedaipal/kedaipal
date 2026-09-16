@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	captureMarketingSource,
+	readMarketingReferrerStore,
 	readMarketingSource,
 } from "./marketing-attribution";
 
@@ -52,5 +53,52 @@ describe("captureMarketingSource / readMarketingSource", () => {
 
 	it("reads undefined when nothing was captured", () => {
 		expect(readMarketingSource()).toBeUndefined();
+	});
+});
+
+describe("the powered-by referrer store (?store=, z8r3fdcwd0)", () => {
+	it("captures the referring store beside the tag", () => {
+		captureMarketingSource("?src=powered-by-track&store=hermoolah");
+		expect(readMarketingSource()).toBe("powered-by-track");
+		expect(readMarketingReferrerStore()).toBe("hermoolah");
+	});
+
+	it("a referrer without a tag says nothing — never stored", () => {
+		captureMarketingSource("?store=hermoolah");
+		expect(readMarketingSource()).toBeUndefined();
+		expect(readMarketingReferrerStore()).toBeUndefined();
+	});
+
+	it("a later tagged hit WITHOUT a referrer clears the stale one — the pair describes one visit", () => {
+		captureMarketingSource("?src=powered-by&store=hermoolah");
+		captureMarketingSource("?src=spotlight-thg");
+		expect(readMarketingSource()).toBe("spotlight-thg");
+		expect(readMarketingReferrerStore()).toBeUndefined();
+	});
+
+	it("an untagged hit leaves BOTH alone (in-site navigation)", () => {
+		captureMarketingSource("?src=powered-by&store=hermoolah");
+		captureMarketingSource("?utm_campaign=x");
+		expect(readMarketingSource()).toBe("powered-by");
+		expect(readMarketingReferrerStore()).toBe("hermoolah");
+	});
+
+	it("a referrer that isn't slug-shaped is dropped, not bucketed — there is no 'other' store", () => {
+		captureMarketingSource("?src=powered-by&store=%3Cscript%3E");
+		expect(readMarketingSource()).toBe("powered-by");
+		expect(readMarketingReferrerStore()).toBeUndefined();
+	});
+
+	it("case-folds the slug the way the server does", () => {
+		captureMarketingSource("?src=powered-by&store=Hermoolah");
+		expect(readMarketingReferrerStore()).toBe("hermoolah");
+	});
+
+	it("uses its own key — never the buyer-side namespace", () => {
+		captureMarketingSource("?src=powered-by&store=hermoolah");
+		expect(sessionStorage.getItem("kedaipal:marketing-ref-store")).toBe(
+			"hermoolah",
+		);
+		expect(sessionStorage.getItem("kedaipal:src:hermoolah")).toBeNull();
 	});
 });

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -100,6 +101,11 @@ function NewProductRoute() {
 				categoryIds: values.categoryIds,
 			});
 		}
+		// Confirm the write, the way every other product mutation now does. The
+		// list it lands on is sorted by the seller's own order, so a new product
+		// is not always the obvious first row — "it saved" should not have to be
+		// inferred from spotting it.
+		toast.success("Product created.");
 		navigate({ to: "/app/products" });
 	}
 

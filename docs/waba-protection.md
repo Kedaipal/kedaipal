@@ -200,9 +200,84 @@ updates emit nothing.
 
 **⚠️ Subscribe these fields in the Meta App dashboard** (App → WhatsApp →
 Configuration → Webhook fields) — it's a dashboard toggle, **not** code:
-`phone_number_quality_update`, `account_update`, and `message_template_status_update`
-(the last is for the templates ticket; we log-and-ignore it here). The repo
-previously relied only on the `messages` field.
+`phone_number_quality_update`, `account_update`, and the three template fields
+below. The repo previously relied only on the `messages` field.
+
+## Template lifecycle webhooks (ClickUp `z8r3fddtkh`)
+
+We run six Meta-approved utility templates (buyer confirm push, payment
+reminder, claim link, three seller alerts — the registry is
+`configuredTemplates()` in `convex/lib/whatsapp.ts`). Meta can change any of
+them **after** approval, and from 1 Oct 2026 the category is the only thing
+that sets the per-send price (utility RM 0.0564 vs marketing RM 0.3467 — 6.1×).
+Before this, the handler explicitly ignored template events; the first sign of
+a recategorised template would have been the invoice.
+
+Parsed in `convex/lib/wabaTemplateWebhook.ts` (pure, no Convex imports) from
+the same webhook, keyed by `field`:
+
+| Field | What it says | Pages ops when |
+| --- | --- | --- |
+| `message_template_status_update` | `APPROVED` / `REJECTED` / `PAUSED` / `DISABLED` / `PENDING_DELETION` / … | REJECTED, PAUSED, DISABLED, PENDING_DELETION, FLAGGED — every send naming the template now fails outright |
+| `template_category_update` | `previous_category` → `new_category` | the template **leaves** UTILITY / AUTHENTICATION / SERVICE (the 6.1× case; an appeal window opens). Winning an appeal back is recorded, not alerted |
+| `message_template_quality_update` | `GREEN` / `YELLOW` / `RED` | YELLOW or RED — Meta's warning before it pauses |
+
+**Two things the panel has to get right, both found by rendering it against
+real webhook data:**
+
+- **Meta never announces the category a template was approved under** — only
+  the ones it *changes*. Left honest, the "billed as" chip would read
+  `unknown` for ever on every healthy template, which is the panel's headline
+  column permanently blank. Every template we register is a utility one (each
+  send goes out under `utility_template`), so a **configured** template reads
+  **`UTILITY (assumed)`**, muted rather than green because we were told
+  nothing; a real category event always beats the assumption, and a template
+  we do *not* configure stays `unknown`. Rules + truth table:
+  `src/lib/waba-template-chips.ts`.
+- **Languages are discovered, not assumed.** `en` and `ms` always show (the two
+  `TEMPLATE_LANGUAGE` can ask for), and any other language code Meta reports
+  is rendered alongside them, so an event under a locale we never send is
+  surfaced rather than recorded and silently dropped.
+- **No chip is ever derived from a scan with a shared budget.** The three
+  kinds arrive at very different rates — quality events are the chatty ones,
+  and a Meta retry re-inserts — so a shared page budget lets the noisy kind
+  bury the others: 200 quality rows would hide an older `PAUSED` and an older
+  `UTILITY→MARKETING`, and the panel would render a paused, marketing-billed
+  template as healthy utility, with the `(assumed)` fallback asserting a fact
+  it holds contrary evidence for (found in PR #267 review). Each chip is one
+  indexed `.first()` on **`by_template_kind`**, and languages are found by
+  walking `by_template` downwards one single-document read at a time, so
+  neither a noisy kind nor a noisy language can starve anything. Cost per
+  template is ~9 single-document reads, not a 200-row page.
+
+Every event is persisted to **`wabaTemplateEvents`** (`recordTemplateEvent`);
+alerting ones schedule `sendWabaTemplateAlert` → email to `ADMIN_ALERT_EMAIL`
+(fallback `EMAIL_FROM`) naming the template, the change and the fix
+(appeal / re-submit / review copy). The admin console
+(`/app/admin/waba` → **Message templates**, `adminListTemplates` — the LAST
+section on the page, below the vendor list and the opt-out register: it is
+reference state an operator consults, not one of the two things they came to
+do) shows each
+configured template per language with its newest **status · billed-as ·
+quality**, lists env vars that are *unset* as "not configured" so a silent
+send path is visible, surfaces templates Meta mentions that we don't
+configure, and keeps the last 20 raw events under a disclosure. Its empty
+state says which three fields to subscribe.
+
+**Testing it without waiting for Meta:** `node scripts/dev-template-webhook.mjs
+<scenario> [template] [language]` fires a correctly *signed* event at the
+deployment, so it exercises verify → parse → row → alert exactly as Meta
+would. `approved` / `pending` / `restore` / `quality-ok` are silent;
+`paused` / `disabled` / `downgrade` / `quality-red` alert **and send a real
+ops email**. Sits beside the existing Lalamove and Delyva webhook simulators.
+
+**Retention:** 90 days (`purgeExpiredWabaTemplateEvents`, 04:20 UTC daily), but
+the newest row per (template, language) is always kept — Meta posts only on
+change, so a healthy template may go a year between events. The sweep advances
+an `observedAt` cursor instead of re-reading from the start and stopping once a
+page deletes nothing: a page can legitimately be all keep-rows, and stopping
+there would strand genuinely expired rows behind them (PR #267 review).
+Termination comes from the moving window, not from having deleted something.
 
 ## Alerts
 
@@ -234,20 +309,23 @@ npx convex run wabaProtection:listRecentOutbound '{"retailerId":"<id>"}'
 ## Schema (`convex/schema.ts`)
 
 `optOuts` (global, by_phone + by_created) · `wabaHealth` (history, by_observed) ·
+`wabaTemplateEvents` (per-template history, by_observed + by_template) ·
 `retailerSendingLimits` (kill switch + cap overrides, by_retailer) ·
 `outboundMessageLog` (audit, by_retailer_sent + by_phone_sent + by_sent) ·
 `messageLogRollups` (permanent monthly cost-ledger aggregates).
 
-**Retention:** `outboundMessageLog` and `wabaHealth` are purged on a 90-day
-window (the outbound log rolls up into `messageLogRollups` first; the newest
-health row is always kept); `optOuts` is **never** purged — see
+**Retention:** `outboundMessageLog`, `wabaHealth` and `wabaTemplateEvents` are
+purged on a 90-day window (the outbound log rolls up into `messageLogRollups`
+first; the newest health row, and the newest row per template, are always
+kept); `optOuts` is **never** purged — see
 [`docs/data-retention.md`](./data-retention.md) for the full policy table.
 
 ## Env vars
 
 | Var | Required | Purpose |
 | --- | --- | --- |
-| `ADMIN_ALERT_EMAIL` | no | health-alert recipient (falls back to `EMAIL_FROM`) |
+| `ADMIN_ALERT_EMAIL` | no | health-alert + template-alert recipient (falls back to `EMAIL_FROM`) |
+| `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` | no | the seller's manual payment reminder as a utility template (unset ⇒ free-form, best-effort) — see [`payment-reminder.md`](./payment-reminder.md) |
 
 (`WHATSAPP_*` send creds are unchanged from the existing send path.)
 
@@ -255,6 +333,11 @@ health row is always kept); `optOuts` is **never** purged — see
 
 - `convex/lib/wabaLimits.test.ts` — caps ramp/tiers, category policy, opt-out keywords.
 - `convex/lib/wabaWebhook.test.ts` — health-event mapping.
+- `convex/lib/wabaTemplateWebhook.test.ts` — template status/category/quality
+  parsing + the alert truth table; `convex/wabaTemplateEvents.test.ts` — signed
+  webhook → row → ops email, the admin per-template view (including a language
+  we never send), keep-the-newest purge; `src/lib/waba-template-chips.test.ts`
+  — chip tone/label rules, including the assumed-utility case.
 - `convex/wabaProtection.test.ts` — category gating (transactional always sends;
   session blocked on pause/opt-out/quality/cap), opt-out lifecycle, health history,
   and end-to-end (paused transactional still sends; opted-out session suppressed

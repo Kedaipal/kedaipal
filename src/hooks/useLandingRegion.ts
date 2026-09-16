@@ -1,5 +1,14 @@
 import { useRouterState } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	createContext,
+	createElement,
+	type ReactNode,
+	useCallback,
+	useContext,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { type Country, DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	parseRegionCookie,
@@ -151,4 +160,43 @@ export function useLandingRegion(): [Country, (next: Country) => void] {
 	}, []);
 
 	return [region, setRegion];
+}
+
+type LandingRegionValue = [Country, (next: Country) => void];
+
+const LandingRegionContext = createContext<LandingRegionValue | null>(null);
+
+/**
+ * One region for the whole landing page (landing v2, z8r3fdegej). Two
+ * sections now react to it — the Delivery courier list and the pricing
+ * teaser — and each owning its own `useLandingRegion()` would give the page
+ * two toggles that can disagree for a render (the cookie write is shared,
+ * the React state is not). The provider owns the single state; both sections
+ * read it, and whichever toggle the visitor uses moves both.
+ *
+ * `/pricing`, `/cost` and onboarding keep calling the hook directly — they
+ * are single-surface pages with one toggle each.
+ */
+export function LandingRegionProvider({ children }: { children: ReactNode }) {
+	const value = useLandingRegion();
+	return createElement(LandingRegionContext.Provider, { value }, children);
+}
+
+/**
+ * The shared landing region. Provider-only, on purpose: an earlier draft fell
+ * back to a private `useLandingRegion()` when no provider was mounted, which
+ * meant every consumer ALSO ran its own router subscription and cookie/Intl
+ * effect even under the provider — hooks can't be called conditionally, so
+ * the fallback was never free. A section rendered outside the provider now
+ * fails loudly instead of quietly owning a second region; tests wrap in
+ * `LandingRegionProvider`.
+ */
+export function useLandingRegionContext(): LandingRegionValue {
+	const shared = useContext(LandingRegionContext);
+	if (!shared) {
+		throw new Error(
+			"useLandingRegionContext: no LandingRegionProvider above this section — mount one (index.tsx does) so both region toggles share one state.",
+		);
+	}
+	return shared;
 }

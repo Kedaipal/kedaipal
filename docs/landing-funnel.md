@@ -1,5 +1,10 @@
 # Landing funnel — money math, guarantee, one CTA, payment strip
 
+> **Landing v2 (13 Sep 2026, `z8r3fdegej`):** the `MoneyMath` block, the problem
+> strip, the how-it-works timeline and the features bento are **off `/`**; only
+> `MoneyMathRow` survives, on `/pricing`. The section order below is historical —
+> the current one is in [`landing-v2.md`](./landing-v2.md).
+
 ClickUp [`86eye3p6z`](https://app.clickup.com/t/86eye3p6z) · shipped 2026-08-14 · dev
 
 The 27 Jul 2026 funnel audit found the strongest argument we own — that we never

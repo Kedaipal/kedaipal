@@ -2,6 +2,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { RESERVED_SLUG_MESSAGE } from "../../convex/lib/reservedSlugs";
 import { validateSlugShape } from "../lib/slug";
 
 export type SlugAvailabilityState =
@@ -19,7 +20,7 @@ const INVALID_MESSAGES: Record<
 	tooShort: "At least 3 characters",
 	tooLong: "At most 32 characters",
 	invalid: "Lowercase letters, numbers and single dashes only",
-	reserved: "That slug is reserved",
+	reserved: RESERVED_SLUG_MESSAGE,
 };
 
 /**

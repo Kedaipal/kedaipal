@@ -627,6 +627,74 @@ describe("retailers legal consent", () => {
 		expect(row?.signupSource).toBeUndefined();
 	});
 
+	// --- Powered-by referrer store (z8r3fdcwd0) -----------------------------
+
+	const REFERRER_OWNER = "user_referrer_owner";
+
+	test("createRetailer resolves signupReferrerSlug to the referring store's id", async () => {
+		const t = setup();
+		await t
+			.withIdentity({ subject: REFERRER_OWNER })
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Hermoolah",
+				slug: "hermoolah",
+			});
+		const referrer = await readRetailer(t, REFERRER_OWNER);
+
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Referred Store",
+			slug: "referred",
+			signupSource: "powered-by-track",
+			// Case-folded like the client capture — the badge's slug is lowercase
+			// but a hand-typed link may not be.
+			signupReferrerSlug: "Hermoolah",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupSource).toBe("powered-by-track");
+		expect(row?.signupReferrerId).toBe(referrer?._id);
+	});
+
+	test("createRetailer drops a referrer slug that names no store — nobody to credit", async () => {
+		const t = setup();
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Orphan Referral",
+			slug: "orphan",
+			signupSource: "powered-by",
+			signupReferrerSlug: "no-such-store",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		// The tag still lands — the referrer is the only thing that couldn't.
+		expect(row?.signupSource).toBe("powered-by");
+		expect(row?.signupReferrerId).toBeUndefined();
+	});
+
+	test("createRetailer never looks up a referrer slug that isn't slug-shaped", async () => {
+		const t = setup();
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Forged Referral",
+			slug: "forged",
+			signupSource: "powered-by",
+			signupReferrerSlug: "<script>alert(1)</script>",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupReferrerId).toBeUndefined();
+	});
+
+	test("createRetailer without a referrer leaves signupReferrerId absent", async () => {
+		const t = setup();
+		await t.withIdentity({ subject: USER_A }).mutation(api.retailers.createRetailer, {
+			storeName: "Plain Store",
+			slug: "plain",
+			signupSource: "spotlight-thg",
+		});
+
+		const row = await readRetailer(t, USER_A);
+		expect(row?.signupReferrerId).toBeUndefined();
+	});
+
 	test("createRetailer stores a wire-format gaClientId on the row", async () => {
 		const t = setup();
 		const asA = t.withIdentity({ subject: USER_A });
@@ -901,6 +969,82 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(await ctx.storage.getUrl(ids.categoryImgId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.proofId)).toBeNull();
 		});
+	});
+
+	test("cancels HitPay auto-renewal + kills the Pay-now link; pending invoice VOIDS, not deletes (86eyb6z4r)", async () => {
+		vi.useFakeTimers();
+		vi.stubEnv("HITPAY_BILLING_API_KEY", "test_del_key");
+		vi.stubEnv("HITPAY_BILLING_SALT", "del_salt");
+		const deleted: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown, init?: { method?: string }) => {
+				if (init?.method === "DELETE") deleted.push(String(url));
+				return new Response("{}", { status: 200 });
+			}),
+		);
+		const t = setup();
+		const ids = await seedFullTenant(t, USER_A, "del-money");
+		const invoiceId = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, {
+				autoRenewSessionId: "rb_del_1",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+			const now = Date.now();
+			return ctx.db.insert("invoices", {
+				retailerId: ids.retailerId,
+				subscriptionId: sub._id,
+				invoiceNumber: "INV-DEL-1",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86400000,
+				dueDate: now + 14 * 86400000,
+				status: "pending" as const,
+				gatewayRequestId: "req_del_1",
+				gatewayPayment: {
+					provider: "hitpay" as const,
+					url: "https://pay.example/req_del_1",
+				},
+				createdAt: now,
+			});
+		});
+
+		await t.mutation(internal.retailers.deleteUser, { userId: USER_A });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		vi.useRealTimers();
+
+		await t.run(async (ctx) => {
+			// The retained financial record is VOIDED — never forever-payable.
+			const invoice = await ctx.db.get(invoiceId);
+			expect(invoice?.status).toBe("void");
+			expect(invoice?.voidReason).toBe("Account deleted");
+			// The subscription row (and with it the local charge capability) is gone.
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+				.first();
+			expect(sub).toBeNull();
+		});
+		// Both remote rails were killed: the saved-method session + the open link.
+		expect(deleted.some((u) => u.includes("/recurring-billing/rb_del_1"))).toBe(
+			true,
+		);
+		expect(deleted.some((u) => u.includes("/payment-requests/req_del_1"))).toBe(
+			true,
+		);
+		vi.unstubAllEnvs();
+		vi.unstubAllGlobals();
 	});
 
 	test("is idempotent — returns deleted:false when no retailer exists", async () => {

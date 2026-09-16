@@ -65,6 +65,25 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "billing",
 		anchor: "settings-annual-billing",
 	},
+	// The three cards the 30 Aug 2026 pricing reset added (z8r3fday24 +
+	// 86eyb6z4r). Each is one card on the Billing tab, so a note about the
+	// free period, the hold or a mid-cycle switch lands on the control rather
+	// than the top of the tab.
+	plan_change: {
+		page: "settings",
+		tab: "billing",
+		anchor: "settings-plan-change",
+	},
+	seasonal_hold: {
+		page: "settings",
+		tab: "billing",
+		anchor: "settings-seasonal-hold",
+	},
+	auto_renewal: {
+		page: "settings",
+		tab: "billing",
+		anchor: "settings-auto-renewal",
+	},
 	invoice_history: {
 		page: "settings",
 		tab: "billing",

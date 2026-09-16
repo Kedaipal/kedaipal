@@ -146,7 +146,7 @@ export interface ReleaseEntry {
 	 * of the tab.
 	 */
 	href?: string;
-	/** Link text. Defaults to "Take a look" when omitted. */
+	/** Link text. Defaults to "Set it up" when omitted — but always write one. */
 	hrefLabel?: Localized;
 	/** Optional icon tile. Omit for the neutral default — a wrong icon is worse than none. */
 	icon?: ReleaseIconName;
@@ -170,6 +170,153 @@ export interface Release {
  * entry would make "everything newer than X" return the wrong set.
  */
 export const RELEASES: Release[] = [
+	{
+		version: "2026.09.5",
+		date: "2026-09-15",
+		// Notable, and not a close call — on two counts now. (1) MONEY MOVES:
+		// the monthly order allowance drops on Pro and Scale and Scale's price
+		// rises, and both land on every existing paying seller with no
+		// grandfathering. A seller who reads nothing will meet the new number on
+		// an invoice, which is the worst place to meet it. (2) A DAILY JOB MOVES:
+		// tomorrow a seller opens the product editor and the stock box they have
+		// always typed into is gone. The in-editor helper line only reaches
+		// someone already looking at that row, and nothing at all would tell them
+		// the products list grew a Stock button or that importing a sheet no
+		// longer touches their counts.
+		notable: true,
+		entries: [
+			{
+				kind: "enhancement",
+				title: {
+					en: "New monthly order allowances, and a new price for Scale",
+				},
+				body: {
+					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It stays a soft line: passing it never stops an order, never closes your storefront and never turns a buyer away — it shows in your usage and we talk about the right plan. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
+				},
+				href: spotlightHref("plan_change"),
+				hrefLabel: { en: "See your plan" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Nothing to pay until your first real order",
+				},
+				body: {
+					en: "A new store now starts free and stays free until it actually sells something. Your first live order starts the billing — whichever door it comes through: storefront, counter, claim link or booking. If a fortnight goes by without one, day 14 starts it instead. The first invoice arrives minutes later rather than in the same breath as the order, and you can still switch plan before you pay it.",
+				},
+				href: "/app/settings?tab=billing",
+				hrefLabel: { en: "Open billing" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Going quiet for the season? Pause instead of cancelling",
+				},
+				body: {
+					en: "The durian's done, the school holidays are over, the night market shuts for a month — whatever your quiet season looks like, you can park your subscription at RM19 a month (S$9) instead of paying the full tier or cancelling and losing the lot. Products, orders and customers all stay exactly where you left them, and your storefront tells buyers you are on a break. Resume whenever. We say what a pause and a resume will bill before you tap either.",
+				},
+				href: spotlightHref("seasonal_hold"),
+				hrefLabel: { en: "Find the hold" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Subscribe yourself, and let it renew itself",
+				},
+				body: {
+					en: "Starting a subscription is now something you do in Settings — pick a plan, pay, done, with no message to us in the middle. Leave auto-renewal on and each month pays itself with the card or Touch 'n Go you set up; switch it off and you get a Pay-now link instead. A failed charge is retried and told to you, never quietly doubled.",
+				},
+				href: spotlightHref("auto_renewal"),
+				hrefLabel: { en: "Set up auto-renewal" },
+				icon: "wallet",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Change plan mid-month without losing what you paid",
+				},
+				body: {
+					en: "Moving up used to mean waiting for the month to turn. Now it takes whatever is left of the period you already paid for, converts it into days on the new plan, and shows you that sum before you confirm. Moving down is scheduled for the end of the period instead, so you keep what you bought until it runs out. Both say what it costs and when it happens.",
+				},
+				href: spotlightHref("plan_change"),
+				hrefLabel: { en: "Change your plan" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Insights stopped counting deposits as money you earned",
+				},
+				body: {
+					en: "A refundable security deposit is your customer's money right up until it isn't — but the revenue rows were adding it to your earnings, so every booking store's numbers read high. Deposits are now left out of the earned figures, and the page says so, instead of leaving you to wonder where the difference went.",
+				},
+				href: "/app/insights",
+				hrefLabel: { en: "Open Insights" },
+				icon: "chart",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "An order card names the deposit inside its total",
+				},
+				body: {
+					en: "A booking's total quietly included the refundable deposit, so the number on the card and the number you actually keep were two different things. The card now names the deposit inside the total — read a day's orders without doing the subtraction in your head.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: 'A small "Powered by Kedaipal" on your buyer pages',
+				},
+				body: {
+					en: "A quiet line on your storefront, your order pages and your printed labels. It sits below your own content, never above it, and nothing about your branding changes. It is a link, so when someone arrives through it and opens their own shop, we can see the introduction came from you.",
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Confirm buttons stopped hiding below the bottom of the screen",
+				},
+				body: {
+					en: "On a small phone a long dialog could push its own Cancel and confirm buttons off the bottom — a fine way to make a confirmation impossible. Dialogs now cap their height and scroll inside, so the buttons stay where your thumb is.",
+				},
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Stock has its own button now — and a save can't undo your sales",
+				},
+				body: {
+					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+				icon: "package",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Importing a sheet won't overwrite your stock unless you say so",
+				},
+				body: {
+					en: "A sheet you exported this morning holds this morning's counts, so importing it in the afternoon used to undo everything sold in between. Now stock is left alone unless you tick \"Update stock too\" — and when you do, we tell you how many counts it replaces and how many would go up, so a stock take still works and a price change can't cost you sales.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A cancelled order stays cancelled",
+				},
+				body: {
+					en: "Marking a cancelled order as confirmed again used to hand its stock back a second time, so your counts could drift above what you actually had — and then the shop would keep taking orders for items you'd run out of. Cancelled orders can no longer be reopened; start a new order instead.",
+				},
+			},
+		],
+	},
 	{
 		version: "2026.09.4",
 		date: "2026-09-08",

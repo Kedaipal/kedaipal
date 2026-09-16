@@ -10,7 +10,11 @@ import { escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
 export type BillingEmailKey =
 	| "invoiceIssued"
 	| "invoiceReminder"
-	| "invoiceOverdue";
+	| "invoiceOverdue"
+	// Start-when-you-sell (z8r3fday24): the store's FIRST invoice, framed by
+	// what ended the free period — the first live order, or the day-14 backstop.
+	| "firstInvoiceOrder"
+	| "firstInvoiceBackstop";
 
 export type BillingEmailVars = {
 	storeName: string;
@@ -31,6 +35,11 @@ export type BillingEmailVars = {
 	// a "we'll confirm payment details on WhatsApp" line instead. Callers must
 	// leave the bank fields unset alongside this flag.
 	crossBorder?: boolean;
+	// HitPay hosted-checkout link for this invoice (86eyb6z4r). Present ⇒ the
+	// pay panel leads with a "Pay online now" button; the manual rails stay
+	// underneath as the fallback. Works for cross-border invoices too — it's
+	// the ONLY self-serve rail an SGD seller has.
+	payNowUrl?: string;
 	billingUrl: string;
 };
 
@@ -57,6 +66,9 @@ const t = {
 		storeStaysLive:
 			"Your storefront and existing orders stay live — editing your store is paused until you pay.",
 		choosePlan: "Choose a plan",
+		payNow: "Pay online now",
+		payNowHint: "Card, banking or eWallet — confirmed automatically.",
+		orManual: "Prefer a bank transfer? The manual details are below.",
 	},
 	ms: {
 		bank: "Bank",
@@ -78,6 +90,9 @@ const t = {
 		storeStaysLive:
 			"Storefront dan pesanan sedia ada kekal aktif — penyuntingan kedai dijeda sehingga anda membayar.",
 		choosePlan: "Pilih pelan",
+		payNow: "Bayar dalam talian",
+		payNowHint: "Kad, perbankan atau eWallet — disahkan secara automatik.",
+		orManual: "Lebih suka pindahan bank? Butiran manual di bawah.",
 	},
 	zh: {
 		bank: "银行",
@@ -99,6 +114,9 @@ const t = {
 		storeStaysLive:
 			"您的商店和现有订单会继续正常运作 —— 付款前暂停编辑功能。",
 		choosePlan: "选择套餐",
+		payNow: "立即在线付款",
+		payNowHint: "银行卡、网银或电子钱包 —— 自动确认到账。",
+		orManual: "想用银行转账？手动付款详情见下方。",
 	},
 } as const;
 
@@ -113,14 +131,15 @@ function contactForPaymentLine(locale: Locale, v: BillingEmailVars): string {
 /** Plain-text version of the pay lines (no HTML tags). */
 function payText(locale: Locale, v: BillingEmailVars): string {
 	const L = t[locale];
-	if (v.crossBorder) return contactForPaymentLine(locale, v);
+	const payNow = v.payNowUrl ? `${L.payNow}: ${v.payNowUrl}\n` : "";
+	if (v.crossBorder) return `${payNow}${contactForPaymentLine(locale, v)}`;
 	const rows: string[] = [];
 	if (v.bankName) rows.push(`${L.bank}: ${v.bankName}`);
 	if (v.bankAccountName) rows.push(`${L.accountName}: ${v.bankAccountName}`);
 	if (v.bankAccountNumber) rows.push(`${L.accountNo}: ${v.bankAccountNumber}`);
 	if (v.duitnowId) rows.push(`${L.duitnow}: ${v.duitnowId}`);
-	if (rows.length === 0) return L.noDetails;
-	return `${L.howToPay}:\n${rows.join("\n")}\n${L.qrNote}`;
+	if (rows.length === 0) return `${payNow}${L.noDetails}`;
+	return `${payNow}${L.howToPay}:\n${rows.join("\n")}\n${L.qrNote}`;
 }
 
 function amountText(locale: Locale, v: BillingEmailVars): string {
@@ -177,10 +196,23 @@ function paymentRow(label: string, value: string, strong = false): string {
 </tr>`;
 }
 
+/** The lead "Pay online now" block when the invoice carries a HitPay link —
+ * rendered ABOVE whatever manual rail applies. */
+function payNowBlock(locale: Locale, v: BillingEmailVars): string {
+	if (!v.payNowUrl) return "";
+	const L = t[locale];
+	const safeUrl = escapeHtml(v.payNowUrl);
+	return `<div style="border:1px solid #a7f3d0;background:#ecfdf5;border-radius:16px;padding:16px;margin:0 0 12px 0;">
+<a href="${safeUrl}" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:12px 18px;border-radius:12px;">${escapeHtml(L.payNow)}</a>
+<p style="margin:10px 0 0 0;font-size:12px;line-height:1.5;color:#047857;">${escapeHtml(L.payNowHint)}</p>
+</div>`;
+}
+
 function paymentPanel(locale: Locale, v: BillingEmailVars): string {
 	const L = t[locale];
+	const payNow = payNowBlock(locale, v);
 	if (v.crossBorder) {
-		return `<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
+		return `${payNow}<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
 <p style="margin:0;font-size:13px;line-height:1.6;color:#1e3a8a;">${escapeHtml(contactForPaymentLine(locale, v))}</p>
 </div>`;
 	}
@@ -191,12 +223,12 @@ function paymentPanel(locale: Locale, v: BillingEmailVars): string {
 		v.duitnowId ? paymentRow(L.duitnow, v.duitnowId, true) : "",
 	].join("");
 	if (!rows) {
-		return `<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
+		return `${payNow}<div style="border:1px solid #dbeafe;background:#eff6ff;border-radius:16px;padding:16px;">
 <p style="margin:0;font-size:13px;line-height:1.6;color:#1e3a8a;">${escapeHtml(L.noDetails)}</p>
 </div>`;
 	}
-	return `<div style="border:1px solid #e5e7eb;background:#ffffff;border-radius:16px;padding:16px;">
-<p style="margin:0 0 10px 0;font-size:13px;font-weight:800;color:#111827;">${escapeHtml(L.howToPay)}</p>
+	return `${payNow}<div style="border:1px solid #e5e7eb;background:#ffffff;border-radius:16px;padding:16px;">
+<p style="margin:0 0 10px 0;font-size:13px;font-weight:800;color:#111827;">${escapeHtml(payNow ? L.orManual : L.howToPay)}</p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table>
 <p style="margin:12px 0 0 0;font-size:12px;line-height:1.5;color:#64748b;">${escapeHtml(L.qrNote)}</p>
 </div>`;
@@ -302,6 +334,35 @@ const render: Record<
 			const text = `🔒 Your subscription is past due · ${v.invoiceNumber}\n${t.en.storeStaysLive}\n${v.planLabel} · ${amountText("en", v)}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		// Start-when-you-sell (z8r3fday24): the store's FIRST invoice. Two
+		// framings for the one event — the seller either just made a sale
+		// (celebrate it, then bill) or ran out the 14-day backstop.
+		firstInvoiceOrder: (v) => {
+			const subject = `🎉 Your first order is in — your first invoice ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"en",
+				"firstInvoiceOrder",
+				"Your first order is in!",
+				`Hi ${escapeHtml(v.storeName)}, congratulations on your first live order. As promised, that's when your plan starts — your first <strong>${escapeHtml(v.planLabel)}</strong> invoice is below, due by ${escapeHtml(v.dueDateFormatted)}. Your storefront and orders keep running as normal in the meantime, and you can switch to a different plan from your billing page before you pay.`,
+				v,
+				t.en.cta,
+			);
+			const text = `🎉 Your first order is in — here's your first invoice ${v.invoiceNumber}\n${v.planLabel} · ${amountText("en", v)}\nDue by ${v.dueDateFormatted}. Your storefront keeps running as normal; switch plan from your billing page before paying if Starter fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		firstInvoiceBackstop: (v) => {
+			const subject = `🧾 Your free period has ended — your first invoice ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"en",
+				"firstInvoiceBackstop",
+				"Your free period has ended",
+				`Hi ${escapeHtml(v.storeName)}, your 14 free days are up — your first <strong>${escapeHtml(v.planLabel)}</strong> invoice is below, due by ${escapeHtml(v.dueDateFormatted)}. Nothing is locked: your storefront stays live and you keep full access while you settle it. Want a different plan? Switch from your billing page before you pay.`,
+				v,
+				t.en.cta,
+			);
+			const text = `🧾 Your free period has ended — here's your first invoice ${v.invoiceNumber}\n${v.planLabel} · ${amountText("en", v)}\nDue by ${v.dueDateFormatted}. Nothing is locked — your storefront stays live while you settle it; switch plan from your billing page before paying if Starter fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	ms: {
 		invoiceIssued: (v) => {
@@ -341,6 +402,32 @@ const render: Record<
 				t.ms.cta,
 			);
 			const text = `🔒 Langganan anda telah tertunggak · ${v.invoiceNumber}\n${t.ms.storeStaysLive}\n${v.planLabel} · ${amountText("ms", v)}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		firstInvoiceOrder: (v) => {
+			const subject = `🎉 Pesanan pertama anda dah masuk — bil pertama anda ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"ms",
+				"firstInvoiceOrder",
+				"Pesanan pertama anda dah masuk!",
+				`Hai ${escapeHtml(v.storeName)}, tahniah atas pesanan pertama anda. Seperti dijanjikan, di situlah pelan anda bermula — bil <strong>${escapeHtml(v.planLabel)}</strong> pertama anda ada di bawah, perlu dibayar sebelum ${escapeHtml(v.dueDateFormatted)}. Etalase dan pesanan anda terus berjalan seperti biasa, dan anda boleh tukar pelan dari halaman bil sebelum membayar.`,
+				v,
+				t.ms.cta,
+			);
+			const text = `🎉 Pesanan pertama anda dah masuk — bil pertama anda ${v.invoiceNumber}\n${v.planLabel} · ${amountText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Etalase anda terus berjalan seperti biasa; tukar pelan dari halaman bil sebelum membayar jika Starter lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		firstInvoiceBackstop: (v) => {
+			const subject = `🧾 Tempoh percuma anda telah tamat — bil pertama anda ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"ms",
+				"firstInvoiceBackstop",
+				"Tempoh percuma anda telah tamat",
+				`Hai ${escapeHtml(v.storeName)}, 14 hari percuma anda telah tamat — bil <strong>${escapeHtml(v.planLabel)}</strong> pertama anda ada di bawah, perlu dibayar sebelum ${escapeHtml(v.dueDateFormatted)}. Tiada apa yang dikunci: etalase anda kekal aktif dan anda masih ada akses penuh sementara menjelaskannya. Mahu pelan lain? Tukar dari halaman bil sebelum membayar.`,
+				v,
+				t.ms.cta,
+			);
+			const text = `🧾 Tempoh percuma anda telah tamat — bil pertama anda ${v.invoiceNumber}\n${v.planLabel} · ${amountText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Tiada apa yang dikunci — etalase anda kekal aktif; tukar pelan dari halaman bil sebelum membayar jika Starter lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},
@@ -384,15 +471,41 @@ const render: Record<
 			const text = `🔒 您的订阅已逾期 · ${v.invoiceNumber}\n${t.zh.storeStaysLive}\n${v.planLabel} · ${amountText("zh", v)}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		firstInvoiceOrder: (v) => {
+			const subject = `🎉 您的第一笔订单来了 —— 第一张账单 ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"zh",
+				"firstInvoiceOrder",
+				"您的第一笔订单来了！",
+				`您好 ${escapeHtml(v.storeName)}，恭喜您收到第一笔订单。如约，您的方案从这一刻开始 —— 第一张 <strong>${escapeHtml(v.planLabel)}</strong> 账单见下方，请在 ${escapeHtml(v.dueDateFormatted)} 前付清。在此期间您的商店和订单照常运作；付款前可在账单页面更换方案。`,
+				v,
+				t.zh.cta,
+			);
+			const text = `🎉 您的第一笔订单来了 —— 第一张账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。您的商店照常运作；如果 Starter 更合适，付款前可在账单页面更换方案。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		firstInvoiceBackstop: (v) => {
+			const subject = `🧾 您的免费期已结束 —— 第一张账单 ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"zh",
+				"firstInvoiceBackstop",
+				"您的免费期已结束",
+				`您好 ${escapeHtml(v.storeName)}，您的 14 天免费期已满 —— 第一张 <strong>${escapeHtml(v.planLabel)}</strong> 账单见下方，请在 ${escapeHtml(v.dueDateFormatted)} 前付清。没有任何功能被锁定：您的商店保持在线，付款期间您仍拥有完整权限。想换个方案？付款前可在账单页面更换。`,
+				v,
+				t.zh.cta,
+			);
+			const text = `🧾 您的免费期已结束 —— 第一张账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。没有任何功能被锁定 —— 您的商店保持在线；如果 Starter 更合适，付款前可在账单页面更换方案。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 };
 
-/** Retailer notices with no invoice attached (trial nudges + a lapsed-subscription
- * notice), so a separate (smaller) var shape. */
-export type TrialEmailKey =
-	| "trialEndingSoon"
-	| "trialEnded"
-	| "subscriptionLapsed";
+/** Retailer notices with no invoice attached (the free-period nudge + a
+ * lapsed-subscription notice), so a separate (smaller) var shape. The old
+ * `trialEnded` lock notice is gone (z8r3fday24): a free period ending now
+ * ISSUES the first invoice (`firstInvoice*` above); only that invoice going
+ * overdue locks, and that sends the ordinary `invoiceOverdue`. */
+export type TrialEmailKey = "trialEndingSoon" | "subscriptionLapsed";
 
 export type TrialEmailVars = {
 	storeName: string;
@@ -408,24 +521,13 @@ const trialRender: Record<
 		trialEndingSoon: (v) => {
 			const d = v.daysLeft ?? 0;
 			const dayStr = `${d} day${d === 1 ? "" : "s"}`;
-			const subject = `⏰ Your Kedaipal trial ends in ${dayStr}`;
+			const subject = `⏰ Your free period ends in ${dayStr}`;
 			const lines = [
-				`Hi ${escapeHtml(v.storeName)}, your free trial ends in <strong>${dayStr}</strong>.`,
-				"Choose a plan to keep growing your store — your storefront stays live, but editing pauses when the trial ends.",
+				`Hi ${escapeHtml(v.storeName)}, your free period ends in <strong>${dayStr}</strong> — or sooner, the moment you take your first live order.`,
+				"Either way your first invoice arrives then, with 14 days to pay, and your plan starts once it's settled. Your storefront stays live throughout — there's nothing to do before then.",
 			];
-			const html = wrapHtml("⏰", `Your trial ends in ${dayStr}`, lines, v.billingUrl, t.en.choosePlan);
-			const text = `⏰ Your Kedaipal trial ends in ${dayStr}\nChoose a plan to keep growing your store — editing pauses when the trial ends.\n\n${v.billingUrl}`;
-			return { subject, html, text };
-		},
-		trialEnded: (v) => {
-			const subject = "🔒 Your Kedaipal free trial has ended";
-			const lines = [
-				`Hi ${escapeHtml(v.storeName)}, your free trial has ended.`,
-				t.en.storeStaysLive,
-				"Choose a plan to continue growing your store.",
-			];
-			const html = wrapHtml("🔒", "Your free trial has ended", lines, v.billingUrl, t.en.choosePlan);
-			const text = `🔒 Your Kedaipal free trial has ended\n${t.en.storeStaysLive}\nChoose a plan to continue.\n\n${v.billingUrl}`;
+			const html = wrapHtml("⏰", `Your free period ends in ${dayStr}`, lines, v.billingUrl, t.en.choosePlan);
+			const text = `⏰ Your free period ends in ${dayStr} — or sooner, the moment you take your first live order.\nYour first invoice arrives then, with 14 days to pay; your storefront stays live throughout.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		subscriptionLapsed: (v) => {
@@ -444,24 +546,13 @@ const trialRender: Record<
 		trialEndingSoon: (v) => {
 			const d = v.daysLeft ?? 0;
 			const dayStr = `${d} hari`;
-			const subject = `⏰ Percubaan Kedaipal anda tamat dalam ${dayStr}`;
+			const subject = `⏰ Tempoh percuma anda tamat dalam ${dayStr}`;
 			const lines = [
-				`Hai ${escapeHtml(v.storeName)}, percubaan percuma anda tamat dalam <strong>${dayStr}</strong>.`,
-				"Pilih pelan untuk terus mengembangkan kedai anda — storefront kekal aktif, tetapi penyuntingan dijeda apabila percubaan tamat.",
+				`Hai ${escapeHtml(v.storeName)}, tempoh percuma anda tamat dalam <strong>${dayStr}</strong> — atau lebih awal, sebaik sahaja anda terima pesanan pertama.`,
+				"Bil pertama anda akan tiba ketika itu, dengan 14 hari untuk membayar, dan pelan anda bermula sebaik sahaja ia dijelaskan. Etalase anda kekal aktif sepanjang masa — tiada apa yang perlu dibuat sebelum itu.",
 			];
-			const html = wrapHtml("⏰", `Percubaan tamat dalam ${dayStr}`, lines, v.billingUrl, t.ms.choosePlan);
-			const text = `⏰ Percubaan Kedaipal anda tamat dalam ${dayStr}\nPilih pelan untuk terus mengembangkan kedai anda — penyuntingan dijeda apabila percubaan tamat.\n\n${v.billingUrl}`;
-			return { subject, html, text };
-		},
-		trialEnded: (v) => {
-			const subject = "🔒 Percubaan percuma Kedaipal anda telah tamat";
-			const lines = [
-				`Hai ${escapeHtml(v.storeName)}, percubaan percuma anda telah tamat.`,
-				t.ms.storeStaysLive,
-				"Pilih pelan untuk terus mengembangkan kedai anda.",
-			];
-			const html = wrapHtml("🔒", "Percubaan percuma anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
-			const text = `🔒 Percubaan percuma Kedaipal anda telah tamat\n${t.ms.storeStaysLive}\nPilih pelan untuk terus.\n\n${v.billingUrl}`;
+			const html = wrapHtml("⏰", `Tempoh percuma anda tamat dalam ${dayStr}`, lines, v.billingUrl, t.ms.choosePlan);
+			const text = `⏰ Tempoh percuma anda tamat dalam ${dayStr} — atau lebih awal, sebaik sahaja anda terima pesanan pertama.\nBil pertama anda tiba ketika itu, dengan 14 hari untuk membayar; etalase anda kekal aktif sepanjang masa.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		subscriptionLapsed: (v) => {
@@ -480,24 +571,13 @@ const trialRender: Record<
 		trialEndingSoon: (v) => {
 			const d = v.daysLeft ?? 0;
 			const dayStr = `${d} 天`;
-			const subject = `⏰ 您的 Kedaipal 试用期还剩 ${dayStr}`;
+			const subject = `⏰ 您的免费期还剩 ${dayStr}`;
 			const lines = [
-				`您好 ${escapeHtml(v.storeName)}，您的免费试用期还剩 <strong>${dayStr}</strong>。`,
-				"选择一个套餐，继续壮大您的商店 —— 商店会保持正常运作，但试用期结束后编辑功能会暂停。",
+				`您好 ${escapeHtml(v.storeName)}，您的免费期还剩 <strong>${dayStr}</strong> —— 一旦收到第一笔订单，免费期会提前结束。`,
+				"届时您会收到第一张账单，有 14 天的付款时间，付清后方案即开始。在此期间您的商店保持在线 —— 之前无需做任何事。",
 			];
-			const html = wrapHtml("⏰", `试用期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
-			const text = `⏰ 您的 Kedaipal 试用期还剩 ${dayStr}\n选择一个套餐，继续壮大您的商店 —— 试用期结束后编辑功能会暂停。\n\n${v.billingUrl}`;
-			return { subject, html, text };
-		},
-		trialEnded: (v) => {
-			const subject = "🔒 您的 Kedaipal 免费试用期已结束";
-			const lines = [
-				`您好 ${escapeHtml(v.storeName)}，您的免费试用期已经结束。`,
-				t.zh.storeStaysLive,
-				"选择一个套餐，继续壮大您的商店。",
-			];
-			const html = wrapHtml("🔒", "您的免费试用期已结束", lines, v.billingUrl, t.zh.choosePlan);
-			const text = `🔒 您的 Kedaipal 免费试用期已结束\n${t.zh.storeStaysLive}\n选择一个套餐继续使用。\n\n${v.billingUrl}`;
+			const html = wrapHtml("⏰", `您的免费期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
+			const text = `⏰ 您的免费期还剩 ${dayStr} —— 一旦收到第一笔订单，免费期会提前结束。\n届时您会收到第一张账单，有 14 天付款时间；您的商店保持在线。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		subscriptionLapsed: (v) => {
@@ -620,4 +700,286 @@ export function renderBillingEmail(
 	vars: BillingEmailVars,
 ): RenderedEmail {
 	return render[locale][key](vars);
+}
+
+/**
+ * Auto-renewal notices (86eyb6z4r): the setup confirmation, the one-per-cycle
+ * "renewing soon" heads-up before a merchant-initiated charge (the
+ * no-surprise-debit rule), and the charge-failure dunning notice. Same small
+ * shell as the trial emails — these are notices, not invoices.
+ */
+export type AutoRenewEmailKey =
+	| "autoRenewEnabled"
+	| "autoRenewUpcoming"
+	| "autoRenewFailed";
+
+export type AutoRenewEmailVars = {
+	storeName: string;
+	/** "Card" / "Touch 'n Go" / "Visa ·· 4242". */
+	methodLabel: string;
+	billingUrl: string;
+	/** upcoming only. */
+	planLabel?: string;
+	amountFormatted?: string;
+	chargeDateFormatted?: string;
+	/** failed only. */
+	payNowUrl?: string;
+	final?: boolean;
+};
+
+const autoRenewRender: Record<
+	Locale,
+	Record<AutoRenewEmailKey, (v: AutoRenewEmailVars) => RenderedEmail>
+> = {
+	en: {
+		autoRenewEnabled: (v) => {
+			const subject = "✅ Auto-renewal is on";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, auto-renewal is now on for your Kedaipal subscription using <strong>${escapeHtml(v.methodLabel)}</strong>.`,
+				"Each renewal will be charged automatically and you'll get a receipt every time. You can turn this off any time in Settings → Billing.",
+			];
+			const html = wrapHtml("✅", "Auto-renewal is on", lines, v.billingUrl, "View billing");
+			const text = `✅ Auto-renewal is on\nYour Kedaipal subscription will renew automatically using ${v.methodLabel}. You'll get a receipt for every charge, and you can turn it off any time in Settings → Billing.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewUpcoming: (v) => {
+			const subject = `🔄 Your Kedaipal plan renews on ${v.chargeDateFormatted}`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your <strong>${escapeHtml(v.planLabel ?? "Kedaipal")}</strong> plan renews on <strong>${escapeHtml(v.chargeDateFormatted ?? "")}</strong>.`,
+				`We'll charge ${escapeHtml(v.amountFormatted ?? "the renewal amount")} to your ${escapeHtml(v.methodLabel)} automatically — nothing for you to do.`,
+				"Not planning to continue? Turn off auto-renewal in Settings → Billing before then.",
+			];
+			const html = wrapHtml("🔄", `Renewing on ${v.chargeDateFormatted}`, lines, v.billingUrl, "View billing");
+			const text = `🔄 Your Kedaipal plan renews on ${v.chargeDateFormatted}\nWe'll charge ${v.amountFormatted ?? "the renewal amount"} to your ${v.methodLabel} automatically. Turn off auto-renewal in Settings → Billing if you don't want this.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewFailed: (v) => {
+			const subject = v.final
+				? "⚠️ We couldn't charge your saved payment method"
+				: "⚠️ Renewal payment failed — we'll retry";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, we tried to charge your <strong>${escapeHtml(v.methodLabel)}</strong> for your Kedaipal renewal and it didn't go through.`,
+				v.final
+					? "We've stopped retrying. Pay your invoice online or by bank transfer to keep your store fully active — or update your payment method for next time."
+					: "We'll retry automatically in a couple of days. You can also pay now, or update your payment method, and it's settled straight away.",
+			];
+			const cta = v.payNowUrl ?? v.billingUrl;
+			const html = wrapHtml("⚠️", "Renewal payment failed", lines, cta, "Pay now");
+			const text = `⚠️ Renewal payment failed\nWe tried to charge your ${v.methodLabel} and it didn't go through. ${v.final ? "We've stopped retrying — pay online or by bank transfer to keep your store fully active." : "We'll retry in a couple of days, or pay now to settle it straight away."}\n\n${cta}`;
+			return { subject, html, text };
+		},
+	},
+	ms: {
+		autoRenewEnabled: (v) => {
+			const subject = "✅ Pembaharuan automatik telah diaktifkan";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pembaharuan automatik kini aktif untuk langganan Kedaipal anda menggunakan <strong>${escapeHtml(v.methodLabel)}</strong>.`,
+				"Setiap pembaharuan akan dicaj secara automatik dan anda akan menerima resit setiap kali. Anda boleh mematikannya bila-bila masa di Tetapan → Bil.",
+			];
+			const html = wrapHtml("✅", "Pembaharuan automatik aktif", lines, v.billingUrl, "Lihat bil");
+			const text = `✅ Pembaharuan automatik telah diaktifkan\nLangganan Kedaipal anda akan diperbaharui secara automatik menggunakan ${v.methodLabel}. Anda akan menerima resit untuk setiap caj, dan boleh mematikannya bila-bila masa di Tetapan → Bil.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewUpcoming: (v) => {
+			const subject = `🔄 Pelan Kedaipal anda diperbaharui pada ${v.chargeDateFormatted}`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pelan <strong>${escapeHtml(v.planLabel ?? "Kedaipal")}</strong> anda akan diperbaharui pada <strong>${escapeHtml(v.chargeDateFormatted ?? "")}</strong>.`,
+				`Kami akan mencaj ${escapeHtml(v.amountFormatted ?? "jumlah pembaharuan")} ke ${escapeHtml(v.methodLabel)} anda secara automatik — tiada apa yang perlu anda buat.`,
+				"Tidak mahu meneruskan? Matikan pembaharuan automatik di Tetapan → Bil sebelum tarikh itu.",
+			];
+			const html = wrapHtml("🔄", `Diperbaharui pada ${v.chargeDateFormatted}`, lines, v.billingUrl, "Lihat bil");
+			const text = `🔄 Pelan Kedaipal anda diperbaharui pada ${v.chargeDateFormatted}\nKami akan mencaj ${v.amountFormatted ?? "jumlah pembaharuan"} ke ${v.methodLabel} anda secara automatik. Matikan pembaharuan automatik di Tetapan → Bil jika anda tidak mahu.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewFailed: (v) => {
+			const subject = v.final
+				? "⚠️ Kami tidak dapat mencaj kaedah pembayaran anda"
+				: "⚠️ Caj pembaharuan gagal — kami akan cuba lagi";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, kami cuba mencaj <strong>${escapeHtml(v.methodLabel)}</strong> anda untuk pembaharuan Kedaipal tetapi tidak berjaya.`,
+				v.final
+					? "Kami telah berhenti mencuba. Bayar bil anda dalam talian atau melalui pindahan bank untuk memastikan kedai anda aktif sepenuhnya — atau kemas kini kaedah pembayaran untuk kali seterusnya."
+					: "Kami akan cuba lagi secara automatik dalam beberapa hari. Anda juga boleh bayar sekarang, atau kemas kini kaedah pembayaran, dan ia selesai serta-merta.",
+			];
+			const cta = v.payNowUrl ?? v.billingUrl;
+			const html = wrapHtml("⚠️", "Caj pembaharuan gagal", lines, cta, "Bayar sekarang");
+			const text = `⚠️ Caj pembaharuan gagal\nKami cuba mencaj ${v.methodLabel} anda tetapi tidak berjaya. ${v.final ? "Kami telah berhenti mencuba — bayar dalam talian atau melalui pindahan bank untuk memastikan kedai anda aktif sepenuhnya." : "Kami akan cuba lagi dalam beberapa hari, atau bayar sekarang untuk menyelesaikannya serta-merta."}\n\n${cta}`;
+			return { subject, html, text };
+		},
+	},
+	zh: {
+		autoRenewEnabled: (v) => {
+			const subject = "✅ 自动续订已开启";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 订阅已开启自动续订，使用 <strong>${escapeHtml(v.methodLabel)}</strong>。`,
+				"每次续订都会自动扣款，并且每次都会收到收据。您可以随时在 设置 → 账单 中关闭。",
+			];
+			const html = wrapHtml("✅", "自动续订已开启", lines, v.billingUrl, "查看账单");
+			const text = `✅ 自动续订已开启\n您的 Kedaipal 订阅将使用 ${v.methodLabel} 自动续订。每次扣款都会收到收据，您可以随时在 设置 → 账单 中关闭。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewUpcoming: (v) => {
+			const subject = `🔄 您的 Kedaipal 套餐将于 ${v.chargeDateFormatted} 续订`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 <strong>${escapeHtml(v.planLabel ?? "Kedaipal")}</strong> 套餐将于 <strong>${escapeHtml(v.chargeDateFormatted ?? "")}</strong> 续订。`,
+				`我们会自动从您的 ${escapeHtml(v.methodLabel)} 扣除 ${escapeHtml(v.amountFormatted ?? "续订金额")} —— 您无需任何操作。`,
+				"不打算继续？请在此之前到 设置 → 账单 关闭自动续订。",
+			];
+			const html = wrapHtml("🔄", `将于 ${v.chargeDateFormatted} 续订`, lines, v.billingUrl, "查看账单");
+			const text = `🔄 您的 Kedaipal 套餐将于 ${v.chargeDateFormatted} 续订\n我们会自动从您的 ${v.methodLabel} 扣除 ${v.amountFormatted ?? "续订金额"}。如不需要，请到 设置 → 账单 关闭自动续订。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		autoRenewFailed: (v) => {
+			const subject = v.final
+				? "⚠️ 我们无法从您保存的付款方式扣款"
+				: "⚠️ 续订扣款失败 —— 我们会重试";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，我们尝试从您的 <strong>${escapeHtml(v.methodLabel)}</strong> 扣除 Kedaipal 续订费用，但没有成功。`,
+				v.final
+					? "我们已停止重试。请在线支付账单或通过银行转账，让您的商店保持完整运作 —— 也可以更新付款方式以备下次使用。"
+					: "我们会在几天后自动重试。您也可以立即付款，或更新付款方式，马上完成结算。",
+			];
+			const cta = v.payNowUrl ?? v.billingUrl;
+			const html = wrapHtml("⚠️", "续订扣款失败", lines, cta, "立即付款");
+			const text = `⚠️ 续订扣款失败\n我们尝试从您的 ${v.methodLabel} 扣款但没有成功。${v.final ? "我们已停止重试 —— 请在线支付或通过银行转账，让您的商店保持完整运作。" : "我们会在几天后重试，您也可以立即付款马上完成结算。"}\n\n${cta}`;
+			return { subject, html, text };
+		},
+	},
+};
+
+export function renderAutoRenewEmail(
+	locale: Locale,
+	key: AutoRenewEmailKey,
+	vars: AutoRenewEmailVars,
+): RenderedEmail {
+	return autoRenewRender[locale][key](vars);
+}
+
+/**
+ * Off-Season Hold notices (z8r3fday24). `holdStarted` restates the deal the
+ * seller just took — what's paused, what stays live, the flat price, when it
+ * starts billing, and that one tap resumes — because a pause is exactly the
+ * state a seller forgets about. `holdResumed` confirms the tier is back and
+ * says whether its invoice is on its way now or waits for the paid period.
+ */
+export type HoldEmailKey = "holdStarted" | "holdResumed";
+
+export type HoldEmailVars = {
+	storeName: string;
+	billingUrl: string;
+	/** The tier the seller resumes to / resumed, e.g. "Pro". */
+	planLabel: string;
+	/** e.g. "MYR 19.00" — always from HOLD_MONTHLY_PRICES, never spelled. */
+	holdPriceFormatted: string;
+	/** Whether an invoice was issued at once (true) or billing waits for the
+	 * running paid period to end (`billsFromFormatted`). */
+	billsNow: boolean;
+	billsFromFormatted?: string;
+};
+
+const holdRender: Record<
+	Locale,
+	Record<HoldEmailKey, (v: HoldEmailVars) => RenderedEmail>
+> = {
+	en: {
+		holdStarted: (v) => {
+			const subject = "⏸ Your store is on Off-Season Hold";
+			const when = v.billsNow
+				? `Your first hold invoice (${v.holdPriceFormatted}) is on its way, with 14 days to pay.`
+				: `You're paid up until ${v.billsFromFormatted ?? "the end of your current period"} — the ${v.holdPriceFormatted}/month hold starts billing after that.`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your ${escapeHtml(v.planLabel)} plan is paused for the season.`,
+				"<strong>Paused:</strong> new orders — buyers see your store with a “seasonal break” note, not a dead link.",
+				"<strong>Still live:</strong> your storefront, catalog, buyer list, order history and editing.",
+				escapeHtml(when),
+				"When your season is back, tap <strong>Resume</strong> in Settings → Billing and your plan returns straight away.",
+			];
+			const html = wrapHtml("⏸", "Off-Season Hold is on", lines, v.billingUrl, "View billing");
+			const text = `⏸ Your store is on Off-Season Hold\nPaused: new orders. Still live: storefront, catalog, buyer list, order history, editing.\n${when}\nResume any time from Settings → Billing.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		holdResumed: (v) => {
+			const subject = `▶️ Welcome back — your ${v.planLabel} plan is on again`;
+			const when = v.billsNow
+				? `Your ${v.planLabel} invoice is on its way, with 14 days to pay — you keep full access meanwhile.`
+				: `You're already paid up until ${v.billsFromFormatted ?? "the end of your current period"}, so nothing to pay right now.`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your ${escapeHtml(v.planLabel)} plan is back and your store is taking orders again.`,
+				escapeHtml(when),
+			];
+			const html = wrapHtml("▶️", `${v.planLabel} is back on`, lines, v.billingUrl, "View billing");
+			const text = `▶️ Welcome back — your ${v.planLabel} plan is on again and your store is taking orders.\n${when}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
+	ms: {
+		holdStarted: (v) => {
+			const subject = "⏸ Kedai anda kini dalam Rehat Luar Musim";
+			const when = v.billsNow
+				? `Bil rehat pertama anda (${v.holdPriceFormatted}) sedang dihantar, dengan 14 hari untuk membayar.`
+				: `Anda sudah bayar sehingga ${v.billsFromFormatted ?? "hujung tempoh semasa"} — rehat ${v.holdPriceFormatted}/bulan mula dicaj selepas itu.`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pelan ${escapeHtml(v.planLabel)} anda dijeda untuk musim ini.`,
+				"<strong>Dijeda:</strong> pesanan baharu — pembeli nampak kedai anda dengan nota “rehat bermusim”, bukan pautan mati.",
+				"<strong>Kekal hidup:</strong> etalase, katalog, senarai pembeli, sejarah pesanan dan penyuntingan.",
+				escapeHtml(when),
+				"Bila musim anda kembali, ketik <strong>Sambung semula</strong> di Tetapan → Pengebilan dan pelan anda kembali serta-merta.",
+			];
+			const html = wrapHtml("⏸", "Rehat Luar Musim diaktifkan", lines, v.billingUrl, "Lihat pengebilan");
+			const text = `⏸ Kedai anda kini dalam Rehat Luar Musim\nDijeda: pesanan baharu. Kekal hidup: etalase, katalog, senarai pembeli, sejarah pesanan, penyuntingan.\n${when}\nSambung semula bila-bila masa dari Tetapan → Pengebilan.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		holdResumed: (v) => {
+			const subject = `▶️ Selamat kembali — pelan ${v.planLabel} anda aktif semula`;
+			const when = v.billsNow
+				? `Bil ${v.planLabel} anda sedang dihantar, dengan 14 hari untuk membayar — akses penuh kekal sementara itu.`
+				: `Anda sudah bayar sehingga ${v.billsFromFormatted ?? "hujung tempoh semasa"}, jadi tiada bayaran buat masa ini.`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pelan ${escapeHtml(v.planLabel)} anda kembali dan kedai anda menerima pesanan semula.`,
+				escapeHtml(when),
+			];
+			const html = wrapHtml("▶️", `${v.planLabel} aktif semula`, lines, v.billingUrl, "Lihat pengebilan");
+			const text = `▶️ Selamat kembali — pelan ${v.planLabel} anda aktif semula dan kedai anda menerima pesanan.\n${when}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
+	zh: {
+		holdStarted: (v) => {
+			const subject = "⏸ 您的商店已进入淡季保留";
+			const when = v.billsNow
+				? `您的第一张保留账单（${v.holdPriceFormatted}）正在发出，有 14 天付款时间。`
+				: `您已付费至 ${v.billsFromFormatted ?? "当前周期结束"} —— 之后才开始按每月 ${v.holdPriceFormatted} 计费。`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 ${escapeHtml(v.planLabel)} 方案已在本季暂停。`,
+				"<strong>已暂停：</strong>新订单 —— 买家看到的是带“淡季休息”提示的商店，而不是失效链接。",
+				"<strong>保持在线：</strong>您的商店、目录、买家名单、订单记录和编辑功能。",
+				escapeHtml(when),
+				"季节回来时，到 设置 → 账单 点击 <strong>恢复</strong>，方案立即回归。",
+			];
+			const html = wrapHtml("⏸", "淡季保留已开启", lines, v.billingUrl, "查看账单");
+			const text = `⏸ 您的商店已进入淡季保留\n已暂停：新订单。保持在线：商店、目录、买家名单、订单记录、编辑。\n${when}\n随时可在 设置 → 账单 恢复。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		holdResumed: (v) => {
+			const subject = `▶️ 欢迎回来 —— 您的 ${v.planLabel} 方案已恢复`;
+			const when = v.billsNow
+				? `您的 ${v.planLabel} 账单正在发出，有 14 天付款时间 —— 期间您仍拥有完整权限。`
+				: `您已付费至 ${v.billsFromFormatted ?? "当前周期结束"}，目前无需付款。`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 ${escapeHtml(v.planLabel)} 方案已恢复，商店重新开始接单。`,
+				escapeHtml(when),
+			];
+			const html = wrapHtml("▶️", `${v.planLabel} 已恢复`, lines, v.billingUrl, "查看账单");
+			const text = `▶️ 欢迎回来 —— 您的 ${v.planLabel} 方案已恢复，商店重新开始接单。\n${when}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
+};
+
+export function renderHoldEmail(
+	locale: Locale,
+	key: HoldEmailKey,
+	vars: HoldEmailVars,
+): RenderedEmail {
+	return holdRender[locale][key](vars);
 }
