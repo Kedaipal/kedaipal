@@ -13,6 +13,8 @@
  * about what fits — the fulfilmentDate.ts way.
  */
 
+import type { Locale } from "./locale";
+
 /** How long a note may be, measured on the STORED text (see `collapseNote`).
  * Long enough for a real instruction, short enough that it can sit on a cart
  * line and inside a WhatsApp message without becoming the message. */
@@ -38,3 +40,54 @@ export function pickupNoteFits(raw: string | undefined): boolean {
 	const collapsed = collapseNote(raw);
 	return collapsed === undefined || collapsed.length <= MAX_PICKUP_NOTE_LENGTH;
 }
+
+/**
+ * The distinct notes across an order's lines, in cart order: trimmed, blanks
+ * dropped, exact duplicates removed.
+ *
+ * Deduped because a seller with six flavours of one puff writes the same note
+ * six times, and "bring an ice bag" six times over is noise wherever it lands.
+ * The product is deliberately NOT named alongside: the instruction is about
+ * collecting the order, not about which line carried it.
+ */
+export function distinctPickupNotes(
+	notes: readonly (string | undefined)[],
+): string[] {
+	const seen = new Set<string>();
+	for (const raw of notes) {
+		const note = raw?.trim();
+		if (note) seen.add(note);
+	}
+	return [...seen];
+}
+
+/**
+ * The ONE gate for "does this order carry buyer-facing pickup notes?".
+ *
+ * `orders.create` freezes each line's note on EVERY order regardless of method,
+ * so a surface that forgot to check the method would print "Before you collect"
+ * on a delivery order. Self-collect only (drop-off meet-ups included — the
+ * instruction still applies there), and never a counter sale: the buyer was
+ * standing at the counter. Deliberately independent of `pickupSnapshot`, so a
+ * self-collect order predating snapshots still shows its notes on /track.
+ *
+ * Returns plain strings — safe to cross a Convex function boundary, where an
+ * `undefined` inside an array is not a valid value.
+ */
+export function orderPickupNotes(order: {
+	deliveryMethod?: string;
+	source?: string;
+	items: readonly { pickupNote?: string }[];
+}): string[] {
+	if ((order.deliveryMethod ?? "delivery") !== "self_collect") return [];
+	if (order.source === "counter") return [];
+	return distinctPickupNotes(order.items.map((item) => item.pickupNote));
+}
+
+/** The heading every buyer-facing surface uses for the notes — the WhatsApp
+ * confirmation, /track and checkout — so the buyer meets one phrase, not three. */
+export const PICKUP_NOTES_HEADING: Record<Locale, string> = {
+	en: "Before you collect",
+	ms: "Sebelum anda ambil",
+	zh: "取货前请注意",
+};

@@ -50,8 +50,10 @@ export type CartItem = {
 	// products at create and is the judge; these exist so the buyer is stopped
 	// at the picker rather than at the error.
 	prepMinutes?: number;
-	// The product's pickup note as it read when added. Shown on the cart line
-	// and the checkout summary, then frozen onto the order at create.
+	// The product's pickup note as it read when added — lets checkout show the
+	// "Before you collect" block without a product join. NOT the copy that
+	// reaches the order: orders.create freezes the LIVE product's note, so a
+	// seller's edit between add and checkout still lands.
 	pickupNote?: string;
 	// Optional buyer reference image for a custom line. Uploaded on attach (Convex
 	// storage id; serializable so it survives cart persistence) and passed to

@@ -14,6 +14,7 @@
 // message points. Don't re-add copy for a send that no longer exists.
 
 import { type Locale, pickLocale as pickLocaleBase } from "./locale";
+import { distinctPickupNotes, PICKUP_NOTES_HEADING } from "./pickupNote";
 import { deriveMapsUrl } from "./mapsUrl";
 
 export type { Locale } from "./locale";
@@ -499,44 +500,29 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 	},
 };
 
-// Per-product pickup notes (z8r3fdff97) — the seller's own instruction for
-// collecting THIS item ("side counter", "bring an ice bag"). Lived in the
-// product description before, which never rode the order, so it reached the
-// storefront and then vanished exactly when the buyer needed it.
-const pickupNotesLabels: Record<Locale, string> = {
-	en: "📝 Before you collect",
-	ms: "📝 Sebelum anda ambil",
-	zh: "📝 取货前请注意",
-};
-
 /**
- * Render the frozen per-line pickup notes as one block.
+ * Render the frozen per-line pickup notes (z8r3fdff97) as one block — the
+ * seller's own instruction for collecting ("side counter", "bring an ice
+ * bag"), which lived in the product description before and so never rode the
+ * order to the moment the buyer needed it.
  *
- * DEDUPED, and deliberately without naming the product: a seller with six
- * flavours of the same puff writes one note six times, and "Ice Cream Puff:
- * bring an ice bag / Mango Puff: bring an ice bag / …" is noise in a chat
- * message. One distinct instruction, once, in cart order.
+ * Dedupe and heading come from `lib/pickupNote.ts`, so this message, /track and
+ * checkout say the same words and list the same notes.
  *
- * Returns "" when there is nothing to say so the caller can concatenate
+ * Returns "" when there is nothing to say, so the caller can concatenate
  * unconditionally — the renderPickupBlock posture.
  */
 export function renderPickupNotes(
 	locale: Locale,
 	notes: readonly (string | undefined)[],
 ): string {
-	// Tolerant of `undefined` entries even though the Convex transport can't
-	// carry them (an undefined inside an array is not a valid Convex value, so
-	// the callers flatMap them out) — this is also called with raw order items
-	// in tests and on any future in-process path.
-	const seen = new Set<string>();
-	for (const raw of notes) {
-		const note = raw?.trim();
-		if (note) seen.add(note);
-	}
-	if (seen.size === 0) return "";
-	return ["", pickupNotesLabels[locale], ...[...seen].map((n) => `• ${n}`)].join(
-		"\n",
-	);
+	const distinct = distinctPickupNotes(notes);
+	if (distinct.length === 0) return "";
+	return [
+		"",
+		`📝 ${PICKUP_NOTES_HEADING[locale]}`,
+		...distinct.map((note) => `• ${note}`),
+	].join("\n");
 }
 
 // Fee line under the pickup address — tells the buyer the charge is already

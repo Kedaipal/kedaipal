@@ -36,6 +36,7 @@ import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { redactPhone } from "./lib/logRedaction";
 import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
+import { orderPickupNotes } from "./lib/pickupNote";
 import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
@@ -319,7 +320,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
-			pickupNotes: order.items.flatMap((i) => (i.pickupNote ? [i.pickupNote] : [])),
+			pickupNotes: orderPickupNotes(order),
 			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
 			mockupPending: isMockupGateClosed(order),
@@ -657,8 +658,14 @@ export const handleInbound = internalAction({
 				meta?.pickupSnapshot,
 				meta?.currency,
 			);
+			// The notes ride here too. A mockup-gated order is made-to-order, and
+			// made-to-order + self-collect is exactly the order most likely to
+			// have a collection instruction ("bring an ice bag") — leaving them off
+			// this path would drop them for the buyers who need them most.
 			const gatedBody =
-				(pickupBlock ? `${gatedConfirm}\n${pickupBlock}` : gatedConfirm) +
+				(pickupBlock
+					? `${gatedConfirm}\n${pickupBlock}${renderPickupNotes(locale, meta?.pickupNotes ?? [])}`
+					: gatedConfirm) +
 				// Same always-on growth line as the normal confirm — a custom-order
 				// buyer still sees it on their "order received" message.
 				poweredByLine(locale);
@@ -804,7 +811,7 @@ export const getManualReminderContext = internalQuery({
 			trackingToken: order.trackingToken,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			pickupSnapshot: order.pickupSnapshot,
-			pickupNotes: order.items.flatMap((i) => (i.pickupNote ? [i.pickupNote] : [])),
+			pickupNotes: orderPickupNotes(order),
 			status: order.status,
 			paymentStatus: order.paymentStatus,
 			mockupPending: isMockupGateClosed(order),

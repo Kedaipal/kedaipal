@@ -1198,7 +1198,8 @@ export const create = mutation({
 		}
 		// Store opening hours (86eyp5rav): the fulfilment moment must fall inside
 		// them — a closed day rejects for BOTH methods, the time window applies
-		// only where a time exists (delivery; pickup is date-only, its point's
+		// only where a time exists (a delivery, or a self-collect order at the
+		// seller's own point; a drop-off meet-up stays date-only and its
 		// schedule note carries the detail). The storefront mirrors this check
 		// pre-submit via the same shared function, so a buyer only hits it from
 		// a stale tab or a direct call. Counter checkout doesn't run this path

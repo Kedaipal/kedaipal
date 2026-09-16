@@ -216,7 +216,9 @@ export function matchesFulfilmentWindow(
 // and the inbox sort, due-today counts, urgency badges and window chips all
 // compare midnights — so a time-of-day must never be folded into it. Minutes
 // compose with the day (`composeFulfilmentMoment`) and cannot drift from it.
-// Legacy orders, counter orders and self-collect orders simply have no time.
+// Legacy, counter and booking orders have no time. A self-collect order may
+// carry one (z8r3fdff97): at the seller's own pickup point, whenever the store
+// has opening hours or the cart has a prep window.
 // ---------------------------------------------------------------------------
 
 export const MINUTES_PER_DAY = 24 * 60;

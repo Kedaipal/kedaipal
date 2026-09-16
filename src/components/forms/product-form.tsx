@@ -1622,7 +1622,7 @@ export function ProductForm({
 						</div>
 						<p className="text-xs leading-relaxed text-muted-foreground">
 							How long you need to make this once an order comes in. Buyers
-							can&apos;t pick a collection or delivery <em>time</em> sooner than
+							can&apos;t pick a pickup or delivery <em>time</em> sooner than
 							this, and the longest prep time in a cart sets the whole order.
 							Leave blank if it&apos;s ready to hand over. Counter checkout
 							ignores it.
@@ -1689,10 +1689,11 @@ export function ProductForm({
 						</div>
 						{offerSelfCollect ? (
 							<p className="text-xs leading-relaxed text-muted-foreground">
-								One line collecting buyers see on the product page, at checkout,
-								in their WhatsApp confirmation and on their order page.
-								It&apos;s copied onto each order as it&apos;s placed, so editing
-								it later never rewrites what earlier buyers were told.
+								One line collecting buyers see on the product page, at checkout
+								and on their order page — the page their WhatsApp confirmation
+								links to. It&apos;s copied onto each order as it&apos;s placed,
+								so editing it later never rewrites what earlier buyers were
+								told.
 							</p>
 						) : null}
 						{!pickupNoteValid ? (

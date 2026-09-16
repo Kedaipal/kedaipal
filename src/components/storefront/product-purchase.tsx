@@ -537,7 +537,14 @@ export function OptionPills({ pp }: { pp: ProductPurchase }) {
 /** Stock hint + minimum-order hint/unreachable alert — surfaced on the product
  * (not only at checkout) so neither rule is ever a surprise. */
 export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
-	const prepLabel = formatPrepDuration(pp.product?.prepMinutes);
+	// "Ready in ~2 hours" is only TRUE when same-day is possible. A product that
+	// needs a day or more of notice can never be ready two hours from now, so
+	// the chip would promise something checkout then refuses — the buyer-side
+	// twin of the seller form's "prep won't apply" note.
+	const prepLabel =
+		(pp.product?.minNoticeDays ?? 0) >= 1
+			? ""
+			: formatPrepDuration(pp.product?.prepMinutes);
 	const pickupNote = pp.product?.pickupNote?.trim();
 	const product = pp.product;
 	if (!product) return null;

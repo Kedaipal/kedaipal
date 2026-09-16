@@ -1608,13 +1608,16 @@ export default defineSchema({
 		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
 		// midnight (0..1439), captured at checkout for DELIVERY orders (both
 		// directions: the rider's arrival at the buyer, or the collection from
-		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// them, shouldn't be an all-day window) and — since z8r3fdff97 — for
+		// SELF-COLLECT orders at the seller's own pickup point whenever the
+		// store has opening hours or the cart has a prep window (a drop-off
+		// meet-up stays date-only: its schedule note governs). Deliberately a separate field:
 		// `fulfilmentDate` must stay a whole midnight (the validator enforces
 		// it, and the inbox sort / due-today counts / urgency badges all
 		// compare midnights), so the time composes with it via
 		// composeFulfilmentMoment and can never drift from the day. Absent on
-		// legacy, counter and self-collect orders — every consumer treats
-		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// legacy, counter and booking orders, and optional on self-collect —
+		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",

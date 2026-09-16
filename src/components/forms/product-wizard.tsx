@@ -2822,7 +2822,7 @@ export function ProductWizard({
 												<IssueText message={issueFor("prepMinutes")} />
 												<span className="text-xs font-normal text-muted-foreground">
 													How long you need to make it. Buyers can&apos;t pick a
-													collection or delivery time sooner than this.
+													pickup or delivery time sooner than this.
 												</span>
 											</label>
 											{/* Pickup note — an instruction, not a limit, so it is
