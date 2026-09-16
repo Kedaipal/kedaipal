@@ -107,6 +107,10 @@ export function ProductCard({
 	// from the minimum) even when the standard variants can't reach it.
 	const chooseDisabled =
 		outOfStock || eventFull || (minUnreachable && !hasCustom);
+	// Does the bottom-left overlay row render at all? Drives the no-photo
+	// placeholder's clearance — see the tile below.
+	const hasBottomChips =
+		event !== undefined || hasCustom || minQuantity >= 2;
 	const pageLink = {
 		to: "/$slug/p/$productSlug",
 		params: { slug: storeSlug, productSlug: product.slug },
@@ -129,6 +133,11 @@ export function ProductCard({
 				aria-hidden
 				className="relative block aspect-square w-full overflow-hidden bg-muted text-left"
 			>
+				{/* The bottom-left chip row sits ON the image tile. With no photo the
+				    tile is the name placeholder instead, and the chips were painting
+				    over it — already true of a lone "Min N", and unmissable once an
+				    event adds a date chip and a seat count. The placeholder gets the
+				    row's height back as padding when chips are present. */}
 				{firstImage ? (
 					<AppImage
 						src={firstImage}
@@ -142,7 +151,11 @@ export function ProductCard({
 						sizes="(min-width: 1024px) 25vw, (min-width: 640px) 33vw, 50vw"
 					/>
 				) : (
-					<div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground">
+					<div
+						className={`flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground ${
+							hasBottomChips ? "pb-9" : ""
+						}`}
+					>
 						<span className="flex size-11 items-center justify-center rounded-xl bg-background/80 shadow-sm">
 							<ImagePlus className="size-5" />
 						</span>
@@ -178,7 +191,7 @@ export function ProductCard({
 				) : null}
 				{/* Overlaid on the image (not a text-zone row) so cards with chips
 				    stay exactly the same height as their neighbours. */}
-				{event !== undefined || hasCustom || minQuantity >= 2 ? (
+				{hasBottomChips ? (
 					<span className="absolute bottom-2 left-2 flex flex-wrap items-center gap-1">
 						{event !== undefined ? (
 							// Accent, normal case, a size up: this is the headline fact,

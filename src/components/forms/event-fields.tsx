@@ -264,9 +264,14 @@ export function EventFields({
 								) : null}
 								they can&apos;t pick their own date, delivery is off for the
 								whole order, and your minimum notice below doesn&apos;t apply.
-								{seatsRaw.length > 0 && seatsValid
-									? ` RSVPs stop at ${seatsParsed} seats.`
-									: " No seat limit — per-option stock still applies."}{" "}
+								{/* Says nothing about a cap the field is currently rejecting —
+								    "RSVPs stop at 10 seats" beside a red "can't go below 18"
+								    describes a state that will never exist. */}
+								{seatsBelowTaken
+									? ""
+									: seatsRaw.length > 0 && seatsValid
+										? ` RSVPs stop at ${seatsParsed} seats.`
+										: " No seat limit — per-option stock still applies."}{" "}
 								The listing hides itself the day after.
 							</span>
 						</p>
