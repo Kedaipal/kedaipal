@@ -68,6 +68,10 @@ function NewProductRoute() {
 
 	const categoriesLocked =
 		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "categories");
+	// Same client mirror for events (`z8r3fdff9u`) — the toggle disables with
+	// the Pro hint rather than erroring on save.
+	const eventsLocked =
+		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "events");
 
 	async function handleCreate(values: ProductFormSubmitValues) {
 		if (!retailer) return;
@@ -166,6 +170,7 @@ function NewProductRoute() {
 				<ProductWizard
 					retailerId={retailer._id}
 					categoriesLocked={categoriesLocked}
+					eventsLocked={eventsLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					initialState={wizardReturn}
@@ -206,6 +211,7 @@ function NewProductRoute() {
 			<ProductForm
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
+				eventsLocked={eventsLocked}
 				initialValues={wizardDraft?.initialValues}
 				initialEditor={wizardDraft?.initialEditor}
 				mode="create"
