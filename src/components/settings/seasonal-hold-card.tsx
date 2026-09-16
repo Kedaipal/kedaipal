@@ -9,6 +9,8 @@ import {
 	HOLD_MONTHLY_PRICES,
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL, holdBillsNow } from "../../../convex/lib/seasonalHold";
+import type { FixHighlight } from "../../lib/country-setup-copy";
+import { highlightRingClass } from "../../lib/country-setup-copy";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -38,7 +40,13 @@ export function SeasonalHoldCard({
 	country,
 	sub,
 	pendingKind,
+	id,
+	highlight,
 }: {
+	/** Anchor + ring for `?spot=seasonal_hold`, carried by EVERY rendered
+	 * state so the deep link lands whichever one the seller is in. */
+	id?: string;
+	highlight?: FixHighlight;
 	retailerId: Id<"retailers">;
 	country: "MY" | "SG";
 	sub: SubscriptionView;
@@ -97,7 +105,13 @@ export function SeasonalHoldCard({
 		const resumeBillsNow =
 			paidThrough === undefined || (sub.periodPaidBy ?? "plan") === "hold";
 		return (
-			<section className="flex flex-col gap-4 rounded-2xl border border-accent/30 bg-accent/5 p-5 lg:p-6">
+			<section
+				id={id}
+				data-fix-highlight={highlight ?? undefined}
+				className={`flex flex-col gap-4 rounded-2xl border bg-accent/5 p-5 scroll-mt-24 lg:p-6 ${
+					highlight ? highlightRingClass(highlight) : "border-accent/30"
+				}`}
+			>
 				<div className="flex items-start gap-3">
 					<PauseCircle
 						className="mt-0.5 size-5 shrink-0 text-accent"
@@ -175,7 +189,11 @@ export function SeasonalHoldCard({
 	});
 	const voidsPlanInvoice = pendingKind === "plan";
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
 			<div className="flex items-start gap-3">
 				<PauseCircle
 					className="mt-0.5 size-5 shrink-0 text-muted-foreground"
