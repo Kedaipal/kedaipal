@@ -397,6 +397,7 @@ describe("hasFeature (client plan gate)", () => {
 				delivery: false,
 				onlinePayments: false,
 				waOrderAlerts: false,
+				events: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -418,6 +419,7 @@ describe("hasFeature (client plan gate)", () => {
 				delivery: true,
 				onlinePayments: true,
 				waOrderAlerts: true,
+				events: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
@@ -447,6 +449,7 @@ describe("isCrmLocked", () => {
 			delivery: false,
 			onlinePayments: false,
 			waOrderAlerts: false,
+			events: false,
 		},
 	});
 
@@ -489,6 +492,7 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 			delivery: false,
 			onlinePayments: false,
 			waOrderAlerts: false,
+			events: false,
 		},
 	});
 
@@ -532,6 +536,7 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 				delivery: false,
 				onlinePayments: false,
 				waOrderAlerts: false,
+				events: false,
 			},
 		});
 		expect(

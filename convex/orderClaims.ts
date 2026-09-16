@@ -139,6 +139,16 @@ async function freezeClaimLines(
 		const displayName = label ? `${product.name} (${label})` : product.name;
 		if (!product.active || !variant.active)
 			throw new ConvexError(`"${displayName}" is not available`);
+		// Event products are out of scope for claim links in v1 (`z8r3fdff9u`).
+		// A claim freezes a price and lets the BUYER pick their fulfilment date,
+		// which is the one thing an event forbids — and a claim carries no seat
+		// reservation, so an event sold through one could oversell the room
+		// between the send and the commit. Refused at the seller's door, where
+		// the alternative is one tap away, rather than at the buyer's.
+		if (product.event !== undefined)
+			throw new ConvexError(
+				`"${product.name}" is an event — share its storefront link so guests RSVP to the fixed date.`,
+			);
 		let unitPrice: number;
 		if (variant.isCustom === true || item.unitPrice !== undefined) {
 			const entered = item.unitPrice;
@@ -782,6 +792,13 @@ export const commit = mutation({
 					`"${line.name}" is no longer available — message the store to sort it out`,
 				);
 			const product = await ctx.db.get(line.productId);
+			// Backstop for a product that BECAME an event after the link was sent
+			// (freezeClaimLines refuses one at send time). The buyer can't be made
+			// to RSVP through a surface that has no date lock.
+			if (product?.event !== undefined)
+				throw new ConvexError(
+					`"${product.name}" is now an event — message the store to RSVP.`,
+				);
 			if ((product?.minNoticeDays ?? 0) > maxItemNoticeDays)
 				maxItemNoticeDays = product?.minNoticeDays ?? 0;
 			if (product) {

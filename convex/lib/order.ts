@@ -162,6 +162,38 @@ export function isMockupPriceUnsettled(order: MockupGateFields): boolean {
 	return order.mockupStatus === "pending" && order.mockupWaivedAt === undefined;
 }
 
+/** The order fields the free-order test reads. */
+export type FreeOrderFields = MockupGateFields & {
+	total: number;
+	deliveryFeePending?: boolean;
+};
+
+/**
+ * Is there genuinely nothing to pay? (`z8r3fdff9u`, the free-event case.)
+ *
+ * A total of 0 is NOT enough on its own, and that's the whole reason this is a
+ * shared predicate rather than an inline `total === 0`: a made-to-order order
+ * sits at 0 until the seller quotes the mockup, and an out-of-zone delivery
+ * sits at its item subtotal until she arranges the fee. Both are "price not
+ * settled yet", the exact opposite of "free" — and telling those buyers their
+ * order costs nothing is how a seller ends up doing RM400 of catering for
+ * free.
+ *
+ * So: zero, AND no outstanding price to name. True only for an order that
+ * really is on the house — a free RSVP event being the case this was built for.
+ *
+ * **Single source of truth** — the tracking page's payment section, the
+ * WhatsApp/email confirmation copy and the seller's payment badge all ask it
+ * here, so "free" can't mean three different things across three surfaces.
+ */
+export function isFreeOrder(order: FreeOrderFields): boolean {
+	return (
+		order.total === 0 &&
+		!isMockupPriceUnsettled(order) &&
+		order.deliveryFeePending !== true
+	);
+}
+
 /** The order fields the collection gate reads (86eyg0n8e). */
 export type CollectionGateFields = {
 	deliveryDirection?: "standard" | "collection";

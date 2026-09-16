@@ -51,6 +51,7 @@ describe("plans — feature entitlements", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
+			events: false,
 			waOrderAlerts: false,
 		});
 	});
@@ -65,6 +66,7 @@ describe("plans — feature entitlements", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
+			events: true,
 			waOrderAlerts: true,
 		});
 		expect(featuresForPlan("scale")).toEqual({
@@ -76,6 +78,7 @@ describe("plans — feature entitlements", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
+			events: true,
 			waOrderAlerts: true,
 		});
 	});
