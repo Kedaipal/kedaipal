@@ -307,6 +307,8 @@ function EditProductRoute() {
 						: undefined,
 					weekendDays: product.booking?.weekendDays,
 					minNoticeDays: product.minNoticeDays,
+					prepMinutes: product.prepMinutes,
+					pickupNote: product.pickupNote,
 					minQuantity: product.minQuantity,
 					categoryIds,
 					imageStorageIds: product.imageStorageIds,
@@ -333,6 +335,9 @@ function EditProductRoute() {
 				// a first-class field in the editor — a weightless item strands that
 				// store's checkout on "missing weights".
 				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				// Legacy stores have the flag unset and DO offer collection, so
+				// only an explicit false hides the pickup note.
+				offerSelfCollect={retailer.offerSelfCollect !== false}
 				// Stock is no longer part of the product save (86eypn8ye): these
 				// saved variants render their count read-only, live, with an Adjust
 				// button. `product` is a reactive read, so the number ticks down as
@@ -386,6 +391,8 @@ function EditProductRoute() {
 						description: values.description ?? null,
 						hidden: values.hidden,
 						minNoticeDays: values.minNoticeDays,
+						prepMinutes: values.prepMinutes ?? 0,
+						pickupNote: values.pickupNote ?? "",
 						// 0 clears the rule (blank input) — server normalizes to unset.
 						minQuantity: values.minQuantity ?? 0,
 						imageStorageIds: values.imageStorageIds,

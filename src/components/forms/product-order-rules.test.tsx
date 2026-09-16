@@ -9,13 +9,7 @@
  * finding a gap where a field should be, and that the presets set the same
  * field the seller can type into — one control, not two.
  */
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("convex/react", () => ({
@@ -207,7 +201,8 @@ describe("Order rules — pickup note", () => {
 	it("keeps a note already written when self-collect is switched off", () => {
 		// Turning delivery-only on must not quietly destroy the seller's copy;
 		// the field hides, the value survives, and turning it back on restores.
-		const onSubmit = vi.fn(async () => {});
+		const onSubmit =
+			vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(async () => {});
 		renderForm({
 			offerSelfCollect: false,
 			onSubmit,
@@ -221,7 +216,8 @@ describe("Order rules — pickup note", () => {
 
 describe("Order rules — what the card submits", () => {
 	it("sends both fields, with 0 and \"\" as the clearing spellings", async () => {
-		const onSubmit = vi.fn(async () => {});
+		const onSubmit =
+			vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(async () => {});
 		renderForm({ onSubmit, initial: { prepMinutes: 120, pickupNote: "Side counter." } });
 
 		fireEvent.change(prepInput() as HTMLInputElement, { target: { value: "" } });
@@ -231,17 +227,20 @@ describe("Order rules — what the card submits", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
 
-		const values = onSubmit.mock.calls[0][0] as ProductFormSubmitValues;
+		const [values] = onSubmit.mock.lastCall ?? [];
+		if (!values) throw new Error("form never submitted");
 		expect(values.prepMinutes).toBe(0);
 		expect(values.pickupNote).toBe("");
 	});
 
 	it("a booking listing submits no prep window", async () => {
-		const onSubmit = vi.fn(async () => {});
+		const onSubmit =
+			vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(async () => {});
 		renderForm({ kind: "booking", onSubmit, initial: { prepMinutes: 120 } });
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
-		const values = onSubmit.mock.calls[0][0] as ProductFormSubmitValues;
+		const [values] = onSubmit.mock.lastCall ?? [];
+		if (!values) throw new Error("form never submitted");
 		expect(values.prepMinutes).toBe(0);
 	});
 });
