@@ -44,7 +44,13 @@ import { ProductForm } from "./product-form";
 
 afterEach(cleanup);
 
-function renderForm(kind: "booking" | "physical") {
+function renderForm(
+	kind: "booking" | "physical",
+	booking: {
+		packageLength?: string;
+		packageUnit?: "day" | "night" | "month";
+	} = {},
+) {
 	return render(
 		<ProductForm
 			retailerId={"r1" as never}
@@ -57,6 +63,7 @@ function renderForm(kind: "booking" | "physical") {
 				name: "Ice Cream Puff",
 				kind,
 				capacityPerNight: kind === "booking" ? "5" : undefined,
+				...booking,
 			}}
 		/>,
 	);
@@ -92,5 +99,37 @@ describe("ProductForm — Minimum notice is days, and only days", () => {
 		renderForm("booking");
 		expect(screen.getAllByLabelText("Package length unit")).toHaveLength(1);
 		expect(noticeRow().querySelector("select")).toBeNull();
+	});
+});
+
+describe("ProductForm — a package is described in its OWN unit", () => {
+	// Found testing the hotfix in a browser: the summary strip said "1-day
+	// package · per package" on a 1-month listing, and the helper said "runs 1
+	// days" — and "days" even on a night package. Both read like the unit
+	// quietly going back to days, which is the report this PR answers.
+	it("summarises a monthly package as a month", () => {
+		renderForm("booking", { packageLength: "1", packageUnit: "month" });
+		expect(document.body.textContent).toContain("1-month package");
+		expect(document.body.textContent).toContain("RM");
+		expect(document.body.textContent).not.toContain("1-day package");
+		expect(document.body.textContent).not.toMatch(/per package/);
+	});
+
+	it("says nights for a night package, never 'days'", () => {
+		renderForm("booking", { packageLength: "2", packageUnit: "night" });
+		expect(document.body.textContent).toContain("the booking runs 2 nights");
+		expect(document.body.textContent).not.toContain("runs 2 days");
+	});
+
+	it("does not pluralise a length of one", () => {
+		renderForm("booking", { packageLength: "1", packageUnit: "day" });
+		expect(document.body.textContent).toContain("the booking runs 1 day from");
+		expect(document.body.textContent).not.toContain("1 days");
+	});
+
+	it("keeps the monthly calendar wording, without a '(s)'", () => {
+		renderForm("booking", { packageLength: "1", packageUnit: "month" });
+		expect(document.body.textContent).toContain("1 month later");
+		expect(document.body.textContent).not.toContain("month(s)");
 	});
 });

@@ -28,7 +28,11 @@ import {
 	type PackageUnit,
 	weekendDaysLabel,
 } from "../../../convex/lib/productKind";
-import { bookingPriceSuffix, bookingSpanNoun } from "../../lib/booking-dates";
+import {
+	bookingPriceSuffix,
+	bookingSpanCounted,
+	bookingSpanNoun,
+} from "../../lib/booking-dates";
 import { asPackageUnit } from "../../lib/package-unit";
 import {
 	convexErrorMessage,
@@ -1747,8 +1751,8 @@ export function ProductWizard({
 							<span className="text-xs font-normal text-muted-foreground">
 								{state.packageLength.trim().length > 0
 									? state.packageUnit === "month"
-										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${state.packageLength.trim()} month(s) later, at one flat price.`
-										: `Buyers pick a start date only — the booking runs ${state.packageLength.trim()} ${state.packageUnit}s from there, at one flat price.`
+										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${bookingSpanCounted(Number(state.packageLength.trim()), "month")} later, at one flat price.`
+										: `Buyers pick a start date only — the booking runs ${bookingSpanCounted(Number(state.packageLength.trim()), state.packageUnit)} from there, at one flat price.`
 									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month, or 2 nights) to sell a fixed-length package at one flat price."}
 							</span>
 						</label>

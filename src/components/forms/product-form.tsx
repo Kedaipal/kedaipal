@@ -29,7 +29,7 @@ import {
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
-import { bookingSpanNoun } from "../../lib/booking-dates";
+import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
 	highlightRingClass,
@@ -1018,6 +1018,7 @@ export function ProductForm({
 									? {
 											capacityPerNight: capacityDraft,
 											packageLength: packageDraft,
+											packageUnit,
 											autoAccept,
 											weekendPrice: weekendDraft,
 											weekendDays,
@@ -1165,8 +1166,8 @@ export function ProductForm({
 						<p className="text-xs leading-relaxed text-muted-foreground">
 							{packageTrimmed.length > 0
 								? packageUnit === "month"
-									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${packageTrimmed} month${packageTrimmed === "1" ? "" : "s"} later, at one flat price.`
-									: `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there, at one flat price.`
+									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${bookingSpanCounted(Number(packageTrimmed), "month")} later, at one flat price.`
+									: `Buyers pick a start date only — the booking runs ${bookingSpanCounted(Number(packageTrimmed), packageUnit)} from there, at one flat price.`
 								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
 						</p>
 					</div>

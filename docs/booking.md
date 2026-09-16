@@ -871,6 +871,23 @@ a 1-month membership into a 1-day pass. Notice is measured in days, full stop.
 > `product-form-min-notice.test.tsx`: a `packageUnit` picker may exist exactly
 > where a unit is a real, saved field — the Package length row — and nowhere
 > else.
+>
+> **Two more of the same class, found by testing the hotfix in a browser.** The
+> units commit updated `bookingPriceSuffix` / `bookingSpanNoun` but missed two
+> places that still assumed every package was days:
+>
+> - The **edit-page summary strip** (`src/lib/product-summary.ts`) had no
+>   `packageUnit` in its input at all, so a 1-month membership read "Booking ·
+>   1-day package · 1 spot/night · RM 100 per package" at the top of its own
+>   edit page — indistinguishable, to the seller, from the unit reverting. It
+>   now reads "1-month package · 1 at a time · RM 100/month", routed through
+>   `bookingPriceSuffix` like every other price line ("per package" is the
+>   wording that helper's docblock had already retired).
+> - The **package helper sentence** in both forms hand-rolled the span: the edit
+>   form printed "the booking runs 1 days" and said *days* on a NIGHT package;
+>   the wizard printed "1 month(s)". Both now go through the new
+>   `bookingSpanCounted` beside `bookingSpanNoun` ("1 month", "3 days",
+>   "2 nights").
 
 ### Blocking states its consequence; it does not refuse
 
