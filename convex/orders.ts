@@ -23,7 +23,7 @@ import {
 	sanitizeAttributionSource,
 } from "./lib/attribution";
 import { stampProductsOrdered } from "./lib/productOrdered";
-import { assertValidAddress } from "./lib/address";
+import { assertValidAddress, formatPickupAddress } from "./lib/address";
 import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
@@ -382,7 +382,12 @@ export function buildPickupSnapshot(
 ): PickupSnapshot {
 	return {
 		label: location.label,
-		address: location.address,
+		// The unit line is COMPOSED into the frozen address (z8r3fdff8r), not
+		// carried as its own snapshot field: every buyer surface that already
+		// prints this string — checkout, /track, email, WhatsApp, the CSV
+		// export — then shows the door detail with no further plumbing, and a
+		// later edit to the location can't rewrite a placed order's history.
+		address: formatPickupAddress(location),
 		locationType: location.locationType ?? "self_collect",
 		scheduleNote: location.scheduleNote,
 		mapsUrl: location.mapsUrl,

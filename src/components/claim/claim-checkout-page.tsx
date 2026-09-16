@@ -30,9 +30,11 @@ import {
 	assertWithinOpeningHours,
 	defaultTimeWithinHours,
 	formatDayWindow,
+	gapForTime,
 	hoursForDate,
 	isAllDay,
 	isOpenOnDate,
+	isTimeSelectable,
 	selectableTimeWindow,
 	WEEKDAY_NAMES,
 } from "../../../convex/lib/openingHours";
@@ -279,6 +281,18 @@ export function ClaimCheckoutPage({
 					);
 					return;
 				}
+				// Inside the outer bounds but in a SPLIT day's break
+				// (z8r3fdff8r) — the case a single-range input can't fence.
+				if (!isTimeSelectable(openingHours, fulfilmentEpoch, parsed)) {
+					const day = hoursForDate(openingHours, fulfilmentEpoch);
+					const gap = day ? gapForTime(day, parsed) : null;
+					setServerError(
+						gap
+							? `${storeName} is closed ${formatFulfilmentTime(gap.open)} – ${formatFulfilmentTime(gap.close)} — pick a time in an open window.`
+							: `${storeName} is open ${day ? formatDayWindow(day) : "at other times"} that day — pick a time inside those hours.`,
+					);
+					return;
+				}
 				fulfilmentTimeMinutes = parsed;
 			}
 
@@ -359,10 +373,11 @@ export function ClaimCheckoutPage({
 			);
 			const window = selectableTimeWindow(openingHours, dayEpoch);
 			if (window === null) return;
+			// Gap-aware (z8r3fdff8r): a stale prefill jumps FORWARD to the next
+			// open window, never into the break.
 			if (
 				Number.isNaN(current) ||
-				current < window.min ||
-				current > window.max
+				!isTimeSelectable(openingHours, dayEpoch, current)
 			) {
 				const next = defaultTimeWithinHours(openingHours, dayEpoch);
 				if (next !== null) {
@@ -398,6 +413,28 @@ export function ClaimCheckoutPage({
 		}
 		return null;
 	}, [openingHours, watchedDate, watchedMethod, storeName]);
+	// Split-day break (z8r3fdff8r) — a single-range time input can't fence it,
+	// so the buyer is told inline the moment the field holds a gap time, in
+	// the same words the submit handler and the server use.
+	const timeHoursIssue = useMemo(() => {
+		if (!openingHours || !watchedDate) return null;
+		if (watchedMethod !== "delivery") return null;
+		const epoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(epoch)) return null;
+		const day = hoursForDate(openingHours, epoch);
+		if (!day || watchedTimeMinutes === undefined) return null;
+		const gap = gapForTime(day, watchedTimeMinutes);
+		if (!gap) return null;
+		return `${storeName} is closed ${formatFulfilmentTime(gap.open)} – ${formatFulfilmentTime(gap.close)} — pick a time in an open window.`;
+	}, [
+		openingHours,
+		watchedDate,
+		watchedMethod,
+		watchedTimeMinutes,
+		storeName,
+	]);
+	// One slot, one message: a day that won't work outranks a time that won't.
+	const hoursIssue = dateHoursIssue ?? timeHoursIssue;
 
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
@@ -880,6 +917,9 @@ export function ClaimCheckoutPage({
 															(collectsFromCustomer
 																? "When the rider should come to you."
 																: "When you'd like it to arrive.") +
+															// Split days (z8r3fdff8r) list BOTH windows
+															// here; the inline notice below names the
+															// break the moment a buyer picks into it.
 															(constrained && day
 																? ` ${storeName} is open ${formatDayWindow(day)} that day.`
 																: "")
@@ -891,9 +931,9 @@ export function ClaimCheckoutPage({
 									})()
 								: null}
 						</div>
-						{dateHoursIssue ? (
+						{hoursIssue ? (
 							<p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
-								{dateHoursIssue}
+								{hoursIssue}
 							</p>
 						) : null}
 					</ClaimSection>

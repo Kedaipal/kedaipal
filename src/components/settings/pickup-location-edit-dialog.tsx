@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { UNIT_LINE_MAX_LENGTH } from "../../../convex/lib/address";
 import { COUNTRY_LABELS, type Country } from "../../../convex/lib/country";
 import { STORED_MOBILE_PATTERN } from "../../../convex/lib/slug";
 import {
@@ -159,6 +160,7 @@ export function PickupLocationEditDialog({
 		defaultValues: {
 			label: location?.label ?? "",
 			address: location?.address ?? "",
+			unit: location?.unit ?? "",
 			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
@@ -176,6 +178,13 @@ export function PickupLocationEditDialog({
 			onChange: z.object({
 				label: z.string().trim().min(1, "Give this pickup point a name."),
 				address: z.string(),
+				unit: z
+					.string()
+					.trim()
+					.max(
+						UNIT_LINE_MAX_LENGTH,
+						`Keep this to ${UNIT_LINE_MAX_LENGTH} characters.`,
+					),
 				scheduleNote: z.string(),
 				notes: z.string(),
 				managerName: z.string(),
@@ -192,6 +201,7 @@ export function PickupLocationEditDialog({
 			setFeeError(null);
 			const label = value.label.trim();
 			const address = value.address.trim();
+			const unit = value.unit.trim();
 			const scheduleNote = value.scheduleNote.trim();
 			const notes = value.notes.trim();
 			const managerName = value.managerName.trim();
@@ -217,6 +227,9 @@ export function PickupLocationEditDialog({
 						pickupLocationId: location._id,
 						label,
 						address,
+						// Sent unconditionally so clearing the field clears the
+						// stored line (empty string = clear, server-side).
+						unit,
 						locationType: kind,
 						// Empty string clears the note server-side; a value re-sets it.
 						scheduleNote,
@@ -249,6 +262,7 @@ export function PickupLocationEditDialog({
 						retailerId,
 						label,
 						address,
+						unit: unit.length > 0 ? unit : undefined,
 						locationType: kind,
 						scheduleNote: scheduleNote.length > 0 ? scheduleNote : undefined,
 						notes: notes.length > 0 ? notes : undefined,
@@ -376,6 +390,23 @@ export function PickupLocationEditDialog({
 								onTextChange={handleManualAddressEdit}
 								errorText={addressError ?? undefined}
 							/>
+
+							{/* Unit / floor / building (z8r3fdff8r). Its own field
+							    rather than "just type it into the address", because
+							    editing the address text away from its Google pick
+							    DROPS the coordinates — and with them the buyer's
+							    one-tap Waze / Maps button. */}
+							<form.AppField name="unit">
+								{(field) => (
+									<field.TextField
+										label="Unit / floor / building (optional)"
+										placeholder="Unit 3-1, Block B"
+										autoComplete="off"
+										maxLength={UNIT_LINE_MAX_LENGTH}
+										description="Shown to buyers in front of the address, on checkout, their order page and the reminder message. Keeps the map pin intact."
+									/>
+								)}
+							</form.AppField>
 
 							<form.AppField name="scheduleNote">
 								{(field) => (

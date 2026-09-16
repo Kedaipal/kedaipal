@@ -317,6 +317,16 @@ export default defineSchema({
 				latitude: v.number(),
 				longitude: v.number(),
 				placeId: v.optional(v.string()),
+				// Unit / floor / building (z8r3fdff8r) — the detail Google's
+				// formatted `label` never carries, typed by the seller. Riders were
+				// arriving at the block and phoning her. Owner-only like the label,
+				// ≤ 80 chars, one line, unset when blank. It is a DISPLAY
+				// composition, not a second address: every surface that prints the
+				// label prints `formatBusinessAddress(...)` instead, and nothing
+				// keys on it (the Lalamove quote keys on lat/lng). Delyva keeps its
+				// own structured `pickupAddress.address2` — deliberately NOT
+				// derived from this.
+				unit: v.optional(v.string()),
 				// The country this address was CAPTURED in (SG-lite, 86eyqgujv).
 				// Stamped at save from the store's country the way
 				// deliveryBooking.env is stamped from the key prefix — never
@@ -643,6 +653,16 @@ export default defineSchema({
 					open: v.number(),
 					close: v.number(),
 					closed: v.optional(v.boolean()),
+					// Optional SECOND window (z8r3fdff8r) — the lunch/dinner split:
+					// a cafe open 7:30–10:00 for breakfast then 12:00–18:00. An
+					// optional widening, so every pre-existing row is untouched and
+					// there is no migration; a day without the pair behaves exactly
+					// as it always has. Set together or not at all (the sanitizer
+					// drops a half pair), `close < open2 < close2 ≤ 1439`, and never
+					// beside an all-day first window. Read through `dayWindows`,
+					// never field-by-field.
+					open2: v.optional(v.number()),
+					close2: v.optional(v.number()),
 				}),
 			),
 		),
@@ -1860,6 +1880,16 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Unit / floor / building (z8r3fdff8r) — same line as the business
+		// address, same reason: buyers were given a block, not a door. Kept
+		// SEPARATE from `address` rather than typed into it because editing the
+		// address text away from its Google pick drops the coordinates, which
+		// costs the buyer their one-tap Waze/Maps button. Composed back on for
+		// display via `formatPickupAddress`, and frozen INTO
+		// `orders.pickupSnapshot.address` at order create — so every buyer
+		// surface that already prints that string (checkout, /track, email,
+		// WhatsApp, CSV) carries the unit with no further plumbing.
+		unit: v.optional(v.string()),
 		// Optional flat fee (minor units / sen) a buyer pays for choosing this
 		// point — passes on a real collection cost (paid drop-off host, meetup
 		// run, host-stall charge). Unset or 0 → free; legacy rows read as free

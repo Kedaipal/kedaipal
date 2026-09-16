@@ -42,6 +42,7 @@ import {
 	toLalamoveContactPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { formatBusinessAddress } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { riderBookingAllowed } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -894,7 +895,10 @@ async function dispatchContextForOrder(
 	const storePoint = {
 		latitude: businessAddress.latitude,
 		longitude: businessAddress.longitude,
-		address: businessAddress.label,
+		// Unit / floor / building first (z8r3fdff8r) — riders were arriving at
+		// the block and phoning the seller. Display only: the quote and the
+		// route key on lat/lng, so this never changes a price or a pin.
+		address: formatBusinessAddress(businessAddress),
 	};
 	const buyerPoint = {
 		latitude: address.latitude!,
@@ -1979,7 +1983,7 @@ export const getProbeContext = internalQuery({
 				origin: {
 					latitude: r.businessAddress.latitude,
 					longitude: r.businessAddress.longitude,
-					label: r.businessAddress.label,
+					label: formatBusinessAddress(r.businessAddress),
 				},
 				credentials,
 			};

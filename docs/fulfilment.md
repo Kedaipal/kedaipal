@@ -930,6 +930,49 @@ The seller order detail page uses these fields to render either the primary "Not
 
 The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have unlimited. **Not implemented in v1** — there's no plan/tier field on `retailers` yet (subscription billing is Sprint 1–3). All retailers currently get unlimited locations. The cap will be added inside `pickupLocations.create` (and a "N locations hidden — upgrade to Pro" banner in `listForRetailer`) when the subscription-billing task lands.
 
+## Unit / floor / building line (2026-09-16, ClickUp `z8r3fdff8r`)
+
+Google's formatted address stops at the block. Riders were arriving at Huff &
+Puff's building and phoning her. Both of the seller's own premises — the
+**business address** and each **pickup point** — now carry an optional free-text
+unit line.
+
+- **Storage:** `retailers.businessAddress.unit` and `pickupLocations.unit`,
+  both `v.optional(v.string())` — optional widenings, no migration. ≤ **80
+  chars**, whitespace collapsed to ONE line (this prints on a rider's screen
+  and a parcel label), blank → unset so "no unit" has one spelling.
+  `sanitizeUnitLine` in `convex/lib/address.ts` is the single normalizer;
+  both mutations throw the same cap message.
+- **It is a DISPLAY composition, never a key.** `formatPremiseAddress` puts
+  the unit FIRST (`"Unit 3-1, Block B, 12 Jln Tun Razak"`) — the part a human
+  needs last and reads first — and returns the label untouched when there is
+  no unit, so every existing surface is byte-identical. Nothing keys on it:
+  the Lalamove quote and the radius price both key on lat/lng.
+- **Where the business address unit rides:** the **Lalamove pickup stop**
+  (both stop builders) and the **despatch label's return address** — a
+  returned parcel has the same find-the-door problem as an arriving rider,
+  and that block IS the return address. It stays **owner-only**:
+  `buildRetailerPublic` strips `businessAddress` entirely, unit included.
+  A **foreign-stamped** address still drops the whole block, unit with it
+  (86eyqgujv). **Delyva is untouched** — it keeps its own structured
+  `pickupAddress.address2`, deliberately not derived from this.
+- **Where the pickup unit rides:** composed into the ONE address string every
+  buyer surface already prints — at the public query boundary
+  (`listActivePublicBySlug`) and frozen into `orders.pickupSnapshot.address`
+  at order create. Checkout, `/track`, email, WhatsApp and the CSV export
+  therefore carry it with **no plumbing of their own**, and a later edit to
+  the location can't rewrite a placed order.
+- **Why it's a separate field and not "just type it into the address".**
+  The pickup address IS free text — but editing it away from its Google pick
+  **drops the coordinates**, and with them the buyer's one-tap Waze / Maps
+  button. A seller should not have to pay for a unit number with their map
+  pin.
+- **Seller UX:** an optional input under the Google autocomplete on both
+  cards, capped at 80 with the browser's own `maxLength`. The business
+  address card's Save button now also enables when **only the unit changed** —
+  before this it required a fresh autocomplete pick, which would have made
+  adding a unit number a re-pin.
+
 ## Known limitations
 
 - **Delivery distance trusts the buyer's chosen coordinates.** Radius pricing measures to the lat/lng from the buyer's Google-autocomplete pick — there's no server-side geocode of the typed address (the deliberate no-Distance-Matrix design). A buyer could pick a *nearer* suggestion than their real address to land a cheaper band. Mitigations: the seller sees the real address label on the order, and the frozen `deliverySnapshot.distanceKm` audits what was charged, so a mismatch is catchable at fulfilment. Acceptable for v1 given the manual-close model; a server geocode is the escape hatch if abuse shows up.

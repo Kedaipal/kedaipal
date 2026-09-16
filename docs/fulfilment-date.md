@@ -268,11 +268,75 @@ schedule, and the fulfilment moment must fall inside it.
   explicit levers — min notice, the 15-min lead floor, or simply tighter
   hours. An explicit "prep buffer" setting is a clean follow-up if a real
   seller asks.
-- **v1 limits** (each a follow-up if a real seller asks): one range per day,
-  no overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception dates.
-  Known corner: a long notice (e.g. 27 days) combined with closed days can
-  leave a mostly-closed selectable window — chips go sparse and submit
-  explains; the server gate keeps it correct.
+- **v1 limits** (each a follow-up if a real seller asks): one range per day
+  (**lifted 16 Sep 2026 — see below**), no overnight wrap (a mamak open
+  6 PM – 2 AM), no holiday/exception dates. Known corner: a long notice
+  (e.g. 27 days) combined with closed days can leave a mostly-closed
+  selectable window — chips go sparse and submit explains; the server gate
+  keeps it correct.
+
+## Update (2026-09-16, z8r3fdff8r): split days — two windows
+
+The first v1 limit to be asked for by a real seller. Huff & Puff runs a
+breakfast window (7:30–10:00) then the regular cafe window (12:00–18:00);
+with one range per day she either set 7:30–close (and buyers booked 11:00,
+when nobody is there) or dropped breakfast.
+
+- **Storage:** an optional `open2`/`close2` pair beside the first window,
+  `close < open2 < close2 ≤ 1439`. An **optional widening** — every existing
+  row is byte-identical and there is no migration. The pair is set **together
+  or not at all**: a half pair is DROPPED by the sanitizer rather than
+  guessed at, so "no second window" keeps one spelling. A second window
+  beside an **all-day** first one is refused (there is no day left to open).
+- **`dayWindows(day)` is THE accessor.** Nothing outside
+  `convex/lib/openingHours.ts` reads `open2`/`close2`: the gate, checkout,
+  the header, the settings editor and the JSON-LD all iterate the list it
+  returns. That is the whole extensibility story — a third window later is a
+  schema widen plus one line in `dayWindows`, not a branch in eight
+  functions.
+- **`dayHoursError(day)` is THE rule-set**, returning the seller-facing
+  sentence or null. `sanitizeOpeningHours` throws it (prefixed with the
+  weekday) and the settings editor renders it inline per keystroke — same
+  function, so the client can never disagree with the server about what is
+  allowed *or say it in different words*.
+- **The break is named, not implied.** `dayGaps` / `gapForTime` turn a
+  refused moment into "closed 10:00 AM – 12:00 PM — pick a time in an open
+  window" rather than restating the hours and leaving the buyer to work out
+  why 11:00 bounced. Both window bounds are open moments, so the gap reads
+  exclusive at both ends — exactly how a human reads "closed 10–12".
+- **A single-range time input can't fence a break**, so the native
+  `min`/`max` carries the **hull** (`selectableTimeWindow`, unchanged
+  signature — ~14 call sites untouched) and the gap is caught by
+  `isTimeSelectable`: at submit, in the 30s repair, and — new — in an
+  **inline notice the moment the field holds a gap time**, on both the
+  storefront and claim checkouts. The repair now jumps a stale prefill
+  FORWARD to the next open window instead of into the break.
+- **`defaultTimeWithinHours` picks the first window that can still host the
+  plain default**: a future day's 10:00 lands in window 1 while it lasts,
+  window 2 once window 1 closes; today, the lead floor drops a window it has
+  already swallowed. It can never prefill into a break (test-pinned by
+  construction, not by example).
+- **`openNowStatus` gained `until`** — the close of the window the store is
+  in RIGHT NOW, because on a split day "closes 6:00 PM" while breakfast is
+  about to end is a lie. Mid-break, `nextOpen` reports **daysAhead 0**: the
+  header says "opens 12:00 PM today", not "tomorrow".
+- **JSON-LD emits one row per window**, which is schema.org's own way to
+  express a lunch break.
+- **Settings editor:** both modes gained it. "Same every day" takes ONE
+  "+ Add a second window" for the whole week (seven days, one click — the
+  bulk-affordance rule); "Different per day" gets a per-row control. A new
+  window is suggested as `close + 2h` for 6h (a 10:00 breakfast close lands
+  on 12:00–18:00, the shape that asked for this). Where a day can't take one
+  — all-day, or a first window running to 23:59 — the control is **disabled
+  with its reason on screen**. A valid split shows the break back in the
+  seller's own numbers ("Closed 10:00 AM – 12:00 PM"), full sentence in
+  same-every-day, compact in the 7-row grid where it would otherwise repeat
+  seven times.
+- **Removing the second window restores single-window behaviour byte for
+  byte** (test-pinned on the saved payload's key order), and an all-24h week
+  still normalises to unset.
+- **Still v1 limits:** at most two windows per day, no overnight wrap, no
+  holiday/exception dates.
 
 ## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
 

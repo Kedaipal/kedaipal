@@ -36,9 +36,11 @@ import {
 	assertWithinOpeningHours,
 	defaultTimeWithinHours,
 	formatDayWindow,
+	gapForTime,
 	hoursForDate,
 	isAllDay,
 	isOpenOnDate,
+	isTimeSelectable,
 	type OpeningHours,
 	selectableTimeWindow,
 	WEEKDAY_NAMES,
@@ -490,6 +492,24 @@ export function CheckoutPage({
 					);
 					return;
 				}
+				// Inside the day's outer bounds but in a SPLIT day's break
+				// (z8r3fdff8r) — the one case the input's own min/max can't
+				// express, since that is a single range. Name the break: "open
+				// 7:30 – 10:00, 12:00 – 18:00" alone leaves the buyer working
+				// out why 11:00 bounced.
+				if (!isTimeSelectable(openingHours, fulfilmentEpoch, parsed)) {
+					const day = hoursForDate(openingHours, fulfilmentEpoch);
+					const gap = day ? gapForTime(day, parsed) : null;
+					setServerError(
+						gap
+							? `${storeName} is closed ${formatFulfilmentTime(gap.open)} – ${formatFulfilmentTime(gap.close)} — pick a time in an open window.`
+							: // Unreachable via the UI (inside the bounds but in no
+								// window IS the break); the honest fallback for a
+								// hand-edited schedule.
+								`${storeName} is open ${day ? formatDayWindow(day) : "at other times"} that day — pick a time inside those hours.`,
+					);
+					return;
+				}
 				fulfilmentTimeMinutes = parsed;
 			}
 
@@ -642,10 +662,12 @@ export function CheckoutPage({
 			// closed): there is no valid time to repair TO — the inline notice
 			// and submit copy send the buyer to another day instead.
 			if (window === null) return;
+			// Gap-aware (z8r3fdff8r): a prefilled 9:30 on a 7:30–10:00 /
+			// 12:00–18:00 day goes stale at 10:00 and must jump FORWARD to
+			// 12:00, not sit in the break waiting to be bounced at submit.
 			if (
 				Number.isNaN(current) ||
-				current < window.min ||
-				current > window.max
+				!isTimeSelectable(openingHours, dayEpoch, current)
 			) {
 				const next = defaultTimeWithinHours(openingHours, dayEpoch);
 				if (next !== null) {
@@ -693,6 +715,30 @@ export function CheckoutPage({
 		}
 		return null;
 	}, [openingHours, watchedDate, watchedMethod, storeName]);
+	// Inline "that TIME won't work" notice for a SPLIT day (z8r3fdff8r). The
+	// native time input's min/max is ONE range, so it cannot fence off a
+	// lunch break — without this the buyer types 11:00, sees nothing, and is
+	// bounced at submit. Shown the moment the field holds a gap time, in the
+	// same words the submit handler and the server use.
+	const timeHoursIssue = useMemo(() => {
+		if (!openingHours || !watchedDate) return null;
+		if (watchedMethod !== "delivery") return null;
+		const epoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(epoch)) return null;
+		const day = hoursForDate(openingHours, epoch);
+		if (!day || watchedTimeMinutes === undefined) return null;
+		const gap = gapForTime(day, watchedTimeMinutes);
+		if (!gap) return null;
+		return `${storeName} is closed ${formatFulfilmentTime(gap.open)} – ${formatFulfilmentTime(gap.close)} — pick a time in an open window.`;
+	}, [
+		openingHours,
+		watchedDate,
+		watchedMethod,
+		watchedTimeMinutes,
+		storeName,
+	]);
+	// One slot, one message: a day that won't work outranks a time that won't.
+	const hoursIssue = dateHoursIssue ?? timeHoursIssue;
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -1597,6 +1643,11 @@ export function CheckoutPage({
 																				: "When you'd like it to arrive.") +
 																			// Surface the hours right where they
 																			// constrain — the rule is never silent.
+																			// Split days (z8r3fdff8r) list BOTH
+																			// windows here, so the break is visible
+																			// before it is bumped into; the inline
+																			// notice below names it the moment a
+																			// buyer picks a time inside it.
 																			(constrained && day
 																				? ` ${storeName} is open ${formatDayWindow(day)} that day.`
 																				: "")
@@ -1608,9 +1659,9 @@ export function CheckoutPage({
 													})()
 												: null}
 										</div>
-										{dateHoursIssue ? (
+										{hoursIssue ? (
 											<p className="text-xs font-medium text-destructive">
-												{dateHoursIssue}
+												{hoursIssue}
 											</p>
 										) : null}
 									</CheckoutSection>

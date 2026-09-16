@@ -286,7 +286,13 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 
 	function renderWithHours(
 		openingHours:
-			| Array<{ open: number; close: number; closed?: boolean }>
+			| Array<{
+					open: number;
+					close: number;
+					closed?: boolean;
+					open2?: number;
+					close2?: number;
+			  }>
 			| undefined,
 	) {
 		return render(
@@ -397,6 +403,121 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 				retailerId: undefined,
 			}),
 		);
+	});
+
+	// ---------------------------------------------------------------------
+	// Split days — two windows (z8r3fdff8r)
+	// ---------------------------------------------------------------------
+
+	/** Huff & Puff: breakfast 7:30–10:00, then the cafe window 12:00–18:00. */
+	const SPLIT = { open: 450, close: 600, open2: 720, close2: 1080 };
+
+	it("same-every-day: ONE 'Add a second window' splits the whole week", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ open: 450, close: 600 })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		// The bulk affordance: seven days, one click — not seven.
+		fireEvent.click(screen.getByRole("button", { name: /Add a second window/ }));
+		// Suggested break: two hours after close, six hours long.
+		expect(screen.getByText(/Closed 10:00 AM – 12:00 PM/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: Array.from({ length: 7 }, () => ({ ...SPLIT })),
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("a week that shares one SPLIT schedule still opens in 'Same every day'", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		expect(
+			screen
+				.getByRole("button", { name: /Same every day/ })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(screen.getByText("Second window")).toBeTruthy();
+	});
+
+	it("removing the second window saves a plain day, byte-identical to before", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Remove second window" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: Array.from({ length: 7 }, () => ({
+					open: 450,
+					close: 600,
+				})),
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("a second window starting before the first closes blocks Save, in the server's own words", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Second window opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
+		expect(
+			screen.getByText(/second window must start after 10:00 AM/i),
+		).toBeTruthy();
+		expect(
+			screen
+				.getByRole("button", { name: "Save hours" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+	});
+
+	it("an all-day first window disables the add control WITH ITS REASON", () => {
+		renderWithHours(undefined); // unset = 00:00–23:59 every day
+		fireEvent.click(screen.getByRole("button", { name: "Set opening hours" }));
+		const add = screen.getByRole("button", { name: /Add a second window/ });
+		expect(add.hasAttribute("disabled")).toBe(true);
+		expect(
+			screen.getByText(/already open 24 hours — narrow the first window/i),
+		).toBeTruthy();
+	});
+
+	it("per-day: splitting ONE row leaves the other six alone", async () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ open: 450, close: 600 }, // Monday
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		// Six open rows carry an add control each; Monday's is the first in
+		// render order (Monday-first), so target it by its own row.
+		const adds = screen.getAllByRole("button", {
+			name: /Add a second window/,
+		});
+		fireEvent.click(adds[0]);
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: [
+					{ open: 540, close: 1080, closed: true },
+					{ ...SPLIT },
+					...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+				],
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("the read-only summary prints both windows", () => {
+		renderWithHours([
+			{ open: 540, close: 900 }, // Sunday, unsplit
+			...Array.from({ length: 6 }, () => ({ ...SPLIT })),
+		]);
+		expect(
+			screen.getAllByText("7:30 AM – 10:00 AM, 12:00 PM – 6:00 PM").length,
+		).toBe(6);
 	});
 
 	it("a configured store shows the weekly summary; Reset sends the null clear", async () => {

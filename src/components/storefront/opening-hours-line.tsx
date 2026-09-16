@@ -6,7 +6,7 @@ import {
 	weekdayIndexMyt,
 } from "../../../convex/lib/fulfilmentDate";
 import {
-	formatDayWindow,
+	dayWindows,
 	isAllDay,
 	type OpeningHours,
 	openNowStatus,
@@ -56,10 +56,16 @@ export function OpeningHoursLine({
 
 	let text: string;
 	if (status.open) {
+		// `until` is the close of the window the store is in RIGHT NOW, not the
+		// day's last close — on a split day (z8r3fdff8r) the breakfast window is
+		// about to shut, and "closes 6:00 PM" would be a lie.
 		text = isAllDay(status.day)
 			? "Open 24 hours today"
-			: `Open now · closes ${formatFulfilmentTime(status.day.close)}`;
+			: `Open now · closes ${formatFulfilmentTime(status.until)}`;
 	} else if (status.nextOpen) {
+		// daysAhead 0 is "before we open" — which on a split day also covers the
+		// lunch break, so "opens 12:00 PM today" is the line a buyer sees at
+		// 11:00 rather than being told the store is shut until tomorrow.
 		const { daysAhead, openMinutes } = status.nextOpen;
 		const when =
 			daysAhead === 0
@@ -112,10 +118,27 @@ export function OpeningHoursLine({
 									{WEEKDAY_NAMES[i]}
 									{isToday ? " · Today" : ""}
 								</span>
+								{/* A split day (z8r3fdff8r) stacks its windows instead of
+								    running them together on one line — "7:30 AM – 10:00 AM,
+								    12:00 PM – 6:00 PM" wraps mid-range on a phone and reads
+								    as one broken span. */}
 								<span
-									className={day?.closed ? "text-muted-foreground" : undefined}
+									className={`text-right ${day?.closed ? "text-muted-foreground" : ""}`}
 								>
-									{!day || day.closed ? "Closed" : formatDayWindow(day)}
+									{!day || day.closed ? (
+										"Closed"
+									) : isAllDay(day) ? (
+										"Open 24 hours"
+									) : (
+										<span className="flex flex-col items-end">
+											{dayWindows(day).map((window) => (
+												<span key={window.open}>
+													{formatFulfilmentTime(window.open)} –{" "}
+													{formatFulfilmentTime(window.close)}
+												</span>
+											))}
+										</span>
+									)}
 								</span>
 							</li>
 						);

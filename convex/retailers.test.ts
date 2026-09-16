@@ -2014,7 +2014,13 @@ describe("retailers — store opening hours (86eyp5rav)", () => {
 	function weekWith(
 		overrides: Record<
 			number,
-			{ open: number; close: number; closed?: boolean }
+			{
+				open: number;
+				close: number;
+				closed?: boolean;
+				open2?: number;
+				close2?: number;
+			}
 		> = {},
 	) {
 		return Array.from(
@@ -2064,6 +2070,47 @@ describe("retailers — store opening hours (86eyp5rav)", () => {
 		if (cleared.status === "ok") {
 			expect(cleared.retailer.openingHours).toBeUndefined();
 		}
+	});
+
+	test("a SPLIT day round-trips to both reads, and a half pair is dropped (z8r3fdff8r)", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "split-hours-store");
+		await asUser.mutation(api.retailers.updateSettings, {
+			openingHours: weekWith({
+				1: { open: 450, close: 600, open2: 720, close2: 1080 },
+				// One half of a pair — the sanitizer keeps the day, drops the
+				// unreadable window rather than guessing at its other half.
+				2: { open: 540, close: 1080, open2: 1200 },
+			}),
+		});
+		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "split-hours-store",
+		});
+		expect(bySlug.status).toBe("ok");
+		if (bySlug.status === "ok") {
+			expect(bySlug.retailer.openingHours?.[1]).toEqual({
+				open: 450,
+				close: 600,
+				open2: 720,
+				close2: 1080,
+			});
+			expect(bySlug.retailer.openingHours?.[2]).toEqual({
+				open: 540,
+				close: 1080,
+			});
+		}
+	});
+
+	test("a second window that starts before the first closes is refused, naming the day", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "bad-split-store");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				openingHours: weekWith({
+					3: { open: 540, close: 600, open2: 550, close2: 1080 },
+				}),
+			}),
+		).rejects.toThrow(/Wednesday: the second window must start after 10:00 AM/);
 	});
 
 	test("an all-24h week normalizes to unset — open 24/7 has one spelling", async () => {
@@ -2688,6 +2735,42 @@ describe("address country stamps (SG-lite, 86eyqgujv)", () => {
 		});
 		const mine = await asA.query(api.retailers.getMyRetailer);
 		expect(mine?.businessAddress?.country).toBe("MY");
+	});
+
+	test("the unit / floor line is trimmed to one line, and survives a re-save (z8r3fdff8r)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "unit-line");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: { ...MY_ADDRESS, unit: "  Unit 3-1,\nBlock B  " },
+		});
+		let mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.unit).toBe("Unit 3-1, Block B");
+		// It is owner-only, exactly like the label it rides on.
+		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "unit-line",
+		});
+		if (bySlug.status === "ok") {
+			expect(
+				(bySlug.retailer as { businessAddress?: unknown }).businessAddress,
+			).toBeUndefined();
+		}
+		// Blank clears it; the pin is untouched either way.
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: { ...MY_ADDRESS, unit: "   " },
+		});
+		mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.businessAddress?.unit).toBeUndefined();
+		expect(mine?.businessAddress?.latitude).toBeCloseTo(MY_ADDRESS.latitude);
+	});
+
+	test("a unit past the cap is refused", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "unit-too-long");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessAddress: { ...MY_ADDRESS, unit: "x".repeat(81) },
+			}),
+		).rejects.toThrow(/at most 80 characters/i);
 	});
 
 	test("an SG store stamps SG — coordinates are never consulted", async () => {
