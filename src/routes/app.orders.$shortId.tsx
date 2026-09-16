@@ -1627,7 +1627,17 @@ function OrderDetailRoute() {
 					    capacity check — rescheduling one without the other would
 					    desync them. Changing a stay's dates is decline + re-request
 					    until the booking-aware reschedule ships. */}
-					{isBooking ? null : (
+					{/* An RSVP's date belongs to the EVENT (`z8r3fdff9u`) — moving one
+					    guest would drop them out of the headcount and send them on a
+					    day nobody else is coming. Disabled WITH the reason and the
+					    two real ways out, never a dialog that errors on submit. The
+					    server refuses it too. */}
+					{isBooking ? null : order.eventLocked ? (
+						<p className="ml-auto max-w-56 shrink-0 text-right text-xs leading-relaxed text-muted-foreground">
+							Date set by the event — change the event&apos;s date, or cancel
+							this RSVP.
+						</p>
+					) : (
 						<div className="ml-auto shrink-0">
 							<RescheduleFulfilmentDialog order={order} />
 						</div>

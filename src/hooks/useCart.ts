@@ -255,6 +255,15 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		[],
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
+	// Drop every RSVP line in one tap (`z8r3fdff9u`) — the escape hatch from the
+	// checkout's event lock. Removing the event releases the date + pickup
+	// lock by construction, since `cartEvent` is derived from the lines.
+	const removeEventLines = useCallback(() => {
+		for (const item of state.items) {
+			if (item.event !== undefined)
+				dispatch({ type: "REMOVE", variantId: item.variantId });
+		}
+	}, [state.items]);
 
 	const { itemCount, total, currency } = useMemo(() => {
 		let count = 0;
@@ -320,6 +329,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		addItem,
 		updateQuantity,
 		removeItem,
+		removeEventLines,
 		clearCart,
 		quantityForProduct,
 		subtotalForProduct,
