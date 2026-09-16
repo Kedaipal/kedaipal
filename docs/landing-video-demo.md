@@ -5,8 +5,10 @@ Branches `claude/landing-page-video-demo-ed64f9` (29 Aug, first clip) ·
 
 The landing page argued the product in prose and stylised CSS mockups and
 **never once showed the real thing moving**. The demo sits in the
-[mobbin.com/mcp](https://mobbin.com/mcp) slot — directly under the hero, ahead
-of every other section — and the encoding work keeps it cheap for the page.
+[mobbin.com/mcp](https://mobbin.com/mcp) slot — directly under the hero (and
+its seller-kinds marquee), ahead of every other section — and the encoding work
+keeps it cheap for the page. Since landing v2 (`z8r3fdegej`) it is also the
+page's "how it works": the timeline section that used to restate it is gone.
 
 | Piece | Where |
 |---|---|

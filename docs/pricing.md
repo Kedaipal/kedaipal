@@ -1,5 +1,12 @@
 # Pricing surface — tiers, Scale multi-outlet, Enterprise-hidden
 
+> **13 Sep 2026 (`z8r3fdegej`):** `/`'s pricing teaser, hero, nav and closing CTA
+> now carry the start-when-you-sell copy (no "14-day"), the JSON-LD offer range
+> is derived from `PLAN_MONTHLY_PRICES`, and the landing's MY/SG region is one
+> shared `LandingRegionProvider` (Delivery + Pricing move together). Scale is
+> RM399 / S$149 once PR #270 merges; `/pricing`'s own `pricingpage_*` copy is
+> still z8r3fday21's.
+
 The public pricing presentation. Backend caps + billing live in
 [`manual-subscription.md`](./manual-subscription.md); this doc is the **display**
 contract. Scale's multi-outlet repositioning tracked in ClickUp `86eyb9zwt`

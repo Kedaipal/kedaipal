@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useInView, useReducedMotion } from "framer-motion";
 import { Check } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
+import { useBeatLoop } from "../../hooks/useBeatLoop";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
@@ -24,37 +25,6 @@ import { Eyebrow } from "./landing-ui";
 
 /** Beat durations, ms: typing → bubble → card → tap → receipt hold → clear. */
 const BEATS = [900, 1100, 1400, 900, 3000, 450];
-
-function useHandshakeBeat(active: boolean): number {
-	const [beat, setBeat] = useState(0);
-
-	useEffect(() => {
-		if (!active) return;
-		let cancelled = false;
-		let id: ReturnType<typeof setTimeout>;
-		// A hidden tab freezes the story rather than advancing it unseen — but
-		// it must WAKE when the tab returns, so the frozen branch re-arms a
-		// short retry instead of setting identical state (which would never
-		// re-run this effect and would kill the loop permanently).
-		const arm = (delay: number) => {
-			id = setTimeout(() => {
-				if (cancelled) return;
-				if (document.visibilityState === "visible") {
-					setBeat((b) => (b + 1) % BEATS.length);
-				} else {
-					arm(1000);
-				}
-			}, delay);
-		};
-		arm(BEATS[beat]);
-		return () => {
-			cancelled = true;
-			clearTimeout(id);
-		};
-	}, [active, beat]);
-
-	return beat;
-}
 
 function TypingDots() {
 	return (
@@ -93,7 +63,7 @@ function HandshakePlay() {
 	const shouldReduceMotion = useReducedMotion();
 	const stageRef = useRef<HTMLDivElement>(null);
 	const inView = useInView(stageRef, { margin: "-10% 0px" });
-	const beat = useHandshakeBeat(!shouldReduceMotion && inView);
+	const beat = useBeatLoop(!shouldReduceMotion && inView, BEATS);
 
 	// Reduced motion: the full story as a still — every element visible.
 	const showTyping = shouldReduceMotion ? false : beat === 0;
