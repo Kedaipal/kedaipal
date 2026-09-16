@@ -1,5 +1,9 @@
 import ExcelJS from "exceljs";
 import Papa from "papaparse";
+import {
+	hhmmFromMinutes,
+	ymdFromEpoch,
+} from "../../convex/lib/fulfilmentDate";
 import { VARIANT_IMPORT_COLUMNS } from "./product-import";
 
 /**
@@ -41,6 +45,13 @@ export const REPORT_COLUMNS = [
 	"product_url",
 	"min_order_qty",
 	"min_notice_days",
+	// Event RSVP (`z8r3fdff9u`) — beside the order rules, not appended at the
+	// end: these govern HOW the product is ordered, same family as the two
+	// above. Export-only; the import ignores them (an event is created by hand,
+	// never bulk-loaded) and the import screen says so rather than no-op'ing.
+	"event_date",
+	"event_time",
+	"event_seats",
 	"stock_policy",
 	"needs_mockup",
 	"custom_line",
@@ -126,6 +137,8 @@ export interface ExportableProduct {
 	 * import skips them, so a value there would round-trip into a warning about
 	 * a setting the seller can't see. */
 	kind?: string;
+	/** Fixed event config (`z8r3fdff9u`). Absent on every normal product. */
+	event?: { date: number; timeMinutes?: number; seats?: number };
 	imageCount?: number;
 }
 
@@ -187,6 +200,15 @@ function productToExportRows(p: ExportableProduct): ExportRow[] {
 		min_order_qty: p.minQuantity ? String(p.minQuantity) : "",
 		min_notice_days:
 			p.minNoticeDays === undefined ? "" : String(p.minNoticeDays),
+		// ISO day + 24h clock, not the display format: a CSV column is read by
+		// spreadsheets and scripts, which sort "2026-09-25" correctly and
+		// "Thu 25 Sep" not at all.
+		event_date: p.event ? ymdFromEpoch(p.event.date) : "",
+		event_time:
+			p.event?.timeMinutes === undefined
+				? ""
+				: hhmmFromMinutes(p.event.timeMinutes),
+		event_seats: p.event?.seats === undefined ? "" : String(p.event.seats),
 		// The one that most often explains "why didn't my stock go down".
 		stock_policy: vr.blockWhenOutOfStock ? "tracked" : "made-to-order",
 		needs_mockup: yesBlank(vr.requiresProof),
