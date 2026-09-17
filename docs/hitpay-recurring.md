@@ -423,7 +423,10 @@ the store is an ordinary seller who can pick any plan.
   monthly/yearly toggle; the change-plan slot reads "Your plan stays Founding
   Pro" with the price and the lapse clause instead of offering a move; the
   first-invoice "Switch to Starter" is not offered; the current-plan card says
-  "Founding Pro"; and the auto-renewal turn-off dialog states the lapse clause.
+  "Founding Pro"; the annual card never describes moving up or down a tier to
+  them ("You stay on Founding Pro for the whole year, at your founding price",
+  both on the offer and once they're on annual); and the auto-renewal turn-off
+  dialog states the lapse clause.
 - **Downgrades scheduled before the lock are cancelled** (Zaki, 17 Sep 2026).
   `renewalQuote` ignores a `pendingPlanChange` the lock forbids, so the renewal
   bills Founding Pro and `internalIssueRenewalInvoice` clears the stale flag as
@@ -474,7 +477,8 @@ stores) and the billing page (`billingGatewayAvailable.nextRenewal`) all read
 it; `subscriptionPayments.test.ts` pins that all four agree across founding
 MY/SG, annual, SGD-billed MY, lapsed, scheduled-downgrade and hold stores. The
 auto-renewal card now states the amount in every state ("Next charge of
-RM104.00 on …", the off-state pitch, the declined-charge line).
+RM104.00 on …", the off-state pitch, an unfinished setup, the declined-charge
+line).
 
 **Found on the way:** settle priced a Starter → Pro carryover with
 `foundingPricingApplies({ plan: sub.plan })` — "no" for a founding member on

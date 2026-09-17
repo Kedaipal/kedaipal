@@ -199,7 +199,9 @@ export function AutoRenewalCard({
 						) : sub.autoRenewSetupPending ? (
 							<p className="mt-1 text-xs text-muted-foreground">
 								Setup started but no payment method saved yet — finish it to
-								switch renewals to automatic.
+								switch renewals
+								{renewal ? ` (${money(renewal)} ${cadence(renewal)})` : ""} to
+								automatic.
 							</p>
 						) : (
 							<p className="mt-1 text-xs text-muted-foreground">

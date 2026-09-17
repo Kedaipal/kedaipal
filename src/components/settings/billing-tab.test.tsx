@@ -1322,6 +1322,29 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		).toBeTruthy();
 	});
 
+	it("an unfinished auto-renewal setup names what renewals will charge — S$41 a month for a Singapore founder", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ founding: true, currency: "SGD" }),
+		});
+		render(
+			<BillingTab
+				retailer={activeFounder(
+					{ autoRenewSetupPending: true },
+					{ country: "SG" },
+				)}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				/finish it to switch renewals \(S\$\s*41\.00 a month\) to automatic/,
+			),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Finish setting up" }),
+		).toBeTruthy();
+	});
+
 	it("a lapsed Founding Member: rank kept, the lapse explained, list prices, and no promise the discount is locked in", () => {
 		mockQueries({ isAdmin: false, gateway: gatewayFor({ lapsed: true }) });
 		render(

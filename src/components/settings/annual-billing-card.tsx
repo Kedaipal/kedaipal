@@ -4,6 +4,7 @@ import {
 	ExternalLink,
 	FileClock,
 } from "lucide-react";
+import { FOUNDING_PLAN } from "../../../convex/lib/plans";
 import type { AnnualOfferState } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
 import {
@@ -134,8 +135,11 @@ export function AnnualBillingCard({
 	// they have already bought is how an app stops being believed. Note this
 	// deliberately does NOT promise a renewal email: the renewal chase is a log
 	// line today (see docs/manual-subscription.md), so a promise here would be
-	// one the backend keeps by luck.
+	// one the backend keeps by luck. Nor a plan change to a Founding Member:
+	// they stay on Founding Pro (`foundingPlanLocked`, Zaki 17 Sep 2026), so
+	// "change plan part-way through" is a promise nothing keeps.
 	if (state.kind === "onAnnual") {
+		const foundingPro = founding && state.plan === FOUNDING_PLAN;
 		return (
 			<NoteCard
 				id={id}
@@ -145,19 +149,21 @@ export function AnnualBillingCard({
 				}
 				title="You're on annual billing"
 			>
-				{PLAN_LABEL[state.plan]}, invoiced once a year — two months of every
-				twelve are free.
+				{foundingPro ? "Founding Pro" : PLAN_LABEL[state.plan]}, invoiced once a
+				year — two months of every twelve are free.
 				{state.renewsAt
 					? ` Your current year runs to ${formatShortDate(state.renewsAt)}.`
 					: ""}{" "}
-				If you change plan part-way through, the months you haven't used are
-				credited to the new one.
+				{foundingPro
+					? "As a Founding Member you stay on Founding Pro for the whole year, at your founding price."
+					: "If you change plan part-way through, the months you haven't used are credited to the new one."}
 			</NoteCard>
 		);
 	}
 
 	const { quote, currency, plan } = state;
 	const rate = founding ? " at my Founding Member rate" : "";
+	const foundingPro = founding && plan === FOUNDING_PLAN;
 	const amount = formatPrice(quote.annualTotal, currency);
 
 	const waMessage =
@@ -240,13 +246,15 @@ export function AnnualBillingCard({
 			    scheduled for the end of the paid term (pendingPlanChange), so the
 			    months already bought are kept rather than refunded. The previous
 			    wording promised a cash-equivalent credit that nothing computed and
-			    that Arif had no way to issue by hand. */}
+			    that Arif had no way to issue by hand. A Founding Member has neither
+			    move — they stay on Founding Pro (`foundingPlanLocked`) — so their
+			    copy states that instead of promising machinery that refuses them. */}
 			<p className="text-[11px] leading-relaxed text-muted-foreground">
 				One invoice, paid the same way as your monthly one. A year already paid
-				isn't refunded in cash. Move up a plan and we only charge the new
-				price — the time you'd already paid for carries over as extra days.
-				Move down and the change waits until your year is up, so you keep what
-				you've paid for until then.
+				isn't refunded in cash.{" "}
+				{foundingPro
+					? "You stay on Founding Pro for the whole year, at your founding price."
+					: "Move up a plan and we only charge the new price — the time you'd already paid for carries over as extra days. Move down and the change waits until your year is up, so you keep what you've paid for until then."}
 			</p>
 
 			{/* Emphasis ladder: full primary only when nothing competes. Whenever an
