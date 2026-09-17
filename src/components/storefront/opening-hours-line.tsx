@@ -6,13 +6,13 @@ import {
 	weekdayIndexMyt,
 } from "../../../convex/lib/fulfilmentDate";
 import {
-	dayWindows,
 	isAllDay,
 	type OpeningHours,
 	openNowStatus,
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
+import { DayWindowsStacked } from "../hours/hours-text";
 import {
 	Dialog,
 	DialogContent,
@@ -118,27 +118,13 @@ export function OpeningHoursLine({
 									{WEEKDAY_NAMES[i]}
 									{isToday ? " · Today" : ""}
 								</span>
-								{/* A split day (z8r3fdff8r) stacks its windows instead of
-								    running them together on one line — "7:30 AM – 10:00 AM,
-								    12:00 PM – 6:00 PM" wraps mid-range on a phone and reads
-								    as one broken span. */}
+								{/* A split day stacks its windows. The same component as the
+								    settings summary, so both sides read the week alike
+								    (z8r3fdff8r). */}
 								<span
 									className={`text-right ${day?.closed ? "text-muted-foreground" : ""}`}
 								>
-									{!day || day.closed ? (
-										"Closed"
-									) : isAllDay(day) ? (
-										"Open 24 hours"
-									) : (
-										<span className="flex flex-col items-end">
-											{dayWindows(day).map((window) => (
-												<span key={window.open}>
-													{formatFulfilmentTime(window.open)} –{" "}
-													{formatFulfilmentTime(window.close)}
-												</span>
-											))}
-										</span>
-									)}
+									{!day || day.closed ? "Closed" : <DayWindowsStacked day={day} />}
 								</span>
 							</li>
 						);

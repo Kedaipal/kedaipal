@@ -403,7 +403,7 @@ export function PickupLocationEditDialog({
 										placeholder="Unit 3-1, Block B"
 										autoComplete="off"
 										maxLength={UNIT_LINE_MAX_LENGTH}
-										description="Shown to buyers in front of the address — at checkout, on their order page and in their WhatsApp confirmation. Keeps the map pin intact."
+										description={`Shown to buyers in front of the address — at checkout, on their order page and in their WhatsApp confirmation. Keeps the map pin intact. Up to ${UNIT_LINE_MAX_LENGTH} characters.`}
 									/>
 								)}
 							</form.AppField>
@@ -421,7 +421,11 @@ export function PickupLocationEditDialog({
 										description={
 											kind === "drop_off"
 												? "Buyers see this next to the date picker so they pick a day the meetup happens. Max 120 characters."
-												: "Optional opening hours for this point. Max 120 characters."
+												: // Store opening hours already govern which dates a
+													// buyer can pick. Inviting a second "opening hours"
+													// here is how the two drift apart, so this note is
+													// only for a point that keeps different hours.
+													"Only if this point keeps different hours from your store's opening hours. Max 120 characters."
 										}
 									/>
 								)}

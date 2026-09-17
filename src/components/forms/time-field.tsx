@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
 import { Input } from "../ui/input";
@@ -12,7 +13,9 @@ interface TimeFieldProps {
 	 * (86eyp5rav) close the chosen day before midnight. */
 	max?: string;
 	required?: boolean;
-	description?: string;
+	/** Hint under the field. A node, not just a string, so a checkout hint can
+	 * keep a time range on one line (`TimeRange`, z8r3fdff8r). */
+	description?: ReactNode;
 	disabled?: boolean;
 }
 

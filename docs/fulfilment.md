@@ -968,10 +968,20 @@ unit line.
   button. A seller should not have to pay for a unit number with their map
   pin.
 - **Seller UX:** an optional input under the Google autocomplete on both
-  cards, capped at 80 with the browser's own `maxLength`. The business
-  address card's Save button now also enables when **only the unit changed** —
-  before this it required a fresh autocomplete pick, which would have made
-  adding a unit number a re-pin.
+  cards, capped at 80 with the browser's own `maxLength`, and the cap is
+  **stated in the hint** so a long building name isn't cut off unnoticed. The
+  business address card's Save button now also enables when **only the unit
+  changed**. Before, it required a fresh autocomplete pick, which would have
+  made adding a unit number a re-pin.
+- **Test-round fixes (17 Sep):** with **no address yet**, the unit field is
+  disabled and says "Pick your address first — the unit rides in front of it".
+  It used to accept typing that Save then silently refused. The "is this a
+  change?" check runs the **server's** `sanitizeUnitLine`, and the saved
+  spelling is written back into the field. With a plain trim, a saved
+  "Unit 3-1,   Block B" still looked unsaved: the padded text stayed in the
+  field and Save stayed lit. The pickup point's "Availability" helper now says
+  it's *only for a point that keeps different hours from your store's opening
+  hours*, so it stops inviting a second, driftable copy of the store's hours.
 
 ## Known limitations
 

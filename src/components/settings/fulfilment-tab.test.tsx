@@ -417,8 +417,15 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
 		// The bulk affordance: seven days, one click — not seven.
 		fireEvent.click(screen.getByRole("button", { name: /Add a second window/ }));
-		// Suggested break: two hours after close, six hours long.
-		expect(screen.getByText(/Closed 10:00 AM – 12:00 PM/)).toBeTruthy();
+		// Suggested break: two hours after close, six hours long. The range is its
+		// own unbreakable span, so match on the whole line's text.
+		expect(
+			screen.getByText(
+				(_, el) =>
+					el?.tagName === "P" &&
+					/^Closed 10:00 AM – 12:00 PM/.test(el.textContent ?? ""),
+			),
+		).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
 		await waitFor(() =>
 			expect(updateSettings).toHaveBeenCalledWith({
@@ -510,14 +517,139 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		);
 	});
 
-	it("the read-only summary prints both windows", () => {
+	it("the read-only summary stacks both windows, one per line", () => {
 		renderWithHours([
 			{ open: 540, close: 900 }, // Sunday, unsplit
 			...Array.from({ length: 6 }, () => ({ ...SPLIT })),
 		]);
+		// Each window is its own line, the storefront dialog's reading, so a
+		// split day never wraps mid-range on a phone.
+		expect(screen.getAllByText("7:30 AM – 10:00 AM").length).toBe(6);
+		expect(screen.getAllByText("12:00 PM – 6:00 PM").length).toBe(6);
+		expect(screen.getByText("9:00 AM – 3:00 PM")).toBeTruthy();
+	});
+
+	// --- test-round fixes (z8r3fdff8r, 17 Sep) ------------------------------
+
+	it("only the OFFENDING window turns red, and its sentence sits under it", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Second window opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
+		const invalid = (name: string) =>
+			screen.getByRole("button", { name }).getAttribute("aria-invalid");
+		expect(invalid("Second window opening time")).toBe("true");
+		expect(invalid("Second window closing time")).toBe("true");
+		// The first window is fine and must not be painted as wrong.
+		expect(invalid("First window opening time")).toBeNull();
+		expect(invalid("First window closing time")).toBeNull();
+		// The sentence comes BEFORE the day chips, right under the pickers, not at
+		// the foot of the card.
+		const sentence = screen.getByText(
+			"The second window must start after 10:00 AM.",
+		);
+		const chips = screen.getByText("Open on");
 		expect(
-			screen.getAllByText("7:30 AM – 10:00 AM, 12:00 PM – 6:00 PM").length,
+			sentence.compareDocumentPosition(chips) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("an all-day first window paints the SECOND window, since removing it is the fix", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "First window opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "12:00 AM" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "First window closing time" }),
+		);
+		const lists = await screen.findAllByRole("button", { name: "11:59 PM" });
+		fireEvent.click(lists[lists.length - 1]);
+		expect(
+			screen.getByText(
+				"The first window already covers the whole day — remove the second window.",
+			),
+		).toBeTruthy();
+		expect(
+			screen
+				.getByRole("button", { name: "First window opening time" })
+				.getAttribute("aria-invalid"),
+		).toBeNull();
+		expect(
+			screen
+				.getByRole("button", { name: "Second window opening time" })
+				.getAttribute("aria-invalid"),
+		).toBe("true");
+	});
+
+	it("per-day: the error sits on its row, and a disabled Save names the rows to fix", async () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ ...SPLIT }, // Monday
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Monday second window opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "9:00 AM" }));
+		expect(
+			screen.getByText("The second window must start after 10:00 AM."),
+		).toBeTruthy();
+		expect(screen.getByText("Fix the hours for Monday to save.")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Save hours" }).hasAttribute("disabled"),
+		).toBe(true);
+	});
+
+	it("per-day: every OPEN row reserves the remove column, so all pickers align", () => {
+		const { container } = renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday, closed → no row
+			{ ...SPLIT }, // Monday, split
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		// Six open days, split or not: one reserved column each.
+		expect(
+			container.querySelectorAll('span.size-11[aria-hidden="true"]').length,
 		).toBe(6);
+	});
+
+	it("switching to 'Same every day' SAYS when it replaced different per-day hours", () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ ...SPLIT }, // Monday
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
+		expect(
+			screen.getByText(/Every day now uses Monday's hours\. Cancel to keep/),
+		).toBeTruthy();
+		// Back to per-day: the note has nothing left to warn about.
+		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
+		expect(screen.queryByText(/Every day now uses/)).toBeNull();
+	});
+
+	it("an identical week switches modes without a note: nothing was replaced", () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
+		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
+		expect(screen.queryByText(/Every day now uses/)).toBeNull();
+	});
+
+	it("the 44px remove target doesn't push 'Second window' away from its pickers", () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		const remove = screen.getByRole("button", { name: "Remove second window" });
+		expect(remove.className).toContain("size-11");
+		// Negative vertical margins keep the label row at text height.
+		expect(remove.className).toContain("-my-3.5");
 	});
 
 	it("a configured store shows the weekly summary; Reset sends the null clear", async () => {
@@ -921,3 +1053,123 @@ describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 		);
 	});
 })
+
+
+describe("Business address — unit / floor line (z8r3fdff8r test round)", () => {
+	let updateSettings: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		globalThis.ResizeObserver ??= class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		} as never;
+		updateSettings = vi.fn().mockResolvedValue({ ok: true });
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => ({
+			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
+			isPending: false,
+		})) as never);
+		vi.mocked(useMutation).mockImplementation(((
+			ref: FunctionReference<"mutation">,
+		) =>
+			getFunctionName(ref) === NAME.updateSettings
+				? updateSettings
+				: vi.fn().mockResolvedValue(undefined)) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	function tab(
+		businessAddress:
+			| { label: string; latitude: number; longitude: number; unit?: string }
+			| undefined,
+	) {
+		return (
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="MY"
+					currency="MYR"
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={undefined}
+					businessAddress={businessAddress}
+					deliveryBooking={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>
+		);
+	}
+
+	const unitInput = () =>
+		screen.getByLabelText(/Unit \/ floor \/ building/) as HTMLInputElement;
+	const saveAddress = () =>
+		screen.getByRole("button", { name: "Save address" });
+
+	it("with no address yet, the unit waits and SAYS why, instead of silently refusing to save", () => {
+		render(tab(undefined));
+		expect(unitInput().disabled).toBe(true);
+		expect(
+			screen.getByText("Pick your address first — the unit rides in front of it."),
+		).toBeTruthy();
+	});
+
+	it("with an address, the unit is editable and its cap is stated up front", () => {
+		render(tab({ label: "12 Jln Tun Razak", latitude: 3.1, longitude: 101.6 }));
+		expect(unitInput().disabled).toBe(false);
+		expect(screen.getByText(/Up to 80 characters\./)).toBeTruthy();
+		expect(saveAddress().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("saving stores the SERVER's spelling, shows it back, and Save goes quiet", async () => {
+		const stored = { label: "12 Jln Tun Razak", latitude: 3.1, longitude: 101.6 };
+		const { rerender } = render(tab(stored));
+		fireEvent.change(unitInput(), {
+			target: { value: "  Unit 3-1,    Block B  " },
+		});
+		expect(saveAddress().hasAttribute("disabled")).toBe(false);
+		fireEvent.click(saveAddress());
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith(
+				expect.objectContaining({
+					businessAddress: expect.objectContaining({
+						label: "12 Jln Tun Razak",
+						unit: "Unit 3-1, Block B",
+					}),
+				}),
+			),
+		);
+		// The field shows what was stored, not the padded text that was typed.
+		await waitFor(() => expect(unitInput().value).toBe("Unit 3-1, Block B"));
+		// Convex pushes the saved row back. Nothing is left to save.
+		rerender(tab({ ...stored, unit: "Unit 3-1, Block B" }));
+		expect(saveAddress().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("whitespace-only is a real change back to 'no unit', not a phantom edit", () => {
+		render(
+			tab({
+				label: "12 Jln Tun Razak",
+				latitude: 3.1,
+				longitude: 101.6,
+				unit: "Unit 3-1, Block B",
+			}),
+		);
+		fireEvent.change(unitInput(), { target: { value: "   " } });
+		expect(saveAddress().hasAttribute("disabled")).toBe(false);
+		// Re-typing the stored spelling with extra spaces is NOT a change.
+		fireEvent.change(unitInput(), {
+			target: { value: " Unit 3-1,  Block B " },
+		});
+		expect(saveAddress().hasAttribute("disabled")).toBe(true);
+	});
+});

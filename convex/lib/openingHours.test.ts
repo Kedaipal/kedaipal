@@ -4,6 +4,7 @@ import {
 	type DayHours,
 	dayGaps,
 	dayHoursError,
+	dayHoursIssue,
 	dayWindows,
 	defaultTimeWithinHours,
 	formatDayWindow,
@@ -14,6 +15,7 @@ import {
 	isOpenOnDate,
 	isTimeSelectable,
 	MAX_CLOSE_MINUTES,
+	nextSelectableTime,
 	OPEN_ALL_DAY,
 	type OpeningHours,
 	openingHoursSpecification,
@@ -377,9 +379,10 @@ describe("dayHoursError (the one shared rule-set)", () => {
 		expect(
 			dayHoursError({ open: 450, close: 600, open2: 720, close2: 720 }),
 		).toMatch(/before its closing time/);
+		// The 11:59 PM cap speaks only when it is the actual problem.
 		expect(
 			dayHoursError({ open: 450, close: 600, open2: 720, close2: 1440 }),
-		).toMatch(/before its closing time/);
+		).toBe("the second window can close at 11:59 PM at the latest");
 	});
 
 	test("an all-day first window refuses a second", () => {
@@ -689,5 +692,74 @@ describe("prepMinutes raises the selectable floor", () => {
 			min: 9 * 60 + 30,
 			max: 18 * 60,
 		});
+	});
+});
+
+
+// ---------------------------------------------------------------------------
+// Which window is wrong, and precise sentences (z8r3fdff8r test round)
+// ---------------------------------------------------------------------------
+
+describe("dayHoursIssue names the window at fault", () => {
+	test("a bad first window points at the first window", () => {
+		expect(dayHoursIssue({ open: 600, close: 540 })).toEqual({
+			message: "opening time must be before closing time",
+			window: "first",
+		});
+		expect(dayHoursIssue({ open: 540, close: 1440 })).toEqual({
+			message: "closing time can be 11:59 PM at the latest",
+			window: "first",
+		});
+	});
+
+	test("the plain single-window message lost the 11:59 PM noise", () => {
+		// The picker can't go past 11:59 PM, so every seller was reading a cap
+		// that could never apply to them.
+		expect(dayHoursError({ open: 600, close: 540 })).toBe(
+			"opening time must be before closing time",
+		);
+	});
+
+	test("every second-window problem points at the second window", () => {
+		for (const day of [
+			{ open: 450, close: 600, open2: 540, close2: 1080 }, // starts too early
+			{ open: 450, close: 600, open2: 720, close2: 720 }, // open ≥ close
+			{ open: 450, close: 600, open2: 720, close2: 1440 }, // past 11:59 PM
+			{ open: 0, close: MAX_CLOSE_MINUTES, open2: 600, close2: 700 }, // all-day clash
+		]) {
+			expect(dayHoursIssue(day)?.window).toBe("second");
+		}
+	});
+
+	test("a valid day has no issue, and dayHoursError agrees", () => {
+		expect(dayHoursIssue(SPLIT_DAY)).toBeNull();
+		expect(dayHoursError(SPLIT_DAY)).toBeNull();
+	});
+});
+
+describe("nextSelectableTime — a repair only ever moves forward", () => {
+	const hours = week({ 6: SPLIT_DAY });
+
+	test("inside a window: that moment itself", () => {
+		expect(nextSelectableTime(hours, SAT_JUN_27, 13 * 60, NOW)).toBe(13 * 60);
+	});
+
+	test("in the break: the next window's opening, never the earlier one", () => {
+		expect(nextSelectableTime(hours, SAT_JUN_27, 11 * 60, NOW)).toBe(12 * 60);
+	});
+
+	test("before the day opens: the first opening", () => {
+		expect(nextSelectableTime(hours, SAT_JUN_27, 6 * 60, NOW)).toBe(450);
+	});
+
+	test("after the last close: nothing later is left", () => {
+		expect(nextSelectableTime(hours, SAT_JUN_27, 19 * 60, NOW)).toBeNull();
+	});
+
+	test("today, the lead floor counts as the day's opening", () => {
+		// NOW = Fri 09:00 → floor 09:15, inside the breakfast window.
+		expect(
+			nextSelectableTime(week({ 5: SPLIT_DAY }), FRI_JUN_26, 9 * 60, NOW),
+		).toBe(9 * 60 + 15);
 	});
 });

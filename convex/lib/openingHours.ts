@@ -219,42 +219,84 @@ export function formatDayWindow(day: DayHours): string {
 		.join(", ");
 }
 
+/** What is wrong with a day's windows, and WHICH window it is about. The
+ * window lets the settings editor mark only the offending pickers and put the
+ * sentence under them. Painting all four red when only the second window's
+ * start is wrong points the seller at controls that are fine. */
+export interface DayHoursIssue {
+	/** Seller-facing sentence, lower-case start so callers can prefix the
+	 * weekday ("Monday: …") or capitalise it when standing alone. */
+	message: string;
+	window: "first" | "second";
+}
+
 /**
- * THE rule-set for one day's windows, as the seller-facing sentence that
- * explains the break — or null when the day is fine. Shared by the settings
- * editor (inline, per keystroke) and `sanitizeOpeningHours` (at save), so the
- * client can never disagree with the server about what is allowed or say it
- * in different words. Callers prefix the weekday.
+ * THE rule-set for one day's windows. Shared by the settings editor (inline,
+ * per keystroke) and `sanitizeOpeningHours` (at save), so the client can never
+ * disagree with the server about what is allowed or say it in different words.
+ *
+ * Each rule gets its own sentence rather than one catch-all. "Opening time must
+ * be before closing time (closing at latest 11:59 PM)" made every seller read a
+ * cap the picker cannot even exceed, so the cap now speaks only when it is the
+ * actual problem (an API caller sending 24:00).
  */
-export function dayHoursError(day: DayHours): string | null {
+export function dayHoursIssue(day: DayHours): DayHoursIssue | null {
 	if (
 		!Number.isInteger(day.open) ||
 		!Number.isInteger(day.close) ||
 		day.open < 0 ||
-		day.close > MAX_CLOSE_MINUTES ||
 		day.open >= day.close
 	) {
-		return "opening time must be before closing time (closing at latest 11:59 PM)";
+		return {
+			message: "opening time must be before closing time",
+			window: "first",
+		};
+	}
+	if (day.close > MAX_CLOSE_MINUTES) {
+		return {
+			message: "closing time can be 11:59 PM at the latest",
+			window: "first",
+		};
 	}
 	if (!hasSecondWindow(day)) return null;
 	// Non-null within this branch — restated for the type system.
 	const open2 = day.open2 as number;
 	const close2 = day.close2 as number;
 	if (isAllDay(day)) {
-		return "the first window already covers the whole day — remove the second window";
+		// About the SECOND window: its existence is the conflict, and removing
+		// it is the fix the sentence asks for.
+		return {
+			message:
+				"the first window already covers the whole day — remove the second window",
+			window: "second",
+		};
 	}
-	if (
-		!Number.isInteger(open2) ||
-		!Number.isInteger(close2) ||
-		close2 > MAX_CLOSE_MINUTES ||
-		open2 >= close2
-	) {
-		return "the second window's opening time must be before its closing time (closing at latest 11:59 PM)";
+	if (!Number.isInteger(open2) || !Number.isInteger(close2) || open2 >= close2) {
+		return {
+			message:
+				"the second window's opening time must be before its closing time",
+			window: "second",
+		};
+	}
+	if (close2 > MAX_CLOSE_MINUTES) {
+		return {
+			message: "the second window can close at 11:59 PM at the latest",
+			window: "second",
+		};
 	}
 	if (open2 <= day.close) {
-		return `the second window must start after ${formatFulfilmentTime(day.close)}`;
+		return {
+			message: `the second window must start after ${formatFulfilmentTime(day.close)}`,
+			window: "second",
+		};
 	}
 	return null;
+}
+
+/** The sentence alone, for callers that only need to know *whether* the day is
+ * valid and what to say (`sanitizeOpeningHours`). */
+export function dayHoursError(day: DayHours): string | null {
+	return dayHoursIssue(day)?.message ?? null;
 }
 
 /**
@@ -392,6 +434,27 @@ export function isTimeSelectable(
 	return selectableTimeWindows(hours, dateEpoch, now, prepMinutes).some(
 		(window) => timeMinutes >= window.open && timeMinutes <= window.close,
 	);
+}
+
+/**
+ * The first pickable moment AT OR AFTER `fromMinutes`, or null when nothing on
+ * that day is left after it. Used to repair a prefilled time that has gone
+ * stale, because a repair must move the buyer's slot FORWARD. Jumping a stale
+ * 7:30 PM back to 5:15 PM, just because 5:15 is the day's first slot, books a
+ * rider earlier than anyone asked for.
+ */
+export function nextSelectableTime(
+	hours: OpeningHours | undefined,
+	dateEpoch: number,
+	fromMinutes: number,
+	now: number = Date.now(),
+	prepMinutes = 0,
+): number | null {
+	for (const window of selectableTimeWindows(hours, dateEpoch, now, prepMinutes)) {
+		const candidate = Math.max(window.open, fromMinutes);
+		if (candidate <= window.close) return candidate;
+	}
+	return null;
 }
 
 /**

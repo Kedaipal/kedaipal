@@ -337,6 +337,40 @@ when nobody is there) or dropped breakfast.
   still normalises to unset.
 - **Still v1 limits:** at most two windows per day, no overnight wrap, no
   holiday/exception dates.
+- **Hands-on test round (17 Sep, driven in a real browser):** the logic held
+  everywhere, and nine UX gaps surfaced. The fixes that changed behaviour:
+  - **The repair is ownership-aware.** `src/lib/fulfilment-time-issue.ts`
+    (`planTimeRepair`) tracks the value the SYSTEM last wrote. A buyer-typed
+    time is **never rewritten**. Before this, a typed 6:00 PM in a break became
+    5:20 PM within 30s, silently and earlier than asked. The inline notice
+    (now covering too early, too late and in the break) explains, and submit
+    refuses in the same words. A stale system prefill moves **forward**
+    (`nextSelectableTime`), falls back to an earlier slot only when nothing
+    later is left, and **announces the move** ("We moved your time to 7:00 PM
+    — … is closed 5:00 PM – 7:00 PM"). On a day with no slot left it is
+    cleared rather than kept as a false promise beside "closed for today". It
+    refills itself once the buyer picks another day. The move also works live
+    when a seller edits hours mid-checkout.
+  - **One ladder, both checkouts.** `fulfilmentTimeIssue` + `timeIssueCopy`
+    replaced the submit `if` ladder that storefront and claim checkout had
+    copy-pasted. Copy is built from parts, so a time or range renders as one
+    unbreakable unit (`src/components/hours/hours-text.tsx`). A half-width
+    hint on a phone used to wrap "4:30 PM –⏎5:30 PM". Server strings keep
+    plain spaces, because they also feed WhatsApp and PDFs.
+  - **Pickup gets the hours on its DATE.** Self-collect has no time field, and
+    the in-person collector is the buyer who walks into a lunch break. Not
+    shown for drop-off, where the point's schedule note governs.
+  - **Editor errors point at the right control.** `dayHoursIssue` returns
+    `{ message, window }`, so only the offending window turns red and the
+    sentence sits under it (per row in the 7-row grid, plus "Fix the hours for
+    Monday to save." at the foot). The 11:59 PM cap only speaks when it's the
+    actual problem, and the plain message is back to "opening time must be
+    before closing time".
+  - **Grid and targets.** Every open row in the 7-row grid reserves the remove
+    column, so all pickers align. The same-every-day × is a full 44px pulled
+    into its label's line height. Switching to "Same every day" **says** when
+    it replaced different per-day hours. The settings summary stacks windows
+    like the storefront dialog, using one component for both.
 - **Prep-floor seam for T2 (`z8r3fdff97`).** Every selectable-time helper —
   `selectableTimeWindows`, `selectableTimeWindow`, `isTimeSelectable`,
   `defaultTimeWithinHours` — takes an optional trailing **`prepMinutes`** and
