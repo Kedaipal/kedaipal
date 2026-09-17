@@ -67,6 +67,21 @@ column picker) and each time cost a second round that should never have existed.
 If a change genuinely warrants mockups (a new surface, a redesign), produce them
 and ask — that is not slowing down, it is the cheaper half of the loop.
 
+## "Test it" means `/test-code`: you drive Zaki's Chrome, he watches
+
+**Standing rule, every time.** When Zaki asks you to test something yourself
+("test it", "test T1", "let's test this"), run the
+[`/test-code`](./.claude/skills/test-code/SKILL.md) skill. That means driving
+**his own Chrome** through every scenario, seller side and buyer side, while he
+watches. It does not mean running the suite, and it does not mean clicking the
+happy path and reporting "works".
+
+Judge each step at the grade-A bar above, on **logic, flow, UI/UX, and
+placement** (is the new component where its meaning puts it, not just wherever
+there was room?). Report findings as they come up. `/ship` is the precondition,
+not the test. If a scenario needs a second account type, say so up front: you
+can't sign in for him.
+
 ## Definition of Done — ship PR-ready, every time
 
 Every change must land in a state that would **pass PR review on the first read**, so review becomes a rubber-stamp, not a rework loop. Before calling anything done, it must clear this bar — no "I'll clean it up later":
