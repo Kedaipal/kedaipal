@@ -409,9 +409,11 @@ price while being BILLED another).
 A store on founding pricing has **one tier: Founding Pro** (`FOUNDING_PLAN`).
 It can move between **monthly and yearly** on that tier (RM104 / RM1,040,
 S$41 / S$410), and it can **stop renewing** (turn auto-renewal off) — it
-cannot change tier. Once the subscription lapses past the 3-month window the
-founding price is revoked, and from then on the store is an ordinary seller
-who can pick any plan.
+cannot change tier — not down to Starter, and not back to list Pro, which
+costs more for the same features. That holds until Scale launches; whether a
+founding member may then move to Scale is Arif's call. Once the subscription
+lapses past the 3-month window the founding price is revoked, and from then on
+the store is an ordinary seller who can pick any plan.
 
 - **Server:** `foundingPlanLocked(plan, eligible)` is refused by
   `subscribeSelf`, `changePlan` (both directions, before anything is scheduled
@@ -422,11 +424,16 @@ who can pick any plan.
   Pro" with the price and the lapse clause instead of offering a move; the
   first-invoice "Switch to Starter" is not offered; the current-plan card says
   "Founding Pro"; and the auto-renewal turn-off dialog states the lapse clause.
-- **Deliberately left alone:** a `pendingPlanChange` a founding member
-  scheduled BEFORE the lock still lands with its renewal, and the change card
-  keeps its "Cancel this change" undo so they can take it back. The Off-Season
-  Hold card is unchanged for founding members (the credits model removes holds
-  for everyone on 14 Oct).
+- **Downgrades scheduled before the lock are cancelled** (Zaki, 17 Sep 2026).
+  `renewalQuote` ignores a `pendingPlanChange` the lock forbids, so the renewal
+  bills Founding Pro and `internalIssueRenewalInvoice` clears the stale flag as
+  it writes the bill; the change card never shows it as a move that will land.
+  No backfill: the rule cancels them wherever they are read.
+- **Deliberately left alone:** the Off-Season Hold card is unchanged for
+  founding members (the credits model removes holds for everyone on 14 Oct). A
+  founding member already sitting on Starter (from before the lock, if any)
+  renews on Starter and is offered only "Move up to Founding Pro" — the lock
+  never raises a bill without the seller's own tap.
 
 ## Every billing-page price is server-resolved (z8r3fdfty4, 17 Sep 2026)
 
@@ -438,13 +445,17 @@ pay **RM104** (S$59 vs S$41). Two defects stacked:
    act-as, the admin's own store — so the tab showed the seller's plan priced
    at the admin's founding status and currency, above the admin's invoices.
    Both now take an optional `retailerId` (owner-or-admin via
-   `requireRetailerAccess`); the tab passes it only while acting-as. The
-   owner-consent WRITES (`subscribeSelf`, `startAutoRenewSetup`,
-   `cancelAutoRenew`, `changePlan`, `cancelPlanChange`, `switchPendingPlan`)
-   still resolve the caller, so under act-as they are rendered **disabled with
-   the reason** ("Only the store owner can do this…") — a card is the owner's
-   to authorise, and a disabled control beats one that silently bills the
-   admin's store. `setSeasonalHold` was already act-as aware and is unchanged.
+   `requireRetailerAccess`); the tab passes it only while acting-as.
+   **Billing is view-only under act-as** (Zaki, 17 Sep 2026): it is the
+   seller's money and consent, and every legitimate admin billing action
+   (issue, void, mark paid, comp) already lives in Admin → Billing. A banner
+   at the top of the tab says so; every billing control renders disabled with
+   a one-line reason — subscribe, auto-renewal on/off, plan change and its
+   undo, the first-invoice switch, the Off-Season Hold switch, the annual
+   request, "Pay online now", "I've paid — notify us" and the manual "Message
+   us". Server-side, the self-serve writes resolve the caller's own store, and
+   `setSeasonalHold` — the one billing write that accepted `retailerId` —
+   now refuses `actingAsAdmin`. Every other settings tab keeps act-as edits.
 2. **The page decided "founding?" three ways.** The picker used the server
    flag; the plan-change card used `sub.foundingIntent` (missing every
    admin-marked member); the annual card used the raw rank flag (ignoring the

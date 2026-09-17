@@ -217,7 +217,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		).toMatch(/S\$\s*410\.00\/year/);
 	});
 
-	it("a founding member's scheduled change from before the lock can still be undone", () => {
+	it("a founding member's downgrade scheduled before the lock is cancelled — never shown as a move that lands (Zaki, 17 Sep 2026)", () => {
 		render(
 			<PlanChangeCard
 				sub={sub({
@@ -231,8 +231,13 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 				foundingPricing={true}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /Cancel this change/ }));
-		expect(mocks.cancelPlanChange).toHaveBeenCalled();
+		// renewalQuote bills Founding Pro and the renewal clears the flag, so the
+		// card states the plan they stay on — not a move that will never happen.
+		expect(screen.getByText("Your plan stays Founding Pro")).toBeTruthy();
+		expect(screen.queryByText(/Moving to Starter/)).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Cancel this change/ }),
+		).toBeNull();
 	});
 
 	it("an SGD seller is quoted in SGD", () => {
@@ -324,7 +329,9 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		);
 		const down = screen.getByRole("button", { name: /Move down to Starter/ });
 		expect((down as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getByText(/Only the store owner can do this/)).toBeTruthy();
+		expect(
+			screen.getByText(/View-only while you're acting as this store/),
+		).toBeTruthy();
 
 		cleanup();
 		render(

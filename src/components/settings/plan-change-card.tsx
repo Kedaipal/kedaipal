@@ -105,7 +105,14 @@ export function PlanChangeCard({
 	const current = sub.plan;
 	const cycle = sub.billingCycle ?? "monthly";
 	const founding = foundingPricing;
-	const scheduled = sub.pendingPlanChange;
+	// A Founding Member's downgrade scheduled before the founding lock is
+	// cancelled (Zaki, 17 Sep 2026) — `renewalQuote` bills Founding Pro and the
+	// renewal clears the flag — so it is never shown as a move that will land.
+	const scheduled =
+		sub.pendingPlanChange &&
+		!foundingPlanLocked(sub.pendingPlanChange.plan, founding)
+			? sub.pendingPlanChange
+			: undefined;
 
 	// Only the tiers a seller can actually buy, minus the one they're on — and
 	// a Founding Member can buy Founding Pro alone.

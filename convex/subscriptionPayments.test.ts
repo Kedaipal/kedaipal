@@ -387,6 +387,11 @@ describe("billing page prices — server-resolved, act-as aware (z8r3fdfty4)", (
 			opts: { pendingPlanChange: "starter" as const },
 		},
 		{
+			name: "founding member with a downgrade scheduled before the lock",
+			slug: "q-fdown",
+			opts: { founding: true, pendingPlanChange: "starter" as const },
+		},
+		{
 			name: "SG founding member on Off-Season Hold",
 			slug: "q-hold",
 			opts: {
@@ -488,6 +493,26 @@ describe("billing page prices — server-resolved, act-as aware (z8r3fdfty4)", (
 			active.asUser.mutation(api.invoices.changePlan, { plan: "starter" }),
 		).rejects.toThrow(/Founding Members stay on Founding Pro/);
 		expect((await getSub(t, active.subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("a founding member's pre-lock scheduled downgrade is cancelled: the renewal bills Founding Pro and clears it", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedPaying(t, "u_fsched", "fsched-store", {
+			founding: true,
+			pendingPlanChange: "starter",
+		});
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId: subId,
+		});
+		const bill = await t.run(async (ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+		expect(bill).toMatchObject({ plan: "pro", total: 10400, foundingDiscount: 4500 });
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
 	});
 
 	test("a founding member's first invoice can't be switched to Starter — and the bill survives the refusal", async () => {

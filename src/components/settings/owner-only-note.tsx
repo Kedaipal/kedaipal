@@ -1,16 +1,17 @@
 /**
- * The reason beside a billing action an admin can't take while acting-as a
- * seller (z8r3fdfty4). Subscribing, auto-renewal and plan changes resolve the
- * CALLER's store server-side, so inside act-as they used to act on the admin's
- * OWN store; and paying or saving a card is the owner's consent to give, not
- * ours. So the action stays visible (the admin sees exactly what the seller
- * sees) but disabled, with this line where they're clicking.
+ * The reason beside a billing action an admin can't take while acting as a
+ * seller (z8r3fdfty4). Billing is VIEW-ONLY under act-as (Zaki, 17 Sep 2026):
+ * it is the seller's money and consent, and every legitimate admin billing
+ * action (issue, void, mark paid, comp) already lives in Admin → Billing. So
+ * each action stays visible — the admin sees exactly what the seller sees —
+ * but disabled, with this line where they're clicking. The tab's top banner
+ * carries the longer explanation.
  */
 export function OwnerOnlyNote() {
 	return (
 		<p className="text-xs text-muted-foreground">
-			Only the store owner can do this — they authorise payments with their own
-			card or wallet, so it's switched off while you're viewing as admin.
+			View-only while you're acting as this store — billing changes are the
+			owner's to make.
 		</p>
 	);
 }

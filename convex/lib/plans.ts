@@ -568,7 +568,8 @@ export type RenewalQuote = {
 	/** The tier billed. A scheduled downgrade lands with the renewal, so this is
 	 * the scheduled plan when there is one — except on a hold bill, where it is
 	 * the tier the seller resumes to (the downgrade waits for the first tier
-	 * bill after they resume). */
+	 * bill after they resume), and for a store on founding pricing, whose
+	 * scheduled downgrade is cancelled by the founding lock. */
 	plan: Plan;
 	/** A hold always bills one month. */
 	billingCycle: BillingCycle;
@@ -608,7 +609,15 @@ export function renewalQuote(args: {
 			amount: HOLD_MONTHLY_PRICES[currency],
 		};
 	}
-	const plan = args.pendingPlanChange ?? args.plan;
+	// Founding Members stay on Founding Pro (Zaki, 17 Sep 2026): a downgrade
+	// scheduled before the lock existed is CANCELLED here — never billed — and
+	// the renewal issuer consumes the flag as it writes the Founding Pro bill.
+	const scheduled =
+		args.pendingPlanChange !== undefined &&
+		!foundingPlanLocked(args.pendingPlanChange, foundingPriceEligible(args))
+			? args.pendingPlanChange
+			: undefined;
+	const plan = scheduled ?? args.plan;
 	const founding = foundingPricingApplies({ ...args, plan });
 	return {
 		kind: "plan",

@@ -1543,32 +1543,75 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 			expect((args as { retailerId?: string }).retailerId).toBeUndefined();
 	});
 
-	it("every billing write is disabled, with the reason beside it", () => {
-		// Renewing: Subscribe.
+	it("billing is view-only: a banner says why, and every billing control is disabled beside its reason (Zaki, 17 Sep 2026)", () => {
+		const note = /View-only while you're acting as this store/;
+		/** Only the always-on support card may still open WhatsApp. */
+		const billingWaLinks = () =>
+			waLinks().filter(
+				(href) => !decodeURIComponent(href).includes("billing question"),
+			);
+		const disabled = (name: string | RegExp) =>
+			(screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+		// A — renewing (past due): Subscribe, and the "pause instead" way out.
 		mockQueries({ isAdmin: true, gateway: foundingSg });
-		const { unmount } = render(
+		const a = render(
 			<BillingTab
 				retailer={retailer({
 					actingAsAdmin: true,
+					storeName: "Her Moolah",
 					country: "SG",
 					isFoundingMember: true,
 					foundingMemberRank: 7,
 				})}
 			/>,
 		);
-		const subscribe = screen.getByRole("button", {
-			name: "Subscribe to Founding Pro",
-		});
-		expect((subscribe as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getByText(/Only the store owner can do this/)).toBeTruthy();
-		unmount();
+		expect(screen.getByText("View-only billing")).toBeTruthy();
+		expect(screen.getByText(/You're acting as Her Moolah/)).toBeTruthy();
+		expect(screen.getByText(/use Admin → Billing/)).toBeTruthy();
+		expect(disabled("Subscribe to Founding Pro")).toBe(true);
+		expect(disabled("Pause instead")).toBe(true);
+		expect(screen.getAllByText(note).length).toBe(2);
+		expect(billingWaLinks()).toEqual([]);
+		a.unmount();
 
-		// Active list seller with auto-renewal on: plan change + turn off.
-		mockQueries({ isAdmin: true, gateway: GATEWAY_ON });
-		render(
+		// B — active list seller, auto-renewal on, an open invoice with a
+		// Pay-now link, and the annual swap on offer.
+		mockQueries({
+			isAdmin: true,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "i1",
+					status: "paid",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-1",
+				},
+				{
+					_id: "i2",
+					status: "paid",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-2",
+				},
+				{
+					_id: "i3",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-3",
+					billingCycle: "monthly",
+					dueDate: Date.now() + 10 * DAY,
+					gatewayPayment: { url: "https://pay.example/inv-3" },
+				},
+			],
+		});
+		const b = render(
 			<BillingTab
 				retailer={retailer({
 					actingAsAdmin: true,
+					storeName: "Open Market",
 					subscription: {
 						plan: "pro",
 						status: "active",
@@ -1589,12 +1632,33 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 				} as unknown as Partial<Retailer>)}
 			/>,
 		);
-		const down = screen.getByRole("button", { name: /Move down to Starter/ });
-		expect((down as HTMLButtonElement).disabled).toBe(true);
-		const off = screen.getByRole("button", { name: "Turn off auto-renewal" });
-		expect((off as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getAllByText(/Only the store owner can do this/).length).toBe(
-			2,
+		expect(disabled(/Move down to Starter/)).toBe(true);
+		expect(disabled("Turn off auto-renewal")).toBe(true);
+		expect(disabled("Pause for the season")).toBe(true);
+		expect(disabled("Ask for an annual invoice")).toBe(true);
+		expect(disabled(/Pay online now/)).toBe(true);
+		expect(disabled(/I've paid — notify us/)).toBe(true);
+		// Nothing still points at the checkout or messages us about the bill.
+		expect(
+			screen
+				.queryAllByRole("link")
+				.some((l) => (l.getAttribute("href") ?? "").includes("pay.example")),
+		).toBe(false);
+		expect(billingWaLinks()).toEqual([]);
+		// Plan change, hold, annual, how-to-pay, auto-renewal: one reason each.
+		expect(screen.getAllByText(note).length).toBe(5);
+		// Viewing stays viewing: the invoice and its document are all there.
+		expect(screen.getByText("INV-3")).toBeTruthy();
+		b.unmount();
+
+		// C — gateway off: the manual "message us to renew" card.
+		mockQueries({ isAdmin: true });
+		render(
+			<BillingTab
+				retailer={retailer({ actingAsAdmin: true, storeName: "Open Market" })}
+			/>,
 		);
+		expect(disabled(/Message us/)).toBe(true);
+		expect(billingWaLinks()).toEqual([]);
 	});
 });

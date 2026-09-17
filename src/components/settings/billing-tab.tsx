@@ -7,6 +7,7 @@ import {
 	Banknote,
 	CreditCard,
 	ExternalLink,
+	Eye,
 	LifeBuoy,
 	Loader2,
 	Mail,
@@ -14,7 +15,13 @@ import {
 	QrCode,
 	ShieldCheck,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import {
@@ -47,6 +54,7 @@ import { AutoRenewalCard } from "./auto-renewal-card";
 import { FirstInvoiceSwitch } from "./first-invoice-switch";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 import { PlanChangeCard } from "./plan-change-card";
+import { OwnerOnlyNote } from "./owner-only-note";
 import { PlanPickerCard } from "./plan-picker-card";
 import { SeasonalHoldCard } from "./seasonal-hold-card";
 
@@ -91,9 +99,12 @@ export function BillingTab({
 	const gateway = useQuery(
 		convexQuery(api.subscriptionPayments.billingGatewayAvailable, storeArgs),
 	).data;
-	// …while every billing WRITE stays the owner's: they resolve the caller's
-	// store server-side, and paying or saving a card is the owner's consent to
-	// give. Shown disabled, with the reason, rather than acting on the admin.
+	// …while billing itself is VIEW-ONLY under act-as (Zaki, 17 Sep 2026): it is
+	// the seller's money and consent, and every legitimate admin billing action
+	// (issue, void, mark paid, comp) already lives in Admin → Billing. Every
+	// control stays visible but disabled with the reason; the self-serve
+	// writes resolve the caller's own store and `setSeasonalHold` refuses
+	// act-as server-side, so nothing here can reach the seller's billing.
 	const ownerOnly = actingAsAdmin;
 	// On founding pricing — SERVER-resolved, the only founding answer any price
 	// on this page may use (z8r3fdfty4). False until the gateway read lands, so
@@ -167,7 +178,8 @@ export function BillingTab({
 	// swaps the trial/past-due nag for an "Admin" badge and hides the subscription
 	// banner) by replacing the plan/usage/renew UI here with a plain admin note.
 	// While acting-as a seller we keep the seller's real plan fully visible —
-	// white-glove support needs to see and manage it. See docs/admin-console.md.
+	// white-glove support needs to SEE it — view-only, never actionable
+	// (billing is the seller's money; see `ownerOnly`). See docs/admin-console.md.
 	const adminOwnAccount = isAdmin && !retailer.actingAsAdmin;
 
 	const pending = invoices.find((i) => i.status === "pending");
@@ -248,6 +260,23 @@ export function BillingTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
+			{/* Said once, first, so every disabled control below has its why. */}
+			{actingAsAdmin ? (
+				<section className="flex items-start gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-5 dark:border-indigo-900 dark:bg-indigo-950/40 lg:p-6">
+					<Eye className="mt-0.5 size-5 shrink-0 text-indigo-600 dark:text-indigo-300" />
+					<div>
+						<p className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">
+							View-only billing
+						</p>
+						<p className="mt-1 text-xs text-indigo-800/80 dark:text-indigo-300/80">
+							You're acting as {retailer.storeName}. Their plan, prices and
+							invoices show exactly as they see them, but billing is the owner's
+							— nothing here can be changed from act-as. To issue, void or mark
+							an invoice paid, use Admin → Billing.
+						</p>
+					</div>
+				</section>
+			) : null}
 			{retailer.isFoundingMember ? (
 				<div className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
 					<Award className="size-6 shrink-0 text-amber-600" />
@@ -417,6 +446,7 @@ export function BillingTab({
 					country={retailer.country}
 					sub={sub}
 					pendingKind={pending ? (pending.kind ?? "plan") : undefined}
+					ownerOnly={ownerOnly}
 				/>
 			) : null}
 
@@ -430,6 +460,7 @@ export function BillingTab({
 				slug={retailer.slug}
 				supportWa={supportWa}
 				founding={foundingPricing}
+				ownerOnly={ownerOnly}
 			/>
 
 			{/* Pending invoice + how to pay */}
@@ -518,13 +549,14 @@ export function BillingTab({
 						    hosted page, auto-confirmed — the manual rails stay below. */}
 								{pending.gatewayPayment?.url ? (
 									<div className="mt-2">
-										<a
+										<ActionLink
 											href={pending.gatewayPayment.url}
+											disabled={ownerOnly}
 											className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
 										>
 											<CreditCard className="size-4" />
 											Pay online now
-										</a>
+										</ActionLink>
 										<p className="mt-1.5 text-xs text-muted-foreground">
 											Confirmed automatically — no need to message us after.
 										</p>
@@ -583,18 +615,23 @@ export function BillingTab({
 										Message us on WhatsApp to receive payment details.
 									</p>
 								)}
-								<a
+								<ActionLink
 									href={buildWaContactLink(
 										`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
 										supportWa,
 									)}
-									target="_blank"
-									rel="noopener noreferrer"
+									external
+									disabled={ownerOnly}
 									className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 								>
 									<ExternalLink className="size-4" />
 									I've paid — notify us
-								</a>
+								</ActionLink>
+								{ownerOnly ? (
+									<div className="mt-2">
+										<OwnerOnlyNote />
+									</div>
+								) : null}
 							</>
 						)}
 					</div>
@@ -643,20 +680,21 @@ export function BillingTab({
 									: "Message us on WhatsApp and we'll send your invoice. Your plan activates once payment lands."}
 							</p>
 						</div>
-						<a
+						<ActionLink
 							href={buildWaContactLink(
 								sub.status === "trialing"
 									? `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`
 									: `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`,
 								supportWa,
 							)}
-							target="_blank"
-							rel="noopener noreferrer"
+							external
+							disabled={ownerOnly}
 							className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 						>
 							<ExternalLink className="size-4" />
 							Message us
-						</a>
+						</ActionLink>
+						{ownerOnly ? <OwnerOnlyNote /> : null}
 					</section>
 				)
 			) : null}
@@ -821,5 +859,46 @@ export function BillingTab({
 				</div>
 			</section>
 		</div>
+	);
+}
+
+/**
+ * A billing CTA that leaves the page — HitPay's checkout, or a WhatsApp
+ * message to us about the seller's bill. Billing is view-only under admin
+ * act-as, so there it renders as the same control, disabled: never a live
+ * link that pays or claims a payment on the seller's behalf.
+ */
+function ActionLink({
+	href,
+	disabled,
+	external = false,
+	className,
+	children,
+}: {
+	href: string;
+	disabled: boolean;
+	/** Opens in a new tab (WhatsApp); HitPay's checkout replaces this page. */
+	external?: boolean;
+	className: string;
+	children: ReactNode;
+}) {
+	if (disabled)
+		return (
+			<button
+				type="button"
+				disabled
+				className={`${className} disabled:cursor-not-allowed disabled:opacity-50`}
+			>
+				{children}
+			</button>
+		);
+	return (
+		<a
+			href={href}
+			className={className}
+			{...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+		>
+			{children}
+		</a>
 	);
 }

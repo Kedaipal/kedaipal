@@ -1191,9 +1191,11 @@ export const internalIssueRenewalInvoice = internalMutation({
 			kind,
 		});
 		// Consumed: the change is baked into a real bill now, and settle will
-		// move the subscription onto it. Leaving the flag set would re-apply the
-		// downgrade to every future renewal. A hold bill never carries it (see
-		// above), so it must never clear it either.
+		// move the subscription onto it — or, for a store on founding pricing,
+		// the quote CANCELLED it (the founding lock) and this is where the stale
+		// flag goes. Leaving it set would re-apply the downgrade to every future
+		// renewal. A hold bill never carries it (see above), so it must never
+		// clear it either.
 		if (kind === "plan" && sub.pendingPlanChange !== undefined) {
 			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
 		}

@@ -469,6 +469,21 @@ describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)"
 		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
 	});
 
+	test("a Founding Member's scheduled downgrade is cancelled — Founding Pro renews (Zaki, 17 Sep 2026)", () => {
+		expect(
+			renewalQuote({ ...founding, pendingPlanChange: "starter" }),
+		).toMatchObject({ plan: "pro", founding: true, amount: 10400 });
+		// Once the founding price is revoked they are an ordinary seller, and a
+		// change they scheduled is theirs to keep.
+		expect(
+			renewalQuote({
+				...founding,
+				pendingPlanChange: "starter",
+				paidThrough: NOW - 91 * DAY,
+			}),
+		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
+	});
+
 	test("a paused store renews the hold: flat, monthly, never founding, tier kept", () => {
 		const held = {
 			...founding,
