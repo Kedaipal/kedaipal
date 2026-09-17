@@ -122,9 +122,20 @@ export function copyText(parts: CopyPart[]): string {
 		.join("");
 }
 
+/** The action a time is for: a rider delivering, a rider collecting from the
+ * buyer (the collection service, 86eyg0n8e), or the buyer picking up in person
+ * (z8r3fdff97) — three different sentences. */
+export type TimeVerb = "deliver" | "collect" | "pick up";
+
+const TIME_NOUN: Record<TimeVerb, string> = {
+	deliver: "delivery",
+	collect: "collection",
+	"pick up": "pickup",
+};
+
 export function timeIssueCopy(
 	issue: TimeIssue,
-	ctx: { storeName: string; verb: "deliver" | "collect" },
+	ctx: { storeName: string; verb: TimeVerb },
 ): CopyPart[] {
 	switch (issue.kind) {
 		case "no_slot":
@@ -132,12 +143,13 @@ export function timeIssueCopy(
 				? [`${ctx.storeName} has closed for today — pick another day.`]
 				: [`There's no time left to ${ctx.verb} today — pick tomorrow.`];
 		case "missing":
-			return [
-				ctx.verb === "collect" ? "Pick a collection time." : "Pick a delivery time.",
-			];
+			return [`Pick a ${TIME_NOUN[ctx.verb]} time.`];
 		case "too_early":
 			return [
-				`The earliest we can ${ctx.verb} is `,
+				// The buyer does the picking up; a rider does the rest.
+				ctx.verb === "pick up"
+					? "The earliest you can pick up is "
+					: `The earliest we can ${ctx.verb} is `,
 				{ time: issue.earliest },
 				" — pick that or later.",
 			];

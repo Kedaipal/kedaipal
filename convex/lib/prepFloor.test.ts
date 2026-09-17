@@ -7,7 +7,9 @@ import {
 } from "./openingHours";
 import {
 	NO_CART_PREP,
+	prepFloorCopy,
 	prepFloorIssue,
+	prepFloorProblem,
 	slowestPrep,
 } from "./prepFloor";
 
@@ -75,7 +77,7 @@ describe("prepFloorIssue", () => {
 
 	test("THE DONE CRITERION: order at 10:00, 2h prep — 11:00 refused, 12:00 fine", () => {
 		expect(prepFloorIssue({ ...base, timeMinutes: hm(11) })).toBe(
-			'"Ice Cream Puff" needs 2 hours to prepare — earliest pickup is 12:00 PM',
+			'“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is 12:00 PM',
 		);
 		expect(prepFloorIssue({ ...base, timeMinutes: hm(12) })).toBeNull();
 	});
@@ -118,7 +120,7 @@ describe("prepFloorIssue", () => {
 			timeMinutes: hm(17, 45),
 		});
 		expect(issue).toBe(
-			'"Ice Cream Puff" needs 2 hours to prepare — too late for today, pick a later day',
+			'“Ice Cream Puff” needs 2 hours to prepare — too late for today, pick a later day',
 		);
 	});
 
@@ -163,5 +165,37 @@ describe("prepFloorIssue", () => {
 				timeMinutes: hm(10, 5),
 			}),
 		).toBeNull();
+	});
+});
+
+describe("prepFloorProblem + prepFloorCopy — one sentence, two renderings", () => {
+	const args = {
+		hours: undefined as OpeningHours | undefined,
+		dateEpoch: FRI,
+		now: at(10),
+		prep: PUFF,
+		kind: "pickup" as const,
+	};
+
+	test("the problem is data: too early carries the slot, too late carries nothing", () => {
+		expect(prepFloorProblem({ ...args, timeMinutes: hm(11) })).toEqual({
+			kind: "too_early",
+			earliest: hm(12),
+		});
+		expect(
+			prepFloorProblem({ ...args, now: at(22, 30), timeMinutes: undefined }),
+		).toEqual({ kind: "too_late_today" });
+		expect(prepFloorProblem({ ...args, timeMinutes: hm(12) })).toBeNull();
+	});
+
+	test("the copy keeps the time as a value, and joins into the server's exact words", () => {
+		const problem = prepFloorProblem({ ...args, timeMinutes: hm(11) });
+		if (!problem) throw new Error("expected a prep problem");
+		const parts = prepFloorCopy(problem, PUFF, "pickup");
+		expect(parts).toContainEqual({ time: hm(12) });
+		// The checkout renders these parts; the server throws the joined string.
+		expect(prepFloorIssue({ ...args, timeMinutes: hm(11) })).toBe(
+			"“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is 12:00 PM",
+		);
 	});
 });

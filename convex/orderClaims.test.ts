@@ -55,6 +55,8 @@ async function seedVariant(
 		block?: boolean;
 		requiresProof?: boolean;
 		minNoticeDays?: number;
+		prepMinutes?: number;
+		pickupNote?: string;
 	} = {},
 ): Promise<Id<"productVariants">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -67,6 +69,8 @@ async function seedVariant(
 		blockWhenOutOfStock: opts.block ?? false,
 		requiresProof: opts.requiresProof ?? false,
 		minNoticeDays: opts.minNoticeDays,
+		prepMinutes: opts.prepMinutes,
+		pickupNote: opts.pickupNote,
 		variants: [
 			{ optionValues: [], price: opts.price ?? 8900, onHand: opts.onHand ?? 50 },
 		],
@@ -690,6 +694,175 @@ describe("orderClaims — commit", () => {
 				deliveryMethod: "delivery",
 			}),
 		).rejects.toThrow(/address/i);
+	});
+});
+
+describe("orderClaims — prep time + pickup note (z8r3fdff97)", () => {
+	const DAY = 86_400_000;
+	/** Minutes since MYT midnight, right now. */
+	const nowMinutes = () =>
+		Math.floor(((Date.now() + 8 * 3600_000) % DAY) / 60_000);
+
+	async function sendPuffs(
+		t: ReturnType<typeof setup>,
+		opts: { prepMinutes?: number; pickupNote?: string } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			...opts,
+		});
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 6 }],
+				windowMinutes: 60,
+			});
+		const productId = (await t.run((ctx) => ctx.db.get(variantId)))
+			?.productId as Id<"products">;
+		return { retailer, variantId, productId, claimId, token };
+	}
+	const orderOf = async (
+		t: ReturnType<typeof setup>,
+		claimId: Id<"orderClaims">,
+	) => {
+		const orderId = (await getClaim(t, claimId)).orderId as Id<"orders">;
+		return t.run((ctx) => ctx.db.get(orderId));
+	};
+
+	test("the claim page receives each line's live prep window and note", async () => {
+		const t = setup();
+		const { token, productId } = await sendPuffs(t, {
+			prepMinutes: 120,
+			pickupNote: "Side counter.",
+		});
+		// Edited after the link went out — the page shows what stands NOW.
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.update, {
+				productId,
+				pickupNote: "Front counter.",
+			});
+		const payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.open?.lines[0]).toMatchObject({
+			name: "Ice Cream Puff",
+			prepMinutes: 120,
+			pickupNote: "Front counter.",
+		});
+	});
+
+	test("a self-collect time is kept — it used to be silently dropped", async () => {
+		const t = setup();
+		const { claimId, token } = await sendPuffs(t);
+		const tomorrow = fulfilmentDateBounds(0).min + DAY;
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow,
+			fulfilmentTimeMinutes: 11 * 60 + 30,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentTimeMinutes).toBe(690);
+	});
+
+	test("the prep floor refuses a same-day pickup inside the window, naming the product", async () => {
+		const t = setup();
+		const { token } = await sendPuffs(t, { prepMinutes: 120 });
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: fulfilmentDateBounds(0).min,
+				fulfilmentTimeMinutes: Math.min(1439, nowMinutes() + 1),
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*2 hours to prepare/s);
+	});
+
+	test("a prep window that swallows today asks for a later day; tomorrow takes any time", async () => {
+		const t = setup();
+		const { claimId, token } = await sendPuffs(t, { prepMinutes: 1440 });
+		const today = fulfilmentDateBounds(0).min;
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: today,
+				fulfilmentTimeMinutes: 23 * 60,
+			}),
+		).rejects.toThrow(/too late for today, pick a later day/);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: today + DAY,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentTimeMinutes).toBe(540);
+	});
+
+	test("a collection trip is exempt — the rider collects first, the work comes after", async () => {
+		const t = setup();
+		const { retailer, claimId, token } = await sendPuffs(t, {
+			prepMinutes: 240,
+		});
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE",
+					deliveryDirection: "collection",
+				},
+			}),
+		);
+		const soon = Math.min(1439, nowMinutes() + 20);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+			fulfilmentDate: fulfilmentDateBounds(0).min,
+			fulfilmentTimeMinutes: soon,
+		});
+		const order = await orderOf(t, claimId);
+		expect(order?.deliveryDirection).toBe("collection");
+		expect(order?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the pickup note freezes from the LIVE product at commit", async () => {
+		const t = setup();
+		const { claimId, token, productId } = await sendPuffs(t, {
+			pickupNote: "Side counter.",
+		});
+		// A typo fix between send and commit reaches the buyer…
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.update, {
+				productId,
+				pickupNote: "Side counter — bring an ice bag.",
+			});
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: fulfilmentDateBounds(0).min + DAY,
+		});
+		// …and an edit AFTER commit never rewrites what they were told.
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.update, { productId, pickupNote: "Gone." });
+		expect((await orderOf(t, claimId))?.items[0].pickupNote).toBe(
+			"Side counter — bring an ice bag.",
+		);
+	});
+
+	test("a product without a note freezes no note key at all", async () => {
+		const t = setup();
+		const { claimId, token } = await sendPuffs(t);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: fulfilmentDateBounds(0).min + DAY,
+		});
+		const order = await orderOf(t, claimId);
+		expect(order?.items[0]).not.toHaveProperty("pickupNote");
 	});
 });
 

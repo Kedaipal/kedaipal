@@ -110,6 +110,21 @@ describe("copy — one sentence for the notice and the submit banner", () => {
 		).toBe("There's no time left to deliver today — pick tomorrow.");
 	});
 
+	test("a buyer picking up speaks for themselves — never the collection service's words (z8r3fdff97)", () => {
+		// "collection" is the rider-collects-from-the-buyer service; a buyer
+		// collecting in person picks up.
+		const pickup = { ...ctx, verb: "pick up" as const };
+		expect(copyText(timeIssueCopy({ kind: "missing" }, pickup))).toBe(
+			"Pick a pickup time.",
+		);
+		expect(
+			copyText(timeIssueCopy({ kind: "too_early", earliest: 990 }, pickup)),
+		).toBe("The earliest you can pick up is 4:30 PM — pick that or later.");
+		expect(
+			copyText(timeIssueCopy({ kind: "no_slot", storeClosed: false }, pickup)),
+		).toBe("There's no time left to pick up today — pick tomorrow.");
+	});
+
 	test("ranges and times stay as values, so the page can keep them whole", () => {
 		const parts = timeIssueCopy(
 			{ kind: "in_break", gap: { open: 1050, close: 1140 } },

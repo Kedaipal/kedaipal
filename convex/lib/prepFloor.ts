@@ -51,12 +51,25 @@ export function slowestPrep(
 }
 
 /**
- * Why this fulfilment moment is refused BECAUSE OF PREP, or `null`.
+ * Why prep refuses a moment, as data — so a page can render the refusal with
+ * its time kept whole (the checkout's `CopyText`), and the server can join the
+ * same parts into its error. One author, two renderings, one sentence.
+ */
+export type PrepFloorProblem =
+	/** Prep used up today's remaining slots — the store still had some
+	 * without it. */
+	| { kind: "too_late_today" }
+	/** Today still has slots, but this moment is before the first one prep
+	 * allows. `earliest` is that slot, never a time inside a break. */
+	| { kind: "too_early"; earliest: number };
+
+/**
+ * What prep refuses about this fulfilment moment, or `null`.
  *
  * Deliberately silent on everything that is not prep's fault — a closed day, a
- * time in a lunch break, a time after closing — so the opening-hours gate
- * speaks for those in its own words. The two are complementary, not stacked:
- * this one only fires when prep is the reason a slot disappeared.
+ * time in a lunch break, a time after closing — so the opening-hours rules speak
+ * for those in their own words. The two are complementary, not stacked: this
+ * one only fires when prep is the reason a slot disappeared.
  *
  * A future day's windows are identical with and without prep (prep is absorbed
  * overnight — `minSelectableTimeMinutes` floors only today), so a future day is
@@ -64,28 +77,24 @@ export function slowestPrep(
  *
  * `timeMinutes` is optional: a date-only order can still be too late for today.
  */
-export function prepFloorIssue(args: {
+export function prepFloorProblem(args: {
 	hours: OpeningHours | undefined;
 	dateEpoch: number;
 	timeMinutes: number | undefined;
 	now: number;
 	prep: CartPrep;
-	kind: PrepFloorKind;
-}): string | null {
-	const { hours, dateEpoch, timeMinutes, now, prep, kind } = args;
+}): PrepFloorProblem | null {
+	const { hours, dateEpoch, timeMinutes, now, prep } = args;
 	if (prep.minutes <= 0) return null;
 
 	const withPrep = selectableTimeWindows(hours, dateEpoch, now, prep.minutes);
 	const withoutPrep = selectableTimeWindows(hours, dateEpoch, now, 0);
-	const needs = `"${prep.productName}" needs ${formatPrepDuration(prep.minutes)} to prepare`;
 
 	if (withPrep.length === 0) {
 		// The day still had slots WITHOUT prep, so prep is what used them up.
 		// Both empty means the store is closed or finished anyway — the
-		// opening-hours gate owns that message.
-		return withoutPrep.length > 0
-			? `${needs} — too late for today, pick a later day`
-			: null;
+		// opening-hours rules own that message.
+		return withoutPrep.length > 0 ? { kind: "too_late_today" } : null;
 	}
 	if (timeMinutes === undefined) return null;
 
@@ -96,7 +105,42 @@ export function prepFloorIssue(args: {
 	const earliestWithoutPrep = withoutPrep[0]?.open ?? earliest;
 	// Only prep's fault if prep actually moved the earliest slot.
 	if (earliest > earliestWithoutPrep && timeMinutes < earliest) {
-		return `${needs} — earliest ${kind} is ${formatFulfilmentTime(earliest)}`;
+		return { kind: "too_early", earliest };
 	}
 	return null;
+}
+
+/** The refusal as parts: text, and a time kept as a value. No closing period —
+ * the server error has none, and a page adds its own. */
+export function prepFloorCopy(
+	problem: PrepFloorProblem,
+	prep: CartPrep,
+	kind: PrepFloorKind,
+): Array<string | { time: number }> {
+	const needs = `“${prep.productName}” needs ${formatPrepDuration(prep.minutes)} to prepare`;
+	return problem.kind === "too_late_today"
+		? [`${needs} — too late for today, pick a later day`]
+		: [`${needs} — earliest ${kind} is `, { time: problem.earliest }];
+}
+
+/**
+ * The server's refusal: `prepFloorProblem` in words, or `null`. What
+ * `orders.create` and `orderClaims.commit` throw — the checkout renders the
+ * same parts, so the two can never tell a buyer different things.
+ */
+export function prepFloorIssue(args: {
+	hours: OpeningHours | undefined;
+	dateEpoch: number;
+	timeMinutes: number | undefined;
+	now: number;
+	prep: CartPrep;
+	kind: PrepFloorKind;
+}): string | null {
+	const problem = prepFloorProblem(args);
+	if (problem === null) return null;
+	return prepFloorCopy(problem, args.prep, args.kind)
+		.map((part) =>
+			typeof part === "string" ? part : formatFulfilmentTime(part.time),
+		)
+		.join("");
 }
