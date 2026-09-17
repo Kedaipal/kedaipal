@@ -30,22 +30,15 @@ import {
 	requireAdmin,
 	requireRetailerAccess,
 } from "./lib/auth";
-import {
-	COMP_FEATURE_PLAN,
-	COMP_LABEL_MAX,
-	COMP_NOTE_MAX,
-	compDaysLeft,
-	type CompEndReason,
-	compEndingSoon,
-	type CompKind,
-	compedCaps,
-} from "./lib/comp";
+import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
 import { autoRenewMethodLabel } from "./lib/hitpayBilling";
 import {
 	type BillingCycle,
 	capsForPlan,
+	FULL_ACCESS_PLAN,
 	featuresForPlan,
+	fullAccessCaps,
 	type Plan,
 	PLAN_CAPS,
 	type PlanFeature,
@@ -81,17 +74,17 @@ export type AccessState = {
 	billingCycle: BillingCycle;
 	comped: boolean;
 	/** Admin-granted comp metadata (z8r3fdeub2) — the SELLER-FACING slice only
-	 * (kind, sponsor label, expiry) so the billing tab can say "Sponsored by X
-	 * · until {date}". `note`/`grantedBy` are admin-internal and never ride a
-	 * seller payload. Absent on fail-open comped rows (missing row / legacy
-	 * backfill) — those render the generic "on the house" line. */
-	comp?: { kind: CompKind; label?: string; expiresAt?: number };
-	/** Set while an EXPIRED seller's lock came from a comp ending (z8r3fdeub2)
-	 * rather than an unpaid bill — revoked by an admin, or past its end date.
-	 * Only meaningful with `status: "past_due"`: it swaps "your subscription is
-	 * past due" for "your sponsored access ended" (they never had a
-	 * subscription) and points them at choosing a plan. Owner-only. */
-	compEnded?: { at: number; reason: CompEndReason };
+	 * (kind, sponsor label) so the billing tab can say "Sponsored by X".
+	 * `note`/`grantedBy` are admin-internal and never ride a seller payload.
+	 * Absent on fail-open comped rows (missing row / legacy backfill) — those
+	 * render the generic sponsored card. */
+	comp?: { kind: CompKind; label?: string };
+	/** Set while an EXPIRED seller's lock came from an admin turning their comp
+	 * upgrade off (z8r3fdeub2) rather than an unpaid bill. Only meaningful with
+	 * `status: "past_due"`: it swaps "your subscription is past due" for "your
+	 * sponsored access ended" (they never had a subscription) and points them
+	 * at choosing a plan. Owner-only. */
+	compEnded?: { at: number };
 	/** The free period's BACKSTOP deadline (signup + TRIAL_DAYS). */
 	trialEndsAt?: number;
 	/** Start-when-you-sell (z8r3fday24): set once the free period ENDED — at
@@ -146,8 +139,8 @@ export type AccessState = {
  * `opts.adminFullAccess` is set only on the OWNER read when the caller is a
  * Kedaipal admin operating their OWN store: they run the app for free with the
  * highest tier unlocked (never soft-locked, every Pro+ feature on), so we force
- * full `features` + `active` while KEEPING the real plan/status/trial so the
- * billing page still tells the truth. Mirrors the server bypass in
+ * full `features` + no-limit caps + `active` while KEEPING the real
+ * plan/status/trial so the billing page still tells the truth. Mirrors the server bypass in
  * `assertSubscriptionActive`/`assertPlanFeature`; the nav pill separately reads
  * "Admin" (client `adminOwnStore`). See docs/admin-console.md. */
 export function resolveAccess(
@@ -158,8 +151,10 @@ export function resolveAccess(
 	if (!opts?.adminFullAccess) return base;
 	return {
 		...base,
-		// Highest tier — an admin should have any Pro/Scale-only feature.
-		features: featuresForPlan("scale"),
+		// Full access — the highest tier's features and no limits. The SAME
+		// entitlement a comped store resolves to below (z8r3fdeub2).
+		caps: fullAccessCaps(),
+		features: featuresForPlan(FULL_ACCESS_PLAN),
 		active: true,
 		frozen: false,
 	};
@@ -179,8 +174,8 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 			// account that has no billing relationship at all.
 			billingCycle: "monthly",
 			comped: true,
-			caps: compedCaps(),
-			features: featuresForPlan(COMP_FEATURE_PLAN),
+			caps: fullAccessCaps(),
+			features: featuresForPlan(FULL_ACCESS_PLAN),
 			active: true,
 			frozen: false,
 			held: false,
@@ -199,31 +194,25 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 		billingCycle: sub.billingCycle,
 		comped,
 		comp: sub.comp
-			? {
-					kind: sub.comp.kind,
-					label: sub.comp.label,
-					expiresAt: sub.comp.expiresAt,
-				}
+			? { kind: sub.comp.kind, label: sub.comp.label }
 			: undefined,
 		compEnded:
-			sub.compEndedAt !== undefined
-				? { at: sub.compEndedAt, reason: sub.compEndReason ?? "revoked" }
-				: undefined,
+			sub.compEndedAt !== undefined ? { at: sub.compEndedAt } : undefined,
 		trialEndsAt: sub.trialEndsAt,
 		freePeriodEndedAt: sub.freePeriodEndedAt,
 		freePeriodEndReason: sub.freePeriodEndReason,
 		currentPeriodEnd: sub.currentPeriodEnd,
-		// A comp resolves like an admin's own store (z8r3fdeub2): unlimited
-		// orders + the highest tier's features, whatever `plan` the row keeps
-		// for the day the comp ends. Resolved, never stored.
+		// A comp resolves exactly like an admin's own store (z8r3fdeub2): no
+		// limits + the highest tier's features, whatever `plan` the row keeps
+		// for the day the comp is turned off. Resolved, never stored.
 		caps: comped
-			? compedCaps()
+			? fullAccessCaps()
 			: {
 					orderCap: held ? 0 : sub.orderCap,
 					userCap: sub.userCap,
 					broadcastQuota: sub.broadcastQuota,
 				},
-		features: featuresForPlan(comped ? COMP_FEATURE_PLAN : sub.plan),
+		features: featuresForPlan(comped ? FULL_ACCESS_PLAN : sub.plan),
 		active: !frozen,
 		frozen,
 		held,
@@ -613,35 +602,32 @@ export const setSeasonalHold = mutation({
 // ---------------------------------------------------------------------------
 
 /**
- * The ONE comp-ending path (z8r3fdeub2): the store becomes an EXPIRED seller —
- * `past_due` with no invoice, the same lock a lapsed subscription is in. The
- * storefront stays live and buyers keep ordering (the order pipeline never
- * reads subscription status); dashboard growth-writes are refused by
- * `assertSubscriptionActive` until the seller picks a plan and pays, which
- * settles the row to `active` like any renewal. No second free period: a
- * sponsored store already had its runway, and a trial would turn "revoke"
- * into two more free weeks.
+ * The ONE comp-ending path (z8r3fdeub2): an admin turned the comp upgrade off,
+ * and the store becomes an EXPIRED seller — `past_due` with no invoice, the
+ * same lock a lapsed subscription is in. The storefront stays live and buyers
+ * keep ordering (the order pipeline never reads subscription status);
+ * dashboard growth-writes are refused by `assertSubscriptionActive` until the
+ * seller picks a plan and pays, which settles the row to `active` like any
+ * renewal. No free period: a comped store already had its runway, and a trial
+ * would turn "off" into two more free weeks.
  *
- * Shared by the admin's `revokeComp` and the daily cron's expiry pass so the
- * two can never drift — including the seller's email. `compEndedAt` /
- * `compEndReason` let the dashboard say "your sponsored access ended" rather
- * than "your subscription is past due". The stored plan + caps stay (the plan
- * picker's default), and a saved auto-renew method is deliberately KEPT: with
- * no invoice there is nothing to charge, and a plan the seller picks charges
- * it through the normal subscribe flow. `updatedAt` moves — this IS the
+ * `compEndedAt` lets the dashboard say "your sponsored access ended" rather
+ * than "your subscription is past due", and the seller is emailed. The stored
+ * plan + caps stay (the plan picker's default), and a saved auto-renew method
+ * is deliberately KEPT: with no invoice there is nothing to charge, and a plan
+ * the seller picks charges it through the normal subscribe flow (whose copy
+ * names the saved method before the tap). `updatedAt` moves — this IS the
  * lock-flip moment the founder report reads.
  */
 async function endComp(
 	ctx: MutationCtx,
 	sub: Doc<"subscriptions">,
-	reason: CompEndReason,
 	now: number,
 ): Promise<void> {
 	await ctx.db.patch(sub._id, {
 		comped: false,
 		comp: undefined,
 		compEndedAt: now,
-		compEndReason: reason,
 		status: "past_due",
 		trialEndsAt: undefined,
 		trialReminderSentAt: undefined,
@@ -662,17 +648,19 @@ async function endComp(
 }
 
 /**
- * Admin: mark a store complimentary (partner / sponsor / pilot / internal).
- * A comp resolves exactly like a Kedaipal admin's own store — the highest
- * tier's features and unlimited orders, never billed, never soft-locked — and
- * there is nothing for the seller to subscribe to, change or pause (every
+ * Admin: turn a store's comp upgrade ON (partner / sponsor / pilot /
+ * internal). A comp is a toggle with no end date — it stays on until an admin
+ * turns it off (`revokeComp`). While on, the store resolves exactly like a
+ * Kedaipal admin's own store — the highest tier's features and no limits
+ * (`fullAccessCaps`), never billed, never soft-locked — minus admin access;
+ * and there is nothing for the seller to subscribe to, change or pause (every
  * self-serve billing mutation refuses a comped row). Also the EDIT path:
- * re-granting overwrites the comp metadata (extend the end date, reword the
- * label) with no gap in access.
+ * calling it on a comped store rewrites kind/label/note with no gap in access,
+ * keeping who first turned it on and when.
  *
- * What one grant does, atomically:
- *  - `comped: true` + the `comp` stamp (who/why/until) — the stamp is what
- *    keeps the backfill from healing this row into a trial;
+ * What turning it on does, atomically:
+ *  - `comped: true` + the `comp` stamp (who/why) — the stamp is what keeps the
+ *    backfill from healing this row into a trial;
  *  - status → `active`; every trial / free-period / paid-period stamp and a
  *    pending plan change cleared (a comp has no billing clock — a leftover
  *    paid-through date would read "expires {date}" under a sponsor line);
@@ -680,9 +668,9 @@ async function endComp(
  *    resolved at read time (`resolveAccess`);
  *  - any pending invoice VOIDED (its Pay-now link killed) — comping a
  *    `past_due` store lifts the lock in the same beat;
- *  - an `on_hold` store released (ordering reopens — a sponsor deal means
- *    the store should be selling, and comped rows can never re-enter hold);
- *  - a previous comp's end marker cleared — re-comping an expired store;
+ *  - an `on_hold` store released (ordering reopens — a comped store should be
+ *    selling, and comped rows can never re-enter hold);
+ *  - a previous comp's off-marker cleared — re-comping an expired store;
  *  - an `adminAuditLog` row, always (targetId = the retailer).
  *
  * A store with NO subscription row (pre-backfill fail-open) gets a real row
@@ -702,13 +690,10 @@ export const setComp = mutation({
 		),
 		label: v.optional(v.string()),
 		note: v.optional(v.string()),
-		/** Unset = free for life. Set = the daily cron ends the comp past this
-		 * moment and the store becomes an expired seller. */
-		expiresAt: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, kind, label, note, expiresAt },
+		{ retailerId, kind, label, note },
 	): Promise<{ ok: true }> => {
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
@@ -728,24 +713,17 @@ export const setComp = mutation({
 				`Keep the note under ${COMP_NOTE_MAX} characters.`,
 			);
 		const now = Date.now();
-		if (expiresAt !== undefined && expiresAt <= now)
-			throw new ConvexError("The end date must be in the future.");
 
 		const sub = await loadSubscription(ctx, retailerId);
+		// An edit keeps who first turned the comp on, and when; the audit log
+		// records the edit itself.
+		const alreadyOn = sub?.comped === true && sub.comp !== undefined;
 		const comp = {
 			kind,
 			label: trimmedLabel,
 			note: trimmedNote,
-			grantedBy: adminSubject,
-			grantedAt: now,
-			expiresAt,
-			// Keep the "ending soon" stamp only while the end date is unchanged —
-			// rewording a label must not re-send the reminder, extending the
-			// date must re-arm it.
-			endingSoonSentAt:
-				sub?.comp !== undefined && sub.comp.expiresAt === expiresAt
-					? sub.comp.endingSoonSentAt
-					: undefined,
+			grantedBy: alreadyOn && sub?.comp ? sub.comp.grantedBy : adminSubject,
+			grantedAt: alreadyOn && sub?.comp ? sub.comp.grantedAt : now,
 		};
 		if (!sub) {
 			// Pre-backfill store, fail-open today — mint the row the comp lives on.
@@ -786,7 +764,6 @@ export const setComp = mutation({
 				comped: true,
 				comp,
 				compEndedAt: undefined,
-				compEndReason: undefined,
 				status: "active",
 				trialEndsAt: undefined,
 				trialReminderSentAt: undefined,
@@ -797,7 +774,8 @@ export const setComp = mutation({
 				periodPaidBy: undefined,
 				heldAt: undefined,
 				pendingPlanChange: undefined,
-				updatedAt: now,
+				// An edit is not a status flip — only turning it on moves the clock.
+				updatedAt: alreadyOn ? sub.updatedAt : now,
 			});
 		}
 		// Always recorded: an admin store can't be comped (refused above), so this
@@ -813,11 +791,11 @@ export const setComp = mutation({
 });
 
 /**
- * Admin: revoke a comp. The store becomes an expired seller straight away
- * (`endComp`): storefront live, buyers still ordering, editing locked until the
- * seller picks a plan and pays — and they're emailed saying so. Works on
- * legacy fail-safe comped rows too (no `comp` stamp). Re-comping is always
- * one dialog away.
+ * Admin: turn a store's comp upgrade OFF. The store becomes an expired seller
+ * straight away (`endComp`): storefront live, buyers still ordering, editing
+ * locked until the seller picks a plan and pays — and they're emailed saying
+ * so. Works on legacy fail-safe comped rows too (no `comp` stamp). Turning it
+ * back on is always one dialog away.
  */
 export const revokeComp = mutation({
 	args: { retailerId: v.id("retailers") },
@@ -828,7 +806,7 @@ export const revokeComp = mutation({
 		const sub = await loadSubscription(ctx, retailerId);
 		if (!sub || sub.comped !== true)
 			throw new ConvexError("This store isn't comped.");
-		await endComp(ctx, sub, "revoked", Date.now());
+		await endComp(ctx, sub, Date.now());
 		await logAdminAction(
 			ctx,
 			{ retailer, actingAsAdmin: true, userId: adminSubject },
@@ -990,10 +968,6 @@ export const internalDailyBillingStatus = internalMutation({
 		renewalsDue: number;
 		remindersSent: number;
 		trialReminders: number;
-		/** Dated comps past their end → expired sellers (z8r3fdeub2). */
-		compsExpired: number;
-		/** "Your sponsored access ends soon" emails sent (z8r3fdeub2). */
-		compEndingReminders: number;
 	}> => {
 		const now = Date.now();
 		let trialExpired = 0;
@@ -1005,8 +979,6 @@ export const internalDailyBillingStatus = internalMutation({
 		let renewalsDue = 0;
 		let remindersSent = 0;
 		let trialReminders = 0;
-		let compsExpired = 0;
-		let compEndingReminders = 0;
 
 		// Trials — start-when-you-sell (z8r3fday24). The free period ends at the
 		// store's first live order (stamped by endFreePeriodOnFirstOrder from the
@@ -1104,43 +1076,10 @@ export const internalDailyBillingStatus = internalMutation({
 				.collect()),
 		];
 		for (const sub of active) {
-			if (sub.comped === true) {
-				// Comps (z8r3fdeub2). Nothing below — overdue lock, dunning, renewal
-				// issuance — may touch a comped row; the only clock a comp has is its
-				// own end date. Free-for-life comps and legacy stampless rows skip.
-				const comp = sub.comp;
-				const expiresAt = comp?.expiresAt;
-				if (comp === undefined || expiresAt === undefined) continue;
-				if (expiresAt <= now) {
-					// Past its end → an expired seller, emailed (the revoke path).
-					await endComp(ctx, sub, "expired", now);
-					compsExpired++;
-				} else if (
-					compEndingSoon(expiresAt, now) &&
-					comp.endingSoonSentAt === undefined
-				) {
-					// The week's warning, once per end date. The stamp lives in the
-					// comp object and deliberately skips `updatedAt` (the lock-flip
-					// moment for past_due rows; this row is active, but the rule is
-					// the rule).
-					await ctx.db.patch(sub._id, {
-						comp: { ...comp, endingSoonSentAt: now },
-					});
-					await ctx.scheduler.runAfter(
-						0,
-						internal.billingEmail.notifyTrialEmail,
-						{
-							retailerId: sub.retailerId,
-							key: "compEndingSoon",
-							sponsorLabel: comp.label,
-							daysLeft: compDaysLeft(expiresAt, now),
-							endsAt: expiresAt,
-						},
-					);
-					compEndingReminders++;
-				}
-				continue;
-			}
+			// A comped row has no billing clock at all (z8r3fdeub2) — it never ends
+			// on a date, so nothing below (overdue lock, dunning, renewal issuance)
+			// may touch it. Only an admin turning the comp off changes it.
+			if (sub.comped === true) continue;
 			const invoices = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
@@ -1262,8 +1201,6 @@ export const internalDailyBillingStatus = internalMutation({
 			renewalsDue,
 			remindersSent,
 			trialReminders,
-			compsExpired,
-			compEndingReminders,
 		};
 	},
 });

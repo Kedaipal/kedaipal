@@ -38,7 +38,7 @@
  * which is what makes `lapsedThisWeek` computable with no schema change.
  * Anyone adding a fourth `db.patch` on `subscriptions` that touches
  * `updatedAt` silently breaks that figure. (Comp accounts, z8r3fdeub2, keep
- * it: `setComp` moves a row AWAY from `past_due`, and a comp ending flips a
+ * it: `setComp` moves a row AWAY from `past_due`, and turning a comp off flips a
  * row INTO it with `updatedAt` = that moment — filed as `comp_ended`.)
  *
  * All windowing is MYT (UTC+8, no DST), reusing `todayMytMidnight` as the
@@ -131,10 +131,10 @@ export type PastDueClass =
 	| "awaiting_invoice"
 	/** Never had a paid invoice. A trial that lapsed, never a customer. */
 	| "trial_expired"
-	/** A sponsored store whose comp was revoked or reached its end date
-	 * (z8r3fdeub2) and hasn't paid for a plan yet. Not churn — it never paid
-	 * for what it lost — but the conversion moment of a partner deal, so it
-	 * gets its own line instead of hiding among lapsed trials. */
+	/** A store whose comp upgrade an admin turned off (z8r3fdeub2) and that
+	 * hasn't paid for a plan yet. Not churn — it never paid for what it lost —
+	 * but the conversion moment of a partner deal, so it gets its own line
+	 * instead of hiding among lapsed trials. */
 	| "comp_ended";
 
 export type PastDueBucket = {
@@ -228,7 +228,7 @@ export type ReportSubscriptionInput = {
 	retailerId: string;
 	status: string;
 	comped?: boolean;
-	/** Set while the row is locked because a comp ENDED (z8r3fdeub2). */
+	/** Set while the row is locked because its comp was turned off (z8r3fdeub2). */
 	compEndedAt?: number;
 	updatedAt: number;
 };
@@ -401,12 +401,12 @@ export function classifyPastDue(args: {
 	hasPaidInvoice: boolean;
 	pending?: ReportPendingInvoiceInput;
 	now: number;
-	/** The lock came from a comp ending, not an unpaid bill (z8r3fdeub2). */
+	/** The lock came from a comp being turned off, not an unpaid bill (z8r3fdeub2). */
 	compEnded?: boolean;
 }): PastDueClass {
-	// First: whatever the store paid before its sponsorship, the lock it's in
-	// now is the comp ending — and a plan it picked but hasn't paid for doesn't
-	// change that until it settles (which clears the marker).
+	// First: whatever the store paid before its comp, the lock it's in now is
+	// the comp being turned off — and a plan it picked but hasn't paid for
+	// doesn't change that until it settles (which clears the marker).
 	if (args.compEnded) return "comp_ended";
 	if (!args.hasPaidInvoice) return "trial_expired";
 	if (args.pending === undefined) return "awaiting_invoice";

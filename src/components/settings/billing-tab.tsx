@@ -171,9 +171,9 @@ export function BillingTab({
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
-	// An expired seller whose lock came from a comp ending (z8r3fdeub2). They
-	// never had a subscription, so every "renew" / "past due" framing below
-	// swaps for "your sponsored access ended — choose a plan".
+	// An expired seller whose lock came from an admin turning their comp upgrade
+	// off (z8r3fdeub2). They never had a subscription, so every "renew" / "past
+	// due" framing below swaps for "your sponsored access ended — choose a plan".
 	const compEnded =
 		sub?.status === "past_due" && !sub.comped ? sub.compEnded : undefined;
 	const statusLine = (() => {
@@ -266,10 +266,9 @@ export function BillingTab({
 				</section>
 			) : sub?.comped ? (
 				/* Sponsored (comped) store — like the admin note above, NOT a plan:
-				   no tier, meter, countdown or renew apparatus, because there is
-				   nothing to subscribe to, change, pause or cancel (z8r3fdeub2). Who
-				   is sponsoring them and until when is the whole message — a comped
-				   seller must never be surprised by the day it ends. */
+				   no tier, meter, countdown or renew apparatus, because a comp is a
+				   toggle an admin turns on with no end date, and there is nothing to
+				   subscribe to, change, pause or cancel (z8r3fdeub2). */
 				<section className="flex items-start gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-5 dark:border-violet-900 dark:bg-violet-950/40 lg:p-6">
 					<Gift className="mt-0.5 size-5 shrink-0 text-violet-600 dark:text-violet-300" />
 					<div className="flex min-w-0 flex-col gap-1.5">
@@ -278,9 +277,7 @@ export function BillingTab({
 								Sponsored account
 							</p>
 							<span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
-								{sub.comp?.expiresAt
-									? `Until ${formatShortDate(sub.comp.expiresAt)}`
-									: "No end date"}
+								No limits
 							</span>
 						</div>
 						{sub.comp?.label ? (
@@ -289,16 +286,10 @@ export function BillingTab({
 							</p>
 						) : null}
 						<p className="text-xs text-violet-800/80 dark:text-violet-300/80">
-							Every feature is unlocked and orders are unlimited. There's no
-							plan to subscribe to, change or cancel, and nothing to pay.
+							Every feature is unlocked and there are no limits on orders.
+							There's no plan to subscribe to, change or cancel, and nothing to
+							pay.
 						</p>
-						{sub.comp?.expiresAt ? (
-							<p className="text-xs text-violet-800/80 dark:text-violet-300/80">
-								When it ends, your storefront stays live and buyers can still
-								order, but editing your store pauses until you choose a plan.
-								We'll remind you by email before then.
-							</p>
-						) : null}
 					</div>
 				</section>
 			) : (

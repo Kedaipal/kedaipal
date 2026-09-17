@@ -1,12 +1,12 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Gift, PauseCircle, X } from "lucide-react";
+import { PauseCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
-import { formatPrice, formatShortDate } from "../../lib/format";
+import { formatPrice } from "../../lib/format";
 import {
 	resolveBannerState,
 	type SubscriptionView,
@@ -15,11 +15,8 @@ import {
 /**
  * Dashboard subscription banner (app shell). Escalates by urgency:
  *  - `past_due` → red, non-dismissable (the dashboard is soft-locked). When the
- *    lock came from a comp ending (z8r3fdeub2) it names that instead of an
- *    unpaid bill, and points at choosing a plan.
- *  - a dated comp ending within a week → amber, dismissable per end date:
- *    the one thing a sponsored store needs to hear, since the end locks
- *    editing the same day.
+ *    lock came from an admin turning the store's comp upgrade off (z8r3fdeub2)
+ *    it names that instead of an unpaid bill, and points at choosing a plan.
  *  - a pending invoice due within 5 days → amber warning, dismissable.
  *  - Off-Season Hold → calm accent strip, persistent: ordering is paused and
  *    the seller must not forget it (z8r3fday24).
@@ -62,61 +59,21 @@ export function SubscriptionBanner({
 	// Dismiss key: only the soft (amber) warnings are dismissable, keyed by their
 	// deadline (or month, for the cap nudge) so the next deadline re-surfaces.
 	const dismissKey =
-		state.kind === "compEnding"
-			? `subwarn:comp:${state.endsAt}`
-			: state.kind === "invoiceWarn"
-				? `subwarn:inv:${pending?.dueDate}`
-				: state.kind === "firstInvoice"
-					? `subwarn:first:${pending?.dueDate}`
-					: state.kind === "trialWarn" && !state.ended
-						? `subwarn:trial:${subscription?.trialEndsAt}`
-						: state.kind === "orderCapNear"
-							? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
-							: null;
+		state.kind === "invoiceWarn"
+			? `subwarn:inv:${pending?.dueDate}`
+			: state.kind === "firstInvoice"
+				? `subwarn:first:${pending?.dueDate}`
+				: state.kind === "trialWarn" && !state.ended
+					? `subwarn:trial:${subscription?.trialEndsAt}`
+					: state.kind === "orderCapNear"
+						? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
+						: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
 	// Read above the early returns — the past-due CTA that uses it is built inside
 	// a branch, where a hook can't go.
 	const supportWa = useSupportWaNumber();
 
 	if (state.kind === "none") return null;
-
-	// A sponsored store's comp ends within the week (z8r3fdeub2). Calm but
-	// explicit about the consequence — storefront stays live, editing pauses —
-	// so the lock that follows is never a surprise. Dismissable per end date.
-	if (state.kind === "compEnding") {
-		if (dismissed) return null;
-		return (
-			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
-				<Gift
-					className="size-5 shrink-0 text-amber-700 dark:text-amber-400"
-					aria-hidden
-				/>
-				<p className="flex-1 text-sm text-foreground/90">
-					<span className="font-medium">
-						Your sponsored access runs until {formatShortDate(state.endsAt)} —{" "}
-						{dayLabel(state.daysLeft)} left.
-					</span>{" "}
-					After that your storefront stays live, but editing your store pauses
-					until you choose a plan.
-				</p>
-				<Link
-					to="/app/settings"
-					search={{ tab: "billing" }}
-					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-				>
-					View billing
-				</Link>
-				<button
-					type="button"
-					onClick={dismiss}
-					aria-label="Dismiss"
-					className="-mr-1 shrink-0 rounded-md p-1.5 text-foreground/50 hover:bg-foreground/5 hover:text-foreground"
-				>
-					<X className="size-4" />
-				</button>
-			</div>
-		);
-	}
 
 	// Off-Season Hold: not a warning — the seller chose this — but ordering is
 	// off, which is exactly the kind of state that gets forgotten. Persistent,
@@ -203,7 +160,7 @@ export function SubscriptionBanner({
 		);
 	}
 
-	// Expired because a comp ended (z8r3fdeub2): the same lock as past-due, but
+	// Expired because the comp was turned off (z8r3fdeub2): the same lock as past-due, but
 	// "pay your subscription" would be a lie — they never had one. Name what
 	// happened and send them to the plan picker.
 	if (state.kind === "compEnded") {

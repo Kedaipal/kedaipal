@@ -133,7 +133,7 @@ describe("tierPill", () => {
 	test("a comp that ENDED reads 'Expired', not 'Past due' — there's no bill behind it", () => {
 		const ended = sub({
 			status: "past_due",
-			compEnded: { at: NOW - DAY, reason: "revoked" },
+			compEnded: { at: NOW - DAY },
 		});
 		expect(tierPill(ended, NOW)).toEqual({ label: "Expired", tone: "warn" });
 		expect(tierPill(ended, NOW, 2).label).toBe("Founding #2 · Expired");
@@ -235,7 +235,7 @@ describe("resolveBannerState", () => {
 			resolveBannerState(
 				sub({
 					comped: true,
-					comp: { kind: "sponsor", expiresAt: NOW + 30 * DAY },
+					comp: { kind: "sponsor" },
 					caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
 				}),
 				undefined,
@@ -255,30 +255,17 @@ describe("resolveBannerState", () => {
 		).toBe("pastDue");
 	});
 
-	test("comp accounts (z8r3fdeub2): a week's warning before a dated comp ends, then 'ended' instead of 'past due'", () => {
-		const comped = (expiresAt?: number) =>
-			sub({ comped: true, comp: { kind: "sponsor", expiresAt } });
-		expect(resolveBannerState(comped(NOW + 7 * DAY), undefined, NOW)).toEqual({
-			kind: "compEnding",
-			daysLeft: 7,
-			endsAt: NOW + 7 * DAY,
-		});
-		expect(
-			resolveBannerState(comped(NOW + 2 * 60 * 60 * 1000), undefined, NOW),
-		).toMatchObject({ kind: "compEnding", daysLeft: 1 });
-		expect(resolveBannerState(comped(NOW + 8 * DAY), undefined, NOW).kind).toBe(
-			"none",
-		);
-		expect(resolveBannerState(comped(undefined), undefined, NOW).kind).toBe(
-			"none",
-		);
-		// Ended: the same lock, named for what it is.
+	test("comp accounts (z8r3fdeub2): no warnings while comped (no end date); once turned off, 'ended' instead of 'past due'", () => {
 		expect(
 			resolveBannerState(
-				sub({
-					status: "past_due",
-					compEnded: { at: NOW - DAY, reason: "expired" },
-				}),
+				sub({ comped: true, comp: { kind: "sponsor", label: "X" } }),
+				NOW + DAY,
+				NOW,
+			).kind,
+		).toBe("none");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", compEnded: { at: NOW - DAY } }),
 				undefined,
 				NOW,
 			).kind,

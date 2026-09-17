@@ -201,7 +201,6 @@ async function settleInvoicePaid(
 		// seller again — drop the marker so a future lapse reads "past due",
 		// not "your sponsored access ended".
 		compEndedAt: undefined,
-		compEndReason: undefined,
 		...(sub.autoRenew
 			? {
 					autoRenew: {

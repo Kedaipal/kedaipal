@@ -84,7 +84,8 @@ categories, insights, chargeable pickup, radius delivery) are gated by plan via
   `!actingAsAdmin`; this also covers **admin-on-own-store** (where `actingAsAdmin` is false).
 - **Client:** the owner read (`getMyRetailer` → `loadRetailerForUser`) detects an admin owner and
   passes `adminFullAccess` into `resolveAccess(sub, { adminFullAccess })`, which forces
-  `features` to the **highest tier** + `active`/`!frozen` while **keeping the real
+  `features` to the **highest tier**, caps to **no limits** (`fullAccessCaps()` — the same
+  full-access definition a comped store resolves to) + `active`/`!frozen` while **keeping the real
   plan/status/trial** (so billing still tells the truth). `subscriptions.current` resolves the
   same way. So an admin's own dashboard never renders a Pro wall / locked control — regardless of
   what plan their own store sits on. The act-as read (`getRetailerForAdmin`) deliberately does
@@ -243,32 +244,35 @@ pause flow) is a sensible next step but not yet implemented.
 
 ## Comp accounts (z8r3fdeub2)
 
-The sellers directory is also where a store is **comped** — admin-granted free
-access for partner/sponsor/pilot/internal deals. A comped store gets what an
-admin's own store gets: every feature and **unlimited orders**, never billed,
-and no way for the seller to subscribe, change plan, pause or cancel. A Gift
-button beside each row opens one dialog that is both the **create and edit**
-surface (kind, seller-facing label, admin-only note, free-for-life vs an end
-date) and carries **Revoke…** behind its own confirm, which names the
-consequence: the store becomes an **expired seller** straight away — storefront
-live, buyers still ordering, editing locked until the seller picks a plan and
-pays (no free period), and the seller is emailed. Comped rows show a violet
-chip (kind · label · until) with the note on hover; a store whose comp ended
-shows a muted "Revoked · {date}" / "Expired · {date}" chip beside its past-due
-status, so nobody chases an invoice that doesn't exist. Admin-owned rows keep
-the Gift button visible but disabled-with-reason ("always free already").
+The sellers directory is also where a store gets the **comp upgrade** — a
+toggle for partner/sponsor/pilot/internal deals. While it's on, the store gets
+exactly what an admin's own store gets (every feature, no limits, never billed —
+the same `FULL_ACCESS_PLAN` / `fullAccessCaps()` resolution) minus admin
+access, and the seller can't subscribe, change plan, pause or cancel. **It has
+no end date**: it stays on until an admin turns it off.
+
+A Gift button beside each row opens one dialog. It states the toggle's
+position up front ("Off", or "On · since {date}") and is the single surface to
+**turn it on** (kind, seller-facing label, admin-only note), **edit** those
+details while it's on (who/when first turned it on is kept), and **turn it
+off** behind its own confirm, which names the consequence: the store becomes an
+**expired seller** straight away — storefront live, buyers still ordering,
+editing locked until the seller picks a plan and pays (no free period) — and the
+seller is emailed. Comped rows show a violet chip (kind · label; since-when and
+the note on hover); a store whose comp was turned off shows a muted
+"Comp off · {date}" chip beside its past-due status, so nobody chases an invoice
+that doesn't exist. Admin-owned rows keep the Gift button visible but
+disabled-with-reason ("always free already").
 
 Both mutations (`subscriptions.setComp` / `revokeComp`) are
 `requireAdmin`-gated and **always** write an `adminAuditLog` row
-(`subscriptions.setComp` / `.revokeComp`, targetId = the retailer) — a
-billing-state change is never untraced, and the act-as no-op doesn't apply
-because an admin's own store can't be comped. An end date works like a
-scheduled revoke: the seller gets a reminder email in the final week and the
-daily cron ends the comp once the date passes. **Note for testing:** revoking
-while acting-as a store won't show you the lock — admins bypass
-`assertSubscriptionActive` — so the growth-write refusal is only visible to the
-seller's own login. Full lifecycle, edge cases and the "never charged"
-guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
+(`subscriptions.setComp` / `.revokeComp`, targetId = the retailer, by the admin
+who made that write) — a billing-state change is never untraced, and the act-as
+no-op doesn't apply because an admin's own store can't be comped. **Note for
+testing:** turning a comp off while acting-as a store won't show you the lock —
+admins bypass `assertSubscriptionActive` — so the growth-write refusal is only
+visible to the seller's own login. Full lifecycle, edge cases and the "never
+charged" guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
 
 ## Deliberate scope / follow-ups
 

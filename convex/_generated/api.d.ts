@@ -137,6 +137,7 @@ import type * as subscriptionUsage from "../subscriptionUsage.js";
 import type * as subscriptions from "../subscriptions.js";
 import type * as wabaProtection from "../wabaProtection.js";
 import type * as whatsapp from "../whatsapp.js";
+import type * as zzCompTestRestore from "../zzCompTestRestore.js";
 
 import type {
   ApiFromModules,
@@ -274,6 +275,7 @@ declare const fullApi: ApiFromModules<{
   subscriptions: typeof subscriptions;
   wabaProtection: typeof wabaProtection;
   whatsapp: typeof whatsapp;
+  zzCompTestRestore: typeof zzCompTestRestore;
 }>;
 
 /**

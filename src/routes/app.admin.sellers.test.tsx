@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-// Comp dialog states (z8r3fdeub2): create vs edit, free-for-life vs dated,
-// disabled-with-reason validation, and what the mutations are called with.
+// Comp upgrade toggle dialog (z8r3fdeub2): off → turn on, on → edit or turn
+// off, no end date anywhere, and what the mutations are called with.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
+import { formatShortDate } from "../lib/format";
 
 // The route module pulls in the router + data layer at import time — stub all
 // of it; the dialog under test only needs `useMutation`.
@@ -59,64 +60,42 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	};
 }
 
-describe("CompDialog — create", () => {
-	it("defaults to free for life (no date field), sponsor kind selectable, and saves without an expiry", async () => {
-		render(<CompDialog seller={seller()} onClose={vi.fn()} />);
-		expect(screen.getByText("Comp Mak Kuih")).toBeTruthy();
-		// Free for life is ON → no date input on screen.
-		expect(screen.queryByLabelText("Ends on")).toBeNull();
+describe("CompDialog — comp upgrade OFF", () => {
+	it("states it's off, has no end date to set, and turning it on sends the trimmed details", async () => {
+		const onClose = vi.fn();
+		render(<CompDialog seller={seller()} onClose={onClose} />);
+		expect(screen.getByText("Comp upgrade — Mak Kuih")).toBeTruthy();
+		expect(screen.getByText("Off")).toBeTruthy();
+		// A comp is a toggle with no expiry — nothing to pick.
+		expect(screen.queryByLabelText(/Ends on/)).toBeNull();
+		expect(screen.queryByRole("switch")).toBeNull();
+		expect(screen.getByText(/no end date/i)).toBeTruthy();
+		// No "turn off" on a store that isn't comped.
+		expect(screen.queryByRole("button", { name: "Turn off…" })).toBeNull();
+
 		fireEvent.click(screen.getByRole("button", { name: "Partner" }));
 		fireEvent.change(screen.getByLabelText(/Label/), {
 			target: { value: "  Sponsored by Maybank SME  " },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Comp this store" }));
+		fireEvent.change(screen.getByLabelText(/Note/), {
+			target: { value: "  Signed 14 Sep  " },
+		});
+		fireEvent.click(
+			screen.getByRole("button", { name: "Turn on comp upgrade" }),
+		);
 		await vi.waitFor(() => expect(setCompSpy()).toHaveBeenCalledTimes(1));
 		expect(setCompSpy()).toHaveBeenCalledWith({
 			retailerId: "r_comp",
 			kind: "partner",
 			label: "Sponsored by Maybank SME",
-			note: undefined,
-			expiresAt: undefined,
+			note: "Signed 14 Sep",
 		});
-	});
-
-	it("turning free-for-life OFF requires a date: save is disabled with the reason VISIBLE, and a past date is refused", () => {
-		render(<CompDialog seller={seller()} onClose={vi.fn()} />);
-		fireEvent.click(screen.getByRole("switch", { name: "Free for life" }));
-		const save = screen.getByRole("button", {
-			name: "Comp this store",
-		}) as HTMLButtonElement;
-		expect(save.disabled).toBe(true);
-		expect(
-			screen.getByText(/Pick an end date, or switch back to free for life/),
-		).toBeTruthy();
-		// A past date flips the reason (the input's `min` blocks the picker UI;
-		// typed/stale values still get caught).
-		fireEvent.change(screen.getByLabelText("Ends on"), {
-			target: { value: "2020-01-01" },
-		});
-		expect(save.disabled).toBe(true);
-		expect(screen.getByText(/end date must be in the future/)).toBeTruthy();
-		expect(setCompSpy()).not.toHaveBeenCalled();
-	});
-
-	it("a dated comp sends expiresAt at the END of the picked day (local time)", async () => {
-		render(<CompDialog seller={seller()} onClose={vi.fn()} />);
-		fireEvent.click(screen.getByRole("switch", { name: "Free for life" }));
-		const nextYear = new Date().getFullYear() + 1;
-		fireEvent.change(screen.getByLabelText("Ends on"), {
-			target: { value: `${nextYear}-03-05` },
-		});
-		fireEvent.click(screen.getByRole("button", { name: "Comp this store" }));
-		await vi.waitFor(() => expect(setCompSpy()).toHaveBeenCalledTimes(1));
-		const sent = setCompSpy()?.mock.calls[0][0] as { expiresAt: number };
-		expect(sent.expiresAt).toBe(
-			new Date(nextYear, 2, 5, 23, 59, 59, 999).getTime(),
-		);
+		await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
 	});
 });
 
-describe("CompDialog — edit", () => {
+describe("CompDialog — comp upgrade ON", () => {
+	const grantedAt = new Date(2026, 8, 14).getTime();
 	const compedSeller = () =>
 		seller({
 			comped: true,
@@ -125,42 +104,47 @@ describe("CompDialog — edit", () => {
 				kind: "sponsor",
 				label: "Sponsored by Bearcamp",
 				note: "deal terms",
-				grantedAt: 1,
-				expiresAt: new Date(
-					new Date().getFullYear() + 1,
-					5,
-					1,
-					23,
-					59,
-					59,
-					999,
-				).getTime(),
+				grantedAt,
 			},
 		});
 
-	it("prefills the current comp and offers Revoke", () => {
+	it("states it's on and since when, prefills the details, and saves edits without turning anything off", async () => {
 		render(<CompDialog seller={compedSeller()} onClose={vi.fn()} />);
-		expect(screen.getByText("Edit comp — Mak Kuih")).toBeTruthy();
+		expect(
+			screen.getByText(`On · since ${formatShortDate(grantedAt)}`),
+		).toBeTruthy();
 		expect((screen.getByLabelText(/Label/) as HTMLInputElement).value).toBe(
 			"Sponsored by Bearcamp",
 		);
-		// Dated comp → the toggle is off and the date is prefilled.
-		expect(
-			(screen.getByLabelText("Ends on") as HTMLInputElement).value,
-		).toMatch(/-06-01$/);
-		expect(screen.getByRole("button", { name: "Revoke…" })).toBeTruthy();
-		expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
+		expect((screen.getByLabelText(/Note/) as HTMLTextAreaElement).value).toBe(
+			"deal terms",
+		);
+		expect(screen.getByRole("button", { name: "Turn off…" })).toBeTruthy();
+		fireEvent.change(screen.getByLabelText(/Label/), {
+			target: { value: "Sponsored by Bearcamp Outdoors" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+		await vi.waitFor(() => expect(setCompSpy()).toHaveBeenCalledTimes(1));
+		expect(setCompSpy()).toHaveBeenCalledWith({
+			retailerId: "r_comp",
+			kind: "sponsor",
+			label: "Sponsored by Bearcamp Outdoors",
+			note: "deal terms",
+		});
+		expect(revokeCompSpy()).not.toHaveBeenCalled();
 	});
 
-	it("Revoke goes through its own confirm naming the consequence, then calls revokeComp and closes", async () => {
+	it("Turn off goes through its own confirm naming the consequence, then calls revokeComp and closes", async () => {
 		const onClose = vi.fn();
 		render(<CompDialog seller={compedSeller()} onClose={onClose} />);
-		fireEvent.click(screen.getByRole("button", { name: "Revoke…" }));
+		fireEvent.click(screen.getByRole("button", { name: "Turn off…" }));
 		// The confirm says what the store becomes before anything happens.
 		expect(screen.getByText(/straight\s+away/)).toBeTruthy();
 		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
 		expect(revokeCompSpy()).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "Revoke access" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Turn off comp upgrade" }),
+		);
 		await vi.waitFor(() => expect(revokeCompSpy()).toHaveBeenCalledTimes(1));
 		expect(revokeCompSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
 		await vi.waitFor(() => expect(onClose).toHaveBeenCalled());

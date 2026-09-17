@@ -434,25 +434,22 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 			ordersThisMonth: 350,
 		} as unknown as Partial<Retailer>);
 
-	it("a sponsored store sees who, until when and what happens after — and nothing to buy, change, pause or cancel", () => {
-		const endsAt = Date.now() + 40 * DAY;
+	it("a sponsored store sees who's sponsoring it, no limits — and nothing to buy, change, pause or cancel", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(
 			<BillingTab
 				retailer={comped({
 					kind: "sponsor",
 					label: "Sponsored by Maybank SME",
-					expiresAt: endsAt,
 				})}
 			/>,
 		);
 		expect(screen.getByText("Sponsored account")).toBeTruthy();
+		expect(screen.getByText("No limits")).toBeTruthy();
 		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
-		expect(screen.getByText(`Until ${formatShortDate(endsAt)}`)).toBeTruthy();
-		expect(screen.getByText(/orders are unlimited/)).toBeTruthy();
-		expect(
-			screen.getByText(/editing your store pauses until you choose a plan/),
-		).toBeTruthy();
+		expect(screen.getByText(/no limits on orders/)).toBeTruthy();
+		// A comp has no end date — nothing may suggest one.
+		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
 		// Not a plan: no tier, meter or any billing door.
 		expect(screen.queryByText("Current plan")).toBeNull();
 		expect(screen.queryByText("Orders this month")).toBeNull();
@@ -462,11 +459,11 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 	});
 
-	it("a free-for-life comp says so, with no end-of-comp warning", () => {
+	it("a comp with no label still reads as a sponsored account", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={comped({ kind: "partner" })} />);
-		expect(screen.getByText("No end date")).toBeTruthy();
-		expect(screen.queryByText(/pauses until you choose a plan/)).toBeNull();
+		expect(screen.getByText("Sponsored account")).toBeTruthy();
+		expect(screen.queryByText("Current plan")).toBeNull();
 	});
 
 	const ended = () =>
@@ -475,7 +472,7 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 				plan: "pro",
 				status: "past_due",
 				comped: false,
-				compEnded: { at: Date.now() - DAY, reason: "revoked" },
+				compEnded: { at: Date.now() - DAY },
 				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
 				active: false,
 				frozen: true,
@@ -510,7 +507,7 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 						plan: "pro",
 						status: "past_due",
 						comped: false,
-						compEnded: { at: Date.now() - DAY, reason: "expired" },
+						compEnded: { at: Date.now() - DAY },
 						autoRenew: {
 							method: "touch_n_go",
 							methodLabel: "Touch 'n Go",
@@ -524,7 +521,9 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 				} as unknown as Partial<Retailer>)}
 			/>,
 		);
-		expect(screen.getByText(/we'll charge your saved Touch 'n Go/)).toBeTruthy();
+		expect(
+			screen.getByText(/we'll charge your saved Touch 'n Go/),
+		).toBeTruthy();
 		expect(
 			screen.getByText(/We'll charge RM 149\.00 to your saved Touch 'n Go now/),
 		).toBeTruthy();

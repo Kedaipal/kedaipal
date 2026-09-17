@@ -109,7 +109,7 @@ describe("resolveTierCta", () => {
 			plan: "pro",
 			status: "past_due",
 			comped: false,
-			compEnded: { at: 1, reason: "revoked" },
+			compEnded: { at: 1 },
 		};
 		expect(resolveTierCta("pro", signedIn(expired))).toBe("subscribe");
 	});

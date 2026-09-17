@@ -1,17 +1,16 @@
 /// <reference types="vite/client" />
-// Comp accounts (z8r3fdeub2): admin-granted free access for partners /
-// sponsors / pilots / internal stores. A comp resolves like an admin's own
-// store — the highest tier's features, UNLIMITED orders, never billed, nothing
-// to subscribe to, change or pause. When it ends (revoked, or its end date
-// passes) the store becomes an EXPIRED seller: `past_due` with no invoice —
-// storefront + buyer ordering live, growth-writes locked until it picks a plan
-// and pays. See docs/manual-subscription.md.
+// Comp accounts (z8r3fdeub2): an admin-toggled "comp upgrade" for partners /
+// sponsors / pilots / internal stores. While on, a store resolves exactly like
+// an admin's own store — the highest tier's features, no limits, never billed,
+// nothing to subscribe to, change or pause — minus admin access. It has NO end
+// date. Turning it off makes the store an EXPIRED seller: `past_due` with no
+// invoice — storefront + buyer ordering live, growth-writes locked until it
+// picks a plan and pays. See docs/manual-subscription.md.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { COMP_ENDING_WARN_DAYS } from "./lib/comp";
 import { isUnlimited } from "./lib/plans";
 import schema from "./schema";
 import { resolveAccess } from "./subscriptions";
@@ -128,24 +127,36 @@ const invoiceRow = (
 });
 
 describe("what a comp grants", () => {
-	test("resolves like an admin store: highest-tier features, UNLIMITED orders, never frozen", async () => {
+	test("resolves EXACTLY like an admin's own store: same features, no limits, never frozen", async () => {
 		const t = setup();
 		const s = await seedSeller(t, "u_grants", { plan: "starter" });
 		await asAdmin(t).mutation(api.subscriptions.setComp, {
 			retailerId: s.retailerId,
 			kind: "partner",
 		});
-		const access = resolveAccess((await getSub(t, s.subId)) ?? null);
+		const sub = (await getSub(t, s.subId)) ?? null;
+		const access = resolveAccess(sub);
 		expect(access.comped).toBe(true);
+		// No limits on anything — orders, seats, broadcasts.
 		expect(isUnlimited(access.caps.orderCap)).toBe(true);
+		expect(isUnlimited(access.caps.userCap)).toBe(true);
+		expect(isUnlimited(access.caps.broadcastQuota)).toBe(true);
 		// Every feature on, even though the stored plan is Starter.
 		expect(Object.values(access.features).every(Boolean)).toBe(true);
 		expect(access.frozen).toBe(false);
+		// "Same limit as admin" is structural: one full-access definition.
+		const admin = resolveAccess(
+			{ ...(sub as Doc<"subscriptions">), comped: false },
+			{ adminFullAccess: true },
+		);
+		expect(access.caps).toEqual(admin.caps);
+		expect(access.features).toEqual(admin.features);
 		// The stored plan is left alone — it's the post-comp default, not the grant.
 		expect((await getSub(t, s.subId))?.plan).toBe("starter");
 		// …and the owner payload the dashboard renders agrees.
 		const me = await s.asUser.query(api.retailers.getMyRetailer, {});
 		expect(isUnlimited(me?.subscription?.caps.orderCap ?? 0)).toBe(true);
+		expect(me?.subscription?.caps).toEqual(access.caps);
 	});
 
 	test("nothing to subscribe to, change or pause: every self-serve billing write refuses", async () => {
@@ -190,13 +201,11 @@ describe("what a comp grants", () => {
 			kind: "sponsor",
 			label: "Sponsored by Maybank SME",
 			note: "internal deal terms",
-			expiresAt: Date.now() + 30 * DAY,
 		});
 		const sub = await getSub(t, s.subId);
 		expect(resolveAccess(sub ?? null).comp).toEqual({
 			kind: "sponsor",
 			label: "Sponsored by Maybank SME",
-			expiresAt: sub?.comp?.expiresAt,
 		});
 		const me = await s.asUser.query(api.retailers.getMyRetailer, {});
 		expect(me?.subscription?.comp?.label).toBe("Sponsored by Maybank SME");
@@ -216,22 +225,20 @@ describe("setComp", () => {
 			periodPaidBy: "plan",
 			pendingPlanChange: { plan: "starter", requestedAt: now - DAY },
 		});
-		const expiresAt = now + 30 * DAY;
 		await asAdmin(t).mutation(api.subscriptions.setComp, {
 			retailerId: s.retailerId,
 			kind: "sponsor",
 			label: "  Sponsored by Maybank SME  ",
 			note: "Q4 SME programme",
-			expiresAt,
 		});
 		const sub = await getSub(t, s.subId);
 		expect(sub?.comped).toBe(true);
-		expect(sub?.comp).toMatchObject({
+		expect(sub?.comp).toEqual({
 			kind: "sponsor",
 			label: "Sponsored by Maybank SME",
 			note: "Q4 SME programme",
 			grantedBy: ADMIN,
-			expiresAt,
+			grantedAt: now,
 		});
 		expect(sub?.status).toBe("active");
 		expect(sub?.trialEndsAt).toBeUndefined();
@@ -252,7 +259,7 @@ describe("setComp", () => {
 		});
 	});
 
-	test("non-admins (owner included) are refused; validation: past end date + oversized label/note", async () => {
+	test("non-admins (owner included) are refused; validation: oversized label/note", async () => {
 		const t = setup();
 		const s = await seedSeller(t, "u_refuse");
 		await expect(
@@ -261,13 +268,6 @@ describe("setComp", () => {
 				kind: "pilot",
 			}),
 		).rejects.toThrow(/not authorized/i);
-		await expect(
-			asAdmin(t).mutation(api.subscriptions.setComp, {
-				retailerId: s.retailerId,
-				kind: "pilot",
-				expiresAt: Date.now() - 1,
-			}),
-		).rejects.toThrow(/end date must be in the future/i);
 		await expect(
 			asAdmin(t).mutation(api.subscriptions.setComp, {
 				retailerId: s.retailerId,
@@ -333,49 +333,40 @@ describe("setComp", () => {
 		).toBeUndefined();
 	});
 
-	test("re-granting EDITS in place; the ending-soon stamp survives a label edit but re-arms when the date moves", async () => {
+	test("editing a comp that's on changes the details in place — keeps who/when turned it on and the status clock", async () => {
 		const t = setup();
+		const OTHER_ADMIN = "user_comp_admin_b";
+		process.env.ADMIN_USER_IDS = `${ADMIN},${OTHER_ADMIN}`;
 		const s = await seedSeller(t, "u_edit");
-		const admin = asAdmin(t);
-		const firstEnd = Date.now() + 5 * DAY;
-		await admin.mutation(api.subscriptions.setComp, {
+		await asAdmin(t).mutation(api.subscriptions.setComp, {
 			retailerId: s.retailerId,
 			kind: "pilot",
-			expiresAt: firstEnd,
 		});
-		// Inside the warning window → the cron stamps + emails once.
-		expect((await cron(t)).compEndingReminders).toBe(1);
-		const stamped = (await getSub(t, s.subId))?.comp?.endingSoonSentAt;
-		expect(stamped).toBeTypeOf("number");
-
-		// Same date, new label → no gap in access, stamp kept, no second email.
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: s.retailerId,
-			kind: "sponsor",
-			label: "Sponsored by Bearcamp",
-			expiresAt: firstEnd,
-		});
-		let sub = await getSub(t, s.subId);
+		const first = await getSub(t, s.subId);
+		vi.setSystemTime(Date.now() + 5 * DAY);
+		await t
+			.withIdentity({ subject: OTHER_ADMIN })
+			.mutation(api.subscriptions.setComp, {
+				retailerId: s.retailerId,
+				kind: "sponsor",
+				label: "Sponsored by Bearcamp",
+				note: "renewed terms",
+			});
+		const sub = await getSub(t, s.subId);
 		expect(sub?.status).toBe("active");
-		expect(sub?.comp).toMatchObject({
+		expect(sub?.comp).toEqual({
 			kind: "sponsor",
 			label: "Sponsored by Bearcamp",
-			endingSoonSentAt: stamped,
+			note: "renewed terms",
+			// Who first turned it on, and when — not the editor.
+			grantedBy: ADMIN,
+			grantedAt: first?.comp?.grantedAt,
 		});
-		expect((await cron(t)).compEndingReminders).toBe(0);
-
-		// Extended → the reminder re-arms for the new date.
-		const extended = Date.now() + 60 * DAY;
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: s.retailerId,
-			kind: "sponsor",
-			label: "Sponsored by Bearcamp",
-			expiresAt: extended,
-		});
-		sub = await getSub(t, s.subId);
-		expect(sub?.comp?.expiresAt).toBe(extended);
-		expect(sub?.comp?.endingSoonSentAt).toBeUndefined();
-		expect(await auditFor(t, s.retailerId)).toHaveLength(3);
+		// An edit is not a status flip.
+		expect(sub?.updatedAt).toBe(first?.updatedAt);
+		// Both writes are audited, each to the admin who made it.
+		const audit = await auditFor(t, s.retailerId);
+		expect(audit.map((a) => a.adminUserId)).toEqual([ADMIN, OTHER_ADMIN]);
 	});
 
 	test("a store with NO subscription row gets a comped row minted", async () => {
@@ -398,7 +389,7 @@ describe("setComp", () => {
 	});
 });
 
-describe("revokeComp — the store becomes an expired seller", () => {
+describe("revokeComp (turning the comp upgrade off) — the store becomes an expired seller", () => {
 	test("past_due with no invoice and no free period, marked comp-ended, audited, seller emailed", async () => {
 		const t = setup();
 		const s = await seedSeller(t, "u_revoke");
@@ -417,7 +408,6 @@ describe("revokeComp — the store becomes an expired seller", () => {
 		expect(sub?.comp).toBeUndefined();
 		expect(sub?.status).toBe("past_due");
 		expect(sub?.compEndedAt).toBe(now);
-		expect(sub?.compEndReason).toBe("revoked");
 		// The lock-flip moment the founder report reads.
 		expect(sub?.updatedAt).toBe(now);
 		// Expired, not a second trial.
@@ -426,7 +416,7 @@ describe("revokeComp — the store becomes an expired seller", () => {
 
 		const access = resolveAccess(sub ?? null);
 		expect(access.frozen).toBe(true);
-		expect(access.compEnded).toEqual({ at: now, reason: "revoked" });
+		expect(access.compEnded).toEqual({ at: now });
 
 		const audit = await auditFor(t, s.retailerId);
 		expect(audit.map((a) => a.action)).toContain("subscriptions.revokeComp");
@@ -514,7 +504,6 @@ describe("revokeComp — the store becomes an expired seller", () => {
 		const sub = await getSub(t, s.subId);
 		expect(sub?.status).toBe("active");
 		expect(sub?.compEndedAt).toBeUndefined();
-		expect(sub?.compEndReason).toBeUndefined();
 		expect(resolveAccess(sub ?? null).frozen).toBe(false);
 	});
 
@@ -558,7 +547,8 @@ describe("revokeComp — the store becomes an expired seller", () => {
 		expect(sub?.comped).toBe(true);
 		expect(sub?.status).toBe("active");
 		expect(sub?.compEndedAt).toBeUndefined();
-		expect(sub?.compEndReason).toBeUndefined();
+		// Turned off and on again starts fresh.
+		expect(sub?.comp?.kind).toBe("partner");
 	});
 
 	test("refuses a store that isn't comped; non-admin refused", async () => {
@@ -578,75 +568,24 @@ describe("revokeComp — the store becomes an expired seller", () => {
 });
 
 describe("daily cron", () => {
-	test("expiry: a dated comp past its end becomes an expired seller; life comps and future dates don't", async () => {
+	test("a comp has no end date — a year of daily runs leaves it on, active and unbilled", async () => {
 		const t = setup();
-		const admin = asAdmin(t);
-		const expired = await seedSeller(t, "u_expired");
-		const life = await seedSeller(t, "u_life");
-		const future = await seedSeller(t, "u_future");
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: expired.retailerId,
-			kind: "sponsor",
-			label: "Sponsored by Y",
-			expiresAt: Date.now() + DAY,
-		});
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: life.retailerId,
+		const s = await seedSeller(t, "u_forever");
+		await asAdmin(t).mutation(api.subscriptions.setComp, {
+			retailerId: s.retailerId,
 			kind: "partner",
+			label: "Sponsored by Y",
 		});
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: future.retailerId,
-			kind: "pilot",
-			expiresAt: Date.now() + 60 * DAY,
-		});
-		vi.setSystemTime(Date.now() + 2 * DAY);
-		const res = await cron(t);
-		expect(res.compsExpired).toBe(1);
-		const expiredSub = await getSub(t, expired.subId);
-		expect(expiredSub?.comped).toBe(false);
-		expect(expiredSub?.comp).toBeUndefined();
-		expect(expiredSub?.status).toBe("past_due");
-		expect(expiredSub?.compEndReason).toBe("expired");
-		expect(expiredSub?.trialEndsAt).toBeUndefined();
-		expect((await compEmails(t, "compEnded"))[0]?.args).toMatchObject({
-			retailerId: expired.retailerId,
-			sponsorLabel: "Sponsored by Y",
-		});
-		expect((await getSub(t, life.subId))?.comped).toBe(true);
-		expect((await getSub(t, future.subId))?.comped).toBe(true);
-		// Idempotent: the expired row is past_due now — nothing left to expire.
-		expect((await cron(t)).compsExpired).toBe(0);
-	});
-
-	test("ending-soon reminder: once, inside the warning window only, with the end date", async () => {
-		const t = setup();
-		const admin = asAdmin(t);
-		const soon = await seedSeller(t, "u_soon");
-		const later = await seedSeller(t, "u_later");
-		const soonEnd = Date.now() + (COMP_ENDING_WARN_DAYS - 1) * DAY;
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: soon.retailerId,
-			kind: "sponsor",
-			label: "Sponsored by Z",
-			expiresAt: soonEnd,
-		});
-		await admin.mutation(api.subscriptions.setComp, {
-			retailerId: later.retailerId,
-			kind: "sponsor",
-			expiresAt: Date.now() + (COMP_ENDING_WARN_DAYS + 5) * DAY,
-		});
-		expect((await cron(t)).compEndingReminders).toBe(1);
-		const emails = await compEmails(t, "compEndingSoon");
-		expect(emails).toHaveLength(1);
-		expect(emails[0].args).toMatchObject({
-			retailerId: soon.retailerId,
-			sponsorLabel: "Sponsored by Z",
-			endsAt: soonEnd,
-			daysLeft: COMP_ENDING_WARN_DAYS - 1,
-		});
-		// Still comped, still active — the warning changes nothing but the stamp.
-		expect((await getSub(t, soon.subId))?.status).toBe("active");
-		expect((await cron(t)).compEndingReminders).toBe(0);
+		for (const days of [1, 30, 180, 365]) {
+			vi.setSystemTime(Date.now() + days * DAY);
+			await cron(t);
+		}
+		const sub = await getSub(t, s.subId);
+		expect(sub?.comped).toBe(true);
+		expect(sub?.status).toBe("active");
+		expect(sub?.comp?.label).toBe("Sponsored by Y");
+		expect(await invoicesFor(t, s.retailerId)).toHaveLength(0);
+		expect(await compEmails(t, "compEnded")).toHaveLength(0);
 	});
 
 	test("a comped active row is never billed or locked — stale period end and stale overdue invoice included", async () => {
@@ -669,13 +608,13 @@ describe("daily cron", () => {
 		expect((await getSub(t, s.subId))?.status).toBe("active");
 	});
 
-	test("expiry keeps a saved auto-renew method attached but charges NOTHING", async () => {
+	test("turning a comp off keeps a saved auto-renew method attached but the machine charges NOTHING", async () => {
 		const t = setup();
 		const s = await seedSeller(t, "u_autorenew");
-		await asAdmin(t).mutation(api.subscriptions.setComp, {
+		const admin = asAdmin(t);
+		await admin.mutation(api.subscriptions.setComp, {
 			retailerId: s.retailerId,
 			kind: "sponsor",
-			expiresAt: Date.now() + DAY,
 		});
 		await t.run((ctx) =>
 			ctx.db.patch(s.subId, {
@@ -686,11 +625,15 @@ describe("daily cron", () => {
 				},
 			}),
 		);
-		vi.setSystemTime(Date.now() + 2 * DAY);
-		const res = await cron(t);
-		expect(res.compsExpired).toBe(1);
-		expect(res.autoChargeRetries).toBe(0);
-		expect(res.renewalsIssued).toBe(0);
+		await admin.mutation(api.subscriptions.revokeComp, {
+			retailerId: s.retailerId,
+		});
+		for (const days of [1, 2, 30]) {
+			vi.setSystemTime(Date.now() + days * DAY);
+			const res = await cron(t);
+			expect(res.autoChargeRetries).toBe(0);
+			expect(res.renewalsIssued).toBe(0);
+		}
 		const sub = await getSub(t, s.subId);
 		expect(sub?.status).toBe("past_due");
 		expect(sub?.autoRenew?.method).toBe("card");
@@ -698,11 +641,6 @@ describe("daily cron", () => {
 		expect(
 			(await scheduled(t)).some((j) => j.name.includes("chargeDueRenewal")),
 		).toBe(false);
-		// A past_due row isn't scanned by the renewal machine at all — a second
-		// day still bills nothing.
-		vi.setSystemTime(Date.now() + DAY);
-		await cron(t);
-		expect(await invoicesFor(t, s.retailerId)).toHaveLength(0);
 	});
 });
 

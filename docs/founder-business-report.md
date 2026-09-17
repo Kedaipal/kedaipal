@@ -84,7 +84,7 @@ tell Arif he lost customers he did not lose.
 | **Awaiting payment** | Paid before, pending invoice **not yet** due | Nothing. Inside grace. |
 | **Awaiting your invoice** | Paid before, **no** pending invoice | **Issue the renewal.** This is Arif's action item, not a loss. |
 | **Trial expired** | **Never** had a paid invoice | Failed conversion, never a customer. |
-| **Comp ended** | `compEndedAt` set — a sponsorship was revoked or reached its end date and the store hasn't paid for a plan yet (z8r3fdeub2). Checked **first**, whatever the store paid before its comp | Not churn — it never paid for what it lost — but the conversion moment of a partner deal. Worth a message. |
+| **Comp ended** | `compEndedAt` set — an admin turned the store's comp upgrade off and it hasn't paid for a plan yet (z8r3fdeub2; comps have no end date). Checked **first**, whatever the store paid before its comp | Not churn — it never paid for what it lost — but the conversion moment of a partner deal. Worth a message. |
 
 The `awaiting_payment` bucket is not a nicety. `issueInvoice` deliberately does
 not touch the subscription (its comment says so outright), and only `markPaid`
@@ -101,8 +101,8 @@ Comped subscriptions are excluded from MRR and from every bucket, and surfaced
 as `compedExcluded` / `subscriptions.comped` so they are visible rather than
 silently vanished. The cron's old trial path used to flip legacy comped rows to
 `past_due`; that flip is retired (comp accounts, z8r3fdeub2), so
-`compedExcluded` should only ever count leftovers from it. A comp that has
-**ended** is no longer comped — it lands in the **Comp ended** bucket above.
+`compedExcluded` should only ever count leftovers from it. A comp that has been
+**turned off** is no longer comped — it lands in the **Comp ended** bucket above.
 
 ### `cancelled` is a structural zero
 
@@ -119,8 +119,8 @@ always move the status *away* from `past_due`, and the cron's trial-reminder
 patch deliberately does not bump `updatedAt`. So for a row **currently** in
 `past_due`, `updatedAt` is exactly the moment it flipped. Comp accounts
 (z8r3fdeub2) keep the invariant: `setComp` moves a row away from `past_due`,
-and a comp ending (revoke or expiry) flips a row *into* it with `updatedAt` set
-to that moment.
+and turning a comp off flips a row *into* it with `updatedAt` set to that
+moment.
 
 **Anyone adding a fourth `db.patch` on `subscriptions` that touches `updatedAt`
 silently breaks this figure.** Making churn-over-time robust would mean stamping

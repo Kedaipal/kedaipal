@@ -37,7 +37,6 @@ import {
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
-import { ToggleSwitch } from "../components/ui/toggle-switch";
 import { useActAs } from "../hooks/useActAs";
 import { convexErrorMessage, formatShortDate } from "../lib/format";
 
@@ -273,36 +272,36 @@ export function SellerCard({
 									</span>
 								) : null}
 								{seller.compEnded && status === "past_due" ? (
-									// Why this store is past due: its comp ended, not an unpaid
-									// bill — so nobody chases an invoice that doesn't exist.
-									// Short enough for the ~135px text column at 375px; the full
-									// date rides the title.
+									// Why this store is past due: its comp upgrade was turned off,
+									// not an unpaid bill — so nobody chases an invoice that doesn't
+									// exist. Short enough for the ~135px text column at 375px; the
+									// full date rides the title.
 									<span
 										className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground"
-										title={`Comp ${seller.compEnded.reason} on ${formatShortDate(seller.compEnded.at)}`}
+										title={`Comp upgrade turned off on ${formatShortDate(seller.compEnded.at)}`}
 									>
 										<Gift className="size-3 shrink-0" />
-										{seller.compEnded.reason === "expired"
-											? "Expired"
-											: "Revoked"}{" "}
-										·{" "}
-										{new Date(seller.compEnded.at).toLocaleDateString(
-											undefined,
-											{
-												day: "numeric",
-												month: "short",
-											},
-										)}
+										Comp off ·{" "}
+										{new Date(seller.compEnded.at).toLocaleDateString(undefined, {
+											day: "numeric",
+											month: "short",
+										})}
 									</span>
 								) : null}
 								{seller.comped ? (
-									// On the house (z8r3fdeub2): kind + label + expiry at a
-									// glance, so "why is this store free?" never needs a click.
-									// The title repeats the full text (plus the note) for the
+									// Comp upgrade on (z8r3fdeub2): kind + label at a glance, so
+									// "why is this store free?" never needs a click. The title
+									// repeats the full text (plus since-when and the note) for the
 									// narrow-screen case where the chip truncates.
 									<span
 										className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950 dark:text-violet-300"
-										title={[compChipText(seller), seller.comp?.note]
+										title={[
+											compChipText(seller),
+											seller.comp
+												? `on since ${formatShortDate(seller.comp.grantedAt)}`
+												: undefined,
+											seller.comp?.note,
+										]
 											.filter(Boolean)
 											.join(" — ")}
 									>
@@ -329,10 +328,10 @@ export function SellerCard({
 			{/* Side controls stack vertically on phones — three columns of controls
 			    (Manage + comp + purge) would squeeze the text to nothing at 375px. */}
 			<div className="flex shrink-0 flex-col gap-1 self-center sm:flex-row sm:items-center sm:gap-1.5">
-				{/* Comp action (z8r3fdeub2) — beside the row like the purge control (the
-				    whole row is already the Manage button). Comped rows reopen the same
-				    dialog prefilled: editing an expiry must not require ending the comp
-				    first. Admin stores keep the button visible but disabled-with-reason. */}
+				{/* Comp upgrade toggle (z8r3fdeub2) — beside the row like the purge
+				    control (the whole row is already the Manage button). One dialog turns
+				    it on, edits its details, or turns it off. Admin stores keep the button
+				    visible but disabled-with-reason. */}
 				<button
 					type="button"
 					onClick={() => setCompOpen(true)}
@@ -341,15 +340,15 @@ export function SellerCard({
 						seller.ownerIsAdmin
 							? "Admin store — always free already"
 							: seller.comped
-								? `Edit the comp for ${seller.storeName}`
-								: `Comp ${seller.storeName} (free access)`
+								? `Comp upgrade is on for ${seller.storeName} — edit or turn off`
+								: `Turn on comp upgrade for ${seller.storeName}`
 					}
 					aria-label={
 						seller.ownerIsAdmin
 							? `${seller.storeName} is an admin store — always free`
 							: seller.comped
-								? `Edit the comp for ${seller.storeName}`
-								: `Comp ${seller.storeName} (free access)`
+								? `Comp upgrade is on for ${seller.storeName} — edit or turn off`
+								: `Turn on comp upgrade for ${seller.storeName}`
 					}
 					className={`flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors disabled:opacity-40 ${
 						seller.comped
@@ -405,39 +404,22 @@ export function SellerCard({
 	);
 }
 
-/** The comp chip's one-liner: kind · label · until — everything an admin needs
+/** The comp chip's one-liner: kind · label — everything an admin needs
  * without opening the dialog. */
 function compChipText(seller: AdminSellerRow): string {
 	const parts = [seller.comp ? COMP_KIND_LABEL[seller.comp.kind] : "Comped"];
 	if (seller.comp?.label) parts.push(seller.comp.label);
-	if (seller.comp?.expiresAt)
-		parts.push(`until ${formatShortDate(seller.comp.expiresAt)}`);
 	return parts.join(" · ");
 }
 
-/** "YYYY-MM-DD" from the native date input → epoch at the END of that day in
- * the admin's local time. "Free until 31 Dec" must cover the 31st — parsing
- * the string with `new Date(str)` would land on UTC midnight instead. */
-function endOfDayLocal(dateStr: string): number {
-	const [y, m, d] = dateStr.split("-").map(Number);
-	return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
-}
-
-/** Epoch → the "YYYY-MM-DD" the native date input wants (local time). */
-function toDateInputValue(epochMs: number): string {
-	const dt = new Date(epochMs);
-	const mm = String(dt.getMonth() + 1).padStart(2, "0");
-	const dd = String(dt.getDate()).padStart(2, "0");
-	return `${dt.getFullYear()}-${mm}-${dd}`;
-}
-
 /**
- * Grant / edit a comp (z8r3fdeub2). Mounted only while open, so the fields
- * initialise from the row's current comp on every open — the same dialog is
- * the create AND edit surface (extending an end date must not require
- * revoking the comp and re-granting it). Revoking lives here too, behind its
- * own confirm that says exactly what happens next: the store becomes an
- * expired seller. Exported for the dialog-states test.
+ * The comp upgrade toggle (z8r3fdeub2). A comp has no end date: an admin turns
+ * it on and it stays on until an admin turns it off. Mounted only while open,
+ * so the fields initialise from the row's current comp on every open — the same
+ * dialog turns it ON, edits its details (kind / seller-facing label / internal
+ * note) with no gap in access, and turns it OFF behind its own confirm that says
+ * exactly what happens next: the store becomes an expired seller. Exported for
+ * the dialog-states test.
  */
 export function CompDialog({
 	seller,
@@ -448,28 +430,12 @@ export function CompDialog({
 }) {
 	const setComp = useMutation(api.subscriptions.setComp);
 	const revokeComp = useMutation(api.subscriptions.revokeComp);
-	const editing = seller.comped;
+	const on = seller.comped;
 	const [kind, setKind] = useState<CompKind>(seller.comp?.kind ?? "sponsor");
 	const [label, setLabel] = useState(seller.comp?.label ?? "");
 	const [note, setNote] = useState(seller.comp?.note ?? "");
-	const [forLife, setForLife] = useState(
-		seller.comp ? seller.comp.expiresAt === undefined : true,
-	);
-	const [dateStr, setDateStr] = useState(
-		seller.comp?.expiresAt ? toDateInputValue(seller.comp.expiresAt) : "",
-	);
 	const [saving, setSaving] = useState(false);
-	const [revokeOpen, setRevokeOpen] = useState(false);
-
-	const expiresAt = !forLife && dateStr ? endOfDayLocal(dateStr) : undefined;
-	// Disabled-with-reason, and the reason is VISIBLE (not just a title attr).
-	const blocked = !forLife
-		? dateStr === ""
-			? "Pick an end date, or switch back to free for life."
-			: expiresAt !== undefined && expiresAt <= Date.now()
-				? "The end date must be in the future."
-				: null
-		: null;
+	const [offOpen, setOffOpen] = useState(false);
 
 	async function save() {
 		setSaving(true);
@@ -479,12 +445,11 @@ export function CompDialog({
 				kind,
 				label: label.trim() || undefined,
 				note: note.trim() || undefined,
-				expiresAt,
 			});
 			toast.success(
-				editing
-					? `Comp updated for ${seller.storeName}.`
-					: `${seller.storeName} is sponsored — unlimited orders, nothing to pay.`,
+				on
+					? `Comp details updated for ${seller.storeName}.`
+					: `Comp upgrade on — ${seller.storeName} has every feature with no limits, never billed.`,
 			);
 			onClose();
 		} catch (err) {
@@ -494,17 +459,17 @@ export function CompDialog({
 		}
 	}
 
-	async function revoke() {
+	async function turnOff() {
 		try {
 			await revokeComp({ retailerId: seller._id });
 			toast.success(
-				`Comp revoked — ${seller.storeName} is now an expired store.`,
+				`Comp upgrade off — ${seller.storeName} is now an expired store.`,
 				{
 					description:
 						"Storefront stays live; editing is locked until they choose a plan. They've been emailed.",
 				},
 			);
-			setRevokeOpen(false);
+			setOffOpen(false);
 			onClose();
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -518,19 +483,49 @@ export function CompDialog({
 			<Dialog open onOpenChange={(open) => (!open ? onClose() : undefined)}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
-						<DialogTitle>
-							{editing
-								? `Edit comp — ${seller.storeName}`
-								: `Comp ${seller.storeName}`}
-						</DialogTitle>
+						<DialogTitle>Comp upgrade — {seller.storeName}</DialogTitle>
 						<DialogDescription>
-							Every feature and unlimited orders, like an admin store — never
-							billed, and the seller can't subscribe, change plan or pause. Any
-							pending invoice is voided (a past-due lock lifts), and a paused
-							store reopens for orders.
+							Gives this store what an admin store gets — every feature, no
+							limits, never billed — without admin access. There's no end date:
+							it stays on until you turn it off.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-4">
+						{/* The toggle's current position, stated up front. */}
+						<div
+							className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 ${
+								on
+									? "border-violet-200 bg-violet-50 dark:border-violet-900 dark:bg-violet-950/40"
+									: "border-input bg-background"
+							}`}
+						>
+							<div className="flex min-w-0 items-center gap-2">
+								<Gift
+									className={`size-4 shrink-0 ${on ? "text-violet-600 dark:text-violet-300" : "text-muted-foreground"}`}
+								/>
+								<p className="text-sm font-medium">Comp upgrade</p>
+							</div>
+							<span
+								className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+									on
+										? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300"
+										: "bg-muted text-muted-foreground"
+								}`}
+							>
+								{on
+									? seller.comp
+										? `On · since ${formatShortDate(seller.comp.grantedAt)}`
+										: "On"
+									: "Off"}
+							</span>
+						</div>
+						{!on ? (
+							<p className="text-xs text-muted-foreground">
+								Turning it on voids any pending invoice (a past-due lock lifts)
+								and reopens a paused store for orders. The seller can't
+								subscribe, change plan or pause while it's on.
+							</p>
+						) : null}
 						<div className="flex flex-col gap-1.5">
 							<span className="text-sm font-medium">Why is it free?</span>
 							<div className="grid grid-cols-2 gap-2">
@@ -588,84 +583,44 @@ export function CompDialog({
 								Internal — only admins see this.
 							</p>
 						</div>
-						<div className="flex items-center justify-between gap-3 rounded-xl border border-input bg-background px-3 py-2.5">
-							<div className="min-w-0">
-								<p className="text-sm font-medium">Free for life</p>
-								<p className="text-xs text-muted-foreground">
-									No end date — the comp runs until you revoke it here.
-								</p>
-							</div>
-							<ToggleSwitch
-								on={forLife}
-								onChange={setForLife}
-								label="Free for life"
-							/>
-						</div>
-						{!forLife ? (
-							<div className="flex flex-col gap-1.5">
-								<label htmlFor="comp-expiry" className="text-sm font-medium">
-									Ends on
-								</label>
-								<Input
-									id="comp-expiry"
-									type="date"
-									min={toDateInputValue(Date.now())}
-									value={dateStr}
-									onChange={(e) => setDateStr(e.target.value)}
-								/>
-								<p className="text-xs text-muted-foreground">
-									Free through the end of that day, then the store becomes an
-									expired seller: storefront stays live, editing locks until
-									they choose a plan. The seller gets a reminder email in the
-									final week, and another when it ends.
-								</p>
-							</div>
-						) : null}
-						{blocked ? (
-							<p className="text-xs font-medium text-destructive">{blocked}</p>
-						) : null}
 					</div>
 					<DialogFooter>
-						{editing ? (
+						{on ? (
 							<Button
 								variant="destructive"
-								onClick={() => setRevokeOpen(true)}
+								onClick={() => setOffOpen(true)}
 								disabled={saving}
 								className="sm:mr-auto"
 							>
-								Revoke…
+								Turn off…
 							</Button>
 						) : null}
 						<Button variant="outline" onClick={onClose} disabled={saving}>
 							Cancel
 						</Button>
-						<Button
-							onClick={save}
-							disabled={saving || blocked !== null}
-							title={blocked ?? undefined}
-						>
+						<Button onClick={save} disabled={saving}>
 							{saving ? <Loader2 className="size-4 animate-spin" /> : null}
-							{editing ? "Save changes" : "Comp this store"}
+							{on ? "Save changes" : "Turn on comp upgrade"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 			<ConfirmDialog
-				open={revokeOpen}
-				onOpenChange={setRevokeOpen}
+				open={offOpen}
+				onOpenChange={setOffOpen}
 				destructive
-				title={`Revoke ${seller.storeName}'s sponsored access?`}
+				title={`Turn off ${seller.storeName}'s comp upgrade?`}
 				description={
 					<>
 						The store becomes an <strong>expired seller</strong> straight away:
 						the storefront stays live and buyers can still order, but the seller
 						can't edit products, settings or bookings until they choose a plan
 						and pay. No free period, and they're emailed that their sponsored
-						access has ended. You can re-comp any time.
+						access has ended. You can turn it back on any time.
 					</>
 				}
-				confirmLabel="Revoke access"
-				onConfirm={revoke}
+				confirmLabel="Turn off comp upgrade"
+				onConfirm={turnOff}
 			/>
 		</>
 	);

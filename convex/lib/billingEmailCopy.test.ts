@@ -162,24 +162,6 @@ describe("comp emails (z8r3fdeub2)", () => {
 		sponsorLabel: "Sponsored by Maybank SME",
 	};
 
-	it("compEndingSoon leads with the end date, says what stays live and what pauses", () => {
-		const { subject, html, text } = renderTrialEmail("en", "compEndingSoon", {
-			...cv,
-			daysLeft: 7,
-			endsOnFormatted: "30 Sep 2026",
-		});
-		expect(subject).toContain("ends on 30 Sep 2026");
-		expect(html).toContain("7 days left");
-		// The store name and sponsor label are escaped, never raw HTML.
-		expect(html).toContain("Huff &amp; Puff");
-		expect(html).toContain("Sponsored by Maybank SME");
-		expect(text).toContain("storefront stays live");
-		expect(text).toContain("pauses until you choose a plan");
-		expect(html).toContain(cv.billingUrl);
-		// Never the old "fresh free period" promise — a comp ending locks.
-		expect(text).not.toMatch(/14-day|free period/i);
-	});
-
 	it("compEnded: storefront + ordering live, editing paused until a plan — no second free period", () => {
 		const { subject, html, text } = renderTrialEmail("en", "compEnded", cv);
 		expect(subject).toMatch(/sponsored Kedaipal access has ended/);
@@ -189,17 +171,14 @@ describe("comp emails (z8r3fdeub2)", () => {
 	});
 
 	it("renders Malay + Chinese comp copy, and a label-less comp reads cleanly", () => {
-		for (const key of ["compEndingSoon", "compEnded"] as const) {
-			const vars = { ...cv, daysLeft: 3, endsOnFormatted: "30 Sep 2026" };
-			expect(renderTrialEmail("ms", key, vars).subject).toContain("tajaan");
-			expect(renderTrialEmail("zh", key, vars).subject).toContain("赞助");
-			const bare = renderTrialEmail("en", key, {
-				...vars,
-				sponsorLabel: undefined,
-			});
-			expect(bare.text).not.toContain("()");
-			expect(bare.html).not.toContain("undefined");
-		}
+		expect(renderTrialEmail("ms", "compEnded", cv).subject).toContain("tajaan");
+		expect(renderTrialEmail("zh", "compEnded", cv).subject).toContain("赞助");
+		const bare = renderTrialEmail("en", "compEnded", {
+			...cv,
+			sponsorLabel: undefined,
+		});
+		expect(bare.text).not.toContain("()");
+		expect(bare.html).not.toContain("undefined");
 	});
 });
 

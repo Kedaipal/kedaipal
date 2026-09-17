@@ -2364,12 +2364,13 @@ export default defineSchema({
 		// Full access, never charged, ineligible for the Founding rank. The READ
 		// seam every consumer gates on (cron skips, self-serve refuses, meter
 		// hides). Two producers: the missing-row fail-safe (no `comp` object) and
-		// an admin grant (z8r3fdeub2 — `comp` stamped below).
+		// an admin turning the comp upgrade on (z8r3fdeub2 — `comp` stamped below).
 		comped: v.optional(v.boolean()),
-		// Admin-granted comp metadata (z8r3fdeub2): who/why/until. Present ⇔ the
-		// comp was deliberately granted from /app/admin/sellers — the backfill
-		// heals a `comped` row into a trial ONLY when this is absent (legacy
-		// fail-safe rows), so a stamped comp survives a backfill re-run.
+		// Admin-granted comp metadata (z8r3fdeub2): who and why. A comp is a
+		// TOGGLE with no end date — it stays on until an admin turns it off.
+		// Present ⇔ the comp was deliberately granted from /app/admin/sellers — the
+		// backfill heals a `comped` row into a trial ONLY when this is absent
+		// (legacy fail-safe rows), so a stamped comp survives a backfill re-run.
 		comp: v.optional(
 			v.object({
 				kind: v.union(
@@ -2382,29 +2383,21 @@ export default defineSchema({
 				label: v.optional(v.string()),
 				// Admin-only context (deal terms, contact) — never on seller payloads.
 				note: v.optional(v.string()),
-				// Admin Clerk subject that granted (or last edited) the comp.
+				// Admin Clerk subject that FIRST turned the comp on, and when. Edits
+				// keep both (the audit log records every change); a comp turned off
+				// and on again starts fresh.
 				grantedBy: v.string(),
 				grantedAt: v.number(),
-				// Unset = free for life. Set = the daily cron ends the comp past this
-				// moment and the store becomes an expired seller (see compEndedAt).
-				expiresAt: v.optional(v.number()),
-				// When the "your sponsored access ends soon" email went out, so the
-				// cron sends it once. Lives INSIDE the comp: an edit rewrites the
-				// object, so extending the end date re-arms the reminder.
-				endingSoonSentAt: v.optional(v.number()),
 			}),
 		),
-		// The comp that ENDED this store's free access (z8r3fdeub2): stamped on
-		// revoke / expiry, when the row flips to `past_due` with no invoice — the
-		// same lock a lapsed subscription is in. Lets the seller's dashboard say
-		// "your sponsored access ended" instead of "your subscription is past due"
-		// (they never had one), and files the store under its own founder-report
-		// bucket rather than as churn. Cleared by every path OUT of past_due
-		// (settle, hold, re-comp), so a later ordinary lapse reads as one.
+		// When an admin turned this store's comp upgrade OFF (z8r3fdeub2): the row
+		// flipped to `past_due` with no invoice — the same lock a lapsed
+		// subscription is in. Lets the seller's dashboard say "your sponsored
+		// access ended" instead of "your subscription is past due" (they never had
+		// one), and files the store under its own founder-report bucket rather than
+		// as churn. Cleared by every path OUT of past_due (settle, re-comp), so a
+		// later ordinary lapse reads as one.
 		compEndedAt: v.optional(v.number()),
-		compEndReason: v.optional(
-			v.union(v.literal("revoked"), v.literal("expired")),
-		),
 		// Set at a Founding-10 onboard (1-month trial). Flags the store so the
 		// conversion invoice auto-applies the founding discount + claims the rank,
 		// even before isFoundingMember is true. Cleared/irrelevant once claimed.

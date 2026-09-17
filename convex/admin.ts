@@ -62,7 +62,7 @@ export type AdminSellerRow = {
 	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
 	 * legacy stampless comped row — the chip renders either way. */
 	comped: boolean;
-	/** The admin-granted stamp (kind/label/note/expiry) — prefills the comp
+	/** The admin-granted stamp (kind/label/note, since when) — prefills the comp
 	 * dialog for edits. `grantedBy` stays server-side (a raw Clerk subject is
 	 * noise here; the audit log answers "who"). Absent on legacy rows. */
 	comp?: {
@@ -70,12 +70,11 @@ export type AdminSellerRow = {
 		label?: string;
 		note?: string;
 		grantedAt: number;
-		expiresAt?: number;
 	};
-	/** The comp that ended this store's free access — revoked or expired — while
-	 * the store is still an expired seller (cleared once it pays or is
+	/** When an admin turned this store's comp upgrade off, while the store is
+	 * still an expired seller because of it (cleared once it pays or is
 	 * re-comped). Lets the directory say why a store is past due. */
-	compEnded?: { at: number; reason: "revoked" | "expired" };
+	compEnded?: { at: number };
 	/** Marketing tag the seller signed up with (`retailers.signupSource`,
 	 * z8r3fdd1v0). Absent = untagged/direct. Rendered verbatim — these are
 	 * Kedaipal's own acquisition tags (`powered-by`, `spotlight-<member>`, …),
@@ -132,13 +131,10 @@ export const listSellersForAdmin = query({
 							label: sub.comp.label,
 							note: sub.comp.note,
 							grantedAt: sub.comp.grantedAt,
-							expiresAt: sub.comp.expiresAt,
 						}
 					: undefined,
 				compEnded:
-					sub?.compEndedAt !== undefined
-						? { at: sub.compEndedAt, reason: sub.compEndReason ?? "revoked" }
-						: undefined,
+					sub?.compEndedAt !== undefined ? { at: sub.compEndedAt } : undefined,
 				signupSource: r.signupSource,
 				...(referrer
 					? {

@@ -2,12 +2,7 @@
 // pill, banner, plan-feature gates). Mirrors the server `AccessState` shape
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
-import {
-	type CompEndReason,
-	type CompKind,
-	compDaysLeft,
-	compEndingSoon,
-} from "../../convex/lib/comp";
+import type { CompKind } from "../../convex/lib/comp";
 import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -19,14 +14,14 @@ export type SubscriptionView = {
 	 * from an older cache degrades to "monthly" rather than throwing. */
 	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
-	/** Admin-granted comp (z8r3fdeub2) — seller-facing slice only: sponsor
-	 * label + optional end date for the billing tab's "Sponsored by X · free
-	 * until Y" line. Absent on legacy/fail-open comped rows. */
-	comp?: { kind: CompKind; label?: string; expiresAt?: number };
-	/** Set while an expired seller's lock came from a comp ENDING (z8r3fdeub2)
-	 * — revoked by an admin, or past its end date — not from an unpaid bill.
-	 * Only meaningful with `status: "past_due"`. */
-	compEnded?: { at: number; reason: CompEndReason };
+	/** Admin-granted comp (z8r3fdeub2) — seller-facing slice only: the sponsor
+	 * label for the billing tab's "Sponsored by X" line. Comps have no end date.
+	 * Absent on legacy/fail-open comped rows. */
+	comp?: { kind: CompKind; label?: string };
+	/** Set while an expired seller's lock came from an admin turning their comp
+	 * upgrade off (z8r3fdeub2), not from an unpaid bill. Only meaningful with
+	 * `status: "past_due"`. */
+	compEnded?: { at: number };
 	/** The free period's backstop deadline (signup + 14 days). */
 	trialEndsAt?: number;
 	/** Start-when-you-sell (z8r3fday24): set once the free period ended (first
@@ -241,21 +236,19 @@ export function orderCapState(
  * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
  * concrete "pay me" — applies whether trialing or active) → a trial ending soon
  * → the soft order-cap nudge (over, then near — upsell ranks below any payment
- * deadline). Paid-with-nothing-due → nothing. A comped store only ever sees
- * its comp's end coming (z8r3fdeub2); once ended, its lock reads `compEnded`
- * instead of `pastDue` — no bill sits behind it. `pendingDueAt` is the
+ * deadline). Comped/paid-with-nothing-due → nothing. A store whose comp was
+ * turned off (z8r3fdeub2) reads `compEnded` instead of `pastDue` — no bill
+ * sits behind that lock. `pendingDueAt` is the
  * soonest pending invoice's due date (undefined when none); `ordersThisMonth`
  * is the usage meter (undefined → no cap nudge).
  */
 export type BannerState =
 	| { kind: "none" }
 	| { kind: "pastDue" }
-	/** An expired seller whose lock came from a comp ending (z8r3fdeub2): same
-	 * lock as past-due, but there is no bill to pay — they choose a plan. */
+	/** An expired seller whose lock came from their comp being turned off
+	 * (z8r3fdeub2): same lock as past-due, but there is no bill to pay — they
+	 * choose a plan. */
 	| { kind: "compEnded" }
-	/** A dated comp ends within COMP_ENDING_WARN_DAYS — the only banner a
-	 * comped store can see, because a comp ending locks editing that day. */
-	| { kind: "compEnding"; daysLeft: number; endsAt: number }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
@@ -280,18 +273,8 @@ export function resolveBannerState(
 	warnDays = PAYMENT_WARN_DAYS,
 	ordersThisMonth?: number,
 ): BannerState {
-	if (!sub) return { kind: "none" };
-	if (sub.comped) {
-		// A comp has no bill, trial or cap to warn about — only its end date.
-		const endsAt = sub.comp?.expiresAt;
-		if (endsAt !== undefined && compEndingSoon(endsAt, now))
-			return {
-				kind: "compEnding",
-				daysLeft: compDaysLeft(endsAt, now),
-				endsAt,
-			};
-		return { kind: "none" };
-	}
+	// A comp has no bill, trial, cap or end date — nothing to warn about.
+	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due")
 		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
 

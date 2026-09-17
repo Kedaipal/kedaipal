@@ -367,56 +367,58 @@ to heal it). A comp ENDING is the one non-invoice path into `past_due` — see
 
 Partner/sponsor deals (Huff & Puff, HCM) need a store that runs free with **no
 founder in the billing loop**. A comp is a **subscription state, not a user
-type**: the seller signs in like anyone else; `subscriptions.comped` (the read
-seam every consumer already gates on) plus a `comp` stamp (`kind` ∈ partner |
-sponsor | pilot | internal, optional seller-facing `label`, admin-only `note`,
-`grantedBy/At`, optional `expiresAt`, and the `endingSoonSentAt` reminder
-stamp) make the whole machine treat the store as never-charged. Rules live in
-`convex/lib/comp.ts`.
+type** — the seller signs in like anyone else — and it is a **toggle**: an
+admin turns the **comp upgrade** on for a store and it stays on until an admin
+turns it off. **There is no end date** (Zaki, 17 Sep). `subscriptions.comped`
+(the read seam every consumer already gates on) plus a `comp` stamp (`kind` ∈
+partner | sponsor | pilot | internal, optional seller-facing `label`,
+admin-only `note`, `grantedBy/At` = who first turned it on and when) make the
+whole machine treat the store as never-charged. Catalog: `convex/lib/comp.ts`.
 
-### What a comp grants — an admin store's entitlements (Zaki, 17 Sep)
+### What it grants — exactly an admin store's entitlements, minus admin access
 
-- **Unlimited orders + the highest tier's features**, exactly what
-  `resolveAccess` grants a Kedaipal admin on their own store. Resolved at read
-  time (`compedCaps()`: `orderCap = UNLIMITED`; seats + broadcasts take
-  Scale's allowance, because both will cost real money per use the day they're
-  enforced — "unlimited" there is a decision for when they ship). Never stored,
-  so the row's own `plan` + caps stay untouched as the post-comp default.
-- **Never billed, never locked, nothing to buy.** The renewal / first-invoice /
-  dunning loops all skip comped rows; `subscribeSelf`, `changePlan`,
-  `setSeasonalHold` and `startAutoRenewSetup` refuse; the **manual**
-  `issueInvoice` refuses too (the admin billing picker labels comped stores
-  "on the house" and disables Issue with the reason). No cancel flow exists yet
-  (`z8r3fdet8t`) — when it does, it must refuse a comped row the same way.
+- **Full access, one definition.** `resolveAccess` resolves a comped store and
+  an admin's own store through the SAME `FULL_ACCESS_PLAN` features and
+  `fullAccessCaps()` (`convex/lib/plans.ts`): the highest tier's features and
+  **no limits on anything** — orders, seats, broadcasts ("same limit as admin",
+  test-pinned as equality). Resolved at read time, never stored, so the row's
+  own `plan` + caps stay untouched as the default for when the comp is turned
+  off. When broadcasts ship, `fullAccessCaps()` is where their cost for admin +
+  comped stores gets decided.
+- **Never billed, nothing to buy.** The renewal / first-invoice / dunning loops
+  all skip comped rows; `subscribeSelf`, `changePlan`, `setSeasonalHold` and
+  `startAutoRenewSetup` refuse; the **manual** `issueInvoice` refuses too (the
+  admin billing picker labels comped stores "on the house" and disables Issue
+  with the reason). No cancel flow exists yet (`z8r3fdet8t`) — when it does, it
+  must refuse a comped row the same way.
 - **Seller surfaces**: tier pill **Sponsored**; billing tab swaps the plan card
-  for a **Sponsored account** card (label, "Until {date}" / "No end date",
-  "every feature unlocked, orders unlimited, nothing to subscribe to, change or
-  cancel") and renders no plan picker, plan change, hold, annual or
-  auto-renewal card; `/pricing` shows every live tier as **Included · you're
-  sponsored** (never a link); no order-cap nudge. AccessState ships the
-  seller-facing slice only (`kind/label/expiresAt`) — `note` and `grantedBy`
-  never leave the server (test-pinned).
+  for a **Sponsored account** card (label, "No limits", "nothing to subscribe
+  to, change or cancel, and nothing to pay") and renders no plan picker, plan
+  change, hold, annual or auto-renewal card; `/pricing` shows every live tier as
+  **Included · you're sponsored** (never a link); no banner of any kind.
+  AccessState ships the seller-facing slice only (`kind/label`) — `note` and
+  `grantedBy` never leave the server (test-pinned).
 
-### Granting — `subscriptions.setComp` (admin, audited)
+### Turning it on — `subscriptions.setComp` (admin, audited)
 
 Stamps `comped` + `comp`, forces `active`, clears every trial / free-period /
 paid-period stamp (a leftover `currentPeriodEnd` would read "expires {date}"
 under a sponsor line) and a pending plan change, **voids any pending invoice**
 (Pay-now link killed — comping a `past_due` store lifts the lock in the same
 beat), releases an `on_hold` store (`orderingPausedAt` unset; `canEnterHold`
-refuses comped from then on), and clears a previous comp's end marker.
-Re-granting **edits in place** (extend the date, reword the label) with no gap
-in access; the ending-soon stamp survives a label edit and re-arms when the
-date moves. A store with no subscription row gets a comped row minted; an
-admin-owned store is refused (already free via `ADMIN_USER_IDS`).
+refuses comped from then on), and clears a previous off-marker. Calling it on a
+store whose comp is already on **edits the details in place** — kind, label,
+note — keeping `grantedBy/At` and `updatedAt` (an edit is not a status flip);
+the audit log records every write. A store with no subscription row gets a
+comped row minted; an admin-owned store is refused (already free via
+`ADMIN_USER_IDS`).
 
-### Ending — revoke or expiry → an EXPIRED seller
+### Turning it off — `subscriptions.revokeComp` → an EXPIRED seller
 
-`subscriptions.revokeComp` (admin, audited) and the daily cron's expiry pass
-share ONE `endComp`: the row becomes `past_due` **with no invoice** — the same
-lock a lapsed subscription is in — and `compEndedAt` / `compEndReason`
-(`revoked` | `expired`) are stamped. No second free period: a sponsored store
-already had its runway. What that means on each side:
+`endComp` flips the row to `past_due` **with no invoice** — the same lock a
+lapsed subscription is in — and stamps `compEndedAt`. No second free period: a
+comped store already had its runway, and a trial would turn "off" into two more
+free weeks. What that means on each side:
 
 - **Buyers**: nothing changes. The storefront stays live and orders go through
   (the order pipeline never reads subscription status).
@@ -435,31 +437,24 @@ already had its runway. What that means on each side:
   paused until they choose a plan, paying online unlocks it straight away.
 - **Getting back**: `subscribeSelf` → pay → `settleInvoicePaid` → `active`,
   which also clears `compEndedAt` (so a later ordinary lapse reads "past
-  due"). Re-comping clears it too. A saved auto-renew method is deliberately
-  KEPT through a comp: nothing charges while there's no invoice, and when the
-  seller picks a plan the picker says plainly that the saved method is charged
-  (it used to promise a HitPay page — fixed in this ticket, since sponsored
-  stores with a method on file make that path common).
+  due"). Turning the comp back on clears it too, and starts a fresh stamp. A
+  saved auto-renew method is deliberately KEPT through a comp: nothing charges
+  while there's no invoice, and when the seller picks a plan the picker says
+  plainly that the saved method is charged (it used to promise a HitPay page —
+  fixed in this ticket, since comped stores with a method on file make that
+  path common).
 
-**Expiry** (`comp.expiresAt`, unset = free for life): the dialog stores the
-picked date as **end-of-day, admin-local** ("free until 31 Dec" covers the
-31st). Inside the final `COMP_ENDING_WARN_DAYS` (7) the cron sends
-`compEndingSoon` once per end date and the dashboard shows an amber,
-dismissable "runs until {date} — N days left" banner; a week rather than the
-trial's 3–5 days because a comp ending locks editing the same day. Past the
-date, the next cron run ends the comp (`compsExpired` / `compEndingReminders`
-in the cron counters; ≤ ~24h of extra access, like every cron boundary).
-
-**Founder report**: an expired-by-comp store files under its own
+**Founder report**: a store whose comp was turned off files under its own
 `pastDue.compEnded` bucket — not churn (it never paid for what it lost), but the
 conversion moment of a partner deal. **Founding**: comped settles claim no rank
 (`invoices.ts` guard) — moot, since no invoice can exist to settle.
 
-Tests: `convex/compAccounts.test.ts` (entitlements, self-serve refusals,
-grant/edit/validation, void-on-comp, hold release, revoke → expired, storefront
-live + growth-write lock, pay-to-unlock clears the marker, no hold when
-expired, re-comp, cron expiry + reminder, auto-renew never charged, backfill
-survival), `convex/lib/businessReport.test.ts`, `convex/lib/billingEmailCopy.test.ts`,
+Tests: `convex/compAccounts.test.ts` (admin-equivalent entitlements, self-serve
+refusals, turn on / edit keeps who-when / validation, void-on-comp, hold
+release, turn off → expired, storefront live + growth-write lock, pay-to-unlock
+clears the marker, no hold when expired, re-comp, a year of cron runs never ends
+a comp, auto-renew never charged, backfill survival),
+`convex/lib/businessReport.test.ts`, `convex/lib/billingEmailCopy.test.ts`,
 `src/lib/subscription.test.ts`, `src/lib/pricing-cta.test.ts`,
 `src/components/settings/billing-tab.test.tsx`,
 `src/components/dashboard/tier-pill.test.tsx`,
