@@ -154,14 +154,14 @@ export function PlanPickerCard({
 					{renewing ? "Renew your subscription" : "Ready to choose a plan?"}
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Pick a plan — you'll pay on HitPay's secure page and your plan
-					activates straight away.
+					{founding ? "Choose monthly or yearly" : "Pick a plan"} — you'll pay
+					on HitPay's secure page and your plan activates straight away.
 				</p>
 				{founding ? (
 					<p className="mt-2 text-xs text-muted-foreground">
-						As a Founding Member you stay on Founding Pro, billed monthly or
-						yearly. Your founding price holds as long as your subscription
-						doesn't lapse for more than 3 months.
+						As a Founding Member you stay on Founding Pro. Your founding price
+						holds as long as your subscription doesn't lapse for more than 3
+						months.
 					</p>
 				) : null}
 				{foundingPricingLapsed ? (
@@ -207,6 +207,35 @@ export function PlanPickerCard({
 				{plans.map((p) => {
 					const selected = plan === p;
 					const foundingApplies = founding && p === "pro";
+					const details = (
+						<div>
+							<p className="flex items-center gap-2 text-sm font-semibold">
+								{planName(p)}
+								{foundingApplies ? (
+									<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+										Founding 30% off
+									</span>
+								) : null}
+							</p>
+							<p className="mt-0.5 text-xs text-muted-foreground">
+								{PLAN_PITCH[p].pitch}
+							</p>
+							<p className="mt-1.5 text-sm font-medium tabular-nums">
+								{priceLine(p)}
+							</p>
+						</div>
+					);
+					// One plan on offer (a Founding Member) is a summary, not a
+					// choice — no radio to tick, nothing to press.
+					if (plans.length === 1)
+						return (
+							<div
+								key={p}
+								className="rounded-xl border border-foreground bg-muted/50 p-4"
+							>
+								{details}
+							</div>
+						);
 					return (
 						<button
 							key={p}
@@ -219,22 +248,7 @@ export function PlanPickerCard({
 									: "border-border hover:border-foreground/40"
 							}`}
 						>
-							<div>
-								<p className="flex items-center gap-2 text-sm font-semibold">
-									{planName(p)}
-									{foundingApplies ? (
-										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-											Founding 30% off
-										</span>
-									) : null}
-								</p>
-								<p className="mt-0.5 text-xs text-muted-foreground">
-									{PLAN_PITCH[p].pitch}
-								</p>
-								<p className="mt-1.5 text-sm font-medium tabular-nums">
-									{priceLine(p)}
-								</p>
-							</div>
+							{details}
 							<span
 								aria-hidden
 								className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${

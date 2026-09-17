@@ -9,8 +9,8 @@
 export function OwnerOnlyNote() {
 	return (
 		<p className="text-xs text-muted-foreground">
-			Only the store owner can do this: payments are authorised with their own
-			card or Touch 'n Go, so you can't do it while viewing as admin.
+			Only the store owner can do this — they authorise payments with their own
+			card or wallet, so it's switched off while you're viewing as admin.
 		</p>
 	);
 }
