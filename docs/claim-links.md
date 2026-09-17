@@ -449,6 +449,7 @@ outcome.
   confirmation push an order create does). Runs the **storefront validation
   set** (address shape by store country, delivery-on-offer, pickup
   resolution, notice floor = store ∨ strictest claim line, opening hours,
+  the **prep floor** and a kept **self-collect time** — `z8r3fdff97` — and
   live stock) but **deliberately skips the min-order rules and the mockup
   gate** — the seller keyed the lines and agreed the price (the counter
   posture; both pinned by test). Delivery fee resolves exactly like
@@ -459,7 +460,17 @@ outcome.
   `stampProductsOrdered`, customer link, retailer email + WA seller alert,
   buyer confirmation push). **Idempotent**: a second commit returns the
   existing order; a reopened completed link shows "already confirmed" +
-  the track page.
+  the track page. Each line freezes its product's **pickup note** from the
+  LIVE product at commit (`z8r3fdff97`) — what the claim page showed, so a
+  seller's correction between send and commit reaches the buyer; the claim
+  lines themselves stay the price-lock snapshot and carry no note.
+- **Prep time + pickup notes on the page** (`z8r3fdff97`): `getByToken`
+  decorates each frozen line with its product's live `prepMinutes` and
+  `pickupNote` (read in the same de-duplicated product pass as the notice
+  floor). The page runs the storefront's rules from
+  `src/lib/checkout-fulfilment.ts` — a pickup time when the store keeps hours
+  or a line needs prep, the prep hint, the pickup point's schedule hint, and
+  the "Before you collect" block — see [`fulfilment-date.md`](./fulfilment-date.md).
 - **After commit** the buyer lands on `/track/<token>`, where the SAME
   deadline keeps counting (`PaymentDueCountdown`, above the payment card)
   until real money — see the timer section for the pause/extension rules.

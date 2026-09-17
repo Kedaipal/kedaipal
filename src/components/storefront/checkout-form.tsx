@@ -1869,9 +1869,12 @@ export function CheckoutPage({
 					<CheckoutSection title="Anything else?">
 						<form.AppField name="note">
 							{(field) => (
+								// No time in the example: the time has its own field (delivery
+								// always, pickup when it matters), where the seller's sort and
+								// calendar can read it — a note can't be sorted.
 								<field.TextareaField
 									label="Note for seller (optional)"
-									placeholder="Any special instructions? e.g. no onions, deliver after 5pm"
+									placeholder="Any special instructions? e.g. no onions, gift wrap please"
 									rows={3}
 									maxLength={500}
 								/>
