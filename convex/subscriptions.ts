@@ -108,8 +108,11 @@ export type AccessState = {
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
-	/** Founding onboard promise (86eyb6z4r): lets the self-serve plan picker
-	 * show the discounted Pro price this store was promised. Owner-only. */
+	/** Founding onboard promise (86eyb6z4r). A fact about the store, never a
+	 * price input: it misses every member an admin marked founding and never
+	 * clears after a lapse, so every price reads the server-resolved
+	 * `billingGatewayAvailable.foundingPricing` instead (z8r3fdfty4).
+	 * Owner-only. */
 	foundingIntent?: boolean;
 	/** A downgrade scheduled for the end of the paid period (86eyb6z4r). The
 	 * seller keeps everything they bought until `effectiveAt`; the renewal

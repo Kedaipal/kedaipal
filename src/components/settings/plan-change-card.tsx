@@ -1,11 +1,18 @@
 import { useMutation } from "convex/react";
-import { ArrowDownRight, ArrowUpRight, CalendarClock } from "lucide-react";
+import {
+	ArrowDownRight,
+	ArrowUpRight,
+	Award,
+	CalendarClock,
+} from "lucide-react";
 import type * as React from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import {
 	type BillingCurrency,
+	FOUNDING_PLAN,
+	foundingPlanLocked,
 	isPlanUpgrade,
 	PLAN_FEATURES,
 	type Plan,
@@ -21,6 +28,7 @@ import {
 } from "../../lib/format";
 import { PLAN_LABEL, type SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { OwnerOnlyNote } from "./owner-only-note";
 
 /** What a seller actually loses by dropping to a lower tier, in their words —
  * derived from PLAN_FEATURES so it can never drift from the real gates. */
@@ -55,19 +63,34 @@ function featuresLost(from: Plan, to: Plan): string[] {
  *    every feature until then, and the dialog names exactly what goes away
  *    when it lands, because losing the customer database by surprise is the
  *    kind of thing a seller only discovers when they need it.
+ *
+ * A Founding Member has no tier to move to (Zaki, 17 Sep 2026): they stay on
+ * Founding Pro, so the card says so in place of offering a change, and
+ * `changePlan` refuses it server-side.
  */
 export function PlanChangeCard({
 	id,
 	highlight,
 	sub,
 	currency,
+	foundingPricing,
+	ownerOnly = false,
 	openInvoiceNumber,
 }: {
-	/** Anchor + ring for `?spot=plan_change`, on both rendered states. */
+	/** Anchor + ring for `?spot=plan_change`, on every rendered state. */
 	id?: string;
 	highlight?: FixHighlight;
 	sub: SubscriptionView;
+	/** What plan changes and renewals bill in — the gateway's
+	 * `renewalCurrency` (last paid invoice, else the country). */
 	currency: BillingCurrency;
+	/** SERVER-resolved (`billingGatewayAvailable.foundingPricing`). Never
+	 * `sub.foundingIntent`: that misses every member an admin marked founding
+	 * and shows a lapsed one a price `changePlan` won't bill (z8r3fdfty4). */
+	foundingPricing: boolean;
+	/** Admin act-as: the changes resolve the caller's own store server-side,
+	 * so they're disabled here with the reason. */
+	ownerOnly?: boolean;
 	/** The seller's unsettled invoice, if any. Moving UP writes a second bill,
 	 * which the server refuses while one is open — so the option is disabled
 	 * with the invoice named, rather than erroring on confirm. Moving DOWN
@@ -81,11 +104,14 @@ export function PlanChangeCard({
 
 	const current = sub.plan;
 	const cycle = sub.billingCycle ?? "monthly";
-	const founding = sub.foundingIntent === true;
+	const founding = foundingPricing;
 	const scheduled = sub.pendingPlanChange;
 
-	// Only the tiers a seller can actually buy, minus the one they're on.
-	const options = (["starter", "pro"] as const).filter((p) => p !== current);
+	// Only the tiers a seller can actually buy, minus the one they're on — and
+	// a Founding Member can buy Founding Pro alone.
+	const options = (["starter", "pro"] as const).filter(
+		(p) => p !== current && !foundingPlanLocked(p, founding),
+	);
 
 	const confirm = async (plan: "starter" | "pro") => {
 		setBusy(true);
@@ -156,10 +182,42 @@ export function PlanChangeCard({
 				<button
 					type="button"
 					onClick={undo}
-					className="tap-target inline-flex h-10 w-fit items-center rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+					disabled={ownerOnly}
+					className="tap-target inline-flex h-10 w-fit items-center rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
 				>
 					Cancel this change — stay on {PLAN_LABEL[current]}
 				</button>
+				{ownerOnly ? <OwnerOnlyNote /> : null}
+			</section>
+		);
+	}
+
+	// A Founding Member on Founding Pro: nothing to change to. Said where the
+	// change would have been offered, so "why can't I switch plans?" has its
+	// answer on the spot instead of an unexplained absence.
+	if (options.length === 0) {
+		return (
+			<section
+				id={id}
+				data-fix-highlight={highlight ?? undefined}
+				className={`flex flex-col gap-3 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+			>
+				<div className="flex items-start gap-3">
+					<Award className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+					<div>
+						<p className="text-sm font-medium">Your plan stays Founding Pro</p>
+						<p className="mt-1 text-xs text-muted-foreground">
+							Founding Members keep Founding Pro at{" "}
+							{formatPrice(
+								planPrice(FOUNDING_PLAN, cycle, true, currency),
+								currency,
+							)}
+							/{cycle === "annual" ? "year" : "month"}, so there's no other plan
+							to move to. Your founding price holds as long as your subscription
+							doesn't lapse for more than 3 months.
+						</p>
+					</div>
+				</div>
 			</section>
 		);
 	}
@@ -181,7 +239,7 @@ export function PlanChangeCard({
 			<div className="flex flex-col gap-2 sm:flex-row">
 				{options.map((plan) => {
 					const up = isPlanUpgrade(current, plan);
-					const blocked = up && openInvoiceNumber !== undefined;
+					const blocked = ownerOnly || (up && openInvoiceNumber !== undefined);
 					return (
 						<button
 							key={plan}
@@ -200,7 +258,10 @@ export function PlanChangeCard({
 					);
 				})}
 			</div>
-			{openInvoiceNumber && options.some((p) => isPlanUpgrade(current, p)) ? (
+			{ownerOnly ? <OwnerOnlyNote /> : null}
+			{!ownerOnly &&
+			openInvoiceNumber &&
+			options.some((p) => isPlanUpgrade(current, p)) ? (
 				<p className="text-xs text-muted-foreground">
 					Moving up waits until invoice{" "}
 					<span className="font-mono">{openInvoiceNumber}</span> is settled —

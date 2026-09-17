@@ -105,6 +105,19 @@ tier or invoices) — so the tab never presents the admin as a Starter/Pro/Scale
 **acting-as** a seller the chrome (banner + billing tab + directory row) shows that seller's
 **real** subscription state — white-glove needs to see where they stand.
 
+**Billing under act-as reads the seller, and leaves the owner's consent to
+the owner** (z8r3fdfty4). The tab's store-scoped reads —
+`invoices.myInvoices` and `subscriptionPayments.billingGatewayAvailable` —
+take an optional `retailerId`, passed only while acting-as; omitted, they
+resolve the CALLER, which inside act-as is the admin's own store (that is how
+a founding seller's plan was priced at the admin's list rate beside the
+admin's invoices). The billing WRITES that authorise or move money on the
+owner's card — subscribe, auto-renewal on/off, plan change and its undo, the
+first-invoice switch — stay caller-resolved and render **disabled with a
+one-line reason** under act-as. The Off-Season Hold switch
+(`subscriptions.setSeasonalHold`) already took `retailerId` and still works
+for the admin. To bill a seller by hand, use Admin → Billing.
+
 ## Reads that had to learn "admin"
 
 A few read paths gate visibility on ownership; they now also allow an admin:

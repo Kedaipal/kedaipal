@@ -30,8 +30,9 @@ grace. The overdue flip at `dueDate` is still the only lock.
 
 And **self-serve subscribe** (`invoices.subscribeSelf`): a trialing /
 past-due / cancelled seller picks Starter or Pro, monthly or annual (framed
-"2 months free"), gets an invoice + Pay-now button, pays, done. A
-`foundingIntent` store automatically gets its promised founding price;
+"2 months free"), gets an invoice + Pay-now button, pays, done. A store on
+founding pricing automatically gets its founding price — and is offered
+**Founding Pro only** (see "Founding Members stay on Founding Pro" below);
 founding is never otherwise self-selectable — the last slots stay Arif's to
 hand out via the admin console, and **manual admin issue/mark-paid is fully
 retained** for bank-transfer holdouts.
@@ -377,20 +378,97 @@ exactly when a stale date would be most misleading.
 The 30% founding price survives a subscription lapse of up to **3 months**
 (`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and NEW bills are
 at list price. The **rank + badge never revert** (existing rule) — only the
-pricing is forfeited. One rule for every automated issuer
-(`foundingPricingApplies`): cron renewals, `subscribeSelf`, the auto-renewal
-setup display amount and the pre-charge notice all resolve it identically —
-the check keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a
-claimed member's never-cleared `foundingIntent` flag deliberately cannot
-bypass it (unclaimed intent = the first conversion, no lapse to measure, so
-it always qualifies). The **admin issue form keeps its explicit founding
-checkbox** — Arif's judgment can override in either direction.
+pricing is forfeited. One rule for every automated issuer, in two shapes
+(lib/plans.ts):
 
-Never enforced silently: the founding ribbon states the condition, and a
-lapsed member's plan picker explains why prices read standard
-(`billingGatewayAvailable.foundingPricing` / `foundingPricingLapsed` — the
-picker must use the server-resolved flag, never client-side `foundingIntent`,
-or a lapsed member would SEE the discount while being BILLED list).
+- **`foundingPriceEligible`** — is this STORE on founding pricing? Tier-agnostic:
+  it keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a claimed
+  member's never-cleared `foundingIntent` flag deliberately cannot bypass the
+  window (unclaimed intent = the first conversion, no lapse to measure, so it
+  always qualifies). This is the answer for anything that prices MORE than one
+  tier — the billing page's cards, a Starter → Pro carryover at settle.
+- **`foundingPricingApplies`** — does a bill for `plan` get the founding price?
+  Eligibility narrowed to the tiers that have one. Asked with the store's
+  *current* plan it says "no" for a founding member on Starter — which is how
+  settle once priced their move back up at list (z8r3fdfty4, below).
+
+Cron renewals, `subscribeSelf`, `changePlan`, `switchPendingPlan`, the
+auto-renewal setup display amount and the pre-charge notice all resolve it
+identically. The **admin issue form keeps its explicit founding checkbox** —
+Arif's judgment can override in either direction.
+
+Never enforced silently: the founding ribbon states the condition (and stops
+saying "locked in" once it has lapsed), and a lapsed member's plan picker
+explains why prices read standard (`billingGatewayAvailable.foundingPricing` /
+`foundingPricingLapsed` — every card must use the server-resolved flag, never
+client-side `foundingIntent` or `isFoundingMember`, or a member would SEE one
+price while being BILLED another).
+
+## Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)
+
+A store on founding pricing has **one tier: Founding Pro** (`FOUNDING_PLAN`).
+It can move between **monthly and yearly** on that tier (RM104 / RM1,040,
+S$41 / S$410), and it can **stop renewing** (turn auto-renewal off) — it
+cannot change tier. Once the subscription lapses past the 3-month window the
+founding price is revoked, and from then on the store is an ordinary seller
+who can pick any plan.
+
+- **Server:** `foundingPlanLocked(plan, eligible)` is refused by
+  `subscribeSelf`, `changePlan` (both directions, before anything is scheduled
+  or billed) and `switchPendingPlan` (before the void, so a refused switch
+  leaves the bill intact), with one message that names what they CAN do.
+- **Billing page:** the plan picker shows a single "Founding Pro" card with the
+  monthly/yearly toggle; the change-plan slot reads "Your plan stays Founding
+  Pro" with the price and the lapse clause instead of offering a move; the
+  first-invoice "Switch to Starter" is not offered; the current-plan card says
+  "Founding Pro"; and the auto-renewal turn-off dialog states the lapse clause.
+- **Deliberately left alone:** a `pendingPlanChange` a founding member
+  scheduled BEFORE the lock still lands with its renewal, and the change card
+  keeps its "Cancel this change" undo so they can take it back. The Off-Season
+  Hold card is unchanged for founding members (the credits model removes holds
+  for everyone on 14 Oct).
+
+## Every billing-page price is server-resolved (z8r3fdfty4, 17 Sep 2026)
+
+Reported by Arif: a founding member's billing tab quoted **RM149** where they
+pay **RM104** (S$59 vs S$41). Two defects stacked:
+
+1. **Admin act-as read the wrong store.** `invoices.myInvoices` and
+   `subscriptionPayments.billingGatewayAvailable` resolved the CALLER — inside
+   act-as, the admin's own store — so the tab showed the seller's plan priced
+   at the admin's founding status and currency, above the admin's invoices.
+   Both now take an optional `retailerId` (owner-or-admin via
+   `requireRetailerAccess`); the tab passes it only while acting-as. The
+   owner-consent WRITES (`subscribeSelf`, `startAutoRenewSetup`,
+   `cancelAutoRenew`, `changePlan`, `cancelPlanChange`, `switchPendingPlan`)
+   still resolve the caller, so under act-as they are rendered **disabled with
+   the reason** ("Only the store owner can do this…") — a card is the owner's
+   to authorise, and a disabled control beats one that silently bills the
+   admin's store. `setSeasonalHold` was already act-as aware and is unchanged.
+2. **The page decided "founding?" three ways.** The picker used the server
+   flag; the plan-change card used `sub.foundingIntent` (missing every
+   admin-marked member); the annual card used the raw rank flag (ignoring the
+   lapse window); the first-invoice switch read the open invoice's discount
+   (which a Starter bill never has). All four now take
+   `billingGatewayAvailable.foundingPricing`, and cards whose price is
+   founding-sensitive wait for that read instead of flashing list.
+
+**One number everywhere.** `renewalQuote` (lib/plans.ts) is the single author
+of what the next renewal bills — tier (a scheduled downgrade lands with it),
+cycle, founding, currency (`renewalCurrency`: last PAID invoice, else the
+country) and amount (the hold price for a paused store). The cron's renewal
+invoice, the pre-charge email, HitPay's authorisation page (which used to show
+the MONTHLY price in the COUNTRY currency — wrong for annual and SGD-billed
+stores) and the billing page (`billingGatewayAvailable.nextRenewal`) all read
+it; `subscriptionPayments.test.ts` pins that all four agree across founding
+MY/SG, annual, SGD-billed MY, lapsed, scheduled-downgrade and hold stores. The
+auto-renewal card now states the amount in every state ("Next charge of
+RM104.00 on …", the off-state pitch, the declined-charge line).
+
+**Found on the way:** settle priced a Starter → Pro carryover with
+`foundingPricingApplies({ plan: sub.plan })` — "no" for a founding member on
+Starter — so the remainder bought 5 days of list Pro while the page (and the
+invoice) said 8 at the founding rate. Settle now uses `foundingPriceEligible`.
 
 At go-live this needs nothing: the current founding cohort is active (inside
 the window) so they keep renewing at their price automatically; everyone else

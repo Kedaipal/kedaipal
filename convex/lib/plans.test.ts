@@ -9,7 +9,10 @@ import {
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	FOUNDING_MONTHLY_PRICES,
+	FOUNDING_PLAN,
 	FOUNDING_PRICE_LAPSE_MS,
+	foundingPlanLocked,
+	foundingPriceEligible,
 	foundingPricingApplies,
 	HOLD_MONTHLY_PRICES,
 	isPlanSelectable,
@@ -24,6 +27,8 @@ import {
 	planPrice,
 	planQualifiesForFounding,
 	PLANS,
+	renewalCurrency,
+	renewalQuote,
 	starterPricePerDay,
 	UNLIMITED,
 } from "./plans";
@@ -302,6 +307,186 @@ describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
 				now: NOW,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("foundingPriceEligible — the STORE is on founding pricing (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const claimed = {
+		isFoundingMember: true,
+		foundingIntent: false, // marked founding by admin — the v1 path
+		now: NOW,
+	};
+
+	test("tier-agnostic: a founding member is eligible whatever plan they sit on", () => {
+		// The trap it closes: asking foundingPricingApplies with the store's
+		// CURRENT plan says "no" for a member on Starter, pricing their move back
+		// up to Founding Pro at list.
+		expect(foundingPriceEligible({ ...claimed, paidThrough: NOW - DAY })).toBe(
+			true,
+		);
+		expect(
+			foundingPricingApplies({
+				...claimed,
+				plan: "starter",
+				paidThrough: NOW - DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("an admin-marked member with foundingIntent unset is eligible", () => {
+		expect(foundingPriceEligible({ ...claimed, paidThrough: NOW + DAY })).toBe(
+			true,
+		);
+	});
+
+	test("the lapse window revokes it; rank flags alone never rescue it", () => {
+		expect(
+			foundingPriceEligible({ ...claimed, paidThrough: NOW - 90 * DAY }),
+		).toBe(true);
+		expect(
+			foundingPriceEligible({
+				...claimed,
+				foundingIntent: true,
+				paidThrough: NOW - 91 * DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("foundingPricingApplies is eligibility narrowed to founding-priced tiers", () => {
+		for (const plan of PLANS) {
+			for (const paidThrough of [undefined, NOW - DAY, NOW - 91 * DAY]) {
+				const args = { ...claimed, paidThrough };
+				expect(foundingPricingApplies({ ...args, plan })).toBe(
+					plan !== "starter" && foundingPriceEligible(args),
+				);
+			}
+		}
+	});
+});
+
+describe("foundingPlanLocked — Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)", () => {
+	test("a store on founding pricing may only be billed for Founding Pro", () => {
+		expect(FOUNDING_PLAN).toBe("pro");
+		expect(foundingPlanLocked("pro", true)).toBe(false);
+		expect(foundingPlanLocked("starter", true)).toBe(true);
+		expect(foundingPlanLocked("scale", true)).toBe(true);
+	});
+
+	test("once the founding price is revoked, every plan is open again", () => {
+		for (const plan of PLANS) expect(foundingPlanLocked(plan, false)).toBe(false);
+	});
+});
+
+describe("renewalCurrency", () => {
+	test("follows the last PAID invoice, else the country", () => {
+		expect(renewalCurrency({ lastPaidCurrency: "SGD", country: "MY" })).toBe(
+			"SGD",
+		);
+		expect(renewalCurrency({ lastPaidCurrency: "MYR", country: "SG" })).toBe(
+			"MYR",
+		);
+		expect(renewalCurrency({ lastPaidCurrency: undefined, country: "SG" })).toBe(
+			"SGD",
+		);
+		// An unreadable currency on an old row never beats the country.
+		expect(renewalCurrency({ lastPaidCurrency: "USD", country: "SG" })).toBe(
+			"SGD",
+		);
+		expect(
+			renewalCurrency({ lastPaidCurrency: undefined, country: undefined }),
+		).toBe("MYR");
+	});
+});
+
+describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const activePro = {
+		status: "active" as const,
+		plan: "pro" as const,
+		billingCycle: "monthly" as const,
+		pendingPlanChange: undefined,
+		isFoundingMember: false,
+		foundingIntent: false,
+		paidThrough: NOW - 1000,
+		lastPaidCurrency: undefined,
+		country: "MY" as const,
+		now: NOW,
+	};
+	const founding = { ...activePro, isFoundingMember: true };
+
+	test("the four-cell matrix: founding / list × MYR / SGD (Pro monthly)", () => {
+		expect(renewalQuote(founding)).toEqual({
+			kind: "plan",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: true,
+			currency: "MYR",
+			amount: 10400,
+		});
+		expect(renewalQuote({ ...founding, country: "SG" })).toMatchObject({
+			currency: "SGD",
+			amount: 4100,
+		});
+		expect(renewalQuote(activePro)).toMatchObject({
+			founding: false,
+			currency: "MYR",
+			amount: 14900,
+		});
+		expect(renewalQuote({ ...activePro, country: "SG" })).toMatchObject({
+			currency: "SGD",
+			amount: 5900,
+		});
+	});
+
+	test("annual bills 10 months at the store's own rate", () => {
+		expect(
+			renewalQuote({ ...founding, billingCycle: "annual" }).amount,
+		).toBe(104000);
+		expect(
+			renewalQuote({ ...founding, billingCycle: "annual", country: "SG" })
+				.amount,
+		).toBe(41000);
+	});
+
+	test("the currency follows the last paid invoice, not the country", () => {
+		expect(
+			renewalQuote({ ...founding, country: "MY", lastPaidCurrency: "SGD" }),
+		).toMatchObject({ currency: "SGD", amount: 4100 });
+	});
+
+	test("a lapsed founding member renews at list", () => {
+		expect(
+			renewalQuote({ ...founding, paidThrough: NOW - 91 * DAY }),
+		).toMatchObject({ founding: false, amount: 14900 });
+	});
+
+	test("a scheduled downgrade lands with the renewal — plan AND price", () => {
+		expect(
+			renewalQuote({ ...activePro, pendingPlanChange: "starter" }),
+		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
+	});
+
+	test("a paused store renews the hold: flat, monthly, never founding, tier kept", () => {
+		const held = {
+			...founding,
+			status: "on_hold" as const,
+			billingCycle: "annual" as const,
+			pendingPlanChange: "starter" as const,
+		};
+		expect(renewalQuote(held)).toEqual({
+			kind: "hold",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			amount: HOLD_MONTHLY_PRICES.MYR,
+		});
+		expect(renewalQuote({ ...held, country: "SG" }).amount).toBe(
+			HOLD_MONTHLY_PRICES.SGD,
+		);
 	});
 });
 

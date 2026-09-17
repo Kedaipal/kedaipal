@@ -16,7 +16,7 @@ import {
 	type MutationCtx,
 	query,
 } from "./_generated/server";
-import { isAdmin, requireAdmin } from "./lib/auth";
+import { isAdmin, requireAdmin, requireRetailerAccess } from "./lib/auth";
 import { gatewayPaymentMethodTag } from "./lib/hitpayBilling";
 import {
 	invoiceToSubscriptionData,
@@ -28,6 +28,8 @@ import {
 	type BillingCurrency,
 	type BillingCycle,
 	DEFAULT_BILLING_CURRENCY,
+	foundingPlanLocked,
+	foundingPriceEligible,
 	foundingPricingApplies,
 	HOLD_MONTHLY_PRICES,
 	isPlanSelectable,
@@ -35,6 +37,8 @@ import {
 	type Plan,
 	planChangeCarryoverDays,
 	planPrice,
+	renewalCurrency,
+	renewalQuote,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
 import { getPaymentProvider, type PaymentRecord } from "./payments/provider";
@@ -43,6 +47,12 @@ import { defaultCapsForPlan } from "./subscriptions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DUE_GRACE_DAYS = 14; // pay-by window when the admin doesn't override it
+
+/** The refusal every self-serve plan path gives a store on founding pricing
+ * that asks for anything but Founding Pro (`foundingPlanLocked`). Names the one
+ * thing they CAN do, so the refusal is never a dead end. */
+const FOUNDING_PLAN_LOCKED_MESSAGE =
+	"Founding Members stay on Founding Pro — your founding price only exists on Pro. To stop renewing, turn off auto-renewal on your billing page.";
 
 /** Who created an invoice — the schema's `origin` union (absent reads as "admin"). */
 type InvoiceOrigin = NonNullable<Doc<"invoices">["origin"]>;
@@ -121,8 +131,13 @@ async function settleInvoicePaid(
 		fromCycle: sub.billingCycle,
 		toPlan: billedPlan,
 		toCycle: billedCycle,
-		founding: foundingPricingApplies({
-			plan: sub.plan,
+		// STORE eligibility, never "does the plan being left have a founding
+		// price": a founding member moving Starter → Pro pays the founding Pro
+		// invoice, so the days their remainder buys are priced at that rate
+		// too. Asked with `sub.plan` this answered "no" and granted 5 days
+		// where the billing page promised 8 (z8r3fdfty4). `planPrice` confines
+		// the discount to Pro/Scale on each side of the conversion.
+		founding: foundingPriceEligible({
 			isFoundingMember: retailerForCarryover?.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
@@ -663,6 +678,19 @@ export const subscribeSelf = mutation({
 			throw new ConvexError(
 				"You're already on an active plan. Message us to change plans mid-cycle.",
 			);
+		// Founding pricing: an unclaimed onboard promise always gets it; a
+		// CLAIMED member keeps it only within the 3-month lapse window
+		// (foundingPriceEligible — rank/badge stay either way). Everyone else
+		// pays list. The rank itself claims at settle. A store on it renews
+		// Founding Pro and nothing else (foundingPlanLocked).
+		const eligibility = {
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now: Date.now(),
+		};
+		if (foundingPlanLocked(plan, foundingPriceEligible(eligibility)))
+			throw new ConvexError(FOUNDING_PLAN_LOCKED_MESSAGE);
 		const existingPending = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
@@ -673,17 +701,7 @@ export const subscribeSelf = mutation({
 				`You already have a pending invoice (${existingPending.invoiceNumber}) — pay that one, or contact us to change it.`,
 			);
 
-		// Founding pricing: an unclaimed onboard promise always gets it; a
-		// CLAIMED member keeps it only within the 3-month lapse window
-		// (foundingPricingApplies — rank/badge stay either way). Everyone else
-		// pays list. The rank itself claims at settle.
-		const founding = foundingPricingApplies({
-			plan,
-			isFoundingMember: retailer.isFoundingMember === true,
-			foundingIntent: sub.foundingIntent === true,
-			paidThrough: sub.currentPeriodEnd,
-			now: Date.now(),
-		});
+		const founding = foundingPricingApplies({ ...eligibility, plan });
 		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: retailer._id,
@@ -775,6 +793,16 @@ export const changePlan = mutation({
 			);
 		if (plan === sub.plan)
 			throw new ConvexError(`You're already on ${plan}.`);
+		// Founding Members stay on Founding Pro (Zaki, 17 Sep 2026) — refused in
+		// BOTH directions before anything is scheduled or billed.
+		const eligibility = {
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now: Date.now(),
+		};
+		if (foundingPlanLocked(plan, foundingPriceEligible(eligibility)))
+			throw new ConvexError(FOUNDING_PLAN_LOCKED_MESSAGE);
 
 		if (!isPlanUpgrade(sub.plan, plan)) {
 			// Downgrade: schedule it, charge nothing, change nothing today.
@@ -800,23 +828,17 @@ export const changePlan = mutation({
 			throw new ConvexError(
 				`Settle your open invoice (${existingPending.invoiceNumber}) first — then you can move up a plan.`,
 			);
-		const founding = foundingPricingApplies({
-			plan,
-			isFoundingMember: retailer.isFoundingMember === true,
-			foundingIntent: sub.foundingIntent === true,
-			paidThrough: sub.currentPeriodEnd,
-			now: Date.now(),
-		});
+		const founding = foundingPricingApplies({ ...eligibility, plan });
 		const invoices = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.order("desc")
 			.collect();
 		const lastPaid = invoices.find((inv) => inv.status === "paid");
-		const currency: BillingCurrency =
-			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
-				? lastPaid.currency
-				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const currency = renewalCurrency({
+			lastPaidCurrency: lastPaid?.currency,
+			country: retailer.country,
+		});
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: retailer._id,
 			subscriptionId: sub._id,
@@ -1037,6 +1059,15 @@ export const switchPendingPlan = mutation({
 				`Your invoice is already for ${plan === "pro" ? "Pro" : "Starter"}.`,
 			);
 		const now = Date.now();
+		const eligibility = {
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			now,
+		};
+		// Checked before the void — a refused switch must leave the bill intact.
+		if (foundingPlanLocked(plan, foundingPriceEligible(eligibility)))
+			throw new ConvexError(FOUNDING_PLAN_LOCKED_MESSAGE);
 		await ctx.db.patch(pending._id, {
 			status: "void",
 			voidedAt: now,
@@ -1050,13 +1081,7 @@ export const switchPendingPlan = mutation({
 				{ requestId: pending.gatewayRequestId },
 			);
 		}
-		const founding = foundingPricingApplies({
-			plan,
-			isFoundingMember: retailer.isFoundingMember === true,
-			foundingIntent: sub.foundingIntent === true,
-			paidThrough: sub.currentPeriodEnd,
-			now,
-		});
+		const founding = foundingPricingApplies({ ...eligibility, plan });
 		const currency: BillingCurrency =
 			pending.currency === "SGD" ? "SGD" : "MYR";
 		const invoiceId = await insertPendingInvoice(ctx, {
@@ -1108,9 +1133,6 @@ export const internalIssueRenewalInvoice = internalMutation({
 		) {
 			return { issued: false, autoCharge: false };
 		}
-		// A held subscription renews the HOLD, not the tier: flat price, no
-		// founding discount, monthly. The tier it resumes to rides on `plan`.
-		const kind: "plan" | "hold" = sub.status === "on_hold" ? "hold" : "plan";
 		const pending = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
@@ -1119,47 +1141,50 @@ export const internalIssueRenewalInvoice = internalMutation({
 		if (pending) return { issued: false, autoCharge: false };
 		const retailer = await ctx.db.get(sub.retailerId);
 		if (!retailer) return { issued: false, autoCharge: false };
-
-		// Founding pricing honours the 3-month lapse window (cron renewals fire
-		// right at period end, so an ACTIVE member is virtually always inside
-		// it — the check is here for uniformity with subscribeSelf).
-		// A downgrade the seller scheduled takes effect HERE — the renewal is the
-		// first bill of the new tier. Read before pricing so the discount, the
-		// caps at settle and the amount all describe the same plan.
-		//
-		// A HOLD renewal is NOT that bill (z8r3fday24 × 86eyb6z4r, reconciled
-		// 14 Sep): it charges the flat hold price and `settleInvoicePaid` leaves
-		// the tier alone, so applying the change here would bill nothing for it
-		// and consuming the flag below would delete a downgrade the seller never
-		// received. It stays scheduled and lands on the first TIER bill after
-		// they resume.
-		const renewingPlan =
-			kind === "hold" ? sub.plan : (sub.pendingPlanChange?.plan ?? sub.plan);
-		const founding = foundingPricingApplies({
-			plan: renewingPlan,
-			isFoundingMember: retailer.isFoundingMember === true,
-			foundingIntent: sub.foundingIntent === true,
-			paidThrough: sub.currentPeriodEnd,
-			now,
-		});
 		const invoices = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
 			.order("desc")
 			.collect();
-		const lastPaid = invoices.find((inv) => inv.status === "paid");
-		const currency: BillingCurrency =
-			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
-				? lastPaid.currency
-				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+
+		// What this bill says comes from `renewalQuote` — the same author the
+		// heads-up email, HitPay's authorisation page and the billing page read,
+		// so none of them can quote a different number (z8r3fdfty4). It encodes:
+		//  - A held subscription renews the HOLD, not the tier: flat price, no
+		//    founding discount, monthly. The tier it resumes to rides on `plan`.
+		//  - Founding pricing honours the 3-month lapse window (cron renewals
+		//    fire right at period end, so an ACTIVE member is virtually always
+		//    inside it — the check is there for uniformity with subscribeSelf).
+		//  - A downgrade the seller scheduled takes effect HERE — the renewal is
+		//    the first bill of the new tier, so the discount, the caps at settle
+		//    and the amount all describe the same plan.
+		//  - A HOLD renewal is NOT that bill (z8r3fday24 × 86eyb6z4r, reconciled
+		//    14 Sep): it charges the flat hold price and `settleInvoicePaid`
+		//    leaves the tier alone, so applying the change there would bill
+		//    nothing for it and consuming the flag below would delete a
+		//    downgrade the seller never received. It stays scheduled and lands
+		//    on the first TIER bill after they resume.
+		const quote = renewalQuote({
+			status: sub.status,
+			plan: sub.plan,
+			billingCycle: sub.billingCycle,
+			pendingPlanChange: sub.pendingPlanChange?.plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			paidThrough: sub.currentPeriodEnd,
+			lastPaidCurrency: invoices.find((inv) => inv.status === "paid")?.currency,
+			country: retailer.country,
+			now,
+		});
+		const kind = quote.kind;
 
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: sub.retailerId,
 			subscriptionId: sub._id,
-			plan: renewingPlan,
-			billingCycle: sub.billingCycle,
-			founding: kind === "plan" && founding,
-			currency,
+			plan: quote.plan,
+			billingCycle: quote.billingCycle,
+			founding: quote.founding,
+			currency: quote.currency,
 			// A forced issue comes from the seller's own pause/resume tap —
 			// their choice, so it is self-serve; the cron's issues are renewals.
 			origin: force ? "self_serve" : "auto_renewal",
@@ -1346,16 +1371,23 @@ export const myNextDueInvoice = query({
 	},
 });
 
-/** The caller's own invoices (billing page). Newest first. */
+/** The caller's own invoices (billing page). Newest first.
+ *
+ * `retailerId` is the admin act-as path: without it the query resolves the
+ * CALLER's store, so an admin viewing a seller's billing tab was shown their
+ * OWN invoices beside the seller's plan (z8r3fdfty4). Owner-or-admin gated by
+ * `requireRetailerAccess`; omitted, it is the unchanged owner read. */
 export const myInvoices = query({
-	args: {},
-	handler: async (ctx): Promise<Doc<"invoices">[]> => {
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (ctx, { retailerId }): Promise<Doc<"invoices">[]> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return [];
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-			.first();
+		const retailer = retailerId
+			? (await requireRetailerAccess(ctx, retailerId)).retailer
+			: await ctx.db
+					.query("retailers")
+					.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+					.first();
 		if (!retailer) return [];
 		return ctx.db
 			.query("invoices")

@@ -17,7 +17,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { isUnlimited } from "../../../convex/lib/plans";
+import {
+	FOUNDING_PLAN,
+	foundingPlanLocked,
+	isUnlimited,
+} from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -73,14 +77,29 @@ export function BillingTab({
 	const ring = (anchor: string): FixHighlight | undefined =>
 		target?.anchor === anchor ? target.highlight : undefined;
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
+	// Admin act-as (z8r3fdfty4): every store-scoped billing READ names the
+	// seller's store. Omitted, the server answers for the CALLER — inside
+	// act-as that is the admin's OWN store, which priced a founding seller's
+	// plan at the admin's list rate and listed the admin's invoices under it.
+	const actingAsAdmin = retailer.actingAsAdmin === true;
+	const storeArgs = { retailerId: actingAsAdmin ? retailer._id : undefined };
 	const invoices =
-		useQuery(convexQuery(api.invoices.myInvoices, {})).data ?? [];
+		useQuery(convexQuery(api.invoices.myInvoices, storeArgs)).data ?? [];
 	const instructions = useQuery(
 		convexQuery(api.billing.paymentInstructions, {}),
 	).data;
 	const gateway = useQuery(
-		convexQuery(api.subscriptionPayments.billingGatewayAvailable, {}),
+		convexQuery(api.subscriptionPayments.billingGatewayAvailable, storeArgs),
 	).data;
+	// …while every billing WRITE stays the owner's: they resolve the caller's
+	// store server-side, and paying or saving a card is the owner's consent to
+	// give. Shown disabled, with the reason, rather than acting on the admin.
+	const ownerOnly = actingAsAdmin;
+	// On founding pricing — SERVER-resolved, the only founding answer any price
+	// on this page may use (z8r3fdfty4). False until the gateway read lands, so
+	// every card that quotes a founding-sensitive price waits for it instead of
+	// flashing list.
+	const foundingPricing = gateway?.foundingPricing === true;
 	const supportWa = useSupportWaNumber();
 
 	// Back from the invoice's HitPay checkout: reconcile against HitPay's
@@ -158,15 +177,22 @@ export function BillingTab({
 	// Annual billing is offered here rather than on /pricing: manual billing has
 	// no self-serve checkout, so a public annual price would be a dead-end CTA,
 	// while a year paid by one transfer is exactly what these rails already do
-	// well. See src/lib/annual-billing.ts + docs/pricing.md.
-	const isFounding = retailer.isFoundingMember === true;
-	const annualOffer = resolveAnnualOffer({
-		subscription: sub,
-		invoices,
-		now,
-		founding: isFounding,
-		adminOwnAccount,
-	});
+	// well. See src/lib/annual-billing.ts + docs/pricing.md. Held back until the
+	// gateway read lands — its quote is founding-sensitive.
+	const annualOffer = gateway
+		? resolveAnnualOffer({
+				subscription: sub,
+				invoices,
+				now,
+				founding: foundingPricing,
+				adminOwnAccount,
+			})
+		: ({ kind: "hidden" } as const);
+	// Founding Members stay on Founding Pro — named as such wherever the plan is.
+	const planLabel =
+		foundingPricing && (sub?.plan ?? "pro") === FOUNDING_PLAN
+			? "Founding Pro"
+			: PLAN_LABEL[sub?.plan ?? "pro"];
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
@@ -230,10 +256,9 @@ export function BillingTab({
 							Founding Member #{retailer.foundingMemberRank} of 10
 						</p>
 						<p className="text-xs text-amber-800/80 dark:text-amber-300/80">
-							Your 30% discount is locked in — thank you for backing Kedaipal
-							early. It stays yours as long as your subscription doesn't lapse
-							for more than 3 months; your rank and badge are permanent either
-							way.
+							{gateway?.foundingPricingLapsed
+								? "Your rank and badge are yours for good. Your founding price lapsed after more than 3 months without an active subscription, so new bills are at the standard price."
+								: "Your 30% discount is locked in — thank you for backing Kedaipal early. It stays yours as long as your subscription doesn't lapse for more than 3 months; your rank and badge are permanent either way."}
 						</p>
 					</div>
 				</div>
@@ -263,9 +288,7 @@ export function BillingTab({
 							<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 								Current plan
 							</p>
-							<p className="mt-1 text-lg font-semibold">
-								{PLAN_LABEL[sub?.plan ?? "pro"]}
-							</p>
+							<p className="mt-1 text-lg font-semibold">{planLabel}</p>
 						</div>
 						<span
 							className={`rounded-full px-2.5 py-1 text-xs font-medium ${
@@ -288,9 +311,8 @@ export function BillingTab({
 					) : null}
 					{held ? (
 						<p className="text-xs text-muted-foreground">
-							{HOLD_LABEL} — ordering is paused. Your{" "}
-							{PLAN_LABEL[sub?.plan ?? "pro"]} plan comes back with one tap
-							below.
+							{HOLD_LABEL} — ordering is paused. Your {planLabel} plan comes
+							back with one tap below.
 						</p>
 					) : null}
 					{freePeriod.kind === "free" ? (
@@ -375,7 +397,9 @@ export function BillingTab({
 					id={SPOTLIGHT_ANCHOR.plan_change.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
-					currency={gateway.currency}
+					currency={gateway.renewalCurrency}
+					foundingPricing={gateway.foundingPricing}
+					ownerOnly={ownerOnly}
 					openInvoiceNumber={pending?.invoiceNumber}
 				/>
 			) : null}
@@ -405,7 +429,7 @@ export function BillingTab({
 				state={annualOffer}
 				slug={retailer.slug}
 				supportWa={supportWa}
-				founding={isFounding}
+				founding={foundingPricing}
 			/>
 
 			{/* Pending invoice + how to pay */}
@@ -452,15 +476,24 @@ export function BillingTab({
 					) : null}
 					{/* Switch tier before paying (z8r3fday24): machine-issued plan
 					    invoices only — the first invoice, or a self-serve pick. The
-					    server refuses admin-issued and hold invoices too. */}
-					{(pending.kind ?? "plan") === "plan" &&
+					    server refuses admin-issued and hold invoices too, and a
+					    Founding Member's move off Founding Pro (they have no other
+					    tier). Waits for the gateway read: the quoted price is
+					    founding-sensitive. */}
+					{gateway &&
+					(pending.kind ?? "plan") === "plan" &&
 					(pending.origin === "free_period_end" ||
 						pending.origin === "self_serve") &&
-					(pending.plan === "pro" || pending.plan === "starter") ? (
+					(pending.plan === "pro" || pending.plan === "starter") &&
+					!foundingPlanLocked(
+						pending.plan === "pro" ? "starter" : "pro",
+						foundingPricing,
+					) ? (
 						<FirstInvoiceSwitch
 							invoicePlan={pending.plan}
 							currency={pending.currency === "SGD" ? "SGD" : "MYR"}
-							founding={(pending.foundingDiscount ?? 0) > 0}
+							founding={foundingPricing}
+							ownerOnly={ownerOnly}
 						/>
 					) : null}
 
@@ -592,6 +625,7 @@ export function BillingTab({
 							renewing={sub.status !== "trialing"}
 							foundingPricing={gateway.foundingPricing}
 							foundingPricingLapsed={gateway.foundingPricingLapsed}
+							ownerOnly={ownerOnly}
 							onRedirectingChange={setRedirecting}
 						/>
 					</div>
@@ -653,6 +687,14 @@ export function BillingTab({
 					highlight={ring(SPOTLIGHT_ANCHOR.auto_renewal.anchor)}
 					sub={sub}
 					methods={gateway.methods}
+					renewal={gateway.nextRenewal}
+					pendingCharge={
+						pending
+							? { amount: pending.total, currency: pending.currency }
+							: undefined
+					}
+					founding={gateway.foundingPricing}
+					ownerOnly={ownerOnly}
 					returnFromSetup={billingReturn === "autorenew"}
 					onReturnHandled={(attached) => {
 						// Setup abandoned → nothing will charge; re-expose the pay

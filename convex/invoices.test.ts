@@ -1255,6 +1255,32 @@ describe("invoices.changePlan — mid-cycle tier moves", () => {
 		expect(after?.currentPeriodEnd).toBe(at + 30 * DAY + 5 * DAY);
 	});
 
+	test("A3 — a founding member's Starter → Founding Pro upgrade carries days at THEIR rate (z8r3fdfty4)", async () => {
+		// Admin-marked founding (rank flag, `foundingIntent` unset) — the v1 path
+		// most of the cohort took. The billing page quotes the carryover at the
+		// founding Pro rate; settle used to ask "does STARTER have a founding
+		// price?" (no) and price it at list, granting 5 days where 8 were shown.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_fup", "fup-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(retailerId, { isFoundingMember: true, foundingMemberRank: 5 }),
+		);
+		const at = Date.now();
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		expect((await getInvoice(t, res.invoiceId))?.total).toBe(10400);
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		// 10 Starter days (RM79/30 a day) buy 8 Founding Pro days (RM104/30 a
+		// day) — at list Pro (RM149/30) the same value buys only 5.
+		expect((await getSubFor(t, retailerId))?.currentPeriodEnd).toBe(
+			at + 30 * DAY + 8 * DAY,
+		);
+	});
+
 	test("A4 — the settled invoice states the period the money actually bought", async () => {
 		const t = setup();
 		const { asUser, retailerId } = await seedActive(t, "u_rcpt", "rcpt-store", {

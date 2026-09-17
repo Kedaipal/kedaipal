@@ -51,6 +51,13 @@ A **plain Pro invoice never claims a rank** — founding must be deliberate. The
 for `isFoundingMember || foundingIntent`. `paidAt`/`firstInvoiceId` on the
 `foundingMembers` row fill in when the first founding invoice is paid.
 
+**Founding Members stay on Founding Pro** (Zaki, 17 Sep 2026): monthly or yearly,
+never another tier, until the founding price lapses (3 months without an active
+subscription), after which they are ordinary sellers. Every self-serve plan path
+refuses the move server-side (`foundingPlanLocked`); the admin issue form is not
+gated — Arif's judgment stays the override. See
+[`hitpay-recurring.md`](./hitpay-recurring.md#founding-members-stay-on-founding-pro-zaki-17-sep-2026).
+
 **Nav pill (`TierPill`, sidebar + mobile header + settings card).** A founding
 member's status chip reads **"Founding #N"** (± trial/past-due state), which on
 its own hides their actual tier — so the pill renders a **second neutral tier
