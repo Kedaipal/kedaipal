@@ -64,8 +64,11 @@ before accepting it.
 - Before each scenario, say in one line what you're about to do and what should
   happen. Take a screenshot at every point where there's something to judge, so
   what you see matches what he sees.
-- Check mobile (`resize_window` 375×812) and desktop wherever the change
-  renders, and reset to desktop at the end.
+- Check mobile and desktop wherever the change renders. Try `resize_window`
+  375×812 first, then **check `window.innerWidth` actually changed**. A
+  maximised or tab-grouped Chrome often ignores it. If it didn't change, ask
+  Zaki to press **⌘⇧M** (DevTools device toolbar) and pick an iPhone preset,
+  rather than calling a desktop render "mobile". Reset to desktop at the end.
 - For behaviour that depends on the clock (opening hours, "today", expiries),
   set the data up relative to **now** rather than waiting for real time.
 - Read the page (`read_page` / `get_page_text` / `find`) to verify text, and use
