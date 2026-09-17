@@ -50,7 +50,11 @@ import {
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
-import { prepFloorIssue, slowestPrep } from "./lib/prepFloor";
+import {
+	prepFloorHours,
+	prepFloorIssue,
+	slowestPrep,
+} from "./lib/prepFloor";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -1187,7 +1191,12 @@ export const create = mutation({
 		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
 			const issue = prepFloorIssue({
-				hours: retailer.openingHours,
+				// A date-only order's prep runs to the end of the day, not to
+				// closing time — see prepFloorHours.
+				hours: prepFloorHours(
+					retailer.openingHours,
+					sanitizedFulfilmentTime !== undefined,
+				),
 				dateEpoch: sanitizedFulfilmentDate,
 				timeMinutes: sanitizedFulfilmentTime,
 				now: Date.now(),

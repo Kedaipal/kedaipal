@@ -23,7 +23,11 @@ import {
 	type OpeningHours,
 	selectableTimeWindows,
 } from "../../convex/lib/openingHours";
-import { type CartPrep, NO_CART_PREP } from "../../convex/lib/prepFloor";
+import {
+	type CartPrep,
+	NO_CART_PREP,
+	prepFloorHours,
+} from "../../convex/lib/prepFloor";
 import {
 	type CopyPart,
 	fulfilmentTimeIssue,
@@ -124,7 +128,8 @@ type DayArgs = {
 	now: number;
 	prep: CartPrep;
 	/** `asksForTime` — a timed day needs a pickable slot left; a date-only
-	 * day just has to be open and not already out of prep time. */
+	 * day just has to be open and not already out of prep time (judged to the
+	 * end of the day, not to closing — `prepFloorHours`). */
 	timed: boolean;
 	kind: FulfilmentKind;
 	storeName: string;
@@ -133,12 +138,13 @@ type DayArgs = {
 /**
  * The day-level issue for a schedule, or `null` when the day can be offered.
  * A timed day needs a slot left (T1's `no_slot`, prep included). A date-only
- * day doesn't: only a closed weekday, or a today the cart's prep has used up,
- * rules it out — a date-only pickup after hours was always allowed.
+ * day doesn't: only a closed weekday, or a today the cart's prep outlasts,
+ * rules it out — a date-only pickup after hours was always allowed. Its prep
+ * runs to midnight, the rule `orders.create` judges it by (`prepFloorHours`).
  */
 function dayIssue(args: Omit<DayArgs, "kind" | "storeName">): TimeIssue | null {
 	const issue = fulfilmentTimeIssue({
-		hours: args.hours,
+		hours: prepFloorHours(args.hours, args.timed),
 		dayEpoch: args.dateEpoch,
 		timeMinutes: undefined,
 		now: args.now,
@@ -202,7 +208,8 @@ export function fulfilmentTimeCopy(
  * absorbed overnight). `null` whenever it changes nothing the buyer can see:
  * no prep, a notice of a day or more (today is out regardless), today already
  * over for other reasons (the hours say so), or a prep that doesn't move
- * today's earliest slot.
+ * today's earliest slot. A date-only fulfilment reads its prep to the end of
+ * the day (`prepFloorHours`), the way the server judges it.
  */
 export function prepHint(args: {
 	hours: OpeningHours | undefined;
@@ -216,9 +223,10 @@ export function prepHint(args: {
 	const { hours, now, prep, kind, noticeDays, timed } = args;
 	if (prep.minutes <= 0 || noticeDays >= 1) return null;
 	const today = todayMytMidnight(now);
-	const withoutPrep = selectableTimeWindows(hours, today, now, 0);
+	const judged = prepFloorHours(hours, timed);
+	const withoutPrep = selectableTimeWindows(judged, today, now, 0);
 	if (withoutPrep.length === 0) return null;
-	const withPrep = selectableTimeWindows(hours, today, now, prep.minutes);
+	const withPrep = selectableTimeWindows(judged, today, now, prep.minutes);
 	const takes = `“${prep.productName}” takes about ${formatPrepDuration(prep.minutes)} to prepare`;
 	if (withPrep.length === 0) return [`${takes}, so it can't be ready today.`];
 	if (withPrep[0].open <= withoutPrep[0].open) return null;

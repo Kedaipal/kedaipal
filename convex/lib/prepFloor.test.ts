@@ -8,6 +8,7 @@ import {
 import {
 	NO_CART_PREP,
 	prepFloorCopy,
+	prepFloorHours,
 	prepFloorIssue,
 	prepFloorProblem,
 	slowestPrep,
@@ -125,7 +126,8 @@ describe("prepFloorIssue", () => {
 	});
 
 	test("too late for today fires even with NO time chosen", () => {
-		// A date-only order still can't be ready today.
+		// The day-level check, before a time is picked, already knows today is
+		// out. (A DATE-ONLY order passes `prepFloorHours` — see below.)
 		const shop = week({ open: hm(9), close: hm(18) });
 		expect(
 			prepFloorIssue({ ...base, hours: shop, now: at(16, 30), timeMinutes: undefined }),
@@ -163,6 +165,59 @@ describe("prepFloorIssue", () => {
 				...base,
 				prep: { minutes: 5, productName: "Kuih" },
 				timeMinutes: hm(10, 5),
+			}),
+		).toBeNull();
+	});
+});
+
+describe("prepFloorHours — the deadline a prep window races", () => {
+	const shop = week({ open: hm(9), close: hm(18) });
+	const closedFriday = week({ open: hm(9), close: hm(18), closed: true });
+	const DAY_PREP = { minutes: 1440, productName: "Wedding tier" };
+	const base = { dateEpoch: FRI, timeMinutes: undefined, kind: "pickup" as const };
+
+	test("a timed fulfilment races closing time: the store's hours, untouched", () => {
+		expect(prepFloorHours(shop, true)).toBe(shop);
+		expect(prepFloorHours(undefined, true)).toBeUndefined();
+		expect(prepFloorHours(undefined, false)).toBeUndefined();
+	});
+
+	test("a date-only one races midnight on every open day; closed days stay closed", () => {
+		const judged = prepFloorHours(closedFriday, false);
+		expect(judged?.[weekdayIndexMyt(FRI)]).toEqual(
+			closedFriday[weekdayIndexMyt(FRI)],
+		);
+		expect(
+			judged?.filter((day) => !day.closed).every((day) => day.open === 0 && day.close === 1439),
+		).toBe(true);
+		expect(judged?.filter((day) => !day.closed)).toHaveLength(6);
+	});
+
+	test("THE GAP: after closing, a day-long prep is still too late for a date-only today", () => {
+		// Against the store's hours, 8 PM has no slot with prep AND none
+		// without — right for a timed order, where the hours rules speak, but a
+		// date-only order then had nobody refusing it.
+		const args = { ...base, prep: DAY_PREP, now: at(20) };
+		expect(prepFloorIssue({ ...args, hours: shop })).toBeNull();
+		expect(prepFloorIssue({ ...args, hours: prepFloorHours(shop, false) })).toBe(
+			"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day",
+		);
+	});
+
+	test("closing time isn't a date-only deadline: prep done before midnight is fine", () => {
+		// 4:30 PM plus 2h is 6:30 PM — past a 6 PM close, still today.
+		const args = { ...base, prep: PUFF, now: at(16, 30) };
+		expect(prepFloorIssue({ ...args, hours: shop })).toMatch(/too late for today/);
+		expect(prepFloorIssue({ ...args, hours: prepFloorHours(shop, false) })).toBeNull();
+	});
+
+	test("a closed weekday stays the opening-hours gate's to refuse", () => {
+		expect(
+			prepFloorIssue({
+				...base,
+				prep: DAY_PREP,
+				now: at(20),
+				hours: prepFloorHours(closedFriday, false),
 			}),
 		).toBeNull();
 	});

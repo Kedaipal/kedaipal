@@ -47,6 +47,7 @@ const SPLIT = week({
 const CLOSED_FRIDAY = week({ open: hm(9), close: hm(18), closed: true });
 
 const PUFF = { minutes: 120, productName: "Ice Cream Puff" };
+const DAY_PREP = { minutes: 1440, productName: "Wedding tier" };
 const base = { storeName: "Huff & Puff" };
 
 describe("resolveLineRules — live first, the cart's snapshot as fallback", () => {
@@ -189,16 +190,22 @@ describe("isFulfilmentDaySelectable", () => {
 		).toBe(true);
 	});
 
-	test("a date-only pickup today is withheld once prep has used the day up", () => {
+	test("a date-only pickup today is withheld once prep outlasts the DAY, not the hours", () => {
+		const dateOnly = {
+			hours: NINE_TO_SIX,
+			dateEpoch: FRI,
+			timed: false,
+		};
+		// 8 PM, after closing: a day-long prep can't be ready tonight. Judged
+		// against the hours this slipped through — no slots with prep or without.
 		expect(
-			isFulfilmentDaySelectable({
-				hours: NINE_TO_SIX,
-				dateEpoch: FRI,
-				now: at(16, 30),
-				prep: PUFF,
-				timed: false,
-			}),
+			isFulfilmentDaySelectable({ ...dateOnly, now: at(20), prep: DAY_PREP }),
 		).toBe(false);
+		// 4:30 PM plus 2h ends past the 6 PM close — but a meet-up's hour is
+		// its own, so today stays on offer.
+		expect(
+			isFulfilmentDaySelectable({ ...dateOnly, now: at(16, 30), prep: PUFF }),
+		).toBe(true);
 	});
 });
 
@@ -255,6 +262,16 @@ describe("fulfilmentDayCopy", () => {
 
 	test("a date-only day only checks open + prep", () => {
 		expect(day({ now: at(19), timed: false })).toBeNull();
+	});
+
+	test("a date-only day's prep races midnight, and a closed weekday still comes first", () => {
+		expect(day({ now: at(20), prep: DAY_PREP, timed: false })).toBe(
+			"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day.",
+		);
+		expect(day({ now: at(16, 30), prep: PUFF, timed: false })).toBeNull();
+		expect(
+			day({ hours: CLOSED_FRIDAY, now: at(20), prep: DAY_PREP, timed: false }),
+		).toBe("Huff & Puff is closed on Fridays — pick another day.");
 	});
 
 	test("a good day is null", () => {
@@ -357,6 +374,16 @@ describe("prepHint — the one line about today", () => {
 		expect(hint({ timed: false })).toBe(
 			"“Ice Cream Puff” takes about 2 hours to prepare, so it's ready from 11:00 AM today.",
 		);
+	});
+
+	test("a date-only hint races midnight, not closing time", () => {
+		expect(hint({ timed: false, now: at(16, 30) })).toBe(
+			"“Ice Cream Puff” takes about 2 hours to prepare, so it's ready from 6:30 PM today.",
+		);
+		expect(hint({ timed: false, now: at(20), prep: DAY_PREP })).toBe(
+			"“Wedding tier” takes about 24 hours to prepare, so it can't be ready today.",
+		);
+		expect(hint({ timed: false, hours: CLOSED_FRIDAY })).toBeNull();
 	});
 
 	test("prep that outlasts today explains why Today isn't offered", () => {

@@ -22,7 +22,11 @@ import {
 	formatFulfilmentTime,
 	formatPrepDuration,
 } from "./fulfilmentDate";
-import { type OpeningHours, selectableTimeWindows } from "./openingHours";
+import {
+	OPEN_ALL_DAY,
+	type OpeningHours,
+	selectableTimeWindows,
+} from "./openingHours";
 
 /** What the buyer is waiting for, in the words the refusal uses. */
 export type PrepFloorKind = "pickup" | "delivery";
@@ -48,6 +52,26 @@ export function slowestPrep(
 		}
 	}
 	return slowest;
+}
+
+/**
+ * The opening hours a prep window is judged against. A TIMED fulfilment is
+ * handed over inside the store's hours, so prep counts only the slots they
+ * leave. A DATE-ONLY one isn't — a drop-off meet-up's hour is its point's own
+ * schedule, and a legacy date-only order means "any time that day" — so prep
+ * is judged against the WHOLE of every day the store opens. Closed weekdays
+ * stay closed: those still refuse every method, in the opening-hours words.
+ *
+ * Judged against the store's hours instead, a date-only order after closing
+ * saw no slots with prep AND none without, so prep looked blameless and a
+ * 24-hour prep could be booked for a meet-up that same evening.
+ */
+export function prepFloorHours(
+	hours: OpeningHours | undefined,
+	timed: boolean,
+): OpeningHours | undefined {
+	if (timed || hours === undefined) return hours;
+	return hours.map((day) => (day.closed ? day : OPEN_ALL_DAY));
 }
 
 /**

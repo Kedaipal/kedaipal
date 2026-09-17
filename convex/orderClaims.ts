@@ -70,7 +70,11 @@ import {
 } from "./lib/order";
 import type { OpeningHours } from "./lib/openingHours";
 import { assertWithinOpeningHours } from "./lib/openingHours";
-import { prepFloorIssue, slowestPrep } from "./lib/prepFloor";
+import {
+	prepFloorHours,
+	prepFloorIssue,
+	slowestPrep,
+} from "./lib/prepFloor";
 import {
 	storablePendingReason,
 	summarizeCartWeight,
@@ -848,7 +852,12 @@ export const commit = mutation({
 		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
 			const issue = prepFloorIssue({
-				hours: retailer.openingHours,
+				// A date-only order's prep runs to the end of the day, not to
+				// closing time — see prepFloorHours.
+				hours: prepFloorHours(
+					retailer.openingHours,
+					sanitizedFulfilmentTime !== undefined,
+				),
 				dateEpoch: sanitizedFulfilmentDate,
 				timeMinutes: sanitizedFulfilmentTime,
 				now,

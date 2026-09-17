@@ -10069,6 +10069,92 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		).rejects.toThrow(/too late for today/);
 	});
 
+	describe("a DATE-ONLY order's prep runs to midnight, not to closing", () => {
+		// A drop-off meet-up sends no time — its hour is the point's own
+		// schedule — so the store's closing time is not the deadline prep races.
+		// Pinned clock: Fri 26 Jun 2026, MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		const at = (h: number, m = 0) => FRI + (h * 60 + m) * 60_000;
+		const nineToSix = Array.from({ length: 7 }, () => ({
+			open: 9 * 60,
+			close: 18 * 60,
+		}));
+		afterEach(() => vi.useRealTimers());
+
+		/** A 9-to-6 store (or `hours`) with one drop-off point; returns a
+		 * date-only order for the given day. */
+		async function dropOffOrder(
+			t: ReturnType<typeof setup>,
+			prepMinutes: number,
+			hours: Array<{ open: number; close: number; closed?: true }>,
+		) {
+			const { retailer, productId } = await storeWithPrep(t, prepMinutes);
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: hours,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Pasar Sabtu",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "drop_off",
+				},
+			);
+			return (fulfilmentDate: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					pickupLocationId,
+					fulfilmentDate,
+				});
+		}
+
+		test("after closing, a day-long prep still can't be booked for tonight", async () => {
+			// The gap: judged against the 9-to-6 hours, 8 PM had no slots with
+			// prep AND none without, so prep looked blameless.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const order = await dropOffOrder(t, 1440, nineToSix);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*24 hours to prepare.*too late for today/s,
+			);
+			await expect(order(FRI + DAY_MS)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("closing time isn't the deadline: prep done before midnight is fine today", async () => {
+			// 4:30 PM plus 2h ends at 6:30 PM — after the store's 6 PM close, but
+			// the meet-up's hour is its own.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(16, 30));
+			const t = setup();
+			const order = await dropOffOrder(t, 120, nineToSix);
+			await expect(order(FRI)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("a closed weekday still refuses in the opening-hours words, never prep's", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const closedFriday = nineToSix.map((day, i) =>
+				i === 5 ? { ...day, closed: true as const } : day,
+			);
+			const order = await dropOffOrder(t, 1440, closedFriday);
+			await expect(order(FRI)).rejects.toThrow(/closed on Fridays/);
+		});
+	});
+
 	test("a COLLECTION trip is exempt: the rider collects first, prep comes after", async () => {
 		const t = setup();
 		const { retailer, productId } = await storeWithPrep(t, 240);

@@ -488,6 +488,22 @@ shutters. (The first cut floored against midnight and got both wrong.) It is
 deliberately silent on everything that is not prep's fault, so the
 opening-hours gate keeps its own words for a closed day or a break.
 
+**What prep races: closing time, or midnight.** A timed moment is handed over
+inside the store's hours, so its prep races **closing time**. A **date-only**
+order — a drop-off meet-up, or a client that sends no time — isn't: the
+meet-up's hour is its point's own, so its prep races **midnight** on every day
+the store opens. `prepFloorHours(hours, timed)` makes that call at all four
+call sites (`orders.create`, `orderClaims.commit`, and through
+`isFulfilmentDaySelectable` / `fulfilmentDayCopy` / `prepHint` at both
+checkouts): the store's hours for a timed order; for a date-only one, every
+open day widened to the whole day, closed weekdays still closed so "closed on
+Fridays" speaks first. Judged against the hours, a date-only order placed after
+closing found no slot with prep AND none without, so prep looked blameless and
+a 24-hour prep could be booked for that evening's meet-up. The reverse was
+wrong too: a 2-hour prep at 4:30 PM was refused for a meet-up only because the
+store's own counter closes at 6. The date-only hint reads "…so it's ready from
+6:30 PM today".
+
 **One boolean decides whether it applies** — `prepFloorApplies`, in
 `orders.create` and `orderClaims.commit`. Exempt:
 
@@ -538,7 +554,8 @@ beside them — each form keeps only its wiring:
   ("Pick a pickup time.", "The earliest you can pick up is …"); "collect"
   stays the collection service's.
 - `isFulfilmentDaySelectable` — chips and the default date skip a today the
-  store has closed on, or that prep has used up.
+  store has closed on, or that prep has used up (for a date-only pickup, a
+  today whose prep runs past midnight).
 - `prepHint` — one line under the step title, about **today**: "“Ice Cream
   Puff” takes about 1 hour to prepare, so the earliest pickup today is
   9:15 AM", or "…so it can't be ready today" when the chips skip Today. Null

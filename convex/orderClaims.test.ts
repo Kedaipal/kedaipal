@@ -800,6 +800,42 @@ describe("orderClaims — prep time + pickup note (z8r3fdff97)", () => {
 		expect((await orderOf(t, claimId))?.fulfilmentTimeMinutes).toBe(540);
 	});
 
+	test("a DATE-ONLY commit's prep runs to midnight — closing time can't hide a day-long prep", async () => {
+		// orders.create's rule: no time sent, so prep is judged to the end of
+		// the day. At 8 PM a 9-to-6 store had no slots with prep AND none
+		// without, so prep used to look blameless and tonight was bookable.
+		vi.useFakeTimers();
+		try {
+			const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+			vi.setSystemTime(FRI + 20 * 3600_000);
+			const t = setup();
+			const { claimId, token } = await sendPuffs(t, { prepMinutes: 1440 });
+			await t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.retailers.updateSettings, {
+					openingHours: Array.from({ length: 7 }, () => ({
+						open: 9 * 60,
+						close: 18 * 60,
+					})),
+				});
+			await expect(
+				t.mutation(api.orderClaims.commit, {
+					token,
+					deliveryMethod: "self_collect",
+					fulfilmentDate: FRI,
+				}),
+			).rejects.toThrow(/24 hours to prepare.*too late for today/s);
+			await t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: FRI + DAY,
+			});
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI + DAY);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("a collection trip is exempt — the rider collects first, the work comes after", async () => {
 		const t = setup();
 		const { retailer, claimId, token } = await sendPuffs(t, {
