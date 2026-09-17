@@ -679,14 +679,28 @@ describe("refusals + admin act-as", () => {
 		).rejects.toThrow(/unpaid plan invoice/);
 	});
 
-	test("a Kedaipal admin can pause and resume a seller's store (white-glove); a stranger cannot", async () => {
+	test("billing is view-only under admin act-as: the admin can't pause or resume a seller's store (Zaki, 17 Sep 2026); a stranger can't either", async () => {
 		const t = setup();
 		const s = await seedPaidSeller(t, "u_actas");
 		const asAdmin = t.withIdentity({ subject: ADMIN });
-		await asAdmin.mutation(api.subscriptions.setSeasonalHold, { retailerId: s.retailerId, hold: true });
-		expect((await getSub(t, s.subId))?.status).toBe("on_hold");
-		await asAdmin.mutation(api.subscriptions.setSeasonalHold, { retailerId: s.retailerId, hold: false });
+		await expect(
+			asAdmin.mutation(api.subscriptions.setSeasonalHold, { retailerId: s.retailerId, hold: true }),
+		).rejects.toThrow(/view-only while you're acting as a store/);
+		// Refused before anything is written — no status flip, no hold bill.
 		expect((await getSub(t, s.subId))?.status).toBe("active");
+		expect(await pendingFor(t, s.retailerId)).toBeUndefined();
+
+		const held = await seedPaidSeller(t, "u_actas_held", { status: "on_hold", heldAt: Date.now() });
+		await expect(
+			asAdmin.mutation(api.subscriptions.setSeasonalHold, { retailerId: held.retailerId, hold: false }),
+		).rejects.toThrow(/view-only while you're acting as a store/);
+		expect((await getSub(t, held.subId))?.status).toBe("on_hold");
+
+		// The owner still decides for themselves.
+		await t
+			.withIdentity({ subject: s.userId })
+			.mutation(api.subscriptions.setSeasonalHold, { retailerId: s.retailerId, hold: true });
+		expect((await getSub(t, s.subId))?.status).toBe("on_hold");
 		await expect(
 			t.withIdentity({ subject: "user_stranger" }).mutation(api.subscriptions.setSeasonalHold, {
 				retailerId: s.retailerId,

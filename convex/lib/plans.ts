@@ -485,10 +485,21 @@ export const FOUNDING_MEMBER_LIMIT = 10;
  */
 export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
 
+export type FoundingEligibilityArgs = {
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	paidThrough: number | undefined;
+	now: number;
+};
+
 /**
- * Whether a NEW invoice (renewal or self-serve) bills at the founding price.
- * One rule for every automated issuer — the admin issue form keeps its
- * explicit founding checkbox (Arif's judgment can override either way).
+ * Whether this STORE is on founding pricing right now — for any tier that has
+ * a founding price. Tier-agnostic on purpose: `planPrice` already confines the
+ * discount to Pro/Scale, so the store-level answer is the one to hand to
+ * anything that prices MORE than one tier (the billing page's plan cards, a
+ * Starter → Pro carryover). Asking `foundingPricingApplies` with the store's
+ * CURRENT plan instead answers "no" for a founding member sitting on Starter,
+ * which then prices their move back up to Pro at list (z8r3fdfty4).
  *
  * Order matters: a CLAIMED member is judged on the lapse window even though
  * their `foundingIntent` flag is never cleared after the claim — intent alone
@@ -496,19 +507,126 @@ export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
  * `paidThrough` is the subscription's `currentPeriodEnd` (undefined = never
  * had a paid period → fail toward the promise).
  */
-export function foundingPricingApplies(args: {
-	plan: Plan;
-	isFoundingMember: boolean;
-	foundingIntent: boolean;
-	paidThrough: number | undefined;
-	now: number;
-}): boolean {
-	if (args.plan !== "pro" && args.plan !== "scale") return false;
+export function foundingPriceEligible(args: FoundingEligibilityArgs): boolean {
 	if (args.isFoundingMember) {
 		if (args.paidThrough === undefined) return true;
 		return args.now - args.paidThrough <= FOUNDING_PRICE_LAPSE_MS;
 	}
 	return args.foundingIntent;
+}
+
+/**
+ * Whether a NEW invoice for `plan` (renewal or self-serve) bills at the
+ * founding price. One rule for every automated issuer — the admin issue form
+ * keeps its explicit founding checkbox (Arif's judgment can override either
+ * way). Store eligibility (`foundingPriceEligible`) narrowed to the tiers that
+ * carry a founding price.
+ */
+export function foundingPricingApplies(
+	args: FoundingEligibilityArgs & { plan: Plan },
+): boolean {
+	if (args.plan !== "pro" && args.plan !== "scale") return false;
+	return foundingPriceEligible(args);
+}
+
+/**
+ * The one tier a store on founding pricing is billed for (Zaki, 17 Sep 2026).
+ * Founding Members stay on Founding Pro: no plan change, no Starter. What they
+ * CAN do is stop renewing (turn auto-renewal off). A subscription that then
+ * lapses past `FOUNDING_PRICE_LAPSE_MS` loses the founding price, and from
+ * there the store is an ordinary seller again, free to pick any plan. Scale
+ * joins when it becomes purchasable (its founding row already exists).
+ */
+export const FOUNDING_PLAN = "pro" satisfies Plan;
+
+/** True when a store on founding pricing asks to be billed for any tier but
+ * Founding Pro — every self-serve plan path refuses it server-side, and the
+ * billing page never offers it. */
+export function foundingPlanLocked(plan: Plan, foundingEligible: boolean): boolean {
+	return foundingEligible && plan !== FOUNDING_PLAN;
+}
+
+/**
+ * The currency a store's renewals and mid-cycle plan changes bill in: its last
+ * PAID invoice's (a one-off experiment or a void must not flip it), falling
+ * back to its country. A brand-new self-serve subscription bills in the
+ * country currency instead — there is no paid history to follow yet.
+ */
+export function renewalCurrency(args: {
+	lastPaidCurrency: string | undefined;
+	country: Country | undefined;
+}): BillingCurrency {
+	return args.lastPaidCurrency === "SGD" || args.lastPaidCurrency === "MYR"
+		? args.lastPaidCurrency
+		: BILLING_CURRENCY_FOR_COUNTRY[args.country ?? "MY"];
+}
+
+/** Everything the NEXT renewal bill will say — see `renewalQuote`. */
+export type RenewalQuote = {
+	/** A paused store renews the Off-Season Hold, not its tier. */
+	kind: "plan" | "hold";
+	/** The tier billed. A scheduled downgrade lands with the renewal, so this is
+	 * the scheduled plan when there is one — except on a hold bill, where it is
+	 * the tier the seller resumes to (the downgrade waits for the first tier
+	 * bill after they resume), and for a store on founding pricing, whose
+	 * scheduled downgrade is cancelled by the founding lock. */
+	plan: Plan;
+	/** A hold always bills one month. */
+	billingCycle: BillingCycle;
+	/** Never on a hold bill — the hold price is flat. */
+	founding: boolean;
+	currency: BillingCurrency;
+	/** Minor units — exactly the `total` the renewal invoice is written with. */
+	amount: number;
+};
+
+/**
+ * What a store's next renewal bills: the ONE author of that answer. The cron's
+ * renewal invoice, the pre-charge heads-up email, HitPay's authorisation page
+ * and the seller's billing page all read it, so "RM104 on the page, RM149 on
+ * the bill" cannot happen by construction (z8r3fdfty4).
+ */
+export function renewalQuote(args: {
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
+	plan: Plan;
+	billingCycle: BillingCycle;
+	pendingPlanChange: Plan | undefined;
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	paidThrough: number | undefined;
+	lastPaidCurrency: string | undefined;
+	country: Country | undefined;
+	now: number;
+}): RenewalQuote {
+	const currency = renewalCurrency(args);
+	if (args.status === "on_hold") {
+		return {
+			kind: "hold",
+			plan: args.plan,
+			billingCycle: "monthly",
+			founding: false,
+			currency,
+			amount: HOLD_MONTHLY_PRICES[currency],
+		};
+	}
+	// Founding Members stay on Founding Pro (Zaki, 17 Sep 2026): a downgrade
+	// scheduled before the lock existed is CANCELLED here — never billed — and
+	// the renewal issuer consumes the flag as it writes the Founding Pro bill.
+	const scheduled =
+		args.pendingPlanChange !== undefined &&
+		!foundingPlanLocked(args.pendingPlanChange, foundingPriceEligible(args))
+			? args.pendingPlanChange
+			: undefined;
+	const plan = scheduled ?? args.plan;
+	const founding = foundingPricingApplies({ ...args, plan });
+	return {
+		kind: "plan",
+		plan,
+		billingCycle: args.billingCycle,
+		founding,
+		currency,
+		amount: planPrice(plan, args.billingCycle, founding, currency),
+	};
 }
 
 /** Caps to denormalize onto a subscription for a plan. Resolves `Infinity` to a

@@ -108,8 +108,11 @@ export type AccessState = {
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
-	/** Founding onboard promise (86eyb6z4r): lets the self-serve plan picker
-	 * show the discounted Pro price this store was promised. Owner-only. */
+	/** Founding onboard promise (86eyb6z4r). A fact about the store, never a
+	 * price input: it misses every member an admin marked founding and never
+	 * clears after a lapse, so every price reads the server-resolved
+	 * `billingGatewayAvailable.foundingPricing` instead (z8r3fdfty4).
+	 * Owner-only. */
 	foundingIntent?: boolean;
 	/** A downgrade scheduled for the end of the paid period (86eyb6z4r). The
 	 * seller keeps everything they bought until `effectiveAt`; the renewal
@@ -448,11 +451,19 @@ export const setSeasonalHold = mutation({
 		{ retailerId, hold },
 	): Promise<{ status: SubscriptionStatus; invoiceIssued: boolean }> => {
 		const access = await requireRetailerAccess(ctx, retailerId);
+		// Billing is view-only under admin act-as (Zaki, 17 Sep 2026): pausing
+		// voids and issues invoices on the SELLER's money, and every legitimate
+		// admin billing action already lives in Admin → Billing, audited. The
+		// owner — including an admin on their own store — is unaffected.
+		if (access.actingAsAdmin)
+			throw new ConvexError(
+				"Billing is view-only while you're acting as a store — the owner pauses or resumes their own plan.",
+			);
 		// Money-adjacent self-serve toggle: each flip can void an invoice, issue
 		// another (which mints a HitPay payment request) and send an email, so it
 		// takes the same limiter as `invoices.switchPendingPlan` — a held button
 		// must not burn the gateway account, the mail sender, or Arif's invoice
-		// list. Keyed by store, not caller, so admin act-as shares the budget.
+		// list. Keyed by store.
 		await rateLimiter.limit(ctx, "billingSelfServe", {
 			key: retailerId,
 			throws: true,

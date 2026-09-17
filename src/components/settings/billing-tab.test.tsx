@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useQuery } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
@@ -61,18 +61,14 @@ function mockQueries({
 	// the destructuring default would swallow it.
 	supportWa = CONFIGURED_WA,
 	invoices = [],
-	gateway = null,
+	gateway = GATEWAY_OFF,
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
-	/** billingGatewayAvailable answer; null = gateway not configured. */
-	gateway?: {
-		payNow: boolean;
-		autoRenew: boolean;
-		methods: string[];
-		currency: string;
-	} | null;
+	/** billingGatewayAvailable answer. Defaults to what the server returns with
+	 * no HitPay credentials (rails off, list pricing); `null` = still loading. */
+	gateway?: Gateway | null;
 }) {
 	const NAME = {
 		amIAdmin: getFunctionName(api.billing.amIAdmin),
@@ -98,12 +94,44 @@ function mockQueries({
 	}) as unknown as typeof useQuery);
 }
 
-const GATEWAY_ON = {
-	payNow: true,
-	autoRenew: true,
+type Gateway = {
+	payNow: boolean;
+	autoRenew: boolean;
+	methods: string[];
+	currency: string;
+	renewalCurrency: string;
+	foundingPricing: boolean;
+	foundingPricingLapsed: boolean;
+	nextRenewal: {
+		kind: "plan" | "hold";
+		plan: string;
+		billingCycle: "monthly" | "annual";
+		founding: boolean;
+		currency: string;
+		amount: number;
+	} | null;
+};
+
+/** No HitPay credentials: every online rail off, a list-price MY store. */
+const GATEWAY_OFF: Gateway = {
+	payNow: false,
+	autoRenew: false,
 	methods: ["card", "touch_n_go"],
 	currency: "MYR",
+	renewalCurrency: "MYR",
+	foundingPricing: false,
+	foundingPricingLapsed: false,
+	nextRenewal: {
+		kind: "plan",
+		plan: "pro",
+		billingCycle: "monthly",
+		founding: false,
+		currency: "MYR",
+		amount: 14900,
+	},
 };
+
+const GATEWAY_ON: Gateway = { ...GATEWAY_OFF, payNow: true, autoRenew: true };
 
 /** Every wa.me href the tab renders. */
 function waLinks(): string[] {
@@ -1107,5 +1135,553 @@ describe("BillingTab — free period, first invoice, Off-Season Hold (z8r3fday24
 		);
 		expect(screen.getByText(/Amount due · Off-Season Hold/)).toBeTruthy();
 		expect(screen.queryByText("Switch to Starter")).toBeNull();
+	});
+});
+
+/**
+ * z8r3fdfty4 — Founding Members were quoted list price on this page. Every
+ * price now comes from the server's founding flag and renewal quote, and the
+ * founding plan lock (Zaki, 17 Sep 2026: Founding Members stay on Founding
+ * Pro, monthly or yearly) is stated where a change would be offered. The
+ * server half is pinned in convex/subscriptionPayments.test.ts.
+ */
+describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** What billingGatewayAvailable answers for a store. */
+	function gatewayFor({
+		currency = "MYR",
+		founding = false,
+		lapsed = false,
+		cycle = "monthly",
+	}: {
+		currency?: "MYR" | "SGD";
+		founding?: boolean;
+		lapsed?: boolean;
+		cycle?: "monthly" | "annual";
+	} = {}): Gateway {
+		const monthly = {
+			MYR: founding ? 10400 : 14900,
+			SGD: founding ? 4100 : 5900,
+		}[currency];
+		return {
+			...GATEWAY_ON,
+			methods: currency === "SGD" ? ["card"] : ["card", "touch_n_go"],
+			currency,
+			renewalCurrency: currency,
+			foundingPricing: founding,
+			foundingPricingLapsed: lapsed,
+			nextRenewal: {
+				kind: "plan",
+				plan: "pro",
+				billingCycle: cycle,
+				founding,
+				currency,
+				amount: cycle === "annual" ? monthly * 10 : monthly,
+			},
+		};
+	}
+
+	/** A Founding Member marked the v1 way — the rank flag on the retailer,
+	 * `foundingIntent` never set — on an active Pro plan mid-period. */
+	const activeFounder = (
+		sub: Record<string, unknown> = {},
+		store: Record<string, unknown> = {},
+	) =>
+		retailer({
+			isFoundingMember: true,
+			foundingMemberRank: 2,
+			...store,
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				currentPeriodEnd: Date.now() + 12 * DAY,
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: true,
+				frozen: false,
+				...sub,
+			},
+		} as unknown as Partial<Retailer>);
+
+	const cardOn = {
+		method: "card",
+		methodLabel: "Visa ·· 4242",
+		failedAttempts: 0,
+		failing: false,
+		nextChargeAt: Date.now() + 12 * DAY,
+	};
+
+	it("renewing: a Founding Member is offered Founding Pro alone — RM104 in MY, S$41 in SG, yearly still on (the screenshot)", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayFor({ founding: true }) });
+		const { unmount } = render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 2 })}
+			/>,
+		);
+		expect(screen.getByText("Renew your subscription")).toBeTruthy();
+		// No Starter for a Founding Member.
+		expect(
+			screen.queryByText("Storefront, orders + WhatsApp confirmations"),
+		).toBeNull();
+		expect(screen.getByText(/RM\s*104\.00\/month/)).toBeTruthy();
+		expect(screen.queryByText(/149/)).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Founding Pro" }),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/As a Founding Member you stay on Founding Pro/),
+		).toBeTruthy();
+		expect(screen.getByText(/be charged/).textContent).toMatch(/RM\s*104\.00/);
+		// Moving between monthly and yearly on the same tier is theirs to make.
+		fireEvent.click(screen.getByRole("button", { name: /Yearly/ }));
+		expect(screen.getByText(/RM\s*1,040\.00\/year/)).toBeTruthy();
+		unmount();
+
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ founding: true, currency: "SGD" }),
+		});
+		render(
+			<BillingTab
+				retailer={retailer({
+					country: "SG",
+					isFoundingMember: true,
+					foundingMemberRank: 7,
+				})}
+			/>,
+		);
+		expect(screen.getByText(/S\$\s*41\.00\/month/)).toBeTruthy();
+		expect(screen.queryByText(/RM\s*\d/)).toBeNull();
+	});
+
+	it("a list seller keeps both plans at list — RM79 / RM149, S$29 / S$59", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayFor() });
+		const { unmount } = render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText(/RM\s*79\.00\/month/)).toBeTruthy();
+		expect(screen.getByText(/RM\s*149\.00\/month/)).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Pro" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/Founding Pro/)).toBeNull();
+		unmount();
+
+		mockQueries({ isAdmin: false, gateway: gatewayFor({ currency: "SGD" }) });
+		render(<BillingTab retailer={retailer({ country: "SG" })} />);
+		expect(screen.getByText(/S\$\s*29\.00\/month/)).toBeTruthy();
+		expect(screen.getByText(/S\$\s*59\.00\/month/)).toBeTruthy();
+	});
+
+	it("an active Founding Member: named Founding Pro, no plan change offered, auto-renewal names RM104", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayFor({ founding: true }) });
+		render(<BillingTab retailer={activeFounder({ autoRenew: cardOn })} />);
+		expect(
+			screen.getByText("Current plan").nextElementSibling?.textContent,
+		).toBe("Founding Pro");
+		expect(screen.getByText("Your plan stays Founding Pro")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /Move (down|up) to/ }),
+		).toBeNull();
+		expect(screen.getByText(/Next charge of RM\s*104\.00 on/)).toBeTruthy();
+		expect(screen.queryByText(/149/)).toBeNull();
+		// Stopping renewal is the one thing they CAN do — and the dialog states
+		// the founding clause before they confirm.
+		fireEvent.click(
+			screen.getByRole("button", { name: "Turn off auto-renewal" }),
+		);
+		expect(screen.getByRole("dialog").textContent).toContain(
+			"As a Founding Member you keep your founding price as long as your subscription doesn't lapse for more than 3 months",
+		);
+	});
+
+	it("a Singapore Founding Member's auto-renewal pitch names S$41 a month — or S$410 a year", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ founding: true, currency: "SGD" }),
+		});
+		const { unmount } = render(
+			<BillingTab retailer={activeFounder({}, { country: "SG" })} />,
+		);
+		expect(
+			screen.getByText(/every renewal \(S\$\s*41\.00 a month\) charges itself/),
+		).toBeTruthy();
+		unmount();
+
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ founding: true, currency: "SGD", cycle: "annual" }),
+		});
+		render(
+			<BillingTab
+				retailer={activeFounder({ billingCycle: "annual" }, { country: "SG" })}
+			/>,
+		);
+		expect(
+			screen.getByText(/every renewal \(S\$\s*410\.00 a year\) charges itself/),
+		).toBeTruthy();
+	});
+
+	it("an unfinished auto-renewal setup names what renewals will charge — S$41 a month for a Singapore founder", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ founding: true, currency: "SGD" }),
+		});
+		render(
+			<BillingTab
+				retailer={activeFounder(
+					{ autoRenewSetupPending: true },
+					{ country: "SG" },
+				)}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				/finish it to switch renewals \(S\$\s*41\.00 a month\) to automatic/,
+			),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Finish setting up" }),
+		).toBeTruthy();
+	});
+
+	it("a lapsed Founding Member: rank kept, the lapse explained, list prices, and no promise the discount is locked in", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayFor({ lapsed: true }) });
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(screen.getByText("Founding Member #3 of 10")).toBeTruthy();
+		expect(
+			screen.getByText(/Your rank and badge are yours for good/),
+		).toBeTruthy();
+		expect(screen.queryByText(/discount is locked in/)).toBeNull();
+		expect(
+			screen.getByText(/founding\s+price lapses after 3 months/),
+		).toBeTruthy();
+		// The founding price is revoked — an ordinary seller's choice again.
+		expect(screen.getByText(/RM\s*79\.00\/month/)).toBeTruthy();
+		expect(screen.getByText(/RM\s*149\.00\/month/)).toBeTruthy();
+	});
+
+	it("a Founding Member's first invoice never offers Starter; a Starter invoice's way back quotes their price", () => {
+		const first = {
+			_id: "i_first",
+			status: "pending",
+			currency: "MYR",
+			total: 10400,
+			amount: 14900,
+			foundingDiscount: 4500,
+			plan: "pro",
+			billingCycle: "monthly",
+			origin: "free_period_end",
+			invoiceNumber: "INV-FIRST",
+			dueDate: Date.now() + 12 * DAY,
+			createdAt: Date.now(),
+		};
+		const ended = retailer({
+			isFoundingMember: true,
+			foundingMemberRank: 4,
+			subscription: {
+				plan: "pro",
+				status: "trialing",
+				comped: false,
+				trialEndsAt: Date.now() + 9 * DAY,
+				freePeriodEndedAt: Date.now() - DAY,
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: true,
+				frozen: false,
+			},
+		} as unknown as Partial<Retailer>);
+		mockQueries({
+			isAdmin: false,
+			invoices: [first],
+			gateway: gatewayFor({ founding: true }),
+		});
+		const { unmount } = render(<BillingTab retailer={ended} />);
+		expect(screen.getByText("Your first invoice")).toBeTruthy();
+		expect(screen.queryByText("Switch to Starter")).toBeNull();
+		unmount();
+
+		// A Starter bill from before the lock: the switch back is Founding Pro.
+		// It used to read the founding flag off THIS invoice — a Starter bill
+		// never carries a discount — and quoted RM149.
+		mockQueries({
+			isAdmin: false,
+			invoices: [
+				{
+					...first,
+					plan: "starter",
+					total: 7900,
+					amount: 7900,
+					foundingDiscount: undefined,
+					origin: "self_serve",
+				},
+			],
+			gateway: gatewayFor({ founding: true }),
+		});
+		render(<BillingTab retailer={ended} />);
+		expect(screen.getByText("Switch to Pro")).toBeTruthy();
+		expect(screen.getByText(/Switch back to Pro/).textContent).toMatch(
+			/RM\s*104\.00/,
+		);
+	});
+
+	it("the annual offer quotes the year from the SERVER's founding flag, not the rank flag", () => {
+		const settled = [
+			{
+				_id: "i1",
+				status: "paid",
+				currency: "MYR",
+				total: 10400,
+				invoiceNumber: "INV-1",
+			},
+			{
+				_id: "i2",
+				status: "paid",
+				currency: "MYR",
+				total: 10400,
+				invoiceNumber: "INV-2",
+			},
+		];
+		mockQueries({
+			isAdmin: false,
+			invoices: settled,
+			gateway: gatewayFor({ founding: true }),
+		});
+		const { unmount } = render(<BillingTab retailer={activeFounder()} />);
+		expect(screen.getByText(/RM\s*1,040\.00/)).toBeTruthy();
+		unmount();
+
+		// Rank flag still set, but the server says the price no longer applies.
+		mockQueries({
+			isAdmin: false,
+			invoices: settled,
+			gateway: gatewayFor({ lapsed: true }),
+		});
+		render(<BillingTab retailer={activeFounder()} />);
+		expect(screen.getByText(/RM\s*1,490\.00/)).toBeTruthy();
+		expect(screen.queryByText(/RM\s*1,040\.00/)).toBeNull();
+	});
+
+	it("quotes nothing founding-sensitive before the server has answered", () => {
+		const settled = [
+			{
+				_id: "i1",
+				status: "paid",
+				currency: "MYR",
+				total: 10400,
+				invoiceNumber: "INV-1",
+			},
+			{
+				_id: "i2",
+				status: "paid",
+				currency: "MYR",
+				total: 10400,
+				invoiceNumber: "INV-2",
+			},
+		];
+		mockQueries({ isAdmin: false, invoices: settled, gateway: null });
+		render(<BillingTab retailer={activeFounder()} />);
+		// A founding member must never see a list price flash in first.
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.queryByText(/RM\s*1,490\.00/)).toBeNull();
+	});
+});
+
+/**
+ * z8r3fdfty4 — the reported repro. Inside admin act-as the tab showed the
+ * seller's plan but asked the server about the CALLER's store: the admin's own
+ * founding status, currency and invoices. Reads now name the seller's store;
+ * writes (which resolve the caller server-side, and which are the owner's
+ * consent to give) are disabled with the reason.
+ */
+describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** The args each call of `fn` was made with. */
+	function argsFor(fn: FunctionReference<"query">): unknown[] {
+		return vi
+			.mocked(useQuery)
+			.mock.calls.map(
+				([opts]) =>
+					opts as unknown as {
+						__fn: FunctionReference<"query">;
+						args: unknown;
+					},
+			)
+			.filter((o) => getFunctionName(o.__fn) === getFunctionName(fn))
+			.map((o) => o.args);
+	}
+
+	const foundingSg: Gateway = {
+		...GATEWAY_ON,
+		methods: ["card"],
+		currency: "SGD",
+		renewalCurrency: "SGD",
+		foundingPricing: true,
+		nextRenewal: {
+			kind: "plan",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: true,
+			currency: "SGD",
+			amount: 4100,
+		},
+	};
+
+	it("reads the SELLER's invoices and prices by id — and the owner path is unchanged", () => {
+		vi.mocked(useQuery).mockClear();
+		mockQueries({ isAdmin: true, gateway: foundingSg });
+		render(
+			<BillingTab
+				retailer={retailer({
+					actingAsAdmin: true,
+					country: "SG",
+					isFoundingMember: true,
+					foundingMemberRank: 7,
+				})}
+			/>,
+		);
+		expect(argsFor(api.invoices.myInvoices)).toContainEqual({
+			retailerId: "r_openmarket",
+		});
+		expect(
+			argsFor(api.subscriptionPayments.billingGatewayAvailable),
+		).toContainEqual({ retailerId: "r_openmarket" });
+		// …so the admin sees exactly what the seller sees.
+		expect(screen.getByText(/S\$\s*41\.00\/month/)).toBeTruthy();
+		cleanup();
+
+		vi.mocked(useQuery).mockClear();
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={retailer()} />);
+		const ownerArgs = [
+			...argsFor(api.invoices.myInvoices),
+			...argsFor(api.subscriptionPayments.billingGatewayAvailable),
+		];
+		expect(ownerArgs.length).toBeGreaterThan(0);
+		for (const args of ownerArgs)
+			expect((args as { retailerId?: string }).retailerId).toBeUndefined();
+	});
+
+	it("billing is view-only: a banner says why, and every billing control is disabled beside its reason (Zaki, 17 Sep 2026)", () => {
+		const note = /View-only while you're acting as this store/;
+		/** Only the always-on support card may still open WhatsApp. */
+		const billingWaLinks = () =>
+			waLinks().filter(
+				(href) => !decodeURIComponent(href).includes("billing question"),
+			);
+		const disabled = (name: string | RegExp) =>
+			(screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+		// A — renewing (past due): Subscribe, and the "pause instead" way out.
+		mockQueries({ isAdmin: true, gateway: foundingSg });
+		const a = render(
+			<BillingTab
+				retailer={retailer({
+					actingAsAdmin: true,
+					storeName: "Her Moolah",
+					country: "SG",
+					isFoundingMember: true,
+					foundingMemberRank: 7,
+				})}
+			/>,
+		);
+		expect(screen.getByText("View-only billing")).toBeTruthy();
+		expect(screen.getByText(/You're acting as Her Moolah/)).toBeTruthy();
+		expect(screen.getByText(/use Admin → Billing/)).toBeTruthy();
+		expect(disabled("Subscribe to Founding Pro")).toBe(true);
+		expect(disabled("Pause instead")).toBe(true);
+		expect(screen.getAllByText(note).length).toBe(2);
+		expect(billingWaLinks()).toEqual([]);
+		a.unmount();
+
+		// B — active list seller, auto-renewal on, an open invoice with a
+		// Pay-now link, and the annual swap on offer.
+		mockQueries({
+			isAdmin: true,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "i1",
+					status: "paid",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-1",
+				},
+				{
+					_id: "i2",
+					status: "paid",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-2",
+				},
+				{
+					_id: "i3",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					invoiceNumber: "INV-3",
+					billingCycle: "monthly",
+					dueDate: Date.now() + 10 * DAY,
+					gatewayPayment: { url: "https://pay.example/inv-3" },
+				},
+			],
+		});
+		const b = render(
+			<BillingTab
+				retailer={retailer({
+					actingAsAdmin: true,
+					storeName: "Open Market",
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						billingCycle: "monthly",
+						currentPeriodEnd: Date.now() + 12 * DAY,
+						caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+						active: true,
+						frozen: false,
+						autoRenew: {
+							method: "card",
+							methodLabel: "Visa ·· 4242",
+							failedAttempts: 0,
+							failing: false,
+							nextChargeAt: Date.now() + 12 * DAY,
+						},
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(disabled(/Move down to Starter/)).toBe(true);
+		expect(disabled("Turn off auto-renewal")).toBe(true);
+		expect(disabled("Pause for the season")).toBe(true);
+		expect(disabled("Ask for an annual invoice")).toBe(true);
+		expect(disabled(/Pay online now/)).toBe(true);
+		expect(disabled(/I've paid — notify us/)).toBe(true);
+		// Nothing still points at the checkout or messages us about the bill.
+		expect(
+			screen
+				.queryAllByRole("link")
+				.some((l) => (l.getAttribute("href") ?? "").includes("pay.example")),
+		).toBe(false);
+		expect(billingWaLinks()).toEqual([]);
+		// Plan change, hold, annual, how-to-pay, auto-renewal: one reason each.
+		expect(screen.getAllByText(note).length).toBe(5);
+		// Viewing stays viewing: the invoice and its document are all there.
+		expect(screen.getByText("INV-3")).toBeTruthy();
+		b.unmount();
+
+		// C — gateway off: the manual "message us to renew" card.
+		mockQueries({ isAdmin: true });
+		render(
+			<BillingTab
+				retailer={retailer({ actingAsAdmin: true, storeName: "Open Market" })}
+			/>,
+		);
+		expect(disabled(/Message us/)).toBe(true);
+		expect(billingWaLinks()).toEqual([]);
 	});
 });
