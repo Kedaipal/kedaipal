@@ -747,6 +747,8 @@ export function CheckoutPage({
 	// either way — a date-only pickup's prep hint moves with it.
 	const repairPrep = watchedSchedule.prep.minutes;
 	const repairTimed = watchedSchedule.timed;
+	// Named in the move note when prep is why a prefilled time moved.
+	const repairPrepName = watchedSchedule.prep.productName;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
@@ -762,6 +764,7 @@ export function CheckoutPage({
 				currentHhmm: form.store.state.values.fulfilmentTime,
 				systemHhmm: systemTimeRef.current,
 				prepMinutes: repairPrep,
+				prepItemName: repairPrepName,
 			});
 			if (!plan) return;
 			systemTimeRef.current = plan.nextHhmm;
@@ -777,7 +780,7 @@ export function CheckoutPage({
 			clearInterval(timer);
 			document.removeEventListener("visibilitychange", repair);
 		};
-	}, [watchedDate, openingHours, repairTimed, repairPrep]);
+	}, [watchedDate, openingHours, repairTimed, repairPrep, repairPrepName]);
 	// Inline "that day won't work" notice (86eyp5rav, z8r3fdff97). Chips never
 	// offer a closed day, but the native date input can't skip weekdays, so a
 	// picked closed day gets an immediate explanation instead of a submit-time

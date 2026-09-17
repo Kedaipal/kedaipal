@@ -398,9 +398,38 @@ describe("planTimeRepair — ownership decides who may change the time", () => {
 			now: at(9, 0),
 		};
 		expect(planTimeRepair(base)?.moved?.reason).toEqual({ kind: "before_open" });
+		const withPrep = planTimeRepair({
+			...base,
+			prepMinutes: 120,
+			prepItemName: "Ice Cream Puff",
+		});
+		// The lead alone (9:15 AM) would have kept 10:00 AM, so prep is the
+		// reason, and the note says so rather than "no longer available".
+		expect(withPrep?.moved?.reason).toEqual({
+			kind: "passed",
+			prep: { itemName: "Ice Cream Puff", minutes: 120 },
+		});
+		if (!withPrep?.moved) throw new Error("expected a move");
 		expect(
-			planTimeRepair({ ...base, prepMinutes: 120 })?.moved?.reason,
-		).toEqual({ kind: "passed" });
+			copyText(timeMovedCopy(withPrep.moved, { storeName: "Huff & Puff" })),
+		).toBe(
+			"We moved your time to 4:30 PM — “Ice Cream Puff” needs 2 hours to prepare.",
+		);
+	});
+
+	test("a time the CLOCK overtook stays plain 'passed', even with prep in the cart (z8r3fdff97)", () => {
+		// 9:00 AM with 2h prep: 9:05 AM is behind the 15-minute lead too, so the
+		// clock — not prep — is why it can't stay.
+		const moved = planTimeRepair({
+			hours,
+			dayEpoch: FRI,
+			currentHhmm: "09:05",
+			systemHhmm: "09:05",
+			now: at(9, 0),
+			prepMinutes: 120,
+			prepItemName: "Ice Cream Puff",
+		})?.moved;
+		expect(moved?.reason).toEqual({ kind: "passed" });
 	});
 
 	test("a day with no slot left clears a system time instead of keeping a false one", () => {

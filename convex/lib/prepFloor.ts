@@ -110,6 +110,12 @@ export function prepFloorProblem(args: {
 	return null;
 }
 
+/** "“Ice Cream Puff” needs 2 hours to prepare" — the one spelling of why prep
+ * refuses or moves a time, shared by the refusal and the checkout's move note. */
+export function prepNeedsText(prep: CartPrep): string {
+	return `“${prep.productName}” needs ${formatPrepDuration(prep.minutes)} to prepare`;
+}
+
 /** The refusal as parts: text, and a time kept as a value. No closing period —
  * the server error has none, and a page adds its own. */
 export function prepFloorCopy(
@@ -117,7 +123,7 @@ export function prepFloorCopy(
 	prep: CartPrep,
 	kind: PrepFloorKind,
 ): Array<string | { time: number }> {
-	const needs = `“${prep.productName}” needs ${formatPrepDuration(prep.minutes)} to prepare`;
+	const needs = prepNeedsText(prep);
 	return problem.kind === "too_late_today"
 		? [`${needs} — too late for today, pick a later day`]
 		: [`${needs} — earliest ${kind} is `, { time: problem.earliest }];

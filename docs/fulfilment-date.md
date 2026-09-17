@@ -554,7 +554,16 @@ beside them — each form keeps only its wiring:
   cart's prep through its `prepMinutes` — one loop and one `systemTimeRef`
   for both methods (a pickup time reuses the delivery time field). A time the
   buyer typed is never rewritten. Its 30s beat (and tab return) also
-  re-renders the prep hint and re-floors the dates past midnight.
+  re-renders the prep hint and re-floors the dates past midnight. When PREP is
+  why a prefilled time moved — the plain lead would still have allowed it —
+  T1's `passed` reason carries `prep` and the note names it: "We moved your
+  time to 1:30 PM — “Ice Cream Puff” needs 1 hour to prepare." (one phrase,
+  `prepNeedsText`, shared with the refusal). A time the clock overtook stays
+  "no longer available".
+- **Refusals retire with their inputs** (T1's `fulfilmentInputsKey`, which
+  already includes the pickup point): switching to a drop-off point, which
+  takes the time requirement away, clears a time refusal made at a self-collect
+  point.
 - **The store's hours sit on the time field only.** A pickup asks for a time
   whenever the store keeps hours, so T1's date hint for a date-only pickup
   could never render and was removed rather than kept as dead code; a

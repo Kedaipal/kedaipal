@@ -456,6 +456,8 @@ export function ClaimCheckoutPage({
 	// repaired while this fulfilment asks for one; the clock ticks either way.
 	const repairPrep = watchedSchedule.prep.minutes;
 	const repairTimed = watchedSchedule.timed;
+	// Named in the move note when prep is why a prefilled time moved.
+	const repairPrepName = watchedSchedule.prep.productName;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
@@ -471,6 +473,7 @@ export function ClaimCheckoutPage({
 				currentHhmm: form.store.state.values.fulfilmentTime,
 				systemHhmm: systemTimeRef.current,
 				prepMinutes: repairPrep,
+				prepItemName: repairPrepName,
 			});
 			if (!plan) return;
 			systemTimeRef.current = plan.nextHhmm;
@@ -484,7 +487,7 @@ export function ClaimCheckoutPage({
 			clearInterval(timer);
 			document.removeEventListener("visibilitychange", repair);
 		};
-	}, [watchedDate, openingHours, repairTimed, repairPrep]);
+	}, [watchedDate, openingHours, repairTimed, repairPrep, repairPrepName]);
 
 	// The day, then the time, in the submit refusal's exact words, the moment
 	// the field holds it — the storefront's helpers, prep threaded in.

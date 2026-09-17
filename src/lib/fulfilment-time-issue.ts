@@ -50,6 +50,7 @@ import {
 	type PrepFloorKind,
 	prepFloorCopy,
 	prepFloorProblem,
+	prepNeedsText,
 } from "../../convex/lib/prepFloor";
 
 /** The cart's prep window, when IT is the reason a moment is refused
@@ -296,9 +297,11 @@ export function timeIssueCopy(
 export type TimeMoveReason =
 	/** `from` sat in a split day's break (a seller edit, or a new day). */
 	| { kind: "break"; gap: DayWindow }
-	/** Today, `from` is below the earliest pickable moment — the clock (or the
-	 * cart's prep window) overtook it. */
-	| { kind: "passed" }
+	/** Today, `from` is below the earliest pickable moment — the clock
+	 * overtook it, or (with `prep`, z8r3fdff97) the cart's prep window did:
+	 * the plain checkout lead would still have allowed it, so "no longer
+	 * available" would hide the actual reason. */
+	| { kind: "passed"; prep?: PrepCause }
 	/** `from` is before the day's first opening. (The repair lands ON that
 	 * opening, so naming the opening time again would say one number twice.) */
 	| { kind: "before_open" }
@@ -324,12 +327,19 @@ function moveReason(
 	from: number,
 	now: number,
 	prepMinutes: number,
+	prepItemName: string,
 ): TimeMoveReason {
 	const day = hoursForDate(hours, dayEpoch);
 	const gap = day ? gapForTime(day, from) : null;
 	if (gap) return { kind: "break", gap };
 	if (from < minSelectableTimeMinutes(dayEpoch, now, prepMinutes)) {
-		return { kind: "passed" };
+		// Prep is the reason only when the lead alone would have kept `from`.
+		return from >= minSelectableTimeMinutes(dayEpoch, now, 0)
+			? {
+					kind: "passed",
+					prep: { itemName: prepItemName, minutes: prepMinutes },
+				}
+			: { kind: "passed" };
 	}
 	if (day) {
 		const windows = dayWindows(day);
@@ -369,7 +379,15 @@ export function timeMovedCopy(
 				` is after ${ctx.storeName} closes that day.`,
 			];
 		case "passed":
-			return [...lead, " — ", { time: moved.from }, " is no longer available."];
+			return moved.reason.prep
+				? [
+						...lead,
+						` — ${prepNeedsText({
+							minutes: moved.reason.prep.minutes,
+							productName: moved.reason.prep.itemName,
+						})}.`,
+					]
+				: [...lead, " — ", { time: moved.from }, " is no longer available."];
 	}
 }
 
@@ -423,6 +441,7 @@ export function planTimeRepair(
 		systemHhmm,
 		now = Date.now(),
 		prepMinutes = 0,
+		prepItemName = "",
 	} = args;
 	if (currentHhmm !== systemHhmm) return null;
 	const current = timeMinutesFromHhmm(currentHhmm);
@@ -444,7 +463,14 @@ export function planTimeRepair(
 			? {
 					from: current,
 					to: next,
-					reason: moveReason(hours, dayEpoch, current, now, prepMinutes),
+					reason: moveReason(
+						hours,
+						dayEpoch,
+						current,
+						now,
+						prepMinutes,
+						prepItemName,
+					),
 				}
 			: null,
 	};
