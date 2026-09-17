@@ -409,7 +409,9 @@ when nobody is there) or dropped breakfast.
     next press.
   - **The storefront shows the refusal beside the CTA,** in the reason slot
     above the button, on both the desktop summary and the mobile bar. The claim
-    page already put it there. The inline date and time notices carry
+    page already put it there. The refusal is held as `CopyPart[]` wherever it
+    has parts and rendered with `CopyText`, so a time range stays whole in the
+    mobile bar — the narrowest place any of this copy renders. The inline date and time notices carry
     `data-form-error`, so the submit focus helper scrolls to the field being
     refused. Note for anyone re-testing: that helper runs on
     `requestAnimationFrame`, which a hidden or covered browser window never

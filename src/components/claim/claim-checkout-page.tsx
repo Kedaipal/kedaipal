@@ -46,7 +46,7 @@ import {
 	formatPrice,
 } from "../../lib/format";
 import {
-	copyText,
+	type CopyPart,
 	fulfilmentInputsKey,
 	fulfilmentTimeIssue,
 	planTimeRepair,
@@ -137,8 +137,10 @@ export function ClaimCheckoutPage({
 	// A submit refusal about the chosen day or time, tied to the inputs it
 	// judged — shown only while those stand, same as the storefront checkout
 	// (z8r3fdff8r): fixing the time must clear "that time won't work".
+	// Parts, not a flat string, wherever there are any: the banner must keep a
+	// time range whole on a phone, like the inline notice above it.
 	const [fulfilmentRefusal, setFulfilmentRefusal] = useState<{
-		message: string;
+		message: string | CopyPart[];
 		inputs: string;
 	} | null>(null);
 	const [pickupError, setPickupError] = useState<string | null>(null);
@@ -228,7 +230,7 @@ export function ClaimCheckoutPage({
 			setServerError(null);
 			setFulfilmentRefusal(null);
 			setPickupError(null);
-			const refuseFulfilment = (message: string) =>
+			const refuseFulfilment = (message: string | CopyPart[]) =>
 				setFulfilmentRefusal({ message, inputs: fulfilmentInputsKey(value) });
 			const sanitizedAddress =
 				value.deliveryMethod === "delivery"
@@ -276,12 +278,10 @@ export function ClaimCheckoutPage({
 				});
 				if (issue) {
 					refuseFulfilment(
-						copyText(
-							timeIssueCopy(issue, {
-								storeName,
-								verb: collectsFromCustomer ? "collect" : "deliver",
-							}),
-						),
+						timeIssueCopy(issue, {
+							storeName,
+							verb: collectsFromCustomer ? "collect" : "deliver",
+						}),
 					);
 					return;
 				}
@@ -1014,7 +1014,11 @@ export function ClaimCheckoutPage({
 							role="alert"
 							className="rounded-xl bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive"
 						>
-							{refusal}
+							{typeof refusal === "string" ? (
+								refusal
+							) : (
+								<CopyText parts={refusal} />
+							)}
 						</p>
 					) : null}
 

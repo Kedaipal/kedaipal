@@ -54,7 +54,7 @@ import {
 	formatPrice,
 } from "../../lib/format";
 import {
-	copyText,
+	type CopyPart,
 	fulfilmentInputsKey,
 	fulfilmentTimeIssue,
 	planTimeRepair,
@@ -272,8 +272,10 @@ export function CheckoutPage({
 	// judged (`fulfilmentInputsKey`). It shows only while those stand: once the
 	// buyer fixes the time, a sentence saying the old one won't work would sit
 	// beside the CTA contradicting the field until the next press (z8r3fdff8r).
+	// Kept as PARTS when it has any, so the CTA line keeps a time range whole
+	// the way the inline notice does — the bar is the narrowest place it renders.
 	const [fulfilmentRefusal, setFulfilmentRefusal] = useState<{
-		message: string;
+		message: string | CopyPart[];
 		inputs: string;
 	} | null>(null);
 	// Submit-time "choose a pickup point" error — inline on the radio list (the
@@ -399,7 +401,7 @@ export function CheckoutPage({
 			setServerError(null);
 			setFulfilmentRefusal(null);
 			setPickupError(null);
-			const refuseFulfilment = (message: string) =>
+			const refuseFulfilment = (message: string | CopyPart[]) =>
 				setFulfilmentRefusal({ message, inputs: fulfilmentInputsKey(value) });
 			if (cart.items.length === 0) return;
 			// Minimum order rules — the submit button is already disabled with the
@@ -480,12 +482,10 @@ export function CheckoutPage({
 				});
 				if (issue) {
 					refuseFulfilment(
-						copyText(
-							timeIssueCopy(issue, {
-								storeName,
-								verb: collectsFromCustomer ? "collect" : "deliver",
-							}),
-						),
+						timeIssueCopy(issue, {
+							storeName,
+							verb: collectsFromCustomer ? "collect" : "deliver",
+						}),
 					);
 					return;
 				}
@@ -1020,7 +1020,7 @@ export function CheckoutPage({
 			role="alert"
 			className="text-center text-xs font-medium text-destructive"
 		>
-			{refusal}
+			{typeof refusal === "string" ? refusal : <CopyText parts={refusal} />}
 		</p>
 	) : null;
 	const privacyPolicyLink = (
