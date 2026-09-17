@@ -375,7 +375,10 @@ when nobody is there) or dropped breakfast.
     plain spaces, because they also feed WhatsApp and PDFs.
   - **Pickup gets the hours on its DATE.** Self-collect has no time field, and
     the in-person collector is the buyer who walks into a lunch break. Not
-    shown for drop-off, where the point's schedule note governs.
+    shown for drop-off, where the point's schedule note governs. *(Superseded
+    by `z8r3fdff97`: pickup now asks for a time whenever the store keeps hours,
+    so the hours ride on the time field like delivery, and the date hint —
+    which could no longer render — was removed.)*
   - **Editor errors point at the right control.** `dayHoursIssue` returns
     `{ message, window }`, so only the offending window turns red and the
     sentence sits under it (per row in the 7-row grid, plus "Fix the hours for
@@ -516,15 +519,24 @@ beside them — each form keeps only its wiring:
 
 - `fulfilmentDayCopy` / `fulfilmentTimeCopy` — the inline notice and the
   submit check, one sentence as `CopyPart`s (rendered through `CopyText`,
-  flattened by `copyText` for the banner). They ask T1's `fulfilmentTimeIssue`
-  every clock question with the cart's `prepMinutes`, and put a **prep
-  refusal first**, from `prepFloorProblem` / `prepFloorCopy` — the same parts
-  `prepFloorIssue` joins for the server — so a prep-caused slot reads
-  "“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is 12:00 PM"
-  rather than T1's generic "the earliest we can …", and a today prep used up
-  reads "too late for today" rather than "has closed for today".
-  `timeIssueCopy` gained a **"pick up"** verb ("Pick a pickup time.", "The
-  earliest you can pick up is …"); "collect" stays the collection service's.
+  flattened by `copyText` for the banner). They are thin calls into T1's
+  `fulfilmentTimeIssue`, which **carries prep as a cause**: given the cart's
+  `prepMinutes` and `prepItemName`, a `too_early` or `no_slot` that prep
+  produced comes back with `prep: { itemName, minutes }` — decided by
+  `prepFloorProblem`, the function behind orders.create's refusal — and
+  `timeIssueCopy` words it with `prepFloorCopy`, the builder the server joins.
+  One precedence rule and one sentence for both checkouts, inline and at
+  submit: "“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is
+  12:00 PM", or "— too late for today, pick a later day".
+- **"Closed" vs "no time left" for every store**, not just under prep.
+  `no_slot` carries a `reason`: `closed_day` (the store doesn't open that
+  weekday), `closed` (it's past today's LAST closing time) or `too_late` (the
+  store is still open but the checkout lead — or prep — runs past its last
+  slot). Before, any timed store with hours read "has closed for today" at
+  5:50 PM with a 6:00 PM close; it now says "There's no time left to deliver
+  today — pick tomorrow". `timeIssueCopy` also gained a **"pick up"** verb
+  ("Pick a pickup time.", "The earliest you can pick up is …"); "collect"
+  stays the collection service's.
 - `isFulfilmentDaySelectable` — chips and the default date skip a today the
   store has closed on, or that prep has used up.
 - `prepHint` — one line under the step title, about **today**: "“Ice Cream
@@ -543,9 +555,10 @@ beside them — each form keeps only its wiring:
   for both methods (a pickup time reuses the delivery time field). A time the
   buyer typed is never rewritten. Its 30s beat (and tab return) also
   re-renders the prep hint and re-floors the dates past midnight.
-- **The store's hours sit on ONE field.** T1 put them on the date hint for a
-  date-only pickup; once pickup asks for a time they move to the time field,
-  like delivery — never both.
+- **The store's hours sit on the time field only.** A pickup asks for a time
+  whenever the store keeps hours, so T1's date hint for a date-only pickup
+  could never render and was removed rather than kept as dead code; a
+  drop-off meet-up (date-only) runs on its point's schedule note instead.
 - **An untouched date only moves when it slips below the floor** (midnight,
   a raised notice) — to the first day that can actually be fulfilled. A date
   the clock makes impossible is left alone: the inline notice explains and the

@@ -548,10 +548,6 @@ export function ClaimCheckoutPage({
 		timeMove && watchedTime === hhmmFromMinutes(timeMove.to)
 			? timeMovedCopy(timeMove, { storeName })
 			: null;
-	// The chosen day's hours, for the hint under the date.
-	const watchedDayHours = watchedDate
-		? hoursForDate(openingHours, mytMidnightFromYmd(watchedDate))
-		: null;
 
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
@@ -1022,28 +1018,12 @@ export function ClaimCheckoutPage({
 										max={maxYmd}
 										required
 										description={
-											<>
-												{minNoticeDays > 0
-													? `${storeName} needs ${minNoticeDays} day${minNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-													: "Pick the date you need this order."}
-												{/* A date-only self-collect carries the store's
-												    hours on the DATE (z8r3fdff8r); once pickup asks
-												    for a time (z8r3fdff97) they move to the time
-												    field, like delivery — never both. Not for a
-												    drop-off meetup, which runs on the point's own
-												    schedule note. */}
-												{watchedMethod === "self_collect" &&
-												!watchedSchedule.isDropOff &&
-												!watchedSchedule.timed &&
-												watchedDayHours &&
-												!isAllDay(watchedDayHours) ? (
-													<>
-														{" "}
-														{storeName} is open{" "}
-														<DayWindowsInline day={watchedDayHours} /> that day.
-													</>
-												) : null}
-											</>
+											// The store's hours ride on the TIME field, never
+											// the date (pickup asks for a time whenever the
+											// store keeps hours).
+											minNoticeDays > 0
+												? `${storeName} needs ${minNoticeDays} day${minNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+												: "Pick the date you need this order."
 										}
 									/>
 								)}

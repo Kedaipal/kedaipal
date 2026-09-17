@@ -2,39 +2,32 @@
  * The "when" step's order rules for both buyer checkouts — the storefront cart
  * and the claim link — as pure functions (ClickUp `z8r3fdff97`).
  *
- * Built ON the opening-hours time rules in `fulfilment-time-issue.ts` (T1,
- * z8r3fdff8r), never beside them: this module adds only what a cart brings —
- * which fulfilment asks for a time at all, the product rules read live, and the
- * prep window — and hands every clock question to `fulfilmentTimeIssue` with
- * the cart's `prepMinutes`. The ticking repair stays T1's `planTimeRepair`.
+ * Built ON the time rules in `fulfilment-time-issue.ts` (T1, z8r3fdff8r),
+ * never beside them: this module adds only what a CART brings — which
+ * fulfilment asks for a time at all, the product rules read live, and the
+ * prep window — and hands every clock question, prep included, to
+ * `fulfilmentTimeIssue`. One precedence rule, one set of words, for both
+ * checkouts and for the inline notice and the submit refusal alike. The
+ * ticking repair stays T1's `planTimeRepair`.
  *
  * Copy comes back as `CopyPart[]`, so a page renders times whole
  * (`CopyText`) and `copyText` flattens the same parts for the submit banner.
- * The server stays the judge (`orders.create`, `orderClaims.commit`); a prep
- * refusal here is the server's own `prepFloorCopy`.
+ * The server stays the judge (`orders.create`, `orderClaims.commit`).
  */
 
 import {
 	formatPrepDuration,
 	todayMytMidnight,
-	weekdayIndexMyt,
 } from "../../convex/lib/fulfilmentDate";
 import {
-	isOpenOnDate,
 	type OpeningHours,
 	selectableTimeWindows,
-	WEEKDAY_NAMES,
 } from "../../convex/lib/openingHours";
-import {
-	type CartPrep,
-	NO_CART_PREP,
-	type PrepFloorKind,
-	prepFloorCopy,
-	prepFloorProblem,
-} from "../../convex/lib/prepFloor";
+import { type CartPrep, NO_CART_PREP } from "../../convex/lib/prepFloor";
 import {
 	type CopyPart,
 	fulfilmentTimeIssue,
+	type TimeIssue,
 	type TimeVerb,
 	timeIssueCopy,
 } from "./fulfilment-time-issue";
@@ -137,99 +130,70 @@ type DayArgs = {
 	storeName: string;
 };
 
-const PREP_KIND: Record<FulfilmentKind, PrepFloorKind> = {
-	delivery: "delivery",
-	// Never reached for prep (a collection trip is exempt) — mapped for totality.
-	collection: "delivery",
-	pickup: "pickup",
-};
+/**
+ * The day-level issue for a schedule, or `null` when the day can be offered.
+ * A timed day needs a slot left (T1's `no_slot`, prep included). A date-only
+ * day doesn't: only a closed weekday, or a today the cart's prep has used up,
+ * rules it out — a date-only pickup after hours was always allowed.
+ */
+function dayIssue(args: Omit<DayArgs, "kind" | "storeName">): TimeIssue | null {
+	const issue = fulfilmentTimeIssue({
+		hours: args.hours,
+		dayEpoch: args.dateEpoch,
+		timeMinutes: undefined,
+		now: args.now,
+		prepMinutes: args.prep.minutes,
+		prepItemName: args.prep.productName,
+	});
+	if (issue?.kind !== "no_slot") return null;
+	if (!args.timed && issue.reason !== "closed_day" && !issue.prep) return null;
+	return issue;
+}
 
 /** Whether the day can be offered at all (chips, the default date). */
 export function isFulfilmentDaySelectable(
 	args: Omit<DayArgs, "kind" | "storeName">,
 ): boolean {
-	const { hours, dateEpoch, now, prep, timed } = args;
-	if (timed) {
-		return selectableTimeWindows(hours, dateEpoch, now, prep.minutes).length > 0;
-	}
-	return (
-		isOpenOnDate(hours, dateEpoch) &&
-		prepFloorProblem({
-			hours,
-			dateEpoch,
-			timeMinutes: undefined,
-			now,
-			prep,
-		}) === null
-	);
+	return dayIssue(args) === null;
 }
 
 /**
  * Why the chosen DAY won't work, or `null` — the notice under the date and the
- * first submit check, one sentence.
+ * first submit check, one sentence: a closed weekday, today's hours over, no
+ * time left today, or the cart's prep having used today up (named as prep).
  */
 export function fulfilmentDayCopy(args: DayArgs): CopyPart[] | null {
-	const { hours, dateEpoch, now, prep, timed, kind, storeName } = args;
-	if (!isOpenOnDate(hours, dateEpoch)) {
-		return [
-			`${storeName} is closed on ${WEEKDAY_NAMES[weekdayIndexMyt(dateEpoch)]}s — pick another day.`,
-		];
-	}
-	// Prep is named before "closed for today": when prep is what used the day
-	// up, the store hasn't closed — the buyer needs to hear why.
-	const prepProblem = prepFloorProblem({
-		hours,
-		dateEpoch,
-		timeMinutes: undefined,
-		now,
-		prep,
-	});
-	if (prepProblem) {
-		return [...prepFloorCopy(prepProblem, prep, PREP_KIND[kind]), "."];
-	}
-	if (!timed) return null;
-	const issue = fulfilmentTimeIssue({
-		hours,
-		dayEpoch: dateEpoch,
-		timeMinutes: undefined,
-		now,
-		prepMinutes: prep.minutes,
-	});
-	return issue?.kind === "no_slot"
-		? timeIssueCopy(issue, { storeName, verb: TIME_VERB[kind] })
+	const issue = dayIssue(args);
+	return issue
+		? timeIssueCopy(issue, {
+				storeName: args.storeName,
+				verb: TIME_VERB[args.kind],
+			})
 		: null;
 }
 
 /**
- * Why the chosen TIME won't work, or `null`. The day is checked first, so a
- * caller asks one question; `timeMinutes` undefined is an empty field. Prep's
- * refusal (naming the product) outranks T1's generic "the earliest we can …",
- * which would otherwise speak for the same moment.
+ * Why the chosen TIME won't work, or `null` — T1's ladder with the cart's prep
+ * in it, so the day comes first and a prep refusal names the item.
+ * `timeMinutes` undefined is an empty field.
  */
 export function fulfilmentTimeCopy(
 	args: Omit<DayArgs, "timed"> & { timeMinutes: number | undefined },
 ): CopyPart[] | null {
-	const dayCopy = fulfilmentDayCopy({ ...args, timed: true });
-	if (dayCopy) return dayCopy;
-	const { hours, dateEpoch, now, prep, kind, storeName, timeMinutes } = args;
-	const prepProblem = prepFloorProblem({
-		hours,
-		dateEpoch,
-		timeMinutes,
-		now,
-		prep,
-	});
-	if (prepProblem) {
-		return [...prepFloorCopy(prepProblem, prep, PREP_KIND[kind]), "."];
-	}
 	const issue = fulfilmentTimeIssue({
-		hours,
-		dayEpoch: dateEpoch,
-		timeMinutes,
-		now,
-		prepMinutes: prep.minutes,
+		hours: args.hours,
+		dayEpoch: args.dateEpoch,
+		timeMinutes: args.timeMinutes,
+		now: args.now,
+		prepMinutes: args.prep.minutes,
+		prepItemName: args.prep.productName,
 	});
-	return issue ? timeIssueCopy(issue, { storeName, verb: TIME_VERB[kind] }) : null;
+	return issue
+		? timeIssueCopy(issue, {
+				storeName: args.storeName,
+				verb: TIME_VERB[args.kind],
+			})
+		: null;
 }
 
 /**

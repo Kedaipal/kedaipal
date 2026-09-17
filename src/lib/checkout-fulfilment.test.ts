@@ -231,6 +231,12 @@ describe("fulfilmentDayCopy", () => {
 		);
 	});
 
+	test("still open but out of time is 'no time left', never 'closed' (5:50 PM, 6 PM close)", () => {
+		expect(day({ now: at(17, 50) })).toBe(
+			"There's no time left to pick up today — pick tomorrow.",
+		);
+	});
+
 	test("a store already closed for today says so — prep is never blamed", () => {
 		expect(day({ now: at(19), prep: PUFF })).toBe(
 			"Huff & Puff has closed for today — pick another day.",

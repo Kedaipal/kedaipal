@@ -852,10 +852,6 @@ export function CheckoutPage({
 		timeMove && watchedTime === hhmmFromMinutes(timeMove.to)
 			? timeMovedCopy(timeMove, { storeName })
 			: null;
-	// The chosen day's hours, for the hints under the fields.
-	const watchedDayHours = watchedDate
-		? hoursForDate(openingHours, mytMidnightFromYmd(watchedDate))
-		: null;
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -1721,47 +1717,25 @@ export function CheckoutPage({
 														max={maxYmd}
 														required
 														description={
-															<>
-																{
-																	// Custom carts: the date is the buyer's ASK.
-																	// The seller settles the final date in the
-																	// design conversation. A notice floor raised by
-																	// a cart item is explained, never silent.
-																	hasCustomLine
-																		? `Your requested date — the seller confirms the final date with you after the design is agreed.${
-																				cartNoticeDays > 0
-																					? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
-																					: ""
-																			}`
-																		: cartNoticeDays >
-																				(minFulfilmentNoticeDays ?? 0)
-																			? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																			: isDropOff
-																				? "Pick the date you'll meet at the drop-off point."
-																				: "Pick the date you need this order."
-																}
-																{/* A date-only self-collect carries the
-																    store's hours on the DATE: a buyer
-																    collecting in person is the one who walks
-																    into a lunch break (z8r3fdff8r). Once pickup
-																    asks for a time (z8r3fdff97) the hours move
-																    to the time field, like delivery — never
-																    both. Drop-off meetups keep the point's own
-																    schedule note, because the store's hours
-																    aren't when the meetup happens. */}
-																{deliveryMethod === "self_collect" &&
-																!isDropOff &&
-																!schedule.timed &&
-																watchedDayHours &&
-																!isAllDay(watchedDayHours) ? (
-																	<>
-																		{" "}
-																		{storeName} is open{" "}
-																		<DayWindowsInline day={watchedDayHours} /> that
-																		day.
-																	</>
-																) : null}
-															</>
+															// Custom carts: the date is the buyer's ASK — the
+															// seller settles the final date in the design
+															// conversation. A notice floor raised by a cart
+															// item is explained, never silent. The store's
+															// hours ride on the TIME field, never the date
+															// (pickup asks for a time whenever the store
+															// keeps hours).
+															hasCustomLine
+																? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																		cartNoticeDays > 0
+																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																			: ""
+																	}`
+																: cartNoticeDays >
+																		(minFulfilmentNoticeDays ?? 0)
+																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																	: isDropOff
+																		? "Pick the date you'll meet at the drop-off point."
+																		: "Pick the date you need this order."
 														}
 													/>
 												)}

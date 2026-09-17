@@ -5,7 +5,10 @@
  *
  * Three pieces, all pure:
  *
- * 1. `fulfilmentTimeIssue`: WHAT is wrong with a chosen time, as data.
+ * 1. `fulfilmentTimeIssue`: WHAT is wrong with a chosen time, as data —
+ *    including WHY, when the cart's prep window (z8r3fdff97) is the reason, so
+ *    one precedence rule serves both checkouts and both the inline notice and
+ *    the submit refusal.
  * 2. `timeIssueCopy` / `timeMovedCopy`: the sentence, as parts. A time or a
  *    range is kept as a value rather than a string, so the page can render it
  *    as one unbreakable unit. On a narrow phone, "4:30 PM –⏎5:30 PM" reads as
@@ -24,9 +27,13 @@ import {
 	formatFulfilmentTime,
 	hhmmFromMinutes,
 	minSelectableTimeMinutes,
+	mytMinutesOfDay,
 	timeMinutesFromHhmm,
+	todayMytMidnight,
+	weekdayIndexMyt,
 } from "../../convex/lib/fulfilmentDate";
 import {
+	type DayHours,
 	type DayWindow,
 	dayWindows,
 	defaultTimeWithinHours,
@@ -37,17 +44,35 @@ import {
 	nextSelectableTime,
 	type OpeningHours,
 	selectableTimeWindows,
+	WEEKDAY_NAMES,
 } from "../../convex/lib/openingHours";
+import {
+	type PrepFloorKind,
+	prepFloorCopy,
+	prepFloorProblem,
+} from "../../convex/lib/prepFloor";
+
+/** The cart's prep window, when IT is the reason a moment is refused
+ * (z8r3fdff97) — the item to name and how long it takes. */
+export interface PrepCause {
+	itemName: string;
+	minutes: number;
+}
 
 export type TimeIssue =
-	/** Nothing left to pick that day (today after closing, or minutes before
-	 * midnight). `storeClosed` separates "the store has shut" from "the
-	 * checkout lead ran out", because they call for different words. */
-	| { kind: "no_slot"; storeClosed: boolean }
+	/** The store doesn't open that weekday. */
+	| { kind: "no_slot"; reason: "closed_day"; weekday: number }
+	/** Nothing left to pick TODAY, and why, because they call for different
+	 * words: `closed` once it's past the day's last closing time; `too_late`
+	 * while the store is still open but the checkout lead — or, with `prep`,
+	 * the cart's prep window — runs past its last slot. At 5:50 PM with a
+	 * 6:00 PM close the store has NOT closed, and saying so would be false. */
+	| { kind: "no_slot"; reason: "closed" | "too_late"; prep?: PrepCause }
 	/** The day has slots, but the field is empty (a cleared input). */
 	| { kind: "missing" }
-	/** Before the earliest pickable moment (opening time, or the lead floor). */
-	| { kind: "too_early"; earliest: number }
+	/** Before the earliest pickable moment: opening time, the lead floor, or —
+	 * with `prep` — the cart's prep window. */
+	| { kind: "too_early"; earliest: number; prep?: PrepCause }
 	/** After the day's last closing time. */
 	| { kind: "too_late"; latest: number }
 	/** Inside the day's bounds but in a split day's break. */
@@ -59,6 +84,16 @@ interface TimeContext {
 	now?: number;
 	/** The cart's prep floor (z8r3fdff97). Optional, and 0 changes nothing. */
 	prepMinutes?: number;
+	/** The item setting that floor, named when prep is the reason. */
+	prepItemName?: string;
+}
+
+/** Whether today's hours are over: past the day's LAST closing time. An
+ * all-day store never "closes" — its only no-slot moment is midnight. */
+function hoursOverToday(day: DayHours, dayEpoch: number, now: number): boolean {
+	if (isAllDay(day) || dayEpoch !== todayMytMidnight(now)) return false;
+	const lastClose = Math.max(...dayWindows(day).map((window) => window.close));
+	return mytMinutesOfDay(now) >= lastClose;
 }
 
 /**
@@ -72,12 +107,44 @@ interface TimeContext {
 export function fulfilmentTimeIssue(
 	args: TimeContext & { timeMinutes: number | undefined },
 ): TimeIssue | null {
-	const { hours, dayEpoch, timeMinutes, now = Date.now(), prepMinutes = 0 } =
-		args;
+	const {
+		hours,
+		dayEpoch,
+		timeMinutes,
+		now = Date.now(),
+		prepMinutes = 0,
+		prepItemName = "",
+	} = args;
+	// Whether PREP is the reason is decided by `prepFloorProblem` — the same
+	// function behind orders.create's refusal — so the checkout can never blame
+	// prep for a moment the server would refuse for another reason, or miss one
+	// it refuses for prep.
+	const prep = { minutes: prepMinutes, productName: prepItemName };
+	const prepCause: PrepCause = { itemName: prepItemName, minutes: prepMinutes };
 	const windows = selectableTimeWindows(hours, dayEpoch, now, prepMinutes);
 	if (windows.length === 0) {
 		const day = hoursForDate(hours, dayEpoch);
-		return { kind: "no_slot", storeClosed: day !== null && !isAllDay(day) };
+		if (day === null) {
+			return {
+				kind: "no_slot",
+				reason: "closed_day",
+				weekday: weekdayIndexMyt(dayEpoch),
+			};
+		}
+		const prepProblem = prepFloorProblem({
+			hours,
+			dateEpoch: dayEpoch,
+			timeMinutes: undefined,
+			now,
+			prep,
+		});
+		if (prepProblem?.kind === "too_late_today") {
+			return { kind: "no_slot", reason: "too_late", prep: prepCause };
+		}
+		return {
+			kind: "no_slot",
+			reason: hoursOverToday(day, dayEpoch, now) ? "closed" : "too_late",
+		};
 	}
 	if (timeMinutes === undefined || Number.isNaN(timeMinutes)) {
 		return { kind: "missing" };
@@ -87,7 +154,18 @@ export function fulfilmentTimeIssue(
 	}
 	const earliest = windows[0].open;
 	const latest = windows[windows.length - 1].close;
-	if (timeMinutes < earliest) return { kind: "too_early", earliest };
+	if (timeMinutes < earliest) {
+		const prepProblem = prepFloorProblem({
+			hours,
+			dateEpoch: dayEpoch,
+			timeMinutes,
+			now,
+			prep,
+		});
+		return prepProblem?.kind === "too_early"
+			? { kind: "too_early", earliest, prep: prepCause }
+			: { kind: "too_early", earliest };
+	}
 	if (timeMinutes > latest) return { kind: "too_late", latest };
 	const day = hoursForDate(hours, dayEpoch);
 	const gap = day ? gapForTime(day, timeMinutes) : null;
@@ -133,18 +211,59 @@ const TIME_NOUN: Record<TimeVerb, string> = {
 	"pick up": "pickup",
 };
 
+/** The noun a prep refusal uses. A collection trip is exempt from prep
+ * (orders.create), so "collect" never reaches it — mapped for totality. */
+const PREP_KIND: Record<TimeVerb, PrepFloorKind> = {
+	deliver: "delivery",
+	collect: "delivery",
+	"pick up": "pickup",
+};
+
+/** The prep refusal — `prepFloorCopy`, the builder orders.create's error is
+ * joined from, so the checkout says exactly what the server says. The server
+ * string has no period; a page sentence does. */
+function prepCopy(
+	problem: Parameters<typeof prepFloorCopy>[0],
+	cause: PrepCause,
+	verb: TimeVerb,
+): CopyPart[] {
+	return [
+		...prepFloorCopy(
+			problem,
+			{ minutes: cause.minutes, productName: cause.itemName },
+			PREP_KIND[verb],
+		),
+		".",
+	];
+}
+
 export function timeIssueCopy(
 	issue: TimeIssue,
 	ctx: { storeName: string; verb: TimeVerb },
 ): CopyPart[] {
 	switch (issue.kind) {
 		case "no_slot":
-			return issue.storeClosed
+			if (issue.reason === "closed_day") {
+				return [
+					`${ctx.storeName} is closed on ${WEEKDAY_NAMES[issue.weekday]}s — pick another day.`,
+				];
+			}
+			if (issue.prep) {
+				return prepCopy({ kind: "too_late_today" }, issue.prep, ctx.verb);
+			}
+			return issue.reason === "closed"
 				? [`${ctx.storeName} has closed for today — pick another day.`]
 				: [`There's no time left to ${ctx.verb} today — pick tomorrow.`];
 		case "missing":
 			return [`Pick a ${TIME_NOUN[ctx.verb]} time.`];
 		case "too_early":
+			if (issue.prep) {
+				return prepCopy(
+					{ kind: "too_early", earliest: issue.earliest },
+					issue.prep,
+					ctx.verb,
+				);
+			}
 			return [
 				// The buyer does the picking up; a rider does the rest.
 				ctx.verb === "pick up"

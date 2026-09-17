@@ -42,7 +42,35 @@ describe("fulfilmentTimeIssue", () => {
 				timeMinutes: undefined,
 				now: at(21, 30),
 			}),
-		).toEqual({ kind: "no_slot", storeClosed: true });
+		).toEqual({ kind: "no_slot", reason: "closed" });
+	});
+
+	test("open but out of time is NOT 'closed': the lead ran out before the last close", () => {
+		// Friday 20:50 → the 7:00–9:00 PM window is still open, but the 15-minute
+		// lead runs past 9:00 PM. The store hasn't closed; there's no time left.
+		expect(
+			fulfilmentTimeIssue({
+				hours,
+				dayEpoch: FRI,
+				timeMinutes: undefined,
+				now: at(20, 50),
+			}),
+		).toEqual({ kind: "no_slot", reason: "too_late" });
+	});
+
+	test("a weekday the store never opens says so, naming the weekday", () => {
+		const closedThursdays: OpeningHours = Array.from({ length: 7 }, (_, i) =>
+			i === 4 ? { ...SPLIT, closed: true } : SPLIT,
+		);
+		const THU = FRI - 86_400_000;
+		expect(
+			fulfilmentTimeIssue({
+				hours: closedThursdays,
+				dayEpoch: THU,
+				timeMinutes: 1000,
+				now: at(9, 0) - 86_400_000,
+			}),
+		).toEqual({ kind: "no_slot", reason: "closed_day", weekday: 4 });
 	});
 
 	test("an empty field on a day with slots is 'missing'", () => {
@@ -85,6 +113,75 @@ describe("fulfilmentTimeIssue", () => {
 	});
 });
 
+describe("the cart's prep window is a CAUSE the ladder carries (z8r3fdff97)", () => {
+	// Friday (today) with 2h prep. At 16:00 the floor is 18:00, so the
+	// 4:30–5:30 window is gone and 7:00–9:00 PM is still open.
+	const prep = { prepMinutes: 120, prepItemName: "Ice Cream Puff" };
+
+	test("a time inside the prep window is too early BECAUSE of prep, and names the item", () => {
+		// Friday is today here, so the floor applies.
+		const issue = fulfilmentTimeIssue({
+			hours,
+			dayEpoch: FRI,
+			timeMinutes: 1000,
+			now: at(16, 0),
+			...prep,
+		});
+		expect(issue).toEqual({
+			kind: "too_early",
+			earliest: 1140,
+			prep: { itemName: "Ice Cream Puff", minutes: 120 },
+		});
+		if (!issue) throw new Error("expected an issue");
+		expect(copyText(timeIssueCopy(issue, { ...ctx, verb: "pick up" }))).toBe(
+			"“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is 7:00 PM.",
+		);
+	});
+
+	test("a prep that uses today up is too late BECAUSE of prep — not 'closed'", () => {
+		// Friday 19:30 with 2h prep: 9:30 PM is past the 9:00 PM close.
+		const issue = fulfilmentTimeIssue({
+			hours,
+			dayEpoch: FRI,
+			timeMinutes: undefined,
+			now: at(19, 30),
+			...prep,
+		});
+		expect(issue).toEqual({
+			kind: "no_slot",
+			reason: "too_late",
+			prep: { itemName: "Ice Cream Puff", minutes: 120 },
+		});
+		if (!issue) throw new Error("expected an issue");
+		expect(copyText(timeIssueCopy(issue, { ...ctx, verb: "pick up" }))).toBe(
+			"“Ice Cream Puff” needs 2 hours to prepare — too late for today, pick a later day.",
+		);
+	});
+
+	test("prep is never blamed for what the hours already refuse", () => {
+		// Friday 21:30: closed with or without prep — the hours speak.
+		expect(
+			fulfilmentTimeIssue({
+				hours,
+				dayEpoch: FRI,
+				timeMinutes: undefined,
+				now: at(21, 30),
+				...prep,
+			}),
+		).toEqual({ kind: "no_slot", reason: "closed" });
+		// Saturday is a future day: prep is absorbed overnight.
+		expect(
+			fulfilmentTimeIssue({
+				hours,
+				dayEpoch: SAT,
+				timeMinutes: 900,
+				now: at(16, 0),
+				...prep,
+			}),
+		).toEqual({ kind: "too_early", earliest: 990 });
+	});
+});
+
 describe("copy — one sentence for the notice and the submit banner", () => {
 	test("each issue flattens to the exact submit wording", () => {
 		expect(
@@ -103,11 +200,16 @@ describe("copy — one sentence for the notice and the submit banner", () => {
 			copyText(timeIssueCopy({ kind: "missing" }, { ...ctx, verb: "collect" })),
 		).toBe("Pick a collection time.");
 		expect(
-			copyText(timeIssueCopy({ kind: "no_slot", storeClosed: true }, ctx)),
+			copyText(timeIssueCopy({ kind: "no_slot", reason: "closed" }, ctx)),
 		).toBe("Huff & Puff has closed for today — pick another day.");
 		expect(
-			copyText(timeIssueCopy({ kind: "no_slot", storeClosed: false }, ctx)),
+			copyText(timeIssueCopy({ kind: "no_slot", reason: "too_late" }, ctx)),
 		).toBe("There's no time left to deliver today — pick tomorrow.");
+		expect(
+			copyText(
+				timeIssueCopy({ kind: "no_slot", reason: "closed_day", weekday: 4 }, ctx),
+			),
+		).toBe("Huff & Puff is closed on Thursdays — pick another day.");
 	});
 
 	test("a buyer picking up speaks for themselves — never the collection service's words (z8r3fdff97)", () => {
@@ -121,7 +223,7 @@ describe("copy — one sentence for the notice and the submit banner", () => {
 			copyText(timeIssueCopy({ kind: "too_early", earliest: 990 }, pickup)),
 		).toBe("The earliest you can pick up is 4:30 PM — pick that or later.");
 		expect(
-			copyText(timeIssueCopy({ kind: "no_slot", storeClosed: false }, pickup)),
+			copyText(timeIssueCopy({ kind: "no_slot", reason: "too_late" }, pickup)),
 		).toBe("There's no time left to pick up today — pick tomorrow.");
 	});
 
