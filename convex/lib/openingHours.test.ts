@@ -720,6 +720,24 @@ describe("dayHoursIssue names the window at fault", () => {
 		);
 	});
 
+	test("on a SPLIT day the first window's sentences name their window too", () => {
+		// "Opening time must be before closing time" under two rows of pickers
+		// leaves the seller guessing which opening time; the second window's
+		// sentences already say "the second window's".
+		expect(
+			dayHoursIssue({ open: 600, close: 540, open2: 720, close2: 1080 }),
+		).toEqual({
+			message: "the first window's opening time must be before its closing time",
+			window: "first",
+		});
+		expect(
+			dayHoursIssue({ open: 540, close: 1440, open2: 720, close2: 1080 }),
+		).toEqual({
+			message: "the first window can close at 11:59 PM at the latest",
+			window: "first",
+		});
+	});
+
 	test("every second-window problem points at the second window", () => {
 		for (const day of [
 			{ open: 450, close: 600, open2: 540, close2: 1080 }, // starts too early

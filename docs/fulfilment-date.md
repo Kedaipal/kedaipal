@@ -366,11 +366,56 @@ when nobody is there) or dropped breakfast.
     Monday to save." at the foot). The 11:59 PM cap only speaks when it's the
     actual problem, and the plain message is back to "opening time must be
     before closing time".
-  - **Grid and targets.** Every open row in the 7-row grid reserves the remove
-    column, so all pickers align. The same-every-day × is a full 44px pulled
-    into its label's line height. Switching to "Same every day" **says** when
-    it replaced different per-day hours. The settings summary stacks windows
-    like the storefront dialog, using one component for both.
+  - **Grid and targets.** Switching to "Same every day" **says** when it
+    replaced different per-day hours. The settings summary stacks windows like
+    the storefront dialog, using one component for both. (The reserved remove
+    column and the 44px × from this round were replaced in the next one; see
+    below.)
+- **Second test round (17 Sep evening), nine more fixes:**
+  - **Add and remove are ONE control under a day's windows** (`SecondWindowButton`),
+    in both editor modes. The × beside the pickers, plus a column reserved on
+    every row to keep them aligned, cost each picker 25px. On a 360px Android,
+    every time read "6:30 …", hiding the AM/PM a split schedule turns on. Both
+    windows now run full width, and both buttons are 44px targets pulled back
+    to text height.
+  - **Errors sit under the window they're about,** in both modes. A
+    first-window error printed after both rows read as a complaint about the
+    second window. On a split day the first window's sentences also name it
+    ("the first window's opening time must be before its closing time").
+    Unsplit days keep the old wording.
+  - **Switching back restores the per-day hours.** "Same every day" keeps the
+    week it replaced, and switching back to "Different per day" puts every day's
+    own hours back. The note used to say "Cancel to keep your different hours
+    per day". Cancel restores the SAVED week, so per-day hours typed in the
+    same session were lost while the note promised to keep them. Re-tapping
+    the active mode no longer re-runs the unify, which had dropped the note and
+    the kept hours.
+  - **"Reset to open 24/7" is a draft action.** It used to save on the spot,
+    one tap beside Cancel, wiping up to fourteen windows with no confirm or
+    undo. Now the pickers show 24/7, Save commits it (the server stores an
+    all-day week as unset, same as the old instant clear), and Cancel takes it
+    back. It hides once the draft already is 24/7.
+  - **A move gives its true reason.** `TimeMove.reason` is `break` | `passed` |
+    `before_open` | `after_close`. Changing the date used to say "7:30 PM is no
+    longer available" when the new day just closes at 6:00 PM. Now: "7:30 PM
+    is after … closes that day", or "10:00 AM is before … opens that day".
+    "Passed" is judged against the floor WITH the cart's prep, so a time the
+    prep window overtook reads as passed, not "before opening" (T2 adds its
+    prep wording on top).
+  - **A refusal stands only while its inputs do.** A submit refusal about the
+    day or time is stored with `fulfilmentInputsKey(values)` (method, pickup
+    point, date, time) and shown only while those are unchanged. Before, it
+    stayed after the buyer fixed the time, contradicting the field until the
+    next press.
+  - **The storefront shows the refusal beside the CTA,** in the reason slot
+    above the button, on both the desktop summary and the mobile bar. The claim
+    page already put it there. The inline date and time notices carry
+    `data-form-error`, so the submit focus helper scrolls to the field being
+    refused. Note for anyone re-testing: that helper runs on
+    `requestAnimationFrame`, which a hidden or covered browser window never
+    fires. An "off-screen refusal" seen in a background tab is partly the tab.
+  - **The pickup unit helper no longer claims WhatsApp.** See
+    [`fulfilment.md`](./fulfilment.md#unit--floor--building-line-2026-09-16-clickup-z8r3fdff8r).
 - **Prep-floor seam for T2 (`z8r3fdff97`).** Every selectable-time helper —
   `selectableTimeWindows`, `selectableTimeWindow`, `isTimeSelectable`,
   `defaultTimeWithinHours` — takes an optional trailing **`prepMinutes`** and

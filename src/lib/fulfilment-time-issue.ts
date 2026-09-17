@@ -23,10 +23,12 @@
 import {
 	formatFulfilmentTime,
 	hhmmFromMinutes,
+	minSelectableTimeMinutes,
 	timeMinutesFromHhmm,
 } from "../../convex/lib/fulfilmentDate";
 import {
 	type DayWindow,
+	dayWindows,
 	defaultTimeWithinHours,
 	gapForTime,
 	hoursForDate,
@@ -154,33 +156,111 @@ export function timeIssueCopy(
 	}
 }
 
+/**
+ * WHY `from` could not stay — the true reason, because a move happens for
+ * different causes and one sentence can't cover them. "7:30 PM is no longer
+ * available" is right when the clock passed it and FALSE when the buyer
+ * switched to a Friday that simply closes at 6:00 PM.
+ */
+export type TimeMoveReason =
+	/** `from` sat in a split day's break (a seller edit, or a new day). */
+	| { kind: "break"; gap: DayWindow }
+	/** Today, `from` is below the earliest pickable moment — the clock (or the
+	 * cart's prep window) overtook it. */
+	| { kind: "passed" }
+	/** `from` is before the day's first opening. (The repair lands ON that
+	 * opening, so naming the opening time again would say one number twice.) */
+	| { kind: "before_open" }
+	/** `from` is after the day's last closing. */
+	| { kind: "after_close" };
+
 /** What a repair did, for the announcement under the time field. */
 export interface TimeMove {
 	from: number;
 	to: number;
-	/** The break `from` sat in, when that's why it moved. */
-	gap: DayWindow | null;
+	reason: TimeMoveReason;
+}
+
+/**
+ * Classify why `from` isn't pickable on `dayEpoch`. Precedence: a break names
+ * itself; then the floor, which is today's earliest moment INCLUDING prep (a
+ * time overtaken by the prep window has passed, it isn't "before opening");
+ * then the day's own bounds.
+ */
+function moveReason(
+	hours: OpeningHours | undefined,
+	dayEpoch: number,
+	from: number,
+	now: number,
+	prepMinutes: number,
+): TimeMoveReason {
+	const day = hoursForDate(hours, dayEpoch);
+	const gap = day ? gapForTime(day, from) : null;
+	if (gap) return { kind: "break", gap };
+	if (from < minSelectableTimeMinutes(dayEpoch, now, prepMinutes)) {
+		return { kind: "passed" };
+	}
+	if (day) {
+		const windows = dayWindows(day);
+		if (from < windows[0].open) return { kind: "before_open" };
+		if (from > windows[windows.length - 1].close) {
+			return { kind: "after_close" };
+		}
+	}
+	return { kind: "passed" };
 }
 
 export function timeMovedCopy(
 	moved: TimeMove,
 	ctx: { storeName: string },
 ): CopyPart[] {
-	return moved.gap
-		? [
-				"We moved your time to ",
-				{ time: moved.to },
+	const lead: CopyPart[] = ["We moved your time to ", { time: moved.to }];
+	switch (moved.reason.kind) {
+		case "break":
+			return [
+				...lead,
 				` — ${ctx.storeName} is closed `,
-				{ range: moved.gap },
+				{ range: moved.reason.gap },
 				".",
-			]
-		: [
-				"We moved your time to ",
-				{ time: moved.to },
+			];
+		case "before_open":
+			return [
+				...lead,
 				" — ",
 				{ time: moved.from },
-				" is no longer available.",
+				` is before ${ctx.storeName} opens that day.`,
 			];
+		case "after_close":
+			return [
+				...lead,
+				" — ",
+				{ time: moved.from },
+				` is after ${ctx.storeName} closes that day.`,
+			];
+		case "passed":
+			return [...lead, " — ", { time: moved.from }, " is no longer available."];
+	}
+}
+
+/**
+ * The inputs a date/time refusal judged, as one comparable value. A submit
+ * refusal about the day or the time stands only while these are unchanged:
+ * the moment the buyer changes the method, the pickup point, the date or the
+ * time, "that time won't work" is about a choice no longer on screen, and it
+ * used to sit there contradicting a fixed field until the next press.
+ */
+export function fulfilmentInputsKey(values: {
+	deliveryMethod: string;
+	fulfilmentDate: string;
+	fulfilmentTime: string;
+	pickupLocationId: string;
+}): string {
+	return [
+		values.deliveryMethod,
+		values.pickupLocationId,
+		values.fulfilmentDate,
+		values.fulfilmentTime,
+	].join("|");
 }
 
 export interface TimeRepair {
@@ -227,11 +307,14 @@ export function planTimeRepair(
 			? nextSelectableTime(hours, dayEpoch, current, now, prepMinutes)
 			: null) ?? defaultTimeWithinHours(hours, dayEpoch, now, prepMinutes);
 	if (next === null) return null;
-	const day = hasTime ? hoursForDate(hours, dayEpoch) : null;
 	return {
 		nextHhmm: hhmmFromMinutes(next),
 		moved: hasTime
-			? { from: current, to: next, gap: day ? gapForTime(day, current) : null }
+			? {
+					from: current,
+					to: next,
+					reason: moveReason(hours, dayEpoch, current, now, prepMinutes),
+				}
 			: null,
 	};
 }

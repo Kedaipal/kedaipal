@@ -606,20 +606,71 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		).toBe(true);
 	});
 
-	it("per-day: every OPEN row reserves the remove column, so all pickers align", () => {
+	it("per-day: the remove control sits UNDER a day's windows, never beside its pickers", () => {
 		const { container } = renderWithHours([
 			{ open: 540, close: 1080, closed: true }, // Sunday, closed → no row
 			{ ...SPLIT }, // Monday, split
 			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
 		]);
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
-		// Six open days, split or not: one reserved column each.
+		// A 44px button beside the pickers cost each picker 25px: on a 360px phone
+		// every time read "6:30 …" and the AM/PM a split schedule turns on was
+		// gone. A picker row now holds its two pickers and nothing else.
+		const remove = screen.getByRole("button", {
+			name: "Remove second window on Monday",
+		});
+		const pickerRow = screen.getByRole("button", {
+			name: "Monday second window opening time",
+		}).parentElement as HTMLElement;
+		expect(pickerRow.contains(remove)).toBe(false);
+		// …and no empty column is reserved to line rows up any more.
 		expect(
 			container.querySelectorAll('span.size-11[aria-hidden="true"]').length,
-		).toBe(6);
+		).toBe(0);
 	});
 
-	it("switching to 'Same every day' SAYS when it replaced different per-day hours", () => {
+	it("per-day: a FIRST-window error sits between the windows and names its window", async () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ ...SPLIT }, // Monday: 7:30–10:00 AM, then 12:00–6:00 PM
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Monday first window opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+		const sentence = screen.getByText(
+			"The first window's opening time must be before its closing time.",
+		);
+		// Printed after BOTH rows, it read as a complaint about the second window,
+		// which is fine. It must come before the second window's pickers.
+		const secondPicker = screen.getByRole("button", {
+			name: "Monday second window opening time",
+		});
+		expect(
+			sentence.compareDocumentPosition(secondPicker) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("same-every-day: a first-window error sits under the FIRST window", async () => {
+		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "First window opening time" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+		const sentence = screen.getByText(
+			"The first window's opening time must be before its closing time.",
+		);
+		expect(
+			sentence.compareDocumentPosition(screen.getByText("Second window")) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("switching to 'Same every day' SAYS it replaced different per-day hours — and switching back restores them", async () => {
 		renderWithHours([
 			{ open: 540, close: 1080, closed: true }, // Sunday
 			{ ...SPLIT }, // Monday
@@ -628,11 +679,64 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
 		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
 		expect(
-			screen.getByText(/Every day now uses Monday's hours\. Cancel to keep/),
+			screen.getByText(
+				"Every day now uses Monday's hours. Switch back to Different per day to restore each day's own hours.",
+			),
 		).toBeTruthy();
-		// Back to per-day: the note has nothing left to warn about.
 		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
 		expect(screen.queryByText(/Every day now uses/)).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Tuesday opening time" }).textContent,
+		).toContain("10:00 AM");
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		await waitFor(() =>
+			expect(updateSettings).toHaveBeenCalledWith({
+				openingHours: [
+					{ open: 540, close: 1080, closed: true },
+					{ ...SPLIT },
+					...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+				],
+				retailerId: undefined,
+			}),
+		);
+	});
+
+	it("per-day hours typed in THIS session survive a trip through 'Same every day'", async () => {
+		// The live-test case: the SAVED week is uniform, so Cancel — all the old
+		// note offered — could only ever restore that, and the per-day hours
+		// typed since were lost while the note promised to keep them.
+		renderWithHours(Array.from({ length: 7 }, () => ({ open: 600, close: 1200 })));
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Monday opening time" }));
+		fireEvent.click(await screen.findByRole("button", { name: "8:00 AM" }));
+		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
+		expect(
+			screen.getByText(/Switch back to Different per day to restore/),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
+		expect(
+			screen.getByRole("button", { name: "Monday opening time" }).textContent,
+		).toContain("8:00 AM");
+		expect(
+			screen.getByRole("button", { name: "Tuesday opening time" }).textContent,
+		).toContain("10:00 AM");
+	});
+
+	it("re-tapping the active mode keeps the note and the hours it promises back", () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			{ ...SPLIT }, // Monday
+			...Array.from({ length: 5 }, () => ({ open: 600, close: 1200 })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
+		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
+		expect(screen.getByText(/Every day now uses Monday's hours/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
+		expect(
+			screen.getByRole("button", { name: "Tuesday opening time" }).textContent,
+		).toContain("10:00 AM");
 	});
 
 	it("an identical week switches modes without a note: nothing was replaced", () => {
@@ -643,16 +747,19 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		expect(screen.queryByText(/Every day now uses/)).toBeNull();
 	});
 
-	it("the 44px remove target doesn't push 'Second window' away from its pickers", () => {
+	it("add and remove are full 44px targets, pulled back to text height", () => {
 		renderWithHours(Array.from({ length: 7 }, () => ({ ...SPLIT })));
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
 		const remove = screen.getByRole("button", { name: "Remove second window" });
-		expect(remove.className).toContain("size-11");
-		// Negative vertical margins keep the label row at text height.
-		expect(remove.className).toContain("-my-3.5");
+		expect(remove.className).toContain("min-h-11");
+		// Negative vertical margins keep the column's rhythm at text height.
+		expect(remove.className).toContain("-my-2.5");
+		fireEvent.click(remove);
+		const add = screen.getByRole("button", { name: /Add a second window/ });
+		expect(add.className).toContain("min-h-11");
 	});
 
-	it("a configured store shows the weekly summary; Reset sends the null clear", async () => {
+	it("a configured store shows the weekly summary; Reset fills the editor instead of saving on the spot", async () => {
 		renderWithHours([
 			{ open: 540, close: 1080, closed: true }, // Sunday
 			...Array.from({ length: 6 }, () => ({ open: 540, close: 1080 })),
@@ -662,12 +769,43 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		expect(screen.getByText("Closed")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
 		fireEvent.click(screen.getByRole("button", { name: "Reset to open 24/7" }));
+		// Nothing is saved: a slip beside Cancel no longer wipes the week.
+		expect(updateSettings).not.toHaveBeenCalled();
+		expect(
+			screen.getByRole("button", { name: "Opening time" }).textContent,
+		).toContain("12:00 AM");
+		expect(
+			screen.getByRole("button", { name: "Closing time" }).textContent,
+		).toContain("11:59 PM");
+		// The draft IS open 24/7 now, so the control stops offering itself.
+		expect(
+			screen.queryByRole("button", { name: "Reset to open 24/7" }),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+		// An all-day week — the server stores it as unset, which is exactly what
+		// the old instant clear wrote.
 		await waitFor(() =>
 			expect(updateSettings).toHaveBeenCalledWith({
-				openingHours: null,
+				openingHours: Array.from({ length: 7 }, () => ({
+					open: 0,
+					close: 1439,
+				})),
 				retailerId: undefined,
 			}),
 		);
+	});
+
+	it("Cancel after Reset keeps the saved week untouched", () => {
+		renderWithHours([
+			{ open: 540, close: 1080, closed: true }, // Sunday
+			...Array.from({ length: 6 }, () => ({ ...SPLIT })),
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
+		fireEvent.click(screen.getByRole("button", { name: "Reset to open 24/7" }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(updateSettings).not.toHaveBeenCalled();
+		expect(screen.getAllByText("7:30 AM – 10:00 AM").length).toBe(6);
+		expect(screen.getByText("Closed")).toBeTruthy();
 	});
 });
 

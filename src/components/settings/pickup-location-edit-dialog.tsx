@@ -99,6 +99,14 @@ function KindButton({
 	);
 }
 
+/**
+ * Where the pickup unit line reaches buyers — only surfaces that really print
+ * it. NOT the WhatsApp confirmation: that push is a Meta template carrying the
+ * order number, store and total plus a button to the order page, and no
+ * address. This hint claimed WhatsApp twice (z8r3fdff8r), so a test holds it.
+ */
+export const PICKUP_UNIT_HELP = `Shown to buyers in front of the address — at checkout and on their order page. Keeps the map pin intact. Up to ${UNIT_LINE_MAX_LENGTH} characters.`;
+
 export function PickupLocationEditDialog({
 	open,
 	onClose,
@@ -403,7 +411,7 @@ export function PickupLocationEditDialog({
 										placeholder="Unit 3-1, Block B"
 										autoComplete="off"
 										maxLength={UNIT_LINE_MAX_LENGTH}
-										description={`Shown to buyers in front of the address — at checkout, on their order page and in their WhatsApp confirmation. Keeps the map pin intact. Up to ${UNIT_LINE_MAX_LENGTH} characters.`}
+										description={PICKUP_UNIT_HELP}
 									/>
 								)}
 							</form.AppField>

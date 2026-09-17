@@ -47,6 +47,7 @@ import {
 } from "../../lib/format";
 import {
 	copyText,
+	fulfilmentInputsKey,
 	fulfilmentTimeIssue,
 	planTimeRepair,
 	type TimeMove,
@@ -133,6 +134,13 @@ export function ClaimCheckoutPage({
 	const commitClaim = useMutation(api.orderClaims.commit);
 	const navigate = useNavigate();
 	const [serverError, setServerError] = useState<string | null>(null);
+	// A submit refusal about the chosen day or time, tied to the inputs it
+	// judged — shown only while those stand, same as the storefront checkout
+	// (z8r3fdff8r): fixing the time must clear "that time won't work".
+	const [fulfilmentRefusal, setFulfilmentRefusal] = useState<{
+		message: string;
+		inputs: string;
+	} | null>(null);
 	const [pickupError, setPickupError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 
@@ -218,7 +226,10 @@ export function ClaimCheckoutPage({
 		validators: { onChange: claimFormSchemaFor(country) },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
+			setFulfilmentRefusal(null);
 			setPickupError(null);
+			const refuseFulfilment = (message: string) =>
+				setFulfilmentRefusal({ message, inputs: fulfilmentInputsKey(value) });
 			const sanitizedAddress =
 				value.deliveryMethod === "delivery"
 					? sanitizeAddress(value.address, country)
@@ -242,14 +253,14 @@ export function ClaimCheckoutPage({
 
 			const fulfilmentEpoch = mytMidnightFromYmd(value.fulfilmentDate);
 			if (Number.isNaN(fulfilmentEpoch)) {
-				setServerError("That date isn't valid — pick a day from the picker.");
+				refuseFulfilment("That date isn't valid — pick a day from the picker.");
 				return;
 			}
 			try {
 				assertValidFulfilmentDate(fulfilmentEpoch, minNoticeDays);
 				assertWithinOpeningHours(openingHours, fulfilmentEpoch, undefined);
 			} catch (err) {
-				setServerError((err as Error).message);
+				refuseFulfilment((err as Error).message);
 				return;
 			}
 
@@ -264,7 +275,7 @@ export function ClaimCheckoutPage({
 					timeMinutes: parsed,
 				});
 				if (issue) {
-					setServerError(
+					refuseFulfilment(
 						copyText(
 							timeIssueCopy(issue, {
 								storeName,
@@ -335,6 +346,15 @@ export function ClaimCheckoutPage({
 	const watchedState = useStore(form.store, (s) => s.values.address.state);
 	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
 	const watchedTime = useStore(form.store, (s) => s.values.fulfilmentTime);
+	const watchedInputs = useStore(form.store, (s) =>
+		fulfilmentInputsKey(s.values),
+	);
+	// The banner after a refused press: a day/time refusal only while the
+	// buyer's choice is still the one refused, otherwise a server error.
+	const refusal =
+		fulfilmentRefusal?.inputs === watchedInputs
+			? fulfilmentRefusal.message
+			: serverError;
 	const watchedTimeMinutes = (() => {
 		const t = timeMinutesFromHhmm(watchedTime);
 		return Number.isNaN(t) ? undefined : t;
@@ -950,12 +970,20 @@ export function ClaimCheckoutPage({
 						</div>
 						{/* One slot, one message: day, then time, then the
 						    "we moved your time" note. */}
+						{/* `data-form-error`: a refused press scrolls here, to the
+						    field being refused. */}
 						{dateHoursIssue ? (
-							<p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+							<p
+								data-form-error
+								className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
+							>
 								{dateHoursIssue}
 							</p>
 						) : timeHoursIssue ? (
-							<p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+							<p
+								data-form-error
+								className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
+							>
 								<CopyText parts={timeHoursIssue} />
 							</p>
 						) : timeMoveNote ? (
@@ -981,12 +1009,12 @@ export function ClaimCheckoutPage({
 						</form.AppField>
 					</ClaimSection>
 
-					{serverError ? (
+					{refusal ? (
 						<p
 							role="alert"
 							className="rounded-xl bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive"
 						>
-							{serverError}
+							{refusal}
 						</p>
 					) : null}
 

@@ -7,6 +7,7 @@ import {
 } from "../../convex/lib/openingHours";
 import {
 	copyText,
+	fulfilmentInputsKey,
 	fulfilmentTimeIssue,
 	planTimeRepair,
 	timeIssueCopy,
@@ -117,20 +118,37 @@ describe("copy — one sentence for the notice and the submit banner", () => {
 		expect(parts).toContainEqual({ range: { open: 1050, close: 1140 } });
 	});
 
-	test("a move is announced, naming the break when that's why", () => {
+	test("a move is announced with its TRUE reason", () => {
+		const store = { storeName: "Huff & Puff" };
 		expect(
 			copyText(
 				timeMovedCopy(
-					{ from: 1080, to: 1140, gap: { open: 1050, close: 1140 } },
-					{ storeName: "Huff & Puff" },
+					{
+						from: 1080,
+						to: 1140,
+						reason: { kind: "break", gap: { open: 1050, close: 1140 } },
+					},
+					store,
 				),
 			),
 		).toBe("We moved your time to 7:00 PM — Huff & Puff is closed 5:30 PM – 7:00 PM.");
 		expect(
 			copyText(
-				timeMovedCopy({ from: 1035, to: 1040, gap: null }, { storeName: "Huff & Puff" }),
+				timeMovedCopy({ from: 1035, to: 1040, reason: { kind: "passed" } }, store),
 			),
 		).toBe("We moved your time to 5:20 PM — 5:15 PM is no longer available.");
+		// A new DAY is not the clock passing: nothing expired, the day just keeps
+		// different hours. Saying "no longer available" here was the live-test bug.
+		expect(
+			copyText(
+				timeMovedCopy({ from: 600, to: 780, reason: { kind: "before_open" } }, store),
+			),
+		).toBe("We moved your time to 1:00 PM — 10:00 AM is before Huff & Puff opens that day.");
+		expect(
+			copyText(
+				timeMovedCopy({ from: 1170, to: 600, reason: { kind: "after_close" } }, store),
+			),
+		).toBe("We moved your time to 10:00 AM — 7:30 PM is after Huff & Puff closes that day.");
 	});
 });
 
@@ -172,7 +190,7 @@ describe("planTimeRepair — ownership decides who may change the time", () => {
 			}),
 		).toEqual({
 			nextHhmm: "19:00",
-			moved: { from: 1045, to: 1140, gap: null },
+			moved: { from: 1045, to: 1140, reason: { kind: "passed" } },
 		});
 	});
 
@@ -189,7 +207,11 @@ describe("planTimeRepair — ownership decides who may change the time", () => {
 			}),
 		).toEqual({
 			nextHhmm: "19:00",
-			moved: { from: 1045, to: 1140, gap: { open: 1020, close: 1140 } },
+			moved: {
+				from: 1045,
+				to: 1140,
+				reason: { kind: "break", gap: { open: 1020, close: 1140 } },
+			},
 		});
 	});
 
@@ -208,8 +230,60 @@ describe("planTimeRepair — ownership decides who may change the time", () => {
 			}),
 		).toEqual({
 			nextHhmm: "16:30",
-			moved: { from: 1230, to: 990, gap: null },
+			moved: { from: 1230, to: 990, reason: { kind: "after_close" } },
 		});
+	});
+
+	test("switching to a day that opens LATER says so — not 'no longer available'", () => {
+		// Friday 10:00 AM prefill, buyer picks Saturday, which opens at 4:30 PM.
+		expect(
+			planTimeRepair({
+				hours,
+				dayEpoch: SAT,
+				currentHhmm: "10:00",
+				systemHhmm: "10:00",
+				now: at(9, 0),
+			}),
+		).toEqual({
+			nextHhmm: "16:30",
+			moved: { from: 600, to: 990, reason: { kind: "before_open" } },
+		});
+	});
+
+	test("switching to a day that closes EARLIER says so", () => {
+		// Today's 7:30 PM prefill; the buyer picks a day that runs 10 AM – 6 PM.
+		const earlyClose: OpeningHours = Array.from({ length: 7 }, (_, i) =>
+			i === 6 ? { open: 600, close: 1080 } : OPEN_ALL_DAY,
+		);
+		expect(
+			planTimeRepair({
+				hours: earlyClose,
+				dayEpoch: SAT,
+				currentHhmm: "19:30",
+				systemHhmm: "19:30",
+				now: at(9, 0),
+			}),
+		).toEqual({
+			nextHhmm: "10:00",
+			moved: { from: 1170, to: 600, reason: { kind: "after_close" } },
+		});
+	});
+
+	test("a time the PREP window overtook has passed — it is not 'before opening'", () => {
+		// Today 9:00 AM, 10:00 AM sits before the 4:30 PM opening. With no prep
+		// the floor (9:15 AM) is behind it, so the opening is the reason; with a
+		// two-hour prep the floor (11:00 AM) overtakes it, and "passed" is true.
+		const base = {
+			hours,
+			dayEpoch: FRI,
+			currentHhmm: "10:00",
+			systemHhmm: "10:00",
+			now: at(9, 0),
+		};
+		expect(planTimeRepair(base)?.moved?.reason).toEqual({ kind: "before_open" });
+		expect(
+			planTimeRepair({ ...base, prepMinutes: 120 })?.moved?.reason,
+		).toEqual({ kind: "passed" });
 	});
 
 	test("a day with no slot left clears a system time instead of keeping a false one", () => {
@@ -234,5 +308,33 @@ describe("planTimeRepair — ownership decides who may change the time", () => {
 				now: at(21, 30),
 			}),
 		).toEqual({ nextHhmm: "16:30", moved: null });
+	});
+});
+
+describe("fulfilmentInputsKey — a refusal stands only while its inputs do", () => {
+	const base = {
+		deliveryMethod: "delivery",
+		pickupLocationId: "",
+		fulfilmentDate: "2026-06-27",
+		fulfilmentTime: "18:00",
+	};
+
+	test("the same choice keeps its refusal", () => {
+		expect(fulfilmentInputsKey({ ...base })).toBe(fulfilmentInputsKey(base));
+	});
+
+	test("changing ANY judged input retires it — the pickup point included", () => {
+		// Switching to a drop-off point turns the time requirement off, so a
+		// refusal left over from the self-collect point would be stale too.
+		for (const patch of [
+			{ deliveryMethod: "self_collect" },
+			{ pickupLocationId: "jx7edez1nd7p7rmc3d9138m0ad8ejqqv" },
+			{ fulfilmentDate: "2026-06-28" },
+			{ fulfilmentTime: "19:00" },
+		]) {
+			expect(fulfilmentInputsKey({ ...base, ...patch })).not.toBe(
+				fulfilmentInputsKey(base),
+			);
+		}
 	});
 });

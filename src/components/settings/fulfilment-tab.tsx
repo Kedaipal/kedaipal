@@ -55,6 +55,7 @@ import {
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	type DayHours,
+	type DayHoursIssue,
 	dayGaps,
 	dayHoursIssue,
 	hasSecondWindow,
@@ -2219,7 +2220,6 @@ function WindowPickers({
 	disabled,
 	isError,
 	showIcon = true,
-	dense = false,
 	ariaPrefix,
 	windowLabel,
 }: {
@@ -2228,10 +2228,6 @@ function WindowPickers({
 	disabled: boolean;
 	isError: boolean;
 	showIcon?: boolean;
-	/** Tighter horizontal padding for the 7-row grid, where a row also carries
-	 * a remove button — at 375px the roomy default truncates "12:00 PM" to
-	 * "12:00 …". */
-	dense?: boolean;
 	/** "Monday " in the per-day grid, "" in same-every-day mode. */
 	ariaPrefix: string;
 	/** "second window " once a day is split, "" while it runs straight
@@ -2254,7 +2250,7 @@ function WindowPickers({
 				isError={isError}
 				showIcon={showIcon}
 				aria-label={ariaLabel("opening")}
-				className={cn("min-w-0 flex-1", dense && "gap-1 px-2.5")}
+				className="min-w-0 flex-1"
 			/>
 			<span className="shrink-0 text-muted-foreground" aria-hidden="true">
 				–
@@ -2266,24 +2262,42 @@ function WindowPickers({
 				isError={isError}
 				showIcon={showIcon}
 				aria-label={ariaLabel("closing")}
-				className={cn("min-w-0 flex-1", dense && "gap-1 px-2.5")}
+				className="min-w-0 flex-1"
 			/>
 		</div>
 	);
 }
 
-/** "+ Add a second window", or the same control disabled WITH ITS REASON where
- * the day can't take one — a click that quietly does nothing is the thing this
- * exists to avoid. */
-function AddSecondWindowButton({
-	blockedReason,
+/**
+ * "+ Add a second window" and "× Remove second window": ONE control, in the
+ * same place under a day's windows, in both editor modes. Adding and taking
+ * away the split happen where it is read, and neither parks a 44px button
+ * beside the pickers — that column cost each picker 25px, which on a 360px
+ * phone cut every time to "6:30 …" and hid the AM/PM a split schedule is
+ * about.
+ *
+ * Add is disabled WITH ITS REASON where the day can't take a second window —
+ * a click that quietly does nothing is the thing this exists to avoid. Both
+ * are full 44px targets, pulled back to text height with negative margins so
+ * the column keeps its rhythm.
+ */
+function SecondWindowButton({
+	action,
+	blockedReason = null,
+	dayName,
 	disabled,
 	onClick,
 }: {
-	blockedReason: string | null;
+	action: "add" | "remove";
+	blockedReason?: string | null;
+	/** Per-day rows only: names the day for assistive tech, since seven rows
+	 * carry the same visible label. */
+	dayName?: string;
 	disabled: boolean;
 	onClick: () => void;
 }) {
+	const Icon = action === "add" ? Plus : X;
+	const label = action === "add" ? "Add a second window" : "Remove second window";
 	return (
 		<div className="flex flex-col gap-1">
 			<button
@@ -2291,15 +2305,32 @@ function AddSecondWindowButton({
 				onClick={onClick}
 				disabled={disabled || blockedReason !== null}
 				title={blockedReason ?? undefined}
-				className="flex items-center gap-1 self-start rounded-lg py-1 text-xs font-medium text-accent underline-offset-2 hover:underline disabled:pointer-events-none disabled:text-muted-foreground disabled:no-underline"
+				// The spoken name STARTS with the visible label, so voice control
+				// ("click Remove second window") still finds it.
+				aria-label={dayName ? `${label} on ${dayName}` : undefined}
+				className={cn(
+					"-my-2.5 flex min-h-11 items-center gap-1 self-start rounded-lg text-xs font-medium underline-offset-2 hover:underline disabled:pointer-events-none disabled:no-underline",
+					action === "add"
+						? "text-accent disabled:text-muted-foreground"
+						: "text-muted-foreground hover:text-destructive",
+				)}
 			>
-				<Plus className="size-3.5" aria-hidden="true" />
-				Add a second window
+				<Icon className="size-3.5" aria-hidden="true" />
+				{label}
 			</button>
 			{blockedReason ? (
 				<span className="text-xs text-muted-foreground">{blockedReason}</span>
 			) : null}
 		</div>
+	);
+}
+
+/** A day's rule sentence, placed directly under the window it is about. */
+function WindowIssueLine({ issue }: { issue: DayHoursIssue }) {
+	return (
+		<p className="text-xs text-destructive">
+			{capitalizeFirst(issue.message)}.
+		</p>
 	);
 }
 
@@ -2365,6 +2396,13 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	// The weekday whose hours "Same every day" just copied over days that were
 	// different. Drives the note that says so. Null when nothing was replaced.
 	const [unifiedFrom, setUnifiedFrom] = useState<string | null>(null);
+	// The per-day hours that unifying replaced, kept so switching back restores
+	// them — saved or not. Without it the note could only point at Cancel,
+	// which restores the SAVED week and so threw away per-day hours typed in
+	// this session while promising to keep them.
+	const [perDayBeforeUnify, setPerDayBeforeUnify] = useState<DayDraft[] | null>(
+		null,
+	);
 	const [saving, setSaving] = useState(false);
 
 	const configured = initial !== undefined;
@@ -2377,6 +2415,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 		);
 		setDraft(rows);
 		setUnifiedFrom(null);
+		setPerDayBeforeUnify(null);
 		setEditing(true);
 	}
 
@@ -2411,9 +2450,13 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	 * When the days actually differed, that replaces the others' windows, so it
 	 * is SAID in a note under the mode buttons rather than only being visible
 	 * in pickers that show one day (z8r3fdff8r: a second window per day made
-	 * the silent version cost more). Switching back keeps the unified values;
-	 * Cancel restores the saved ones. */
+	 * the silent version cost more) — and the replaced week is kept, so
+	 * switching back to "Different per day" puts every day's own hours back. */
 	function switchMode(next: "same" | "perDay") {
+		// Re-tapping the active mode must not re-run the unify: the week is
+		// already uniform, so it would read as "nothing replaced" and drop the
+		// kept per-day hours along with the note.
+		if (next === mode) return;
 		if (next === "same") {
 			const sourceIndex = DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1;
 			const source = draft[sourceIndex];
@@ -2421,12 +2464,15 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 				(row) => !row.closed && !sameSchedule(row, source),
 			);
 			setUnifiedFrom(differed ? WEEKDAY_NAMES[sourceIndex] : null);
+			setPerDayBeforeUnify(differed ? draft : null);
 			setAllDays({
 				openHhmm: source.openHhmm,
 				closeHhmm: source.closeHhmm,
 				second: source.second ? { ...source.second } : null,
 			});
 		} else {
+			if (perDayBeforeUnify) setDraft(perDayBeforeUnify);
+			setPerDayBeforeUnify(null);
 			setUnifiedFrom(null);
 		}
 		setMode(next);
@@ -2477,18 +2523,26 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 		}
 	}
 
-	async function resetTo247() {
-		setSaving(true);
-		try {
-			await updateSettings({ openingHours: null });
-			toast.success("Back to open 24 hours, every day.");
-			setEditing(false);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
+	/** Back to open 24/7 as a DRAFT, not a save. It used to save on the spot,
+	 * one tap beside Cancel, so a slip wiped a whole split week (up to fourteen
+	 * windows) with no confirm and no undo. Now the pickers show the result,
+	 * Save commits it — the server stores an all-day week as unset, exactly what
+	 * the old instant clear wrote — and Cancel takes it back. */
+	function resetDraftTo247() {
+		setDraft(draftFromHours(undefined));
+		setMode("same");
+		setUnifiedFrom(null);
+		setPerDayBeforeUnify(null);
 	}
+	// Nothing to reset once the draft already IS open 24/7, so the control
+	// isn't offered — rather than a tap that visibly does nothing.
+	const draftIsOpen247 = draft.every(
+		(row) =>
+			!row.closed &&
+			row.second === null &&
+			timeMinutesFromHhmm(row.openHhmm) === 0 &&
+			timeMinutesFromHhmm(row.closeHhmm) === MAX_CLOSE_MINUTES,
+	);
 
 	return (
 		<Card>
@@ -2558,8 +2612,8 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 					</div>
 					{mode === "same" && unifiedFrom ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Every day now uses {unifiedFrom}&apos;s hours. Cancel to keep
-							your different hours per day.
+							Every day now uses {unifiedFrom}&apos;s hours. Switch back to
+							Different per day to restore each day&apos;s own hours.
 						</p>
 					) : null}
 					{mode === "same" ? (
@@ -2582,30 +2636,17 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 									ariaPrefix=""
 									windowLabel={rangeSource.second ? "first window " : ""}
 								/>
+								{/* Each rule's sentence sits directly under the window
+								    it is about. Printed after both rows, a first-window
+								    error read as a complaint about the second. */}
+								{sameIssue?.window === "first" ? (
+									<WindowIssueLine issue={sameIssue} />
+								) : null}
 								{rangeSource.second ? (
 									<>
-										{/* The × rides the LABEL row, not the picker row: two
-										    pickers plus a 44px button do not fit a 375px phone
-										    without truncating "12:00 PM", and both ranges
-										    staying full-width keeps them column-aligned. */}
-										<div className="flex items-center justify-between gap-2">
-											<span className="text-xs font-medium text-muted-foreground">
-												Second window
-											</span>
-											{/* A full 44px target, pulled into the label's
-											    line height with negative margins so "Second
-											    window" sits exactly as close to its pickers
-											    as "First window" does. */}
-											<button
-												type="button"
-												onClick={() => setAllDays({ second: null })}
-												disabled={saving}
-												aria-label="Remove second window"
-												className="-my-3.5 -mr-3 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive"
-											>
-												<X className="size-4" aria-hidden="true" />
-											</button>
-										</div>
+										<span className="text-xs font-medium text-muted-foreground">
+											Second window
+										</span>
 										<WindowPickers
 											window={rangeSource.second}
 											onChange={(patch) =>
@@ -2622,25 +2663,26 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 											ariaPrefix=""
 											windowLabel="second window "
 										/>
+										{sameIssue?.window === "second" ? (
+											<WindowIssueLine issue={sameIssue} />
+										) : (
+											<BreakLine row={rangeSource} />
+										)}
+										<SecondWindowButton
+											action="remove"
+											disabled={saving}
+											onClick={() => setAllDays({ second: null })}
+										/>
 									</>
 								) : (
-									<AddSecondWindowButton
+									<SecondWindowButton
+										action="add"
 										blockedReason={secondWindowBlockedReason(rangeSource)}
 										disabled={saving}
 										onClick={() =>
 											setAllDays({ second: suggestSecondWindow(rangeSource) })
 										}
 									/>
-								)}
-								{/* The rule's sentence sits under the window it's about,
-								    in place of the break line, rather than at the foot of
-								    the card below the day chips. */}
-								{sameIssue ? (
-									<p className="text-xs text-destructive">
-										{capitalizeFirst(sameIssue.message)}.
-									</p>
-								) : (
-									<BreakLine row={rangeSource} />
 								)}
 							</div>
 							{/* Tap a day off for the weekly rest day — chips, not 7
@@ -2700,62 +2742,56 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 										</div>
 										{row.closed ? null : (
 											// A split day (z8r3fdff8r) stacks its windows in
-											// this column, so the day name + switch stay put
-											// and the second range never squeezes the first.
+											// this column, so the day name + switch stay put.
+											// Both windows run full width, with no remove column
+											// beside the pickers (see SecondWindowButton), so every
+											// row's pickers are one width and the grid stays aligned.
 											<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-												<div className="flex min-w-0 items-center gap-1.5">
-													<WindowPickers
-														window={row}
-														onChange={(patch) => setDay(i, patch)}
-														disabled={saving}
-														isError={rowIssue?.window === "first"}
-														showIcon={false}
-														dense
-														ariaPrefix={`${WEEKDAY_NAMES[i]} `}
-														windowLabel={row.second ? "first window " : ""}
-													/>
-													{/* The remove column is reserved on EVERY row, split
-													    or not, so all seven days' pickers are one width
-													    and the grid reads as a single aligned column. */}
-													<span className="size-11 shrink-0" aria-hidden="true" />
-												</div>
+												<WindowPickers
+													window={row}
+													onChange={(patch) => setDay(i, patch)}
+													disabled={saving}
+													isError={rowIssue?.window === "first"}
+													showIcon={false}
+													ariaPrefix={`${WEEKDAY_NAMES[i]} `}
+													windowLabel={row.second ? "first window " : ""}
+												/>
+												{rowIssue?.window === "first" ? (
+													<WindowIssueLine issue={rowIssue} />
+												) : null}
 												{row.second ? (
-													<div className="flex min-w-0 items-center gap-1.5">
+													<>
 														<WindowPickers
 															window={row.second}
 															onChange={(patch) => setSecond(i, patch)}
 															disabled={saving}
 															isError={rowIssue?.window === "second"}
 															showIcon={false}
-															dense
 															ariaPrefix={`${WEEKDAY_NAMES[i]} `}
 															windowLabel="second window "
 														/>
-														<button
-															type="button"
-															onClick={() => setDay(i, { second: null })}
+														{rowIssue?.window === "second" ? (
+															<WindowIssueLine issue={rowIssue} />
+														) : (
+															<BreakLine row={row} compact />
+														)}
+														<SecondWindowButton
+															action="remove"
+															dayName={WEEKDAY_NAMES[i]}
 															disabled={saving}
-															aria-label={`Remove ${WEEKDAY_NAMES[i]} second window`}
-															className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive"
-														>
-															<X className="size-4" aria-hidden="true" />
-														</button>
-													</div>
+															onClick={() => setDay(i, { second: null })}
+														/>
+													</>
 												) : (
-													<AddSecondWindowButton
+													<SecondWindowButton
+														action="add"
 														blockedReason={secondWindowBlockedReason(row)}
+														dayName={WEEKDAY_NAMES[i]}
 														disabled={saving}
 														onClick={() =>
 															setDay(i, { second: suggestSecondWindow(row) })
 														}
 													/>
-												)}
-												{rowIssue ? (
-													<p className="text-xs text-destructive">
-														{capitalizeFirst(rowIssue.message)}.
-													</p>
-												) : (
-													<BreakLine row={row} compact />
 												)}
 											</div>
 										)}
@@ -2799,12 +2835,12 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 						>
 							Cancel
 						</Button>
-						{configured ? (
+						{!draftIsOpen247 ? (
 							<button
 								type="button"
-								onClick={resetTo247}
+								onClick={resetDraftTo247}
 								disabled={saving}
-								className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+								className="min-h-11 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
 							>
 								Reset to open 24/7
 							</button>

@@ -55,6 +55,7 @@ import {
 } from "../../lib/format";
 import {
 	copyText,
+	fulfilmentInputsKey,
 	fulfilmentTimeIssue,
 	planTimeRepair,
 	type TimeMove,
@@ -267,6 +268,14 @@ export function CheckoutPage({
 	const minRulesBlocked = qtyShortfalls.length > 0 || valueShortfall > 0;
 
 	const [serverError, setServerError] = useState<string | null>(null);
+	// A submit refusal about the chosen day or time, tied to the inputs it
+	// judged (`fulfilmentInputsKey`). It shows only while those stand: once the
+	// buyer fixes the time, a sentence saying the old one won't work would sit
+	// beside the CTA contradicting the field until the next press (z8r3fdff8r).
+	const [fulfilmentRefusal, setFulfilmentRefusal] = useState<{
+		message: string;
+		inputs: string;
+	} | null>(null);
 	// Submit-time "choose a pickup point" error — inline on the radio list (the
 	// shared focus helper lands on it), not a generic bottom banner. Cleared as
 	// soon as the buyer picks one.
@@ -388,7 +397,10 @@ export function CheckoutPage({
 		validators: { onChange: checkoutFormSchemaFor(country) },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
+			setFulfilmentRefusal(null);
 			setPickupError(null);
+			const refuseFulfilment = (message: string) =>
+				setFulfilmentRefusal({ message, inputs: fulfilmentInputsKey(value) });
 			if (cart.items.length === 0) return;
 			// Minimum order rules — the submit button is already disabled with the
 			// reason on screen; this guard covers a race (e.g. Enter key mid-render).
@@ -430,13 +442,13 @@ export function CheckoutPage({
 			// server (which re-validates) so the buyer sees the error inline.
 			const fulfilmentEpoch = mytMidnightFromYmd(value.fulfilmentDate);
 			if (Number.isNaN(fulfilmentEpoch)) {
-				setServerError("That date isn't valid — pick a day from the picker.");
+				refuseFulfilment("That date isn't valid — pick a day from the picker.");
 				return;
 			}
 			try {
 				assertValidFulfilmentDate(fulfilmentEpoch, minFulfilmentNoticeDays);
 			} catch (err) {
-				setServerError((err as Error).message);
+				refuseFulfilment((err as Error).message);
 				return;
 			}
 			// Store opening hours (86eyp5rav): a closed day rejects for BOTH
@@ -446,7 +458,7 @@ export function CheckoutPage({
 			try {
 				assertWithinOpeningHours(openingHours, fulfilmentEpoch, undefined);
 			} catch (err) {
-				setServerError((err as Error).message);
+				refuseFulfilment((err as Error).message);
 				return;
 			}
 
@@ -467,7 +479,7 @@ export function CheckoutPage({
 					timeMinutes: parsed,
 				});
 				if (issue) {
-					setServerError(
+					refuseFulfilment(
 						copyText(
 							timeIssueCopy(issue, {
 								storeName,
@@ -601,6 +613,15 @@ export function CheckoutPage({
 	// pickup on that day) — date changes re-quote just like address changes.
 	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
 	const watchedTime = useStore(form.store, (s) => s.values.fulfilmentTime);
+	const watchedInputs = useStore(form.store, (s) =>
+		fulfilmentInputsKey(s.values),
+	);
+	// What the CTA says after a refused press: a day/time refusal only while
+	// the buyer's choice is still the one refused, otherwise a server error.
+	const refusal =
+		fulfilmentRefusal?.inputs === watchedInputs
+			? fulfilmentRefusal.message
+			: serverError;
 	// Parsed once for the two consumers below; NaN (cleared field) reads as
 	// "no time" so the quote falls back to the day-level pricing.
 	const watchedTimeMinutes = (() => {
@@ -986,11 +1007,20 @@ export function CheckoutPage({
 			)}
 		</form.Subscribe>
 	);
-	// Disabled-with-reason: the line sits directly above the CTA in BOTH places
-	// it renders (desktop summary footer, mobile sticky bar).
-	const blockedReasonLine = blockedReason ? (
+	// Directly above the CTA in BOTH places it renders (desktop summary footer,
+	// mobile sticky bar): why it's disabled, or why a press was refused. The
+	// refusal used to render at the foot of the form column, on desktop a
+	// screen away from the button in the summary card (z8r3fdff8r).
+	const ctaNoticeLine = blockedReason ? (
 		<p className="text-center text-xs font-medium text-destructive">
 			{blockedReason}
+		</p>
+	) : refusal ? (
+		<p
+			role="alert"
+			className="text-center text-xs font-medium text-destructive"
+		>
+			{refusal}
 		</p>
 	) : null;
 	const privacyPolicyLink = (
@@ -1196,7 +1226,7 @@ export function CheckoutPage({
 										// Desktop CTA lives with the money it commits to; the
 										// mobile CTA is the sticky bar below.
 										<div className="mt-4 hidden flex-col gap-3 lg:flex">
-											{blockedReasonLine}
+											{ctaNoticeLine}
 											{submitButton}
 											{finePrint}
 										</div>
@@ -1672,13 +1702,22 @@ export function CheckoutPage({
 										</div>
 										{/* One slot, one message: a day that won't work
 										    outranks a time that won't, and both outrank
-										    the "we moved your time" note. */}
+										    the "we moved your time" note. `data-form-error`
+										    makes a refused press scroll HERE, to the field
+										    being refused, while the CTA line repeats the
+										    sentence beside the button. */}
 										{dateHoursIssue ? (
-											<p className="text-xs font-medium text-destructive">
+											<p
+												data-form-error
+												className="text-xs font-medium text-destructive"
+											>
 												{dateHoursIssue}
 											</p>
 										) : timeHoursIssue ? (
-											<p className="text-xs font-medium text-destructive">
+											<p
+												data-form-error
+												className="text-xs font-medium text-destructive"
+											>
 												<CopyText parts={timeHoursIssue} />
 											</p>
 										) : timeMoveNote ? (
@@ -1712,16 +1751,6 @@ export function CheckoutPage({
 						<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
 							Order checkout is temporarily unavailable. Please try again
 							shortly or contact the store owner.
-						</p>
-					) : null}
-
-					{serverError ? (
-						<p
-							data-form-error
-							role="alert"
-							className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
-						>
-							{serverError}
 						</p>
 					) : null}
 				</div>
@@ -1789,7 +1818,7 @@ export function CheckoutPage({
 							);
 						}}
 					</form.Subscribe>
-					{blockedReasonLine}
+					{ctaNoticeLine}
 					{submitButton}
 					{finePrintCompact}
 				</div>

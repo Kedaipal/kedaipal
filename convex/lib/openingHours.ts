@@ -241,6 +241,10 @@ export interface DayHoursIssue {
  * actual problem (an API caller sending 24:00).
  */
 export function dayHoursIssue(day: DayHours): DayHoursIssue | null {
+	// On a split day "opening time" is ambiguous — the second window's rules
+	// name their window, so the first window's must too. An unsplit day keeps
+	// the wording it always had.
+	const split = hasSecondWindow(day);
 	if (
 		!Number.isInteger(day.open) ||
 		!Number.isInteger(day.close) ||
@@ -248,17 +252,21 @@ export function dayHoursIssue(day: DayHours): DayHoursIssue | null {
 		day.open >= day.close
 	) {
 		return {
-			message: "opening time must be before closing time",
+			message: split
+				? "the first window's opening time must be before its closing time"
+				: "opening time must be before closing time",
 			window: "first",
 		};
 	}
 	if (day.close > MAX_CLOSE_MINUTES) {
 		return {
-			message: "closing time can be 11:59 PM at the latest",
+			message: split
+				? "the first window can close at 11:59 PM at the latest"
+				: "closing time can be 11:59 PM at the latest",
 			window: "first",
 		};
 	}
-	if (!hasSecondWindow(day)) return null;
+	if (!split) return null;
 	// Non-null within this branch — restated for the type system.
 	const open2 = day.open2 as number;
 	const close2 = day.close2 as number;

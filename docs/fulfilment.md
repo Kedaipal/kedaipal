@@ -959,9 +959,18 @@ unit line.
 - **Where the pickup unit rides:** composed into the ONE address string every
   buyer surface already prints — at the public query boundary
   (`listActivePublicBySlug`) and frozen into `orders.pickupSnapshot.address`
-  at order create. Checkout, `/track`, email, WhatsApp and the CSV export
-  therefore carry it with **no plumbing of their own**, and a later edit to
-  the location can't rewrite a placed order.
+  at order create. Checkout, `/track`, the seller's order email and the CSV
+  export therefore carry it with **no plumbing of their own**, and a later
+  edit to the location can't rewrite a placed order.
+- **The WhatsApp confirmation does NOT carry it** — and the seller-facing
+  helper must never say it does (it did twice; fixed in the 17 Sep evening
+  round). The checkout confirmation is the Meta TEMPLATE push, whose only
+  parameters are order number, store name and total plus a button to
+  `/track`, where the unit is. `renderPickupBlock` prints the address only
+  on the legacy buyer-messages-first path, which is off whenever
+  `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is set. Adding the address to the
+  template would be a new outbound payload, which buyer-info-lives-on-the-
+  order-page rules out.
 - **Why it's a separate field and not "just type it into the address".**
   The pickup address IS free text — but editing it away from its Google pick
   **drops the coordinates**, and with them the buyer's one-tap Waze / Maps
