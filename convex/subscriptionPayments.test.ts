@@ -163,6 +163,390 @@ describe("billingGatewayAvailable", () => {
 	});
 });
 
+/**
+ * z8r3fdfty4 — a founding member was quoted list price on the billing page.
+ * The trigger Arif hit was admin act-as (every billing read resolved the
+ * ADMIN's own store), and underneath it the page priced founding three ways.
+ * These pin the server half: one resolved founding flag, one renewal quote
+ * that every surface reads, act-as reads of the SELLER's store, and the
+ * founding plan lock.
+ */
+describe("billing page prices — server-resolved, act-as aware (z8r3fdfty4)", () => {
+	const DAY = 86400000;
+
+	/** A paying store the v1 way: founding is ADMIN-MARKED (rank + flag on the
+	 * retailer, `foundingIntent` never set) — most of the real cohort. */
+	async function seedPaying(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		opts: {
+			country?: "MY" | "SG";
+			founding?: boolean;
+			status?: "active" | "past_due" | "on_hold";
+			cycle?: "monthly" | "annual";
+			/** Days since the paid period ended (negative = still running). */
+			lapsedDays?: number;
+			lastPaidCurrency?: "MYR" | "SGD";
+			pendingPlanChange?: "starter";
+		} = {},
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.patch(retailerId, {
+				country: opts.country ?? "MY",
+				...(opts.founding
+					? { isFoundingMember: true, foundingMemberRank: 2 }
+					: {}),
+			});
+			await ctx.db.patch(subId, {
+				status: opts.status ?? "active",
+				plan: "pro",
+				billingCycle: opts.cycle ?? "monthly",
+				currentPeriodStart: now - 30 * DAY,
+				currentPeriodEnd: now - (opts.lapsedDays ?? 0) * DAY - 1000,
+				...(opts.pendingPlanChange
+					? {
+							pendingPlanChange: {
+								plan: opts.pendingPlanChange,
+								requestedAt: now - DAY,
+							},
+						}
+					: {}),
+			});
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: subId,
+				invoiceNumber: `INV-PAID-${slug}`,
+				plan: "pro",
+				billingCycle: opts.cycle ?? "monthly",
+				amount: 14900,
+				total: 10400,
+				currency:
+					opts.lastPaidCurrency ?? (opts.country === "SG" ? "SGD" : "MYR"),
+				periodStart: now - 30 * DAY,
+				periodEnd: now,
+				dueDate: now - 20 * DAY,
+				status: "paid",
+				origin: "admin",
+				createdAt: now - 30 * DAY,
+			});
+		});
+		return { retailerId, subId, asUser: t.withIdentity({ subject: userId }) };
+	}
+
+	test("an admin-marked founding member is on founding pricing: MY RM104, SG S$41", async () => {
+		const t = setup();
+		const my = await seedPaying(t, "u_fmy", "fmy-store", { founding: true });
+		expect(
+			await my.asUser.query(api.subscriptionPayments.billingGatewayAvailable, {}),
+		).toMatchObject({
+			currency: "MYR",
+			renewalCurrency: "MYR",
+			foundingPricing: true,
+			foundingPricingLapsed: false,
+			nextRenewal: { plan: "pro", founding: true, amount: 10400, currency: "MYR" },
+		});
+		const sg = await seedPaying(t, "u_fsg", "fsg-store", {
+			founding: true,
+			country: "SG",
+		});
+		expect(
+			await sg.asUser.query(api.subscriptionPayments.billingGatewayAvailable, {}),
+		).toMatchObject({
+			currency: "SGD",
+			foundingPricing: true,
+			nextRenewal: { amount: 4100, currency: "SGD" },
+		});
+		// And a list seller is untouched.
+		const list = await seedPaying(t, "u_lsg", "lsg-store", { country: "SG" });
+		expect(
+			await list.asUser.query(api.subscriptionPayments.billingGatewayAvailable, {}),
+		).toMatchObject({
+			foundingPricing: false,
+			foundingPricingLapsed: false,
+			nextRenewal: { founding: false, amount: 5900, currency: "SGD" },
+		});
+	});
+
+	test("act-as reads the SELLER's store — not the admin's own (the reported repro)", async () => {
+		const t = setup();
+		// The admin runs their own (MY, list-price) store…
+		await seedPaying(t, ADMIN, "admin-own-store");
+		// …and opens a Singapore founding member's billing tab.
+		const seller = await seedPaying(t, "u_fseller", "fseller-store", {
+			founding: true,
+			country: "SG",
+		});
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		// Without the id, the query answers for the caller — what the tab did.
+		const own = await asAdmin.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{},
+		);
+		expect(own).toMatchObject({ currency: "MYR", foundingPricing: false });
+
+		const theirs = await asAdmin.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{ retailerId: seller.retailerId },
+		);
+		expect(theirs).toMatchObject({
+			currency: "SGD",
+			foundingPricing: true,
+			nextRenewal: { amount: 4100, currency: "SGD" },
+		});
+
+		const invoices = await asAdmin.query(api.invoices.myInvoices, {
+			retailerId: seller.retailerId,
+		});
+		expect(invoices.map((i) => i.invoiceNumber)).toEqual([
+			"INV-PAID-fseller-store",
+		]);
+		expect(
+			(await asAdmin.query(api.invoices.myInvoices, {})).map(
+				(i) => i.invoiceNumber,
+			),
+		).toEqual(["INV-PAID-admin-own-store"]);
+	});
+
+	test("a non-admin can't read another store's billing through the act-as argument", async () => {
+		const t = setup();
+		const seller = await seedPaying(t, "u_victim", "victim-store", {
+			founding: true,
+		});
+		await seedRetailer(t, "u_nosy", "nosy-store");
+		const asNosy = t.withIdentity({ subject: "u_nosy" });
+		await expect(
+			asNosy.query(api.subscriptionPayments.billingGatewayAvailable, {
+				retailerId: seller.retailerId,
+			}),
+		).rejects.toThrow(/Forbidden/);
+		await expect(
+			asNosy.query(api.invoices.myInvoices, { retailerId: seller.retailerId }),
+		).rejects.toThrow(/Forbidden/);
+		// The owner passing their OWN id is fine (same answer as omitting it).
+		expect(
+			await seller.asUser.query(api.subscriptionPayments.billingGatewayAvailable, {
+				retailerId: seller.retailerId,
+			}),
+		).toMatchObject({ foundingPricing: true });
+	});
+
+	test("a lapsed founding member reads list price with the lapse flag; a comped store gets no renewal quote", async () => {
+		const t = setup();
+		const lapsed = await seedPaying(t, "u_flapsed", "flapsed-store", {
+			founding: true,
+			status: "past_due",
+			lapsedDays: 91,
+		});
+		expect(
+			await lapsed.asUser.query(
+				api.subscriptionPayments.billingGatewayAvailable,
+				{},
+			),
+		).toMatchObject({
+			foundingPricing: false,
+			foundingPricingLapsed: true,
+			nextRenewal: { founding: false, amount: 14900 },
+		});
+		const comped = await seedPaying(t, "u_comp", "comp-store");
+		await t.run(async (ctx) => ctx.db.patch(comped.subId, { comped: true }));
+		expect(
+			await comped.asUser.query(
+				api.subscriptionPayments.billingGatewayAvailable,
+				{},
+			),
+		).toMatchObject({ nextRenewal: null });
+	});
+
+	// The ticket's money check, as a test: the number on the page, in the
+	// heads-up email, on HitPay's authorisation page and on the renewal invoice
+	// the cron writes are ONE number for the same seller.
+	const QUOTE_CASES = [
+		{ name: "MY founding, monthly", slug: "q-myf", opts: { founding: true } },
+		{
+			name: "SG founding, annual",
+			slug: "q-sgfa",
+			opts: { founding: true, country: "SG" as const, cycle: "annual" as const },
+		},
+		{
+			name: "MY store billed in SGD (last paid invoice wins)",
+			slug: "q-mysgd",
+			opts: { founding: true, lastPaidCurrency: "SGD" as const },
+		},
+		{
+			name: "founding member lapsed past 3 months",
+			slug: "q-lapsed",
+			opts: { founding: true, lapsedDays: 91 },
+		},
+		{
+			name: "list seller with a scheduled downgrade",
+			slug: "q-down",
+			opts: { pendingPlanChange: "starter" as const },
+		},
+		{
+			name: "founding member with a downgrade scheduled before the lock",
+			slug: "q-fdown",
+			opts: { founding: true, pendingPlanChange: "starter" as const },
+		},
+		{
+			name: "SG founding member on Off-Season Hold",
+			slug: "q-hold",
+			opts: {
+				founding: true,
+				country: "SG" as const,
+				status: "on_hold" as const,
+			},
+		},
+	];
+	for (const c of QUOTE_CASES) {
+		test(`one number everywhere — ${c.name}`, async () => {
+			const t = setup();
+			stubBillingEnv();
+			const userId = `u_${c.slug}`;
+			const { retailerId, subId, asUser } = await seedPaying(
+				t,
+				userId,
+				c.slug,
+				c.opts,
+			);
+			const gateway = await asUser.query(
+				api.subscriptionPayments.billingGatewayAvailable,
+				{},
+			);
+			const quote = gateway?.nextRenewal;
+			if (!quote) throw new Error("expected a renewal quote");
+
+			const email = await t.query(
+				internal.billingEmail.getAutoRenewEmailContext,
+				{ retailerId },
+			);
+			expect(email?.amountFormatted).toBe(
+				`${quote.currency} ${(quote.amount / 100).toFixed(2)}`,
+			);
+
+			const fetchMock = vi.fn(async (_url: unknown, _init?: { body?: unknown }) =>
+				Response.json({ id: "rb_q", url: "https://auth.example/rb_q" }),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+			await t
+				.withIdentity({ subject: userId, email: `${userId}@x.com` })
+				.action(api.subscriptionPayments.startAutoRenewSetup, {});
+			const body = new URLSearchParams(
+				String(fetchMock.mock.calls[0]?.[1]?.body ?? ""),
+			);
+			expect(body.get("amount")).toBe((quote.amount / 100).toFixed(2));
+			expect(body.get("currency")).toBe(quote.currency);
+
+			await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+				subscriptionId: subId,
+			});
+			const issued = await t.run(async (ctx) =>
+				ctx.db
+					.query("invoices")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+					.filter((q) => q.eq(q.field("status"), "pending"))
+					.first(),
+			);
+			expect(issued).toMatchObject({
+				total: quote.amount,
+				currency: quote.currency,
+				plan: quote.plan,
+			});
+			// A plan invoice carries no `kind` field at all (absent reads "plan").
+			expect(issued?.kind ?? "plan").toBe(quote.kind);
+		});
+	}
+
+	test("Founding Members stay on Founding Pro: no Starter, no tier change — but yearly is fine", async () => {
+		const t = setup();
+		// Renewing after a short lapse (inside the window).
+		const renewing = await seedPaying(t, "u_frenew", "frenew-store", {
+			founding: true,
+			status: "past_due",
+			lapsedDays: 20,
+		});
+		await expect(
+			renewing.asUser.mutation(api.invoices.subscribeSelf, {
+				plan: "starter",
+				billingCycle: "monthly",
+			}),
+		).rejects.toThrow(/Founding Members stay on Founding Pro/);
+		// Switching CYCLE on the same founding tier is allowed (Zaki, 17 Sep).
+		const { invoiceId } = await renewing.asUser.mutation(
+			api.invoices.subscribeSelf,
+			{ plan: "pro", billingCycle: "annual" },
+		);
+		expect(await getInvoice(t, invoiceId)).toMatchObject({
+			total: 104000,
+			billingCycle: "annual",
+		});
+
+		// An active member can't schedule a move down, and nothing is written.
+		const active = await seedPaying(t, "u_factive", "factive-store", {
+			founding: true,
+			lapsedDays: -10,
+		});
+		await expect(
+			active.asUser.mutation(api.invoices.changePlan, { plan: "starter" }),
+		).rejects.toThrow(/Founding Members stay on Founding Pro/);
+		expect((await getSub(t, active.subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("a founding member's pre-lock scheduled downgrade is cancelled: the renewal bills Founding Pro and clears it", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedPaying(t, "u_fsched", "fsched-store", {
+			founding: true,
+			pendingPlanChange: "starter",
+		});
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId: subId,
+		});
+		const bill = await t.run(async (ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+		expect(bill).toMatchObject({ plan: "pro", total: 10400, foundingDiscount: 4500 });
+		expect((await getSub(t, subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("a founding member's first invoice can't be switched to Starter — and the bill survives the refusal", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedRetailer(t, "u_ffirst", "ffirst-store");
+		await t.run(async (ctx) => ctx.db.patch(subId, { foundingIntent: true }));
+		const pendingId = await seedRenewalInvoice(t, retailerId, subId, {
+			origin: "free_period_end" as const,
+			total: 10400,
+			foundingDiscount: 4500,
+		});
+		await expect(
+			t
+				.withIdentity({ subject: "u_ffirst" })
+				.mutation(api.invoices.switchPendingPlan, { plan: "starter" }),
+		).rejects.toThrow(/Founding Members stay on Founding Pro/);
+		expect((await getInvoice(t, pendingId))?.status).toBe("pending");
+	});
+
+	test("once the founding price is revoked (lapsed past the window) the store picks like anyone", async () => {
+		const t = setup();
+		const revoked = await seedPaying(t, "u_frevoked", "frevoked-store", {
+			founding: true,
+			status: "past_due",
+			lapsedDays: 120,
+		});
+		const { invoiceId } = await revoked.asUser.mutation(
+			api.invoices.subscribeSelf,
+			{ plan: "starter", billingCycle: "monthly" },
+		);
+		expect((await getInvoice(t, invoiceId))?.total).toBe(7900);
+	});
+});
+
 describe("subscribeSelf", () => {
 	test("creates the pending invoice at list price (origin self_serve)", async () => {
 		const t = setup();

@@ -207,6 +207,29 @@ describe("AnnualBillingCard — states", () => {
 		expect(waText()).not.toContain("Founding");
 	});
 
+	it("a standard seller is told how plan changes work across a paid year", () => {
+		renderCard(state());
+		expect(
+			screen.getByText(/Move up a plan and we only charge the new price/),
+		).toBeTruthy();
+		expect(screen.getByText(/Move down and the change waits/)).toBeTruthy();
+		expect(screen.queryByText(/stay on Founding Pro/)).toBeNull();
+	});
+
+	it("a Founding Member is never promised a plan change they can't make (z8r3fdfty4)", () => {
+		// Founding Members stay on Founding Pro (Zaki, 17 Sep 2026): the offer
+		// must not describe moving up or down a tier across the year.
+		renderCard(state({ founding: true }), true);
+		expect(
+			screen.getByText(
+				/You stay on Founding Pro for the whole year, at your founding price/,
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/Move up a plan|Move down/)).toBeNull();
+		// The refund position still stands for them too.
+		expect(screen.getByText(/isn't refunded in cash/)).toBeTruthy();
+	});
+
 	it("pendingAnnual offers no call to action", () => {
 		renderCard(
 			state({
@@ -240,6 +263,25 @@ describe("AnnualBillingCard — states", () => {
 		expect(screen.getByText(/credited to the new one/)).toBeTruthy();
 		// The renewal chase is a log line today — never promise a reminder here.
 		expect(screen.queryByText(/we'll email|we will email|remind/i)).toBeNull();
+	});
+
+	it("a Founding Member already on annual is told they stay on Founding Pro — no plan-change credit", () => {
+		renderCard(
+			state({
+				founding: true,
+				subscription: {
+					plan: "pro",
+					status: "active",
+					billingCycle: "annual",
+					currentPeriodEnd: Date.UTC(2027, 2, 12),
+				},
+			}),
+			true,
+		);
+		const note = screen.getByText(/invoiced once a/).textContent ?? "";
+		expect(note).toMatch(/^Founding Pro, invoiced once a/);
+		expect(note).toContain("you stay on Founding Pro for the whole year");
+		expect(note).not.toMatch(/change plan|credited to the new one/);
 	});
 
 	it("switchDeferred explains the wait instead of a button that misbehaves", () => {

@@ -45,12 +45,20 @@ function sub(overrides: Partial<SubscriptionView> = {}): SubscriptionView {
 
 describe("PlanChangeCard — what the seller is told before confirming", () => {
 	it("offers the other tier, framed by direction", () => {
-		render(<PlanChangeCard sub={sub()} currency="MYR" />);
+		render(
+			<PlanChangeCard sub={sub()} currency="MYR" foundingPricing={false} />,
+		);
 		expect(screen.getByRole("button", { name: /Move up to Pro/ })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /Move down to/ })).toBeNull();
 
 		cleanup();
-		render(<PlanChangeCard sub={sub({ plan: "pro" })} currency="MYR" />);
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "pro" })}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
 		expect(
 			screen.getByRole("button", { name: /Move down to Starter/ }),
 		).toBeTruthy();
@@ -58,7 +66,9 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 	});
 
 	it("an upgrade names the price AND shows the carryover conversion", () => {
-		render(<PlanChangeCard sub={sub()} currency="MYR" />);
+		render(
+			<PlanChangeCard sub={sub()} currency="MYR" foundingPricing={false} />,
+		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
 		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
 		// Full RM149 — never a prorated difference.
@@ -81,6 +91,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			<PlanChangeCard
 				sub={sub({ currentPeriodEnd: Date.now() + 30 * DAY })}
 				currency="MYR"
+				foundingPricing={false}
 			/>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
@@ -95,6 +106,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			<PlanChangeCard
 				sub={sub({ currentPeriodEnd: Date.now() - DAY })}
 				currency="MYR"
+				foundingPricing={false}
 			/>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
@@ -111,6 +123,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			<PlanChangeCard
 				sub={sub({ plan: "pro", currentPeriodEnd: periodEnd })}
 				currency="MYR"
+				foundingPricing={false}
 			/>,
 		);
 		fireEvent.click(
@@ -134,36 +147,103 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		expect(copy).toContain("cancel this any time before it takes effect");
 	});
 
-	it("a downgrade quotes a founding member's OWN price as the one they leave", () => {
-		render(
-			<PlanChangeCard
-				sub={sub({ plan: "pro", foundingIntent: true })}
-				currency="MYR"
-			/>,
-		);
-		fireEvent.click(
-			screen.getByRole("button", { name: /Move down to Starter/ }),
-		);
-		const copy = screen.getByRole("dialog").textContent ?? "";
-		expect(copy).toMatch(/instead of RM\s*104\.00/);
-		expect(copy).not.toMatch(/149/);
-	});
-
 	it("a founding member is quoted THEIR price, not list", () => {
+		// A Founding Member still on Starter (from before the founding lock) can
+		// only move back up to Founding Pro — at the founding price.
 		render(
-			<PlanChangeCard sub={sub({ foundingIntent: true })} currency="MYR" />,
+			<PlanChangeCard sub={sub()} currency="MYR" foundingPricing={true} />,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
 		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
 		expect(copy).toMatch(/RM\s*104\.00/);
 		expect(copy).not.toMatch(/149/);
 		// Their own rate is the one the carryover is priced against too, so a
-		// founding member's remainder stretches further (10 days -> 8, not 5).
+		// founding member's remainder stretches further (10 days -> 8, not 5) —
+		// the same 8 days settle grants (invoices.test.ts, A3).
 		expect(copy).toContain("buys 8 days");
 	});
 
+	it("prices from the SERVER's founding flag, never sub.foundingIntent (z8r3fdfty4)", () => {
+		// Admin-marked founding member: intent unset, server says founding.
+		render(
+			<PlanChangeCard sub={sub()} currency="MYR" foundingPricing={true} />,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
+		expect(screen.getByText(/You'll be invoiced/).textContent).toMatch(
+			/RM\s*104\.00/,
+		);
+
+		// Lapsed member: intent still set (never cleared), server says list.
+		cleanup();
+		render(
+			<PlanChangeCard
+				sub={sub({ foundingIntent: true })}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
+		expect(screen.getByText(/You'll be invoiced/).textContent).toMatch(
+			/RM\s*149\.00/,
+		);
+	});
+
+	it("a Founding Member on Founding Pro has no plan to move to — and is told so (MY + SG)", () => {
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "pro" })}
+				currency="MYR"
+				foundingPricing={true}
+			/>,
+		);
+		// Zaki, 17 Sep 2026: Founding Members stay on Founding Pro.
+		expect(screen.queryByRole("button", { name: /Move down to/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Move up to/ })).toBeNull();
+		expect(screen.getByText("Your plan stays Founding Pro")).toBeTruthy();
+		const why = screen.getByText(/Founding Members keep Founding Pro/);
+		expect(why.textContent).toMatch(/RM\s*104\.00\/month/);
+		expect(why.textContent).toContain("doesn't lapse for more than 3 months");
+
+		cleanup();
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "pro", billingCycle: "annual" })}
+				currency="SGD"
+				foundingPricing={true}
+			/>,
+		);
+		expect(
+			screen.getByText(/Founding Members keep Founding Pro/).textContent,
+		).toMatch(/S\$\s*410\.00\/year/);
+	});
+
+	it("a founding member's downgrade scheduled before the lock is cancelled — never shown as a move that lands (Zaki, 17 Sep 2026)", () => {
+		render(
+			<PlanChangeCard
+				sub={sub({
+					plan: "pro",
+					pendingPlanChange: {
+						plan: "starter",
+						effectiveAt: Date.UTC(2027, 2, 12),
+					},
+				})}
+				currency="MYR"
+				foundingPricing={true}
+			/>,
+		);
+		// renewalQuote bills Founding Pro and the renewal clears the flag, so the
+		// card states the plan they stay on — not a move that will never happen.
+		expect(screen.getByText("Your plan stays Founding Pro")).toBeTruthy();
+		expect(screen.queryByText(/Moving to Starter/)).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Cancel this change/ }),
+		).toBeNull();
+	});
+
 	it("an SGD seller is quoted in SGD", () => {
-		render(<PlanChangeCard sub={sub()} currency="SGD" />);
+		render(
+			<PlanChangeCard sub={sub()} currency="SGD" foundingPricing={false} />,
+		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
 		expect(screen.getByText(/You'll be invoiced/).textContent).toMatch(
 			/S\$\s*59\.00/,
@@ -179,6 +259,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 					pendingPlanChange: { plan: "starter", effectiveAt },
 				})}
 				currency="MYR"
+				foundingPricing={false}
 			/>,
 		);
 		expect(screen.getByText(/Moving to Starter on .*2027/)).toBeTruthy();
@@ -201,6 +282,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			<PlanChangeCard
 				sub={sub()}
 				currency="MYR"
+				foundingPricing={false}
 				openInvoiceNumber="INV-2609-AB12"
 			/>,
 		);
@@ -217,6 +299,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			<PlanChangeCard
 				sub={sub({ plan: "pro" })}
 				currency="MYR"
+				foundingPricing={false}
 				openInvoiceNumber="INV-2609-AB12"
 			/>,
 		);
@@ -227,9 +310,47 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 	});
 
 	it("confirming sends the chosen plan to the server", () => {
-		render(<PlanChangeCard sub={sub()} currency="MYR" />);
+		render(
+			<PlanChangeCard sub={sub()} currency="MYR" foundingPricing={false} />,
+		);
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
 		fireEvent.click(screen.getByRole("button", { name: /^Move to Pro$/ }));
 		expect(mocks.changePlan).toHaveBeenCalledWith({ plan: "pro" });
+	});
+
+	it("an admin acting-as sees the options disabled, with the reason beside them", () => {
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "pro" })}
+				currency="MYR"
+				foundingPricing={false}
+				ownerOnly
+			/>,
+		);
+		const down = screen.getByRole("button", { name: /Move down to Starter/ });
+		expect((down as HTMLButtonElement).disabled).toBe(true);
+		expect(
+			screen.getByText(/View-only while you're acting as this store/),
+		).toBeTruthy();
+
+		cleanup();
+		render(
+			<PlanChangeCard
+				sub={sub({
+					plan: "pro",
+					pendingPlanChange: {
+						plan: "starter",
+						effectiveAt: Date.UTC(2027, 2, 12),
+					},
+				})}
+				currency="MYR"
+				foundingPricing={false}
+				ownerOnly
+			/>,
+		);
+		const undo = screen.getByRole("button", { name: /Cancel this change/ });
+		expect((undo as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(undo);
+		expect(mocks.cancelPlanChange).not.toHaveBeenCalled();
 	});
 });
