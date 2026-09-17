@@ -71,20 +71,24 @@ before accepting it.
 - Read the page (`read_page` / `get_page_text` / `find`) to verify text, and use
   `javascript_tool` only to inspect, never to change what the user would do.
 
-## Ask first, even mid-test
+## Dev is pre-authorized; prod never is
 
-Stop and get Zaki's yes, naming the exact action, before anything that leaves
-the local app:
+On the **dev** Convex deployment, every third-party integration (WhatsApp,
+Lalamove, Delyva, HitPay, email) is a **sandbox account wired to Zaki's own
+credentials**. So placing orders, sending WhatsApp or email, booking riders and
+making sandbox payments are all fine **without asking**. Use his own test phone
+numbers and email (kept in memory, never in the repo) wherever a buyer or
+seller contact is needed, and don't invent a number that could belong to a
+stranger.
 
-- sending a WhatsApp or email, including a claim-link send or a placed order
-  that notifies a buyer number
-- entering any real person's phone number or name
-- calling a paid or sandbox third party (Lalamove, Delyva, HitPay)
-- downloading a file (CSV or PDF export)
+Still stop and ask for:
 
-Offer the safe alternative when one exists, such as verifying an export's
-contents in the page instead of downloading it. Never enter credentials, never
-touch prod, never merge.
+- **anything touching prod**, including any doubt about which deployment
+  you're on
+- a **download** to his machine (CSV or PDF export). Give a one-line heads-up
+  naming the file.
+
+Never enter credentials and never merge.
 
 ## Findings: report as they surface
 
