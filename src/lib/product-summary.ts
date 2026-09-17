@@ -4,7 +4,11 @@
 // the variant editor's draft state, so it live-updates as they edit.
 // See docs/product-setup-wizard.md.
 
-import { weekendDaysLabel } from "../../convex/lib/productKind";
+import {
+	type PackageUnit,
+	weekendDaysLabel,
+} from "../../convex/lib/productKind";
+import { bookingPriceSuffix } from "./booking-dates";
 import { parsePriceInput } from "./format";
 
 export type SummaryInput = {
@@ -22,11 +26,18 @@ export type SummaryInput = {
 	 * starting price, so the strip needs the value, not just its presence. */
 	customLine: { price: string } | null;
 	/** Booking kind describes itself in booking words — "Booking · 5
-	 * spots/night · RM 80/night" for a free-range stay, "Booking · 30-day
-	 * package · RM 150 per package" for a fixed-length one (S7). */
+	 * spots/night · RM 80/night" for a free-range stay, "Booking · 1-month
+	 * package · 20 at a time · RM 150/month" for a fixed-length one (S7).
+	 *
+	 * `packageUnit` is required knowledge, not decoration: the strip was
+	 * written when every package was days and kept saying "1-day package" on
+	 * a 1-month membership after units shipped, which on the edit page reads
+	 * exactly like the unit silently going back to days. Absent = days, the
+	 * same default `isMonthlyUnit` reads for a pre-units listing. */
 	booking?: {
 		capacityPerNight: string;
 		packageLength?: string;
+		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 		/** Weekend per-night rate as typed (RM) + the nights it covers (S13).
 		 * Blank/absent = one rate; ignored on a package. */
@@ -86,20 +97,31 @@ export function describeProduct(
 	if (booking) {
 		const price = parsePriceInput(rows[0]?.price.trim() ?? "");
 		const cap = booking.capacityPerNight.trim();
-		const days = Number(booking.packageLength?.trim() || "0");
-		const isPackage = Number.isFinite(days) && days > 0;
+		const length = Number(booking.packageLength?.trim() || "0");
+		const isPackage = Number.isFinite(length) && length > 0;
+		const unit: PackageUnit = booking.packageUnit ?? "day";
 		const parts = ["Booking"];
-		if (isPackage) parts.push(`${days}-day package`);
+		// Hyphenated adjective, singular unit: "1-month package", "30-day
+		// package", "2-night package" — the shape packageCountLabel already uses.
+		if (isPackage) parts.push(`${length}-${unit} package`);
 		// Blank capacity = unlimited (S7); saying "1 spot/night" there would be
-		// a different product from the one the seller configured.
+		// a different product from the one the seller configured. A package is
+		// counted AT A TIME, not per night — the words the capacity field and
+		// the wizard review already use for it.
 		parts.push(
 			cap.length === 0
 				? "Unlimited spots"
-				: `${cap} spot${cap === "1" ? "" : "s"}/night`,
+				: isPackage
+					? `${cap} at a time`
+					: `${cap} spot${cap === "1" ? "" : "s"}/night`,
 		);
+		// The ONE span author, so this strip, the storefront card and the price
+		// field say "RM 150/month" alike. "Per package" is the wording that
+		// helper's own docblock retired: it made the reader open the listing to
+		// find out what span they were buying.
 		parts.push(
 			price && price > 0
-				? `${currency} ${formatMajor(price)}${isPackage ? " per package" : "/night"}`
+				? `${currency} ${formatMajor(price)}${bookingPriceSuffix(isPackage ? length : undefined, unit)}`
 				: "No price yet",
 		);
 		// The second rate, named by its nights: "RM 120 Fri & Sat". A package

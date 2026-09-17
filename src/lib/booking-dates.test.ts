@@ -8,6 +8,7 @@ import {
 	mytEpochFromCalendarDate,
 	mytMonthStart,
 	bookingPriceSuffix,
+	bookingSpanCounted,
 	bookingSpanNoun,
 	describeBookingSpan,
 	describeNights,
@@ -277,5 +278,29 @@ describe("naming a split line's nights (S13)", () => {
 
 	it("says nothing for no nights", () => {
 		expect(describeNights([], formatNight)).toBe("");
+	});
+});
+
+describe("bookingSpanCounted — the span with its count, always", () => {
+	it("singular at one, plural above, in the listing's own unit", () => {
+		expect(bookingSpanCounted(1, "month")).toBe("1 month");
+		expect(bookingSpanCounted(3, "month")).toBe("3 months");
+		expect(bookingSpanCounted(1, "day")).toBe("1 day");
+		expect(bookingSpanCounted(30, "day")).toBe("30 days");
+		expect(bookingSpanCounted(1, "night")).toBe("1 night");
+		expect(bookingSpanCounted(2, "night")).toBe("2 nights");
+	});
+
+	it("defaults to days — a pre-units listing reads as days everywhere", () => {
+		expect(bookingSpanCounted(7)).toBe("7 days");
+	});
+
+	it("never produces the strings the forms used to hand-roll", () => {
+		for (const unit of ["day", "night", "month"] as const) {
+			for (const n of [1, 2, 12]) {
+				const out = bookingSpanCounted(n, unit);
+				expect(out).not.toMatch(/\(s\)|1 [a-z]+s$|ss$/);
+			}
+		}
 	});
 });
