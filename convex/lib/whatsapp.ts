@@ -121,6 +121,28 @@ export function paymentReminderTemplateName(): string | undefined {
 }
 
 /**
+ * The seller's subscription-lockout alert (ClickUp z8r3fdg3mh). The ONE
+ * WhatsApp in the whole billing chain, sent at the moment `past_due` lands and
+ * the dashboard locks — issue / due-soon / recovery nudges all stay email.
+ *
+ * It is a utility template, not a session message: sellers hold no open
+ * service window with the shared WABA, so a template is the only shape Meta
+ * will deliver. Same env-gating posture as every sibling — unset ⇒ no WA is
+ * attempted and every email path is byte-identical, so this ships decoupled
+ * from Meta template review.
+ *
+ * Body params are {{1}} store name, {{2}} invoice number, {{3}} amount (e.g.
+ * "MYR 79.00"); the button URL base is `https://kedaipal.com/app/settings{{1}}`
+ * ← the `?tab=billing` suffix (the seller is authenticated, so no capability
+ * token is involved). Added via Meta's **Add variable** control, never
+ * hand-typed braces.
+ */
+export function billingPastDueTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_BILLING_PAST_DUE_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * Every Meta template this deployment is configured to send, keyed by the
  * env var that names it — the ONE registry the admin console's template
  * panel reads, so a new template can't be sent without also being watched.
@@ -162,6 +184,11 @@ export function configuredTemplates(): Array<{
 			envVar: "WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE",
 			purpose: "Seller alert — gateway payment settled",
 			name: sellerPaymentReceivedTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_BILLING_PAST_DUE_TEMPLATE",
+			purpose: "Seller alert — subscription past due (dashboard locked)",
+			name: billingPastDueTemplateName(),
 		},
 	];
 }

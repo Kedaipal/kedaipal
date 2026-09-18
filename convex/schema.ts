@@ -2547,6 +2547,14 @@ export default defineSchema({
 		// Stamped when the pre-due-date reminder email is sent, so the daily cron
 		// sends it at most once. See convex/billingEmail.ts.
 		reminderSentAt: v.optional(v.number()),
+		// Post-lock recovery chain (z8r3fdg3mh): how far the dunning ladder has
+		// walked for THIS invoice — 1 after the +3d nudge, 2 after the +7d one.
+		// Deliberately stamped on the invoice rather than the subscription:
+		// `subscriptions.updatedAt` is the lock-flip moment the founder report
+		// reads and is moved by any other patch, while this row's `dueDate` IS
+		// the lock's clock and stops existing as "pending + overdue" the moment
+		// the seller pays — so the chain cancels itself with no teardown.
+		recoveryStage: v.optional(v.number()),
 		// Who created this invoice (86eyb6z4r). Absent on rows issued before the
 		// field existed — read as "admin" (the only path that existed then).
 		origin: v.optional(

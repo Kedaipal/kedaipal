@@ -344,6 +344,19 @@ export function BillingTab({
 							back with one tap below.
 						</p>
 					) : null}
+					{/* Past due (z8r3fdg3mh). The badge above says "Past due"; this
+					    says what that MEANS and what happens next, so neither the
+					    lock nor the reminders that follow it are a surprise. The
+					    chain is deliberately not opt-out-able, so it is stated
+					    rather than offered as a setting. */}
+					{sub?.status === "past_due" && !sub?.comped ? (
+						<p className="text-xs text-muted-foreground">
+							Your storefront and existing orders stay live — only editing your
+							store is paused until this is settled. We'll follow up by email,
+							and once on WhatsApp at your alert number. Billing reminders can't
+							be switched off, but they stop the moment you pay.
+						</p>
+					) : null}
 					{freePeriod.kind === "free" ? (
 						<p className="text-xs text-muted-foreground">
 							You're free until your first live order, or day 15 — whichever

@@ -1566,3 +1566,267 @@ describe("invoices.changePlan — mid-cycle tier moves", () => {
 		expect(invoice?.foundingDiscount).toBe(4500);
 	});
 });
+
+/**
+ * Post-lock recovery chain (z8r3fdg3mh). Before this, `invoiceOverdue` on the
+ * lock transition was the LAST thing a lapsing seller ever heard from us —
+ * `cancelled` is never reached, so they sat at `past_due` in silence forever.
+ */
+describe("post-lock recovery chain (z8r3fdg3mh)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** A store locked over an invoice that went overdue `daysAgo` days ago. */
+	async function seedLocked(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		daysAgo: number,
+	) {
+		const { retailerId, invoiceId } = await seedFounding(t, userId, slug);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "past_due" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - daysAgo * DAY });
+		});
+		return { retailerId, invoiceId };
+	}
+
+	test("+3d past due → stage 1, stamped and not re-sent on the next run", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec1", "rec-1", 3);
+
+		const first = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(first.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+	});
+
+	test("the ladder walks 1 → 2 as the days pass, and stops there", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec2", "rec-2", 3);
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+
+		// Age the invoice past the final threshold.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 7 * DAY });
+		});
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(2);
+
+		// Day 30: nothing further. The final nudge says it is the last contact,
+		// and the code has to mean it.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 30 * DAY });
+		});
+		const third = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(third.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(2);
+	});
+
+	test("an invoice found at day 9 with no stage gets ONLY the final notice", async () => {
+		// A cron outage must not produce a +3d today and a +7d tomorrow — that
+		// reads as a system flailing at someone who is already unhappy.
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec3", "rec-3", 9);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(2);
+	});
+
+	test("day 1 and 2 past due are still silent — the lock email just went out", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec4", "rec-4", 2);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
+	});
+
+	test("paying stops the chain with no teardown", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedLocked(t, "u_rec5", "rec-5", 3);
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 7 * DAY });
+		});
+		const after = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		// The invoice left `pending`, so the by_status scan never sees it again.
+		expect(after.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("active");
+	});
+
+	test("a COMPED store overdue on a stale invoice is never told it is locked", async () => {
+		// The lock loops skip comped subs entirely, so a store comped after its
+		// invoice was issued sits overdue with full access — chasing it would be
+		// flatly untrue. `past_due` + not-comped IS the soft-lock predicate.
+		const t = setup();
+		const { retailerId, invoiceId } = await seedLocked(t, "u_rec6", "rec-6", 10);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { comped: true });
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
+	});
+
+	test("an overdue invoice on a still-ACTIVE sub locks first, and is not chased in the same run", async () => {
+		// Ordering guard: the lock transition owns day 0 (it sends invoiceOverdue
+		// + the WhatsApp). The ladder must not also fire on that same pass.
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_rec7", "rec-7");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "active" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 5 * DAY });
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.overdue).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("past_due");
+		// The sub was `active` when the ladder's guard read it, so no nudge yet —
+		// it starts from the next daily run, a clear day after the lock notice.
+		expect(res.recoveryNudges).toBe(0);
+	});
+
+	test("the pre-due reminder and the recovery ladder never both fire for one invoice", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec8", "rec-8", 3);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(1);
+		expect(res.remindersSent).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.reminderSentAt).toBeUndefined();
+	});
+});
+
+/**
+ * The ONE WhatsApp in the billing chain (z8r3fdg3mh) — scheduled at the lock
+ * moment beside the overdue email. `_scheduled_functions` is the honest read:
+ * a spy on the action would never fire from a mutation.
+ */
+describe("billing past-due WhatsApp (z8r3fdg3mh)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	async function waJobs(t: ReturnType<typeof setup>): Promise<string[]> {
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		return jobs
+			.filter((j) => j.name.includes("notifyBillingPastDue"))
+			.map((j) => String((j.args[0] as { invoiceId: string }).invoiceId));
+	}
+
+	test("a real lock schedules the WhatsApp alongside the overdue email", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_wa1", "wa-1");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "active" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 1000 });
+		});
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		expect(await waJobs(t)).toContain(invoiceId);
+	});
+
+	test("the legacy COMPED flip locks nothing, so it sends nothing", async () => {
+		// A comped row can't be billed and is never frozen — the flip only keeps
+		// its status honest. Pinging that seller would be a lie on both channels.
+		const t = setup();
+		await t
+			.withIdentity({ subject: "u_wa2" })
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Comped Co",
+				slug: "wa-comped",
+			});
+		await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "wa-comped"))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				comped: true,
+				trialEndsAt: Date.now() - 1000,
+			});
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.trialExpired).toBe(1);
+		expect(await waJobs(t)).toHaveLength(0);
+	});
+
+	test("the recovery nudges stay email-only — exactly one WhatsApp per lapse", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_wa3", "wa-3");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "past_due" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 3 * DAY });
+		});
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 7 * DAY });
+		});
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		// Both ladder stages ran (see the recovery-chain suite) and neither
+		// spent a template. WhatsApp is the lock moment only.
+		expect(await waJobs(t)).toHaveLength(0);
+	});
+});
