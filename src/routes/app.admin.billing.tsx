@@ -591,7 +591,8 @@ function IssueInvoiceForm() {
 	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
 	const [plan, setPlan] = useState<"starter" | "pro">("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
-	const [founding, setFounding] = useState(false);
+	// The operator's OVERRIDE only — not the effective value. See `founding`.
+	const [foundingOverride, setFoundingOverride] = useState(false);
 	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
 
@@ -611,12 +612,27 @@ function IssueInvoiceForm() {
 	const isExistingFounding =
 		(selected?.isFoundingMember === true && !foundingBenefitsRevoked) ||
 		selected?.foundingIntent === true;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
+	// DERIVED, never stored: a locked store IS on founding pricing, so the
+	// checkbox and the Amount cannot disagree with the lock. This used to be an
+	// effect copying `isExistingFounding` into state on `[retailerId]` — fine
+	// while a store's founding status was fixed for a given retailer, but
+	// revoking or restoring in the Founding members card below now moves it for a
+	// retailerId that never changed. The label and helper copy updated reactively
+	// while the checkbox and Amount did not, so the form read "bills at the
+	// standard price" directly above "RM 104.00 − RM 45.00 founding discount",
+	// and Issue would have charged the founding price to a member whose benefits
+	// had just been taken (found while testing, 18 Sep 2026). Deriving makes that
+	// state unreachable rather than merely re-synced — there is no dependency
+	// array left to get wrong.
+	const founding = isExistingFounding || foundingOverride;
+	// The override is the operator's own tick, so it clears when they pick a
+	// DIFFERENT store — never when a revoke elsewhere on the page changes the
+	// status. Currency clears with it: an SGD pick left over from the previous
+	// store must never silently carry to a Malaysian retailer (an SGD invoice
+	// ships with no bank/DuitNow block).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: retailerId is the TRIGGER, not a read — picking a different store is exactly what clears the operator's override
 	useEffect(() => {
-		setFounding(isExistingFounding);
-		// Currency resets to the default too — an SGD pick left over from the
-		// previous store must never silently carry to a Malaysian retailer (an SGD
-		// invoice ships with no bank/DuitNow block).
+		setFoundingOverride(false);
 		setCurrency("MYR");
 	}, [retailerId]);
 
@@ -646,7 +662,7 @@ function IssueInvoiceForm() {
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
-			setFounding(false);
+			setFoundingOverride(false);
 			// Reset to the default so the next store isn't silently billed in SGD.
 			setCurrency("MYR");
 		} catch (err) {
@@ -774,7 +790,7 @@ function IssueInvoiceForm() {
 					type="checkbox"
 					checked={founding}
 					disabled={isExistingFounding}
-					onChange={(e) => setFounding(e.target.checked)}
+					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
 				<span>
@@ -1259,6 +1275,33 @@ function FoundingMembersList() {
 					{members.map((m) => {
 						const s = foundingStatus(m);
 						const revoked = m.benefitsRevokedAt !== undefined;
+						// The slot is claimed by a store that no longer exists (a partial
+						// account purge). Shown so the header's count and this list agree,
+						// and so the row the daily pass skips is visible rather than
+						// inferred — but with no Revoke/Restore lever, because there is
+						// nothing left to revoke.
+						if (m.retailerMissing) {
+							return (
+								<li
+									key={m.rank}
+									className="flex items-start gap-2.5 rounded-xl border border-dashed border-border bg-muted/30 p-3"
+								>
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+										#{m.rank}
+									</span>
+									<span className="min-w-0">
+										<span className="block truncate text-sm font-semibold text-muted-foreground">
+											Store deleted
+										</span>
+										<span className="mt-0.5 block text-xs text-muted-foreground">
+											This slot stays claimed and the daily benefit check skips
+											it. Nothing to do — it clears if the account purge is
+											completed.
+										</span>
+									</span>
+								</li>
+							);
+						}
 						return (
 							<li
 								key={m.rank}

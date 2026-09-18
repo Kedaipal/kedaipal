@@ -105,6 +105,10 @@ export async function revokeBenefits(
 	note?: string,
 ): Promise<boolean> {
 	if (row.benefitsRevokedAt !== undefined) return false;
+	// A founding row can outlive its retailer (a partial account purge). Patching
+	// a deleted document throws, so refuse the whole write rather than stamp the
+	// row and then blow up mid-transaction. Callers treat false as "nothing to do".
+	if ((await ctx.db.get(row.retailerId)) === null) return false;
 	const now = Date.now();
 	await ctx.db.patch(row._id, {
 		benefitsRevokedAt: now,
@@ -144,6 +148,7 @@ export async function restoreBenefits(
 	note?: string,
 ): Promise<boolean> {
 	if (row.benefitsRevokedAt === undefined) return false;
+	if ((await ctx.db.get(row.retailerId)) === null) return false;
 	await ctx.db.patch(row._id, {
 		benefitsRevokedAt: undefined,
 		benefitsRevokedReason: undefined,
@@ -181,13 +186,36 @@ export const internalRevokeLapsedBenefits = internalMutation({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<{ warned: number; revoked: number; scanned: number }> => {
+	): Promise<{
+		warned: number;
+		revoked: number;
+		scanned: number;
+		orphaned: number;
+	}> => {
 		const now = Date.now();
 		let warned = 0;
 		let revoked = 0;
+		let orphaned = 0;
 		const rows = await ctx.db.query("foundingMembers").collect();
 		for (const row of rows) {
 			if (row.benefitsRevokedAt !== undefined) continue;
+			// ORPHANED ROW: the retailer is gone but the founding row (and often the
+			// subscription) outlived it — a partially-completed account purge, which
+			// dev has a live example of. Revoking one patches a deleted document,
+			// which THROWS; and because this pass is a single transaction, that one
+			// bad row would abort the whole thing and nobody would ever be revoked.
+			// Skipped and counted, not deleted: tidying purge leftovers is
+			// accountDeletion's job, and `listForAdmin` surfaces these so the count
+			// and the list agree.
+			const retailer = await ctx.db.get(row.retailerId);
+			if (!retailer) {
+				orphaned++;
+				console.warn("[founding] skipping orphaned founding row", {
+					rank: row.rank,
+					retailerId: row.retailerId,
+				});
+				continue;
+			}
 			const sub = await ctx.db
 				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", row.retailerId))
@@ -245,7 +273,7 @@ export const internalRevokeLapsedBenefits = internalMutation({
 				warned++;
 			}
 		}
-		return { warned, revoked, scanned: rows.length };
+		return { warned, revoked, scanned: rows.length, orphaned };
 	},
 });
 
@@ -299,6 +327,12 @@ export const listForAdmin = query({
 			benefitsEndAt?: number;
 			/** The T-14 notice has gone out for the current paid period. */
 			warned: boolean;
+			/** The retailer this row points at no longer exists — a partially
+			 * completed account purge. Listed rather than hidden: the header counts
+			 * ROWS (`getSpotsRemaining`), so skipping these made it read "2/10
+			 * claimed" above a single store with nothing to explain the gap, and it
+			 * hid the exact row the daily pass has to step around. */
+			retailerMissing: boolean;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -309,7 +343,18 @@ export const listForAdmin = query({
 		const out = [];
 		for (const row of rows) {
 			const r = await ctx.db.get(row.retailerId);
-			if (!r) continue;
+			if (!r) {
+				out.push({
+					retailerId: row.retailerId,
+					rank: row.rank,
+					storeName: "Store deleted",
+					slug: "—",
+					paid: row.paidAt !== undefined,
+					warned: false,
+					retailerMissing: true,
+				});
+				continue;
+			}
 			const sub = await ctx.db
 				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", row.retailerId))
@@ -331,6 +376,7 @@ export const listForAdmin = query({
 				warned:
 					sub?.currentPeriodEnd !== undefined &&
 					row.benefitsWarningSentForPeriodEnd === sub.currentPeriodEnd,
+				retailerMissing: false,
 			});
 		}
 		return out.sort((a, b) => a.rank - b.rank);

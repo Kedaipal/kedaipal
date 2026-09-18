@@ -9,7 +9,11 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { FOUNDING_PRICE_LAPSE_MS } from "./lib/plans";
+import { revokeBenefits } from "./foundingMembers";
+import {
+	FOUNDING_MEMBER_LIMIT,
+	FOUNDING_PRICE_LAPSE_MS,
+} from "./lib/plans";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -449,6 +453,66 @@ describe("the admin lever", () => {
 		// Rank is still reported — the console shows membership and benefits as
 		// the two separate facts they are.
 		expect(b?.rank).toBeGreaterThan(0);
+	});
+});
+
+describe("an orphaned founding row can't take the whole pass down", () => {
+	/** A founding row whose retailer was deleted but whose subscription survived —
+	 * a partially completed account purge. Dev has a live example, which is how
+	 * this was found (18 Sep 2026). */
+	async function seedOrphan(t: ReturnType<typeof setup>, userId: string) {
+		const s = await seedFoundingMember(t, userId);
+		await t.run(async (ctx) => {
+			await ctx.db.delete(s.retailerId);
+		});
+		return s;
+	}
+
+	test("the pass skips it instead of throwing, and still revokes everyone else", async () => {
+		const t = setup();
+		// The orphan is past the window, so it reaches the revoke branch — which is
+		// where the patch on a deleted document used to blow up. Because the pass
+		// is ONE transaction, that throw aborted the run and nobody was revoked.
+		const orphan = await seedOrphan(t, "user_orphan_row");
+		const healthy = await seedFoundingMember(t, "user_beside_orphan");
+
+		const res = await runPass(t);
+
+		expect(res.orphaned).toBe(1);
+		expect(res.revoked).toBe(1);
+		expect((await getRow(t, orphan.rowId))?.benefitsRevokedAt).toBeUndefined();
+		// The whole point: the row beside it still got processed.
+		expect((await getRow(t, healthy.rowId))?.benefitsRevokedAt).toBeDefined();
+	});
+
+	test("the slot stays claimed, and the admin list SHOWS it so the count adds up", async () => {
+		const t = setup();
+		const orphan = await seedOrphan(t, "user_orphan_listed");
+		await seedFoundingMember(t, "user_orphan_peer");
+
+		const spots = await t.query(api.foundingMembers.getSpotsRemaining, {});
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.foundingMembers.listForAdmin, {});
+
+		// The header counts ROWS; the list must not silently drop one, or it reads
+		// "2/10 claimed" above a single store with nothing to explain the gap.
+		expect(FOUNDING_MEMBER_LIMIT - spots).toBe(rows.length);
+		const ghost = rows.find((r) => r.retailerMissing);
+		expect(ghost?.retailerId).toBe(orphan.retailerId);
+		expect(ghost?.storeName).toBe("Store deleted");
+	});
+
+	test("the admin levers refuse an orphan rather than throwing", async () => {
+		const t = setup();
+		const orphan = await seedOrphan(t, "user_orphan_lever");
+		await expect(
+			t.run(async (ctx) => {
+				const row = await ctx.db.get(orphan.rowId);
+				if (!row) throw new Error("no row");
+				return await revokeBenefits(ctx, row, "admin");
+			}),
+		).resolves.toBe(false);
 	});
 });
 

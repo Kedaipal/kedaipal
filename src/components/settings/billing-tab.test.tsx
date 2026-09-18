@@ -102,6 +102,8 @@ type Gateway = {
 	renewalCurrency: string;
 	foundingPricing: boolean;
 	foundingPricingLapsed: boolean;
+	foundingBenefitsRevoked: boolean;
+	foundingBenefitsEndAt?: number;
 	nextRenewal: {
 		kind: "plan" | "hold";
 		plan: string;
@@ -121,6 +123,7 @@ const GATEWAY_OFF: Gateway = {
 	renewalCurrency: "MYR",
 	foundingPricing: false,
 	foundingPricingLapsed: false,
+	foundingBenefitsRevoked: false,
 	nextRenewal: {
 		kind: "plan",
 		plan: "pro",
@@ -1153,11 +1156,13 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		currency = "MYR",
 		founding = false,
 		lapsed = false,
+		revoked = false,
 		cycle = "monthly",
 	}: {
 		currency?: "MYR" | "SGD";
 		founding?: boolean;
 		lapsed?: boolean;
+		revoked?: boolean;
 		cycle?: "monthly" | "annual";
 	} = {}): Gateway {
 		const monthly = {
@@ -1171,6 +1176,7 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 			renewalCurrency: currency,
 			foundingPricing: founding,
 			foundingPricingLapsed: lapsed,
+			foundingBenefitsRevoked: revoked,
 			nextRenewal: {
 				kind: "plan",
 				plan: "pro",
@@ -1343,6 +1349,49 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		expect(
 			screen.getByRole("button", { name: "Finish setting up" }),
 		).toBeTruthy();
+	});
+
+	it("WHILE THE GATEWAY IS LOADING the ribbon makes no claim about the price", () => {
+		// The retailer doc resolves before billingGatewayAvailable, so every flag
+		// reads false for a moment. That used to fall through to the amber
+		// "your 30% discount is locked in" — told to a REVOKED member on every
+		// page load (~310ms on localhost; longer on mobile data). The rank is
+		// known and always true, so the title stays; the claim waits.
+		mockQueries({ isAdmin: false, gateway: null });
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(screen.getByText("Founding Member #3 of 10")).toBeTruthy();
+		expect(screen.queryByText(/discount is locked in/)).toBeNull();
+		expect(screen.queryByText(/price ended/)).toBeNull();
+		expect(screen.queryByText(/founding price ends/)).toBeNull();
+	});
+
+	it("a REVOKED Founding Member: badge kept, the end is permanent, no renew-to-keep promise", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ lapsed: true, revoked: true }),
+		});
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(
+			screen.getByText(/Founding Member #3 of 10 · founding price ended/),
+		).toBeTruthy();
+		// The promise that survives revocation — in the agreement and in this copy.
+		expect(
+			screen.getByText(/rank and badge stay yours, permanently/),
+		).toBeTruthy();
+		expect(screen.queryByText(/discount is locked in/)).toBeNull();
+		// Never tell a revoked member renewing brings the price back — it doesn't.
+		expect(screen.queryByText(/Renew below before then/)).toBeNull();
+		// Priced as an ordinary seller, both tiers offered again.
+		expect(screen.getByText(/RM\s*79\.00\/month/)).toBeTruthy();
+		expect(screen.getByText(/RM\s*149\.00\/month/)).toBeTruthy();
 	});
 
 	it("a lapsed Founding Member: rank kept, the lapse explained, list prices, and no promise the discount is locked in", () => {

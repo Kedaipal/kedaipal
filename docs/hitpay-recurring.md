@@ -450,6 +450,15 @@ closed 30 Aug 2026), so a full `collect()` is correct.
   both protect it, and both are tested), `active`, `comped`, and a member with
   no paid period at all (`paidThrough` undefined → fail toward the promise,
   exactly as `foundingPriceEligible` does).
+- **Orphaned rows are skipped, counted and LISTED.** A founding row can outlive
+  its retailer (a partially completed account purge — dev has a live example).
+  Revoking one patches a deleted document, which throws; and since the pass is a
+  single transaction, one bad row would abort the run so **nobody** is ever
+  revoked. The loop skips them (`orphaned` in the return), `revokeBenefits` /
+  `restoreBenefits` refuse rather than throw, and `listForAdmin` renders them as
+  "Store deleted" — because the header counts ROWS, hiding them made the console
+  read "2/10 claimed" above a single store and concealed the exact row the pass
+  has to step around. Tidying the leftovers stays `accountDeletion`'s job.
 - `foundingBenefitsEndAt` is the **one author** of the end date — the gate, the
   warning email, the seller's ribbon and the admin list all read it, so the page
   cannot promise a date the cron won't honour. `foundingBenefitsRevocable` is
@@ -462,9 +471,17 @@ closed 30 Aug 2026), so a full `collect()` is correct.
 `foundingPriceEligible`, so a revoked seller regains the Starter/Pro choice with
 no extra code. Pinned by a test, because it is an acceptance criterion.
 
-**Surfaces.** The billing ribbon is ONE control with three tones — amber
+**Surfaces.** The billing ribbon is ONE control with **four** tones — amber
 ("locked in"), red (T-14, naming the date), muted (ended, and never "renew to
-keep your founding price", which would be a lie). The plan picker's lapsed note
+keep your founding price", which would be a lie), and a **pending** state that
+exists because its absence was one: the retailer doc resolves before
+`billingGatewayAvailable`, so every flag read `false` and the ribbon told a
+revoked member their discount was "locked in" on every page load (~310ms
+measured on localhost, longer on mobile data). The rank is true in every state
+so the title still renders; only the CLAIM waits for the server. The admin issue
+form derives its founding toggle from the same server answer rather than copying
+it into state — an effect keyed on the selection alone left the checkbox and
+Amount showing the founding discount under copy that said "standard price". The plan picker's lapsed note
 splits the same way. White-glove (`foundingMembers.myStatus.benefitsRevoked`)
 stops being offered, since it is a benefit. **The storefront badge and nav pill
 are untouched, by design.** Admin → Billing → Founding members shows each

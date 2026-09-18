@@ -281,6 +281,9 @@ export function BillingTab({
 			{retailer.isFoundingMember ? (
 				<FoundingRibbon
 					rank={retailer.foundingMemberRank}
+					// undefined = the server hasn't answered yet, which is NOT the same
+					// as "nothing is wrong" — see the ribbon's `pending` branch.
+					pending={gateway === undefined}
 					revoked={gateway?.foundingBenefitsRevoked === true}
 					lapsed={gateway?.foundingPricingLapsed === true}
 					endsAt={gateway?.foundingBenefitsEndAt}
@@ -884,33 +887,47 @@ export function BillingTab({
  * `revoked`, `lapsed` and `endsAt` are all SERVER-resolved
  * (`billingGatewayAvailable`) — deriving founding state client-side is the bug
  * z8r3fdfty4 closed.
+ *
+ * **The fourth state is `pending`, and it exists because its absence was a lie.**
+ * The retailer doc resolves before the gateway query, so while the latter is
+ * `undefined` all three flags read `false` and this fell through to the amber
+ * "your 30% discount is locked in" — told to a member whose discount had ENDED,
+ * on every single page load (measured at ~310ms on localhost, and a seller on
+ * mobile data reads for longer than that). The rank is known from the retailer
+ * doc and is true in every state, so the title still renders; only the CLAIM
+ * waits for the server, behind a skeleton line that holds the same height and
+ * keeps the ribbon from jumping.
  */
 function FoundingRibbon({
 	rank,
+	pending,
 	revoked,
 	lapsed,
 	endsAt,
 }: {
 	rank?: number;
+	pending: boolean;
 	revoked: boolean;
 	lapsed: boolean;
 	endsAt?: number;
 }) {
 	const endingSoon =
+		!pending &&
 		!revoked &&
 		endsAt !== undefined &&
 		endsAt - Date.now() <= FOUNDING_BENEFIT_WARNING_MS;
-	const tone = revoked
+	const muted = pending || revoked;
+	const tone = muted
 		? "border-border bg-muted/50"
 		: endingSoon
 			? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
 			: "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40";
-	const iconTone = revoked
+	const iconTone = muted
 		? "text-muted-foreground"
 		: endingSoon
 			? "text-red-600 dark:text-red-400"
 			: "text-amber-600";
-	const titleTone = revoked
+	const titleTone = muted
 		? "text-foreground"
 		: endingSoon
 			? "text-red-900 dark:text-red-200"
@@ -930,41 +947,50 @@ function FoundingRibbon({
 			<div className="min-w-0">
 				<p className={`text-sm font-semibold ${titleTone}`}>
 					Founding Member #{rank} of 10
-					{endingSoon && endsAt !== undefined
-						? ` · founding price ends ${formatShortDate(endsAt)}`
-						: revoked
-							? " · founding price ended"
-							: null}
+					{pending
+						? null
+						: endingSoon && endsAt !== undefined
+							? ` · founding price ends ${formatShortDate(endsAt)}`
+							: revoked
+								? " · founding price ended"
+								: null}
 				</p>
-				<p className={`mt-0.5 text-xs ${bodyTone}`}>
-					{revoked ? (
-						<>
-							Your subscription stayed unrenewed past the 3-month window, so
-							your founding price has ended and every plan is open to you again
-							at the standard prices.{" "}
-							<strong className="font-semibold text-foreground">
-								Your rank and badge stay yours, permanently
-							</strong>{" "}
-							— your storefront is unchanged. Think this is wrong? Message us.
-						</>
-					) : endingSoon && endsAt !== undefined ? (
-						<>
-							Your subscription hasn't renewed, so your 30% founding price ends
-							on{" "}
-							<strong className="font-semibold">
-								{formatShortDate(endsAt)}
-							</strong>
-							. Renew below before then and you keep it — after that date your
-							plan bills at the standard price, and renewing later won't bring
-							the discount back. Your rank and badge are yours for good either
-							way.
-						</>
-					) : lapsed ? (
-						"Your rank and badge are yours for good. Your founding price lapsed after more than 3 months without an active subscription, so new bills are at the standard price."
-					) : (
-						"Your 30% discount is locked in — thank you for backing Kedaipal early. It stays yours as long as your subscription doesn't lapse for more than 3 months; your rank and badge are permanent either way."
-					)}
-				</p>
+				{pending ? (
+					<div
+						className="mt-1.5 h-3 w-48 max-w-full animate-pulse rounded bg-muted-foreground/20"
+						aria-hidden="true"
+					/>
+				) : (
+					<p className={`mt-0.5 text-xs ${bodyTone}`}>
+						{revoked ? (
+							<>
+								Your subscription stayed unrenewed past the 3-month window, so
+								your founding price has ended and every plan is open to you
+								again at the standard prices.{" "}
+								<strong className="font-semibold text-foreground">
+									Your rank and badge stay yours, permanently
+								</strong>{" "}
+								— your storefront is unchanged. Think this is wrong? Message us.
+							</>
+						) : endingSoon && endsAt !== undefined ? (
+							<>
+								Your subscription hasn't renewed, so your 30% founding price
+								ends on{" "}
+								<strong className="font-semibold">
+									{formatShortDate(endsAt)}
+								</strong>
+								. Renew below before then and you keep it — after that date your
+								plan bills at the standard price, and renewing later won't bring
+								the discount back. Your rank and badge are yours for good either
+								way.
+							</>
+						) : lapsed ? (
+							"Your rank and badge are yours for good. Your founding price lapsed after more than 3 months without an active subscription, so new bills are at the standard price."
+						) : (
+							"Your 30% discount is locked in — thank you for backing Kedaipal early. It stays yours as long as your subscription doesn't lapse for more than 3 months; your rank and badge are permanent either way."
+						)}
+					</p>
+				)}
 			</div>
 		</div>
 	);
