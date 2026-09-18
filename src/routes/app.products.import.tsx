@@ -112,6 +112,7 @@ function toApiProduct(p: GroupedProductImport) {
 		active: p.active,
 		prepMinutes: p.prepMinutes,
 		pickupNote: p.pickupNote,
+		handle: p.handle,
 		options: p.options,
 		variants: p.variants.map((vr) => ({
 			optionValues: vr.optionValues,

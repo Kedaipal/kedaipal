@@ -15,6 +15,7 @@ function row(over: Partial<VariantImportRow>): VariantImportRow {
 	return {
 		rowNumber: 1,
 		groupingKey: (over.name ?? "p").toLowerCase(),
+		handle: "",
 		name: "P",
 		description: undefined,
 		optionNames: [],
@@ -534,5 +535,35 @@ describe("describeOrderRuleChanges — the preview line (z8r3fdff97)", () => {
 				pickupNoteChange: null,
 			}),
 		).toEqual(["prep time removed"]);
+	});
+});
+
+describe("the product_handle reaches the server (z8r3fdff97 test round)", () => {
+	test("a group carries its handle as written, and blank means none", () => {
+		// The export writes the product id there; the server matches on it, so
+		// the case must survive parsing (ids are case-sensitive) and a name-only
+		// sheet must not invent one.
+		const withHandle = groupVariantRows([
+			row({ handle: "jd7ABC123", name: "Ice Cream Puff", sku: "PUFF-1" }),
+		]);
+		expect(withHandle.products[0]?.handle).toBe("jd7ABC123");
+
+		const nameOnly = groupVariantRows([row({ handle: "", name: "Kuih" })]);
+		expect(nameOnly.products[0]?.handle).toBeUndefined();
+	});
+
+	test("parseVariantImport keeps the handle from the sheet", () => {
+		const parsed = parseVariantImport(
+			[
+				{
+					product_handle: "jd7ABC123",
+					name: "Ice Cream Puff",
+					price: "4.50",
+					stock: "40",
+				} as RawImportRow,
+			],
+			["product_handle", "name", "price", "stock"],
+		);
+		expect(parsed.products[0]?.handle).toBe("jd7ABC123");
 	});
 });

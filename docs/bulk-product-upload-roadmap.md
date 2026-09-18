@@ -31,9 +31,10 @@ sheet can **write**, not just report.
   through `sanitizePrepMinutes` / `sanitizePickupNote`, the create/update
   sanitizers (`importOrderRules` in `convex/products.ts`).
 - **Booking listings are skipped.** Their form hides both fields and their
-  orders never carry a note, so a SKU-matched booking listing takes neither
-  value and the preview says so. The export writes both blank for bookings, so a
-  round trip never produces that warning.
+  orders never carry a note, so a matched booking listing takes neither value
+  and the preview says so. It is matched by handle or by SKU (see above — a
+  real booking listing has no SKU, so the handle is what finds it). The export
+  writes both blank for bookings, so a round trip never produces that warning.
 - **The preview says what changes and where it won't bite:** "prep time 30 min →
   2 hours · pickup note added" per product, plus a warning when a product needs
   a day or more of notice (prep can't move a same-day clock that doesn't exist).
@@ -146,12 +147,22 @@ The importer + exporter were reworked for the variant schema (subtask of
   is added as an **inactive** variant at 0 price / 0 stock, so the data always
   forms the complete grid the variant model requires. The seller re-activates
   them later. An ⓘ note in the importer explains this.
-- **Upsert by variant SKU; never deletes.** A row whose SKU matches an existing
-  variant **updates** it (price/stock/weight) + product fields; unlisted variants
-  are left untouched (so a partial stock-update sheet is safe). A row with a new
-  SKU aimed at an existing product is **skipped + warned** ("add new variants in
-  the dashboard") — adding variants to an existing product via import is a
-  deferred follow-up. Rows with no SKU create new products.
+- **Upsert by `product_handle`, then by variant SKU; never deletes.** The
+  EXPORT writes each product's id into `product_handle`, so a round-tripped
+  sheet matches its own products even when they carry no SKU
+  (`classifyImportProduct`). A handle that isn't one of this store's ids — every
+  hand-made sheet, where it is a name or a slug — is only a grouping key, and
+  SKU matching decides as before; a handle belonging to ANOTHER store is
+  refused outright rather than imported. A row whose SKU matches an existing
+  variant **updates** it (price/stock/weight) + product fields; unlisted
+  variants are left untouched (so a partial stock-update sheet is safe). A row
+  with a new SKU aimed at an existing product is **skipped + warned** ("add new
+  variants in the dashboard") — adding variants to an existing product via
+  import is a deferred follow-up. Rows matching nothing create new products.
+  *Handle matching was added in the z8r3fdff97 test round: without it, matching
+  was SKU-only, so exporting a catalogue and importing it back duplicated every
+  product with no SKU — a **booking listing has none at all** — and the
+  booking guard below, which only fires on a matched booking, never ran.*
 - **Price = 2 dp (rounded to sen); stock = whole number** — matches the dashboard
   editor; the parser rounds price and rejects non-integer stock.
 - **Blank `weight_grams` = preserve on update.** A blank/omitted weight cell parses

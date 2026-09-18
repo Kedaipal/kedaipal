@@ -1535,6 +1535,10 @@ const importVariantValidator = v.object({
 
 const importProductValidator = v.object({
 	name: v.string(),
+	/** The sheet's `product_handle`. The export writes the product's id there,
+	 * so a round-tripped sheet can be matched back to its own products — see
+	 * `classifyImportProduct`. Optional: hand-made sheets group by name. */
+	handle: v.optional(v.string()),
 	description: v.optional(v.string()),
 	// Round-tripped from the export's `product_status` (86eyrtz74). Optional so
 	// a client that predates the column, or any hand-made sheet, still imports —
@@ -1551,6 +1555,7 @@ const importProductValidator = v.object({
 
 type ImportProduct = {
 	name: string;
+	handle?: string;
 	description?: string;
 	active?: boolean;
 	prepMinutes?: number;
@@ -1617,9 +1622,21 @@ type ImportClassification =
 	  };
 
 /**
- * Classify an imported product as a create or an update. Update wins if ANY of
- * its SKUs already exists on a variant; all matched SKUs must belong to the same
- * product (else a cross-product clash — rejected).
+ * Classify an imported product as a create or an update.
+ *
+ * Two ways to match. The sheet's `product_handle` wins when it holds one of
+ * THIS store's product ids — which is exactly what the export writes — and
+ * otherwise any SKU that already exists on a variant does. All matched SKUs
+ * must belong to the same product as each other and as the handle (else a
+ * cross-product clash — rejected).
+ *
+ * Handle matching exists because SKU matching alone can't see a product with
+ * no SKU, and a BOOKING listing never has one: exporting a catalogue, editing
+ * a price and importing it back re-created every such product as a duplicate,
+ * and the booking guard in `importOrderRules` — which only fires on a MATCHED
+ * booking — never got the chance to skip it (found in the z8r3fdff97 test
+ * round). A hand-made sheet is unaffected: its handles are names or slugs,
+ * which `normalizeId` rejects, so it still matches by SKU.
  */
 async function classifyImportProduct(
 	ctx: MutationCtx | QueryCtx,
@@ -1628,6 +1645,19 @@ async function classifyImportProduct(
 ): Promise<ImportClassification> {
 	let target: Doc<"products"> | null = null;
 	const existingBySku = new Map<string, Doc<"productVariants">>();
+	const handle = product.handle?.trim() ?? "";
+	if (handle.length > 0) {
+		const handleId = ctx.db.normalizeId("products", handle);
+		// A handle that isn't an id of ours is a grouping key, not a match.
+		const byHandle = handleId ? await ctx.db.get(handleId) : null;
+		if (byHandle) {
+			if (byHandle.retailerId !== retailerId)
+				throw new ConvexError(
+					`"${product.name}" carries a product_handle from another store — clear that column or export this store's own sheet`,
+				);
+			target = byHandle;
+		}
+	}
 	for (const variant of product.variants) {
 		const sku = normalizeSku(variant.sku, "Variant");
 		if (!sku) continue;

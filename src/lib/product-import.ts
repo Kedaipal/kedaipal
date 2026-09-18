@@ -283,6 +283,15 @@ export interface VariantImportRow {
 	rowNumber: number;
 	/** Lowercased grouping key (product_handle ?? name). */
 	groupingKey: string;
+	/**
+	 * The `product_handle` cell exactly as written, before lowercasing.
+	 * The EXPORT writes the product's id here, so keeping the case lets the
+	 * server match a row back to the product it came from — without it, a
+	 * sheet round-tripped through the export re-created every product that
+	 * has no SKU to match on (a booking listing has none at all). Empty when
+	 * the column was blank; grouping still falls back to the name.
+	 */
+	handle: string;
 	name: string;
 	description: string | undefined;
 	optionNames: string[]; // [] for single-variant rows
@@ -348,6 +357,10 @@ export interface GroupedProductImport {
 	 * blank rows after it must not erase it. `undefined` = keep. */
 	prepMinutes?: number;
 	pickupNote?: string;
+	/** The group's `product_handle`, as written (see VariantImportRow.handle).
+	 * Handed to the server so an exported sheet updates its own products
+	 * instead of creating copies of the ones with no SKU. */
+	handle?: string;
 	options: { name: string; values: string[] }[];
 	variants: GroupedVariant[];
 	autoFilledCount: number;
@@ -519,6 +532,7 @@ export function validateVariantRow(
 	return {
 		rowNumber,
 		groupingKey,
+		handle,
 		name,
 		description,
 		optionNames,
@@ -786,6 +800,7 @@ export function groupVariantRows(
 			active: first.productActive,
 			prepMinutes,
 			pickupNote,
+			handle: first.handle.length > 0 ? first.handle : undefined,
 			options: axes.options,
 			variants: grid.variants,
 			autoFilledCount: grid.autoFilled,

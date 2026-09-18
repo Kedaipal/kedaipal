@@ -3255,6 +3255,118 @@ describe("prep time + pickup note — spreadsheet import (z8r3fdff97)", () => {
 		expect(preview.plan[0]?.pickupNoteChange).toBe("changed");
 	});
 
+	test("an exported sheet matches its own products by handle — the SKU-less booking listing is skipped, not duplicated", async () => {
+		// The gap this closes: matching was SKU-only, a booking listing has no
+		// SKU at all, so exporting a catalogue and importing it back created a
+		// second, non-booking "Riverside Plot" — and the booking guard, which
+		// only fires on a MATCHED booking, never got to skip it.
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t);
+		const plotId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		// What the export writes in product_handle: the product's own id.
+		const row = {
+			...importSingle("Riverside Plot", {
+				price: 9000,
+				stock: 5,
+				prepMinutes: 90,
+				pickupNote: "Gate on the left.",
+			}),
+			handle: plotId as string,
+		};
+
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [row],
+		});
+		expect(preview.summary.creates).toBe(0);
+		expect(preview.plan[0]?.action).toBe("update");
+		expect(preview.plan[0]?.warnings).toContain(
+			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+
+		const result = await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [row],
+		});
+		expect(result).toEqual({ created: 0, updated: 1 });
+		const after = await t.run((ctx) => ctx.db.get(plotId));
+		// The booking kept its kind, and neither order rule was written.
+		expect(after?.kind).toBe("booking");
+		expect(after?.prepMinutes).toBeUndefined();
+		expect(after?.pickupNote).toBeUndefined();
+		const plots = await t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("products")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.collect()
+			).filter((pr) => pr.name === "Riverside Plot"),
+		);
+		expect(plots).toHaveLength(1);
+	});
+
+	test("a handle updates a product with no SKU; a handle-less sheet still matches by SKU", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t);
+		// No SKU anywhere on this product — only the handle can find it.
+		const noSku = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Counter cake", price: 4000 }),
+		);
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				{
+					...importSingle("Counter cake", { price: 4500, stock: 2, prepMinutes: 45 }),
+					handle: noSku as string,
+				},
+			],
+		});
+		const cake = await t.run((ctx) => ctx.db.get(noSku));
+		expect(cake?.prepMinutes).toBe(45);
+
+		// A hand-made sheet's handle is a slug, not an id: it groups rows and
+		// nothing more, so SKU matching still decides.
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				{ ...puffRow({ prepMinutes: 15 }), handle: "ice-cream-puff" },
+			],
+		});
+		expect((await t.run((ctx) => ctx.db.get(productId)))?.prepMinutes).toBe(15);
+	});
+
+	test("a handle from another store is refused, never silently imported", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t);
+		const otherRetailer = await seedRetailer(t, USER_B);
+		const theirs = await t
+			.withIdentity({ subject: USER_B })
+			.mutation(
+				api.products.create,
+				baseProduct(otherRetailer._id, { name: "Their cake" }),
+			);
+		await expect(
+			asA.mutation(api.products.bulkUpsert, {
+				retailerId: retailer._id,
+				currency: "MYR",
+				products: [
+					{
+						...importSingle("Their cake", { price: 1000, stock: 1 }),
+						handle: theirs as string,
+					},
+				],
+			}),
+		).rejects.toThrow(/product_handle from another store/);
+	});
+
 	test("preview: says where a value won't bite — a booking listing, a product needing days of notice", async () => {
 		const t = setup();
 		const { retailer, asA } = await seedPuff(t, { minNoticeDays: 2 });
