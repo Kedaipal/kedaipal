@@ -27,6 +27,9 @@ interface TextFieldProps {
 	 * the prefix tells the user to do something the validator then rejects.
 	 */
 	prefix?: ReactNode;
+	/** Hard-caps input (browser `maxLength`), the TextareaField contract — for
+	 * a short one-line field where truncating a paste beats reporting it. */
+	maxLength?: number;
 }
 
 export function TextField({
@@ -40,6 +43,7 @@ export function TextField({
 	autoComplete,
 	disabled = false,
 	prefix,
+	maxLength,
 }: TextFieldProps) {
 	const field = useFieldContext<string>();
 	const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
@@ -52,6 +56,7 @@ export function TextField({
 			inputMode={inputMode}
 			autoComplete={autoComplete}
 			disabled={disabled}
+			maxLength={maxLength}
 			placeholder={placeholder}
 			value={field.state.value ?? ""}
 			onChange={(e) => field.handleChange(e.target.value)}

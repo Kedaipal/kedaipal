@@ -27,8 +27,25 @@
  * 9?"), and prep headroom already has explicit levers (min notice, the
  * checkout lead floor, or simply tighter hours).
  *
- * v1 limits (each a follow-up if a real seller asks): one range per day, no
- * overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception dates.
+ * PREP FLOOR: every selectable-time helper takes an optional trailing
+ * `prepMinutes` and hands it to `minSelectableTimeMinutes` — the cart's
+ * slowest item raising the checkout lead (z8r3fdff97). It is threaded rather
+ * than applied by the caller so there is ONE answer to "the earliest moment a
+ * buyer may pick"; defaults to 0, so a caller that doesn't care is unchanged.
+ *
+ * SPLIT DAYS (z8r3fdff8r): a day may carry a SECOND window — a cafe open
+ * 7:30–10:00 for breakfast then 12:00–18:00, a kitchen that shuts between
+ * lunch and dinner. Stored as an optional `open2`/`close2` pair beside the
+ * first window: an optional widening, so every existing row stays byte-
+ * identical and there is no migration. Nothing outside this file reads those
+ * fields — every consumer goes through `dayWindows(day)`, which hands back
+ * the day's windows as a list. That is the whole extensibility story: a third
+ * window later is a schema widen plus one line in `dayWindows`, not a branch
+ * in eight functions.
+ *
+ * v1 limits (each a follow-up if a real seller asks): at most two windows per
+ * day, no overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception
+ * dates.
  *
  * No Convex imports — pure functions shared by the server gate
  * (orders.create, retailers.updateSettings) and the client (checkout date/
@@ -54,6 +71,21 @@ export interface DayHours {
 	/** Shut all day. `open`/`close` keep their last values so re-opening a day
 	 * in settings restores them instead of resetting to a default. */
 	closed?: boolean;
+	/** Optional SECOND window's opening minute (z8r3fdff8r) — the lunch/dinner
+	 * split. Strictly after `close`, so the two windows never touch and the
+	 * shut stretch between them is a real gap buyers are kept out of. Set as a
+	 * PAIR with `close2`; the sanitizer drops a half pair rather than guessing.
+	 * Read it through `dayWindows`, never directly. */
+	open2?: number;
+	/** Optional second window's closing minute — `> open2`, `≤ 1439`. */
+	close2?: number;
+}
+
+/** One open stretch within a day, in minutes since MYT midnight. Both bounds
+ * inclusive (the freeAbove posture: delivering AT closing time is fine). */
+export interface DayWindow {
+	open: number;
+	close: number;
 }
 
 /** 7 entries indexed by weekday, 0 = Sunday .. 6 = Saturday. */
@@ -113,15 +145,166 @@ export function isOpenOnDate(
 	return hoursForDate(hours, dateEpoch) !== null;
 }
 
-/** Whether a day's window is the full 24 hours. */
+/** Whether a day's window is the full 24 hours. The all-day spelling is
+ * always a SINGLE window — the sanitizer refuses a second one beside it — so
+ * this stays a one-window question. */
 export function isAllDay(day: DayHours): boolean {
 	return day.open === 0 && day.close === MAX_CLOSE_MINUTES;
 }
 
-/** "9:00 AM – 6:00 PM", or "Open 24 hours" for a full day. */
+/**
+ * A day's open stretches, earliest first — THE accessor. Every consumer
+ * (gate, checkout, header, JSON-LD, settings summary) iterates this instead of
+ * reading `open2`/`close2`, so adding a third window later touches this
+ * function and the sanitizer, and nothing else.
+ *
+ * A half pair (one of `open2`/`close2` set, from hand-edited data) is ignored
+ * rather than guessed at — the sanitizer already drops it on the way in.
+ */
+export function dayWindows(day: DayHours): DayWindow[] {
+	const windows: DayWindow[] = [{ open: day.open, close: day.close }];
+	if (day.open2 !== undefined && day.close2 !== undefined) {
+		windows.push({ open: day.open2, close: day.close2 });
+	}
+	return windows;
+}
+
+/** Whether the day is split (a lunch/dinner break sits inside it). */
+export function hasSecondWindow(day: DayHours): boolean {
+	return day.open2 !== undefined && day.close2 !== undefined;
+}
+
+/**
+ * The SHUT stretches between a day's windows — what the buyer must be kept
+ * out of, in the words they're told ("closed 10:00 AM – 12:00 PM"). Bounds are
+ * the neighbouring windows' own close/open: both are open moments, so the gap
+ * is read as exclusive, which is exactly how a human reads "closed 10–12".
+ */
+export function dayGaps(day: DayHours): DayWindow[] {
+	const windows = dayWindows(day);
+	return windows
+		.slice(0, -1)
+		.map((window, i) => ({ open: window.close, close: windows[i + 1].open }));
+}
+
+/** Whether a moment falls inside one of the day's open windows. */
+export function isWithinDay(day: DayHours, timeMinutes: number): boolean {
+	return dayWindows(day).some(
+		(window) => timeMinutes >= window.open && timeMinutes <= window.close,
+	);
+}
+
+/** The gap a moment falls into, or null when it doesn't sit between two
+ * windows (before opening, after closing, or inside an open stretch). */
+export function gapForTime(
+	day: DayHours,
+	timeMinutes: number,
+): DayWindow | null {
+	return (
+		dayGaps(day).find(
+			(gap) => timeMinutes > gap.open && timeMinutes < gap.close,
+		) ?? null
+	);
+}
+
+/** "9:00 AM – 6:00 PM", "7:30 AM – 10:00 AM, 12:00 PM – 6:00 PM" for a split
+ * day, or "Open 24 hours" for a full one. */
 export function formatDayWindow(day: DayHours): string {
 	if (isAllDay(day)) return "Open 24 hours";
-	return `${formatFulfilmentTime(day.open)} – ${formatFulfilmentTime(day.close)}`;
+	return dayWindows(day)
+		.map(
+			(window) =>
+				`${formatFulfilmentTime(window.open)} – ${formatFulfilmentTime(window.close)}`,
+		)
+		.join(", ");
+}
+
+/** What is wrong with a day's windows, and WHICH window it is about. The
+ * window lets the settings editor mark only the offending pickers and put the
+ * sentence under them. Painting all four red when only the second window's
+ * start is wrong points the seller at controls that are fine. */
+export interface DayHoursIssue {
+	/** Seller-facing sentence, lower-case start so callers can prefix the
+	 * weekday ("Monday: …") or capitalise it when standing alone. */
+	message: string;
+	window: "first" | "second";
+}
+
+/**
+ * THE rule-set for one day's windows. Shared by the settings editor (inline,
+ * per keystroke) and `sanitizeOpeningHours` (at save), so the client can never
+ * disagree with the server about what is allowed or say it in different words.
+ *
+ * Each rule gets its own sentence rather than one catch-all. "Opening time must
+ * be before closing time (closing at latest 11:59 PM)" made every seller read a
+ * cap the picker cannot even exceed, so the cap now speaks only when it is the
+ * actual problem (an API caller sending 24:00).
+ */
+export function dayHoursIssue(day: DayHours): DayHoursIssue | null {
+	// On a split day "opening time" is ambiguous — the second window's rules
+	// name their window, so the first window's must too. An unsplit day keeps
+	// the wording it always had.
+	const split = hasSecondWindow(day);
+	if (
+		!Number.isInteger(day.open) ||
+		!Number.isInteger(day.close) ||
+		day.open < 0 ||
+		day.open >= day.close
+	) {
+		return {
+			message: split
+				? "the first window's opening time must be before its closing time"
+				: "opening time must be before closing time",
+			window: "first",
+		};
+	}
+	if (day.close > MAX_CLOSE_MINUTES) {
+		return {
+			message: split
+				? "the first window can close at 11:59 PM at the latest"
+				: "closing time can be 11:59 PM at the latest",
+			window: "first",
+		};
+	}
+	if (!split) return null;
+	// Non-null within this branch — restated for the type system.
+	const open2 = day.open2 as number;
+	const close2 = day.close2 as number;
+	if (isAllDay(day)) {
+		// About the SECOND window: its existence is the conflict, and removing
+		// it is the fix the sentence asks for.
+		return {
+			message:
+				"the first window already covers the whole day — remove the second window",
+			window: "second",
+		};
+	}
+	if (!Number.isInteger(open2) || !Number.isInteger(close2) || open2 >= close2) {
+		return {
+			message:
+				"the second window's opening time must be before its closing time",
+			window: "second",
+		};
+	}
+	if (close2 > MAX_CLOSE_MINUTES) {
+		return {
+			message: "the second window can close at 11:59 PM at the latest",
+			window: "second",
+		};
+	}
+	if (open2 <= day.close) {
+		return {
+			message: `the second window must start after ${formatFulfilmentTime(day.close)}`,
+			window: "second",
+		};
+	}
+	return null;
+}
+
+/** The sentence alone, for callers that only need to know *whether* the day is
+ * valid and what to say (`sanitizeOpeningHours`). */
+export function dayHoursError(day: DayHours): string | null {
+	return dayHoursIssue(day)?.message ?? null;
 }
 
 /**
@@ -137,22 +320,24 @@ export function sanitizeOpeningHours(
 	if (!Array.isArray(input) || input.length !== DAYS_PER_WEEK) {
 		throw new Error("Opening hours must cover all 7 days of the week");
 	}
-	const days: OpeningHours = input.map((day, i) => {
-		if (
-			!Number.isInteger(day.open) ||
-			!Number.isInteger(day.close) ||
-			day.open < 0 ||
-			day.close > MAX_CLOSE_MINUTES ||
-			day.open >= day.close
-		) {
-			throw new Error(
-				`${WEEKDAY_NAMES[i]}: opening time must be before closing time (closing at latest 11:59 PM)`,
-			);
-		}
-		// One spelling per day: drop a false/undefined `closed` flag entirely.
-		return day.closed
-			? { open: day.open, close: day.close, closed: true }
-			: { open: day.open, close: day.close };
+	const days: OpeningHours = input.map((raw, i) => {
+		// A half pair is DROPPED, not guessed at: one spelling for "no second
+		// window", so a client that clears only one picker can't persist a
+		// window nothing can read.
+		const day: DayHours =
+			raw.open2 !== undefined && raw.close2 !== undefined
+				? raw
+				: { open: raw.open, close: raw.close, closed: raw.closed };
+		const error = dayHoursError(day);
+		if (error) throw new Error(`${WEEKDAY_NAMES[i]}: ${error}`);
+		// One spelling per day: drop a false/undefined `closed` flag entirely,
+		// and never persist an absent second window as explicit undefined.
+		return {
+			open: day.open,
+			close: day.close,
+			...(day.closed ? { closed: true as const } : {}),
+			...(hasSecondWindow(day) ? { open2: day.open2, close2: day.close2 } : {}),
+		};
 	});
 	if (days.every((day) => day.closed)) {
 		// The working-method-invariant posture: a store closed every day of the
@@ -167,10 +352,13 @@ export function sanitizeOpeningHours(
 
 /**
  * The authoritative gate: does the fulfilment moment fall inside the hours?
- * Rejects a closed day for every method; checks the time window only when a
+ * Rejects a closed day for every method; checks the time windows only when a
  * time exists (delivery — pickup orders are date-only, their point's own
- * schedule note carries the detail). Throws plain Errors, caller wraps.
- * Mirrored client-side pre-submit so the buyer sees the same words inline.
+ * schedule note carries the detail). A moment that lands in a SPLIT day's
+ * break is named as such ("closed 10:00 AM – 12:00 PM"), because "open
+ * 7:30 AM – 10:00 AM, 12:00 PM – 6:00 PM" alone makes the buyer work out why
+ * 11:00 was refused. Throws plain Errors, caller wraps. Mirrored client-side
+ * pre-submit so the buyer sees the same words inline.
  */
 export function assertWithinOpeningHours(
 	hours: OpeningHours | undefined,
@@ -184,61 +372,134 @@ export function assertWithinOpeningHours(
 		);
 	}
 	if (timeMinutes === undefined || isAllDay(day)) return;
-	if (timeMinutes < day.open || timeMinutes > day.close) {
+	if (isWithinDay(day, timeMinutes)) return;
+	const gap = gapForTime(day, timeMinutes);
+	if (gap) {
 		throw new Error(
-			`The store is open ${formatDayWindow(day)} that day — pick a time inside those hours`,
+			`The store is closed ${formatFulfilmentTime(gap.open)} – ${formatFulfilmentTime(gap.close)} that day — pick a time in an open window`,
 		);
 	}
+	throw new Error(
+		`The store is open ${formatDayWindow(day)} that day — pick a time inside those hours`,
+	);
 }
 
 /**
- * The window a buyer may actually PICK for a delivery time on a chosen day:
- * the day's opening window floored by the checkout lead
+ * Every stretch a buyer may actually PICK for a delivery time on a chosen
+ * day: the day's open windows floored by the checkout lead
  * (minSelectableTimeMinutes — "not in the next 15 minutes" when the day is
- * today). `null` = no pickable slot: the day is closed, or it's today and the
- * store has already closed (or midnight is too near). With hours unset this
- * degrades to exactly the pre-hours behaviour: floor..23:59, null only in the
- * last minutes before midnight.
+ * today), with any window the floor has already swallowed dropped. Empty =
+ * no pickable slot: the day is closed, or it's today and the store has
+ * finished for the day (or midnight is too near).
+ */
+export function selectableTimeWindows(
+	hours: OpeningHours | undefined,
+	dateEpoch: number,
+	now: number = Date.now(),
+	prepMinutes = 0,
+): DayWindow[] {
+	const day = hoursForDate(hours, dateEpoch);
+	if (day === null) return [];
+	const floor = minSelectableTimeMinutes(dateEpoch, now, prepMinutes);
+	return dayWindows(day)
+		.map((window) => ({
+			open: Math.max(window.open, floor),
+			close: window.close,
+		}))
+		.filter((window) => window.open <= window.close);
+}
+
+/**
+ * The OUTER BOUNDS of the pickable stretches — what a native
+ * `<input type="time">` can express, since its min/max is one range. On a
+ * split day the break falls inside these bounds: the input stops the buyer
+ * wandering outside the day, and the gap check (`isTimeSelectable`) stops
+ * them landing in the break. `null` = nothing pickable that day. With hours
+ * unset this degrades to exactly the pre-hours behaviour: floor..23:59, null
+ * only in the last minutes before midnight.
  */
 export function selectableTimeWindow(
 	hours: OpeningHours | undefined,
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): { min: number; max: number } | null {
-	const day = hoursForDate(hours, dateEpoch);
-	if (day === null) return null;
-	const min = Math.max(day.open, minSelectableTimeMinutes(dateEpoch, now));
-	if (min > day.close) return null;
-	return { min, max: day.close };
+	const windows = selectableTimeWindows(hours, dateEpoch, now, prepMinutes);
+	if (windows.length === 0) return null;
+	return { min: windows[0].open, max: windows[windows.length - 1].close };
+}
+
+/** Whether a specific moment is pickable on that day — inside an open window
+ * AND past the checkout lead floor. The gap-aware replacement for a
+ * `min <= t <= max` test against the hull. */
+export function isTimeSelectable(
+	hours: OpeningHours | undefined,
+	dateEpoch: number,
+	timeMinutes: number,
+	now: number = Date.now(),
+	prepMinutes = 0,
+): boolean {
+	return selectableTimeWindows(hours, dateEpoch, now, prepMinutes).some(
+		(window) => timeMinutes >= window.open && timeMinutes <= window.close,
+	);
+}
+
+/**
+ * The first pickable moment AT OR AFTER `fromMinutes`, or null when nothing on
+ * that day is left after it. Used to repair a prefilled time that has gone
+ * stale, because a repair must move the buyer's slot FORWARD. Jumping a stale
+ * 7:30 PM back to 5:15 PM, just because 5:15 is the day's first slot, books a
+ * rider earlier than anyone asked for.
+ */
+export function nextSelectableTime(
+	hours: OpeningHours | undefined,
+	dateEpoch: number,
+	fromMinutes: number,
+	now: number = Date.now(),
+	prepMinutes = 0,
+): number | null {
+	for (const window of selectableTimeWindows(hours, dateEpoch, now, prepMinutes)) {
+		const candidate = Math.max(window.open, fromMinutes);
+		if (candidate <= window.close) return candidate;
+	}
+	return null;
 }
 
 /**
  * Prefill for the time input, hours-aware: the plain default (today → the
- * floor / future day → 10:00 AM) clamped into the day's pickable window — a
- * dinner stall opening 5 PM prefills a future day at 5:00 PM, a breakfast
- * stall closing 9 AM prefills 9:00 AM. Null when the day has no pickable slot
- * at all (caller moves the buyer to another day).
+ * floor / future day → 10:00 AM) moved into the FIRST pickable window that can
+ * still host it — a dinner stall opening 5 PM prefills a future day at
+ * 5:00 PM, a breakfast stall closing 9 AM prefills 9:00 AM, and a cafe split
+ * 7:30–10:00 / 12:00–18:00 prefills 12:00 PM once 10:00 has passed rather than
+ * dropping the buyer in the break. Null when the day has no pickable slot at
+ * all (caller moves the buyer to another day).
  */
 export function defaultTimeWithinHours(
 	hours: OpeningHours | undefined,
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): number | null {
-	const window = selectableTimeWindow(hours, dateEpoch, now);
-	if (window === null) return null;
-	const plain =
-		dateEpoch === todayMytMidnight(now) ? window.min : 10 * 60;
-	return Math.min(Math.max(plain, window.min), window.max);
+	const windows = selectableTimeWindows(hours, dateEpoch, now, prepMinutes);
+	if (windows.length === 0) return null;
+	const plain = dateEpoch === todayMytMidnight(now) ? windows[0].open : 10 * 60;
+	for (const window of windows) {
+		if (plain <= window.close) return Math.max(plain, window.open);
+	}
+	// Past every window's close — the last pickable moment of the day.
+	return windows[windows.length - 1].close;
 }
 
 /**
- * Live status for the storefront header line. `open` carries today's closing
- * time; `closed` carries the next opening (0 = later today, 1 = tomorrow, …)
- * — `nextOpen` is null only for a schedule with no open day, which the
- * sanitizer forbids (defensive for hand-edited data).
+ * Live status for the storefront header line. `open` carries the close of the
+ * window the store is in RIGHT NOW (not the day's last close — a split day is
+ * about to shut for lunch, and "closes 6:00 PM" would be a lie); `closed`
+ * carries the next opening, which on a split day may be later TODAY
+ * (daysAhead 0). `nextOpen` is null only for a schedule with no open day,
+ * which the sanitizer forbids (defensive for hand-edited data).
  */
 export type OpenNowStatus =
-	| { open: true; day: DayHours }
+	| { open: true; day: DayHours; until: number }
 	| {
 			open: false;
 			nextOpen: { daysAhead: number; openMinutes: number } | null;
@@ -246,8 +507,9 @@ export type OpenNowStatus =
 
 /**
  * schema.org `openingHoursSpecification` rows for the storefront's Store
- * JSON-LD — open days only, 24h "HH:MM" strings (the schema.org format).
- * Local-SEO icing on the same single source of truth.
+ * JSON-LD — open days only, one row per WINDOW (schema.org's own way to
+ * express a lunch break), 24h "HH:MM" strings. Local-SEO icing on the same
+ * single source of truth.
  */
 export function openingHoursSpecification(
 	hours: OpeningHours,
@@ -255,14 +517,12 @@ export function openingHoursSpecification(
 	return hours.flatMap((day, i) =>
 		day.closed
 			? []
-			: [
-					{
-						"@type": "OpeningHoursSpecification",
-						dayOfWeek: WEEKDAY_NAMES[i],
-						opens: hhmmFromMinutes(day.open),
-						closes: hhmmFromMinutes(day.close),
-					},
-				],
+			: dayWindows(day).map((window) => ({
+					"@type": "OpeningHoursSpecification",
+					dayOfWeek: WEEKDAY_NAMES[i],
+					opens: hhmmFromMinutes(window.open),
+					closes: hhmmFromMinutes(window.close),
+				})),
 	);
 }
 
@@ -273,25 +533,34 @@ export function openNowStatus(
 	const today = todayMytMidnight(now);
 	const nowMinutes = mytMinutesOfDay(now);
 	const todayHours = hoursForDate(hours, today);
-	if (
-		todayHours !== null &&
-		nowMinutes >= todayHours.open &&
-		nowMinutes <= todayHours.close
-	) {
-		return { open: true, day: todayHours };
-	}
-	// Still before today's opening? That's the soonest reopening.
-	if (todayHours !== null && nowMinutes < todayHours.open) {
-		return {
-			open: false,
-			nextOpen: { daysAhead: 0, openMinutes: todayHours.open },
-		};
+	if (todayHours !== null) {
+		const current = dayWindows(todayHours).find(
+			(window) => nowMinutes >= window.open && nowMinutes <= window.close,
+		);
+		if (current) {
+			return { open: true, day: todayHours, until: current.close };
+		}
+		// Still before one of today's openings? The soonest is the next one —
+		// on a split day that's the post-lunch reopening, hours away, not
+		// tomorrow.
+		const next = dayWindows(todayHours).find(
+			(window) => nowMinutes < window.open,
+		);
+		if (next) {
+			return {
+				open: false,
+				nextOpen: { daysAhead: 0, openMinutes: next.open },
+			};
+		}
 	}
 	const DAY_MS = MINUTES_PER_DAY * 60 * 1000;
 	for (let ahead = 1; ahead <= DAYS_PER_WEEK; ahead++) {
 		const day = hoursForDate(hours, today + ahead * DAY_MS);
 		if (day !== null) {
-			return { open: false, nextOpen: { daysAhead: ahead, openMinutes: day.open } };
+			return {
+				open: false,
+				nextOpen: { daysAhead: ahead, openMinutes: day.open },
+			};
 		}
 	}
 	return { open: false, nextOpen: null };

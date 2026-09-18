@@ -1488,6 +1488,45 @@ describe("collection service (86eyg0n8e) — reversed trips", () => {
 		expect(context.deliveryDirection).toBe("standard");
 	});
 
+	test("the store stop carries the unit / floor line (z8r3fdff8r)", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			const booking = row?.deliveryBooking;
+			if (!booking) throw new Error("seed missing booking");
+			await ctx.db.patch(retailer._id, {
+				// Standard direction so the STORE is the origin — the pickup stop
+				// the rider actually drives to.
+				deliveryBooking: { ...booking, deliveryDirection: undefined },
+				businessAddress: {
+					label: "Bearcamp Wash Bay",
+					latitude: 3.139,
+					longitude: 101.6869,
+					unit: "Unit 3-1, Block B",
+				},
+			});
+		});
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: BUYER_ADDRESS,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		// The rider reads the door first, then the building.
+		expect(context.origin.label).toBe("Unit 3-1, Block B, Bearcamp Wash Bay");
+		// The PIN is untouched — the quote keys on lat/lng, the address is display.
+		expect(context.origin.latitude).toBe(3.139);
+		expect(context.origin.longitude).toBe(101.6869);
+	});
+
 	test("reserveBooking stamps the job's frozen direction; standard stays unset", async () => {
 		const t = setup();
 		const retailer = await seedCollectionStore(t);

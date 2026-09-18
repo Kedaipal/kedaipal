@@ -7984,7 +7984,13 @@ describe("orders — store opening hours at create (86eyp5rav)", () => {
 	function weekWith(
 		overrides: Record<
 			number,
-			{ open: number; close: number; closed?: boolean }
+			{
+				open: number;
+				close: number;
+				closed?: boolean;
+				open2?: number;
+				close2?: number;
+			}
 		>,
 	) {
 		return Array.from(
@@ -8067,6 +8073,45 @@ describe("orders — store opening hours at create (86eyp5rav)", () => {
 		});
 		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.fulfilmentTimeMinutes).toBe(1080);
+	});
+
+	test("a SPLIT day refuses a delivery in the break, naming it, and takes both windows (z8r3fdff8r)", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const date = tomorrowMidnight();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: weekWith({
+					// Breakfast 7:30–10:00, then the cafe window 12:00–18:00.
+					[weekdayOf(date)]: { open: 450, close: 600, open2: 720, close2: 1080 },
+				}),
+			},
+		);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR" as const,
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+			deliveryAddress: validAddress,
+			fulfilmentDate: date,
+		};
+		// 11:00 sits inside the day's outer bounds — the case a single-range
+		// check would wave through. The server names the break.
+		await expect(
+			t.mutation(api.orders.create, { ...base, fulfilmentTimeMinutes: 660 }),
+		).rejects.toThrow(/closed 10:00 AM – 12:00 PM/);
+		// Both windows accept, each at its own closing boundary (inclusive).
+		for (const minute of [600, 1080]) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				...base,
+				fulfilmentTimeMinutes: minute,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(o?.fulfilmentTimeMinutes).toBe(minute);
+		}
 	});
 
 	test("an open day passes date-only (self-collect), and unset hours constrain nothing", async () => {

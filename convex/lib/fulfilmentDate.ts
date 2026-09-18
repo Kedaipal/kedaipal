@@ -305,21 +305,33 @@ export function defaultFulfilmentTimeMinutes(
 }
 
 /**
- * Earliest selectable time for a chosen day: 30 minutes from now (rounded up
- * to 5) when the day is today, else free. Drives the `<input type="time">`
- * floor + the submit check; near midnight the floor can exceed the day —
- * `hasSelectableTimeToday` tells the form to push the buyer to tomorrow.
+ * Earliest selectable time for a chosen day: the checkout lead from now
+ * (rounded up to 5) when the day is today, else free. Drives the
+ * `<input type="time">` floor + the submit check; near midnight the floor can
+ * exceed the day — `hasSelectableTimeToday` tells the form to push the buyer
+ * to tomorrow.
+ *
+ * `prepMinutes` (z8r3fdff97) raises that lead where the CART needs longer
+ * than the flat checkout lead — the slowest item's prep time. It belongs
+ * here, not beside here: a second floor applied further down the chain would
+ * be a second source of truth for "the earliest moment a buyer may pick",
+ * and the two would drift. Defaults to 0, so every pre-existing caller is
+ * byte-identical.
+ *
+ * A FUTURE day returns 0 — prep is absorbed overnight, the min-notice
+ * posture. That is a semantic call, not an API one: if prep should ever bite
+ * on a future day too, it changes inside this function and no caller moves.
  */
 export function minSelectableTimeMinutes(
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 0;
-	return (
-		Math.ceil(
-			(mytMinutesOfDay(now) + EARLIEST_FULFILMENT_LEAD_MINUTES) / 5,
-		) * 5
-	);
+	// A negative or non-finite prep never shortens the flat lead.
+	const prep = Number.isFinite(prepMinutes) ? prepMinutes : 0;
+	const lead = Math.max(EARLIEST_FULFILMENT_LEAD_MINUTES, prep);
+	return Math.ceil((mytMinutesOfDay(now) + lead) / 5) * 5;
 }
 
 /** False only in the last half-hour before midnight, when "today" has no

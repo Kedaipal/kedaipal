@@ -268,11 +268,170 @@ schedule, and the fulfilment moment must fall inside it.
   explicit levers — min notice, the 15-min lead floor, or simply tighter
   hours. An explicit "prep buffer" setting is a clean follow-up if a real
   seller asks.
-- **v1 limits** (each a follow-up if a real seller asks): one range per day,
-  no overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception dates.
-  Known corner: a long notice (e.g. 27 days) combined with closed days can
-  leave a mostly-closed selectable window — chips go sparse and submit
-  explains; the server gate keeps it correct.
+- **v1 limits** (each a follow-up if a real seller asks): one range per day
+  (**lifted 16 Sep 2026 — see below**), no overnight wrap (a mamak open
+  6 PM – 2 AM), no holiday/exception dates. Known corner: a long notice
+  (e.g. 27 days) combined with closed days can leave a mostly-closed
+  selectable window — chips go sparse and submit explains; the server gate
+  keeps it correct.
+
+## Update (2026-09-16, z8r3fdff8r): split days — two windows
+
+The first v1 limit to be asked for by a real seller. Huff & Puff runs a
+breakfast window (7:30–10:00) then the regular cafe window (12:00–18:00);
+with one range per day she either set 7:30–close (and buyers booked 11:00,
+when nobody is there) or dropped breakfast.
+
+- **Storage:** an optional `open2`/`close2` pair beside the first window,
+  `close < open2 < close2 ≤ 1439`. An **optional widening** — every existing
+  row is byte-identical and there is no migration. The pair is set **together
+  or not at all**: a half pair is DROPPED by the sanitizer rather than
+  guessed at, so "no second window" keeps one spelling. A second window
+  beside an **all-day** first one is refused (there is no day left to open).
+- **`dayWindows(day)` is THE accessor.** Nothing outside
+  `convex/lib/openingHours.ts` reads `open2`/`close2`: the gate, checkout,
+  the header, the settings editor and the JSON-LD all iterate the list it
+  returns. That is the whole extensibility story — a third window later is a
+  schema widen plus one line in `dayWindows`, not a branch in eight
+  functions.
+- **`dayHoursError(day)` is THE rule-set**, returning the seller-facing
+  sentence or null. `sanitizeOpeningHours` throws it (prefixed with the
+  weekday) and the settings editor renders it inline per keystroke — same
+  function, so the client can never disagree with the server about what is
+  allowed *or say it in different words*.
+- **The break is named, not implied.** `dayGaps` / `gapForTime` turn a
+  refused moment into "closed 10:00 AM – 12:00 PM — pick a time in an open
+  window" rather than restating the hours and leaving the buyer to work out
+  why 11:00 bounced. Both window bounds are open moments, so the gap reads
+  exclusive at both ends — exactly how a human reads "closed 10–12".
+- **A single-range time input can't fence a break**, so the native
+  `min`/`max` carries the **hull** (`selectableTimeWindow`, unchanged
+  signature — ~14 call sites untouched) and the gap is caught by
+  `isTimeSelectable`: at submit, in the 30s repair, and — new — in an
+  **inline notice the moment the field holds a gap time**, on both the
+  storefront and claim checkouts. The repair now jumps a stale prefill
+  FORWARD to the next open window instead of into the break.
+- **`defaultTimeWithinHours` picks the first window that can still host the
+  plain default**: a future day's 10:00 lands in window 1 while it lasts,
+  window 2 once window 1 closes; today, the lead floor drops a window it has
+  already swallowed. It can never prefill into a break (test-pinned by
+  construction, not by example).
+- **`openNowStatus` gained `until`** — the close of the window the store is
+  in RIGHT NOW, because on a split day "closes 6:00 PM" while breakfast is
+  about to end is a lie. Mid-break, `nextOpen` reports **daysAhead 0**: the
+  header says "opens 12:00 PM today", not "tomorrow".
+- **JSON-LD emits one row per window**, which is schema.org's own way to
+  express a lunch break.
+- **Settings editor:** both modes gained it. "Same every day" takes ONE
+  "+ Add a second window" for the whole week (seven days, one click — the
+  bulk-affordance rule); "Different per day" gets a per-row control. A new
+  window is suggested as `close + 2h` for 6h (a 10:00 breakfast close lands
+  on 12:00–18:00, the shape that asked for this). Where a day can't take one
+  — all-day, or a first window running to 23:59 — the control is **disabled
+  with its reason on screen**. A valid split shows the break back in the
+  seller's own numbers ("Closed 10:00 AM – 12:00 PM"), full sentence in
+  same-every-day, compact in the 7-row grid where it would otherwise repeat
+  seven times.
+- **Removing the second window restores single-window behaviour byte for
+  byte** (test-pinned on the saved payload's key order), and an all-24h week
+  still normalises to unset.
+- **Still v1 limits:** at most two windows per day, no overnight wrap, no
+  holiday/exception dates.
+- **Hands-on test round (17 Sep, driven in a real browser):** the logic held
+  everywhere, and nine UX gaps surfaced. The fixes that changed behaviour:
+  - **The repair is ownership-aware.** `src/lib/fulfilment-time-issue.ts`
+    (`planTimeRepair`) tracks the value the SYSTEM last wrote. A buyer-typed
+    time is **never rewritten**. Before this, a typed 6:00 PM in a break became
+    5:20 PM within 30s, silently and earlier than asked. The inline notice
+    (now covering too early, too late and in the break) explains, and submit
+    refuses in the same words. A stale system prefill moves **forward**
+    (`nextSelectableTime`), falls back to an earlier slot only when nothing
+    later is left, and **announces the move** ("We moved your time to 7:00 PM
+    — … is closed 5:00 PM – 7:00 PM"). On a day with no slot left it is
+    cleared rather than kept as a false promise beside "closed for today". It
+    refills itself once the buyer picks another day. The move also works live
+    when a seller edits hours mid-checkout.
+  - **One ladder, both checkouts.** `fulfilmentTimeIssue` + `timeIssueCopy`
+    replaced the submit `if` ladder that storefront and claim checkout had
+    copy-pasted. Copy is built from parts, so a time or range renders as one
+    unbreakable unit (`src/components/hours/hours-text.tsx`). A half-width
+    hint on a phone used to wrap "4:30 PM –⏎5:30 PM". Server strings keep
+    plain spaces, because they also feed WhatsApp and PDFs.
+  - **Pickup gets the hours on its DATE.** Self-collect has no time field, and
+    the in-person collector is the buyer who walks into a lunch break. Not
+    shown for drop-off, where the point's schedule note governs.
+  - **Editor errors point at the right control.** `dayHoursIssue` returns
+    `{ message, window }`, so only the offending window turns red and the
+    sentence sits under it (per row in the 7-row grid, plus "Fix the hours for
+    Monday to save." at the foot). The 11:59 PM cap only speaks when it's the
+    actual problem, and the plain message is back to "opening time must be
+    before closing time".
+  - **Grid and targets.** Switching to "Same every day" **says** when it
+    replaced different per-day hours. The settings summary stacks windows like
+    the storefront dialog, using one component for both. (The reserved remove
+    column and the 44px × from this round were replaced in the next one; see
+    below.)
+- **Second test round (17 Sep evening), nine more fixes:**
+  - **Add and remove are ONE control under a day's windows** (`SecondWindowButton`),
+    in both editor modes. The × beside the pickers, plus a column reserved on
+    every row to keep them aligned, cost each picker 25px. On a 360px Android,
+    every time read "6:30 …", hiding the AM/PM a split schedule turns on. Both
+    windows now run full width, and both buttons are 44px targets pulled back
+    to text height.
+  - **Errors sit under the window they're about,** in both modes. A
+    first-window error printed after both rows read as a complaint about the
+    second window. On a split day the first window's sentences also name it
+    ("the first window's opening time must be before its closing time").
+    Unsplit days keep the old wording.
+  - **Switching back restores the per-day hours.** "Same every day" keeps the
+    week it replaced, and switching back to "Different per day" puts every day's
+    own hours back. The note used to say "Cancel to keep your different hours
+    per day". Cancel restores the SAVED week, so per-day hours typed in the
+    same session were lost while the note promised to keep them. Re-tapping
+    the active mode no longer re-runs the unify, which had dropped the note and
+    the kept hours.
+  - **"Reset to open 24/7" is a draft action.** It used to save on the spot,
+    one tap beside Cancel, wiping up to fourteen windows with no confirm or
+    undo. Now the pickers show 24/7, Save commits it (the server stores an
+    all-day week as unset, same as the old instant clear), and Cancel takes it
+    back. It hides once the draft already is 24/7.
+  - **A move gives its true reason.** `TimeMove.reason` is `break` | `passed` |
+    `before_open` | `after_close`. Changing the date used to say "7:30 PM is no
+    longer available" when the new day just closes at 6:00 PM. Now: "7:30 PM
+    is after … closes that day", or "10:00 AM is before … opens that day".
+    "Passed" is judged against the floor WITH the cart's prep, so a time the
+    prep window overtook reads as passed, not "before opening" (T2 adds its
+    prep wording on top).
+  - **A refusal stands only while its inputs do.** A submit refusal about the
+    day or time is stored with `fulfilmentInputsKey(values)` (method, pickup
+    point, date, time) and shown only while those are unchanged. Before, it
+    stayed after the buyer fixed the time, contradicting the field until the
+    next press.
+  - **The storefront shows the refusal beside the CTA,** in the reason slot
+    above the button, on both the desktop summary and the mobile bar. The claim
+    page already put it there. The refusal is held as `CopyPart[]` wherever it
+    has parts and rendered with `CopyText`, so a time range stays whole in the
+    mobile bar — the narrowest place any of this copy renders. The inline date and time notices carry
+    `data-form-error`, so the submit focus helper scrolls to the field being
+    refused. Note for anyone re-testing: that helper runs on
+    `requestAnimationFrame`, which a hidden or covered browser window never
+    fires. An "off-screen refusal" seen in a background tab is partly the tab.
+  - **The pickup unit helper no longer claims WhatsApp.** See
+    [`fulfilment.md`](./fulfilment.md#unit--floor--building-line-2026-09-16-clickup-z8r3fdff8r).
+- **Prep-floor seam for T2 (`z8r3fdff97`).** Every selectable-time helper —
+  `selectableTimeWindows`, `selectableTimeWindow`, `isTimeSelectable`,
+  `defaultTimeWithinHours` — takes an optional trailing **`prepMinutes`** and
+  hands it to `minSelectableTimeMinutes(dateEpoch, now, prepMinutes = 0)`,
+  which floors today at `now + max(15, prepMinutes)` rounded up to 5. It is
+  **threaded, not applied by the caller**: a second floor further down the
+  chain would be a second source of truth for "the earliest moment a buyer
+  may pick", and the two would drift. Defaults to 0 everywhere, so every
+  pre-existing caller is byte-identical (test-pinned by equality against the
+  no-arg call). A **future day returns 0** — prep is absorbed overnight, the
+  min-notice posture; that is a semantic call living inside
+  `minSelectableTimeMinutes`, so changing it later moves no caller. On a
+  split day a long prep can swallow the first window whole, and the prefill
+  follows into the second rather than into the break.
 
 ## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
 

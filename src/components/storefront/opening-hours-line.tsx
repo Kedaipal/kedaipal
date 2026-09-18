@@ -6,13 +6,13 @@ import {
 	weekdayIndexMyt,
 } from "../../../convex/lib/fulfilmentDate";
 import {
-	formatDayWindow,
 	isAllDay,
 	type OpeningHours,
 	openNowStatus,
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
+import { DayWindowsStacked } from "../hours/hours-text";
 import {
 	Dialog,
 	DialogContent,
@@ -56,10 +56,16 @@ export function OpeningHoursLine({
 
 	let text: string;
 	if (status.open) {
+		// `until` is the close of the window the store is in RIGHT NOW, not the
+		// day's last close — on a split day (z8r3fdff8r) the breakfast window is
+		// about to shut, and "closes 6:00 PM" would be a lie.
 		text = isAllDay(status.day)
 			? "Open 24 hours today"
-			: `Open now · closes ${formatFulfilmentTime(status.day.close)}`;
+			: `Open now · closes ${formatFulfilmentTime(status.until)}`;
 	} else if (status.nextOpen) {
+		// daysAhead 0 is "before we open" — which on a split day also covers the
+		// lunch break, so "opens 12:00 PM today" is the line a buyer sees at
+		// 11:00 rather than being told the store is shut until tomorrow.
 		const { daysAhead, openMinutes } = status.nextOpen;
 		const when =
 			daysAhead === 0
@@ -112,10 +118,13 @@ export function OpeningHoursLine({
 									{WEEKDAY_NAMES[i]}
 									{isToday ? " · Today" : ""}
 								</span>
+								{/* A split day stacks its windows. The same component as the
+								    settings summary, so both sides read the week alike
+								    (z8r3fdff8r). */}
 								<span
-									className={day?.closed ? "text-muted-foreground" : undefined}
+									className={`text-right ${day?.closed ? "text-muted-foreground" : ""}`}
 								>
-									{!day || day.closed ? "Closed" : formatDayWindow(day)}
+									{!day || day.closed ? "Closed" : <DayWindowsStacked day={day} />}
 								</span>
 							</li>
 						);
