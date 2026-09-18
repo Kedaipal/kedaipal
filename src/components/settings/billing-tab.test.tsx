@@ -1369,6 +1369,30 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		expect(screen.queryByText(/founding price ends/)).toBeNull();
 	});
 
+	it("a date already in the PAST never renders as a deadline to beat", () => {
+		// The pass runs daily, so for up to a day after the window closes the
+		// member is lapsed but not yet revoked. Rendering "founding price ends
+		// <yesterday> — renew before then" would be a deadline nobody can meet.
+		mockQueries({
+			isAdmin: false,
+			gateway: {
+				...gatewayFor({ lapsed: true }),
+				foundingBenefitsEndAt: Date.now() - 2 * 60 * 60 * 1000,
+			},
+		});
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(screen.queryByText(/founding price ends/)).toBeNull();
+		expect(screen.queryByText(/Renew below before then/)).toBeNull();
+		// It says the true thing for that day instead.
+		expect(
+			screen.getByText(/founding\s+price lapsed after more than 3 months/),
+		).toBeTruthy();
+	});
+
 	it("a REVOKED Founding Member: badge kept, the end is permanent, no renew-to-keep promise", () => {
 		mockQueries({
 			isAdmin: false,

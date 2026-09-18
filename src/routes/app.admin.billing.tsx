@@ -1230,16 +1230,25 @@ function FoundingMembersList() {
 		if (!pending) return;
 		setBusy(true);
 		try {
-			await setBenefits({
+			const changed = await setBenefits({
 				retailerId: pending.retailerId,
 				revoked: pending.revoke,
 				note: note.trim() === "" ? undefined : note.trim(),
 			});
-			toast.success(
-				pending.revoke
-					? `Founding benefits revoked for ${pending.storeName} — rank #${pending.rank} and badge kept.`
-					: `Founding benefits restored for ${pending.storeName}.`,
-			);
+			// The mutation refuses rather than throws when there is nothing to do
+			// (already in that state, or the retailer is gone) — reporting that as
+			// success would tell Arif he had changed something he hadn't.
+			if (changed) {
+				toast.success(
+					pending.revoke
+						? `Founding benefits revoked for ${pending.storeName} — rank #${pending.rank} and badge kept.`
+						: `Founding benefits restored for ${pending.storeName} — their founding price applies again from now.`,
+				);
+			} else {
+				toast.info(
+					`No change — ${pending.storeName} is already ${pending.revoke ? "revoked" : "on founding pricing"}.`,
+				);
+			}
 			setPending(null);
 			setNote("");
 		} catch (err) {
@@ -1395,7 +1404,7 @@ function FoundingMembersList() {
 						<DialogDescription>
 							{pending?.revoke
 								? `Their 30% founding price ends now and every plan opens to them again at standard prices. Founding rank #${pending?.rank} and the storefront badge are KEPT — those are permanent. They are not emailed; this is a manual move, so tell them yourself.`
-								: `Their 30% founding price applies again from their next bill, and they go back to Founding Pro only. Use this for a revocation that was wrong, or a deliberate re-grant.`}
+								: `Their 30% founding price applies again straight away and they go back to Founding Pro only. The 90-day lapse clock restarts from today, so if they still don't renew they'll be warned again 14 days before it ends. Use this for a revocation that was wrong, or a deliberate re-grant.`}
 						</DialogDescription>
 					</DialogHeader>
 					<label className="flex flex-col gap-1 text-sm font-medium">

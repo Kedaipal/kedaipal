@@ -505,6 +505,11 @@ export type FoundingEligibilityArgs = {
 	 * REQUIRED, not optional: every caller must answer it, so a new pricing path
 	 * cannot forget to and quietly re-grant a revoked discount. */
 	benefitsRevokedAt: number | undefined;
+	/** `retailers.foundingBenefitsRestoredAt` — an admin re-grant, and the floor
+	 * the window measures from. Also required, for the same reason: a pricing
+	 * path that ignored it would quote list price to a member Arif just
+	 * restored. */
+	benefitsRestoredAt: number | undefined;
 	now: number;
 };
 
@@ -518,10 +523,36 @@ export type FoundingEligibilityArgs = {
  */
 export function foundingBenefitsEndAt(
 	paidThrough: number | undefined,
+	benefitsRestoredAt?: number,
 ): number | undefined {
-	return paidThrough === undefined
-		? undefined
-		: paidThrough + FOUNDING_PRICE_LAPSE_MS;
+	const from = foundingClockFrom(paidThrough, benefitsRestoredAt);
+	return from === undefined ? undefined : from + FOUNDING_PRICE_LAPSE_MS;
+}
+
+/**
+ * The moment the founding lapse clock runs FROM: normally the store's
+ * paid-through, but never earlier than an admin's re-grant (z8r3fdfyw5).
+ *
+ * A re-grant has to move the clock or it does nothing. Clearing the revocation
+ * stamp alone left `foundingPriceEligible`'s window measured from a
+ * paid-through that had already expired, so Arif's "Restore benefits" was a
+ * no-op for the exact population it exists for — the lapsed members — and the
+ * next daily pass revoked them again and sent a second "ended" email. Restored
+ * members now get a fresh full window, warned again at T-14 before it lapses a
+ * second time, on identical terms.
+ *
+ * A store that never paid is left alone: `paidThrough === undefined` keeps its
+ * "nothing has lapsed, fail toward the promise" meaning rather than starting a
+ * clock a re-grant would otherwise invent.
+ */
+export function foundingClockFrom(
+	paidThrough: number | undefined,
+	benefitsRestoredAt: number | undefined,
+): number | undefined {
+	if (paidThrough === undefined) return undefined;
+	return benefitsRestoredAt === undefined
+		? paidThrough
+		: Math.max(paidThrough, benefitsRestoredAt);
 }
 
 /**
@@ -550,8 +581,12 @@ export function foundingPriceEligible(args: FoundingEligibilityArgs): boolean {
 	// second flag. Mutation-tested: delete this line and plans.test.ts goes red.
 	if (args.benefitsRevokedAt !== undefined) return false;
 	if (args.isFoundingMember) {
-		if (args.paidThrough === undefined) return true;
-		return args.now - args.paidThrough <= FOUNDING_PRICE_LAPSE_MS;
+		// Measured from the re-grant when there is one, or the whole lever is a
+		// no-op: a restored member's paid-through is, by definition, already past
+		// the window.
+		const from = foundingClockFrom(args.paidThrough, args.benefitsRestoredAt);
+		if (from === undefined) return true;
+		return args.now - from <= FOUNDING_PRICE_LAPSE_MS;
 	}
 	return args.foundingIntent;
 }
@@ -578,6 +613,8 @@ export type FoundingLapseGateArgs = {
 	/** The subscription's `currentPeriodEnd`. */
 	paidThrough: number | undefined;
 	benefitsRevokedAt: number | undefined;
+	/** An admin re-grant — the floor the clock measures from. */
+	benefitsRestoredAt: number | undefined;
 	now: number;
 };
 
@@ -607,7 +644,7 @@ export function foundingBenefitsAtRisk(args: FoundingLapseGateArgs): boolean {
 	if (args.benefitsRevokedAt !== undefined) return false;
 	if (args.comped) return false;
 	if (args.status === "active" || args.status === "on_hold") return false;
-	return foundingBenefitsEndAt(args.paidThrough) !== undefined;
+	return foundingBenefitsEndAt(args.paidThrough, args.benefitsRestoredAt) !== undefined;
 }
 
 /**
@@ -621,7 +658,7 @@ export function foundingBenefitsAtRisk(args: FoundingLapseGateArgs): boolean {
  */
 export function foundingBenefitsRevocable(args: FoundingLapseGateArgs): boolean {
 	if (!foundingBenefitsAtRisk(args)) return false;
-	const endAt = foundingBenefitsEndAt(args.paidThrough);
+	const endAt = foundingBenefitsEndAt(args.paidThrough, args.benefitsRestoredAt);
 	if (endAt === undefined) return false;
 	return args.now > endAt;
 }
@@ -639,7 +676,7 @@ export function foundingBenefitsWarningDue(
 	args: FoundingLapseGateArgs & { sentForPeriodEnd: number | undefined },
 ): boolean {
 	if (!foundingBenefitsAtRisk(args)) return false;
-	const endAt = foundingBenefitsEndAt(args.paidThrough);
+	const endAt = foundingBenefitsEndAt(args.paidThrough, args.benefitsRestoredAt);
 	if (endAt === undefined) return false;
 	if (args.sentForPeriodEnd === args.paidThrough) return false;
 	return args.now >= endAt - FOUNDING_BENEFIT_WARNING_MS && args.now <= endAt;
@@ -716,6 +753,9 @@ export function renewalQuote(args: {
 	/** `retailers.foundingBenefitsRevokedAt` — a revoked member's renewal is an
 	 * ordinary Pro bill, and the scheduled-downgrade lock opens with it. */
 	benefitsRevokedAt: number | undefined;
+	/** `retailers.foundingBenefitsRestoredAt` — an admin re-grant re-prices the
+	 * next renewal at the founding rate, which is the promise the dialog makes. */
+	benefitsRestoredAt: number | undefined;
 	lastPaidCurrency: string | undefined;
 	country: Country | undefined;
 	now: number;

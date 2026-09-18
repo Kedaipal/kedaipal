@@ -513,10 +513,24 @@ an email plus a red banner 14 days before anything is taken. Whether Arif also
 wants a direct message to the three unpaid members ahead of the first revocation
 (lekor-mr-ganu, 28 Oct 2026) is a GTM call, not a code gap.
 
-**Known edge, deliberately not built.** Comping a member through their own lapse
-and later un-comping them leaves a stale `currentPeriodEnd`, so the pass could
-revoke them the next day. No founding member is comped today; the admin restore
-lever is the remedy if it ever happens.
+**A re-grant RESTARTS the clock** (`foundingMembers.benefitsRestoredAt`, mirrored
+to `retailers.foundingBenefitsRestoredAt`; `foundingClockFrom` takes the later of
+paid-through and the re-grant). This is not bookkeeping — without it the lever
+did nothing for the only people it exists for. A lapsed member is by definition
+past the window, so clearing the revocation stamp left `foundingPriceEligible`
+measuring from a paid-through that had already expired: the seller stayed on
+list price the moment Arif told them otherwise, and the next daily pass revoked
+them again and sent a **second** "your founding price has ended" email. Found in
+review of PR #288. A restored member now gets a fresh full window and is warned
+again at T-14 before it can lapse a second time — a re-grant, not immunity. This
+also covers the comp-through-lapse edge that was previously listed as known and
+unhandled: restore is the remedy and it now actually works.
+
+**A date already in the past is never rendered as a deadline.** The pass runs
+daily, so for up to a day a member can be past the window but not yet revoked.
+The ribbon's T-14 branch requires a FUTURE date, or it would say "founding price
+ends <yesterday> — renew before then"; it falls through to the lapsed copy for
+that day instead.
 
 ## Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)
 

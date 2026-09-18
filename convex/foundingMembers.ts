@@ -137,11 +137,22 @@ export async function revokeBenefits(
 
 /**
  * Give the benefits back — the escape hatch for a wrong revocation, a member
- * Arif re-grants, or a store that was comped through its own lapse. Clears the
- * audit stamps AND the warning stamp, so a future lapse warns again before it
- * takes anything a second time. Does NOT restore `foundingIntent`: that flag is
- * about the first conversion's invoice, and a restored member's eligibility
- * comes from `isFoundingMember`, which never left.
+ * Arif re-grants, or a store that was comped through its own lapse.
+ *
+ * **It stamps `benefitsRestoredAt`, and that is the whole fix, not bookkeeping.**
+ * Clearing the revocation alone left `foundingPriceEligible` measuring its
+ * window from a paid-through that had ALREADY expired — so for the only people
+ * this lever is ever used on (lapsed members, by definition past the window) a
+ * re-grant restored nothing: the seller stayed on list price, and the next
+ * daily pass revoked them again and sent a SECOND "your founding price has
+ * ended" email contradicting whatever Arif had just told them. The stamp is the
+ * floor the clock runs from (`foundingClockFrom`), so a re-granted member gets
+ * a fresh full window and is warned again at T-14 before it can lapse twice.
+ *
+ * Also clears the warning stamp, so that second warning actually fires. Does
+ * NOT restore `foundingIntent`: that flag is about the first conversion's
+ * invoice, and a restored member's eligibility comes from `isFoundingMember`,
+ * which never left.
  */
 export async function restoreBenefits(
 	ctx: MutationCtx,
@@ -150,15 +161,18 @@ export async function restoreBenefits(
 ): Promise<boolean> {
 	if (row.benefitsRevokedAt === undefined) return false;
 	if ((await ctx.db.get(row.retailerId)) === null) return false;
+	const now = Date.now();
 	await ctx.db.patch(row._id, {
 		benefitsRevokedAt: undefined,
 		benefitsRevokedReason: undefined,
 		benefitsRevokedNote: note !== undefined && note !== "" ? note : undefined,
 		benefitsWarningSentForPeriodEnd: undefined,
+		benefitsRestoredAt: now,
 	});
 	await ctx.db.patch(row.retailerId, {
 		foundingBenefitsRevokedAt: undefined,
-		updatedAt: Date.now(),
+		foundingBenefitsRestoredAt: now,
+		updatedAt: now,
 	});
 	return true;
 }
@@ -227,9 +241,13 @@ export const internalRevokeLapsedBenefits = internalMutation({
 				comped: sub.comped === true,
 				paidThrough: sub.currentPeriodEnd,
 				benefitsRevokedAt: row.benefitsRevokedAt,
+				benefitsRestoredAt: row.benefitsRestoredAt,
 				now,
 			};
-			const endsAt = foundingBenefitsEndAt(sub.currentPeriodEnd);
+			const endsAt = foundingBenefitsEndAt(
+				sub.currentPeriodEnd,
+				row.benefitsRestoredAt,
+			);
 			if (foundingBenefitsRevocable(gate)) {
 				if (await revokeBenefits(ctx, row, "lapsed")) {
 					revoked++;
@@ -379,9 +397,13 @@ export const listForAdmin = query({
 						comped: sub.comped === true,
 						paidThrough: sub.currentPeriodEnd,
 						benefitsRevokedAt: row.benefitsRevokedAt,
+						benefitsRestoredAt: row.benefitsRestoredAt,
 						now: Date.now(),
 					})
-						? foundingBenefitsEndAt(sub.currentPeriodEnd)
+						? foundingBenefitsEndAt(
+								sub.currentPeriodEnd,
+								row.benefitsRestoredAt,
+							)
 						: undefined,
 				warned:
 					sub?.currentPeriodEnd !== undefined &&

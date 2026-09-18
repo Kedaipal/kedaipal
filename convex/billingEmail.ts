@@ -618,6 +618,7 @@ export const getAutoRenewEmailContext = internalQuery({
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,

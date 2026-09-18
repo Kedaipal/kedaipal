@@ -178,6 +178,7 @@ export const billingGatewayAvailable = query({
 			? {
 					isFoundingMember: retailer.isFoundingMember === true,
 					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 					foundingIntent: sub.foundingIntent === true,
 					paidThrough: sub.currentPeriodEnd,
 					now,
@@ -206,9 +207,13 @@ export const billingGatewayAvailable = query({
 					comped: sub.comped === true,
 					paidThrough: sub.currentPeriodEnd,
 					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 					now,
 				})
-					? foundingBenefitsEndAt(sub.currentPeriodEnd)
+					? foundingBenefitsEndAt(
+							sub.currentPeriodEnd,
+							retailer.foundingBenefitsRestoredAt,
+						)
 					: undefined,
 			nextRenewal:
 				sub && eligibility && sub.comped !== true
@@ -702,6 +707,7 @@ export const autoRenewSetupContext = internalQuery({
 				pendingPlanChange: sub.pendingPlanChange?.plan,
 				isFoundingMember: retailer.isFoundingMember === true,
 				benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+				benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 				foundingIntent: sub.foundingIntent === true,
 				paidThrough: sub.currentPeriodEnd,
 				lastPaidCurrency: lastPaid?.currency,

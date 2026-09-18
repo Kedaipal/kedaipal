@@ -140,6 +140,7 @@ async function settleInvoicePaid(
 		founding: foundingPriceEligible({
 			isFoundingMember: retailerForCarryover?.isFoundingMember === true,
 			benefitsRevokedAt: retailerForCarryover?.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailerForCarryover?.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -687,6 +688,7 @@ export const subscribeSelf = mutation({
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
@@ -800,6 +802,7 @@ export const changePlan = mutation({
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
@@ -976,6 +979,7 @@ export const internalIssueFirstInvoice = internalMutation({
 			plan: sub.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -1066,6 +1070,7 @@ export const switchPendingPlan = mutation({
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -1176,6 +1181,7 @@ export const internalIssueRenewalInvoice = internalMutation({
 			pendingPlanChange: sub.pendingPlanChange?.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: invoices.find((inv) => inv.status === "paid")?.currency,

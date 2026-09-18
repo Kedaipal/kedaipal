@@ -911,11 +911,18 @@ function FoundingRibbon({
 	lapsed: boolean;
 	endsAt?: number;
 }) {
+	// A FUTURE date only. The pass runs daily, so between the window closing and
+	// the next run there is a window of up to a day where `endsAt` is already in
+	// the past — this branch would then render "founding price ends <yesterday>"
+	// and tell them to "renew before then". Falling through to `lapsed` says the
+	// true thing for that day, and `revoked` takes over once the pass catches up.
+	const now = Date.now();
 	const endingSoon =
 		!pending &&
 		!revoked &&
 		endsAt !== undefined &&
-		endsAt - Date.now() <= FOUNDING_BENEFIT_WARNING_MS;
+		endsAt > now &&
+		endsAt - now <= FOUNDING_BENEFIT_WARNING_MS;
 	const muted = pending || revoked;
 	const tone = muted
 		? "border-border bg-muted/50"

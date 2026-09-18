@@ -264,6 +264,7 @@ describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
 		isFoundingMember: true,
 		foundingIntent: true, // never cleared after the claim — must not bypass the window
 		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
 		now: NOW,
 	};
 
@@ -310,6 +311,7 @@ describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
 				isFoundingMember: false,
 				foundingIntent: false,
 				benefitsRevokedAt: undefined,
+				benefitsRestoredAt: undefined,
 				paidThrough: NOW - DAY,
 				now: NOW,
 			}),
@@ -324,6 +326,7 @@ describe("foundingPriceEligible — the STORE is on founding pricing (z8r3fdfty4
 		isFoundingMember: true,
 		foundingIntent: false, // marked founding by admin — the v1 path
 		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
 		now: NOW,
 	};
 
@@ -419,6 +422,7 @@ describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)"
 		isFoundingMember: false,
 		foundingIntent: false,
 		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
 		paidThrough: NOW - 1000,
 		lastPaidCurrency: undefined,
 		country: "MY" as const,
@@ -812,6 +816,7 @@ describe("founding benefit REVOCATION — membership is permanent, benefits aren
 		foundingIntent: true,
 		paidThrough: NOW - 10 * DAY,
 		benefitsRevokedAt: undefined as number | undefined,
+		benefitsRestoredAt: undefined as number | undefined,
 		now: NOW,
 	};
 	const gate = {
@@ -819,6 +824,7 @@ describe("founding benefit REVOCATION — membership is permanent, benefits aren
 		comped: false,
 		paidThrough: NOW - (WINDOW + DAY),
 		benefitsRevokedAt: undefined as number | undefined,
+		benefitsRestoredAt: undefined as number | undefined,
 		now: NOW,
 	};
 
@@ -1017,6 +1023,7 @@ describe("founding benefit REVOCATION — membership is permanent, benefits aren
 			paidThrough: NOW - 10 * DAY,
 			lastPaidCurrency: undefined,
 			country: "MY" as const,
+			benefitsRestoredAt: undefined,
 			now: NOW,
 		};
 		const founding = renewalQuote({ ...base, benefitsRevokedAt: undefined });

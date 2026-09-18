@@ -774,6 +774,12 @@ export default defineSchema({
 		// unlike the read-time lapse window, paying does NOT bring the discount
 		// back. Undefined for everyone who never had benefits taken.
 		foundingBenefitsRevokedAt: v.optional(v.number()),
+		// Denormalized mirror of `foundingMembers.benefitsRestoredAt` — the floor
+		// the founding lapse clock measures from, so an admin re-grant actually
+		// restores the price instead of being overwritten by a window that
+		// already ran out. Read off the retailer doc every pricing caller
+		// already loads, exactly like the flag above.
+		foundingBenefitsRestoredAt: v.optional(v.number()),
 		// WABA send guardrails (kill switch, per-seller caps) live in their own
 		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
@@ -2672,6 +2678,13 @@ export default defineSchema({
 		// Arif's free-text note on a manual revoke/restore — shown in the admin
 		// cohort list so "why is #4 revoked?" is answerable a year later.
 		benefitsRevokedNote: v.optional(v.string()),
+		// When an admin last GAVE the benefits back — and the floor the founding
+		// clock is measured from thereafter (z8r3fdfyw5). Without it a re-grant
+		// was a no-op for the only people it exists for: clearing the revocation
+		// stamp leaves `foundingPriceEligible`'s read-time window still expired,
+		// so the seller stayed on list price and the next daily pass re-revoked
+		// them and sent a SECOND "your founding price has ended" email.
+		benefitsRestoredAt: v.optional(v.number()),
 		// The `currentPeriodEnd` the T-14 warning was sent ABOUT, not a bare
 		// timestamp — same idiom as `subscriptions.renewalNoticeSentForPeriodEnd`.
 		// Paying advances the period, so the stamp stops matching and a LATER lapse

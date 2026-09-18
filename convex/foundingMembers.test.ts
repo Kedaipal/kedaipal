@@ -521,6 +521,87 @@ describe("the admin lever", () => {
 		).toBeUndefined();
 	});
 
+	test("RE-GRANTING A STILL-LAPSED MEMBER actually restores the price, and sticks", async () => {
+		/**
+		 * The lever's PRIMARY use: one of the unpaid members comes back and Arif
+		 * re-grants. Before the clock floor, this was doubly broken — the restore
+		 * was a no-op (the read-time window measured from a paid-through already
+		 * months past, so the seller stayed on LIST price the instant Arif told
+		 * them otherwise), and the next daily pass re-revoked them and sent a
+		 * SECOND "your founding price has ended" email. Reported in review of
+		 * PR #288.
+		 */
+		const t = setup();
+		// Well past the window, past_due — the exact shape of the three unpaid.
+		const s2 = await seedFoundingMember(t, "user_regrant", {
+			status: "past_due",
+			currentPeriodEnd: Date.now() - (WINDOW + 20 * DAY),
+		});
+		const asUser = t.withIdentity({ subject: s2.userId });
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		expect((await runPass(t)).revoked).toBe(1);
+		expect(await benefitEmails(t)).toHaveLength(1);
+
+		await asAdmin.mutation(api.foundingMembers.adminSetBenefits, {
+			retailerId: s2.retailerId,
+			revoked: false,
+			note: "coming back",
+		});
+
+		// IMMEDIATELY: the price is actually back — the dialog's promise is true.
+		const after = await asUser.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{},
+		);
+		expect(after?.foundingPricing).toBe(true);
+		expect(after?.foundingBenefitsRevoked).toBe(false);
+		expect(after?.nextRenewal?.founding).toBe(true);
+
+		// AND IT STICKS: the very next daily run must not undo Arif's decision.
+		vi.advanceTimersByTime(DAY);
+		const res = await runPass(t);
+		expect(res.revoked).toBe(0);
+		expect(res.warned).toBe(0);
+		expect((await getRow(t, s2.rowId))?.benefitsRevokedAt).toBeUndefined();
+		// No second "ended" email contradicting what the seller was just told.
+		expect(await benefitEmails(t)).toHaveLength(1);
+	});
+
+	test("a re-grant restarts the clock — it does not grant immunity", async () => {
+		// The floor is a fresh window, not a free pass: an unpaid restored member
+		// lapses again on identical terms, warned at T-14 first.
+		const t = setup();
+		const s2 = await seedFoundingMember(t, "user_regrant_relapse", {
+			status: "past_due",
+			currentPeriodEnd: Date.now() - (WINDOW + 20 * DAY),
+		});
+		await runPass(t);
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.foundingMembers.adminSetBenefits, {
+				retailerId: s2.retailerId,
+				revoked: false,
+			});
+		const restoredAt = Date.now();
+
+		// Still inside the fresh window at day 75 — nothing taken.
+		vi.advanceTimersByTime(75 * DAY);
+		expect((await runPass(t)).revoked).toBe(0);
+
+		// Warned again at T-14, from the RE-GRANT, not the old paid-through.
+		vi.advanceTimersByTime(2 * DAY);
+		expect((await runPass(t)).warned).toBe(1);
+		const gateway = await t
+			.withIdentity({ subject: s2.userId })
+			.query(api.subscriptionPayments.billingGatewayAvailable, {});
+		expect(gateway?.foundingBenefitsEndAt).toBe(restoredAt + WINDOW);
+
+		// And it does lapse a second time, on the same terms.
+		vi.advanceTimersByTime(15 * DAY);
+		expect((await runPass(t)).revoked).toBe(1);
+	});
+
 	test("a restored member is on founding pricing and locked to Founding Pro again", async () => {
 		const t = setup();
 		const s = await seedFoundingMember(t, "user_restored", {
