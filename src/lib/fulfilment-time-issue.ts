@@ -12,9 +12,10 @@
  * 2. `timeIssueCopy` / `timeMovedCopy`: the sentence, as parts. A time or a
  *    range is kept as a value rather than a string, so the page can render it
  *    as one unbreakable unit. On a narrow phone, "4:30 PM –⏎5:30 PM" reads as
- *    two unrelated times. `copyText` flattens the same parts for the submit
- *    banner, so the inline notice and the submit refusal are one sentence and
- *    can't drift.
+ *    two unrelated times. The submit refusal beside the CTA holds the SAME
+ *    parts (the mobile bar is the narrowest place this copy renders), so the
+ *    inline notice and the refusal are one sentence and can't drift.
+ *    `copyText` flattens them wherever a plain string is all there is.
  * 3. `planTimeRepair`: the ticking repair, made ownership-aware. A time the
  *    SYSTEM prefilled goes stale as the clock moves, and is moved FORWARD with
  *    an announcement. A time the BUYER typed is never rewritten: the inline

@@ -534,8 +534,9 @@ pure module, `src/lib/checkout-fulfilment.ts`, built ON T1's time rules
 beside them — each form keeps only its wiring:
 
 - `fulfilmentDayCopy` / `fulfilmentTimeCopy` — the inline notice and the
-  submit check, one sentence as `CopyPart`s (rendered through `CopyText`,
-  flattened by `copyText` for the banner). They are thin calls into T1's
+  submit check, one sentence as `CopyPart`s, rendered through `CopyText` in
+  both places: under the field, and beside the CTA (T1's refusal state holds
+  the parts, so a prep refusal's time stays whole in the mobile bar too). They are thin calls into T1's
   `fulfilmentTimeIssue`, which **carries prep as a cause**: given the cart's
   `prepMinutes` and `prepItemName`, a `too_early` or `no_slot` that prep
   produced comes back with `prep: { itemName, minutes }` — decided by

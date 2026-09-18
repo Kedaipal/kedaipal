@@ -10,8 +10,9 @@
  * checkouts and for the inline notice and the submit refusal alike. The
  * ticking repair stays T1's `planTimeRepair`.
  *
- * Copy comes back as `CopyPart[]`, so a page renders times whole
- * (`CopyText`) and `copyText` flattens the same parts for the submit banner.
+ * Copy comes back as `CopyPart[]`, so every place it lands renders its times
+ * whole through `CopyText` — the inline notice under the field and the refusal
+ * beside the CTA alike (T1's refusal state takes parts).
  * The server stays the judge (`orders.create`, `orderClaims.commit`).
  */
 
