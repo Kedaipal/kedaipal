@@ -51,6 +51,7 @@ import { weekendRateConsequence } from "../../lib/product-summary";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
@@ -890,6 +891,15 @@ export function ProductWizard({
 	const [issues, setIssues] = useState<WizardIssue[]>([]);
 	const [uploading, setUploading] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
+	// The one destructive answer the wizard ever asks for — a type switch that
+	// drops typed prices, or leaving an unsaved draft. One piece of state, so
+	// there is one dialog rather than two that can both be open.
+	const [pendingConfirm, setPendingConfirm] = useState<{
+		title: string;
+		description: string;
+		confirmLabel: string;
+		apply: () => void;
+	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
 	// Restored drafts open their optional reveals when they hold content.
 	const [showDescription, setShowDescription] = useState(
@@ -1072,14 +1082,31 @@ export function ProductWizard({
 	}
 
 	/** True when switching away would throw typed pricing/stock away. */
-	function confirmLosingChoices(): boolean {
+	function switchingLosesChoices(): boolean {
 		const hasTypedData = rows.some(
 			(r) => r.price.trim().length > 0 || r.stock.trim().length > 0,
 		);
-		if (!options.some((a) => a.values.length > 0) || !hasTypedData) return true;
-		return window.confirm(
-			"Change the product type? Your choices and their prices will be removed.",
-		);
+		return options.some((a) => a.values.length > 0) && hasTypedData;
+	}
+
+	/**
+	 * Run `apply`, asking first when the switch would throw typed prices or
+	 * stock away. The question is the house `ConfirmDialog`, never
+	 * `window.confirm`: a native dialog is unstyled, ignores the theme, and
+	 * BLOCKS the page until it is dismissed (found while driving the wizard —
+	 * the renderer froze for as long as it stood).
+	 */
+	function askBeforeLosingChoices(apply: () => void) {
+		if (!switchingLosesChoices()) {
+			apply();
+			return;
+		}
+		setPendingConfirm({
+			title: "Change the product type?",
+			description: "Your choices and their prices will be removed.",
+			confirmLabel: "Change type",
+			apply,
+		});
 	}
 
 	/**
@@ -1121,63 +1148,65 @@ export function ProductWizard({
 	}
 	function switchToSingle() {
 		if (shape === "single") return;
-		if (!confirmLosingChoices()) return;
-		// Collapse to one row, carrying the first row's price/stock/flags.
-		const donor = madeToOrder
-			? rowsLeavingMadeToOrder()[0]
-			: (rows[0] ?? emptyRow([]));
-		patch({
-			shape: "single",
-			// Same reason as switchToChoices: "how do you prepare orders?" was
-			// never asked, so step 4 must ask it rather than inherit an answer.
-			fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
-			editor: {
-				...state.editor,
-				options: [],
-				customLine: madeToOrder ? null : state.editor.customLine,
-				rows: [
-					{
-						...donor,
-						optionValues: [],
-						sku: "",
-						imageStorageIds: [],
-						imageUrl: undefined,
-						active: true,
-					},
-				],
-			},
+		askBeforeLosingChoices(() => {
+			// Collapse to one row, carrying the first row's price/stock/flags.
+			const donor = madeToOrder
+				? rowsLeavingMadeToOrder()[0]
+				: (rows[0] ?? emptyRow([]));
+			patch({
+				shape: "single",
+				// Same reason as switchToChoices: "how do you prepare orders?" was
+				// never asked, so step 4 must ask it rather than inherit an answer.
+				fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
+				editor: {
+					...state.editor,
+					options: [],
+					customLine: madeToOrder ? null : state.editor.customLine,
+					rows: [
+						{
+							...donor,
+							optionValues: [],
+							sku: "",
+							imageStorageIds: [],
+							imageUrl: undefined,
+							active: true,
+						},
+					],
+				},
+			});
+			setValueDrafts([]);
 		});
-		setValueDrafts([]);
 	}
 	function switchToMadeToOrder() {
 		if (madeToOrder) return;
-		if (!confirmLosingChoices()) return;
-		const donor = rows[0] ?? emptyRow([]);
-		// The type IS the fulfilment answer (made to order, never out of stock,
-		// mockup-approved), so step 4 has nothing left to ask — mark it answered
-		// and drop it from the sequence.
-		//
-		// The product becomes ONE bespoke line and no matrix at all: modelling the
-		// type as `isCustom` is what gives it the storefront's existing bespoke
-		// flow (request box, "Choose" routing, qty-1 cart line) instead of a
-		// parallel path. An existing custom line is kept — same offer, and the
-		// seller already wrote its prompt.
-		patch({
-			shape: "made_to_order",
-			fulfilmentAnswered: true,
-			editor: {
-				options: [],
-				rows: [],
-				customLine: customLine ?? {
-					...emptyCustomLine(),
-					// Carry what still means something from the row being retired.
-					price: donor?.price ?? "",
-					imageStorageIds: donor?.imageStorageIds ?? [],
-					imageUrl: donor?.imageUrl,
+		askBeforeLosingChoices(() => {
+			const donor = rows[0] ?? emptyRow([]);
+			// The type IS the fulfilment answer (made to order, never out of stock,
+			// mockup-approved), so step 4 has nothing left to ask — mark it answered
+			// and drop it from the sequence.
+			//
+			// The product becomes ONE bespoke line and no matrix at all: modelling the
+			// type as `isCustom` is what gives it the storefront's existing bespoke
+			// flow (request box, "Choose" routing, qty-1 cart line) instead of a
+			// parallel path. An existing custom line is kept — same offer, and the
+			// seller already wrote its prompt.
+			patch({
+				shape: "made_to_order",
+				fulfilmentAnswered: true,
+				editor: {
+					options: [],
+					rows: [],
+					customLine: customLine ?? {
+						...emptyCustomLine(),
+						// Carry what still means something from the row being retired.
+						price: donor?.price ?? "",
+						imageStorageIds: donor?.imageStorageIds ?? [],
+						imageUrl: donor?.imageUrl,
+					},
 				},
-			},
+			});
+			setValueDrafts([]);
 		});
-		setValueDrafts([]);
 	}
 
 	/**
@@ -1197,44 +1226,45 @@ export function ProductWizard({
 			patch({ kindCard: card });
 			return;
 		}
-		if (!confirmLosingChoices()) return;
-		if (nextBooking) {
-			patch({
-				kindCard: card,
-				shape: null,
-				fulfilmentAnswered: true,
-				editor: {
-					options: [],
-					customLine: null,
-					rows: [
-						{
-							...(rows[0] ?? emptyRow([])),
-							optionValues: [],
-							sku: "",
-							imageStorageIds: [],
-							imageUrl: undefined,
-							active: true,
-							blockWhenOutOfStock: false,
-							requiresProof: false,
-						},
-					],
-				},
-			});
-		} else {
-			// Leaving booking: the per-night price carries onto the fresh row so
-			// the seller doesn't retype; shape + preparation are re-asked.
-			patch({
-				kindCard: card,
-				shape: null,
-				fulfilmentAnswered: false,
-				editor: {
-					options: [],
-					customLine: null,
-					rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
-				},
-			});
-		}
-		setValueDrafts([]);
+		askBeforeLosingChoices(() => {
+			if (nextBooking) {
+				patch({
+					kindCard: card,
+					shape: null,
+					fulfilmentAnswered: true,
+					editor: {
+						options: [],
+						customLine: null,
+						rows: [
+							{
+								...(rows[0] ?? emptyRow([])),
+								optionValues: [],
+								sku: "",
+								imageStorageIds: [],
+								imageUrl: undefined,
+								active: true,
+								blockWhenOutOfStock: false,
+								requiresProof: false,
+							},
+						],
+					},
+				});
+			} else {
+				// Leaving booking: the per-night price carries onto the fresh row so
+				// the seller doesn't retype; shape + preparation are re-asked.
+				patch({
+					kindCard: card,
+					shape: null,
+					fulfilmentAnswered: false,
+					editor: {
+						options: [],
+						customLine: null,
+						rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
+					},
+				});
+			}
+			setValueDrafts([]);
+		});
 	}
 
 	// --- Custom line ---------------------------------------------------------
@@ -1280,13 +1310,16 @@ export function ProductWizard({
 		state.minNoticeDays.trim().length > 0;
 
 	function cancelWizard() {
-		if (
-			isDirty &&
-			!window.confirm("Discard this product? Nothing has been saved.")
-		) {
+		if (!isDirty) {
+			onExit();
 			return;
 		}
-		onExit();
+		setPendingConfirm({
+			title: "Discard this product?",
+			description: "Nothing has been saved — leaving loses the draft.",
+			confirmLabel: "Discard",
+			apply: onExit,
+		});
 	}
 
 	// Structural gate: the branching questions must be answered before Continue
@@ -2929,6 +2962,21 @@ export function ProductWizard({
 					</p>
 				) : null}
 			</div>
+			<ConfirmDialog
+				open={pendingConfirm !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingConfirm(null);
+				}}
+				title={pendingConfirm?.title ?? ""}
+				description={pendingConfirm?.description}
+				confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+				destructive
+				onConfirm={() => {
+					const apply = pendingConfirm?.apply;
+					setPendingConfirm(null);
+					apply?.();
+				}}
+			/>
 		</div>
 	);
 }
