@@ -3,13 +3,26 @@
 // current count and inserting the next rank is atomic — two admin mark-paid
 // events in the same instant can't both get rank 10; the second OCC-retries and
 // sees the first). Once claimed, the denormalized retailer flags never revert.
-// See docs/manual-subscription.md.
+// Benefit revocation (z8r3fdfyw5) lives here too: membership is permanent, the
+// ENTITLEMENTS are not. `revokeBenefits` takes the price, the Founding-Pro lock
+// and white-glove; it never touches `rank`, `isFoundingMember` or
+// `foundingMemberRank`, because the agreement and the billing ribbon both
+// promise the seller those "for good". See docs/manual-subscription.md +
+// docs/hitpay-recurring.md.
 
-import { mutation, query } from "./_generated/server";
+import { v } from "convex/values";
+import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/auth";
-import { FOUNDING_MEMBER_LIMIT } from "./lib/plans";
+import {
+	FOUNDING_MEMBER_LIMIT,
+	foundingBenefitsAtRisk,
+	foundingBenefitsEndAt,
+	foundingBenefitsRevocable,
+	foundingBenefitsWarningDue,
+} from "./lib/plans";
 
 /**
  * RESERVE a Founding slot for `retailerId` (assigns the next rank 1..10), inside
@@ -63,6 +76,251 @@ export async function stampFoundingPaid(
 	return row.rank;
 }
 
+/**
+ * Take a member's founding BENEFITS — the 30% price, the Founding-Pro lock and
+ * white-glove — leaving the honour untouched. Idempotent: a row already revoked
+ * is returned unchanged, so the daily pass can never double-send or restamp.
+ *
+ * Three writes, and the order does not matter (one serializable transaction):
+ *  1. the audit record on the founding row;
+ *  2. `retailers.foundingBenefitsRevokedAt` — the denormalized flag every
+ *     `foundingPriceEligible` caller reads off the retailer doc it already has;
+ *  3. clearing `subscriptions.foundingIntent`.
+ *
+ * (3) is belt-and-braces, not the guard. `foundingPriceEligible` short-circuits
+ * on the revocation flag BEFORE its `foundingIntent` fallback, so the discount
+ * is gone whether or not intent is cleared — but intent means "this signup was
+ * designated founding, discount its first invoice", which stops being true
+ * here, and leaving a stale flag behind is how the next reader gets it wrong.
+ * Both are mutation-tested independently.
+ *
+ * NOT written: `isFoundingMember`, `foundingMemberRank`, `rank`, or the row
+ * itself. The badge stays on the storefront, the pill stays in the nav, and the
+ * slot stays claimed (`getSpotsRemaining` counts rows) — re-granting is Arif's
+ * deliberate act, never a race for a freed spot.
+ */
+export async function revokeBenefits(
+	ctx: MutationCtx,
+	row: Doc<"foundingMembers">,
+	reason: "lapsed" | "admin",
+	note?: string,
+): Promise<boolean> {
+	if (row.benefitsRevokedAt !== undefined) return false;
+	// A founding row can outlive its retailer (a partial account purge). Patching
+	// a deleted document throws, so refuse the whole write rather than stamp the
+	// row and then blow up mid-transaction. Callers treat false as "nothing to do".
+	if ((await ctx.db.get(row.retailerId)) === null) return false;
+	const now = Date.now();
+	await ctx.db.patch(row._id, {
+		benefitsRevokedAt: now,
+		benefitsRevokedReason: reason,
+		...(note !== undefined && note !== "" ? { benefitsRevokedNote: note } : {}),
+	});
+	await ctx.db.patch(row.retailerId, {
+		foundingBenefitsRevokedAt: now,
+		updatedAt: now,
+	});
+	const sub = await ctx.db
+		.query("subscriptions")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", row.retailerId))
+		.first();
+	// `foundingIntent: undefined` DELETES the field (Convex patch semantics) —
+	// which is what we want; `false` would leave a flag that reads as "considered
+	// and declined" rather than "not a founding signup".
+	// `updatedAt` is deliberately untouched: for a `past_due` row that field is
+	// the lock-flip moment the founder report reads (docs/shipped-log.md).
+	if (sub?.foundingIntent === true) {
+		await ctx.db.patch(sub._id, { foundingIntent: undefined });
+	}
+	return true;
+}
+
+/**
+ * Give the benefits back — the escape hatch for a wrong revocation, a member
+ * Arif re-grants, or a store that was comped through its own lapse.
+ *
+ * **It stamps `benefitsRestoredAt`, and that is the whole fix, not bookkeeping.**
+ * Clearing the revocation alone left `foundingPriceEligible` measuring its
+ * window from a paid-through that had ALREADY expired — so for the only people
+ * this lever is ever used on (lapsed members, by definition past the window) a
+ * re-grant restored nothing: the seller stayed on list price, and the next
+ * daily pass revoked them again and sent a SECOND "your founding price has
+ * ended" email contradicting whatever Arif had just told them. The stamp is the
+ * floor the clock runs from (`foundingClockFrom`), so a re-granted member gets
+ * a fresh full window and is warned again at T-14 before it can lapse twice.
+ *
+ * Also clears the warning stamp, so that second warning actually fires. Does
+ * NOT restore `foundingIntent`: that flag is about the first conversion's
+ * invoice, and a restored member's eligibility comes from `isFoundingMember`,
+ * which never left.
+ */
+export async function restoreBenefits(
+	ctx: MutationCtx,
+	row: Doc<"foundingMembers">,
+	note?: string,
+): Promise<boolean> {
+	if (row.benefitsRevokedAt === undefined) return false;
+	if ((await ctx.db.get(row.retailerId)) === null) return false;
+	const now = Date.now();
+	await ctx.db.patch(row._id, {
+		benefitsRevokedAt: undefined,
+		benefitsRevokedReason: undefined,
+		benefitsRevokedNote: note !== undefined && note !== "" ? note : undefined,
+		benefitsWarningSentForPeriodEnd: undefined,
+		benefitsRestoredAt: now,
+	});
+	await ctx.db.patch(row.retailerId, {
+		foundingBenefitsRevokedAt: undefined,
+		foundingBenefitsRestoredAt: now,
+		updatedAt: now,
+	});
+	return true;
+}
+
+/**
+ * The daily founding-benefit pass — scheduled by the daily billing cron
+ * (`subscriptions.internalDailyBillingStatus`).
+ *
+ * It walks the `foundingMembers` table rather than hanging off that cron's
+ * subscription loops, and that is not a style choice: those loops cover
+ * `trialing`, `active` and `on_hold`, and a lapsed member is `past_due` within
+ * ~14 days of their period ending (renewal invoice issued, then overdue). A
+ * revocation pass built on them would never fire for the exact population it
+ * targets. Walking the ledger is also bounded forever — the cohort is 10 and
+ * the programme closed 30 Aug 2026 — so a full `collect()` is correct here.
+ *
+ * Two independent steps per member, both gated by pure predicates in
+ * lib/plans.ts (unit-tested at the day-89/90/91 boundary):
+ *  - T-14: warn, once per paid period.
+ *  - T-0: revoke. NOT gated on the warning having been sent (Zaki, 18 Sep
+ *    2026) — the rule is the rule; with a daily cadence 14 runs sit between the
+ *    two, so a member can only miss the warning if this ships inside their
+ *    final fortnight, which no member is (the earliest T-14 is 14 Oct 2026).
+ */
+export const internalRevokeLapsedBenefits = internalMutation({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{
+		warned: number;
+		revoked: number;
+		scanned: number;
+		orphaned: number;
+	}> => {
+		const now = Date.now();
+		let warned = 0;
+		let revoked = 0;
+		let orphaned = 0;
+		const rows = await ctx.db.query("foundingMembers").collect();
+		for (const row of rows) {
+			if (row.benefitsRevokedAt !== undefined) continue;
+			// ORPHANED ROW: the retailer is gone but the founding row (and often the
+			// subscription) outlived it — a partially-completed account purge, which
+			// dev has a live example of. Revoking one patches a deleted document,
+			// which THROWS; and because this pass is a single transaction, that one
+			// bad row would abort the whole thing and nobody would ever be revoked.
+			// Skipped and counted, not deleted: tidying purge leftovers is
+			// accountDeletion's job, and `listForAdmin` surfaces these so the count
+			// and the list agree.
+			const retailer = await ctx.db.get(row.retailerId);
+			if (!retailer) {
+				orphaned++;
+				console.warn("[founding] skipping orphaned founding row", {
+					rank: row.rank,
+					retailerId: row.retailerId,
+				});
+				continue;
+			}
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", row.retailerId))
+				.first();
+			if (!sub) continue;
+			const gate = {
+				status: sub.status,
+				comped: sub.comped === true,
+				paidThrough: sub.currentPeriodEnd,
+				benefitsRevokedAt: row.benefitsRevokedAt,
+				benefitsRestoredAt: row.benefitsRestoredAt,
+				now,
+			};
+			const endsAt = foundingBenefitsEndAt(
+				sub.currentPeriodEnd,
+				row.benefitsRestoredAt,
+			);
+			if (foundingBenefitsRevocable(gate)) {
+				if (await revokeBenefits(ctx, row, "lapsed")) {
+					revoked++;
+					console.info("[founding] benefits revoked after the lapse window", {
+						retailerId: row.retailerId,
+						rank: row.rank,
+						paidThrough: sub.currentPeriodEnd,
+					});
+					if (endsAt !== undefined) {
+						await ctx.scheduler.runAfter(
+							0,
+							internal.billingEmail.notifyFoundingBenefitsEmail,
+							{
+								retailerId: row.retailerId,
+								key: "foundingBenefitsEnded",
+								endsOnAt: endsAt,
+							},
+						);
+					}
+				}
+				continue;
+			}
+			if (
+				foundingBenefitsWarningDue({
+					...gate,
+					sentForPeriodEnd: row.benefitsWarningSentForPeriodEnd,
+				}) &&
+				endsAt !== undefined
+			) {
+				await ctx.db.patch(row._id, {
+					benefitsWarningSentForPeriodEnd: sub.currentPeriodEnd,
+				});
+				await ctx.scheduler.runAfter(
+					0,
+					internal.billingEmail.notifyFoundingBenefitsEmail,
+					{
+						retailerId: row.retailerId,
+						key: "foundingBenefitsEndingSoon",
+						endsOnAt: endsAt,
+					},
+				);
+				warned++;
+			}
+		}
+		return { warned, revoked, scanned: rows.length, orphaned };
+	},
+});
+
+/** Admin: revoke or restore a member's founding benefits by hand — the
+ * deliberate lever beside the automatic rule. Revoking early is Arif's call
+ * (a member who has clearly gone); restoring is the escape hatch for a wrong
+ * revocation or a re-grant. The rank and badge are untouched either way, so
+ * neither direction can strip the honour. No email: a manual move is one Arif
+ * is already talking to the seller about. */
+export const adminSetBenefits = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		revoked: v.boolean(),
+		note: v.optional(v.string()),
+	},
+	handler: async (ctx, { retailerId, revoked, note }): Promise<boolean> => {
+		await requireAdmin(ctx);
+		const row = await ctx.db
+			.query("foundingMembers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (!row) throw new Error("Not a founding member");
+		return revoked
+			? await revokeBenefits(ctx, row, "admin", note)
+			: await restoreBenefits(ctx, row, note);
+	},
+});
+
 /** Admin: the founding cohort overview — rank, store, and where each one is in the
  * pay cycle (pending payment / active / past due). Ordered by rank. */
 export const listForAdmin = query({
@@ -71,11 +329,29 @@ export const listForAdmin = query({
 		ctx,
 	): Promise<
 		Array<{
+			retailerId: Id<"retailers">;
 			rank: number;
 			storeName: string;
 			slug: string;
 			status?: Doc<"subscriptions">["status"];
 			paid: boolean;
+			/** Benefits taken: when, why, and Arif's note if it was by hand. */
+			benefitsRevokedAt?: number;
+			benefitsRevokedReason?: "lapsed" | "admin";
+			benefitsRevokedNote?: string;
+			/** When benefits END if this member never renews — the same
+			 * `foundingBenefitsEndAt` the cron gate and the seller's banner read,
+			 * so the console shows the real date, not a second calculation of it.
+			 * Undefined once revoked, or for a member with no paid period yet. */
+			benefitsEndAt?: number;
+			/** The T-14 notice has gone out for the current paid period. */
+			warned: boolean;
+			/** The retailer this row points at no longer exists — a partially
+			 * completed account purge. Listed rather than hidden: the header counts
+			 * ROWS (`getSpotsRemaining`), so skipping these made it read "2/10
+			 * claimed" above a single store with nothing to explain the gap, and it
+			 * hid the exact row the daily pass has to step around. */
+			retailerMissing: boolean;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -86,17 +362,53 @@ export const listForAdmin = query({
 		const out = [];
 		for (const row of rows) {
 			const r = await ctx.db.get(row.retailerId);
-			if (!r) continue;
+			if (!r) {
+				out.push({
+					retailerId: row.retailerId,
+					rank: row.rank,
+					storeName: "Store deleted",
+					slug: "—",
+					paid: row.paidAt !== undefined,
+					warned: false,
+					retailerMissing: true,
+				});
+				continue;
+			}
 			const sub = await ctx.db
 				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", row.retailerId))
 				.first();
 			out.push({
+				retailerId: row.retailerId,
 				rank: row.rank,
 				storeName: r.storeName,
 				slug: r.slug,
 				status: sub?.status,
 				paid: row.paidAt !== undefined,
+				benefitsRevokedAt: row.benefitsRevokedAt,
+				benefitsRevokedReason: row.benefitsRevokedReason,
+				benefitsRevokedNote: row.benefitsRevokedNote,
+				// Same gate as the cron and the seller's ribbon — the console must
+				// not show Arif a countdown for a store the pass will skip.
+				benefitsEndAt:
+					sub !== null &&
+					foundingBenefitsAtRisk({
+						status: sub.status,
+						comped: sub.comped === true,
+						paidThrough: sub.currentPeriodEnd,
+						benefitsRevokedAt: row.benefitsRevokedAt,
+						benefitsRestoredAt: row.benefitsRestoredAt,
+						now: Date.now(),
+					})
+						? foundingBenefitsEndAt(
+								sub.currentPeriodEnd,
+								row.benefitsRestoredAt,
+							)
+						: undefined,
+				warned:
+					sub?.currentPeriodEnd !== undefined &&
+					row.benefitsWarningSentForPeriodEnd === sub.currentPeriodEnd,
+				retailerMissing: false,
 			});
 		}
 		return out.sort((a, b) => a.rank - b.rank);
@@ -118,7 +430,11 @@ export const myStatus = query({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<{ rank: number; whiteGloveScheduled: boolean } | null> => {
+	): Promise<{
+		rank: number;
+		whiteGloveScheduled: boolean;
+		benefitsRevoked: boolean;
+	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		const retailer = await ctx.db
@@ -134,6 +450,12 @@ export const myStatus = query({
 		return {
 			rank: row.rank,
 			whiteGloveScheduled: row.whiteGloveScheduledAt !== undefined,
+			// White-glove onboarding is one of the BENEFITS (the agreement lists it
+			// beside the discount), so a revoked member no longer sees the one-time
+			// CTA — offering Arif's personal setup session to a store whose
+			// entitlements we just took would be the app contradicting itself.
+			// The rank it returns is untouched: the honour is not a benefit.
+			benefitsRevoked: row.benefitsRevokedAt !== undefined,
 		};
 	},
 });
