@@ -2248,7 +2248,9 @@ export function ProductWizard({
 						{state.fulfilmentAnswered && allMto ? (
 							<p className="rounded-xl bg-accent/10 px-3 py-2.5 text-sm leading-relaxed text-accent-emphasis">
 								Nice — buyers can always order. No stock counting, nothing ever
-								shows "sold out". You'll see the day's orders in your inbox.
+								shows "sold out". You'll see the day's orders in your inbox. If
+								each one takes time to make, set a prep time under More options
+								on the last step — buyers then can't pick a time sooner.
 							</p>
 						) : null}
 						{state.fulfilmentAnswered && anyTrack ? (
@@ -2816,8 +2818,9 @@ export function ProductWizard({
 												</span>
 												<IssueText message={issueFor("prepMinutes")} />
 												<span className="text-xs font-normal text-muted-foreground">
-													How long you need to make it. Buyers can&apos;t pick a
-													pickup or delivery time sooner than this.
+													How long you need to make it, up to 24 hours. Buyers
+													can&apos;t pick a pickup or delivery time sooner than
+													this.
 												</span>
 											</label>
 											{/* Pickup note — an instruction, not a limit, so it is

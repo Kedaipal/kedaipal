@@ -533,7 +533,7 @@ export function RescheduleFulfilmentDialog({
 										saving || dateValue === "" || scheduleIssue !== null
 									}
 								>
-									Save new date
+									Save changes
 								</Button>
 							</DialogFooter>
 						</div>

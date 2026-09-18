@@ -609,9 +609,17 @@ reads in the order buyers arrive.
 **Seller side.** The Order rules card (and the create wizard) puts **Prep
 time** directly under notice, with presets (30 min / 1 hour / 2 hours /
 4 hours, `PREP_PRESETS`), then **Pickup note**; both are hidden on a booking
-listing. The store's "Order date notice" setting points sellers who need hours
-rather than days at the product's prep time. Both fields ride the spreadsheet
-import/export — [`bulk-product-upload-roadmap.md`](./bulk-product-upload-roadmap.md).
+listing. The card's own description names all four rules — it used to say
+"leave both blank" beside four fields, and called a collection instruction a
+limit. The prep helper states the **24-hour ceiling** and sends anything longer
+to the notice days above, so the cap isn't first met as a refusal after Save.
+The store's "Order date notice" setting points sellers who need hours rather
+than days at the product's prep time. In the **wizard**, prep time sits on the
+Review step under "More options", while step 5 is called *Preparation* and only
+asks about stock policy — so answering **"Made fresh"** there names prep time
+and says where it is, rather than leaving the made-to-order seller to find it.
+Both fields ride the spreadsheet import/export —
+[`bulk-product-upload-roadmap.md`](./bulk-product-upload-roadmap.md).
 
 **Known limits.** Prep is per product, not per variant; there is no
 store-level prep; prep never bites a future day by design (a product that

@@ -1445,9 +1445,17 @@ function TrackingRoute() {
 					</div>
 					<PickupNavButtons snapshot={order.pickupSnapshot} />
 					{order.pickupSnapshot.notes ? (
-						<p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
-							{order.pickupSnapshot.notes}
-						</p>
+						// The point's own note, labelled: it sits directly above the
+						// products' "Before you collect" block (z8r3fdff97), and two
+						// instruction boxes in one card must each say whose they are.
+						<div className="rounded-lg bg-muted/40 px-3 py-2">
+							<p className="text-xs font-semibold text-foreground">
+								About this spot
+							</p>
+							<p className="mt-0.5 text-xs text-foreground whitespace-pre-line">
+								{order.pickupSnapshot.notes}
+							</p>
+						</div>
 					) : null}
 					{/* The PRODUCTS' collection instructions (z8r3fdff97), beside the
 					    point's own notes above: those describe the place, these

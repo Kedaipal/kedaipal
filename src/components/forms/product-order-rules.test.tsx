@@ -176,6 +176,30 @@ describe("Order rules — prep time", () => {
 	});
 });
 
+describe("Order rules — the card describes what it holds", () => {
+	// The card arrived with two fields and kept its two-field sentence when
+	// prep time and the pickup note joined it, so it told sellers to "leave
+	// both blank" beside four controls — and called a collection instruction a
+	// limit. Found by reading the card in a browser, not by a test.
+	it("names all four rules, and never says 'both'", () => {
+		renderForm();
+		const card = screen.getByText("Order rules").closest("section");
+		const description = card?.textContent ?? "";
+		expect(description).not.toMatch(/both/i);
+		expect(description).toMatch(/how long you need to make it/i);
+		expect(description).toMatch(/when collecting/i);
+	});
+
+	it("says how long a prep window may be, and where a longer one goes", () => {
+		// The cap is 1440 and the field speaks minutes, so without this the
+		// only place a seller meets the ceiling is the refusal after Save.
+		renderForm();
+		const help = screen.getByText(/How long you need to make this/i);
+		expect(help.textContent).toMatch(/up to 24 hours/i);
+		expect(help.textContent).toMatch(/notice days/i);
+	});
+});
+
 describe("Order rules — pickup note", () => {
 	it("counts what it will STORE, not what was typed", () => {
 		// The cap is enforced on the collapsed text server-side, so a note

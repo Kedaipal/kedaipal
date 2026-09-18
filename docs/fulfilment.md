@@ -522,7 +522,10 @@ in [`fulfilment-date.md`](./fulfilment-date.md).
   three lines), checkout (one deduped **"Before you collect"** block under the chosen pickup
   point, read live from the product), and `/track` (in the "Pick up at" card while the order
   is live; hidden once cancelled or delivered). One component, `PickupNotes`, and one heading
-  per locale (`PICKUP_NOTES_HEADING`) everywhere.
+  per locale (`PICKUP_NOTES_HEADING`) everywhere. The **point's own note** — the seller's
+  "Notes for buyers" on the location — sits directly above it on `/track` and the seller order
+  page, so it carries its own heading, **"About this spot"**: two instruction boxes in one card,
+  each saying whose it is (the place vs. what was bought).
 - **WhatsApp — honestly scoped.** `renderPickupNotes` appends "📝 Before you collect" and the
   notes inside the pickup block of the **free-form** confirm (legacy / no-template path), the
   **mockup-gated** confirm, and the **free-form** manual payment reminder. The **Meta template

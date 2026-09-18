@@ -1828,9 +1828,16 @@ function OrderDetailRoute() {
 							{order.pickupSnapshot.address}
 						</p>
 						{order.pickupSnapshot.notes ? (
-							<p className="mt-1 rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
-								{order.pickupSnapshot.notes}
-							</p>
+							// Labelled for the same reason as the buyer's page: the
+							// products' "Before they collect" block is its neighbour.
+							<div className="mt-1 rounded-lg bg-muted/40 px-3 py-2">
+								<p className="text-xs font-semibold text-foreground">
+									About this spot
+								</p>
+								<p className="mt-0.5 text-xs text-foreground whitespace-pre-line">
+									{order.pickupSnapshot.notes}
+								</p>
+							</div>
 						) : null}
 					</div>
 				</section>

@@ -1452,10 +1452,11 @@ export function ProductForm({
 				</ProductStepCard>
 			)}
 
-			{/* Order rules — the two constraints on HOW a buyer may order this
-			    product (how many, how soon). Grouped in one card because they're
-			    the same kind of decision: neither is about price/choices (what it
-			    costs) nor publishing (where it shows). Both are optional. */}
+			{/* Order rules — what governs HOW a buyer may order this product (how
+			    many, how soon, how long it takes to make) and the one line they
+			    need when they collect it. Grouped in one card because they're the
+			    same kind of decision: none is about price/choices (what it costs)
+			    nor publishing (where it shows). All are optional. */}
 			<ProductStepCard
 				icon={<ClipboardList className="size-5" />}
 				kicker="Selling"
@@ -1463,7 +1464,7 @@ export function ProductForm({
 				description={
 					isBooking
 						? "How much lead time a booking request needs. Optional."
-						: "Optional limits on how buyers can order this product. Leave both blank for no restrictions."
+						: "How soon buyers can order it, how long you need to make it, and what they should know when collecting. All optional."
 				}
 			>
 				{/* Minimum order quantity (86ey9unyx) — summed across options, so
@@ -1621,6 +1622,7 @@ export function ProductForm({
 							How long you need to make this once an order comes in. Buyers
 							can&apos;t pick a pickup or delivery <em>time</em> sooner than
 							this, and the longest prep time in a cart sets the whole order.
+							Up to 24 hours — for anything longer, use the notice days above.
 							Leave blank if it&apos;s ready to hand over. Counter checkout
 							ignores it.
 						</p>
