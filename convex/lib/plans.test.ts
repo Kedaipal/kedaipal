@@ -12,6 +12,7 @@ import {
 	FOUNDING_PLAN,
 	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PRICE_LAPSE_MS,
+	foundingBenefitsAtRisk,
 	foundingBenefitsEndAt,
 	foundingBenefitsRevocable,
 	foundingBenefitsWarningDue,
@@ -952,6 +953,44 @@ describe("founding benefit REVOCATION — membership is permanent, benefits aren
 				foundingBenefitsWarningDue({ ...held, sentForPeriodEnd: undefined }),
 			).toBe(false);
 		}
+	});
+
+	test("INVARIANT: a date is only SHOWN when the pass would actually act on it", () => {
+		// The bug this closes: the ribbon derived its countdown from paid-through
+		// alone, so a store the pass skips — most plausibly a COMPED founding
+		// member — was shown a red "your founding price ends on 29 Sept" alert
+		// for a deadline that could never arrive. Whatever surface shows a date
+		// must gate on the same predicate the cron warns and revokes on.
+		const skipped = [
+			{ ...gate, status: "active" as const },
+			{ ...gate, status: "on_hold" as const },
+			{ ...gate, comped: true },
+			{ ...gate, paidThrough: undefined },
+			{ ...gate, benefitsRevokedAt: NOW - DAY },
+		];
+		for (const args of skipped) {
+			expect(foundingBenefitsAtRisk(args)).toBe(false);
+			// …and therefore neither gate can fire, at ANY point on the clock.
+			for (const age of [0, WINDOW - DAY, WINDOW, WINDOW + DAY]) {
+				const at = { ...args, paidThrough: args.paidThrough && NOW - age };
+				expect(foundingBenefitsRevocable(at)).toBe(false);
+				expect(
+					foundingBenefitsWarningDue({ ...at, sentForPeriodEnd: undefined }),
+				).toBe(false);
+			}
+		}
+		// A lapsing store IS at risk, and both gates become reachable.
+		expect(foundingBenefitsAtRisk(gate)).toBe(true);
+	});
+
+	test("at-risk is the shared precondition, never the whole answer", () => {
+		// Being at risk must not by itself warn or revoke — the clock still rules.
+		const fresh = { ...gate, paidThrough: NOW - DAY };
+		expect(foundingBenefitsAtRisk(fresh)).toBe(true);
+		expect(foundingBenefitsRevocable(fresh)).toBe(false);
+		expect(
+			foundingBenefitsWarningDue({ ...fresh, sentForPeriodEnd: undefined }),
+		).toBe(false);
 	});
 
 	test("AC: the Founding Pro plan lock OPENS on revocation, with no extra code", () => {

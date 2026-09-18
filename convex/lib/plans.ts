@@ -582,15 +582,18 @@ export type FoundingLapseGateArgs = {
 };
 
 /**
- * Should the daily pass revoke this member's founding benefits? The EXACT
- * complement of `foundingPriceEligible` for a claimed member, by construction:
- * eligibility survives while `now <= paidThrough + window`, so revocation needs
- * `now > paidThrough + window`. A day-90 boundary where both said "yes" would
- * revoke a member the billing page was still quoting the discount to, which is
- * the one inconsistency this pairing exists to make impossible (invariant-tested
- * in plans.test.ts).
+ * Is this member's clock RUNNING — i.e. are their benefits on the path to being
+ * taken at all? The one author of that question (z8r3fdfyw5): the revoke gate,
+ * the warning gate and the date the seller is SHOWN all ask it, so the billing
+ * page can never count down to a deadline the cron will not enforce.
  *
- * Four never-revoke cases, all of them a store that is square with us:
+ * That split was a real bug, found by testing against an aged store: the ribbon
+ * derived its countdown from `currentPeriodEnd` alone and showed a red "your
+ * founding price ends on 29 Sept" alert to a store the pass skips — most
+ * plausibly a COMPED founding member, who would be threatened with losing a
+ * discount that can never actually be taken.
+ *
+ * Four never-touch cases, all of them a store that is square with us:
  *  - already revoked — revocation is once, and re-granting is Arif's to do;
  *  - `on_hold` — AN OFF-SEASON HOLD IS A PAYING STORE. Its monthly hold invoice
  *    advances `currentPeriodEnd` at settle, so paid-through protects it too;
@@ -600,10 +603,24 @@ export type FoundingLapseGateArgs = {
  *    trial that never paid: nothing has lapsed, so we fail toward the promise,
  *    exactly as `foundingPriceEligible` does).
  */
-export function foundingBenefitsRevocable(args: FoundingLapseGateArgs): boolean {
+export function foundingBenefitsAtRisk(args: FoundingLapseGateArgs): boolean {
 	if (args.benefitsRevokedAt !== undefined) return false;
 	if (args.comped) return false;
 	if (args.status === "active" || args.status === "on_hold") return false;
+	return foundingBenefitsEndAt(args.paidThrough) !== undefined;
+}
+
+/**
+ * Should the daily pass revoke this member's founding benefits? The EXACT
+ * complement of `foundingPriceEligible` for a claimed member whose clock is
+ * running: eligibility survives while `now <= paidThrough + window`, so
+ * revocation needs `now > paidThrough + window`. A day-90 boundary where both
+ * said "yes" would revoke a member the billing page was still quoting the
+ * discount to, which is the one inconsistency this pairing exists to make
+ * impossible (invariant-tested in plans.test.ts).
+ */
+export function foundingBenefitsRevocable(args: FoundingLapseGateArgs): boolean {
+	if (!foundingBenefitsAtRisk(args)) return false;
 	const endAt = foundingBenefitsEndAt(args.paidThrough);
 	if (endAt === undefined) return false;
 	return args.now > endAt;
@@ -621,9 +638,7 @@ export function foundingBenefitsRevocable(args: FoundingLapseGateArgs): boolean 
 export function foundingBenefitsWarningDue(
 	args: FoundingLapseGateArgs & { sentForPeriodEnd: number | undefined },
 ): boolean {
-	if (args.benefitsRevokedAt !== undefined) return false;
-	if (args.comped) return false;
-	if (args.status === "active" || args.status === "on_hold") return false;
+	if (!foundingBenefitsAtRisk(args)) return false;
 	const endAt = foundingBenefitsEndAt(args.paidThrough);
 	if (endAt === undefined) return false;
 	if (args.sentForPeriodEnd === args.paidThrough) return false;

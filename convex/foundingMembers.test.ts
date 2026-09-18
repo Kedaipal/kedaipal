@@ -263,6 +263,69 @@ describe("who is never revoked", () => {
 	});
 });
 
+describe("the date a seller SEES matches the date the pass acts on", () => {
+	/**
+	 * Found by driving an aged store (19 Sep 2026): the billing tab derived its
+	 * countdown from paid-through alone, so a store the pass SKIPS was shown a
+	 * red "your founding price ends on 29 Sept" alert for a deadline that could
+	 * never arrive. The worst case is a COMPED founding member — Kedaipal is
+	 * giving them the product, and the page threatened to take their discount.
+	 */
+	const STALE = { currentPeriodEnd: Date.now() - (WINDOW - 10 * DAY) };
+
+	test("a lapsing member is shown the date, and the pass agrees by warning", async () => {
+		const t = setup();
+		const s = await seedFoundingMember(t, "user_shown_date", STALE);
+		const gateway = await t
+			.withIdentity({ subject: s.userId })
+			.query(api.subscriptionPayments.billingGatewayAvailable, {});
+		expect(gateway?.foundingBenefitsEndAt).toBe(
+			(STALE.currentPeriodEnd as number) + WINDOW,
+		);
+		// The page says a date; the pass must act on it.
+		expect((await runPass(t)).warned).toBe(1);
+	});
+
+	test.each([
+		["active", { status: "active" as const, ...STALE }],
+		["on_hold", { status: "on_hold" as const, ...STALE }],
+		["comped", { status: "past_due" as const, comped: true, ...STALE }],
+	])(
+		"a %s store is shown NO date, because the pass would never act",
+		async (_label, overrides) => {
+			const t = setup();
+			const s = await seedFoundingMember(t, `user_nodate_${_label}`, overrides);
+			const gateway = await t
+				.withIdentity({ subject: s.userId })
+				.query(api.subscriptionPayments.billingGatewayAvailable, {});
+			// No countdown…
+			expect(gateway?.foundingBenefitsEndAt).toBeUndefined();
+			// …and the pass confirms why: it neither warns nor revokes.
+			const res = await runPass(t);
+			expect(res.warned).toBe(0);
+			expect(res.revoked).toBe(0);
+			// Their benefits are untouched and still priced as founding.
+			expect(gateway?.foundingPricing).toBe(true);
+		},
+	);
+
+	test("the admin console applies the same gate", async () => {
+		const t = setup();
+		await seedFoundingMember(t, "user_admin_nodate", {
+			status: "active",
+			...STALE,
+		});
+		const lapsing = await seedFoundingMember(t, "user_admin_date", STALE);
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.foundingMembers.listForAdmin, {});
+		const shown = rows.find((r) => r.retailerId === lapsing.retailerId);
+		const hidden = rows.find((r) => r.retailerId !== lapsing.retailerId);
+		expect(shown?.benefitsEndAt).toBeDefined();
+		expect(hidden?.benefitsEndAt).toBeUndefined();
+	});
+});
+
 describe("the T-14 warning goes out before anything is taken", () => {
 	test("warned once per paid period, and nothing is revoked yet", async () => {
 		const t = setup();

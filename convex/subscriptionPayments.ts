@@ -52,6 +52,7 @@ import {
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	foundingBenefitsAtRisk,
 	foundingBenefitsEndAt,
 	foundingPriceEligible,
 	type RenewalQuote,
@@ -137,9 +138,13 @@ export const billingGatewayAvailable = query({
 		 * to keep your founding price" would be a lie the billing page tells. */
 		foundingBenefitsRevoked: boolean;
 		/** When benefits end if this member never renews — drives the T-14
-		 * warning banner and the date in the ribbon, from the same
-		 * `foundingBenefitsEndAt` the cron revokes on. Undefined once revoked, for
-		 * a member with no paid period yet, or for a non-member. */
+		 * warning banner and the date in the ribbon. Gated on
+		 * `foundingBenefitsAtRisk`, the SAME predicate the cron's warn and revoke
+		 * gates use, so the page can never count down to a deadline the pass will
+		 * not enforce: undefined once revoked, for a member with no paid period,
+		 * for a non-member, and for any store the pass skips (`active`,
+		 * `on_hold`, `comped`). A comped founding member was otherwise shown a red
+		 * "your founding price ends on …" alert that could never come true. */
 		foundingBenefitsEndAt: number | undefined;
 		nextRenewal: RenewalQuote | null;
 	} | null> => {
@@ -195,8 +200,15 @@ export const billingGatewayAvailable = query({
 				retailer.foundingBenefitsRevokedAt !== undefined,
 			foundingBenefitsEndAt:
 				retailer.isFoundingMember === true &&
-				retailer.foundingBenefitsRevokedAt === undefined
-					? foundingBenefitsEndAt(sub?.currentPeriodEnd)
+				sub !== null &&
+				foundingBenefitsAtRisk({
+					status: sub.status,
+					comped: sub.comped === true,
+					paidThrough: sub.currentPeriodEnd,
+					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					now,
+				})
+					? foundingBenefitsEndAt(sub.currentPeriodEnd)
 					: undefined,
 			nextRenewal:
 				sub && eligibility && sub.comped !== true

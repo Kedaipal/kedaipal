@@ -459,9 +459,17 @@ closed 30 Aug 2026), so a full `collect()` is correct.
   "Store deleted" — because the header counts ROWS, hiding them made the console
   read "2/10 claimed" above a single store and concealed the exact row the pass
   has to step around. Tidying the leftovers stays `accountDeletion`'s job.
-- `foundingBenefitsEndAt` is the **one author** of the end date — the gate, the
-  warning email, the seller's ribbon and the admin list all read it, so the page
-  cannot promise a date the cron won't honour. `foundingBenefitsRevocable` is
+- `foundingBenefitsEndAt` is the **one author** of the end date, and
+  **`foundingBenefitsAtRisk` is the one author of whether a date is shown at
+  all** — the revoke gate, the warning gate, the seller's ribbon and the admin
+  list all ask it. Without that second author the two disagreed: the ribbon
+  derived its countdown from paid-through alone and showed a red "your founding
+  price ends on 29 Sept" alert to a store the pass SKIPS (found 19 Sep 2026
+  testing an aged store). The realistic victim is a **comped** founding member —
+  Kedaipal is giving them the product while the page threatens to take their
+  discount on a date that can never arrive. Whatever surface shows the date must
+  gate on the same predicate the cron acts on; pinned both in `plans.test.ts`
+  and against the real queries in `foundingMembers.test.ts`. `foundingBenefitsRevocable` is
   the **exact complement** of `foundingPriceEligible` (eligible while
   `now <= endAt`, revocable while `now > endAt`), pinned by an hour-by-hour
   invariant test across the boundary — a day where both said "yes" would revoke

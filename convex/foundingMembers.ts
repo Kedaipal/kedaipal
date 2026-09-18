@@ -18,6 +18,7 @@ import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/auth";
 import {
 	FOUNDING_MEMBER_LIMIT,
+	foundingBenefitsAtRisk,
 	foundingBenefitsEndAt,
 	foundingBenefitsRevocable,
 	foundingBenefitsWarningDue,
@@ -369,9 +370,18 @@ export const listForAdmin = query({
 				benefitsRevokedAt: row.benefitsRevokedAt,
 				benefitsRevokedReason: row.benefitsRevokedReason,
 				benefitsRevokedNote: row.benefitsRevokedNote,
+				// Same gate as the cron and the seller's ribbon — the console must
+				// not show Arif a countdown for a store the pass will skip.
 				benefitsEndAt:
-					row.benefitsRevokedAt === undefined
-						? foundingBenefitsEndAt(sub?.currentPeriodEnd)
+					sub !== null &&
+					foundingBenefitsAtRisk({
+						status: sub.status,
+						comped: sub.comped === true,
+						paidThrough: sub.currentPeriodEnd,
+						benefitsRevokedAt: row.benefitsRevokedAt,
+						now: Date.now(),
+					})
+						? foundingBenefitsEndAt(sub.currentPeriodEnd)
 						: undefined,
 				warned:
 					sub?.currentPeriodEnd !== undefined &&
