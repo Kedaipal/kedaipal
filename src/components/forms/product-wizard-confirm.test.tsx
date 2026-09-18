@@ -66,6 +66,110 @@ function renderWizard(state: WizardState, onExit: () => void) {
 const discard = () =>
 	fireEvent.click(screen.getByRole("button", { name: /cancel and discard/i }));
 
+/** A draft on the type step with choices AND typed prices — the state the
+ * switch guard exists for. */
+function draftWithPricedChoices(): WizardState {
+	return {
+		...dirtyDraft(),
+		shape: "choices",
+		editor: {
+			options: [{ name: "Size", values: ["S", "M"] }],
+			rows: [
+				{ ...emptyRow(["S"]), price: "18" },
+				{ ...emptyRow(["M"]), price: "18" },
+			],
+			customLine: null,
+		},
+	};
+}
+
+describe("wizard — switching product type away from priced choices", () => {
+	/** An answered draft opens on Review — walk back to the Type question. */
+	const goToTypeStep = () => {
+		for (let i = 0; i < 8; i++) {
+			if (screen.queryByText("What kind of product is it?")) return;
+			fireEvent.click(screen.getByRole("button", { name: /previous step/i }));
+		}
+		throw new Error("never reached the type step");
+	};
+	const pickType = (re: RegExp) => {
+		goToTypeStep();
+		fireEvent.click(screen.getByRole("button", { name: re }));
+	};
+
+	it("asks before dropping them, and Cancel keeps the choices", () => {
+		const nativeConfirm = vi.fn(() => true);
+		vi.stubGlobal("confirm", nativeConfirm);
+		renderWizard(draftWithPricedChoices(), vi.fn());
+
+		pickType(/just one item/i);
+		expect(screen.getByText("Change the product type?")).toBeTruthy();
+		expect(
+			screen.getByText("Your choices and their prices will be removed."),
+		).toBeTruthy();
+		expect(nativeConfirm).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(
+			screen
+				.getByRole("button", { name: /buyer picks a choice/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		vi.unstubAllGlobals();
+	});
+
+	it("Change type applies the switch it asked about", () => {
+		renderWizard(draftWithPricedChoices(), vi.fn());
+
+		pickType(/just one item/i);
+		fireEvent.click(screen.getByRole("button", { name: "Change type" }));
+		expect(
+			screen
+				.getByRole("button", { name: /just one item/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(screen.queryByText("Change the product type?")).toBeNull();
+	});
+
+	it("the same guard covers Made to order — the third switch", () => {
+		// Each switch hands its body to `askBeforeLosingChoices`; this is the
+		// one the browser round couldn't reach.
+		renderWizard(draftWithPricedChoices(), vi.fn());
+
+		pickType(/made to order/i);
+		expect(screen.getByText("Change the product type?")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Change type" }));
+		expect(
+			screen
+				.getByRole("button", { name: /made to order/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("no question when there is nothing to lose", () => {
+		// Choices, but no price typed into any of them.
+		renderWizard(
+			{
+				...draftWithPricedChoices(),
+				editor: {
+					options: [{ name: "Size", values: ["S"] }],
+					rows: [emptyRow(["S"])],
+					customLine: null,
+				},
+			},
+			vi.fn(),
+		);
+
+		pickType(/just one item/i);
+		expect(screen.queryByText("Change the product type?")).toBeNull();
+		expect(
+			screen
+				.getByRole("button", { name: /just one item/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+});
+
 describe("wizard — discarding a draft", () => {
 	it("asks in a dialog, and native confirm is never reached", () => {
 		const nativeConfirm = vi.fn(() => true);
