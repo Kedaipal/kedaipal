@@ -98,6 +98,26 @@ const getRow = (t: ReturnType<typeof setup>, id: Id<"foundingMembers">) =>
 const runPass = (t: ReturnType<typeof setup>) =>
 	t.mutation(internal.foundingMembers.internalRevokeLapsedBenefits, {});
 
+/**
+ * The founding-benefit emails the pass has queued, with their args. Counting
+ * `warned`/`revoked` alone would pass vacuously if the notice were never
+ * scheduled — the whole point of a T-14 warning is that it reaches the seller,
+ * and `_scheduled_functions` is the honest witness.
+ */
+async function benefitEmails(t: ReturnType<typeof setup>): Promise<
+	Array<{ key: string; endsOnAt: number }>
+> {
+	const jobs = await t.run((ctx) =>
+		ctx.db.system.query("_scheduled_functions").collect(),
+	);
+	return jobs
+		.filter((j) => j.name.includes("notifyFoundingBenefitsEmail"))
+		.map((j) => {
+			const a = (j.args as unknown as Array<Record<string, unknown>>)[0];
+			return { key: String(a.key), endsOnAt: Number(a.endsOnAt) };
+		});
+}
+
 describe("the daily pass revokes benefits past the window", () => {
 	test("revoked exactly once: row stamped, retailer flagged, intent cleared", async () => {
 		const t = setup();
@@ -116,12 +136,17 @@ describe("the daily pass revokes benefits past the window", () => {
 		// guards, and each is asserted on its own so neither can quietly rot.
 		expect((await getSub(t, s.subId))?.foundingIntent).toBeUndefined();
 
+		// One "benefits ended" notice, quoting the date it actually happened on.
+		const sent = await benefitEmails(t);
+		expect(sent.map((e) => e.key)).toEqual(["foundingBenefitsEnded"]);
+
 		// Running again is a no-op — no restamp, no second email.
 		const stampedAt = row?.benefitsRevokedAt;
 		vi.advanceTimersByTime(2 * DAY);
 		const second = await runPass(t);
 		expect(second.revoked).toBe(0);
 		expect((await getRow(t, s.rowId))?.benefitsRevokedAt).toBe(stampedAt);
+		expect(await benefitEmails(t)).toHaveLength(1);
 	});
 
 	test("the HONOUR survives: rank, badge flags, row and the claimed slot", async () => {
@@ -340,9 +365,20 @@ describe("the T-14 warning goes out before anything is taken", () => {
 		expect(row?.benefitsWarningSentForPeriodEnd).toBeDefined();
 		expect(row?.benefitsRevokedAt).toBeUndefined();
 
-		// The next daily run must not warn again for the same period.
+		// The notice actually went out, and quotes the SAME date the pass will
+		// revoke on — a warning naming a different day would be worse than none.
+		const sent = await benefitEmails(t);
+		expect(sent).toHaveLength(1);
+		expect(sent[0].key).toBe("foundingBenefitsEndingSoon");
+		expect(sent[0].endsOnAt).toBe(
+			(row?.benefitsWarningSentForPeriodEnd as number) + WINDOW,
+		);
+
+		// The next daily run must not warn again for the same period — and must
+		// not queue a second email either.
 		vi.advanceTimersByTime(DAY);
 		expect((await runPass(t)).warned).toBe(0);
+		expect(await benefitEmails(t)).toHaveLength(1);
 	});
 
 	test("paying resets the clock, so a LATER lapse warns again", async () => {
@@ -370,6 +406,60 @@ describe("the T-14 warning goes out before anything is taken", () => {
 			});
 		});
 		expect((await runPass(t)).warned).toBe(1);
+	});
+
+	test("THE WHOLE LIFECYCLE: warned at T-14, still paying-price, then revoked at T-0", async () => {
+		// warn and revoke are covered apart; this is the sequence a real member
+		// actually walks, on one row, across daily runs.
+		const t = setup();
+		const paidThrough = Date.now() - (WINDOW - 10 * DAY);
+		const s = await seedFoundingMember(t, "user_lifecycle", {
+			currentPeriodEnd: paidThrough,
+		});
+		const asUser = t.withIdentity({ subject: s.userId });
+
+		// Day 80 — warned, and NOTHING taken: still on founding pricing.
+		expect((await runPass(t)).warned).toBe(1);
+		let gateway = await asUser.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{},
+		);
+		expect(gateway?.foundingPricing).toBe(true);
+		expect(gateway?.foundingBenefitsRevoked).toBe(false);
+		expect(gateway?.foundingBenefitsEndAt).toBe(paidThrough + WINDOW);
+		expect((await benefitEmails(t)).map((e) => e.key)).toEqual([
+			"foundingBenefitsEndingSoon",
+		]);
+
+		// The daily runs in between change nothing — no re-warn, no early take.
+		for (let d = 0; d < 10; d++) {
+			vi.advanceTimersByTime(DAY);
+			const res = await runPass(t);
+			expect(res.warned).toBe(0);
+			expect(res.revoked).toBe(0);
+		}
+		expect((await getRow(t, s.rowId))?.benefitsRevokedAt).toBeUndefined();
+
+		// Past the window — revoked, once, with the second notice.
+		vi.advanceTimersByTime(DAY);
+		expect((await runPass(t)).revoked).toBe(1);
+		expect((await getRow(t, s.rowId))?.benefitsRevokedReason).toBe("lapsed");
+		expect((await benefitEmails(t)).map((e) => e.key)).toEqual([
+			"foundingBenefitsEndingSoon",
+			"foundingBenefitsEnded",
+		]);
+
+		// And the seller's page now prices them as an ordinary Pro store, with
+		// no countdown left to show.
+		gateway = await asUser.query(
+			api.subscriptionPayments.billingGatewayAvailable,
+			{},
+		);
+		expect(gateway?.foundingPricing).toBe(false);
+		expect(gateway?.foundingBenefitsRevoked).toBe(true);
+		expect(gateway?.foundingBenefitsEndAt).toBeUndefined();
+		// The honour is untouched, all the way through.
+		expect((await getRetailer(t, s.retailerId))?.isFoundingMember).toBe(true);
 	});
 
 	test("the warning names the same end date the pass revokes on", async () => {
