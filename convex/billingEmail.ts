@@ -366,6 +366,7 @@ async function sendRetailerNotice(
 	retailerId: Id<"retailers">,
 	key: TrialEmailKey,
 	daysLeft?: number,
+	endsOnFormatted?: string,
 ): Promise<void> {
 	let meta: {
 		notifyEmail: string | undefined;
@@ -385,6 +386,7 @@ async function sendRetailerNotice(
 		storeName: meta.storeName,
 		billingUrl: billingPageUrl(),
 		daysLeft,
+		endsOnFormatted,
 	});
 	try {
 		await sendEmail(meta.notifyEmail, subject, html, text);
@@ -410,6 +412,36 @@ export const notifyTrialEmail = internalAction({
 	},
 	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {
 		await sendRetailerNotice(ctx, retailerId, key, daysLeft);
+	},
+});
+
+/**
+ * Founding-benefit lifecycle notices (z8r3fdfyw5), both scheduled by the daily
+ * pass (`foundingMembers.internalRevokeLapsedBenefits`):
+ * `foundingBenefitsEndingSoon` at T-14 and `foundingBenefitsEnded` once it is
+ * taken. `endsOnAt` is the date from `foundingBenefitsEndAt` — the SAME author
+ * the cron's gate and the billing-tab banner read, so the email can't promise a
+ * date the cron doesn't honour. Fire-and-forget like every other billing email:
+ * the revoke itself has already committed, so a bounced email must never undo
+ * it (and never blocks it — Zaki, 18 Sep 2026).
+ */
+export const notifyFoundingBenefitsEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(
+			v.literal("foundingBenefitsEndingSoon"),
+			v.literal("foundingBenefitsEnded"),
+		),
+		endsOnAt: v.number(),
+	},
+	handler: async (ctx, { retailerId, key, endsOnAt }): Promise<void> => {
+		await sendRetailerNotice(
+			ctx,
+			retailerId,
+			key,
+			undefined,
+			formatDueDate(endsOnAt),
+		);
 	},
 });
 
@@ -585,6 +617,7 @@ export const getAutoRenewEmailContext = internalQuery({
 			pendingPlanChange: sub.pendingPlanChange?.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,

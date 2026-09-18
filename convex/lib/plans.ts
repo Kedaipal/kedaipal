@@ -476,21 +476,51 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 export const FOUNDING_MEMBER_LIMIT = 10;
 
 /**
- * Founding-price retention window (Zaki, 3 Sep 2026): the 30% founding price
- * survives a subscription lapse of up to 3 months; sit unpaid longer and NEW
- * bills are at list price. The rank + badge never revert (existing rule —
- * `isFoundingMember` is permanent); only the *pricing* is forfeited. Surfaced
- * on the billing tab's founding ribbon and the plan picker — never enforced
- * silently.
+ * Founding-benefit retention window (Zaki, 3 Sep 2026; unchanged z8r3fdfyw5):
+ * founding benefits survive a subscription lapse of up to 3 months. Sit unpaid
+ * longer and the daily pass REVOKES them for good
+ * (`foundingMembers.internalRevokeLapsedBenefits`) — the rank and badge stay,
+ * permanently, exactly as the agreement and the billing ribbon promise.
+ * Surfaced on the billing tab's founding ribbon, its T-14 warning banner and
+ * the plan picker — never enforced silently.
+ *
+ * NOTE (unsettled): the 90 exists only here and in docs/hitpay-recurring.md,
+ * from a verbal call. Arif's signed agreement (86exq9kz9) says "RM104/mo for
+ * life" with no lapse clause at all. One constant, one doc line — trivially
+ * changed once that is settled.
  */
 export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
+
+/** How long before benefits end the seller is warned (z8r3fdfyw5): one email +
+ * one billing-tab banner, so nothing is taken without notice. */
+export const FOUNDING_BENEFIT_WARNING_MS = 14 * DAY_MS;
 
 export type FoundingEligibilityArgs = {
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
 	paidThrough: number | undefined;
+	/** `retailers.foundingBenefitsRevokedAt` — set = benefits ended for good.
+	 * REQUIRED, not optional: every caller must answer it, so a new pricing path
+	 * cannot forget to and quietly re-grant a revoked discount. */
+	benefitsRevokedAt: number | undefined;
 	now: number;
 };
+
+/**
+ * The instant a founding member's benefits end if they never pay: their
+ * paid-through plus the window. The ONE author of that date — the cron's
+ * revoke gate, the T-14 warning gate, the warning email and the billing-tab
+ * banner all read it, so "ends 28 Oct" on the page cannot disagree with the
+ * day the cron actually takes it. Undefined when there is no paid period to
+ * measure from (a founding trial that never paid — nothing to lapse).
+ */
+export function foundingBenefitsEndAt(
+	paidThrough: number | undefined,
+): number | undefined {
+	return paidThrough === undefined
+		? undefined
+		: paidThrough + FOUNDING_PRICE_LAPSE_MS;
+}
 
 /**
  * Whether this STORE is on founding pricing right now — for any tier that has
@@ -508,6 +538,15 @@ export type FoundingEligibilityArgs = {
  * had a paid period → fail toward the promise).
  */
 export function foundingPriceEligible(args: FoundingEligibilityArgs): boolean {
+	// REVOKED OUTRANKS EVERYTHING, and is checked before the `foundingIntent`
+	// fallback on purpose (z8r3fdfyw5). That fallback is the trap: a claimed
+	// member's `foundingIntent` is never cleared, and it carries NO lapse check —
+	// so any revocation that merely cleared `isFoundingMember` would drop through
+	// to `return args.foundingIntent` and hand the store founding pricing
+	// *forever*, the exact opposite of revoking it. Short-circuiting here makes
+	// that unreachable by construction instead of by remembering to clear a
+	// second flag. Mutation-tested: delete this line and plans.test.ts goes red.
+	if (args.benefitsRevokedAt !== undefined) return false;
 	if (args.isFoundingMember) {
 		if (args.paidThrough === undefined) return true;
 		return args.now - args.paidThrough <= FOUNDING_PRICE_LAPSE_MS;
@@ -529,13 +568,76 @@ export function foundingPricingApplies(
 	return foundingPriceEligible(args);
 }
 
+/** Everything the daily pass needs to judge one founding member's benefits. */
+export type FoundingLapseGateArgs = {
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
+	/** A comped store isn't billed at all — there is no lapse to measure. */
+	comped: boolean;
+	/** The subscription's `currentPeriodEnd`. */
+	paidThrough: number | undefined;
+	benefitsRevokedAt: number | undefined;
+	now: number;
+};
+
+/**
+ * Should the daily pass revoke this member's founding benefits? The EXACT
+ * complement of `foundingPriceEligible` for a claimed member, by construction:
+ * eligibility survives while `now <= paidThrough + window`, so revocation needs
+ * `now > paidThrough + window`. A day-90 boundary where both said "yes" would
+ * revoke a member the billing page was still quoting the discount to, which is
+ * the one inconsistency this pairing exists to make impossible (invariant-tested
+ * in plans.test.ts).
+ *
+ * Four never-revoke cases, all of them a store that is square with us:
+ *  - already revoked — revocation is once, and re-granting is Arif's to do;
+ *  - `on_hold` — AN OFF-SEASON HOLD IS A PAYING STORE. Its monthly hold invoice
+ *    advances `currentPeriodEnd` at settle, so paid-through protects it too;
+ *    both guards are deliberate, and both are pinned by a test;
+ *  - `active` — either mid-period, or a renewal invoice still inside its grace;
+ *  - `comped`, or no paid period at all (`paidThrough` undefined — a founding
+ *    trial that never paid: nothing has lapsed, so we fail toward the promise,
+ *    exactly as `foundingPriceEligible` does).
+ */
+export function foundingBenefitsRevocable(args: FoundingLapseGateArgs): boolean {
+	if (args.benefitsRevokedAt !== undefined) return false;
+	if (args.comped) return false;
+	if (args.status === "active" || args.status === "on_hold") return false;
+	const endAt = foundingBenefitsEndAt(args.paidThrough);
+	if (endAt === undefined) return false;
+	return args.now > endAt;
+}
+
+/**
+ * Should the T-14 "your founding price ends on {date}" notice go out? Same
+ * never-touch cases as revocation, narrowed to the warning window and deduped
+ * per PAID PERIOD rather than per member: `sentForPeriodEnd` holds the
+ * `currentPeriodEnd` the last warning was about, so paying (which advances the
+ * period) lets a future lapse warn again — no clearing logic to forget. The
+ * window closes at `endAt`, which the daily cadence always reaches first: 14
+ * daily runs sit between T-14 and T-0.
+ */
+export function foundingBenefitsWarningDue(
+	args: FoundingLapseGateArgs & { sentForPeriodEnd: number | undefined },
+): boolean {
+	if (args.benefitsRevokedAt !== undefined) return false;
+	if (args.comped) return false;
+	if (args.status === "active" || args.status === "on_hold") return false;
+	const endAt = foundingBenefitsEndAt(args.paidThrough);
+	if (endAt === undefined) return false;
+	if (args.sentForPeriodEnd === args.paidThrough) return false;
+	return args.now >= endAt - FOUNDING_BENEFIT_WARNING_MS && args.now <= endAt;
+}
+
 /**
  * The one tier a store on founding pricing is billed for (Zaki, 17 Sep 2026).
  * Founding Members stay on Founding Pro: no plan change, no Starter. What they
  * CAN do is stop renewing (turn auto-renewal off). A subscription that then
- * lapses past `FOUNDING_PRICE_LAPSE_MS` loses the founding price, and from
- * there the store is an ordinary seller again, free to pick any plan. Scale
- * joins when it becomes purchasable (its founding row already exists).
+ * lapses past `FOUNDING_PRICE_LAPSE_MS` has its benefits REVOKED (z8r3fdfyw5),
+ * and from there the store is an ordinary seller again, free to pick any plan —
+ * permanently, since the revocation outranks the read-time window. The lock
+ * needs no code for that: it keys off `foundingPriceEligible`, so it opens the
+ * moment revocation lands (pinned by a test). Scale joins when it becomes
+ * purchasable (its founding row already exists).
  */
 export const FOUNDING_PLAN = "pro" satisfies Plan;
 
@@ -594,6 +696,9 @@ export function renewalQuote(args: {
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
 	paidThrough: number | undefined;
+	/** `retailers.foundingBenefitsRevokedAt` — a revoked member's renewal is an
+	 * ordinary Pro bill, and the scheduled-downgrade lock opens with it. */
+	benefitsRevokedAt: number | undefined;
 	lastPaidCurrency: string | undefined;
 	country: Country | undefined;
 	now: number;

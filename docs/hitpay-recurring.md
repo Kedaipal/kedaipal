@@ -376,10 +376,13 @@ exactly when a stale date would be most misleading.
 ## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
 
 The 30% founding price survives a subscription lapse of up to **3 months**
-(`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and NEW bills are
-at list price. The **rank + badge never revert** (existing rule) — only the
-pricing is forfeited. One rule for every automated issuer, in two shapes
-(lib/plans.ts):
+(`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and the benefits
+are **revoked for good** (see "Revocation" below — before z8r3fdfyw5 this was a
+read-time window only, so paying later silently brought the discount back). The
+**rank + badge never revert** — that is a promise in the signed agreement and in
+the billing ribbon's own copy, and revocation deliberately does not touch them.
+Only the *entitlements* are forfeited. One rule for every automated issuer, in
+two shapes (lib/plans.ts):
 
 - **`foundingPriceEligible`** — is this STORE on founding pricing? Tier-agnostic:
   it keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a claimed
@@ -403,6 +406,82 @@ explains why prices read standard (`billingGatewayAvailable.foundingPricing` /
 `foundingPricingLapsed` — every card must use the server-resolved flag, never
 client-side `foundingIntent` or `isFoundingMember`, or a member would SEE one
 price while being BILLED another).
+
+### Revocation — membership is permanent, benefits are not (z8r3fdfyw5)
+
+**The split that governs everything here.** A Founding Member has an **honour**
+(rank, storefront badge, nav pill, their slot in the 10) and a set of
+**benefits** (the 30% price, the Founding-Pro lock, white-glove onboarding). The
+honour is permanent: Arif's signed agreement (`86exq9kz9`) promises "RM104/mo
+for life" with no lapse clause, and this app's own billing ribbon has told
+members since 3 Sep that "your rank and badge are permanent either way". Only
+the benefits can be taken. **Never revoke by clearing `isFoundingMember`** —
+that strips a badge we promised *and* drops through to the `foundingIntent`
+fallback in `foundingPriceEligible`, granting founding pricing for ever.
+
+**Data.** `foundingMembers.benefitsRevokedAt` / `benefitsRevokedReason`
+(`lapsed` | `admin`) / `benefitsRevokedNote` is the audit record;
+`retailers.foundingBenefitsRevokedAt` is the denormalized flag every
+`foundingPriceEligible` caller reads off the retailer doc it already loaded
+(zero extra reads, mirroring `isFoundingMember`). `benefitsRevokedAt` is a
+**required** field on `FoundingEligibilityArgs`, so a new pricing path is a
+compile error until it answers the question. The row is stamped, never deleted —
+`getSpotsRemaining` counts rows, so **a revoked slot does not free up** and
+re-granting is a deliberate admin act rather than a race for a freed spot.
+
+**The pass** (`foundingMembers.internalRevokeLapsedBenefits`, scheduled by the
+daily billing cron). It walks the `foundingMembers` ledger, not that cron's
+subscription loops, and **that is load-bearing**: those loops cover `trialing`,
+`active` and `on_hold`, while a lapsed member is `past_due` within ~14 days of
+their period ending. A pass built on them would never fire for the exact
+population it targets. The ledger is bounded at 10 for ever (the programme
+closed 30 Aug 2026), so a full `collect()` is correct.
+
+- **T-14:** `foundingBenefitsWarningDue` → one email
+  (`foundingBenefitsEndingSoon`) + the ribbon's red state. Deduped by
+  `benefitsWarningSentForPeriodEnd`, which stores the `currentPeriodEnd` the
+  warning was about (the `renewalNoticeSentForPeriodEnd` idiom) — paying
+  advances the period, so a later lapse warns again with no clearing logic.
+- **T-0:** `foundingBenefitsRevocable` → revoke + `foundingBenefitsEnded` email.
+  **Not gated on the warning** (Zaki, 18 Sep 2026): the rule is the rule, and 14
+  daily runs sit between the two.
+- **Never revoked:** `on_hold` (an Off-Season Hold is a PAYING store — its hold
+  invoice advances the period, so the status guard and the paid-through guard
+  both protect it, and both are tested), `active`, `comped`, and a member with
+  no paid period at all (`paidThrough` undefined → fail toward the promise,
+  exactly as `foundingPriceEligible` does).
+- `foundingBenefitsEndAt` is the **one author** of the end date — the gate, the
+  warning email, the seller's ribbon and the admin list all read it, so the page
+  cannot promise a date the cron won't honour. `foundingBenefitsRevocable` is
+  the **exact complement** of `foundingPriceEligible` (eligible while
+  `now <= endAt`, revocable while `now > endAt`), pinned by an hour-by-hour
+  invariant test across the boundary — a day where both said "yes" would revoke
+  a member the billing page was still quoting the discount to.
+
+**The plan lock opens for free.** `foundingPlanLocked` keys off
+`foundingPriceEligible`, so a revoked seller regains the Starter/Pro choice with
+no extra code. Pinned by a test, because it is an acceptance criterion.
+
+**Surfaces.** The billing ribbon is ONE control with three tones — amber
+("locked in"), red (T-14, naming the date), muted (ended, and never "renew to
+keep your founding price", which would be a lie). The plan picker's lapsed note
+splits the same way. White-glove (`foundingMembers.myStatus.benefitsRevoked`)
+stops being offered, since it is a benefit. **The storefront badge and nav pill
+are untouched, by design.** Admin → Billing → Founding members shows each
+member's benefit state, the end date, whether they were warned, and a
+revoke/restore lever (`adminSetBenefits`) — the escape hatch for a wrong
+revocation or a deliberate re-grant; a restore also clears the warning stamp so
+a future lapse warns again.
+
+**Open — the terms conflict is unresolved.** The 90 days comes from a verbal
+call (Zaki, 3 Sep 2026) and exists only in `FOUNDING_PRICE_LAPSE_MS` and this
+file; no ticket carries it, and the signed agreement has no lapse clause at all.
+One constant, one doc line — trivially changed once Arif settles it.
+
+**Known edge, deliberately not built.** Comping a member through their own lapse
+and later un-comping them leaves a stale `currentPeriodEnd`, so the pass could
+revoke them the next day. No founding member is comped today; the admin restore
+lever is the remedy if it ever happens.
 
 ## Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)
 

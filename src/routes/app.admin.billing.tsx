@@ -50,7 +50,11 @@ import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatShortDate,
+} from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
@@ -551,13 +555,20 @@ function retailerOptionLabel(r: {
 	plan?: string;
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
+	foundingBenefitsRevoked: boolean;
 	hasPending: boolean;
 }): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	const parts = [`${r.storeName} (/${r.slug})`];
 	if (r.plan) parts.push(cap(r.plan));
 	if (r.status) parts.push(STATUS_LABEL[r.status] ?? cap(r.status));
-	if (r.isFoundingMember) parts.push("Founding");
+	// Membership and benefits are two facts, and when Arif is about to bill
+	// someone he needs the second one: "Founding" alone would read as "charge
+	// them RM104" for a member whose benefits lapsed months ago.
+	if (r.isFoundingMember)
+		parts.push(
+			r.foundingBenefitsRevoked ? "Founding · benefits ended" : "Founding",
+		);
 	else if (r.foundingIntent) parts.push("Founding (trial)");
 	if (r.hasPending) parts.push("has pending");
 	return parts.join(" · ");
@@ -586,11 +597,20 @@ function IssueInvoiceForm() {
 
 	const selected = retailers?.find((r) => r._id === retailerId);
 	const blocked = selected?.hasPending === true;
-	// Auto-apply (and lock) the founding discount when the store is already a
-	// Founding Member OR was onboarded as one (foundingIntent, still on the 14-day
-	// trial) — so the conversion/renewal invoice always carries their discount.
+	// Auto-apply (and lock) the founding discount when the store is on founding
+	// PRICING — an existing Founding Member whose benefits still stand, or a store
+	// onboarded as one (foundingIntent, still on the 14-day trial) — so the
+	// conversion/renewal invoice always carries their discount.
+	//
+	// A member whose benefits were revoked (z8r3fdfyw5) is deliberately NEITHER
+	// ticked NOR locked: ticked would hand back the discount the daily pass just
+	// took, and locked would leave Arif unable to untick it — the machine undoing
+	// its own rule, with no manual way out. Unticked but ENABLED keeps the
+	// standing posture that the admin form is Arif's override in both directions.
+	const foundingBenefitsRevoked = selected?.foundingBenefitsRevoked === true;
 	const isExistingFounding =
-		selected?.isFoundingMember === true || selected?.foundingIntent === true;
+		(selected?.isFoundingMember === true && !foundingBenefitsRevoked) ||
+		selected?.foundingIntent === true;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
 	useEffect(() => {
 		setFounding(isExistingFounding);
@@ -762,11 +782,13 @@ function IssueInvoiceForm() {
 					<span className="block text-xs text-muted-foreground">
 						{isExistingFounding
 							? "This store is a Founding Member — lifetime 30% discount applied automatically."
-							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
-									spotsRemaining === 0
-										? " (cohort full — no rank will be claimed)"
-										: ""
-								}`}
+							: foundingBenefitsRevoked
+								? "Founding Member, but their founding price ended after 3 months unpaid — this invoice bills at the standard price. Tick to re-grant the discount on this invoice only; to give it back for good, use Restore benefits under Founding members."
+								: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+										spotsRemaining === 0
+											? " (cohort full — no rank will be claimed)"
+											: ""
+									}`}
 					</span>
 				</span>
 			</label>
@@ -1159,6 +1181,17 @@ function AutoRenewOverview() {
 	);
 }
 
+/**
+ * Admin: the 10-slot cohort — who's reserved, where each one sits in the pay
+ * cycle, and the state of their founding BENEFITS (z8r3fdfyw5).
+ *
+ * Membership and benefits are shown as two separate facts because they are two
+ * separate facts: the rank pill is permanent, the benefit line is what can be
+ * taken. The automatic rule does the taking at day 90; this list exists so the
+ * question "why is #4 on standard pricing?" is answerable here rather than from
+ * the logs, and so Arif has a lever either way — revoke a member who has
+ * clearly gone, or restore one revoked wrongly.
+ */
 function FoundingMembersList() {
 	const members = useQuery(
 		convexQuery(api.foundingMembers.listForAdmin, {}),
@@ -1166,13 +1199,46 @@ function FoundingMembersList() {
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
+	const setBenefits = useMutation(api.foundingMembers.adminSetBenefits);
+	// The row awaiting confirmation, and which direction it's going.
+	const [pending, setPending] = useState<{
+		retailerId: Id<"retailers">;
+		storeName: string;
+		rank: number;
+		revoke: boolean;
+	} | null>(null);
+	const [note, setNote] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	async function apply() {
+		if (!pending) return;
+		setBusy(true);
+		try {
+			await setBenefits({
+				retailerId: pending.retailerId,
+				revoked: pending.revoke,
+				note: note.trim() === "" ? undefined : note.trim(),
+			});
+			toast.success(
+				pending.revoke
+					? `Founding benefits revoked for ${pending.storeName} — rank #${pending.rank} and badge kept.`
+					: `Founding benefits restored for ${pending.storeName}.`,
+			);
+			setPending(null);
+			setNote("");
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't update");
+		} finally {
+			setBusy(false);
+		}
+	}
 
 	return (
 		<AdminCard>
 			<AdminSectionHeading
 				icon={<Award className="size-5" />}
 				title="Founding members"
-				description="The 10-slot cohort — who's reserved and where they are in the pay cycle."
+				description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
 				aside={
 					spotsRemaining !== undefined ? (
 						<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -1192,12 +1258,20 @@ function FoundingMembersList() {
 				<ul className="flex flex-col gap-2">
 					{members.map((m) => {
 						const s = foundingStatus(m);
+						const revoked = m.benefitsRevokedAt !== undefined;
 						return (
 							<li
 								key={m.rank}
-								className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background p-3"
+								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 sm:flex-row sm:items-start sm:justify-between"
 							>
-								<div className="flex min-w-0 items-center gap-2.5">
+								{/* Stacked on a phone, side-by-side from sm. Side-by-side all
+								    the way down squeezed the name column between the pill and
+								    the button: "Bearcam…", a slug over three lines, and the
+								    benefit line at two words a row.
+								    items-START, not center: the benefit line makes this block
+								    two or three lines tall, and a centred rank pill drifts down
+								    beside the SLUG instead of the store name it labels. */}
+								<div className="flex w-full items-start gap-2.5 sm:min-w-0 sm:flex-1">
 									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
 										#{m.rank}
 									</span>
@@ -1205,21 +1279,110 @@ function FoundingMembersList() {
 										<span className="block truncate text-sm font-semibold">
 											{m.storeName}
 										</span>
-										<span className="font-mono text-xs text-muted-foreground">
+										<span className="block font-mono text-xs text-muted-foreground">
 											/{m.slug}
 										</span>
+										{/* The benefit line. Silent for a member whose benefits
+										    are live and nowhere near the window — nine identical
+										    "Benefits active" rows would bury the one that isn't. */}
+										{revoked ? (
+											<span className="mt-0.5 block text-xs text-muted-foreground">
+												Benefits ended{" "}
+												{m.benefitsRevokedAt !== undefined
+													? formatShortDate(m.benefitsRevokedAt)
+													: ""}
+												{m.benefitsRevokedReason === "admin"
+													? " · by admin"
+													: " · lapsed"}
+												{m.benefitsRevokedNote
+													? ` · ${m.benefitsRevokedNote}`
+													: ""}
+											</span>
+										) : m.benefitsEndAt !== undefined &&
+											m.status !== "active" &&
+											m.status !== "on_hold" ? (
+											<span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-400">
+												Benefits end {formatShortDate(m.benefitsEndAt)}
+												{m.warned ? " · warned" : " · not yet warned"}
+											</span>
+										) : null}
 									</span>
 								</div>
-								<span
-									className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
-								>
-									{s.label}
-								</span>
+								<div className="flex shrink-0 items-center gap-2 pl-[38px] sm:pl-0">
+									<span
+										className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
+									>
+										{s.label}
+									</span>
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => {
+											setNote("");
+											setPending({
+												retailerId: m.retailerId,
+												storeName: m.storeName,
+												rank: m.rank,
+												revoke: !revoked,
+											});
+										}}
+									>
+										{revoked ? "Restore benefits" : "Revoke benefits"}
+									</Button>
+								</div>
 							</li>
 						);
 					})}
 				</ul>
 			)}
+
+			<Dialog
+				open={pending !== null}
+				onOpenChange={(o) => {
+					if (!o) setPending(null);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>
+							{pending?.revoke
+								? `Revoke founding benefits for ${pending?.storeName}?`
+								: `Restore founding benefits for ${pending?.storeName}?`}
+						</DialogTitle>
+						<DialogDescription>
+							{pending?.revoke
+								? `Their 30% founding price ends now and every plan opens to them again at standard prices. Founding rank #${pending?.rank} and the storefront badge are KEPT — those are permanent. They are not emailed; this is a manual move, so tell them yourself.`
+								: `Their 30% founding price applies again from their next bill, and they go back to Founding Pro only. Use this for a revocation that was wrong, or a deliberate re-grant.`}
+						</DialogDescription>
+					</DialogHeader>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Note{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional — shown in this list)
+						</span>
+						<Input
+							value={note}
+							onChange={(e) => setNote(e.target.value)}
+							placeholder={
+								pending?.revoke ? "e.g. closed the business" : "e.g. re-granted"
+							}
+							variant="field"
+						/>
+					</label>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setPending(null)}>
+							Cancel
+						</Button>
+						<Button disabled={busy} onClick={apply}>
+							{busy
+								? "Saving…"
+								: pending?.revoke
+									? "Revoke benefits"
+									: "Restore benefits"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</AdminCard>
 	);
 }

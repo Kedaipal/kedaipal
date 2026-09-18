@@ -755,8 +755,25 @@ export default defineSchema({
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
 		// ledger. See docs/manual-subscription.md.
+		//
+		// MEMBERSHIP IS PERMANENT, BENEFITS ARE NOT (z8r3fdfyw5). These two fields
+		// are the HONOUR — the storefront badge and the "Founding #N" pill — and the
+		// signed agreement plus the billing ribbon both promise them "for good", so
+		// nothing clears them. What CAN be taken back is the entitlement set (the
+		// 30% price, the Founding-Pro lock, white-glove), and that is
+		// `foundingBenefitsRevokedAt` below. Never conflate the two: clearing
+		// `isFoundingMember` to revoke a price would strip a badge we promised, AND
+		// silently hand the store permanent founding pricing through the
+		// `foundingIntent` fallback in `foundingPriceEligible`.
 		isFoundingMember: v.optional(v.boolean()),
 		foundingMemberRank: v.optional(v.number()),
+		// When this member's founding BENEFITS ended — denormalized from
+		// `foundingMembers.benefitsRevokedAt` so every `foundingPriceEligible`
+		// caller gets it off the retailer doc it already loaded (zero extra reads,
+		// mirroring the flags above). Set = ordinary seller pricing, permanently:
+		// unlike the read-time lapse window, paying does NOT bring the discount
+		// back. Undefined for everyone who never had benefits taken.
+		foundingBenefitsRevokedAt: v.optional(v.number()),
 		// WABA send guardrails (kill switch, per-seller caps) live in their own
 		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
@@ -2642,6 +2659,24 @@ export default defineSchema({
 		firstInvoiceId: v.optional(v.id("invoices")),
 		welcomedAt: v.optional(v.number()),
 		whiteGloveScheduledAt: v.optional(v.number()),
+		// Benefit revocation (z8r3fdfyw5) — the audit record behind the retailer's
+		// denormalized `foundingBenefitsRevokedAt`. The RANK AND BADGE ARE NEVER
+		// TOUCHED: the row stays, so the slot stays claimed (`getSpotsRemaining`
+		// counts rows) and re-granting is a deliberate admin act, not a race for a
+		// freed spot.
+		benefitsRevokedAt: v.optional(v.number()),
+		// Why: the 90-day lapse window ran out, or Arif did it by hand.
+		benefitsRevokedReason: v.optional(
+			v.union(v.literal("lapsed"), v.literal("admin")),
+		),
+		// Arif's free-text note on a manual revoke/restore — shown in the admin
+		// cohort list so "why is #4 revoked?" is answerable a year later.
+		benefitsRevokedNote: v.optional(v.string()),
+		// The `currentPeriodEnd` the T-14 warning was sent ABOUT, not a bare
+		// timestamp — same idiom as `subscriptions.renewalNoticeSentForPeriodEnd`.
+		// Paying advances the period, so the stamp stops matching and a LATER lapse
+		// warns again, with no clearing logic to forget.
+		benefitsWarningSentForPeriodEnd: v.optional(v.number()),
 	})
 		.index("by_rank", ["rank"])
 		.index("by_retailer", ["retailerId"]),

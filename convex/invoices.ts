@@ -139,6 +139,7 @@ async function settleInvoicePaid(
 		// the discount to Pro/Scale on each side of the conversion.
 		founding: foundingPriceEligible({
 			isFoundingMember: retailerForCarryover?.isFoundingMember === true,
+			benefitsRevokedAt: retailerForCarryover?.foundingBenefitsRevokedAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -685,6 +686,7 @@ export const subscribeSelf = mutation({
 		// Founding Pro and nothing else (foundingPlanLocked).
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
@@ -797,6 +799,7 @@ export const changePlan = mutation({
 		// BOTH directions before anything is scheduled or billed.
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
@@ -972,6 +975,7 @@ export const internalIssueFirstInvoice = internalMutation({
 		const founding = foundingPricingApplies({
 			plan: sub.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -1061,6 +1065,7 @@ export const switchPendingPlan = mutation({
 		const now = Date.now();
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -1170,6 +1175,7 @@ export const internalIssueRenewalInvoice = internalMutation({
 			billingCycle: sub.billingCycle,
 			pendingPlanChange: sub.pendingPlanChange?.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: invoices.find((inv) => inv.status === "paid")?.currency,
@@ -1231,6 +1237,10 @@ export const listRetailersForAdmin = query({
 			plan?: Doc<"subscriptions">["plan"];
 			isFoundingMember: boolean;
 			foundingIntent: boolean;
+			/** Founding BENEFITS revoked (z8r3fdfyw5) — still a member, no longer
+			 * on founding pricing. The issue form must not auto-apply (let alone
+			 * lock in) a discount the daily pass has taken away. */
+			foundingBenefitsRevoked: boolean;
 			hasPending: boolean;
 		}>
 	> => {
@@ -1255,6 +1265,7 @@ export const listRetailersForAdmin = query({
 				plan: sub?.plan,
 				isFoundingMember: r.isFoundingMember === true,
 				foundingIntent: sub?.foundingIntent === true,
+				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
 				hasPending: pending !== null,
 			});
 		}

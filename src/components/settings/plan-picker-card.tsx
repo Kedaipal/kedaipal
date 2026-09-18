@@ -48,6 +48,7 @@ export function PlanPickerCard({
 	renewing,
 	foundingPricing,
 	foundingPricingLapsed,
+	foundingBenefitsRevoked = false,
 	ownerOnly = false,
 	onRedirectingChange,
 }: {
@@ -62,6 +63,10 @@ export function PlanPickerCard({
 	/** Founding-shaped store whose 3-month lapse window passed — explain why
 	 * the price reads standard instead of leaving them to wonder. */
 	foundingPricingLapsed: boolean;
+	/** Benefits revoked for good (z8r3fdfyw5). Distinct from the line above:
+	 * the lapsed wording implies the discount comes back when they pay, and for
+	 * a revoked member it does not. */
+	foundingBenefitsRevoked?: boolean;
 	/** Admin act-as: the prices are the seller's, but subscribing authorises
 	 * the OWNER's card or wallet — Subscribe is disabled with the reason. */
 	ownerOnly?: boolean;
@@ -166,9 +171,9 @@ export function PlanPickerCard({
 				) : null}
 				{foundingPricingLapsed ? (
 					<p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-						Your Founding Member rank is yours for good, but the founding
-						price lapses after 3 months without an active subscription — so
-						these are the standard prices. Questions? Message us.
+						{foundingBenefitsRevoked
+							? "Your Founding Member rank is yours for good, but your founding price ended after more than 3 months without an active subscription — so these are the standard prices, and every plan is open to you again. Questions? Message us."
+							: "Your Founding Member rank is yours for good, but the founding price lapses after 3 months without an active subscription — so these are the standard prices. Questions? Message us."}
 					</p>
 				) : null}
 			</div>
