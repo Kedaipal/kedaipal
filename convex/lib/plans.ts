@@ -484,10 +484,12 @@ export const FOUNDING_MEMBER_LIMIT = 10;
  * Surfaced on the billing tab's founding ribbon, its T-14 warning banner and
  * the plan picker — never enforced silently.
  *
- * NOTE (unsettled): the 90 exists only here and in docs/hitpay-recurring.md,
- * from a verbal call. Arif's signed agreement (86exq9kz9) says "RM104/mo for
- * life" with no lapse clause at all. One constant, one doc line — trivially
- * changed once that is settled.
+ * CONFIRMED by Arif, 19 Sep 2026 (z8r3fdfyw5) — 90 days is the number. It had
+ * existed only here and in docs/hitpay-recurring.md, from a verbal call, which
+ * is why it was flagged: the signed agreement (86exq9kz9) still reads "RM104/mo
+ * for life" with no lapse clause, so the code was the only record of the rule
+ * it enforces. Change it here and the cron gate, the T-14 warning, the emails
+ * and every surfaced date move together.
  */
 export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
 

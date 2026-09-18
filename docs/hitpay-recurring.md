@@ -490,10 +490,20 @@ revoke/restore lever (`adminSetBenefits`) — the escape hatch for a wrong
 revocation or a deliberate re-grant; a restore also clears the warning stamp so
 a future lapse warns again.
 
-**Open — the terms conflict is unresolved.** The 90 days comes from a verbal
-call (Zaki, 3 Sep 2026) and exists only in `FOUNDING_PRICE_LAPSE_MS` and this
-file; no ticket carries it, and the signed agreement has no lapse clause at all.
-One constant, one doc line — trivially changed once Arif settles it.
+**The window: 90 days, confirmed by Arif on 19 Sep 2026** (z8r3fdfyw5). It had
+come from a verbal call (Zaki, 3 Sep 2026) and lived only in
+`FOUNDING_PRICE_LAPSE_MS` and this file, with no ticket carrying it — worth
+recording, because the signed agreement (86exq9kz9) still reads "RM104/mo for
+life" with no lapse clause, so these two lines remain the only written statement
+of the rule the code enforces. If the agreement is ever revised, revise it to
+match this.
+
+**Notice to the cohort.** The condition has been stated in-product since 3 Sep —
+the founding ribbon says the price "stays yours as long as your subscription
+doesn't lapse for more than 3 months" — and from this ticket a member also gets
+an email plus a red banner 14 days before anything is taken. Whether Arif also
+wants a direct message to the three unpaid members ahead of the first revocation
+(lekor-mr-ganu, 28 Oct 2026) is a GTM call, not a code gap.
 
 **Known edge, deliberately not built.** Comping a member through their own lapse
 and later un-comping them leaves a stale `currentPeriodEnd`, so the pass could
