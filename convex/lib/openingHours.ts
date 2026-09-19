@@ -353,8 +353,9 @@ export function sanitizeOpeningHours(
 /**
  * The authoritative gate: does the fulfilment moment fall inside the hours?
  * Rejects a closed day for every method; checks the time windows only when a
- * time exists (delivery — pickup orders are date-only, their point's own
- * schedule note carries the detail). A moment that lands in a SPLIT day's
+ * time exists — a delivery, or (z8r3fdff97) a self-collect order at the
+ * seller's own pickup point. A drop-off meet-up stays date-only: its own
+ * schedule note carries the detail. A moment that lands in a SPLIT day's
  * break is named as such ("closed 10:00 AM – 12:00 PM"), because "open
  * 7:30 AM – 10:00 AM, 12:00 PM – 6:00 PM" alone makes the buyer work out why
  * 11:00 was refused. Throws plain Errors, caller wraps. Mirrored client-side

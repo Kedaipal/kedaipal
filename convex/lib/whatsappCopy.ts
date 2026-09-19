@@ -14,6 +14,7 @@
 // message points. Don't re-add copy for a send that no longer exists.
 
 import { type Locale, pickLocale as pickLocaleBase } from "./locale";
+import { distinctPickupNotes, PICKUP_NOTES_HEADING } from "./pickupNote";
 import { deriveMapsUrl } from "./mapsUrl";
 
 export type { Locale } from "./locale";
@@ -498,6 +499,31 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 		drop_off: "📍 交收点",
 	},
 };
+
+/**
+ * Render the frozen per-line pickup notes (z8r3fdff97) as one block — the
+ * seller's own instruction for collecting ("side counter", "bring an ice
+ * bag"), which lived in the product description before and so never rode the
+ * order to the moment the buyer needed it.
+ *
+ * Dedupe and heading come from `lib/pickupNote.ts`, so this message, /track and
+ * checkout say the same words and list the same notes.
+ *
+ * Returns "" when there is nothing to say, so the caller can concatenate
+ * unconditionally — the renderPickupBlock posture.
+ */
+export function renderPickupNotes(
+	locale: Locale,
+	notes: readonly (string | undefined)[],
+): string {
+	const distinct = distinctPickupNotes(notes);
+	if (distinct.length === 0) return "";
+	return [
+		"",
+		`📝 ${PICKUP_NOTES_HEADING[locale]}`,
+		...distinct.map((note) => `• ${note}`),
+	].join("\n");
+}
 
 // Fee line under the pickup address — tells the buyer the charge is already
 // inside the total they're being asked to pay, so the amount never reads as a

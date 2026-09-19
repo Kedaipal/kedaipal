@@ -932,6 +932,26 @@ export default defineSchema({
 		// no override (0 is normalized to unset — one spelling). Capped at
 		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
 		minNoticeDays: v.optional(v.number()),
+		// How long THIS product takes to make, in MINUTES (z8r3fdff97). The
+		// hours-scale sibling of minNoticeDays, which could only ever move whole
+		// DAYS: notice 0 lets a buyer collect 15 minutes after ordering, notice 1
+		// kills same-day outright, and "ready in 2 hours" is neither. Checkout
+		// takes the MAX across the cart and floors the pickup/delivery TIME with
+		// it, the same way minNoticeDays floors the DATE — and the two compose:
+		// notice moves the day, prep moves the clock, and prep is absorbed
+		// overnight on any day but today. Undefined = no window (0 normalizes to
+		// unset — one spelling). Capped at MAX_PREP_MINUTES. Counter checkout is
+		// exempt, the notice posture: the seller is standing there.
+		prepMinutes: v.optional(v.number()),
+		// One line the buyer must read before collecting THIS product — "side
+		// counter", "bring an ice bag, ice-cream puffs melt in 20 min". Lived in
+		// the description before, where it reached the storefront and then died:
+		// it never rode the order, so it was absent from checkout, the WhatsApp
+		// confirmation and /track, which is exactly where a buyer needs it.
+		// Frozen onto orders.items[].pickupNote at create. Plain text, trimmed,
+		// <= MAX_PICKUP_NOTE_LENGTH; empty -> unset. Shown only where
+		// self-collect is actually on offer.
+		pickupNote: v.optional(v.string()),
 		// What KIND of thing this is — the vocabulary + question router locked in
 		// the booking spec (86eyj70z1 decision 5). Unset = physical (legacy
 		// default, zero migration). "Food" is a wizard card, never a stored value
@@ -1251,6 +1271,15 @@ export default defineSchema({
 				// exactly the wrong answer for any product whose flag has since
 				// changed, and we cannot know what was true then.
 				stockReserved: v.optional(v.boolean()),
+				// The product's pickup note AS IT READ WHEN SOLD (z8r3fdff97) —
+				// frozen like `name`, `price` and `categoryNames`, and for the same
+				// reason: a seller who later edits "side counter" to "front door"
+				// must not rewrite the instruction a buyer was already given and is
+				// still holding in their WhatsApp thread. Undefined = the product
+				// carried no note at the time, which is also every order predating
+				// the field; deliberately NOT backfilled, since today's note is not
+				// evidence of what that buyer was told.
+				pickupNote: v.optional(v.string()),
 			}),
 		),
 		subtotal: v.number(),
@@ -1602,15 +1631,30 @@ export default defineSchema({
 		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
 		// midnight (0..1439), captured at checkout for DELIVERY orders (both
 		// directions: the rider's arrival at the buyer, or the collection from
-		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// them, shouldn't be an all-day window) and — since z8r3fdff97 — for
+		// SELF-COLLECT orders at the seller's own pickup point whenever the
+		// store has opening hours or the cart has a prep window (a drop-off
+		// meet-up stays date-only: its schedule note governs). Deliberately a separate field:
 		// `fulfilmentDate` must stay a whole midnight (the validator enforces
 		// it, and the inbox sort / due-today counts / urgency badges all
 		// compare midnights), so the time composes with it via
 		// composeFulfilmentMoment and can never drift from the day. Absent on
-		// legacy, counter and self-collect orders — every consumer treats
-		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// legacy, counter and booking orders, and optional on self-collect —
+		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
+		// The seller MOVED this order's moment (z8r3fdff97 test round). The
+		// buyer is never messaged about a reschedule — the dialog says so and
+		// tells the seller to agree it in chat — so `/track` is the only place
+		// they can see it changed, and "Collect on Mon 3:00 PM" alone looks
+		// exactly like the time they chose. These three carry what the page
+		// needs to say so: WHEN it was moved, and the moment it moved FROM
+		// (date-only when the seller cleared the time). Absent = never moved,
+		// which is every order before this shipped. Stamped only when the
+		// moment actually differs, so re-saving the same day is not "changed".
+		rescheduledAt: v.optional(v.number()),
+		rescheduledFromDate: v.optional(v.number()),
+		rescheduledFromTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery

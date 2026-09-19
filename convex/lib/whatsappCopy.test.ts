@@ -6,6 +6,7 @@ import {
 	poweredByLine,
 	renderMessage,
 	renderPickupBlock,
+	renderPickupNotes,
 	renderSystemMessage,
 	TEMPLATE_KEYS,
 	TEMPLATE_LANGUAGE,
@@ -468,5 +469,52 @@ describe("collection service (86eyg0n8e) — confirm wording", () => {
 			deliveryDirection: "standard",
 		});
 		expect(out).toContain("ready to ship");
+	});
+});
+
+describe("renderPickupNotes (z8r3fdff97)", () => {
+	test("says nothing when there is nothing to say", () => {
+		// Callers concatenate unconditionally — renderPickupBlock's posture.
+		expect(renderPickupNotes("en", [])).toBe("");
+		expect(renderPickupNotes("en", [undefined, undefined])).toBe("");
+		expect(renderPickupNotes("en", ["   "])).toBe("");
+	});
+
+	test("prints each distinct instruction ONCE, in cart order", () => {
+		// A seller with six flavours of the same puff writes one note six
+		// times. "Ice Cream Puff: bring an ice bag / Mango Puff: bring an ice
+		// bag / …" is noise in a chat message, so the note is deduped and the
+		// product is deliberately not named.
+		const out = renderPickupNotes("en", [
+			"Bring an ice bag.",
+			"Bring an ice bag.",
+			"Side counter, ring the bell.",
+			undefined,
+			"Bring an ice bag.",
+		]);
+		expect(out.split("\n").filter((l) => l.startsWith("•"))).toEqual([
+			"• Bring an ice bag.",
+			"• Side counter, ring the bell.",
+		]);
+	});
+
+	test("leads with a blank line so it stacks under the pickup block", () => {
+		const out = renderPickupNotes("en", ["Side counter."]);
+		expect(out.startsWith("\n")).toBe(true);
+		expect(out).toContain("Before you collect");
+	});
+
+	test("speaks the buyer's language", () => {
+		expect(renderPickupNotes("ms", ["Bawa beg ais."])).toContain(
+			"Sebelum anda ambil",
+		);
+		expect(renderPickupNotes("zh", ["带冰袋。"])).toContain("取货前请注意");
+	});
+
+	test("trims, so a seller's stray spacing never shows up as a bullet", () => {
+		const out = renderPickupNotes("en", ["  Side counter.  ", "Side counter."]);
+		expect(out.split("\n").filter((l) => l.startsWith("•"))).toEqual([
+			"• Side counter.",
+		]);
 	});
 });

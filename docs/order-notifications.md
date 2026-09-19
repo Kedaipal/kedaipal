@@ -220,7 +220,15 @@ dashboard open.
   BASELINE (page loads never chime for existing orders); later increases
   raise: WebAudio two-tone chime (no asset), a system `Notification`
   (`tag`-collapsed, click focuses + navigates to the order), a 6s tab-title
-  flash, and an in-app toast fallback.
+  flash, and an in-app toast fallback. The toast **says what happened and is
+  clickable end to end** (z8r3fdff97 test round): "A new order just came in"
+  over "ORD-XCVE · Zaki T2 test · RM 63.90", the whole body opening the order
+  — a seller reaches for the words, not a 40px button — with the Open button
+  kept for keyboard focus and for anyone who reads it as the only affordance.
+  `latestActivity` returns the buyer name and total for that line; both come
+  off the order doc it already reads, so the extra facts cost nothing. A
+  counter or anonymous order has no name, and the line drops that segment
+  rather than printing a stray separator.
 - Events: **new order** and **rider booking failed** (money-relevant only —
   deliberately not every status change).
 - Preferences are **per device** (`localStorage`): master switch + sound.

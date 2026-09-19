@@ -18,7 +18,15 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import {
+	MAX_NOTICE_DAYS,
+	MAX_PREP_MINUTES,
+	parsePrepMinutesText,
+} from "../../../convex/lib/fulfilmentDate";
+import {
+	MAX_PICKUP_NOTE_LENGTH,
+	pickupNoteFits,
+} from "../../../convex/lib/pickupNote";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	DEFAULT_WEEKEND_DAYS,
@@ -43,13 +51,16 @@ import { weekendRateConsequence } from "../../lib/product-summary";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import { CategoryPicker } from "./category-picker";
 import {
 	buildSubmitVariants,
 	collectOptionIssues,
+	PREP_PRESETS,
 	type ProductFormDraft,
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
@@ -166,6 +177,10 @@ export type WizardState = {
 	/** Review "More options" — order rules, as typed (blank = no rule). */
 	minQuantity: string;
 	minNoticeDays: string;
+	/** Prep window in minutes, as typed; blank = none (z8r3fdff97). */
+	prepMinutes: string;
+	/** One line a collecting buyer reads; blank = none. */
+	pickupNote: string;
 };
 
 export function emptyWizardState(defaultKind?: ProductKind): WizardState {
@@ -201,6 +216,8 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		categoryIds: [],
 		minQuantity: "",
 		minNoticeDays: "",
+		prepMinutes: "",
+		pickupNote: "",
 	};
 }
 
@@ -513,6 +530,21 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// Prep time + pickup note ride the same step, and only on the
+		// non-booking route — a booking's preparation IS the acceptance, and
+		// its orders can never carry a pickup note.
+		if (!parsePrepMinutesText(state.prepMinutes).ok) {
+			issues.push({
+				field: "prepMinutes",
+				message: `Enter a whole number of minutes between 0 and ${MAX_PREP_MINUTES}, or leave blank.`,
+			});
+		}
+		if (!pickupNoteFits(state.pickupNote)) {
+			issues.push({
+				field: "pickupNote",
+				message: `Keep it to ${MAX_PICKUP_NOTE_LENGTH} characters or fewer.`,
+			});
+		}
 	}
 	return issues;
 }
@@ -539,6 +571,7 @@ export function buildWizardSubmitValues(
 	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
+	const prep = parsePrepMinutesText(state.prepMinutes);
 	const kind = wizardKind(state);
 	const capacity = Number(state.capacityPerNight.trim());
 	const packageLengthValue = (() => {
@@ -568,9 +601,7 @@ export function buildWizardSubmitValues(
 						// No unit without a length — a bare unit on a free-range
 						// listing is config that describes nothing.
 						packageUnit:
-							packageLengthValue !== undefined
-								? state.packageUnit
-								: undefined,
+							packageLengthValue !== undefined ? state.packageUnit : undefined,
 						autoAccept: state.autoAccept || undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
@@ -605,6 +636,13 @@ export function buildWizardSubmitValues(
 			state.minNoticeDays.trim().length > 0 && Number.isInteger(notice)
 				? notice
 				: undefined,
+		// Both are non-booking-only, like minQuantity: a booking's preparation
+		// IS the acceptance, and its orders can never carry a pickup note.
+		prepMinutes: kind !== "booking" && prep.ok ? prep.minutes : undefined,
+		pickupNote:
+			kind !== "booking" && state.pickupNote.trim().length > 0
+				? state.pickupNote
+				: undefined,
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: reconciled.options,
@@ -620,12 +658,14 @@ export function wizardHandoff(state: WizardState): {
 	initialValues: ProductFormInitialValues;
 	initialEditor: VariantEditorState;
 } {
-	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger), so a
-	// value the wizard rejects can never arrive silently truncated in the form.
+	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger; prep
+	// through parsePrepMinutesText), so a value the wizard rejects can never
+	// arrive silently truncated in the form.
 	const minQtyRaw = state.minQuantity.trim();
 	const noticeRaw = state.minNoticeDays.trim();
 	const minQty = minQtyRaw.length > 0 ? Number(minQtyRaw) : Number.NaN;
 	const notice = noticeRaw.length > 0 ? Number(noticeRaw) : Number.NaN;
+	const prep = parsePrepMinutesText(state.prepMinutes);
 	return {
 		initialValues: {
 			name: state.name,
@@ -646,6 +686,12 @@ export function wizardHandoff(state: WizardState): {
 			minQuantity: Number.isInteger(minQty) && minQty > 0 ? minQty : undefined,
 			minNoticeDays:
 				Number.isInteger(notice) && notice > 0 ? notice : undefined,
+			prepMinutes:
+				prep.ok && prep.minutes !== undefined && prep.minutes > 0
+					? prep.minutes
+					: undefined,
+			pickupNote:
+				state.pickupNote.trim().length > 0 ? state.pickupNote : undefined,
 		},
 		initialEditor: state.editor,
 	};
@@ -689,6 +735,8 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		categoryIds: draft.categoryIds,
 		minQuantity: draft.minQuantity,
 		minNoticeDays: draft.minNoticeDays,
+		prepMinutes: draft.prepMinutes,
+		pickupNote: draft.pickupNote,
 	};
 }
 
@@ -843,6 +891,15 @@ export function ProductWizard({
 	const [issues, setIssues] = useState<WizardIssue[]>([]);
 	const [uploading, setUploading] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
+	// The one destructive answer the wizard ever asks for — a type switch that
+	// drops typed prices, or leaving an unsaved draft. One piece of state, so
+	// there is one dialog rather than two that can both be open.
+	const [pendingConfirm, setPendingConfirm] = useState<{
+		title: string;
+		description: string;
+		confirmLabel: string;
+		apply: () => void;
+	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
 	// Restored drafts open their optional reveals when they hold content.
 	const [showDescription, setShowDescription] = useState(
@@ -1025,14 +1082,31 @@ export function ProductWizard({
 	}
 
 	/** True when switching away would throw typed pricing/stock away. */
-	function confirmLosingChoices(): boolean {
+	function switchingLosesChoices(): boolean {
 		const hasTypedData = rows.some(
 			(r) => r.price.trim().length > 0 || r.stock.trim().length > 0,
 		);
-		if (!options.some((a) => a.values.length > 0) || !hasTypedData) return true;
-		return window.confirm(
-			"Change the product type? Your choices and their prices will be removed.",
-		);
+		return options.some((a) => a.values.length > 0) && hasTypedData;
+	}
+
+	/**
+	 * Run `apply`, asking first when the switch would throw typed prices or
+	 * stock away. The question is the house `ConfirmDialog`, never
+	 * `window.confirm`: a native dialog is unstyled, ignores the theme, and
+	 * BLOCKS the page until it is dismissed (found while driving the wizard —
+	 * the renderer froze for as long as it stood).
+	 */
+	function askBeforeLosingChoices(apply: () => void) {
+		if (!switchingLosesChoices()) {
+			apply();
+			return;
+		}
+		setPendingConfirm({
+			title: "Change the product type?",
+			description: "Your choices and their prices will be removed.",
+			confirmLabel: "Change type",
+			apply,
+		});
 	}
 
 	/**
@@ -1074,63 +1148,65 @@ export function ProductWizard({
 	}
 	function switchToSingle() {
 		if (shape === "single") return;
-		if (!confirmLosingChoices()) return;
-		// Collapse to one row, carrying the first row's price/stock/flags.
-		const donor = madeToOrder
-			? rowsLeavingMadeToOrder()[0]
-			: (rows[0] ?? emptyRow([]));
-		patch({
-			shape: "single",
-			// Same reason as switchToChoices: "how do you prepare orders?" was
-			// never asked, so step 4 must ask it rather than inherit an answer.
-			fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
-			editor: {
-				...state.editor,
-				options: [],
-				customLine: madeToOrder ? null : state.editor.customLine,
-				rows: [
-					{
-						...donor,
-						optionValues: [],
-						sku: "",
-						imageStorageIds: [],
-						imageUrl: undefined,
-						active: true,
-					},
-				],
-			},
+		askBeforeLosingChoices(() => {
+			// Collapse to one row, carrying the first row's price/stock/flags.
+			const donor = madeToOrder
+				? rowsLeavingMadeToOrder()[0]
+				: (rows[0] ?? emptyRow([]));
+			patch({
+				shape: "single",
+				// Same reason as switchToChoices: "how do you prepare orders?" was
+				// never asked, so step 4 must ask it rather than inherit an answer.
+				fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
+				editor: {
+					...state.editor,
+					options: [],
+					customLine: madeToOrder ? null : state.editor.customLine,
+					rows: [
+						{
+							...donor,
+							optionValues: [],
+							sku: "",
+							imageStorageIds: [],
+							imageUrl: undefined,
+							active: true,
+						},
+					],
+				},
+			});
+			setValueDrafts([]);
 		});
-		setValueDrafts([]);
 	}
 	function switchToMadeToOrder() {
 		if (madeToOrder) return;
-		if (!confirmLosingChoices()) return;
-		const donor = rows[0] ?? emptyRow([]);
-		// The type IS the fulfilment answer (made to order, never out of stock,
-		// mockup-approved), so step 4 has nothing left to ask — mark it answered
-		// and drop it from the sequence.
-		//
-		// The product becomes ONE bespoke line and no matrix at all: modelling the
-		// type as `isCustom` is what gives it the storefront's existing bespoke
-		// flow (request box, "Choose" routing, qty-1 cart line) instead of a
-		// parallel path. An existing custom line is kept — same offer, and the
-		// seller already wrote its prompt.
-		patch({
-			shape: "made_to_order",
-			fulfilmentAnswered: true,
-			editor: {
-				options: [],
-				rows: [],
-				customLine: customLine ?? {
-					...emptyCustomLine(),
-					// Carry what still means something from the row being retired.
-					price: donor?.price ?? "",
-					imageStorageIds: donor?.imageStorageIds ?? [],
-					imageUrl: donor?.imageUrl,
+		askBeforeLosingChoices(() => {
+			const donor = rows[0] ?? emptyRow([]);
+			// The type IS the fulfilment answer (made to order, never out of stock,
+			// mockup-approved), so step 4 has nothing left to ask — mark it answered
+			// and drop it from the sequence.
+			//
+			// The product becomes ONE bespoke line and no matrix at all: modelling the
+			// type as `isCustom` is what gives it the storefront's existing bespoke
+			// flow (request box, "Choose" routing, qty-1 cart line) instead of a
+			// parallel path. An existing custom line is kept — same offer, and the
+			// seller already wrote its prompt.
+			patch({
+				shape: "made_to_order",
+				fulfilmentAnswered: true,
+				editor: {
+					options: [],
+					rows: [],
+					customLine: customLine ?? {
+						...emptyCustomLine(),
+						// Carry what still means something from the row being retired.
+						price: donor?.price ?? "",
+						imageStorageIds: donor?.imageStorageIds ?? [],
+						imageUrl: donor?.imageUrl,
+					},
 				},
-			},
+			});
+			setValueDrafts([]);
 		});
-		setValueDrafts([]);
 	}
 
 	/**
@@ -1150,44 +1226,45 @@ export function ProductWizard({
 			patch({ kindCard: card });
 			return;
 		}
-		if (!confirmLosingChoices()) return;
-		if (nextBooking) {
-			patch({
-				kindCard: card,
-				shape: null,
-				fulfilmentAnswered: true,
-				editor: {
-					options: [],
-					customLine: null,
-					rows: [
-						{
-							...(rows[0] ?? emptyRow([])),
-							optionValues: [],
-							sku: "",
-							imageStorageIds: [],
-							imageUrl: undefined,
-							active: true,
-							blockWhenOutOfStock: false,
-							requiresProof: false,
-						},
-					],
-				},
-			});
-		} else {
-			// Leaving booking: the per-night price carries onto the fresh row so
-			// the seller doesn't retype; shape + preparation are re-asked.
-			patch({
-				kindCard: card,
-				shape: null,
-				fulfilmentAnswered: false,
-				editor: {
-					options: [],
-					customLine: null,
-					rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
-				},
-			});
-		}
-		setValueDrafts([]);
+		askBeforeLosingChoices(() => {
+			if (nextBooking) {
+				patch({
+					kindCard: card,
+					shape: null,
+					fulfilmentAnswered: true,
+					editor: {
+						options: [],
+						customLine: null,
+						rows: [
+							{
+								...(rows[0] ?? emptyRow([])),
+								optionValues: [],
+								sku: "",
+								imageStorageIds: [],
+								imageUrl: undefined,
+								active: true,
+								blockWhenOutOfStock: false,
+								requiresProof: false,
+							},
+						],
+					},
+				});
+			} else {
+				// Leaving booking: the per-night price carries onto the fresh row so
+				// the seller doesn't retype; shape + preparation are re-asked.
+				patch({
+					kindCard: card,
+					shape: null,
+					fulfilmentAnswered: false,
+					editor: {
+						options: [],
+						customLine: null,
+						rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
+					},
+				});
+			}
+			setValueDrafts([]);
+		});
 	}
 
 	// --- Custom line ---------------------------------------------------------
@@ -1233,13 +1310,16 @@ export function ProductWizard({
 		state.minNoticeDays.trim().length > 0;
 
 	function cancelWizard() {
-		if (
-			isDirty &&
-			!window.confirm("Discard this product? Nothing has been saved.")
-		) {
+		if (!isDirty) {
+			onExit();
 			return;
 		}
-		onExit();
+		setPendingConfirm({
+			title: "Discard this product?",
+			description: "Nothing has been saved — leaving loses the draft.",
+			confirmLabel: "Discard",
+			apply: onExit,
+		});
 	}
 
 	// Structural gate: the branching questions must be answered before Continue
@@ -1778,7 +1858,9 @@ export function ProductWizard({
 						    in its place, so the seller never wonders where it went. */}
 						{isPackageListing ? (
 							<p className="text-xs text-muted-foreground">
-								<span className="font-medium text-foreground">Weekend rate</span>{" "}
+								<span className="font-medium text-foreground">
+									Weekend rate
+								</span>{" "}
 								— a package has one flat price. Clear the package length to
 								charge weekend nights differently.
 							</p>
@@ -2199,7 +2281,9 @@ export function ProductWizard({
 						{state.fulfilmentAnswered && allMto ? (
 							<p className="rounded-xl bg-accent/10 px-3 py-2.5 text-sm leading-relaxed text-accent-emphasis">
 								Nice — buyers can always order. No stock counting, nothing ever
-								shows "sold out". You'll see the day's orders in your inbox.
+								shows "sold out". You'll see the day's orders in your inbox. If
+								each one takes time to make, set a prep time under More options
+								on the last step — buyers then can't pick a time sooner.
 							</p>
 						) : null}
 						{state.fulfilmentAnswered && anyTrack ? (
@@ -2711,6 +2795,104 @@ export function ProductWizard({
 													or pickup date sooner than this.
 												</span>
 											</label>
+											{/* Prep time — the same question at a smaller scale, so
+											    it follows notice here exactly as it does in the full
+											    form. Same presets, same order, one control. */}
+											<label className="flex flex-col gap-1 text-sm font-medium">
+												Prep time{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
+												<span className="flex items-center gap-1.5">
+													<Input
+														type="number"
+														inputMode="numeric"
+														min={0}
+														max={MAX_PREP_MINUTES}
+														placeholder="0"
+														value={state.prepMinutes}
+														onChange={(e) =>
+															patch({ prepMinutes: e.target.value })
+														}
+														isError={!!issueFor("prepMinutes")}
+														className="h-11 w-24 text-center"
+													/>
+													<span className="text-sm font-normal text-muted-foreground">
+														minutes
+													</span>
+												</span>
+												<span className="flex flex-wrap gap-1.5 pt-0.5">
+													{PREP_PRESETS.map((preset) => {
+														const active =
+															state.prepMinutes.trim() ===
+															String(preset.minutes);
+														return (
+															<button
+																key={preset.minutes}
+																type="button"
+																aria-pressed={active}
+																onClick={() =>
+																	patch({
+																		prepMinutes: active
+																			? ""
+																			: String(preset.minutes),
+																	})
+																}
+																className={`h-11 rounded-xl border px-3 text-sm font-normal transition-colors ${
+																	active
+																		? "border-accent bg-accent/10 font-medium text-accent-emphasis"
+																		: "border-input text-muted-foreground hover:bg-muted"
+																}`}
+															>
+																{preset.label}
+															</button>
+														);
+													})}
+												</span>
+												<IssueText message={issueFor("prepMinutes")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													How long you need to make it, up to 24 hours. Buyers
+													can&apos;t pick a pickup or delivery time sooner than
+													this.
+												</span>
+											</label>
+											{/* Pickup note — an instruction, not a limit, so it is
+											    last. Offered here regardless of the store's
+											    self-collect setting: the wizard is the CREATE flow,
+											    and a seller turning collection on next week should
+											    not have to come back for it. */}
+											{/* htmlFor rather than a wrapping label: the control is
+											    a component, and the a11y rule (rightly) can't see
+											    an <input> through it. */}
+											<label
+												htmlFor="wizard-pickup-note"
+												className="flex flex-col gap-1 text-sm font-medium"
+											>
+												Pickup note{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
+												<Textarea
+													id="wizard-pickup-note"
+													value={state.pickupNote}
+													onChange={(e) =>
+														patch({ pickupNote: e.target.value })
+													}
+													placeholder="e.g. Collect from the side counter — bring an ice bag."
+													className="min-h-20 font-normal"
+													aria-invalid={!!issueFor("pickupNote")}
+												/>
+												<span className="self-end text-xs font-normal tabular-nums text-muted-foreground">
+													{state.pickupNote.replace(/\s+/g, " ").trim().length}/
+													{MAX_PICKUP_NOTE_LENGTH}
+												</span>
+												<IssueText message={issueFor("pickupNote")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													Collecting buyers see this at checkout and on their
+													order page. It&apos;s copied onto each order, so
+													editing it later never changes past orders.
+												</span>
+											</label>
 										</div>
 									)}
 
@@ -2780,6 +2962,21 @@ export function ProductWizard({
 					</p>
 				) : null}
 			</div>
+			<ConfirmDialog
+				open={pendingConfirm !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingConfirm(null);
+				}}
+				title={pendingConfirm?.title ?? ""}
+				description={pendingConfirm?.description}
+				confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+				destructive
+				onConfirm={() => {
+					const apply = pendingConfirm?.apply;
+					setPendingConfirm(null);
+					apply?.();
+				}}
+			/>
 		</div>
 	);
 }

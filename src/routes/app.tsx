@@ -150,7 +150,15 @@ function AppShell() {
 					isAdmin={isAdmin}
 					adminBadge={adminOwnStore}
 				/>
-				<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
+				{/* min-w-0: this column is a flex item beside the sidebar, and a flex
+				    item's default `min-width: auto` refuses to shrink below its
+				    content. Any page whose content is wider than the space left
+				    (the orders TABLE with a few columns switched on) therefore
+				    pushed the whole shell past the viewport — the page scrolled
+				    sideways and the toolbar's right-hand controls went off screen.
+				    With min-w-0 the column takes the space it is given and the
+				    inner `overflow-x-auto` scroller does the scrolling, as designed. */}
+				<div className="mx-auto flex w-full min-w-0 max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
 					{retailer?.actingAsAdmin ? (
 						<div className="print:hidden">
 							<ActingAsBanner storeName={retailer.storeName} />
@@ -234,7 +242,9 @@ function ShellSkeleton() {
 				</div>
 			</aside>
 
-			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
+			{/* Same min-w-0 as the loaded shell, so the skeleton and the real
+			    page lay out identically. */}
+			<div className="mx-auto flex w-full min-w-0 max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
 				{/* Mobile header placeholder */}
 				<header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden">
 					<div className="flex items-center gap-2.5">

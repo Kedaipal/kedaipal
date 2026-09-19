@@ -14,6 +14,8 @@ interface BadgeOrder {
 	updatedAt?: number;
 	createdAt: number;
 	fulfilmentDate?: number;
+	/** Pickup/delivery time on that day (z8r3fdff97) — shown on the card's badge. */
+	fulfilmentTimeMinutes?: number;
 	mockupStatus?: string;
 	/** Checkout surface — counter orders get a defaulted date, so no date badge. */
 	source?: string;
@@ -91,6 +93,7 @@ export function OrderContextBadge({
 			<FulfilmentDateBadge
 				epoch={order.fulfilmentDate}
 				now={now}
+				timeMinutes={order.fulfilmentTimeMinutes}
 				muted={isTerminalStatus(order.status) || isCollectedCollection(order)}
 			/>
 		);

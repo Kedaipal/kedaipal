@@ -78,6 +78,8 @@ async function seedProduct(
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
 		minNoticeDays: number;
+		prepMinutes: number;
+		pickupNote: string;
 		parcelWeightG: number;
 	}> = {},
 ): Promise<Id<"products">> {
@@ -91,6 +93,8 @@ async function seedProduct(
 		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
 		requiresProof: overrides.requiresProof ?? false,
 		minNoticeDays: overrides.minNoticeDays,
+		prepMinutes: overrides.prepMinutes,
+		pickupNote: overrides.pickupNote,
 		variants: [
 			{
 				optionValues: [],
@@ -7916,7 +7920,13 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 		expect(o?.fulfilmentTimeMinutes).toBe(930);
 	});
 
-	test("self-collect ignores a stray time — the point's schedule governs pickup hours", async () => {
+	test("self-collect now KEEPS a pickup time (z8r3fdff97 reverses this)", async () => {
+		// This test used to assert the opposite: a stray time on a self-collect
+		// order was dropped, because pickup was date-only and the point's own
+		// schedule note carried the detail. That left a made-to-order seller
+		// with no idea when the buyer was coming, which is the whole reason
+		// z8r3fdff97 exists. Kept rather than deleted, inverted rather than
+		// rewritten, so the behaviour change is visible in the diff.
 		const t = setup();
 		const { retailer, productId } = await store(t);
 		const { shortId } = await t.mutation(api.orders.create, {
@@ -7928,6 +7938,24 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 			deliveryMethod: "self_collect",
 			fulfilmentDate: tomorrowMidnight(),
 			fulfilmentTimeMinutes: 930,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(930);
+	});
+
+	test("a self-collect order with no time is still accepted", async () => {
+		// The time is OPTIONAL on both methods. A buyer on a stale tab, or any
+		// client that predates the picker, must not be refused.
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMidnight(),
 		});
 		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
@@ -8126,9 +8154,9 @@ describe("orders — store opening hours at create (86eyp5rav)", () => {
 				}),
 			},
 		);
-		// Self-collect is date-only: an open day passes even though 3 AM would
-		// be outside the window (pickup has no time; the point's schedule note
-		// governs the detail).
+		// A self-collect order WITHOUT a time is judged by the day alone: an
+		// open day passes (a pickup time is optional; when one is sent it is
+		// held to the window like a delivery's).
 		const { shortId } = await t.mutation(api.orders.create, {
 			retailerId: retailer._id,
 			items: [{ productId, quantity: 1 }],
@@ -8212,6 +8240,81 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		);
 		const note = events.find((e) => e.note?.startsWith("fulfilment_rescheduled"));
 		expect(note?.note).toMatch(/from \d{4}-\d{2}-\d{2} 03:00 to \d{4}-\d{2}-\d{2} 10:00/);
+	});
+
+	test("the order carries what /track needs to SAY it moved", async () => {
+		// No message goes out on a reschedule, so the buyer's page is the only
+		// place the change can surface — and "Deliver on 10:00 AM" alone reads
+		// exactly like the time they picked (z8r3fdff97 test round).
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 10 * 60,
+		});
+		const moved = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(moved?.rescheduledAt).toBeGreaterThan(0);
+		expect(moved?.rescheduledFromDate).toBe(date);
+		expect(moved?.rescheduledFromTimeMinutes).toBe(3 * 60);
+
+		// Moving again re-points "was" at the moment just left, never the first.
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date + DAY_MS,
+			fulfilmentTimeMinutes: 11 * 60,
+		});
+		const again = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(again?.rescheduledFromDate).toBe(date);
+		expect(again?.rescheduledFromTimeMinutes).toBe(10 * 60);
+	});
+
+	test("clearing a pickup time leaves no stale 'was' time behind", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const date = todayMytMidnight() + 2 * DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 15 * 60,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		if (!order) throw new Error("seed failed");
+
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.orders.rescheduleFulfilment,
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
+		);
+		const cleared = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(cleared?.fulfilmentTimeMinutes).toBeUndefined();
+		// It moved FROM 3:00 PM — that is what the buyer needs contrasted.
+		expect(cleared?.rescheduledFromTimeMinutes).toBe(15 * 60);
+		expect(cleared?.rescheduledAt).toBeGreaterThan(0);
+	});
+
+	test("re-saving the SAME moment is not a change — the buyer is told nothing", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.orders.rescheduleFulfilment,
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: 3 * 60 },
+		);
+		const same = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(same?.rescheduledAt).toBeUndefined();
+		expect(same?.rescheduledFromDate).toBeUndefined();
 	});
 
 	test("date-only change keeps the existing time — the clock never silently drops", async () => {
@@ -8383,22 +8486,150 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		).rejects.toThrow(/time of day/);
 	});
 
-	test("self-collect orders stay date-only — a passed time is ignored, mirroring create", async () => {
+	test("self-collect takes a pickup time, and a date-only change keeps it (z8r3fdff97)", async () => {
 		const t = setup();
 		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
 		await t.run(async (ctx) =>
 			ctx.db.patch(order._id, {
 				deliveryMethod: "self_collect" as const,
 				fulfilmentTimeMinutes: undefined,
 			}),
 		);
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date + DAY_MS,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		let updated = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(updated?.fulfilmentDate).toBe(date + DAY_MS);
+		expect(updated?.fulfilmentTimeMinutes).toBe(9 * 60);
+
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date,
+		});
+		updated = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(updated?.fulfilmentTimeMinutes).toBe(9 * 60);
+	});
+
+	test("null clears a self-collect time — 'come any time that day' — and the event says so", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, {
+				deliveryMethod: "self_collect" as const,
+				fulfilmentTimeMinutes: 15 * 60,
+			}),
+		);
 		await t.withIdentity({ subject: USER_A }).mutation(
 			api.orders.rescheduleFulfilment,
-			{ orderId: order._id, fulfilmentDate: date + DAY_MS, fulfilmentTimeMinutes: 9 * 60 },
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
 		);
 		const updated = await t.run(async (ctx) => ctx.db.get(order._id));
-		expect(updated?.fulfilmentDate).toBe(date + DAY_MS);
 		expect(updated?.fulfilmentTimeMinutes).toBeUndefined();
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.filter((q) => q.eq(q.field("orderId"), order._id))
+				.collect(),
+		);
+		const note = events.find((e) => e.note?.startsWith("fulfilment_rescheduled"));
+		expect(note?.note).toMatch(
+			/from \d{4}-\d{2}-\d{2} 15:00 to \d{4}-\d{2}-\d{2}\)$/,
+		);
+	});
+
+	test("a delivery refuses a clear — dispatch composes the rider's moment from it", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(
+				api.orders.rescheduleFulfilment,
+				{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
+			),
+		).rejects.toThrow(/keeps a time/);
+		const unchanged = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(unchanged?.fulfilmentDate).toBe(date);
+		expect(unchanged?.fulfilmentTimeMinutes).toBe(3 * 60);
+	});
+
+	test("neither the prep floor nor opening hours bind the seller", async () => {
+		// "The puffs are done early, come in 30 min" is what this is for — and
+		// the store's hours are the seller's to make exceptions to.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes: 240,
+		});
+		const tomorrow = todayMytMidnight() + DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		if (!order) throw new Error("seed failed");
+
+		// Inside today's 4-hour prep window. Skipped in the last minutes of the
+		// MYT day, where "a minute from now" would be tomorrow.
+		const nowMinutes = Math.floor(
+			((Date.now() + 8 * 3600_000) % DAY_MS) / 60_000,
+		);
+		if (nowMinutes < 1430) {
+			await asA.mutation(api.orders.rescheduleFulfilment, {
+				orderId: order._id,
+				fulfilmentDate: todayMytMidnight(),
+				fulfilmentTimeMinutes: nowMinutes + 5,
+			});
+			const soon = await t.run(async (ctx) => ctx.db.get(order._id));
+			expect(soon?.fulfilmentTimeMinutes).toBe(nowMinutes + 5);
+		}
+
+		// Tomorrow's hours are 9–6; 3 AM is outside them, and allowed.
+		const weekday = new Date(tomorrow + 8 * 3600_000).getUTCDay();
+		await asA.mutation(api.retailers.updateSettings, {
+			openingHours: Array.from({ length: 7 }, (_, i) =>
+				i === weekday
+					? { open: 9 * 60, close: 18 * 60 }
+					: { open: 9 * 60, close: 18 * 60, closed: true },
+			),
+		});
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: tomorrow,
+			fulfilmentTimeMinutes: 3 * 60,
+		});
+		const early = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(early?.fulfilmentTimeMinutes).toBe(3 * 60);
+	});
+
+	test("a booking is refused — its fulfilment date IS the check-in", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, { deliveryMethod: "booking" as const }),
+		);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(
+				api.orders.rescheduleFulfilment,
+				{ orderId: order._id, fulfilmentDate: date + DAY_MS },
+			),
+		).rejects.toThrow(/booking/);
+		const unchanged = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(unchanged?.fulfilmentDate).toBe(date);
 	});
 
 	test("a dateless legacy order can be GIVEN a date — event says 'from unset'", async () => {
@@ -9775,3 +10006,373 @@ describe("orders — column header filters (86eyrtz74)", () => {
 	});
 });
 
+
+describe("per-product prep time (z8r3fdff97)", () => {
+	const customer = { name: "Aisyah", waPhone: "60123456789" };
+
+	async function storeWithPrep(
+		t: ReturnType<typeof setup>,
+		prepMinutes: number,
+		pickupNote?: string,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes,
+			pickupNote,
+		});
+		return { retailer, productId };
+	}
+
+	const todayMyt = () =>
+		Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+		8 * 3600_000;
+	const tomorrowMyt = () => todayMyt() + 86_400_000;
+	/** Minutes since MYT midnight, right now. */
+	const nowMinutes = () =>
+		Math.floor(((Date.now() + 8 * 3600_000) % 86_400_000) / 60_000);
+
+	test("refuses a same-day pickup inside the prep window, and names the product", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		// A minute from now is comfortably inside a two-hour window.
+		const tooSoon = Math.min(1439, nowMinutes() + 1);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: tooSoon,
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*2 hours to prepare.*earliest pickup/s);
+	});
+
+	test("accepts the same order once the time clears the window", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		const clear = nowMinutes() + 130;
+		// Near midnight the floor spills past the day; that case has its own
+		// test below, so only run the happy path when today still has room.
+		if (clear < 1440) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: clear,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(o?.fulfilmentTimeMinutes).toBe(clear);
+		}
+	});
+
+	test("prep is absorbed overnight — tomorrow takes any open time", async () => {
+		// The deliberate semantic: prep moves the CLOCK within today and then
+		// stops. Ordering at 11 PM for tomorrow 9 AM is fine.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 240);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(9 * 60);
+	});
+
+	test("a prep window that swallows the day moves the DATE, not the time", async () => {
+		// Without this the buyer picks today, finds no selectable time, and has
+		// a dead end instead of an answer.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 1440);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: 23 * 60,
+			}),
+		).rejects.toThrow(/too late for today, pick a later day/);
+	});
+
+	test("the floor is HOURS-AWARE: a store closing before prep finishes is too late today", async () => {
+		// The first server floor counted to midnight, so an 18:00 close with a
+		// 16:30 order and 2h prep named "earliest pickup is 6:30 PM" — after
+		// the shutters were down. Build that shape relative to now.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		const now = nowMinutes();
+		const closeAt = now + 60;
+		if (closeAt > 1439) return; // too near midnight to build the shape
+		const weekday = new Date(todayMyt() + 8 * 3600_000).getUTCDay();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: Array.from({ length: 7 }, (_, i) =>
+					i === weekday ? { open: 0, close: closeAt } : { open: 0, close: 1439 },
+				),
+			},
+		);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				// Inside today's hours — only prep makes it impossible.
+				fulfilmentTimeMinutes: Math.min(closeAt, now + 30),
+			}),
+		).rejects.toThrow(/too late for today/);
+	});
+
+	describe("a DATE-ONLY order's prep runs to midnight, not to closing", () => {
+		// A drop-off meet-up sends no time — its hour is the point's own
+		// schedule — so the store's closing time is not the deadline prep races.
+		// Pinned clock: Fri 26 Jun 2026, MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		const at = (h: number, m = 0) => FRI + (h * 60 + m) * 60_000;
+		const nineToSix = Array.from({ length: 7 }, () => ({
+			open: 9 * 60,
+			close: 18 * 60,
+		}));
+		afterEach(() => vi.useRealTimers());
+
+		/** A 9-to-6 store (or `hours`) with one drop-off point; returns a
+		 * date-only order for the given day. */
+		async function dropOffOrder(
+			t: ReturnType<typeof setup>,
+			prepMinutes: number,
+			hours: Array<{ open: number; close: number; closed?: true }>,
+		) {
+			const { retailer, productId } = await storeWithPrep(t, prepMinutes);
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: hours,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Pasar Sabtu",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "drop_off",
+				},
+			);
+			return (fulfilmentDate: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					pickupLocationId,
+					fulfilmentDate,
+				});
+		}
+
+		test("after closing, a day-long prep still can't be booked for tonight", async () => {
+			// The gap: judged against the 9-to-6 hours, 8 PM had no slots with
+			// prep AND none without, so prep looked blameless.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const order = await dropOffOrder(t, 1440, nineToSix);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*24 hours to prepare.*too late for today/s,
+			);
+			await expect(order(FRI + DAY_MS)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("closing time isn't the deadline: prep done before midnight is fine today", async () => {
+			// 4:30 PM plus 2h ends at 6:30 PM — after the store's 6 PM close, but
+			// the meet-up's hour is its own.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(16, 30));
+			const t = setup();
+			const order = await dropOffOrder(t, 120, nineToSix);
+			await expect(order(FRI)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("a closed weekday still refuses in the opening-hours words, never prep's", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const closedFriday = nineToSix.map((day, i) =>
+				i === 5 ? { ...day, closed: true as const } : day,
+			);
+			const order = await dropOffOrder(t, 1440, closedFriday);
+			await expect(order(FRI)).rejects.toThrow(/closed on Fridays/);
+		});
+	});
+
+	test("a COLLECTION trip is exempt: the rider collects first, prep comes after", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 240);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE",
+					deliveryDirection: "collection",
+				},
+			});
+		});
+		const soon = Math.min(1439, nowMinutes() + 20);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMyt(),
+			fulfilmentTimeMinutes: soon,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.deliveryDirection).toBe("collection");
+		expect(o?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the SLOWEST item in a mixed cart sets the floor and is named", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const quick = await seedProduct(t, USER_A, retailer._id, {
+			name: "Kuih",
+			prepMinutes: 15,
+		});
+		const slow = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes: 240,
+		});
+		const tooSoon = Math.min(1439, nowMinutes() + 30);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ productId: quick, quantity: 1 },
+					{ productId: slow, quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: tooSoon,
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*4 hours/s);
+	});
+
+	test("a product with no prep window is untouched", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 0);
+		const soon = Math.min(1439, nowMinutes() + 20);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: todayMyt(),
+			fulfilmentTimeMinutes: soon,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the pickup note is FROZEN onto the line, and a later edit never rewrites it", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(
+			t,
+			0,
+			"Side counter — ring the bell.",
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.update, {
+			productId,
+			pickupNote: "Front door now.",
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// The buyer is still holding the old instruction in their chat.
+		expect(o?.items[0]?.pickupNote).toBe("Side counter — ring the bell.");
+	});
+
+	test("the export carries the pickup time and the note AS TOLD — and never on a delivery", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(
+			t,
+			0,
+			"Side counter, ring the bell.",
+		);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId: collectId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+			fulfilmentTimeMinutes: 11 * 60 + 30,
+		});
+		const { shortId: deliveryId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Edited after both orders were placed — the export must not follow it.
+		await asA.mutation(api.products.update, {
+			productId,
+			pickupNote: "Front door now.",
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilmentTime", "pickupNotes"],
+		});
+		const lines = csv.split("\r\n");
+		expect(lines[0]).toBe("Order ID,Fulfilment time,Pickup notes");
+		expect(lines).toContain(
+			`${collectId},11:30 AM,"Side counter, ring the bell."`,
+		);
+		expect(lines).toContain(`${deliveryId},,`);
+	});
+});

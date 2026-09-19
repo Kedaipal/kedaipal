@@ -14,9 +14,11 @@ storefront always keeps at least one _working_ method.**
 > **delivery optional** (ClickUp `86exu4grm`) and the cross-method invariant that ties the
 > two together.
 
-> **Related:** the **fulfilment date** captured at checkout (the buyer's "when do you need
-> this?", applies to both methods) has its own reference: [`fulfilment-date.md`](./fulfilment-date.md).
-> The `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab.
+> **Related:** the **fulfilment date and time** captured at checkout (the buyer's "when do you
+> need this?", both methods), store and per-product notice, per-product **prep time** and store
+> opening hours have their own reference: [`fulfilment-date.md`](./fulfilment-date.md). The
+> `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab. The
+> per-product **pickup note** is below: [Per-product pickup note](#per-product-pickup-note-2026-09-17-clickup-z8r3fdff97).
 
 ## Delivery charge — flat fee + radius bands (2026-07-16, ClickUp `86extzdr8`)
 
@@ -480,6 +482,60 @@ part that survived), end-to-end transition/set/clear/auth cases in
 `src/components/order/shipment-tracking.test.tsx`, block copy in
 `src/lib/dispatch-block.test.ts`.
 
+## Per-product pickup note (2026-09-17, ClickUp `z8r3fdff97`)
+
+The one line a buyer must read before collecting — "side counter", "bring an ice bag, these
+melt in 20 minutes", "ring the bell, the shutter looks closed". It used to live in the product
+description, where it reached the storefront and died: the description never rides the order,
+so the instruction was missing from checkout, the WhatsApp confirmation and `/track` — exactly
+where a buyer standing outside the shop needs it. Its sibling, per-product **prep time**, lives
+in [`fulfilment-date.md`](./fulfilment-date.md).
+
+- **Storage.** `products.pickupNote`, stored as ONE line (`collapseNote`: inner whitespace
+  collapsed, trimmed; empty → unset) and capped at `MAX_PICKUP_NOTE_LENGTH` = 200 counted on
+  the stored text — `convex/lib/pickupNote.ts`, shared by the server sanitizer and the form's
+  counter so they can't disagree about what fits. Plain text, rendered escaped everywhere.
+- **Frozen per line at create** as `orders.items[].pickupNote`, from the LIVE product — the
+  `pickupSnapshot` posture: a later edit never rewrites what earlier buyers were told. Not
+  backfilled; older orders simply have none.
+
+  | Create path | Freezes the note? |
+  | --- | --- |
+  | Storefront checkout (`orders.create`) | Yes — every order, whatever the method (the read gate below decides where it shows). |
+  | Claim links (`orderClaims.commit`) | Yes — from the live product at the buyer's commit, so a typo fixed after the link went out still reaches them. |
+  | Counter checkout | No, deliberately — the buyer is at the counter. |
+  | Bookings | Never — a booking's form hides the note. |
+
+- **One read gate: `orderPickupNotes(order)`.** Self-collect orders only (drop-off meet-ups
+  included — the instruction still applies), never a counter sale; the distinct notes in cart
+  order, exact duplicates removed (six flavours of one puff carry one note once), product
+  names left out (the instruction is about collecting the order, not about a line). Every
+  surface reads through it, so none can print "Before you collect" on a delivery.
+- **Seller surfaces.** The Order rules card and the create wizard (hidden on a booking
+  listing). On a store without self-collect the field degrades to a line naming
+  Settings → Fulfilment — the note is kept, not lost, in case collection is switched back on.
+  The seller order page shows the frozen notes in the Fulfilment card ("Before they collect",
+  with a caption saying they are the note as it read when the order was placed), the orders
+  table/CSV has a **Pickup notes** column, and both fields ride the product spreadsheet
+  import/export.
+- **Buyer surfaces.** The product page ("Collecting?" under the purchase controls, clamped to
+  three lines), checkout (one deduped **"Before you collect"** block under the chosen pickup
+  point, read live from the product), and `/track` (in the "Pick up at" card while the order
+  is live; hidden once cancelled or delivered). One component, `PickupNotes`, and one heading
+  per locale (`PICKUP_NOTES_HEADING`) everywhere. The **point's own note** — the seller's
+  "Notes for buyers" on the location — sits directly above it on `/track` and the seller order
+  page, so it carries its own heading, **"About this spot"**: two instruction boxes in one card,
+  each saying whose it is (the place vs. what was bought).
+- **WhatsApp — honestly scoped.** `renderPickupNotes` appends "📝 Before you collect" and the
+  notes inside the pickup block of the **free-form** confirm (legacy / no-template path), the
+  **mockup-gated** confirm, and the **free-form** manual payment reminder. The **Meta template
+  push** at checkout and the template reminder carry fixed parameters and NO notes, and with
+  the push path on the free-form confirm is suppressed (`pushOwnsTheMessage`) — so in
+  production `/track`, linked from that one message, is the surface guaranteed to carry them.
+  Adding notes to the template would need a Meta template change; the one-message-per-order
+  rule means no new send was added instead. The buyer's own wa.me message doesn't carry them
+  (that message is written TO the seller).
+
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
 
 A seller can attach an **optional flat fee** (minor units / sen) to any pickup location —
@@ -554,9 +610,10 @@ picker, the snapshot. Only a badge, a grouping heading and a schedule field diff
 - **Storefront:** the top-level picker shows **Delivery / Pickup**. Inside the Pickup form,
   points are grouped under **Self-collect** / **Drop-off** sub-headings — but **only when
   both kinds exist**; a single-kind seller (the legacy 100%-self-collect case) sees a flat
-  list, identical to before. The chosen point's `scheduleNote` is surfaced **at the date
-  picker step** (advisory, no hard date constraint — decision locked with the CTO) so the
-  buyer picks a sensible day for a recurring meetup.
+  list, identical to before. The chosen point's `scheduleNote` is surfaced **at the date/time
+  step** (advisory, no hard date constraint — decision locked with the CTO) so the
+  buyer picks a sensible day for a recurring meetup. A drop-off point never asks for a time
+  (`z8r3fdff97`) — its schedule note sets the hour.
 - **Render surfaces:** the WhatsApp confirm (`renderPickupBlock`, kind-aware header +
   `🗓️ scheduleNote`), the seller new-order/confirmed email (kind-aware `Method:` label +
   point/schedule/maps block), and `/track/<token>` ("Meet at" vs "Pick up at" + kind badge +
@@ -823,14 +880,18 @@ Single-message confirm. The pickup info (label, address, **clickable maps URL**,
                                   //   - lat/lng form: search by coords
    \n
    {notes?}
+   \n
+   📝 Before you collect          // renderPickupNotes — the frozen per-product
+   • {note}                       //   notes, deduped (z8r3fdff97); omitted when none
    \n\n
    {transferReferenceLine}        // system message, non-overridable
-   \n
-   💳 Payment details             // renderPaymentInstructions, if any
-   [I've paid button]             // CTA
-
-2. Payment QR image (separate)    // if configured
+   [Make payment button]          // CTA onto the order page
 ```
+
+Bank details and the payment QR no longer ride this message (`86ey98ju1`) — the CTA opens the
+order page, where "How to pay" lives. This composition is the **legacy / no-template** path;
+with the confirmation template on, the push at checkout owns the one message
+([`one-message-per-order.md`](./one-message-per-order.md)).
 
 The pickup block is appended *after* the user-overridable confirm template — retailers can customise their own copy without being able to break the pickup info. No new template variables were added to the override surface.
 
@@ -897,6 +958,7 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
 
   ```
   📦 New pickup order ORD-AB23 — Main Store
+  Collect on: Thu, 18 Sep 2026 · 11:30 AM
   Customer: Ali (+60 12-345 6789)
 
   Items:
@@ -907,7 +969,7 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
   Please prepare for collection.
   ```
 
-  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after the wa.me link opens WhatsApp (or after pasting from the Copy button).
+  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. The "Collect on" line (`z8r3fdff97` — "Meet on" at a drop-off point) is the moment the manager actually needs; it's omitted on a dateless order. Built by `buildNotifyManagerMessage` (`src/lib/notify-manager-message.ts`, unit-tested). Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after the wa.me link opens WhatsApp (or after pasting from the Copy button).
 
 ### Store manager contact (per pickup location)
 
@@ -1002,5 +1064,5 @@ unit line.
 ## Future work
 
 - **Tier cap enforcement** when subscription billing lands (Starter = 1 active, Pro+ = unlimited) — single check inside `pickupLocations.create`, plus a soft over-cap banner in `listForRetailer` for retailers downgraded from Pro.
-- **Pickup time slots / appointments** — currently a free-form `notes` field. A structured slot picker (Mon–Sat 10am–6pm, etc.) would unlock the cake/kuih cohort's actual workflow.
+- **Pickup time slots / appointments** — a pickup TIME shipped in `z8r3fdff97` (asked when the store keeps opening hours or the cart needs prep, bound by both). Still future: per-point hours (a drop-off point's schedule is free text) and slot capacity (how many pickups per half hour).
 - **Pickup location attached to a specific product** — for retailers where only some products are pickup-eligible (e.g. frozen-only). Not requested yet; flag the use case if it surfaces.

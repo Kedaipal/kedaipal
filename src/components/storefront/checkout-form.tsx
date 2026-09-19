@@ -3,7 +3,7 @@ import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Clock, Package, ShoppingBag, Truck } from "lucide-react";
+import { Package, ShoppingBag, Truck } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
@@ -25,29 +25,39 @@ import {
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
-	weekdayIndexMyt,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import { pickLocale } from "../../../convex/lib/locale";
 import {
 	collectMinQuantityShortfalls,
 	minOrderValueShortfall,
 } from "../../../convex/lib/minOrderRules";
 import {
-	assertWithinOpeningHours,
 	defaultTimeWithinHours,
 	hoursForDate,
 	isAllDay,
-	isOpenOnDate,
 	type OpeningHours,
 	selectableTimeWindow,
-	WEEKDAY_NAMES,
 } from "../../../convex/lib/openingHours";
+import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
+import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
+import {
+	asksForTime,
+	type FulfilmentKind,
+	fulfilmentDayCopy,
+	fulfilmentKind,
+	fulfilmentTimeCopy,
+	isFulfilmentDaySelectable,
+	prepForFulfilment,
+	prepHint,
+	resolveLineRules,
+} from "../../lib/checkout-fulfilment";
 import {
 	convexErrorMessage,
 	formatMobile,
@@ -56,10 +66,8 @@ import {
 import {
 	type CopyPart,
 	fulfilmentInputsKey,
-	fulfilmentTimeIssue,
 	planTimeRepair,
 	type TimeMove,
-	timeIssueCopy,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
 import { composeCustomerNote } from "../../lib/order-note";
@@ -73,9 +81,11 @@ import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
 import { useAppForm } from "../forms/form";
+import { PickupNotes } from "../order/pickup-notes";
 import { Button } from "../ui/button";
 import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
 import { AddressFieldset } from "./address-fieldset";
+import { CheckoutHint } from "./checkout-hint";
 import {
 	CheckoutSummary,
 	CheckoutTotals,
@@ -87,6 +97,13 @@ import {
 	type PublicPickupLocation,
 	pickupFeeOf,
 } from "./pickup-location-options";
+
+/** What the time field asks, per fulfilment. */
+const TIME_DESCRIPTION: Record<FulfilmentKind, string> = {
+	delivery: "When you'd like it to arrive.",
+	collection: "When the rider should come to you.",
+	pickup: "When you'll collect it.",
+};
 
 interface CheckoutPageProps {
 	cart: UseCart;
@@ -116,8 +133,9 @@ interface CheckoutPageProps {
 	collectsFromCustomer: boolean;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store opening hours (86eyp5rav) — closed days are unselectable and the
-	 * delivery time clamps to the day's window. Undefined = open 24/7. The
-	 * server re-enforces via the same shared module. */
+	 * time clamps to the day's window (delivery always; pickup whenever it asks
+	 * for a time, z8r3fdff97). Undefined = open 24/7. The server re-enforces
+	 * via the same shared module. */
 	openingHours: OpeningHours | undefined;
 	/** Store-wide minimum order value (minor units) — checkout blocks below it.
 	 * See convex/lib/minOrderRules.ts. */
@@ -247,6 +265,30 @@ export function CheckoutPage({
 		},
 		[stockByVariant],
 	);
+	// Order rules read LIVE (z8r3fdff97) from the same list: prep window,
+	// pickup note and notice days, as orders.create will judge them — a seller
+	// who raised the prep time after the buyer added the item, or a cart saved
+	// before prep existed, is caught here and not at the refused order. The
+	// cart's own snapshot stands in while the list loads.
+	const liveProductsById = useMemo(
+		() => new Map((listedProducts ?? []).map((p) => [p._id as string, p])),
+		[listedProducts],
+	);
+	const lineRules = cart.items.map((item) =>
+		resolveLineRules(item, liveProductsById.get(item.productId)),
+	);
+	// The slowest item decides the whole cart's prep, the way the strictest
+	// decides its notice. ONE value, so an exemption (an event cart) is one edit.
+	const cartPrep = slowestPrep(lineRules);
+	// "Before you collect" — deduped across lines, shown under the pickup
+	// point (the block WhatsApp and the order page repeat).
+	const cartPickupNotes = distinctPickupNotes(
+		lineRules.map((rules) => rules.pickupNote),
+	);
+	// Read per render; the repair effect's `clockTick` below re-renders on the
+	// 30s beat and on tab return, so today's prep window and the date floor
+	// move with the clock.
+	const now = Date.now();
 
 	// Minimum order rules (86ey9unyx) — same shared module the server enforces
 	// with, so this pre-submit mirror can't disagree with orders.create. Cart
@@ -290,8 +332,8 @@ export function CheckoutPage({
 	// Effective notice = the store-level setting raised by the strictest cart
 	// item's per-product override (a custom cake needs lead time; ready stock
 	// doesn't). Server enforces the same max at create.
-	const cartNoticeDays = cart.items.reduce(
-		(max, item) => Math.max(max, item.minNoticeDays ?? 0),
+	const cartNoticeDays = lineRules.reduce(
+		(max, rules) => Math.max(max, rules.minNoticeDays),
 		0,
 	);
 	// A custom / price-on-quote line means the date is a REQUEST, not a promise
@@ -299,18 +341,21 @@ export function CheckoutPage({
 	const hasCustomLine = cart.items.some(
 		(item) => item.isCustom === true || item.quoteOnRequest === true,
 	);
+	const noticeDays = Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays);
+	// Keyed on the calendar DAY, so a tab left open past midnight re-floors
+	// instead of offering yesterday.
+	const nowDayKey = ymdFromEpoch(now);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
 	const { minYmd, maxYmd, todayYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(
-			Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays),
-		);
+		const bounds = fulfilmentDateBounds(noticeDays, now);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
 			// Today with no notice applied — lets the chips say "Today"/"Tomorrow"
 			// only when those days are genuinely selectable.
-			todayYmd: ymdFromEpoch(fulfilmentDateBounds(0).min),
+			todayYmd: ymdFromEpoch(fulfilmentDateBounds(0, now).min),
 		};
-	}, [minFulfilmentNoticeDays, cartNoticeDays]);
+	}, [noticeDays, nowDayKey]);
 	const noCheckoutPhone = !checkoutPhone;
 	// Self-collect surfaces on the storefront only when the retailer opted in
 	// AND has at least one active pickup location. Both gates must be open or
@@ -327,33 +372,6 @@ export function CheckoutPage({
 	const defaultMethod: "delivery" | "self_collect" = deliveryAvailable
 		? "delivery"
 		: "self_collect";
-	// Opening-hours day predicate (86eyp5rav). For delivery the day must have a
-	// pickable time slot left — an open day whose window has already passed
-	// today is as unpickable as a closed one; pickup is date-only, so the day
-	// just has to be open. Reads the clock the same way the bounds memo does
-	// (once per dep change); the submit handler re-judges live either way.
-	const isDaySelectable = useCallback(
-		(ymd: string, method: "delivery" | "self_collect") => {
-			const epoch = mytMidnightFromYmd(ymd);
-			if (Number.isNaN(epoch)) return false;
-			if (method === "delivery") {
-				return selectableTimeWindow(openingHours, epoch) !== null;
-			}
-			return isOpenOnDate(openingHours, epoch);
-		},
-		[openingHours],
-	);
-	// The form's default date: the first day the DEFAULT method can actually
-	// be fulfilled — skipping closed days (and, for delivery, a today the
-	// store has already closed on). Falls back to the plain earliest day when
-	// the whole window is closed (a notice-vs-hours misconfig — the inline
-	// notice and submit copy then explain).
-	const defaultYmd = useMemo(() => {
-		for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
-			if (isDaySelectable(ymd, defaultMethod)) return ymd;
-		}
-		return minYmd;
-	}, [minYmd, maxYmd, defaultMethod, isDaySelectable]);
 	// Stable sort so the auto-select / radio list match the retailer's
 	// configured order — the query already returns sorted, but defending against
 	// upstream reordering is cheap and removes a class of subtle bugs.
@@ -362,6 +380,64 @@ export function CheckoutPage({
 	);
 	const singlePickup =
 		sortedPickups.length === 1 ? sortedPickups[0] : undefined;
+	// How the "when" step behaves for a method + pickup point (z8r3fdff97):
+	// which verbs it speaks, which prep floors it, and whether it asks for a
+	// TIME — delivery always; pickup when the store keeps hours or the cart
+	// needs prep; a drop-off meet-up never. Submit, chips, notices, the repair
+	// and the render all ask this one function.
+	const scheduleFor = (
+		method: "delivery" | "self_collect",
+		pickupLocationId: string,
+	) => {
+		const kind: FulfilmentKind = fulfilmentKind(method, collectsFromCustomer);
+		const point =
+			method === "self_collect"
+				? (singlePickup ??
+					sortedPickups.find((p) => p._id === pickupLocationId))
+				: undefined;
+		const isDropOff = point?.locationType === "drop_off";
+		const prep = prepForFulfilment(cartPrep, kind);
+		return {
+			kind,
+			point,
+			isDropOff,
+			prep,
+			timed: asksForTime({
+				kind,
+				isDropOff,
+				openingHours,
+				prepMinutes: prep.minutes,
+			}),
+		};
+	};
+	type Schedule = ReturnType<typeof scheduleFor>;
+	// Opening-hours + prep day predicate (86eyp5rav, z8r3fdff97). A timed day
+	// needs a pickable slot left — an open day whose window (floored by prep)
+	// has already passed today is as unpickable as a closed one; a date-only
+	// pickup just has to be open and not already out of prep time.
+	const isDaySelectable = (ymd: string, schedule: Schedule) => {
+		const epoch = mytMidnightFromYmd(ymd);
+		if (Number.isNaN(epoch)) return false;
+		return isFulfilmentDaySelectable({
+			hours: openingHours,
+			dateEpoch: epoch,
+			now,
+			prep: schedule.prep,
+			timed: schedule.timed,
+		});
+	};
+	// The first day a schedule can actually be fulfilled — skipping closed
+	// days and a today already used up. Falls back to the plain earliest day
+	// when the whole window is closed (a notice-vs-hours misconfig — the inline
+	// notice and submit copy then explain).
+	const firstSelectableYmd = (schedule: Schedule) => {
+		for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
+			if (isDaySelectable(ymd, schedule)) return ymd;
+		}
+		return minYmd;
+	};
+	const defaultSchedule = scheduleFor(defaultMethod, "");
+	const defaultYmd = firstSelectableYmd(defaultSchedule);
 
 	const form = useAppForm({
 		defaultValues: {
@@ -383,14 +459,24 @@ export function CheckoutPage({
 			// zero taps while pre-order buyers just pick a later date. Server
 			// re-validates the live window either way.
 			fulfilmentDate: defaultYmd,
-			// "HH:MM" the rider should arrive (delivery orders, 86eyg0n8e
-			// follow-up). Prefilled — today starts at the earliest pickable slot;
-			// a future day defaults 10:00 AM — clamped into the day's opening
-			// hours (86eyp5rav), so the required field never costs a tap unless
+			// "HH:MM" — when the rider should arrive, or (z8r3fdff97) when the
+			// buyer collects, whenever the step asks for a time. Prefilled —
+			// today starts at the earliest pickable slot (floored by the cart's
+			// prep); a future day defaults 10:00 AM — clamped into the day's
+			// opening hours (86eyp5rav), so the field never costs a tap unless
 			// the buyer cares.
 			fulfilmentTime: hhmmFromMinutes(
-				defaultTimeWithinHours(openingHours, mytMidnightFromYmd(defaultYmd)) ??
-					defaultFulfilmentTimeMinutes(mytMidnightFromYmd(defaultYmd)),
+				defaultTimeWithinHours(
+					openingHours,
+					mytMidnightFromYmd(defaultYmd),
+					now,
+					defaultSchedule.prep.minutes,
+				) ??
+					defaultFulfilmentTimeMinutes(
+						mytMidnightFromYmd(defaultYmd),
+						now,
+						defaultSchedule.prep.minutes,
+					),
 			),
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
@@ -448,45 +534,51 @@ export function CheckoutPage({
 				return;
 			}
 			try {
-				assertValidFulfilmentDate(fulfilmentEpoch, minFulfilmentNoticeDays);
+				// The effective notice — store AND cart, the max orders.create
+				// applies (the store notice alone let a cart item's stricter
+				// notice through to a server refusal).
+				assertValidFulfilmentDate(fulfilmentEpoch, noticeDays);
 			} catch (err) {
 				refuseFulfilment((err as Error).message);
 				return;
 			}
-			// Store opening hours (86eyp5rav): a closed day rejects for BOTH
-			// methods — the same shared check the server runs, so the words
-			// match. Chips never offer a closed day; this catches the native
-			// date input (which can't skip weekdays) and stale tabs.
-			try {
-				assertWithinOpeningHours(openingHours, fulfilmentEpoch, undefined);
-			} catch (err) {
-				refuseFulfilment((err as Error).message);
+			// The day, then the time, in the words the inline notice already
+			// showed: opening hours (a closed day rejects for every method), the
+			// cart's prep window, and the day's pickable slots — T1's shared
+			// ladder (`fulfilmentTimeIssue`) with the prep floor threaded in
+			// (src/lib/checkout-fulfilment.ts). A time is judged whenever this
+			// fulfilment asks for one: delivery, and pickup when it matters
+			// (z8r3fdff97). The dispatch rule absorbs near-past moments (books
+			// "now"), so only what's nonsense to promise is refused, and the
+			// input's own min/max never gets to speak for us.
+			const schedule = scheduleFor(
+				value.deliveryMethod,
+				value.pickupLocationId,
+			);
+			const judged = {
+				hours: openingHours,
+				dateEpoch: fulfilmentEpoch,
+				now: Date.now(),
+				prep: schedule.prep,
+				kind: schedule.kind,
+				storeName,
+			};
+			const dayCopy = fulfilmentDayCopy({ ...judged, timed: schedule.timed });
+			if (dayCopy) {
+				refuseFulfilment(dayCopy);
 				return;
 			}
-
-			// Fulfilment time (delivery orders): the input is prefilled and
-			// floored, so failures here are a cleared field, a time the buyer
-			// typed that the day can't take, or a form that sat past its slot.
-			// The dispatch rule absorbs near-past moments (books "now"), so only
-			// reject what's nonsense to promise. The input's own min/max would
-			// otherwise block submit with the browser's native message. One
-			// shared ladder (z8r3fdff8r), so these are the same words the inline
-			// notice already showed.
 			let fulfilmentTimeMinutes: number | undefined;
-			if (value.deliveryMethod === "delivery") {
+			if (schedule.timed) {
 				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
-				const issue = fulfilmentTimeIssue({
-					hours: openingHours,
-					dayEpoch: fulfilmentEpoch,
-					timeMinutes: parsed,
+				const timeCopy = fulfilmentTimeCopy({
+					...judged,
+					timeMinutes: Number.isNaN(parsed) ? undefined : parsed,
 				});
-				if (issue) {
-					refuseFulfilment(
-						timeIssueCopy(issue, {
-							storeName,
-							verb: collectsFromCustomer ? "collect" : "deliver",
-						}),
-					);
+				if (timeCopy) {
+					// Parts, never flattened: T1 keeps the CTA line's copy whole on a
+					// phone, and a prep refusal carries a time too.
+					refuseFulfilment(timeCopy);
 					return;
 				}
 				fulfilmentTimeMinutes = parsed;
@@ -568,16 +660,27 @@ export function CheckoutPage({
 		},
 	});
 
-	// The form's default date is captured at mount (often before the cart has
-	// its strictest item, and long-lived tabs cross midnight) — pull a stale
-	// value up to the current floor whenever it slips below.
+	// The form's default date is captured at mount (often before the live
+	// catalogue raises a line's notice, and long-lived tabs cross midnight) —
+	// pull a stale value up whenever it slips below the floor, to the first day
+	// that can actually be fulfilled rather than a floor that may be closed. A
+	// date the buyer picked above the floor is never moved: if the clock makes
+	// it impossible, the inline notice says so and the buyer chooses — the same
+	// posture as a buyer-typed time.
+	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
+	const watchedPickupId = useStore(
+		form.store,
+		(s) => s.values.pickupLocationId,
+	);
+	const watchedSchedule = scheduleFor(watchedMethod, watchedPickupId);
+	const floorYmd = firstSelectableYmd(watchedSchedule);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
 	useEffect(() => {
 		const current = form.store.state.values.fulfilmentDate;
-		if (current && current < minYmd) {
-			form.setFieldValue("fulfilmentDate", minYmd);
+		if (!current || current < minYmd) {
+			form.setFieldValue("fulfilmentDate", floorYmd);
 		}
-	}, [minYmd]);
+	}, [minYmd, floorYmd]);
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -589,20 +692,16 @@ export function CheckoutPage({
 	// elsewhere don't re-render the page), and quote the fee server-side. The
 	// server strips distances/zone internals (privacy) and orders.create
 	// re-resolves authoritatively — this is display + gating only.
-	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
 	// One-tap shortcuts for the first selectable days — most orders are "as
 	// soon as possible", so the common case is a single tap instead of a native
 	// date-picker round trip. The DateField below stays the source of truth.
-	// Hours-aware (86eyp5rav): closed days never render as chips, and for
-	// delivery a today the store has already closed on is skipped too — the
-	// scan continues forward so three real choices still show. Lives below the
-	// form (unlike the bounds memo) because the filter follows the LIVE method.
-	const quickDays = useMemo(
-		() =>
-			quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
-				isDaySelectable(ymd, watchedMethod),
-			),
-		[minYmd, maxYmd, todayYmd, watchedMethod, isDaySelectable],
+	// Hours- and prep-aware (86eyp5rav, z8r3fdff97): closed days never render
+	// as chips, and a today already used up — the store has closed, or the
+	// cart's prep can't finish in time — is skipped too; the scan continues
+	// forward so three real choices still show. Follows the LIVE method and
+	// pickup point, since those decide whether the step asks for a time.
+	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
+		isDaySelectable(ymd, watchedSchedule),
 	);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
@@ -643,19 +742,29 @@ export function CheckoutPage({
 	// repair. Without it "the earliest we can deliver" goes stale on screen
 	// until some other field changes.
 	const [clockTick, setClockTick] = useState(0);
+	// The cart's prep floors the repair too (z8r3fdff97), and a time is only
+	// repaired while this fulfilment asks for one. The clock keeps ticking
+	// either way — a date-only pickup's prep hint moves with it.
+	const repairPrep = watchedSchedule.prep.minutes;
+	const repairTimed = watchedSchedule.timed;
+	// Named in the move note when prep is why a prefilled time moved.
+	const repairPrepName = watchedSchedule.prep.productName;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
-		if (!watchedDate) return;
-		const dayEpoch = mytMidnightFromYmd(watchedDate);
-		if (Number.isNaN(dayEpoch)) return;
+		const dayEpoch = watchedDate
+			? mytMidnightFromYmd(watchedDate)
+			: Number.NaN;
 		const repair = () => {
 			setClockTick((t) => t + 1);
+			if (!repairTimed || Number.isNaN(dayEpoch)) return;
 			const plan = planTimeRepair({
 				hours: openingHours,
 				dayEpoch,
 				currentHhmm: form.store.state.values.fulfilmentTime,
 				systemHhmm: systemTimeRef.current,
+				prepMinutes: repairPrep,
+				prepItemName: repairPrepName,
 			});
 			if (!plan) return;
 			systemTimeRef.current = plan.nextHhmm;
@@ -671,78 +780,81 @@ export function CheckoutPage({
 			clearInterval(timer);
 			document.removeEventListener("visibilitychange", repair);
 		};
-	}, [watchedDate, openingHours]);
-	// Inline "that day won't work" notice (86eyp5rav). Chips never offer a
-	// closed day, but the native date input can't skip weekdays, so a picked
-	// closed day gets an immediate explanation instead of a submit-time
-	// bounce. Also covers delivery on a today the store has already closed on.
+	}, [watchedDate, openingHours, repairTimed, repairPrep, repairPrepName]);
+	// Inline "that day won't work" notice (86eyp5rav, z8r3fdff97). Chips never
+	// offer a closed day, but the native date input can't skip weekdays, so a
+	// picked closed day gets an immediate explanation instead of a submit-time
+	// bounce. Also covers a today the store has already closed on, and a today
+	// the cart's prep has used up — named as prep, not as "closed".
 	// biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the deliberate re-read of the wall clock.
 	const dateHoursIssue = useMemo(() => {
-		if (!openingHours || !watchedDate) return null;
-		const epoch = mytMidnightFromYmd(watchedDate);
-		if (Number.isNaN(epoch)) return null;
-		if (!isOpenOnDate(openingHours, epoch)) {
-			return `${storeName} is closed on ${WEEKDAY_NAMES[weekdayIndexMyt(epoch)]}s — pick another day.`;
-		}
-		if (watchedMethod === "delivery") {
-			const day = hoursForDate(openingHours, epoch);
-			// All-day windows are excluded: their only null-window case is
-			// "midnight is minutes away", where "has closed" would be wrong.
-			// The submit copy's "no time left today" covers that rarity.
-			if (
-				day &&
-				!isAllDay(day) &&
-				selectableTimeWindow(openingHours, epoch) === null
-			) {
-				return `${storeName} has closed for today — pick another day.`;
-			}
-		}
-		return null;
-	}, [openingHours, watchedDate, watchedMethod, storeName, clockTick]);
-	// Inline "that TIME won't work" notice. Too early, too late, or in a split
-	// day's break, shown the moment the field holds it, in the exact words the
-	// submit refusal will use. The native input's min/max is a single range, so
-	// it can't fence off a lunch break by itself. Buyer-typed times are never
-	// auto-corrected, so this notice is the only thing telling the buyer.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the deliberate re-read of the wall clock.
-	const timeHoursIssue = useMemo(() => {
-		if (!watchedDate || watchedMethod !== "delivery") return null;
-		if (watchedTimeMinutes === undefined) return null;
-		const dayEpoch = mytMidnightFromYmd(watchedDate);
-		if (Number.isNaN(dayEpoch)) return null;
-		const issue = fulfilmentTimeIssue({
+		if (!watchedDate) return null;
+		const dateEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dateEpoch)) return null;
+		return fulfilmentDayCopy({
 			hours: openingHours,
-			dayEpoch,
-			timeMinutes: watchedTimeMinutes,
-		});
-		// A day with no slot is the date notice's to say, and an empty field is
-		// the required marker's.
-		if (!issue || issue.kind === "no_slot" || issue.kind === "missing") {
-			return null;
-		}
-		return timeIssueCopy(issue, {
+			dateEpoch,
+			now: Date.now(),
+			prep: watchedSchedule.prep,
+			timed: watchedSchedule.timed,
+			kind: watchedSchedule.kind,
 			storeName,
-			verb: collectsFromCustomer ? "collect" : "deliver",
 		});
 	}, [
 		openingHours,
 		watchedDate,
-		watchedMethod,
-		watchedTimeMinutes,
+		watchedSchedule.prep,
+		watchedSchedule.timed,
+		watchedSchedule.kind,
 		storeName,
-		collectsFromCustomer,
 		clockTick,
 	]);
+	// Inline "that TIME won't work" notice. Inside the prep window, too early,
+	// too late, or in a split day's break, shown the moment the field holds it,
+	// in the exact words the submit refusal will use. The native input's
+	// min/max is a single range, so it can't fence off a lunch break by itself.
+	// Buyer-typed times are never auto-corrected, so this notice is the only
+	// thing telling the buyer. An empty field is the required marker's to say.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the deliberate re-read of the wall clock.
+	const timeHoursIssue = useMemo(() => {
+		if (!watchedDate || !watchedSchedule.timed) return null;
+		if (watchedTimeMinutes === undefined) return null;
+		const dateEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dateEpoch)) return null;
+		return fulfilmentTimeCopy({
+			hours: openingHours,
+			dateEpoch,
+			now: Date.now(),
+			prep: watchedSchedule.prep,
+			kind: watchedSchedule.kind,
+			storeName,
+			timeMinutes: watchedTimeMinutes,
+		});
+	}, [
+		openingHours,
+		watchedDate,
+		watchedSchedule.prep,
+		watchedSchedule.timed,
+		watchedSchedule.kind,
+		watchedTimeMinutes,
+		storeName,
+		clockTick,
+	]);
+	// Why today's slots start later than usual — or why today is gone.
+	const cartPrepHint = prepHint({
+		hours: openingHours,
+		now,
+		prep: watchedSchedule.prep,
+		kind: watchedSchedule.kind,
+		noticeDays,
+		timed: watchedSchedule.timed,
+	});
 	// "We moved your time" stays only while the field still holds the moved
 	// time. A buyer who edits it has read it.
 	const timeMoveNote =
 		timeMove && watchedTime === hhmmFromMinutes(timeMove.to)
 			? timeMovedCopy(timeMove, { storeName })
 			: null;
-	// The chosen day's hours, for the hints under the fields.
-	const watchedDayHours = watchedDate
-		? hoursForDate(openingHours, mytMidnightFromYmd(watchedDate))
-		: null;
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -1468,27 +1580,37 @@ export function CheckoutPage({
 											) : null}
 										</div>
 									) : selfCollectAvailable ? (
-										singlePickup ? (
-											<PickupSummaryCard
-												location={singlePickup}
-												currency={cart.currency}
+										<div className="flex flex-col gap-2">
+											{singlePickup ? (
+												<PickupSummaryCard
+													location={singlePickup}
+													currency={cart.currency}
+												/>
+											) : (
+												<form.AppField name="pickupLocationId">
+													{(field) => (
+														<PickupLocationRadioList
+															locations={sortedPickups}
+															currency={cart.currency}
+															value={field.state.value}
+															onChange={(id) => {
+																field.handleChange(id);
+																setPickupError(null);
+															}}
+															error={pickupError ?? undefined}
+														/>
+													)}
+												</form.AppField>
+											)}
+											{/* The seller's collection instructions (z8r3fdff97),
+											    deduped across the cart — the same block WhatsApp and
+											    the order page carry, read BEFORE the buyer commits. */}
+											<PickupNotes
+												audience="buyer"
+												locale={pickLocale(locale)}
+												notes={cartPickupNotes}
 											/>
-										) : (
-											<form.AppField name="pickupLocationId">
-												{(field) => (
-													<PickupLocationRadioList
-														locations={sortedPickups}
-														currency={cart.currency}
-														value={field.state.value}
-														onChange={(id) => {
-															field.handleChange(id);
-															setPickupError(null);
-														}}
-														error={pickupError ?? undefined}
-													/>
-												)}
-											</form.AppField>
-										)
+										</div>
 									) : null
 								}
 							</form.Subscribe>
@@ -1511,15 +1633,12 @@ export function CheckoutPage({
 								// can surface its recurring schedule right here, at the
 								// date step — a "Every Sat 3-5pm" drop-off shouldn't be
 								// learned only after ordering. Single-pickup auto-resolves.
-								const selectedPickup =
-									deliveryMethod === "self_collect"
-										? (singlePickup ??
-											sortedPickups.find((p) => p._id === pickupLocationId))
-										: undefined;
 								// Drop-off points are meetups, not the seller's place —
 								// the date question reads "meet", matching the DROP-OFF
 								// badge and the tracking page's "Meet at".
-								const isDropOff = selectedPickup?.locationType === "drop_off";
+								const schedule = scheduleFor(deliveryMethod, pickupLocationId);
+								const selectedPickup = schedule.point;
+								const isDropOff = schedule.isDropOff;
 								return (
 									<CheckoutSection
 										step={3}
@@ -1536,22 +1655,27 @@ export function CheckoutPage({
 										}
 									>
 										{selectedPickup?.scheduleNote ? (
-											<p className="flex items-start gap-1.5 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
-												<Clock
-													className="mt-0.5 size-3.5 shrink-0 text-accent"
-													aria-hidden="true"
-												/>
-												<span>
-													<span className="font-medium">
-														{selectedPickup.label}
-													</span>{" "}
-													is available{" "}
-													<span className="font-medium">
-														{selectedPickup.scheduleNote}
-													</span>{" "}
-													— pick a matching date.
-												</span>
-											</p>
+											<CheckoutHint>
+												<span className="font-medium">
+													{selectedPickup.label}
+												</span>{" "}
+												is available{" "}
+												<span className="font-medium">
+													{selectedPickup.scheduleNote}
+												</span>{" "}
+												—{" "}
+												{schedule.timed
+													? "pick a matching date and time."
+													: "pick a matching date."}
+											</CheckoutHint>
+										) : null}
+										{/* The cart's prep window (z8r3fdff97), said where it
+										    bites: why today's first slot is later, or why today
+										    isn't offered at all. */}
+										{cartPrepHint ? (
+											<CheckoutHint>
+												<CopyText parts={cartPrepHint} />
+											</CheckoutHint>
 										) : null}
 										{quickDays.length > 0 ? (
 											<div className="flex flex-wrap gap-2">
@@ -1577,15 +1701,15 @@ export function CheckoutPage({
 												})}
 											</div>
 										) : null}
-										{/* Delivery orders pair the date with a TIME (86eyg0n8e
-										    follow-up): a rider arriving at — or collecting from —
-										    the buyer shouldn't be an all-day window. Pickup keeps
-										    date-only: the point's own schedule governs its hours. */}
+										{/* The date pairs with a TIME whenever the step asks for
+										    one: always for delivery (86eyg0n8e follow-up) — a rider
+										    at the buyer's door shouldn't be an all-day window — and
+										    for a pickup when the store keeps hours or the cart
+										    needs prep (z8r3fdff97). A drop-off meet-up, or a store
+										    using neither, stays date-only. */}
 										<div
 											className={
-												deliveryMethod === "delivery"
-													? "grid grid-cols-2 gap-3"
-													: undefined
+												schedule.timed ? "grid grid-cols-2 gap-3" : undefined
 											}
 										>
 											<form.AppField name="fulfilmentDate">
@@ -1596,62 +1720,49 @@ export function CheckoutPage({
 														max={maxYmd}
 														required
 														description={
-															<>
-																{
-																	// Custom carts: the date is the buyer's ASK.
-																	// The seller settles the final date in the
-																	// design conversation. A notice floor raised by
-																	// a cart item is explained, never silent.
-																	hasCustomLine
-																		? `Your requested date — the seller confirms the final date with you after the design is agreed.${
-																				cartNoticeDays > 0
-																					? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
-																					: ""
-																			}`
-																		: cartNoticeDays >
-																				(minFulfilmentNoticeDays ?? 0)
-																			? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																			: isDropOff
-																				? "Pick the date you'll meet at the drop-off point."
-																				: "Pick the date you need this order."
-																}
-																{/* Self-collect has no time field, so the
-																    store's hours belong on the DATE. A buyer
-																    collecting in person is the one who walks
-																    into a lunch break (z8r3fdff8r). Drop-off
-																    meetups keep the point's own schedule note,
-																    because the store's hours aren't when the
-																    meetup happens. */}
-																{deliveryMethod === "self_collect" &&
-																!isDropOff &&
-																watchedDayHours &&
-																!isAllDay(watchedDayHours) ? (
-																	<>
-																		{" "}
-																		{storeName} is open{" "}
-																		<DayWindowsInline day={watchedDayHours} /> that
-																		day.
-																	</>
-																) : null}
-															</>
+															// Custom carts: the date is the buyer's ASK — the
+															// seller settles the final date in the design
+															// conversation. A notice floor raised by a cart
+															// item is explained, never silent. The store's
+															// hours ride on the TIME field, never the date
+															// (pickup asks for a time whenever the store
+															// keeps hours).
+															hasCustomLine
+																? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																		cartNoticeDays > 0
+																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																			: ""
+																	}`
+																: cartNoticeDays >
+																		(minFulfilmentNoticeDays ?? 0)
+																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																	: isDropOff
+																		? "Pick the date you'll meet at the drop-off point."
+																		: "Pick the date you need this order."
 														}
 													/>
 												)}
 											</form.AppField>
-											{deliveryMethod === "delivery"
+											{schedule.timed
 												? (() => {
 														// The day's pickable window (86eyp5rav): the lead
-														// floor raised to the store's opening, capped by
-														// its closing. Null (closed day / today already
-														// closed) leaves the input unconstrained — the
-														// repair effect won't fight it and the inline
-														// notice + submit copy explain instead.
+														// floor — or the cart's prep — raised to the
+														// store's opening, capped by its closing. Null
+														// (closed day / today already used up) leaves the
+														// input unconstrained — the repair effect won't
+														// fight it and the inline notice + submit copy
+														// explain instead.
 														const dayEpoch = watchedDate
 															? mytMidnightFromYmd(watchedDate)
 															: Number.NaN;
 														const window = Number.isNaN(dayEpoch)
 															? null
-															: selectableTimeWindow(openingHours, dayEpoch);
+															: selectableTimeWindow(
+																	openingHours,
+																	dayEpoch,
+																	now,
+																	schedule.prep.minutes,
+																);
 														const day = Number.isNaN(dayEpoch)
 															? null
 															: hoursForDate(openingHours, dayEpoch);
@@ -1674,9 +1785,7 @@ export function CheckoutPage({
 																		}
 																		description={
 																			<>
-																				{collectsFromCustomer
-																					? "When the rider should come to you."
-																					: "When you'd like it to arrive."}
+																				{TIME_DESCRIPTION[schedule.kind]}
 																				{/* Surface the hours right where they
 																				    constrain, so the rule is never
 																				    silent. Split days (z8r3fdff8r) list
@@ -1711,7 +1820,7 @@ export function CheckoutPage({
 												data-form-error
 												className="text-xs font-medium text-destructive"
 											>
-												{dateHoursIssue}
+												<CopyText parts={dateHoursIssue} />
 											</p>
 										) : timeHoursIssue ? (
 											<p
@@ -1737,9 +1846,12 @@ export function CheckoutPage({
 					<CheckoutSection title="Anything else?">
 						<form.AppField name="note">
 							{(field) => (
+								// No time in the example: the time has its own field (delivery
+								// always, pickup when it matters), where the seller's sort and
+								// calendar can read it — a note can't be sorted.
 								<field.TextareaField
 									label="Note for seller (optional)"
-									placeholder="Any special instructions? e.g. no onions, deliver after 5pm"
+									placeholder="Any special instructions? e.g. no onions, gift wrap please"
 									rows={3}
 									maxLength={500}
 								/>

@@ -171,9 +171,13 @@ seller never meets the concept mid-wizard.
   Price step's details).
 - **Custom / made-to-order option** — label, price-on-quote, buyer prompt AND
   photo (`VariantImageCell`), same as the full form.
-- **Order rules** — minimum order quantity + minimum notice days, mirroring
-  the edit form's "Order rules" card. Blank = no rule (mapped to `undefined`,
-  never 0, so the create mutation simply omits them).
+- **Order rules** — minimum order quantity + minimum notice days, plus (since
+  `z8r3fdff97`) **prep time** in minutes (the same `PREP_PRESETS` as the form)
+  and the **pickup note**, mirroring the edit form's "Order rules" card. Blank =
+  no rule (mapped to `undefined`, never 0, so the create mutation simply omits
+  them). Prep and note are hidden on the booking route; prep parses through the
+  shared `parsePrepMinutesText` (digits only), the same rule as the form and
+  the spreadsheet import.
 - **"Open in the full editor"** — same draft, other skin: `wizardHandoff`
   passes the editor substrate as-is (in-memory via the route's `wizardDraft`;
   a refresh falls back to a blank full form).
@@ -209,7 +213,13 @@ wizard's mental model:
   order* — neither is about price/choices (what it costs) nor publishing
   (where it shows). Staging had min-notice floating above the product name
   (that slot is now the summary strip) and min-quantity tacked onto the
-  pricing card.
+  pricing card. Since `z8r3fdff97` the card holds four rules in this order:
+  minimum quantity, minimum notice, **prep time** directly under notice (its
+  hours-scale sibling; an amber note says when a notice of a day or more makes
+  it inert), and **pickup note** last (an instruction, not a limit). Both new
+  fields are hidden on a booking listing, and the note degrades to a pointer at
+  Settings → Fulfilment on a store without self-collect. See
+  [`fulfilment-date.md`](./fulfilment-date.md) and [`fulfilment.md`](./fulfilment.md).
 - Photos moved to a shared `ProductImagesField`
   (`src/components/forms/product-images-field.tsx`), used by both the form and
   the wizard. Both it and the variant editor render through staging's shared
