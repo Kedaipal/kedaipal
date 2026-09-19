@@ -355,7 +355,7 @@ function OrderDetailRoute() {
 	const [pinBusy, setPinBusy] = useState(false);
 	// A lapsed store is view-only (z8r3fdeub2): the server refuses every action
 	// on this page, so the controls say so instead of failing on tap.
-	const { readOnly } = useStoreLock();
+	const { readOnly, reason } = useStoreLock();
 	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
 	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
 	// server-side in one batched read rather than a lookup per row.
@@ -2043,7 +2043,11 @@ function OrderDetailRoute() {
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}
-								disabled={pending !== null}
+								// View-only: cancelling is a write like any other, and an
+								// enabled destructive control that answers with a toast is
+								// worse than one that says why up front (the note above).
+								disabled={pending !== null || readOnly}
+								title={readOnly ? reason : undefined}
 								variant="ghost"
 								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 							>

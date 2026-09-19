@@ -138,9 +138,14 @@ describe("CompDialog — comp upgrade ON", () => {
 		const onClose = vi.fn();
 		render(<CompDialog seller={compedSeller()} onClose={onClose} />);
 		fireEvent.click(screen.getByRole("button", { name: "Turn off…" }));
-		// The confirm says what the store becomes before anything happens.
+		// The confirm says what the store becomes before anything happens — and
+		// says the WHOLE consequence: the dashboard goes view-only (z8r3fdeub2),
+		// not just "can't edit products". This is the screen where an admin cuts
+		// a partner off, so understating it here is the expensive kind of wrong.
 		expect(screen.getByText(/straight\s+away/)).toBeTruthy();
 		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
+		expect(screen.getByText(/view-only/)).toBeTruthy();
+		expect(screen.getByText(/work\s+their orders/)).toBeTruthy();
 		expect(revokeCompSpy()).not.toHaveBeenCalled();
 		fireEvent.click(
 			screen.getByRole("button", { name: "Turn off comp upgrade" }),

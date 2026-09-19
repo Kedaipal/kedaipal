@@ -373,8 +373,9 @@ export function BillingTab({
 					</div>
 					{compEnded ? (
 						<p className="text-xs text-muted-foreground">
-							Your storefront stays live and buyers can still order. Choose a
-							plan below to get editing your store again.
+							Your storefront stays live and buyers can still order. Your
+							dashboard is view-only — choose a plan below to start working
+							again.
 						</p>
 					) : null}
 					{held ? (
@@ -717,7 +718,7 @@ export function BillingTab({
 								{sub.status === "trialing"
 									? "Want to start your plan now?"
 									: compEnded
-										? "Choose a plan to keep editing"
+										? "Choose a plan to start working again"
 										: "Renew your subscription"}
 							</p>
 							<p className="mt-1 text-xs text-muted-foreground">

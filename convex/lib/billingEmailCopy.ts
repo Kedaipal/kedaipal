@@ -64,7 +64,7 @@ const t = {
 		wasPrefix: "was",
 		foundingDiscount: "founding discount",
 		storeStaysLive:
-			"Your storefront and existing orders stay live — editing your store is paused until you pay.",
+			"Your storefront stays live and buyers can still order — your dashboard is view-only until you pay.",
 		choosePlan: "Choose a plan",
 		payNow: "Pay online now",
 		payNowHint: "Card, banking or eWallet — confirmed automatically.",
@@ -88,7 +88,7 @@ const t = {
 		wasPrefix: "asal",
 		foundingDiscount: "diskaun pengasas",
 		storeStaysLive:
-			"Storefront dan pesanan sedia ada kekal aktif — penyuntingan kedai dijeda sehingga anda membayar.",
+			"Etalase anda kekal aktif dan pembeli masih boleh memesan — papan pemuka anda hanya boleh dilihat sehingga anda membayar.",
 		choosePlan: "Pilih pelan",
 		payNow: "Bayar dalam talian",
 		payNowHint: "Kad, perbankan atau eWallet — disahkan secara automatik.",
@@ -112,7 +112,7 @@ const t = {
 		wasPrefix: "原价",
 		foundingDiscount: "创始会员折扣",
 		storeStaysLive:
-			"您的商店和现有订单会继续正常运作 —— 付款前暂停编辑功能。",
+			"您的店面继续在线，买家仍可下单 —— 付款前您的后台仅可查看。",
 		choosePlan: "选择套餐",
 		payNow: "立即在线付款",
 		payNowHint: "银行卡、网银或电子钱包 —— 自动确认到账。",
@@ -563,10 +563,10 @@ const trialRender: Record<
 			const subject = "🎁 Your sponsored Kedaipal access has ended";
 			const lines = [
 				`Hi ${escapeHtml(v.storeName)}, your complimentary Kedaipal access${via} has ended.`,
-				"Your storefront stays live and buyers can still place orders — nothing on their side changes. Editing your store (products, settings, bookings) is paused until you choose a plan; paying online unlocks it straight away.",
+				"Your storefront stays live and buyers can still place orders — nothing on their side changes. Your dashboard is view-only until you choose a plan: you can see everything, but working orders, editing products and changing settings are all paused. Paying online unlocks it straight away.",
 			];
 			const html = wrapHtml("🎁", "Your sponsored access has ended", lines, v.billingUrl, t.en.choosePlan);
-			const text = `🎁 Your sponsored Kedaipal access${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} has ended.\nYour storefront stays live and buyers can still order. Editing your store is paused until you choose a plan — paying online unlocks it straight away.\n\n${v.billingUrl}`;
+			const text = `🎁 Your sponsored Kedaipal access${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} has ended.\nYour storefront stays live and buyers can still order. Your dashboard is view-only until you choose a plan — paying online unlocks it straight away.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {
@@ -623,10 +623,10 @@ const trialRender: Record<
 			const subject = "🎁 Akses tajaan Kedaipal anda telah tamat";
 			const lines = [
 				`Hai ${escapeHtml(v.storeName)}, akses percuma Kedaipal anda${via} telah tamat.`,
-				"Etalase anda kekal aktif dan pembeli masih boleh membuat pesanan — tiada apa yang berubah bagi mereka. Penyuntingan kedai (produk, tetapan, tempahan) dijeda sehingga anda memilih pelan; bayaran dalam talian membukanya serta-merta.",
+				"Etalase anda kekal aktif dan pembeli masih boleh membuat pesanan — tiada apa yang berubah bagi mereka. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan: anda nampak semuanya, tetapi menguruskan pesanan, menyunting produk dan menukar tetapan semuanya dijeda. Bayaran dalam talian membukanya serta-merta.",
 			];
 			const html = wrapHtml("🎁", "Akses tajaan anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
-			const text = `🎁 Akses tajaan Kedaipal anda${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} telah tamat.\nEtalase anda kekal aktif dan pembeli masih boleh memesan. Penyuntingan kedai dijeda sehingga anda memilih pelan — bayaran dalam talian membukanya serta-merta.\n\n${v.billingUrl}`;
+			const text = `🎁 Akses tajaan Kedaipal anda${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} telah tamat.\nEtalase anda kekal aktif dan pembeli masih boleh memesan. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan — bayaran dalam talian membukanya serta-merta.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {
@@ -683,10 +683,10 @@ const trialRender: Record<
 			const subject = "🎁 您的 Kedaipal 赞助权益已结束";
 			const lines = [
 				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 免费权益${via}已经结束。`,
-				"您的商店继续在线，买家仍可下单 —— 他们那边没有任何变化。编辑商店（商品、设置、预约）已暂停，直到您选择套餐；在线付款后立即恢复。",
+				"您的商店继续在线，买家仍可下单 —— 他们那边没有任何变化。在您选择套餐之前，后台仅可查看：您能看到全部内容，但处理订单、编辑商品和更改设置都已暂停。在线付款后立即恢复。",
 			];
 			const html = wrapHtml("🎁", "您的赞助权益已结束", lines, v.billingUrl, t.zh.choosePlan);
-			const text = `🎁 您的 Kedaipal 赞助权益${v.sponsorLabel ? `（${v.sponsorLabel}）` : ""}已结束。\n商店继续在线，买家仍可下单。编辑商店已暂停，直到您选择套餐 —— 在线付款后立即恢复。\n\n${v.billingUrl}`;
+			const text = `🎁 您的 Kedaipal 赞助权益${v.sponsorLabel ? `（${v.sponsorLabel}）` : ""}已结束。\n商店继续在线，买家仍可下单。在您选择套餐之前后台仅可查看 —— 在线付款后立即恢复。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {

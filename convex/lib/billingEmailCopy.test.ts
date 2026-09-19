@@ -241,11 +241,15 @@ describe("comp emails (z8r3fdeub2)", () => {
 		sponsorLabel: "Sponsored by Maybank SME",
 	};
 
-	it("compEnded: storefront + ordering live, editing paused until a plan — no second free period", () => {
+	it("compEnded: storefront + ordering live, the dashboard view-only until a plan — no second free period", () => {
 		const { subject, html, text } = renderTrialEmail("en", "compEnded", cv);
 		expect(subject).toMatch(/sponsored Kedaipal access has ended/);
 		expect(html).toContain("buyers can still place orders");
-		expect(text).toContain("paused until you choose a plan");
+		// The lock is the whole dashboard, not just editing (z8r3fdeub2,
+		// 19 Sep) — an email promising they can still work their orders would
+		// send them to a screen that refuses every tap.
+		expect(text).toContain("view-only until you choose a plan");
+		expect(html).toMatch(/working orders/);
 		expect(text).not.toMatch(/14-day|free period|invoice/i);
 	});
 

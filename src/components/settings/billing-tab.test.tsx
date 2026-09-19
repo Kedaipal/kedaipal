@@ -564,7 +564,7 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 	it("gateway off: the manual card asks them to choose a plan, not renew", () => {
 		mockQueries({ isAdmin: false });
 		render(<BillingTab retailer={ended()} />);
-		expect(screen.getByText("Choose a plan to keep editing")).toBeTruthy();
+		expect(screen.getByText("Choose a plan to start working again")).toBeTruthy();
 		expect(screen.queryByText("Renew your subscription")).toBeNull();
 		expect(waLinks().some((href) => href.includes("choose%20a%20plan"))).toBe(
 			true,
