@@ -48,6 +48,7 @@ import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
 import { sanitizeAttributionSource } from "./lib/attribution";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
+import { assertSubscriptionActive } from "./subscriptions";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
@@ -207,6 +208,7 @@ export const sendClaim = mutation({
 		const session = await ctx.db.get(args.sessionId);
 		if (!session) throw new ConvexError("Session not found");
 		const access = await requireRetailerAccess(ctx, session.retailerId);
+		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
 		// Off-Season Hold (z8r3fday24): a paused store sends no claim links.
 		if (retailer.orderingPausedAt !== undefined)
@@ -299,6 +301,7 @@ export const resendClaim = mutation({
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
 		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		await assertSubscriptionActive(ctx, claim.retailerId);
 		// Re-sending pushes a fresh link into the buyer's chat — a new order
 		// invitation, refused while paused exactly like sendClaim.
 		if (access.retailer.orderingPausedAt !== undefined)
@@ -336,6 +339,7 @@ export const cancelClaim = mutation({
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
 		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		await assertSubscriptionActive(ctx, claim.retailerId);
 		if (effectiveClaimStatus(claim, Date.now()) !== "open") return; // already dead — idempotent
 		await ctx.db.patch(claimId, {
 			status: "cancelled",

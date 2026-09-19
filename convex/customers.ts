@@ -12,7 +12,10 @@ import {
 import { buildSearchText } from "./lib/customer";
 import { revenueExcludingDeposit } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
-import { assertPlanFeature } from "./subscriptions";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+} from "./subscriptions";
 
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 50;
@@ -169,6 +172,7 @@ export const updateNotes = mutation({
 	args: { customerId: v.id("customers"), notes: v.string() },
 	handler: async (ctx, { customerId, notes }): Promise<void> => {
 		const { access } = await requireOwnedCustomer(ctx, customerId);
+		await assertSubscriptionActive(ctx, access.retailer._id);
 		const trimmed = notes.trim();
 		if (trimmed.length > NOTES_MAX) {
 			throw new Error(`Notes must be ${NOTES_MAX} characters or fewer`);
@@ -185,6 +189,7 @@ export const updateName = mutation({
 	args: { customerId: v.id("customers"), name: v.string() },
 	handler: async (ctx, { customerId, name }): Promise<void> => {
 		const { customer, access } = await requireOwnedCustomer(ctx, customerId);
+		await assertSubscriptionActive(ctx, access.retailer._id);
 		const trimmed = name.trim();
 		if (trimmed.length > NAME_MAX) {
 			throw new Error(`Name must be ${NAME_MAX} characters or fewer`);

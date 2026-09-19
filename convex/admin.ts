@@ -59,6 +59,22 @@ export type AdminSellerRow = {
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
+	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
+	 * legacy stampless comped row — the chip renders either way. */
+	comped: boolean;
+	/** The admin-granted stamp (kind/label/note, since when) — prefills the comp
+	 * dialog for edits. `grantedBy` stays server-side (a raw Clerk subject is
+	 * noise here; the audit log answers "who"). Absent on legacy rows. */
+	comp?: {
+		kind: "partner" | "sponsor" | "pilot" | "internal";
+		label?: string;
+		note?: string;
+		grantedAt: number;
+	};
+	/** When an admin turned this store's comp upgrade off, while the store is
+	 * still an expired seller because of it (cleared once it pays or is
+	 * re-comped). Lets the directory say why a store is past due. */
+	compEnded?: { at: number };
 	/** Marketing tag the seller signed up with (`retailers.signupSource`,
 	 * z8r3fdd1v0). Absent = untagged/direct. Rendered verbatim — these are
 	 * Kedaipal's own acquisition tags (`powered-by`, `spotlight-<member>`, …),
@@ -108,6 +124,17 @@ export const listSellersForAdmin = query({
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				comped: sub?.comped === true,
+				comp: sub?.comp
+					? {
+							kind: sub.comp.kind,
+							label: sub.comp.label,
+							note: sub.comp.note,
+							grantedAt: sub.comp.grantedAt,
+						}
+					: undefined,
+				compEnded:
+					sub?.compEndedAt !== undefined ? { at: sub.compEndedAt } : undefined,
 				signupSource: r.signupSource,
 				...(referrer
 					? {
@@ -282,6 +309,7 @@ export const businessReport = internalQuery({
 					retailerId: s.retailerId,
 					status: s.status,
 					comped: s.comped,
+					compEndedAt: s.compEndedAt,
 					updatedAt: s.updatedAt,
 				}),
 			),

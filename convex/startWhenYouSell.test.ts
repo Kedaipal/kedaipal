@@ -346,17 +346,20 @@ describe("daily cron — the first invoice is the only clock", () => {
 		expect(all.filter((i) => i.status === "void")).toHaveLength(1);
 	});
 
-	test("a comped trial that lapses keeps the legacy flip (never billed, never frozen)", async () => {
+	test("a comped trial that lapses is left alone entirely (legacy flip retired, z8r3fdeub2)", async () => {
+		// The old comped→past_due "keep the status honest" flip is gone: the cron
+		// now skips comped rows before the backstop. A leftover comped trial is
+		// never billed, never flipped — it waits for the backfill to heal it.
 		const t = setup();
 		const { subId } = await seedRetailer(t, "u_cmp");
 		await t.run((ctx) =>
 			ctx.db.patch(subId, { comped: true, trialEndsAt: Date.now() - 1000 }),
 		);
 		const res = await cron(t);
-		expect(res.trialExpired).toBe(1);
+		expect(res.trialExpired).toBe(0);
 		expect(res.firstInvoicesIssued).toBe(0);
 		const sub = await getSub(t, subId);
-		expect(sub?.status).toBe("past_due");
+		expect(sub?.status).toBe("trialing");
 		expect(sub?.freePeriodEndedAt).toBeUndefined();
 	});
 

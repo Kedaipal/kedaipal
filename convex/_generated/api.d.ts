@@ -47,6 +47,7 @@ import type * as lib_categoryCounts from "../lib/categoryCounts.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
+import type * as lib_comp from "../lib/comp.js";
 import type * as lib_confirmationPush from "../lib/confirmationPush.js";
 import type * as lib_contact from "../lib/contact.js";
 import type * as lib_country from "../lib/country.js";
@@ -185,6 +186,7 @@ declare const fullApi: ApiFromModules<{
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
+  "lib/comp": typeof lib_comp;
   "lib/confirmationPush": typeof lib_confirmationPush;
   "lib/contact": typeof lib_contact;
   "lib/country": typeof lib_country;

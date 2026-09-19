@@ -50,6 +50,7 @@ import {
 	type OrderPaymentMethod,
 } from "../../convex/lib/paymentMethod";
 import { ProFeatureTease } from "../components/app/pro-gate";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -101,6 +102,7 @@ import {
 	useInboxView,
 } from "../hooks/useInboxView";
 import { useOrderColumns } from "../hooks/useOrderColumns";
+import { useStoreLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
@@ -480,6 +482,8 @@ function OrdersRoute() {
 	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+	// A lapsed store is view-only (z8r3fdeub2) — every bulk action is refused.
+	const { readOnly, reason } = useStoreLock();
 	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
 	const setPinned = useMutation(api.orders.setPinned);
 	const [pinBusyId, setPinBusyId] = useState<string | null>(null);
@@ -1280,13 +1284,25 @@ function OrdersRoute() {
 				showCalendar={hasBookingListings === true}
 				onSelectView={setView}
 			/>
+			{/* View-only (z8r3fdeub2): select mode exists only to run a bulk
+			    action, every one of which the server now refuses — so the door is
+			    disabled with its reason rather than opening onto dead buttons.
+			    Export stays: reading their own data is never withheld. */}
 			<Button
 				type="button"
 				variant={selectMode ? "secondary" : "outline"}
 				size="icon"
 				className="size-11 rounded-xl"
 				aria-pressed={selectMode}
-				aria-label={selectMode ? "Exit select mode" : "Select orders"}
+				disabled={readOnly}
+				title={readOnly ? reason : undefined}
+				aria-label={
+					readOnly
+						? `Select orders — unavailable, ${reason}`
+						: selectMode
+							? "Exit select mode"
+							: "Select orders"
+				}
 				onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
 			>
 				<ListChecks className="size-5" />
@@ -1379,6 +1395,9 @@ function OrdersRoute() {
 					{inboxEnabled ? headerActions : null}
 				</div>
 			</div>
+
+			{/* A lapsed store can read this inbox and act on nothing in it. */}
+			<ViewOnlyNote />
 
 			{/* Starter: the inbox controls are a Pro feature — say so where they'd
 			    be, instead of leaving a silent gap. The order list below still works. */}

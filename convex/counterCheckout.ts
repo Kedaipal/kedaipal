@@ -37,6 +37,7 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import { assertSubscriptionActive } from "./subscriptions";
 import {
 	getDisplayName,
 	normalizeOptionalCustomerName,
@@ -352,6 +353,7 @@ export const bindSessionManualPhone = mutation({
 		{ retailerId, waPhone, name },
 	): Promise<{ sessionId: Id<"counterCheckoutSessions">; reclaimed: boolean }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
+		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		assertOrderingNotPaused(retailer);
 
@@ -450,6 +452,7 @@ export const startAnonymousSession = mutation({
 		{ retailerId, name },
 	): Promise<{ sessionId: Id<"counterCheckoutSessions"> }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
+		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		assertOrderingNotPaused(retailer);
 		const now = Date.now();
@@ -499,6 +502,7 @@ export const setSessionCustomerName = mutation({
 		const resolved = await requireSessionAccess(ctx, sessionId);
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
+		await assertSubscriptionActive(ctx, session.retailerId);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open for editing");
 		await ctx.db.patch(sessionId, {
@@ -546,6 +550,7 @@ export const saveSessionDraft = mutation({
 		const resolved = await requireSessionAccess(ctx, sessionId);
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session } = resolved;
+		await assertSubscriptionActive(ctx, session.retailerId);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open for editing");
 		// A claim link froze these lines and the buyer is looking at them. An
@@ -708,6 +713,7 @@ export const createOrderFromSession = mutation({
 		const resolved = await requireSessionAccess(ctx, args.sessionId);
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
+		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
 		assertOrderingNotPaused(retailer);
 		if (session.status !== "buyer_identified")
@@ -1017,6 +1023,7 @@ export const cancelCheckoutSession = mutation({
 		const resolved = await requireSessionAccess(ctx, sessionId);
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
+		await assertSubscriptionActive(ctx, session.retailerId);
 		if (session.status === "awaiting_buyer" || session.status === "buyer_identified") {
 			const now = Date.now();
 			await ctx.db.patch(sessionId, {
@@ -1179,6 +1186,7 @@ export const rotateCounterQrToken = mutation({
 		{ retailerId },
 	): Promise<{ token: string; waUrl: string | undefined }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
+		await assertSubscriptionActive(ctx, access.retailer._id);
 		const token = generateTrackingToken();
 		await ctx.db.patch(access.retailer._id, {
 			counterQrToken: token,

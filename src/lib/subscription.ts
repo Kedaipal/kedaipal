@@ -2,6 +2,7 @@
 // pill, banner, plan-feature gates). Mirrors the server `AccessState` shape
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
+import type { CompKind } from "../../convex/lib/comp";
 import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -13,6 +14,14 @@ export type SubscriptionView = {
 	 * from an older cache degrades to "monthly" rather than throwing. */
 	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
+	/** Admin-granted comp (z8r3fdeub2) — seller-facing slice only: the sponsor
+	 * label for the billing tab's "Sponsored by X" line. Comps have no end date.
+	 * Absent on legacy/fail-open comped rows. */
+	comp?: { kind: CompKind; label?: string };
+	/** Set while an expired seller's lock came from an admin turning their comp
+	 * upgrade off (z8r3fdeub2), not from an unpaid bill. Only meaningful with
+	 * `status: "past_due"`. */
+	compEnded?: { at: number };
 	/** The free period's backstop deadline (signup + 14 days). */
 	trialEndsAt?: number;
 	/** Start-when-you-sell (z8r3fday24): set once the free period ended (first
@@ -102,6 +111,42 @@ export function isOrderInboxLocked(
 		!retailer.actingAsAdmin &&
 		!hasFeature(retailer.subscription, "orderInbox")
 	);
+}
+
+/**
+ * True when this dashboard is VIEW-ONLY (z8r3fdeub2, 19 Sep 2026): the store's
+ * subscription lapsed — an unpaid invoice, or an admin turning its comp upgrade
+ * off — so the server refuses every seller write, orders included. Same shape
+ * and same fail-open posture as `isCrmLocked`: a payload still loading, or one
+ * with no subscription at all, reads as NOT locked, because a control that
+ * flickers disabled mid-load is worse than one that refuses a tap.
+ *
+ * `actingAsAdmin` and `isAdmin` mirror the server's two bypasses — white-glove
+ * support on a lapsed store keeps working, and an admin's own store is never
+ * billed (see `assertSubscriptionActive`).
+ */
+export function isStoreReadOnly(
+	retailer:
+		| { actingAsAdmin?: boolean; subscription?: SubscriptionView }
+		| null
+		| undefined,
+	isAdmin = false,
+): boolean {
+	if (!retailer || retailer.actingAsAdmin || isAdmin) return false;
+	const sub = retailer.subscription;
+	return sub?.status === "past_due" && sub.comped !== true;
+}
+
+/**
+ * The one sentence every view-only surface says — the banner, a disabled
+ * control's note, the toast if a tap gets through. Deliberately the same shape
+ * as the server's `ConvexError`, so a seller who sees both reads one message
+ * twice rather than two rules.
+ */
+export function storeReadOnlyReason(sub: SubscriptionView | undefined): string {
+	return sub?.compEnded
+		? "Your sponsored access has ended, so your store is view-only. Choose a plan to start working again."
+		: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again.";
 }
 
 /** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
@@ -228,13 +273,19 @@ export function orderCapState(
  * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
  * concrete "pay me" — applies whether trialing or active) → a trial ending soon
  * → the soft order-cap nudge (over, then near — upsell ranks below any payment
- * deadline). Comped/paid-with-nothing-due → nothing. `pendingDueAt` is the
+ * deadline). Comped/paid-with-nothing-due → nothing. A store whose comp was
+ * turned off (z8r3fdeub2) reads `compEnded` instead of `pastDue` — no bill
+ * sits behind that lock. `pendingDueAt` is the
  * soonest pending invoice's due date (undefined when none); `ordersThisMonth`
  * is the usage meter (undefined → no cap nudge).
  */
 export type BannerState =
 	| { kind: "none" }
 	| { kind: "pastDue" }
+	/** An expired seller whose lock came from their comp being turned off
+	 * (z8r3fdeub2): same lock as past-due, but there is no bill to pay — they
+	 * choose a plan. */
+	| { kind: "compEnded" }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
@@ -259,8 +310,10 @@ export function resolveBannerState(
 	warnDays = PAYMENT_WARN_DAYS,
 	ordersThisMonth?: number,
 ): BannerState {
+	// A comp has no bill, trial, cap or end date — nothing to warn about.
 	if (!sub || sub.comped) return { kind: "none" };
-	if (sub.status === "past_due") return { kind: "pastDue" };
+	if (sub.status === "past_due")
+		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still
@@ -307,7 +360,13 @@ export function resolveBannerState(
 	return { kind: "none" };
 }
 
-export type TierTone = "neutral" | "trial" | "warn" | "founding" | "admin";
+export type TierTone =
+	| "neutral"
+	| "trial"
+	| "warn"
+	| "founding"
+	| "admin"
+	| "sponsored";
 
 export type TierPill = { label: string; tone: TierTone };
 
@@ -322,7 +381,9 @@ const PILL_COUNTDOWN_DAYS = PAYMENT_WARN_DAYS;
  * read "Founding #N · …" instead. A held store reads "On hold". When `isAdmin`
  * is set (a Kedaipal admin viewing their OWN store), the pill reads "Admin"
  * instead of any state — admins run the app for free and are never
- * soft-locked, so a countdown would be a lie. */
+ * soft-locked, so a countdown would be a lie. A comped store reads
+ * "Sponsored" for the same reason (z8r3fdeub2), and once its comp has ended
+ * it reads "Expired" rather than "Past due" — there's no bill behind it. */
 export function tierPill(
 	sub: SubscriptionView,
 	now: number,
@@ -331,6 +392,8 @@ export function tierPill(
 ): TierPill {
 	if (isAdmin) return { label: "Admin", tone: "admin" };
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
+	if (sub.comped)
+		return { label: fm ? `${fm} · Sponsored` : "Sponsored", tone: "sponsored" };
 	switch (sub.status) {
 		case "trialing": {
 			const free = freePeriodState(sub, now);
@@ -350,8 +413,10 @@ export function tierPill(
 		}
 		case "on_hold":
 			return { label: fm ? `${fm} · On hold` : "On hold", tone: "trial" };
-		case "past_due":
-			return { label: fm ? `${fm} · Past due` : "Past due", tone: "warn" };
+		case "past_due": {
+			const state = sub.compEnded ? "Expired" : "Past due";
+			return { label: fm ? `${fm} · ${state}` : state, tone: "warn" };
+		}
 		case "cancelled":
 			return { label: fm ? `${fm} · Cancelled` : "Cancelled", tone: "warn" };
 		default:
