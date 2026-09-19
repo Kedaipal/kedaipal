@@ -41,7 +41,7 @@ import {
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { orderPickupNotes } from "../../convex/lib/pickupNote";
-import { isMockupGateClosed } from "../../convex/lib/order";
+import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
@@ -406,7 +406,12 @@ function TrackingRoute() {
 		order.status !== "cancelled" &&
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
-		order.deliveryFeePending !== true;
+		order.deliveryFeePending !== true &&
+		// A genuinely free order (`z8r3fdff9u` — the RM0 RSVP) has nothing to
+		// pay: without this, the page told a guest to bank-transfer RM 0.00 and
+		// attach the receipt. isFreeOrder, never a bare total check — an
+		// unquoted mockup order also sits at 0 and must keep its (held) ask.
+		!isFreeOrder(order);
 	const paymentInfo = useQuery(
 		convexQuery(
 			api.orders.getPaymentMethods,
@@ -821,8 +826,12 @@ function TrackingRoute() {
 
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
 			    and held back on a booking REQUEST: nothing is payable until the seller
-			    approves (the awaiting card above says so). */}
-			{!isCancelled && order.status !== "booking_requested" ? (
+			    approves (the awaiting card above says so). A FREE order drops the
+			    whole card: "Payment Unpaid" over an RM 0.00 total is a claim about a
+			    debt that doesn't exist, and every control inside is a dead end. */}
+			{!isCancelled &&
+			order.status !== "booking_requested" &&
+			!isFreeOrder(order) ? (
 				<section
 					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
 				>
@@ -1578,7 +1587,7 @@ function TrackingRoute() {
 						{order.eventLocked ? (
 							<span className="mt-0.5 block text-xs font-normal text-muted-foreground">
 								Set by the store for this event — same for every guest. Where to
-								go is below.
+								go is in the pickup card above.
 							</span>
 						) : null}
 					</span>
