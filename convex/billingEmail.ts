@@ -136,6 +136,9 @@ async function sendInvoiceEmail(
 	ctx: ActionCtx,
 	invoiceId: Id<"invoices">,
 	key: BillingEmailKey,
+	/** Post-lock recovery chain only (z8r3fdg3mh) — how long this invoice has
+	 * been overdue, so the copy can state it as a fact. */
+	daysPastDue?: number,
 ): Promise<void> {
 	let meta: InvoiceEmailMeta | null = null;
 	try {
@@ -181,6 +184,17 @@ async function sendInvoiceEmail(
 		crossBorder: meta.crossBorder,
 		payNowUrl: meta.payNowUrl,
 		billingUrl: billingPageUrl(),
+		daysPastDue,
+		// The Off-Season Hold is only an alternative for a seller who ISN'T
+		// already on it — a hold invoice means they took that door already, and
+		// offering it again would point them at a button that refuses them.
+		holdPriceFormatted:
+			key === "recoveryFinal" && meta.kind === "plan"
+				? formatMoney(
+						HOLD_MONTHLY_PRICES[meta.currency as BillingCurrency],
+						meta.currency,
+					)
+				: undefined,
 	});
 
 	try {
@@ -229,6 +243,32 @@ export const notifyInvoiceOverdue = internalAction({
 	args: { invoiceId: v.id("invoices") },
 	handler: async (ctx, { invoiceId }): Promise<void> => {
 		await sendInvoiceEmail(ctx, invoiceId, "invoiceOverdue");
+	},
+});
+
+/**
+ * Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock, at
+ * +3d and +7d past the due date. `invoiceOverdue` above fires on the
+ * transition itself; before this existed that was the last thing a lapsing
+ * seller ever heard from us.
+ *
+ * `sendInvoiceEmail` re-guards `status === "pending"`, so a seller who paid
+ * between the cron stamping the stage and this action running gets nothing —
+ * the chain's stop condition is enforced at both ends.
+ */
+export const notifyInvoiceRecovery = internalAction({
+	args: {
+		invoiceId: v.id("invoices"),
+		stage: v.union(v.literal(1), v.literal(2)),
+		daysPastDue: v.number(),
+	},
+	handler: async (ctx, { invoiceId, stage, daysPastDue }): Promise<void> => {
+		await sendInvoiceEmail(
+			ctx,
+			invoiceId,
+			stage === 1 ? "recoveryNudge" : "recoveryFinal",
+			daysPastDue,
+		);
 	},
 });
 
@@ -557,17 +597,6 @@ export const notifyPaymentReceived = internalAction({
 				}`,
 			);
 		}
-	},
-});
-
-/** Scheduled when the daily cron locks a paid vendor whose period lapsed with no
- * pending invoice. Since 86eyb6z4r the cron ISSUES the renewal instead of
- * locking, so this no longer fires in the normal flow — kept (path-stable) for
- * any in-flight scheduled call across the deploy. */
-export const notifySubscriptionLapsed = internalAction({
-	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<void> => {
-		await sendRetailerNotice(ctx, retailerId, "subscriptionLapsed");
 	},
 });
 

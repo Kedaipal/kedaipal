@@ -694,11 +694,17 @@ export const internalBackfillSubscriptions = internalMutation({
  *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts);
  *  - auto-renew sellers get a one-per-cycle "renewing soon" notice ahead of
  *    the charge (the no-surprise-MIT rule).
- * Plus the one-time pre-due-date reminder for pending invoices. Runs once
- * daily — a retailer keeps access up to ~24h past any boundary (acceptable
+ * Plus the one-time pre-due-date reminder for pending invoices, and — once an
+ * invoice is PAST due and its subscription actually locked — the post-lock
+ * recovery ladder at +3d / +7d (z8r3fdg3mh), which before now was silence.
+ * Runs once daily — a retailer keeps access up to ~24h past any boundary (acceptable
  * grace). See docs/manual-subscription.md + docs/hitpay-recurring.md.
  */
 const REMINDER_DAYS_BEFORE = 3;
+/** Post-lock recovery chain (z8r3fdg3mh): days PAST the due date at which each
+ * nudge fires. The lock itself (and `invoiceOverdue`) lands on day 0. */
+const RECOVERY_NUDGE_DAYS = 3;
+const RECOVERY_FINAL_DAYS = 7;
 
 export const internalDailyBillingStatus = internalMutation({
 	args: {},
@@ -715,6 +721,8 @@ export const internalDailyBillingStatus = internalMutation({
 		renewalNotices: number;
 		renewalsDue: number;
 		remindersSent: number;
+		/** Post-lock recovery nudges scheduled this run (z8r3fdg3mh). */
+		recoveryNudges: number;
 		trialReminders: number;
 	}> => {
 		const now = Date.now();
@@ -726,6 +734,16 @@ export const internalDailyBillingStatus = internalMutation({
 		let renewalNotices = 0;
 		let renewalsDue = 0;
 		let remindersSent = 0;
+		let recoveryNudges = 0;
+		// Invoices whose subscription LOCKED during this very run. The lock
+		// transition owns day 0 — it sends `invoiceOverdue` and the WhatsApp — so
+		// the recovery ladder below must not also chase them on the same pass.
+		// Normally moot (a daily cron catches an invoice <1 day overdue, which is
+		// under every threshold), but after a missed run the ladder would see a
+		// freshly-locked invoice already 5 days past due and fire a second,
+		// near-identical email the same minute. That is exactly the dunning spam
+		// this chain exists to avoid.
+		const lockedThisRun = new Set<string>();
 		let trialReminders = 0;
 
 		// Trials — start-when-you-sell (z8r3fday24). The free period ends at the
@@ -793,6 +811,15 @@ export const internalDailyBillingStatus = internalMutation({
 						internal.billingEmail.notifyInvoiceOverdue,
 						{ invoiceId: pending._id },
 					);
+					// …and the one WhatsApp of the whole billing chain (z8r3fdg3mh).
+					// Email is the channel that always works; this is the louder
+					// second tap for a cohort that lives in WhatsApp, not inboxes.
+					await ctx.scheduler.runAfter(
+						0,
+						internal.whatsapp.notifyBillingPastDue,
+						{ invoiceId: pending._id },
+					);
+					lockedThisRun.add(pending._id);
 				}
 				continue;
 			}
@@ -843,6 +870,13 @@ export const internalDailyBillingStatus = internalMutation({
 					internal.billingEmail.notifyInvoiceOverdue,
 					{ invoiceId: overduePending._id },
 				);
+				// …and the one WhatsApp of the whole billing chain (z8r3fdg3mh).
+				await ctx.scheduler.runAfter(
+					0,
+					internal.whatsapp.notifyBillingPastDue,
+					{ invoiceId: overduePending._id },
+				);
+				lockedThisRun.add(overduePending._id);
 				continue;
 			}
 			const pendingInvoice = invoices.find((inv) => inv.status === "pending");
@@ -939,6 +973,50 @@ export const internalDailyBillingStatus = internalMutation({
 			.withIndex("by_status", (q) => q.eq("status", "pending"))
 			.collect();
 		for (const inv of pending) {
+			// Post-lock recovery chain (z8r3fdg3mh): an invoice already PAST its
+			// due date is out of reminder territory — the seller is locked, and
+			// the ladder below is what chases them. Before this existed the
+			// `invoiceOverdue` mail on the flip was the last contact they ever got.
+			if (inv.dueDate < now) {
+				// Locked moments ago by the loops above — that notice is enough
+				// for today; the ladder picks up from the next daily run.
+				if (lockedThisRun.has(inv._id)) continue;
+				// The chain speaks in the first person about a LOCKED dashboard, so
+				// it must only run where a lock actually happened. An overdue
+				// pending invoice is not sufficient on its own: the loops above
+				// skip comped subscriptions entirely, so a store comped after its
+				// invoice was issued sits overdue forever with full access — and
+				// telling them they're locked would be flatly untrue. `past_due` +
+				// not-comped IS the soft-lock predicate (see accessFor).
+				const lockSub = await ctx.db.get(inv.subscriptionId);
+				if (
+					!lockSub ||
+					lockSub.status !== "past_due" ||
+					lockSub.comped === true
+				)
+					continue;
+				const daysPastDue = Math.floor((now - inv.dueDate) / DAY_MS);
+				// Send only the HIGHEST stage that's due and stamp it, skipping any
+				// it passed. A cron outage that leaves an invoice at day 9 with no
+				// stage must produce one final notice, not a +3d today and a +7d
+				// tomorrow — the seller would read that as a system flailing.
+				const stage =
+					daysPastDue >= RECOVERY_FINAL_DAYS
+						? 2
+						: daysPastDue >= RECOVERY_NUDGE_DAYS
+							? 1
+							: 0;
+				if (stage > (inv.recoveryStage ?? 0)) {
+					await ctx.db.patch(inv._id, { recoveryStage: stage });
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyInvoiceRecovery,
+						{ invoiceId: inv._id, stage: stage as 1 | 2, daysPastDue },
+					);
+					recoveryNudges++;
+				}
+				continue;
+			}
 			if (inv.reminderSentAt !== undefined) continue;
 			if (inv.dueDate <= reminderFrom || inv.dueDate > reminderTo) continue;
 			await ctx.db.patch(inv._id, { reminderSentAt: now });
@@ -959,6 +1037,7 @@ export const internalDailyBillingStatus = internalMutation({
 			renewalNotices,
 			renewalsDue,
 			remindersSent,
+			recoveryNudges,
 			trialReminders,
 		};
 	},

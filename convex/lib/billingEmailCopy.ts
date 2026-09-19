@@ -14,7 +14,14 @@ export type BillingEmailKey =
 	// Start-when-you-sell (z8r3fday24): the store's FIRST invoice, framed by
 	// what ended the free period — the first live order, or the day-14 backstop.
 	| "firstInvoiceOrder"
-	| "firstInvoiceBackstop";
+	| "firstInvoiceBackstop"
+	// Post-lock recovery chain (z8r3fdg3mh): the two nudges AFTER the lock has
+	// landed. `invoiceOverdue` fires on the transition itself; these follow at
+	// +3d and +7d past the due date. `recoveryFinal` is the last automatic
+	// contact — nothing chases them after it — so it names the Off-Season Hold
+	// as the cheaper alternative to walking away.
+	| "recoveryNudge"
+	| "recoveryFinal";
 
 export type BillingEmailVars = {
 	storeName: string;
@@ -41,6 +48,12 @@ export type BillingEmailVars = {
 	// the ONLY self-serve rail an SGD seller has.
 	payNowUrl?: string;
 	billingUrl: string;
+	// Post-lock recovery chain (z8r3fdg3mh). `daysPastDue` states the elapsed
+	// time as a fact rather than a threat; `holdPriceFormatted` is the
+	// Off-Season Hold monthly price (RM19 / S$9) offered in the final nudge —
+	// omitted when a hold makes no sense for this row (already held).
+	daysPastDue?: number;
+	holdPriceFormatted?: string;
 };
 
 type RenderedEmail = { subject: string; html: string; text: string };
@@ -69,6 +82,13 @@ const t = {
 		payNow: "Pay online now",
 		payNowHint: "Card, banking or eWallet — confirmed automatically.",
 		orManual: "Prefer a bank transfer? The manual details are below.",
+		// Post-lock recovery chain (z8r3fdg3mh).
+		pastDueDays: "Invoice {invoiceNumber} is {days} days past due.",
+		lastReminder:
+			"This is our last automatic reminder — after this we'll leave you to it.",
+		holdOffer:
+			"Between seasons? Pause your plan for {holdPrice} a month instead of cancelling. Your storefront, catalog and order history all stay — new orders just close until you resume.",
+		needHelp: "Stuck on something? Reply to this email and we'll sort it out.",
 	},
 	ms: {
 		bank: "Bank",
@@ -93,6 +113,14 @@ const t = {
 		payNow: "Bayar dalam talian",
 		payNowHint: "Kad, perbankan atau eWallet — disahkan secara automatik.",
 		orManual: "Lebih suka pindahan bank? Butiran manual di bawah.",
+		// Post-lock recovery chain (z8r3fdg3mh).
+		pastDueDays: "Bil {invoiceNumber} telah lewat {days} hari.",
+		lastReminder:
+			"Ini peringatan automatik terakhir kami — selepas ini kami takkan kacau lagi.",
+		holdOffer:
+			"Antara musim? Jeda pelan anda pada {holdPrice} sebulan daripada membatalkannya. Storefront, katalog dan sejarah pesanan anda semuanya kekal — cuma pesanan baharu ditutup sehingga anda sambung semula.",
+		needHelp:
+			"Ada masalah? Balas e-mel ini dan kami akan bantu selesaikan.",
 	},
 	zh: {
 		bank: "银行",
@@ -117,6 +145,12 @@ const t = {
 		payNow: "立即在线付款",
 		payNowHint: "银行卡、网银或电子钱包 —— 自动确认到账。",
 		orManual: "想用银行转账？手动付款详情见下方。",
+		// Post-lock recovery chain (z8r3fdg3mh).
+		pastDueDays: "账单 {invoiceNumber} 已逾期 {days} 天。",
+		lastReminder: "这是我们最后一封自动提醒 —— 之后不会再打扰您。",
+		holdOffer:
+			"季节之间的空档？与其取消，不如以每月 {holdPrice} 暂停您的套餐。您的商店、商品目录和订单记录都会保留 —— 只是暂停接收新订单，直到您恢复。",
+		needHelp: "遇到问题？直接回复这封邮件，我们会帮您处理。",
 	},
 } as const;
 
@@ -126,6 +160,16 @@ function contactForPaymentLine(locale: Locale, v: BillingEmailVars): string {
 		"{invoiceNumber}",
 		v.invoiceNumber,
 	);
+}
+
+/** "Invoice INV-2609-0007 is 3 days past due." — the recovery chain states the
+ * elapsed time as a fact and never guesses: a caller that somehow has no
+ * `daysPastDue` gets the invoice number alone rather than "0 days". */
+function pastDueLine(locale: Locale, v: BillingEmailVars): string {
+	if (v.daysPastDue === undefined) return `${t[locale].invoice} ${v.invoiceNumber}.`;
+	return t[locale].pastDueDays
+		.replace("{invoiceNumber}", v.invoiceNumber)
+		.replace("{days}", String(v.daysPastDue));
 }
 
 /** Plain-text version of the pay lines (no HTML tags). */
@@ -156,7 +200,11 @@ function invoiceStatusTone(key: BillingEmailKey): {
 	labelBg: string;
 	labelColor: string;
 } {
-	if (key === "invoiceOverdue") {
+	if (
+		key === "invoiceOverdue" ||
+		key === "recoveryNudge" ||
+		key === "recoveryFinal"
+	) {
 		return {
 			accent: "#dc2626",
 			bg: "#fef2f2",
@@ -363,6 +411,41 @@ const render: Record<
 			const text = `🧾 Your free period has ended — here's your first invoice ${v.invoiceNumber}\n${v.planLabel} · ${amountText("en", v)}\nDue by ${v.dueDateFormatted}. Nothing is locked — your storefront stays live while you settle it; switch plan from your billing page before paying if Starter fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		// Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock.
+		// Both carry the full pay panel: the ONLY thing being asked for is
+		// payment, so the button is never more than one line away.
+		recoveryNudge: (v) => {
+			const subject = `🔒 ${v.storeName} — your dashboard is locked · ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"en",
+				"recoveryNudge",
+				"Your dashboard is still locked",
+				`Hi ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("en", v))} Until it's settled you can't edit your store or manage orders from the dashboard — ${escapeHtml(t.en.storeStaysLive)}`,
+				v,
+				t.en.cta,
+			);
+			const text = `🔒 ${v.storeName} — your dashboard is locked\n${pastDueLine("en", v)}\n${v.planLabel} · ${amountText("en", v)}\n${t.en.storeStaysLive}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		recoveryFinal: (v) => {
+			const subject = `Last reminder — ${v.invoiceNumber} is still unpaid`;
+			// The hold offer only renders when a price was passed — a row that is
+			// already on hold has no cheaper option to move to, and inventing one
+			// would send a seller to a button that refuses them.
+			const holdLine = v.holdPriceFormatted
+				? t.en.holdOffer.replace("{holdPrice}", v.holdPriceFormatted)
+				: "";
+			const html = wrapBillingHtml(
+				"en",
+				"recoveryFinal",
+				"One last reminder",
+				`Hi ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("en", v))} ${escapeHtml(t.en.lastReminder)}${holdLine ? ` ${escapeHtml(holdLine)}` : ""} ${escapeHtml(t.en.needHelp)}`,
+				v,
+				t.en.cta,
+			);
+			const text = `Last reminder — ${v.invoiceNumber} is still unpaid\n${pastDueLine("en", v)}\n${v.planLabel} · ${amountText("en", v)}\n${t.en.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.en.needHelp}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	ms: {
 		invoiceIssued: (v) => {
@@ -428,6 +511,41 @@ const render: Record<
 				t.ms.cta,
 			);
 			const text = `🧾 Tempoh percuma anda telah tamat — bil pertama anda ${v.invoiceNumber}\n${v.planLabel} · ${amountText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Tiada apa yang dikunci — etalase anda kekal aktif; tukar pelan dari halaman bil sebelum membayar jika Starter lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		// Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock.
+		// Both carry the full pay panel: the ONLY thing being asked for is
+		// payment, so the button is never more than one line away.
+		recoveryNudge: (v) => {
+			const subject = `🔒 ${v.storeName} — dashboard anda dikunci · ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"ms",
+				"recoveryNudge",
+				"Dashboard anda masih dikunci",
+				`Hai ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("ms", v))} Sehingga ia dijelaskan, anda tidak boleh menyunting kedai atau menguruskan pesanan dari dashboard — ${escapeHtml(t.ms.storeStaysLive)}`,
+				v,
+				t.ms.cta,
+			);
+			const text = `🔒 ${v.storeName} — dashboard anda dikunci\n${pastDueLine("ms", v)}\n${v.planLabel} · ${amountText("ms", v)}\n${t.ms.storeStaysLive}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		recoveryFinal: (v) => {
+			const subject = `Peringatan terakhir — ${v.invoiceNumber} masih belum dijelaskan`;
+			// The hold offer only renders when a price was passed — a row that is
+			// already on hold has no cheaper option to move to, and inventing one
+			// would send a seller to a button that refuses them.
+			const holdLine = v.holdPriceFormatted
+				? t.ms.holdOffer.replace("{holdPrice}", v.holdPriceFormatted)
+				: "";
+			const html = wrapBillingHtml(
+				"ms",
+				"recoveryFinal",
+				"Peringatan terakhir",
+				`Hai ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("ms", v))} ${escapeHtml(t.ms.lastReminder)}${holdLine ? ` ${escapeHtml(holdLine)}` : ""} ${escapeHtml(t.ms.needHelp)}`,
+				v,
+				t.ms.cta,
+			);
+			const text = `Peringatan terakhir — ${v.invoiceNumber} masih belum dijelaskan\n${pastDueLine("ms", v)}\n${v.planLabel} · ${amountText("ms", v)}\n${t.ms.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.ms.needHelp}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},
@@ -497,17 +615,57 @@ const render: Record<
 			const text = `🧾 您的免费期已结束 —— 第一张账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。没有任何功能被锁定 —— 您的商店保持在线；如果 Starter 更合适，付款前可在账单页面更换方案。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		// Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock.
+		// Both carry the full pay panel: the ONLY thing being asked for is
+		// payment, so the button is never more than one line away.
+		recoveryNudge: (v) => {
+			const subject = `🔒 ${v.storeName} —— 您的管理后台已锁定 · ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"zh",
+				"recoveryNudge",
+				"您的管理后台仍处于锁定状态",
+				`您好 ${escapeHtml(v.storeName)}，${escapeHtml(pastDueLine("zh", v))} 在付清之前，您无法在管理后台编辑店铺或处理订单 —— ${escapeHtml(t.zh.storeStaysLive)}`,
+				v,
+				t.zh.cta,
+			);
+			const text = `🔒 ${v.storeName} —— 您的管理后台已锁定\n${pastDueLine("zh", v)}\n${v.planLabel} · ${amountText("zh", v)}\n${t.zh.storeStaysLive}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		recoveryFinal: (v) => {
+			const subject = `最后提醒 —— ${v.invoiceNumber} 仍未付款`;
+			// The hold offer only renders when a price was passed — a row that is
+			// already on hold has no cheaper option to move to, and inventing one
+			// would send a seller to a button that refuses them.
+			const holdLine = v.holdPriceFormatted
+				? t.zh.holdOffer.replace("{holdPrice}", v.holdPriceFormatted)
+				: "";
+			const html = wrapBillingHtml(
+				"zh",
+				"recoveryFinal",
+				"最后一次提醒",
+				`您好 ${escapeHtml(v.storeName)}，${escapeHtml(pastDueLine("zh", v))} ${escapeHtml(t.zh.lastReminder)}${holdLine ? ` ${escapeHtml(holdLine)}` : ""} ${escapeHtml(t.zh.needHelp)}`,
+				v,
+				t.zh.cta,
+			);
+			const text = `最后提醒 —— ${v.invoiceNumber} 仍未付款\n${pastDueLine("zh", v)}\n${v.planLabel} · ${amountText("zh", v)}\n${t.zh.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.zh.needHelp}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 };
 
-/** Retailer notices with no invoice attached (the free-period nudge + a
- * lapsed-subscription notice), so a separate (smaller) var shape. The old
- * `trialEnded` lock notice is gone (z8r3fday24): a free period ending now
- * ISSUES the first invoice (`firstInvoice*` above); only that invoice going
- * overdue locks, and that sends the ordinary `invoiceOverdue`. */
+/** Retailer notices with no invoice attached — the free-period nudge and the
+ * founding-benefit lifecycle — so a separate (smaller) var shape.
+ *
+ * Two siblings have been retired here. `trialEnded` went with z8r3fday24: a
+ * free period ending now ISSUES the first invoice (`firstInvoice*` above), and
+ * only that invoice going overdue locks. The lapsed-subscription notice went
+ * with z8r3fdg3mh: the cron stopped locking lapsed periods when 86eyb6z4r made
+ * it auto-issue the renewal, leaving copy that told sellers to "message us to
+ * renew and we'll send your invoice" for a bill the machine had already sent.
+ * A lapse now produces an ordinary invoice, and a lock produces
+ * `invoiceOverdue` followed by the `recovery*` chain. */
 export type TrialEmailKey =
 	| "trialEndingSoon"
-	| "subscriptionLapsed"
 	// Founding-benefit lifecycle (z8r3fdfyw5): the T-14 warning, then the
 	// notice that benefits ended. Both say the rank and badge are KEPT — that
 	// is the promise, and an email that failed to repeat it would read as
@@ -538,17 +696,6 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("⏰", `Your free period ends in ${dayStr}`, lines, v.billingUrl, t.en.choosePlan);
 			const text = `⏰ Your free period ends in ${dayStr} — or sooner, the moment you take your first live order.\nYour first invoice arrives then, with 14 days to pay; your storefront stays live throughout.\n\n${v.billingUrl}`;
-			return { subject, html, text };
-		},
-		subscriptionLapsed: (v) => {
-			const subject = "🔒 Your Kedaipal subscription has lapsed";
-			const lines = [
-				`Hi ${escapeHtml(v.storeName)}, your subscription period has ended and isn't renewed yet.`,
-				t.en.storeStaysLive,
-				"Message us to renew and we'll send your invoice.",
-			];
-			const html = wrapHtml("🔒", "Your subscription has lapsed", lines, v.billingUrl, t.en.choosePlan);
-			const text = `🔒 Your Kedaipal subscription has lapsed\n${t.en.storeStaysLive}\nMessage us to renew and we'll send your invoice.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {
@@ -589,17 +736,6 @@ const trialRender: Record<
 			const text = `⏰ Tempoh percuma anda tamat dalam ${dayStr} — atau lebih awal, sebaik sahaja anda terima pesanan pertama.\nBil pertama anda tiba ketika itu, dengan 14 hari untuk membayar; etalase anda kekal aktif sepanjang masa.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
-		subscriptionLapsed: (v) => {
-			const subject = "🔒 Langganan Kedaipal anda telah luput";
-			const lines = [
-				`Hai ${escapeHtml(v.storeName)}, tempoh langganan anda telah tamat dan belum diperbaharui.`,
-				t.ms.storeStaysLive,
-				"Hubungi kami untuk memperbaharui dan kami akan hantar bil anda.",
-			];
-			const html = wrapHtml("🔒", "Langganan anda telah luput", lines, v.billingUrl, t.ms.choosePlan);
-			const text = `🔒 Langganan Kedaipal anda telah luput\n${t.ms.storeStaysLive}\nHubungi kami untuk memperbaharui.\n\n${v.billingUrl}`;
-			return { subject, html, text };
-		},
 		foundingBenefitsEndingSoon: (v) => {
 			const on = v.endsOnFormatted ?? "tidak lama lagi";
 			const subject = `⏳ Harga pengasas anda tamat pada ${on}`;
@@ -636,17 +772,6 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("⏰", `您的免费期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
 			const text = `⏰ 您的免费期还剩 ${dayStr} —— 一旦收到第一笔订单，免费期会提前结束。\n届时您会收到第一张账单，有 14 天付款时间；您的商店保持在线。\n\n${v.billingUrl}`;
-			return { subject, html, text };
-		},
-		subscriptionLapsed: (v) => {
-			const subject = "🔒 您的 Kedaipal 订阅已失效";
-			const lines = [
-				`您好 ${escapeHtml(v.storeName)}，您的订阅期已经结束，还未续订。`,
-				t.zh.storeStaysLive,
-				"联系我们续订，我们会把账单发给您。",
-			];
-			const html = wrapHtml("🔒", "您的订阅已失效", lines, v.billingUrl, t.zh.choosePlan);
-			const text = `🔒 您的 Kedaipal 订阅已失效\n${t.zh.storeStaysLive}\n联系我们续订，我们会把账单发给您。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {

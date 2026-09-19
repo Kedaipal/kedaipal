@@ -527,7 +527,9 @@ conversation). But three premises above changed when HitPay recurring landed:
 - **No cancellation flow.** The `cancelled` status exists but nothing reaches it; a churning
   vendor just stops paying and sits at `past_due` (auto-renewal itself is always cancellable —
   that kills the *charge*, not the subscription). A real "cancel my subscription" flow is
-  still an open follow-up.
+  still an open follow-up. **Partly mitigated by z8r3fdg3mh:** they no longer sit there in
+  silence — the post-lock recovery chain below chases them twice and then stops. What is
+  still missing is a terminal state and a seller-initiated exit.
 - ~~No self-serve plan picker~~ — **closed by 86eyb6z4r**: with the payment gateway
   configured, trial-ended / lapsed / cancelled vendors pick a plan + cycle in the billing tab
   (`invoices.subscribeSelf`) and pay the invoice online. Without gateway credentials the old
@@ -535,6 +537,70 @@ conversation). But three premises above changed when HitPay recurring landed:
 - ~~Renewals typed by hand~~ — **closed by 86eyb6z4r**: the daily cron issues renewal
   invoices (`invoices.internalIssueRenewalInvoice`); the old lapse-lock branch is gone (the
   overdue flip at `dueDate` is still the lock).
+
+## Post-lock recovery chain (z8r3fdg3mh)
+
+`invoiceOverdue` used to be the **last** thing a lapsing seller ever heard from
+us. `cancelled` is never reached, so they sat at `past_due` indefinitely — a
+live storefront still taking orders they could not manage — and nothing chased
+them. The full chain now reads:
+
+| Day | Trigger | Email | WhatsApp |
+| --- | --- | --- | --- |
+| periodEnd | renewal invoice auto-issued (`internalIssueRenewalInvoice`) | `invoiceIssued` | — |
+| dueDate − 3 | pre-due window, stamped `reminderSentAt` | `invoiceReminder` | — |
+| **dueDate** | → `past_due`, dashboard locks | `invoiceOverdue` | **the one alert** |
+| **dueDate + 3** | recovery stage 1 | `recoveryNudge` | — |
+| **dueDate + 7** | recovery stage 2, last automatic contact | `recoveryFinal` | — |
+
+Four design points worth keeping:
+
+- **It keys off the overdue INVOICE, not the subscription.** There is no
+  `lockedAt` field, and `subscriptions.updatedAt` — which for a `past_due` row
+  is the lock-flip moment the founder report reads — is moved by any other
+  patch to that row. The invoice's `dueDate` is stable and IS the lock's clock.
+  `invoices.recoveryStage` (1 / 2) is the dedup stamp.
+- **It cancels itself.** Paying, or an admin void, moves the invoice out of
+  `pending`, so the `by_status` scan never sees it again. No teardown logic
+  exists because none is needed. `sendInvoiceEmail` re-guards `pending` too, so
+  a settle racing the scheduler still sends nothing.
+- **Only the highest due stage fires.** An invoice found at day 9 with no stage
+  (a missed cron) gets `recoveryFinal` alone — never a `+3d` today and a `+7d`
+  tomorrow, which reads as a system flailing at someone already unhappy. For the
+  same reason an invoice locked during *this* run is skipped by the ladder:
+  **day 0 belongs to the lock notice**.
+- **A comped store is never chased.** The lock loops skip comped subs entirely,
+  so a store comped after its invoice was issued sits overdue with full access.
+  The ladder re-checks `past_due` + not-comped — the actual soft-lock predicate
+  — because the copy speaks in the first person about a locked dashboard.
+
+`recoveryFinal` names the **Off-Season Hold** as the alternative to walking
+away (`setSeasonalHold` is reachable from `past_due`, voids the pending plan
+invoice and bills the flat hold price instead). The offer is omitted when the
+overdue invoice is itself a hold bill — that seller already took the door, and
+pointing them at it again lands on a button that refuses them.
+
+### The one WhatsApp
+
+`WHATSAPP_BILLING_PAST_DUE_TEMPLATE`, sent once per lapse at the lock moment
+and nowhere else in the chain. Cost is not the constraint (~RM0.07 a template);
+noise discipline is. Issue and due-soon notices stay email — the only moment
+that earns a template is the one where the seller actually lost something.
+
+| Env var | Template (suggested name) | Body params (in order) | URL button |
+| --- | --- | --- | --- |
+| `WHATSAPP_BILLING_PAST_DUE_TEMPLATE` | `billing_past_due_utility` | store name, invoice number, amount (e.g. `MYR 79.00`) | `https://kedaipal.com/app/settings{{1}}` ← `?tab=billing` |
+
+Unset ⇒ nothing is attempted and every email path is byte-identical, so this
+ships decoupled from Meta template review. Failures do **not** fall back to
+email the way the order alerts do: `invoiceOverdue` is scheduled unconditionally
+at the same moment, so the seller has already been told on the channel that
+always works. This is the louder second tap, not the only one.
+
+It is **not** gated on `retailers.orderWaAlerts` — see
+[`order-notifications.md`](./order-notifications.md) for why. The seller is told
+this in the billing tab's past-due helper line, which states that billing
+reminders can't be switched off and stop the moment they pay.
 
 ## Soft-lock (`past_due`)
 
