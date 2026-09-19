@@ -609,9 +609,13 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 	// "Ready in ~2 hours" is only TRUE when same-day is possible. A product that
 	// needs a day or more of notice can never be ready two hours from now, so
 	// the chip would promise something checkout then refuses — the buyer-side
-	// twin of the seller form's "prep won't apply" note.
+	// twin of the seller form's "prep won't apply" note. An EVENT product is
+	// the same case (`z8r3fdff9u`): its moment is the seller's fixed date, the
+	// prep floor is exempt there, and the badge beside this one already says
+	// when it happens — so "ready in ~2 hours" would answer a question the
+	// guest isn't asking.
 	const prepLabel =
-		(pp.product?.minNoticeDays ?? 0) >= 1
+		(pp.product?.minNoticeDays ?? 0) >= 1 || pp.product?.event !== undefined
 			? ""
 			: formatPrepDuration(pp.product?.prepMinutes);
 	const pickupNote = pp.product?.pickupNote?.trim();
