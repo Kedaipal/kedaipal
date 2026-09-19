@@ -21,6 +21,11 @@ import {
 	todayMytMidnight,
 } from "../../convex/lib/fulfilmentDate";
 import {
+	asksForTime,
+	type FulfilmentKind,
+	fulfilmentKind,
+} from "../../convex/lib/fulfilmentShape";
+import {
 	type OpeningHours,
 	selectableTimeWindows,
 } from "../../convex/lib/openingHours";
@@ -37,16 +42,14 @@ import {
 	timeIssueCopy,
 } from "./fulfilment-time-issue";
 
-/** What the fulfilment is, as the buyer hears it — it picks every verb. */
-export type FulfilmentKind = "delivery" | "collection" | "pickup";
-
-export function fulfilmentKind(
-	method: "delivery" | "self_collect",
-	collectsFromCustomer: boolean,
-): FulfilmentKind {
-	if (method === "self_collect") return "pickup";
-	return collectsFromCustomer ? "collection" : "delivery";
-}
+/**
+ * The fulfilment's shape moved to `convex/lib/fulfilmentShape.ts` (z8r3fdg9aa)
+ * so `orders.create` and `orderClaims.commit` ask the same question this
+ * module does. Re-exported here, because a checkout still reads its whole
+ * "when" vocabulary from one import.
+ */
+export { asksForTime, fulfilmentKind };
+export type { FulfilmentKind };
 
 /** The verb T1's time copy speaks for a kind. */
 export const TIME_VERB: Record<FulfilmentKind, TimeVerb> = {
@@ -101,26 +104,6 @@ export function prepForFulfilment(
 	kind: FulfilmentKind,
 ): CartPrep {
 	return kind === "collection" ? NO_CART_PREP : cartPrep;
-}
-
-/**
- * Whether the checkout asks WHEN as well as which day.
- *
- * A delivery or collection always does — a rider at someone's door shouldn't
- * be an all-day window. A pickup does only when something makes the hour
- * matter: the store keeps opening hours, or the cart needs prep time. A store
- * using neither keeps the date-only pickup it always had (zero change), and a
- * drop-off meet-up never asks — the point's own schedule sets the hour.
- */
-export function asksForTime(args: {
-	kind: FulfilmentKind;
-	isDropOff: boolean;
-	openingHours: OpeningHours | undefined;
-	prepMinutes: number;
-}): boolean {
-	if (args.kind !== "pickup") return true;
-	if (args.isDropOff) return false;
-	return args.openingHours !== undefined || args.prepMinutes > 0;
 }
 
 type DayArgs = {

@@ -50,11 +50,8 @@ import {
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
-import {
-	prepFloorHours,
-	prepFloorIssue,
-	slowestPrep,
-} from "./lib/prepFloor";
+import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
+import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -1170,10 +1167,10 @@ export const create = mutation({
 		// live products, never trusted from the client — the cart line carries a
 		// copy only so the buyer is stopped at the picker instead of here.
 		//
-		// Hours-aware (`prepFloorIssue` reads the store's selectable windows), so
-		// the refusal never names a time after closing or inside a lunch break,
-		// and a prep that swallows the rest of the day says "too late for today"
-		// rather than pointing at an impossible slot.
+		// Hours-aware (`orderPrepFloorIssue` reads the store's selectable
+		// windows), so the refusal never names a time after closing or inside a
+		// lunch break, and a prep that swallows the rest of the day says "too
+		// late for today" rather than pointing at an impossible slot.
 		//
 		// ONE boolean owns whether the floor applies, so an exemption is one
 		// clause in one place:
@@ -1185,26 +1182,29 @@ export const create = mutation({
 		//    `&& eventLock === undefined` here — the seller set that time
 		//    herself, the same reason min-notice and opening hours exempt it.
 		const cartPrep = slowestPrep(prepLines);
-		const isCollectionTrip =
-			effectiveDeliveryMethod === "delivery" &&
-			retailer.deliveryBooking?.deliveryDirection === "collection";
+		const orderFulfilmentKind = fulfilmentKind(
+			effectiveDeliveryMethod,
+			retailer.deliveryBooking?.deliveryDirection === "collection",
+		);
+		const isCollectionTrip = orderFulfilmentKind === "collection";
 		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
-			const issue = prepFloorIssue({
-				// A date-only order's prep runs to the end of the day, not to
-				// closing time — see prepFloorHours. "Date-only" here means NO
-				// TIME ARRIVED, which is not quite the checkout's question
-				// (`asksForTime`: the point's kind, the store's hours, the
-				// cart's prep). Every shipped client sends a time whenever it
-				// asks for one, so the two agree in practice — but a hand-made
-				// call that omits it lands on this lenient branch instead of
-				// being held to closing time. Closing that needs `asksForTime`
-				// server-side, and a decision on whether a missing time should
-				// be refused outright; tracked separately.
-				hours: prepFloorHours(
-					retailer.openingHours,
-					sanitizedFulfilmentTime !== undefined,
-				),
+			const issue = orderPrepFloorIssue({
+				hours: retailer.openingHours,
+				// What prep races. The CHECKOUT's question (`asksForTime`,
+				// z8r3fdg9aa), not "did a time arrive?": both sides ask the
+				// same one, so a request that omits a time the form would
+				// have required is still held to the store's real hours
+				// instead of being widened to the whole day. The missing time
+				// is accepted — a date-only order is a legitimate shape — it
+				// is just judged honestly. A drop-off meet-up still races
+				// midnight: its hour is its point's own.
+				timed: asksForTime({
+					kind: orderFulfilmentKind,
+					isDropOff: sanitizedPickupSnapshot?.locationType === "drop_off",
+					openingHours: retailer.openingHours,
+					prepMinutes: cartPrep.minutes,
+				}),
 				dateEpoch: sanitizedFulfilmentDate,
 				timeMinutes: sanitizedFulfilmentTime,
 				now: Date.now(),
