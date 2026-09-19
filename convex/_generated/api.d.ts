@@ -61,6 +61,7 @@ import type * as lib_delyva from "../lib/delyva.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
+import type * as lib_fulfilmentShape from "../lib/fulfilmentShape.js";
 import type * as lib_ga4 from "../lib/ga4.js";
 import type * as lib_hitpay from "../lib/hitpay.js";
 import type * as lib_hitpayBilling from "../lib/hitpayBilling.js";
@@ -199,6 +200,7 @@ declare const fullApi: ApiFromModules<{
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/fulfilmentDate": typeof lib_fulfilmentDate;
+  "lib/fulfilmentShape": typeof lib_fulfilmentShape;
   "lib/ga4": typeof lib_ga4;
   "lib/hitpay": typeof lib_hitpay;
   "lib/hitpayBilling": typeof lib_hitpayBilling;

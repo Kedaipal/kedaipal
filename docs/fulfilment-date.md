@@ -488,21 +488,53 @@ shutters. (The first cut floored against midnight and got both wrong.) It is
 deliberately silent on everything that is not prep's fault, so the
 opening-hours gate keeps its own words for a closed day or a break.
 
-**What prep races: closing time, or midnight.** A timed moment is handed over
-inside the store's hours, so its prep races **closing time**. A **date-only**
-order — a drop-off meet-up, or a client that sends no time — isn't: the
-meet-up's hour is its point's own, so its prep races **midnight** on every day
-the store opens. `prepFloorHours(hours, timed)` makes that call at all four
-call sites (`orders.create`, `orderClaims.commit`, and through
-`isFulfilmentDaySelectable` / `fulfilmentDayCopy` / `prepHint` at both
-checkouts): the store's hours for a timed order; for a date-only one, every
-open day widened to the whole day, closed weekdays still closed so "closed on
-Fridays" speaks first. Judged against the hours, a date-only order placed after
-closing found no slot with prep AND none without, so prep looked blameless and
-a 24-hour prep could be booked for that evening's meet-up. The reverse was
-wrong too: a 2-hour prep at 4:30 PM was refused for a meet-up only because the
-store's own counter closes at 6. The date-only hint reads "…so it's ready from
-6:30 PM today".
+**What prep races: closing time, or midnight.** A handover the store's hours
+bound is made across its counter, so its prep races **closing time**. A
+**drop-off meet-up** isn't: its hour is its point's own schedule, so its prep
+races **midnight** on every day the store opens. `prepFloorHours(hours, timed)`
+makes that call at all four call sites (`orders.create`,
+`orderClaims.commit`, and through `isFulfilmentDaySelectable` /
+`fulfilmentDayCopy` / `prepHint` at both checkouts): the store's hours for a
+bounded handover; for an unbounded one, every open day widened to the whole
+day, closed weekdays still closed so "closed on Fridays" speaks first. Judged
+against the hours, a date-only order placed after closing found no slot with
+prep AND none without, so prep looked blameless and a 24-hour prep could be
+booked for that evening's meet-up. The reverse was wrong too: a 2-hour prep at
+4:30 PM was refused for a meet-up only because the store's own counter closes
+at 6. The date-only hint reads "…so it's ready from 6:30 PM today".
+
+`timed` is **`asksForTime`, the checkout's own question** — on the server too
+since `z8r3fdg9aa`. It used to ask a cheaper one there, "did a time arrive in
+the request?", and the two diverge the moment a request omits a time the
+checkout would have required (a stale tab, a hand-made `orders.create`): the
+server then took the *lenient* reading and widened a counter's day to midnight.
+A 9-to-6 store with a 2-hour cake, ordered date-only at 5 PM, was accepted for
+a collection that couldn't be ready before 7 — from a counter shut at 6. The
+missing time is still **accepted** — a date-only order is a legitimate shape,
+the one every pickup had before `z8r3fdff97`, and the seller can set an hour
+with Reschedule — it is only judged honestly now.
+
+**An order clears BOTH deadlines** — `orderPrepFloorIssue`, the entry point
+`orders.create` and `orderClaims.commit` call (`prepFloorIssue` judges one).
+Neither deadline implies the other:
+
+| Deadline | What it is | When it bites |
+| --- | --- | --- |
+| The **handover's** | Closing time when the store's hours bound it, else midnight | Inside the open window — a 2-hour prep at 4:30 PM at a 6 PM counter |
+| The **day's** | Midnight, for a request that named no hour at all | After closing, where the handover deadline goes *silent* — no slot left with prep and none without, so prep isn't what emptied the day and it defers (`prepFloorProblem`) |
+
+Without the second, holding a counter to its real hours would have *unrefused*
+the case `z8r3fdff97` fixed: at 8 PM a 24-hour prep books tonight, because prep
+has nothing left to measure. A request that DID name an hour is judged on that
+hour alone — the day's deadline is the date-only reading of "today".
+
+**Still open, deliberately** ([`z8r3fdg9pv`](https://app.clickup.com/t/z8r3fdg9pv)):
+a date-only order for a day whose window has already passed is accepted when
+prep is small or zero — at 8 PM a 2-hour cake for today still goes through,
+from that same shut counter. Prep declines to speak (it isn't prep's fault) and
+`assertWithinOpeningHours` applies its **window** test only where a time
+exists. That is the opening-hours gate's gap, not prep's, and closing it moves
+prep-free orders too.
 
 **One boolean decides whether it applies** — `prepFloorApplies`, in
 `orders.create` and `orderClaims.commit`. Exempt:
@@ -524,9 +556,17 @@ the storefront hides the "Ready in ~2 hours" chip on such a product.
 when something makes the hour matter** — the store keeps opening hours, or the
 cart needs prep time — and is then required and prefilled like delivery. A
 store using neither keeps its date-only pickup, byte for byte, and a
-**drop-off meet-up never asks**: its schedule note sets the hour
-(`asksForTime`, `src/lib/checkout-fulfilment.ts`). At a time-bearing pickup,
-the server holds the time to the windows and the break like a delivery's.
+**drop-off meet-up never asks**: its schedule note sets the hour. At a
+time-bearing pickup, the server holds the time to the windows and the break
+like a delivery's.
+
+`asksForTime` lives in **`convex/lib/fulfilmentShape.ts`** (with the
+`FulfilmentKind` type and `fulfilmentKind()`), not in the checkout's own
+module, because `orders.create` and `orderClaims.commit` ask it too — see the
+deadline section above. `src/lib/checkout-fulfilment.ts` re-exports all three,
+so a checkout still reads its whole "when" vocabulary from one import. Both
+servers feed it the same inputs the client does: the kind, the point's
+`locationType === "drop_off"`, the store's hours, and the cart's prep.
 
 **Checkout, storefront and claim link alike.** The cart's rules live in one
 pure module, `src/lib/checkout-fulfilment.ts`, built ON T1's time rules
