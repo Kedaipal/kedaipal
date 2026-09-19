@@ -853,7 +853,15 @@ export const commit = mutation({
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
 			const issue = prepFloorIssue({
 				// A date-only order's prep runs to the end of the day, not to
-				// closing time — see prepFloorHours.
+				// closing time — see prepFloorHours. "Date-only" here means NO
+				// TIME ARRIVED, which is not quite the checkout's question
+				// (`asksForTime`: the point's kind, the store's hours, the
+				// cart's prep). Every shipped client sends a time whenever it
+				// asks for one, so the two agree in practice — but a hand-made
+				// call that omits it lands on this lenient branch instead of
+				// being held to closing time. Closing that needs `asksForTime`
+				// server-side, and a decision on whether a missing time should
+				// be refused outright; tracked separately.
 				hours: prepFloorHours(
 					retailer.openingHours,
 					sanitizedFulfilmentTime !== undefined,
