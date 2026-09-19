@@ -17,6 +17,7 @@ import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
 import { ORDER_STATUS_KEYS, type OrderStatus } from "./orderStatus";
 import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
+import { orderPickupNotes } from "./pickupNote";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -42,6 +43,14 @@ function csvFlag(on: boolean | undefined): string {
 	return on ? "Yes" : "";
 }
 
+/** Which fulfilment key a row reads as — the collection DIRECTION wins over the
+ * method, since it is the opposite trip (86eyg0n8e). */
+function fulfilmentKey(o: CsvOrder): string {
+	return o.deliveryDirection === "collection"
+		? "collection"
+		: (o.deliveryMethod ?? "");
+}
+
 /**
  * A stored enum value as a person reads it: `payment_window_expired` →
  * `Payment window expired` (86eyrtz74).
@@ -51,14 +60,6 @@ function csvFlag(on: boolean | undefined): string {
  * attribution through `sourceLabel`. The raw enums were the inconsistency, not
  * this. Idempotent, so a value that is already prose passes through unchanged.
  */
-/** Which fulfilment key a row reads as — the collection DIRECTION wins over the
- * method, since it is the opposite trip (86eyg0n8e). */
-function fulfilmentKey(o: CsvOrder): string {
-	return o.deliveryDirection === "collection"
-		? "collection"
-		: (o.deliveryMethod ?? "");
-}
-
 export function humanizeEnum(raw: string): string {
 	const spaced = raw.replace(/[_-]+/g, " ").trim();
 	if (spaced === "") return "";
@@ -124,10 +125,11 @@ export type CsvOrder = {
 	shortId: string;
 	createdAt: number;
 	fulfilmentDate?: number;
-	/** Buyer's chosen time slot, minutes since MYT midnight. Stored separately
-	 * from `fulfilmentDate` (which keeps a whole-day invariant), so it needs its
-	 * own column — a date alone can't tell a made-to-order seller when the
-	 * customer is actually coming. */
+	/** Buyer's chosen time slot, minutes since MYT midnight — a delivery slot or,
+	 * since z8r3fdff97, a self-collect pickup time. Stored separately from
+	 * `fulfilmentDate` (which keeps a whole-day invariant), so it needs its own
+	 * column — a date alone can't tell a made-to-order seller when the customer
+	 * is actually coming. */
 	fulfilmentTimeMinutes?: number;
 	status: string;
 	paymentStatus?: string;
@@ -161,6 +163,9 @@ export type CsvOrder = {
 		 * frozen per line at order create, not looked up. See
 		 * `orders.items[].categoryNames` in convex/schema.ts. */
 		categoryNames?: string[];
+		/** The product's pickup note AS THE BUYER WAS TOLD IT (z8r3fdff97) —
+		 * frozen per line at order create. See `orders.items[].pickupNote`. */
+		pickupNote?: string;
 	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
@@ -244,6 +249,7 @@ export type OrderColumnKey =
 	| "addressNotes"
 	| "pickupLocation"
 	| "pickupAddress"
+	| "pickupNotes"
 	| "courierName"
 	| "trackingNo"
 	| "status"
@@ -332,7 +338,7 @@ export interface OrderColumn {
 	 */
 	display?: (o: CsvOrder) => string;
 	/** In the table's default column set. The rest are opt-in via the picker —
-	 * every column is available, but 36 at once is unreadable. */
+	 * every column is available, but all of them at once is unreadable. */
 	defaultVisible?: boolean;
 	/** Table column width in px — the DEFAULT. The seller can drag it between
 	 * `ORDER_COLUMN_MIN_WIDTH` and `ORDER_COLUMN_MAX_WIDTH`, and double-clicking
@@ -351,6 +357,23 @@ export interface OrderColumn {
 	 * Columns without a `sortKey` sort on their lowercased display string.
 	 */
 	sortKey?: (o: CsvOrder) => number | string | undefined;
+}
+
+/** A millisecond short of the next midnight — where an untimed order sits
+ * within its day: after every timed one (the latest slot is 11:59 PM) and
+ * before anything on the following day. */
+const UNTIMED_WITHIN_DAY_MS = 24 * 60 * 60 * 1000 - 1;
+
+/**
+ * The Fulfilment date column's sort value: the day plus the chosen time, so
+ * same-day orders fall in pickup/delivery-time order and untimed ones follow
+ * them. `undefined` for a dateless order, which sinks in either direction.
+ */
+export function fulfilmentMomentSortKey(o: CsvOrder): number | undefined {
+	if (o.fulfilmentDate === undefined) return undefined;
+	return o.fulfilmentTimeMinutes === undefined
+		? o.fulfilmentDate + UNTIMED_WITHIN_DAY_MS
+		: o.fulfilmentDate + o.fulfilmentTimeMinutes * 60_000;
 }
 
 /**
@@ -394,7 +417,11 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		defaultVisible: true,
 		width: 128,
 		value: (o) => csvDate(o.fulfilmentDate),
-		sortKey: (o) => o.fulfilmentDate,
+		// The moment, not just the day: same-day pickups sort by the hour the
+		// buyer arrives (z8r3fdff97), untimed ones after them — the inbox's
+		// "due" order (`compareInboxOrder`), so a kitchen's pickup list reads
+		// the same in both views.
+		sortKey: fulfilmentMomentSortKey,
 	},
 	{
 		key: "fulfilmentTime",
@@ -494,6 +521,21 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "fulfilment",
 		width: 200,
 		value: (o) => o.pickupSnapshot?.address ?? "",
+	},
+	{
+		// The third fact about a pickup, after where and the address (z8r3fdff97):
+		// what the buyer was told to do when they get there. The same deduped
+		// list the WhatsApp confirmation and /track show (`orderPickupNotes`), so
+		// the cell is the seller's record of it — blank on delivery and counter
+		// orders even though their lines froze a note. " | " joins, because
+		// notes are sentences that already carry their own commas and periods.
+		// Not default-visible: in a table it would repeat the seller's own
+		// sentence on every row of that product.
+		key: "pickupNotes",
+		label: "Pickup notes",
+		group: "fulfilment",
+		width: 220,
+		value: (o) => orderPickupNotes(o).join(" | "),
 	},
 	{
 		key: "courierName",
@@ -775,12 +817,6 @@ export function resolveOrderColumns(
 }
 
 /**
- * Comparable value for a column, for the table's per-column sort.
- *
- * Falls back to the lowercased display string, so a column that never declared
- * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
- */
-/**
  * A cell as it reads on screen. The one way the table (and free-text search)
  * should ask for text — going straight to `column.value` gets the stored value,
  * which is what the CSV wants and not what a person should read.
@@ -789,6 +825,12 @@ export function orderColumnDisplay(column: OrderColumn, o: CsvOrder): string {
 	return (column.display ?? column.value)(o);
 }
 
+/**
+ * Comparable value for a column, for the table's per-column sort.
+ *
+ * Falls back to the lowercased display string, so a column that never declared
+ * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
+ */
 export function orderColumnSortValue(
 	column: OrderColumn,
 	o: CsvOrder,

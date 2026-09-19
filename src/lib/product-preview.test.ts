@@ -41,6 +41,8 @@ function draft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
 		},
 		minQuantity: "",
 		minNoticeDays: "",
+		prepMinutes: "",
+		pickupNote: "",
 		...partial,
 	};
 }

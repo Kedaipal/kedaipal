@@ -653,8 +653,8 @@ const render: Record<
 	},
 };
 
-/** The one retailer notice with no invoice attached — the free-period nudge —
- * so a separate (smaller) var shape.
+/** Retailer notices with no invoice attached — the free-period nudge and the
+ * founding-benefit lifecycle — so a separate (smaller) var shape.
  *
  * Two siblings have been retired here. `trialEnded` went with z8r3fday24: a
  * free period ending now ISSUES the first invoice (`firstInvoice*` above), and
@@ -664,12 +664,21 @@ const render: Record<
  * renew and we'll send your invoice" for a bill the machine had already sent.
  * A lapse now produces an ordinary invoice, and a lock produces
  * `invoiceOverdue` followed by the `recovery*` chain. */
-export type TrialEmailKey = "trialEndingSoon";
+export type TrialEmailKey =
+	| "trialEndingSoon"
+	// Founding-benefit lifecycle (z8r3fdfyw5): the T-14 warning, then the
+	// notice that benefits ended. Both say the rank and badge are KEPT — that
+	// is the promise, and an email that failed to repeat it would read as
+	// though we had taken the badge too.
+	| "foundingBenefitsEndingSoon"
+	| "foundingBenefitsEnded";
 
 export type TrialEmailVars = {
 	storeName: string;
 	billingUrl: string;
 	daysLeft?: number; // only for trialEndingSoon
+	/** Pre-formatted date the founding benefits end / ended (founding keys). */
+	endsOnFormatted?: string;
 };
 
 const trialRender: Record<
@@ -689,6 +698,30 @@ const trialRender: Record<
 			const text = `⏰ Your free period ends in ${dayStr} — or sooner, the moment you take your first live order.\nYour first invoice arrives then, with 14 days to pay; your storefront stays live throughout.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		foundingBenefitsEndingSoon: (v) => {
+			const on = v.endsOnFormatted ?? "soon";
+			const subject = `⏳ Your founding price ends on ${on}`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your Kedaipal subscription hasn't renewed, so your <strong>Founding Member 30% discount ends on ${escapeHtml(on)}</strong>.`,
+				"Renew before then and nothing changes — you keep the founding price. After that date your plan bills at the standard price, and renewing later won't bring the discount back.",
+				"Your Founding Member rank and badge are yours for good either way.",
+			];
+			const html = wrapHtml("⏳", `Your founding price ends on ${on}`, lines, v.billingUrl, t.en.choosePlan);
+			const text = `⏳ Your founding price ends on ${on}\nRenew before then and you keep it. After that date your plan bills at the standard price, and renewing later won't bring the discount back.\nYour Founding Member rank and badge are yours for good either way.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		foundingBenefitsEnded: (v) => {
+			const subject = "Your founding price has ended";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your subscription stayed unrenewed past the 3-month window, so your founding 30% discount has now ended.`,
+				"You're an ordinary Pro seller from here — every plan is open to you again, at the standard prices, and you can pick one whenever you're ready.",
+				"<strong>Your Founding Member rank and badge stay yours, permanently.</strong> Nothing has changed on your storefront.",
+				"Think this is wrong? Message us — we'll sort it out.",
+			];
+			const html = wrapHtml("🏅", "Your founding price has ended", lines, v.billingUrl, t.en.choosePlan);
+			const text = `Your founding price has ended\nYour subscription stayed unrenewed past the 3-month window. You're an ordinary Pro seller from here — every plan is open again at standard prices.\nYour Founding Member rank and badge stay yours, permanently.\nThink this is wrong? Message us.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	ms: {
 		trialEndingSoon: (v) => {
@@ -703,6 +736,30 @@ const trialRender: Record<
 			const text = `⏰ Tempoh percuma anda tamat dalam ${dayStr} — atau lebih awal, sebaik sahaja anda terima pesanan pertama.\nBil pertama anda tiba ketika itu, dengan 14 hari untuk membayar; etalase anda kekal aktif sepanjang masa.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		foundingBenefitsEndingSoon: (v) => {
+			const on = v.endsOnFormatted ?? "tidak lama lagi";
+			const subject = `⏳ Harga pengasas anda tamat pada ${on}`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, langganan Kedaipal anda belum diperbaharui, jadi <strong>diskaun 30% Ahli Pengasas anda tamat pada ${escapeHtml(on)}</strong>.`,
+				"Perbaharui sebelum tarikh itu dan tiada apa berubah — harga pengasas kekal milik anda. Selepas tarikh itu pelan anda dibil pada harga biasa, dan memperbaharui kemudian tidak akan mengembalikan diskaun.",
+				"Pangkat dan lencana Ahli Pengasas anda kekal milik anda selama-lamanya.",
+			];
+			const html = wrapHtml("⏳", `Harga pengasas anda tamat pada ${on}`, lines, v.billingUrl, t.ms.choosePlan);
+			const text = `⏳ Harga pengasas anda tamat pada ${on}\nPerbaharui sebelum tarikh itu dan ia kekal milik anda. Selepas itu pelan anda dibil pada harga biasa, dan memperbaharui kemudian tidak akan mengembalikan diskaun.\nPangkat dan lencana Ahli Pengasas anda kekal milik anda selama-lamanya.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		foundingBenefitsEnded: (v) => {
+			const subject = "Harga pengasas anda telah tamat";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, langganan anda kekal tidak diperbaharui melebihi tempoh 3 bulan, jadi diskaun 30% pengasas anda telah tamat.`,
+				"Dari sini anda peniaga Pro biasa — semua pelan terbuka semula untuk anda, pada harga biasa, dan anda boleh pilih bila-bila anda bersedia.",
+				"<strong>Pangkat dan lencana Ahli Pengasas anda kekal milik anda, selama-lamanya.</strong> Tiada apa berubah pada etalase anda.",
+				"Rasa ini tidak betul? Mesej kami — kami akan uruskan.",
+			];
+			const html = wrapHtml("🏅", "Harga pengasas anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
+			const text = `Harga pengasas anda telah tamat\nLangganan anda kekal tidak diperbaharui melebihi tempoh 3 bulan. Dari sini anda peniaga Pro biasa — semua pelan terbuka semula pada harga biasa.\nPangkat dan lencana Ahli Pengasas anda kekal milik anda, selama-lamanya.\nRasa ini tidak betul? Mesej kami.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	zh: {
 		trialEndingSoon: (v) => {
@@ -715,6 +772,30 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("⏰", `您的免费期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
 			const text = `⏰ 您的免费期还剩 ${dayStr} —— 一旦收到第一笔订单，免费期会提前结束。\n届时您会收到第一张账单，有 14 天付款时间；您的商店保持在线。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		foundingBenefitsEndingSoon: (v) => {
+			const on = v.endsOnFormatted ?? "即将";
+			const subject = `⏳ 您的创始价将于 ${on} 结束`;
+			const lines = [
+				`${escapeHtml(v.storeName)} 您好，您的 Kedaipal 订阅尚未续订，因此您的<strong>创始会员 30% 折扣将于 ${escapeHtml(on)} 结束</strong>。`,
+				"在此之前续订，一切不变 — 创始价仍然属于您。该日期之后，您的方案将按标准价计费，之后再续订也无法恢复折扣。",
+				"无论如何，您的创始会员等级和徽章永久属于您。",
+			];
+			const html = wrapHtml("⏳", `您的创始价将于 ${on} 结束`, lines, v.billingUrl, t.zh.choosePlan);
+			const text = `⏳ 您的创始价将于 ${on} 结束\n在此之前续订即可保留。该日期之后将按标准价计费，之后再续订也无法恢复折扣。\n您的创始会员等级和徽章永久属于您。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		foundingBenefitsEnded: (v) => {
+			const subject = "您的创始价已结束";
+			const lines = [
+				`${escapeHtml(v.storeName)} 您好，您的订阅超过 3 个月仍未续订，因此您的创始 30% 折扣已结束。`,
+				"从现在起您是普通 Pro 卖家 — 所有方案按标准价重新向您开放，随时可以选择。",
+				"<strong>您的创始会员等级和徽章永久属于您。</strong>您的店面没有任何变化。",
+				"觉得有误？请联系我们，我们会处理。",
+			];
+			const html = wrapHtml("🏅", "您的创始价已结束", lines, v.billingUrl, t.zh.choosePlan);
+			const text = `您的创始价已结束\n您的订阅超过 3 个月仍未续订。从现在起您是普通 Pro 卖家 — 所有方案按标准价重新开放。\n您的创始会员等级和徽章永久属于您。\n觉得有误？请联系我们。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},

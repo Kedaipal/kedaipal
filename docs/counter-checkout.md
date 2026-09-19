@@ -115,7 +115,9 @@ chains to `buyer_identified`).
 **Fulfilment date:** counter orders capture an optional collection date
 (defaults to **today**, the walk-in case) validated against a 0-day notice — the
 seller is keying it in person, so today is always valid regardless of the
-storefront `minFulfilmentNoticeDays`. See [`fulfilment-date.md`](./fulfilment-date.md).
+storefront `minFulfilmentNoticeDays` — and the per-product **prep time**
+(`z8r3fdff97`) doesn't apply either. Counter orders freeze no pickup note: the
+buyer is at the counter. See [`fulfilment-date.md`](./fulfilment-date.md).
 After a **paid-in-person** order is created, the success screen offers an
 optional **"Mark as completed"** button (one tap → `delivered`).
 

@@ -21,9 +21,14 @@
  *  - Resend is cooled down + capped (convex/lib/orderClaims.ts) so the seller
  *    can't spam the buyer's WhatsApp.
  *  - Commit mirrors the STOREFRONT validation set (address shape, delivery
- *    on offer, pickup resolution, notice floor, opening hours, live stock) but
- *    deliberately skips the min-order rules and the mockup gate — the seller
- *    keyed the lines and agreed the price, the counter posture.
+ *    on offer, pickup resolution, notice floor, opening hours, the prep floor
+ *    and a kept self-collect time — z8r3fdff97 — live stock) but deliberately
+ *    skips the min-order rules and the mockup gate — the seller keyed the
+ *    lines and agreed the price, the counter posture.
+ *  - A line's pickup note is frozen from the LIVE product at commit, like
+ *    orders.create: it is what the claim page showed the buyer, and a seller
+ *    correcting a typo between send and commit still reaches them. The claim
+ *    lines stay the price-lock snapshot and carry no note.
  */
 
 import { ConvexError, v } from "convex/values";
@@ -65,6 +70,11 @@ import {
 } from "./lib/order";
 import type { OpeningHours } from "./lib/openingHours";
 import { assertWithinOpeningHours } from "./lib/openingHours";
+import {
+	prepFloorHours,
+	prepFloorIssue,
+	slowestPrep,
+} from "./lib/prepFloor";
 import {
 	storablePendingReason,
 	summarizeCartWeight,
@@ -478,7 +488,10 @@ export interface ClaimPagePayload {
 	};
 	/** Present only while the claim is OPEN. */
 	open?: {
-		lines: ClaimLine[];
+		/** The frozen lines, each decorated with its product's LIVE order rules
+		 * (z8r3fdff97) — the prep window that floors today's times and the
+		 * pickup note the buyer reads before collecting. */
+		lines: Array<ClaimLine & { prepMinutes?: number; pickupNote?: string }>;
 		itemsTotal: number;
 		buyerName?: string;
 		waPhone: string;
@@ -510,14 +523,26 @@ export const getByToken = query({
 		const status = effectiveClaimStatus(claim, now);
 
 		// Strictest per-product notice across the frozen lines (storefront rule —
-		// the buyer picks the date, so the floor applies here too).
+		// the buyer picks the date, so the floor applies here too). The same read
+		// collects each product's prep window and pickup note (z8r3fdff97), so
+		// the page applies the storefront's prep floor and shows the notes.
 		let minNoticeDays = retailer.minFulfilmentNoticeDays ?? 0;
+		const rulesByProduct = new Map<
+			Id<"products">,
+			{ prepMinutes?: number; pickupNote?: string }
+		>();
 		if (status === "open") {
-			const seen = new Set<Id<"products">>();
 			for (const line of claim.lines) {
-				if (seen.has(line.productId)) continue;
-				seen.add(line.productId);
+				if (rulesByProduct.has(line.productId)) continue;
 				const product = await ctx.db.get(line.productId);
+				rulesByProduct.set(line.productId, {
+					...(product?.prepMinutes !== undefined
+						? { prepMinutes: product.prepMinutes }
+						: {}),
+					...(product?.pickupNote !== undefined
+						? { pickupNote: product.pickupNote }
+						: {}),
+				});
 				if (product && (product.minNoticeDays ?? 0) > minNoticeDays)
 					minNoticeDays = product.minNoticeDays ?? 0;
 			}
@@ -549,7 +574,10 @@ export const getByToken = query({
 		};
 		if (status === "open") {
 			payload.open = {
-				lines: claim.lines,
+				lines: claim.lines.map((line) => ({
+					...line,
+					...rulesByProduct.get(line.productId),
+				})),
 				itemsTotal: claimItemsTotal(claim.lines),
 				buyerName: claim.buyerName,
 				waPhone: claim.waPhone,
@@ -743,6 +771,10 @@ export const commit = mutation({
 		>();
 		const weightItems: CartWeightItem[] = [];
 		let maxItemNoticeDays = 0;
+		// The live order rules (z8r3fdff97): prep for the floor below, and the
+		// pickup note each line freezes — read in the same loop, like notice.
+		const prepLines: { name: string; prepMinutes?: number }[] = [];
+		const pickupNoteByProduct = new Map<Id<"products">, string>();
 		for (const line of claim.lines) {
 			const variant = await ctx.db.get(line.variantId);
 			if (!variant)
@@ -752,6 +784,14 @@ export const commit = mutation({
 			const product = await ctx.db.get(line.productId);
 			if ((product?.minNoticeDays ?? 0) > maxItemNoticeDays)
 				maxItemNoticeDays = product?.minNoticeDays ?? 0;
+			if (product) {
+				prepLines.push({
+					name: product.name,
+					prepMinutes: product.prepMinutes,
+				});
+				if (product.pickupNote !== undefined)
+					pickupNoteByProduct.set(product._id, product.pickupNote);
+			}
 			const block =
 				(variant.blockWhenOutOfStock ?? product?.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(line.variantId);
@@ -787,11 +827,12 @@ export const commit = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// A self-collect time is kept too (z8r3fdff97), exactly as orders.create
+		// keeps it — it was silently dropped here before.
 		let sanitizedFulfilmentTime: number | undefined;
 		if (
 			args.fulfilmentTimeMinutes !== undefined &&
-			sanitizedFulfilmentDate !== undefined &&
-			args.deliveryMethod === "delivery"
+			sanitizedFulfilmentDate !== undefined
 		) {
 			try {
 				sanitizedFulfilmentTime = assertValidFulfilmentTime(
@@ -800,6 +841,38 @@ export const commit = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+		// Prep floor — orders.create's rule, word for word (convex/lib/prepFloor):
+		// the slowest line decides the earliest moment, a collection trip is
+		// exempt (the rider collects first; the work comes after).
+		const cartPrep = slowestPrep(prepLines);
+		const isCollectionTrip =
+			args.deliveryMethod === "delivery" &&
+			retailer.deliveryBooking?.deliveryDirection === "collection";
+		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
+		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
+			const issue = prepFloorIssue({
+				// A date-only order's prep runs to the end of the day, not to
+				// closing time — see prepFloorHours. "Date-only" here means NO
+				// TIME ARRIVED, which is not quite the checkout's question
+				// (`asksForTime`: the point's kind, the store's hours, the
+				// cart's prep). Every shipped client sends a time whenever it
+				// asks for one, so the two agree in practice — but a hand-made
+				// call that omits it lands on this lenient branch instead of
+				// being held to closing time. Closing that needs `asksForTime`
+				// server-side, and a decision on whether a missing time should
+				// be refused outright; tracked separately.
+				hours: prepFloorHours(
+					retailer.openingHours,
+					sanitizedFulfilmentTime !== undefined,
+				),
+				dateEpoch: sanitizedFulfilmentDate,
+				timeMinutes: sanitizedFulfilmentTime,
+				now,
+				prep: cartPrep,
+				kind: args.deliveryMethod === "self_collect" ? "pickup" : "delivery",
+			});
+			if (issue !== null) throw new ConvexError(issue);
 		}
 		if (sanitizedFulfilmentDate !== undefined) {
 			try {
@@ -839,11 +912,9 @@ export const commit = mutation({
 			deliveryFeePending = resolved.pending;
 			deliveryFeePendingReason = storablePendingReason(resolved.pendingReason);
 		}
-		const deliveryDirection =
-			args.deliveryMethod === "delivery" &&
-			retailer.deliveryBooking?.deliveryDirection === "collection"
-				? ("collection" as const)
-				: undefined;
+		const deliveryDirection = isCollectionTrip
+			? ("collection" as const)
+			: undefined;
 
 		const { subtotal, total } = computeOrderTotals(claim.lines, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
@@ -895,10 +966,15 @@ export const commit = mutation({
 			// This is the THIRD create path to need it (storefront, counter, claim)
 			// — each builds its own snapshot, so a new frozen field has to be
 			// stamped in three places. See docs/stock-adjustments.md.
-			items: claim.lines.map((line) => ({
-				...line,
-				stockReserved: requestedByVariant.get(line.variantId)?.block === true,
-			})),
+			items: claim.lines.map((line) => {
+				const pickupNote = pickupNoteByProduct.get(line.productId);
+				return {
+					...line,
+					stockReserved: requestedByVariant.get(line.variantId)?.block === true,
+					// Frozen from the live product at commit — see the header.
+					...(pickupNote !== undefined ? { pickupNote } : {}),
+				};
+			}),
 			subtotal,
 			total,
 			currency: claim.currency,

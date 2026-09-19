@@ -1776,3 +1776,113 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		fetchMock.restore();
 	});
 });
+
+describe("whatsapp confirm — pickup notes (z8r3fdff97)", () => {
+	async function seedCollectStore(
+		t: ReturnType<typeof convexTest>,
+		opts: { madeToOrder?: boolean } = {},
+	) {
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Huff Test",
+			slug: `huff-${opts.madeToOrder ? "mto" : "std"}`,
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Huff & Puff Cafe",
+				address: "Jln SS2/24, Petaling Jaya",
+			},
+		);
+		const mk = (name: string, pickupNote: string) =>
+			asUser.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name,
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				pickupNote,
+				requiresProof: opts.madeToOrder === true,
+				variants: [
+					{
+						optionValues: [],
+						price: opts.madeToOrder ? 0 : 1200,
+						onHand: 50,
+					},
+				],
+			});
+		const vanilla = await mk("Ice Cream Puff (Vanilla)", "Bring an ice bag.");
+		const mango = await mk("Ice Cream Puff (Mango)", "Bring an ice bag.");
+		const box = await mk("Cream Puff Box", "Side counter — ring the bell.");
+		return { retailerId: retailer._id, pickupLocationId, vanilla, mango, box };
+	}
+
+	test("a normal self-collect confirm carries each distinct note once", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const s = await seedCollectStore(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: s.retailerId,
+			items: [
+				{ productId: s.vanilla, quantity: 1 },
+				{ productId: s.mango, quantity: 1 },
+				{ productId: s.box, quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisyah", waPhone: "60123456789" },
+			deliveryMethod: "self_collect",
+			pickupLocationId: s.pickupLocationId,
+		});
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		const cta = fetchMock
+			.waCalls()
+			.find((c) => (c.body as { type?: string } | null)?.type === "interactive");
+		const text = (cta?.body as { interactive: { body: { text: string } } })
+			.interactive.body.text;
+		expect(text).toContain("Before you collect");
+		// Two vanilla-and-mango lines share one note: it appears ONCE.
+		expect(text.split("Bring an ice bag.").length - 1).toBe(1);
+		expect(text).toContain("Side counter — ring the bell.");
+		fetchMock.restore();
+	});
+
+	test("the MOCKUP-GATED confirm carries them too — made-to-order + self-collect", async () => {
+		// The path that dropped them: a custom order defers the payment ask and
+		// sends a branded image instead, and that caption had no notes.
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const s = await seedCollectStore(t, { madeToOrder: true });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: s.retailerId,
+			items: [{ productId: s.vanilla, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisyah", waPhone: "60123456789" },
+			deliveryMethod: "self_collect",
+			pickupLocationId: s.pickupLocationId,
+		});
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		const image = fetchMock
+			.waCalls()
+			.find((c) => (c.body as { type?: string } | null)?.type === "image");
+		const caption =
+			(image?.body as { image?: { caption?: string } }).image?.caption ?? "";
+		expect(caption).toContain("design for you to approve");
+		expect(caption).toContain("Before you collect");
+		expect(caption).toContain("Bring an ice bag.");
+		fetchMock.restore();
+	});
+});

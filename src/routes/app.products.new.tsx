@@ -89,6 +89,8 @@ function NewProductRoute() {
 				kind: values.kind,
 				booking: values.booking,
 				minNoticeDays: values.minNoticeDays,
+				prepMinutes: values.prepMinutes,
+				pickupNote: values.pickupNote,
 				minQuantity: values.minQuantity,
 				variants: values.variants,
 			}));
@@ -211,6 +213,7 @@ function NewProductRoute() {
 				currency={retailer.currency}
 				submitLabel="Create product"
 				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				offerSelfCollect={retailer.offerSelfCollect !== false}
 				onSubmit={handleCreate}
 			/>
 		</div>

@@ -722,6 +722,10 @@ order left the vendor choosing between a 3 AM rider and no rider.
 - The seller-side reschedule of the ORDER's fulfilment moment (what the buyer
   sees) is `orders.rescheduleFulfilment` — see docs/fulfilment-date.md
   ("Seller reschedule"). Its hard guard: refused while a rider job is ACTIVE.
+- **A self-collect order's time is never a rider schedule** (`z8r3fdff97`,
+  when pickups gained a time): `dispatchBlockReason` returns `not_delivery`
+  before `requestedMoment` is ever composed, here and in Delyva — pinned by a
+  test in each provider's suite.
 
 ### Rebook path + order sync (canonical bug 86eyp63xn, Wagyu Walid)
 

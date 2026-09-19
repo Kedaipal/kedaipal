@@ -13,6 +13,7 @@ import {
 	REPORT_COLUMNS,
 } from "./product-export";
 import { exportOnlyColumnsPresent } from "./product-import";
+import { parseProductsXlsx } from "./xlsx";
 
 const sampleProducts: ExportableProduct[] = [
 	{
@@ -153,7 +154,7 @@ describe("buildExportFilename", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 86eyrtz74 — the catalogue report columns. The first eleven columns stay the
+// 86eyrtz74 — the catalogue report columns. The leading columns stay the
 // import template; everything after answers "what is actually in my store".
 // ---------------------------------------------------------------------------
 
@@ -219,14 +220,16 @@ function rowOf(csv: string, i = 1): Record<string, string> {
 describe("product export — round-trip contract", () => {
 	test("the import columns still lead, in their original order", () => {
 		const header = productsToCsvString([reportProduct]).split("\n")[0];
-		expect(header.split(",").slice(0, 11)).toEqual([
-			...PRODUCT_IMPORT_ROUNDTRIP_COLUMNS,
-		]);
+		expect(
+			header.split(",").slice(0, PRODUCT_IMPORT_ROUNDTRIP_COLUMNS.length),
+		).toEqual([...PRODUCT_IMPORT_ROUNDTRIP_COLUMNS]);
 	});
 
 	test("the report columns follow, in registry order", () => {
 		const header = productsToCsvString([reportProduct]).split("\n")[0];
-		expect(header.split(",").slice(11)).toEqual([...REPORT_COLUMNS]);
+		expect(
+			header.split(",").slice(PRODUCT_IMPORT_ROUNDTRIP_COLUMNS.length),
+		).toEqual([...REPORT_COLUMNS]);
 	});
 
 	test("an exported sheet re-parses through the import parser", () => {
@@ -464,5 +467,87 @@ describe("round-trip preserves sellability (PR #230 review, MEDIUM)", () => {
 			expect(EXPORT_ONLY_COLUMNS).not.toContain(roundtrip);
 			expect(REPORT_COLUMNS).toContain(roundtrip);
 		}
+	});
+});
+
+describe("product export — order rules round-trip (z8r3fdff97)", () => {
+	const puff: ExportableProduct = {
+		handle: "prod_puff",
+		name: "Ice cream puff",
+		options: [],
+		prepMinutes: 120,
+		// A comma, so the cell has to be quoted to survive.
+		pickupNote: "Side counter, bring an ice bag.",
+		variants: [
+			{
+				optionValues: [],
+				sku: "PUFF-1",
+				price: 450,
+				onHand: 40,
+				parcelWeightG: 80,
+				active: true,
+			},
+		],
+	};
+
+	test("the two importable columns close the template block, not the report", () => {
+		expect(PRODUCT_IMPORT_ROUNDTRIP_COLUMNS.slice(-2)).toEqual([
+			"prep_minutes",
+			"pickup_note",
+		]);
+		expect(REPORT_COLUMNS as readonly string[]).not.toContain("prep_minutes");
+		expect(REPORT_COLUMNS as readonly string[]).not.toContain("pickup_note");
+	});
+
+	test("a prep time and a note export and come back exactly (CSV)", () => {
+		const csv = productsToCsvString([puff]);
+		expect(rowOf(csv).prep_minutes).toBe("120");
+		expect(rowOf(csv).pickup_note).toBe("Side counter, bring an ice bag.");
+		const parsed = parseProductsCsv(csv);
+		expect(parsed.errorRows).toEqual([]);
+		expect(parsed.products[0].prepMinutes).toBe(120);
+		expect(parsed.products[0].pickupNote).toBe(
+			"Side counter, bring an ice bag.",
+		);
+	});
+
+	test("unset rules export blank and re-import as 'keep', never as a clear", () => {
+		const bare: ExportableProduct = {
+			...puff,
+			prepMinutes: undefined,
+			pickupNote: undefined,
+		};
+		const csv = productsToCsvString([bare]);
+		expect(rowOf(csv).prep_minutes).toBe("");
+		expect(rowOf(csv).pickup_note).toBe("");
+		const parsed = parseProductsCsv(csv);
+		expect(parsed.products[0].prepMinutes).toBeUndefined();
+		expect(parsed.products[0].pickupNote).toBeUndefined();
+	});
+
+	test("a booking listing exports blank rules even if its row holds some", () => {
+		// The form hides both on a booking and the import skips them, so a value
+		// in the sheet would round-trip into a warning about a setting the
+		// seller cannot see.
+		const csv = productsToCsvString([{ ...puff, kind: "booking" }]);
+		expect(rowOf(csv).prep_minutes).toBe("");
+		expect(rowOf(csv).pickup_note).toBe("");
+	});
+
+	test("a fresh export never tells the import the rules are ignored", () => {
+		const header = productsToCsvString([puff]).split("\n")[0].split(",");
+		const ignored = exportOnlyColumnsPresent(header);
+		expect(ignored).not.toContain("prep_minutes");
+		expect(ignored).not.toContain("pickup_note");
+	});
+
+	test("both survive the Excel round-trip", async () => {
+		const blob = await productsToXlsxBlob([puff]);
+		const parsed = await parseProductsXlsx(await blob.arrayBuffer());
+		expect(parsed.errorRows).toEqual([]);
+		expect(parsed.products[0].prepMinutes).toBe(120);
+		expect(parsed.products[0].pickupNote).toBe(
+			"Side counter, bring an ice bag.",
+		);
 	});
 });

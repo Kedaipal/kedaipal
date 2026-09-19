@@ -755,8 +755,31 @@ export default defineSchema({
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
 		// ledger. See docs/manual-subscription.md.
+		//
+		// MEMBERSHIP IS PERMANENT, BENEFITS ARE NOT (z8r3fdfyw5). These two fields
+		// are the HONOUR — the storefront badge and the "Founding #N" pill — and the
+		// signed agreement plus the billing ribbon both promise them "for good", so
+		// nothing clears them. What CAN be taken back is the entitlement set (the
+		// 30% price, the Founding-Pro lock, white-glove), and that is
+		// `foundingBenefitsRevokedAt` below. Never conflate the two: clearing
+		// `isFoundingMember` to revoke a price would strip a badge we promised, AND
+		// silently hand the store permanent founding pricing through the
+		// `foundingIntent` fallback in `foundingPriceEligible`.
 		isFoundingMember: v.optional(v.boolean()),
 		foundingMemberRank: v.optional(v.number()),
+		// When this member's founding BENEFITS ended — denormalized from
+		// `foundingMembers.benefitsRevokedAt` so every `foundingPriceEligible`
+		// caller gets it off the retailer doc it already loaded (zero extra reads,
+		// mirroring the flags above). Set = ordinary seller pricing, permanently:
+		// unlike the read-time lapse window, paying does NOT bring the discount
+		// back. Undefined for everyone who never had benefits taken.
+		foundingBenefitsRevokedAt: v.optional(v.number()),
+		// Denormalized mirror of `foundingMembers.benefitsRestoredAt` — the floor
+		// the founding lapse clock measures from, so an admin re-grant actually
+		// restores the price instead of being overwritten by a window that
+		// already ran out. Read off the retailer doc every pricing caller
+		// already loads, exactly like the flag above.
+		foundingBenefitsRestoredAt: v.optional(v.number()),
 		// WABA send guardrails (kill switch, per-seller caps) live in their own
 		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
@@ -909,6 +932,26 @@ export default defineSchema({
 		// no override (0 is normalized to unset — one spelling). Capped at
 		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
 		minNoticeDays: v.optional(v.number()),
+		// How long THIS product takes to make, in MINUTES (z8r3fdff97). The
+		// hours-scale sibling of minNoticeDays, which could only ever move whole
+		// DAYS: notice 0 lets a buyer collect 15 minutes after ordering, notice 1
+		// kills same-day outright, and "ready in 2 hours" is neither. Checkout
+		// takes the MAX across the cart and floors the pickup/delivery TIME with
+		// it, the same way minNoticeDays floors the DATE — and the two compose:
+		// notice moves the day, prep moves the clock, and prep is absorbed
+		// overnight on any day but today. Undefined = no window (0 normalizes to
+		// unset — one spelling). Capped at MAX_PREP_MINUTES. Counter checkout is
+		// exempt, the notice posture: the seller is standing there.
+		prepMinutes: v.optional(v.number()),
+		// One line the buyer must read before collecting THIS product — "side
+		// counter", "bring an ice bag, ice-cream puffs melt in 20 min". Lived in
+		// the description before, where it reached the storefront and then died:
+		// it never rode the order, so it was absent from checkout, the WhatsApp
+		// confirmation and /track, which is exactly where a buyer needs it.
+		// Frozen onto orders.items[].pickupNote at create. Plain text, trimmed,
+		// <= MAX_PICKUP_NOTE_LENGTH; empty -> unset. Shown only where
+		// self-collect is actually on offer.
+		pickupNote: v.optional(v.string()),
 		// What KIND of thing this is — the vocabulary + question router locked in
 		// the booking spec (86eyj70z1 decision 5). Unset = physical (legacy
 		// default, zero migration). "Food" is a wizard card, never a stored value
@@ -1228,6 +1271,15 @@ export default defineSchema({
 				// exactly the wrong answer for any product whose flag has since
 				// changed, and we cannot know what was true then.
 				stockReserved: v.optional(v.boolean()),
+				// The product's pickup note AS IT READ WHEN SOLD (z8r3fdff97) —
+				// frozen like `name`, `price` and `categoryNames`, and for the same
+				// reason: a seller who later edits "side counter" to "front door"
+				// must not rewrite the instruction a buyer was already given and is
+				// still holding in their WhatsApp thread. Undefined = the product
+				// carried no note at the time, which is also every order predating
+				// the field; deliberately NOT backfilled, since today's note is not
+				// evidence of what that buyer was told.
+				pickupNote: v.optional(v.string()),
 			}),
 		),
 		subtotal: v.number(),
@@ -1579,15 +1631,30 @@ export default defineSchema({
 		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
 		// midnight (0..1439), captured at checkout for DELIVERY orders (both
 		// directions: the rider's arrival at the buyer, or the collection from
-		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// them, shouldn't be an all-day window) and — since z8r3fdff97 — for
+		// SELF-COLLECT orders at the seller's own pickup point whenever the
+		// store has opening hours or the cart has a prep window (a drop-off
+		// meet-up stays date-only: its schedule note governs). Deliberately a separate field:
 		// `fulfilmentDate` must stay a whole midnight (the validator enforces
 		// it, and the inbox sort / due-today counts / urgency badges all
 		// compare midnights), so the time composes with it via
 		// composeFulfilmentMoment and can never drift from the day. Absent on
-		// legacy, counter and self-collect orders — every consumer treats
-		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// legacy, counter and booking orders, and optional on self-collect —
+		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
+		// The seller MOVED this order's moment (z8r3fdff97 test round). The
+		// buyer is never messaged about a reschedule — the dialog says so and
+		// tells the seller to agree it in chat — so `/track` is the only place
+		// they can see it changed, and "Collect on Mon 3:00 PM" alone looks
+		// exactly like the time they chose. These three carry what the page
+		// needs to say so: WHEN it was moved, and the moment it moved FROM
+		// (date-only when the seller cleared the time). Absent = never moved,
+		// which is every order before this shipped. Stamped only when the
+		// moment actually differs, so re-saving the same day is not "changed".
+		rescheduledAt: v.optional(v.number()),
+		rescheduledFromDate: v.optional(v.number()),
+		rescheduledFromTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -2650,6 +2717,31 @@ export default defineSchema({
 		firstInvoiceId: v.optional(v.id("invoices")),
 		welcomedAt: v.optional(v.number()),
 		whiteGloveScheduledAt: v.optional(v.number()),
+		// Benefit revocation (z8r3fdfyw5) — the audit record behind the retailer's
+		// denormalized `foundingBenefitsRevokedAt`. The RANK AND BADGE ARE NEVER
+		// TOUCHED: the row stays, so the slot stays claimed (`getSpotsRemaining`
+		// counts rows) and re-granting is a deliberate admin act, not a race for a
+		// freed spot.
+		benefitsRevokedAt: v.optional(v.number()),
+		// Why: the 90-day lapse window ran out, or Arif did it by hand.
+		benefitsRevokedReason: v.optional(
+			v.union(v.literal("lapsed"), v.literal("admin")),
+		),
+		// Arif's free-text note on a manual revoke/restore — shown in the admin
+		// cohort list so "why is #4 revoked?" is answerable a year later.
+		benefitsRevokedNote: v.optional(v.string()),
+		// When an admin last GAVE the benefits back — and the floor the founding
+		// clock is measured from thereafter (z8r3fdfyw5). Without it a re-grant
+		// was a no-op for the only people it exists for: clearing the revocation
+		// stamp leaves `foundingPriceEligible`'s read-time window still expired,
+		// so the seller stayed on list price and the next daily pass re-revoked
+		// them and sent a SECOND "your founding price has ended" email.
+		benefitsRestoredAt: v.optional(v.number()),
+		// The `currentPeriodEnd` the T-14 warning was sent ABOUT, not a bare
+		// timestamp — same idiom as `subscriptions.renewalNoticeSentForPeriodEnd`.
+		// Paying advances the period, so the stamp stops matching and a LATER lapse
+		// warns again, with no clearing logic to forget.
+		benefitsWarningSentForPeriodEnd: v.optional(v.number()),
 	})
 		.index("by_rank", ["rank"])
 		.index("by_retailer", ["retailerId"]),

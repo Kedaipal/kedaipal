@@ -7,7 +7,6 @@ import { Package, Truck } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
-	useCallback,
 	useEffect,
 	useMemo,
 	useRef,
@@ -23,23 +22,31 @@ import {
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
-	weekdayIndexMyt,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import {
-	assertWithinOpeningHours,
 	defaultTimeWithinHours,
 	hoursForDate,
 	isAllDay,
-	isOpenOnDate,
 	selectableTimeWindow,
-	WEEKDAY_NAMES,
 } from "../../../convex/lib/openingHours";
+import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
+import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
+import {
+	asksForTime,
+	type FulfilmentKind,
+	fulfilmentDayCopy,
+	fulfilmentKind,
+	fulfilmentTimeCopy,
+	isFulfilmentDaySelectable,
+	prepForFulfilment,
+	prepHint,
+} from "../../lib/checkout-fulfilment";
 import {
 	convexErrorMessage,
 	formatMobile,
@@ -48,10 +55,8 @@ import {
 import {
 	type CopyPart,
 	fulfilmentInputsKey,
-	fulfilmentTimeIssue,
 	planTimeRepair,
 	type TimeMove,
-	timeIssueCopy,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
 import { claimFormSchemaFor } from "../../lib/schemas";
@@ -59,7 +64,9 @@ import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
+import { PickupNotes } from "../order/pickup-notes";
 import { AddressFieldset } from "../storefront/address-fieldset";
+import { CheckoutHint } from "../storefront/checkout-hint";
 import { sanitizeAddress } from "../storefront/checkout-form";
 import {
 	PickupLocationRadioList,
@@ -86,6 +93,13 @@ import { Button } from "../ui/button";
  */
 
 const CLAIM_LINES_TICKET = "font-mono text-[13px] leading-6";
+
+/** What the time field asks, per fulfilment — the storefront checkout's words. */
+const TIME_DESCRIPTION: Record<FulfilmentKind, string> = {
+	delivery: "When you'd like it to arrive.",
+	collection: "When the rider should come to you.",
+	pickup: "When you'll collect it.",
+};
 
 type OpenClaim = NonNullable<ClaimPagePayload["open"]>;
 
@@ -155,14 +169,26 @@ export function ClaimCheckoutPage({
 		openingHours,
 	} = store;
 
+	// The claim's order rules, read live at load (z8r3fdff97): the slowest
+	// line's prep window floors today's times, and the lines' pickup notes are
+	// the "Before you collect" block — the same rules the storefront applies.
+	const cartPrep = slowestPrep(open.lines);
+	const claimPickupNotes = distinctPickupNotes(
+		open.lines.map((line) => line.pickupNote),
+	);
+	// Read per render; the repair effect's `clockTick` re-renders on the 30s
+	// beat and on tab return (a claim tab left open past midnight re-floors).
+	const now = Date.now();
+	const nowDayKey = ymdFromEpoch(now);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
 	const { minYmd, maxYmd, todayYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(minNoticeDays);
+		const bounds = fulfilmentDateBounds(minNoticeDays, now);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
-			todayYmd: ymdFromEpoch(fulfilmentDateBounds(0).min),
+			todayYmd: ymdFromEpoch(fulfilmentDateBounds(0, now).min),
 		};
-	}, [minNoticeDays]);
+	}, [minNoticeDays, nowDayKey]);
 
 	const selfCollectAvailable =
 		store.offerSelfCollect && pickupLocations.length > 0;
@@ -173,29 +199,61 @@ export function ClaimCheckoutPage({
 		? "delivery"
 		: "self_collect";
 
-	const isDaySelectable = useCallback(
-		(ymd: string, method: "delivery" | "self_collect") => {
-			const epoch = mytMidnightFromYmd(ymd);
-			if (Number.isNaN(epoch)) return false;
-			if (method === "delivery") {
-				return selectableTimeWindow(openingHours, epoch) !== null;
-			}
-			return isOpenOnDate(openingHours, epoch);
-		},
-		[openingHours],
-	);
-	const defaultYmd = useMemo(() => {
-		for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
-			if (isDaySelectable(ymd, defaultMethod)) return ymd;
-		}
-		return minYmd;
-	}, [minYmd, maxYmd, defaultMethod, isDaySelectable]);
-
 	const sortedPickups = [...pickupLocations].sort(
 		(a, b) => a.sortOrder - b.sortOrder,
 	);
 	const singlePickup =
 		sortedPickups.length === 1 ? sortedPickups[0] : undefined;
+
+	// How the "when" step behaves for a method + pickup point — the
+	// storefront checkout's rule (z8r3fdff97): delivery always asks for a
+	// time; a pickup asks when the store keeps hours or the claim needs prep;
+	// a drop-off meet-up never does.
+	const scheduleFor = (
+		method: "delivery" | "self_collect",
+		pickupLocationId: string,
+	) => {
+		const kind: FulfilmentKind = fulfilmentKind(method, collectsFromCustomer);
+		const point =
+			method === "self_collect"
+				? (singlePickup ??
+					sortedPickups.find((p) => p._id === pickupLocationId))
+				: undefined;
+		const isDropOff = point?.locationType === "drop_off";
+		const prep = prepForFulfilment(cartPrep, kind);
+		return {
+			kind,
+			point,
+			isDropOff,
+			prep,
+			timed: asksForTime({
+				kind,
+				isDropOff,
+				openingHours,
+				prepMinutes: prep.minutes,
+			}),
+		};
+	};
+	type Schedule = ReturnType<typeof scheduleFor>;
+	const isDaySelectable = (ymd: string, schedule: Schedule) => {
+		const epoch = mytMidnightFromYmd(ymd);
+		if (Number.isNaN(epoch)) return false;
+		return isFulfilmentDaySelectable({
+			hours: openingHours,
+			dateEpoch: epoch,
+			now,
+			prep: schedule.prep,
+			timed: schedule.timed,
+		});
+	};
+	const firstSelectableYmd = (schedule: Schedule) => {
+		for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
+			if (isDaySelectable(ymd, schedule)) return ymd;
+		}
+		return minYmd;
+	};
+	const defaultSchedule = scheduleFor(defaultMethod, "");
+	const defaultYmd = firstSelectableYmd(defaultSchedule);
 
 	const form = useAppForm({
 		defaultValues: {
@@ -220,8 +278,17 @@ export function ClaimCheckoutPage({
 			pickupLocationId: "",
 			fulfilmentDate: defaultYmd,
 			fulfilmentTime: hhmmFromMinutes(
-				defaultTimeWithinHours(openingHours, mytMidnightFromYmd(defaultYmd)) ??
-					defaultFulfilmentTimeMinutes(mytMidnightFromYmd(defaultYmd)),
+				defaultTimeWithinHours(
+					openingHours,
+					mytMidnightFromYmd(defaultYmd),
+					now,
+					defaultSchedule.prep.minutes,
+				) ??
+					defaultFulfilmentTimeMinutes(
+						mytMidnightFromYmd(defaultYmd),
+						now,
+						defaultSchedule.prep.minutes,
+					),
 			),
 			note: "",
 		},
@@ -260,29 +327,43 @@ export function ClaimCheckoutPage({
 			}
 			try {
 				assertValidFulfilmentDate(fulfilmentEpoch, minNoticeDays);
-				assertWithinOpeningHours(openingHours, fulfilmentEpoch, undefined);
 			} catch (err) {
 				refuseFulfilment((err as Error).message);
 				return;
 			}
 
-			// Same shared ladder as the storefront checkout (z8r3fdff8r): one set
-			// of rules, one set of words, and the inline notice showed them first.
+			// Same shared ladder as the storefront checkout (z8r3fdff8r), with the
+			// claim's prep floor threaded in and a pickup time whenever it asks
+			// for one (z8r3fdff97): one set of rules, one set of words, and the
+			// inline notice showed them first.
+			const schedule = scheduleFor(
+				value.deliveryMethod,
+				value.pickupLocationId,
+			);
+			const judged = {
+				hours: openingHours,
+				dateEpoch: fulfilmentEpoch,
+				now: Date.now(),
+				prep: schedule.prep,
+				kind: schedule.kind,
+				storeName,
+			};
+			const dayCopy = fulfilmentDayCopy({ ...judged, timed: schedule.timed });
+			if (dayCopy) {
+				refuseFulfilment(dayCopy);
+				return;
+			}
 			let fulfilmentTimeMinutes: number | undefined;
-			if (value.deliveryMethod === "delivery") {
+			if (schedule.timed) {
 				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
-				const issue = fulfilmentTimeIssue({
-					hours: openingHours,
-					dayEpoch: fulfilmentEpoch,
-					timeMinutes: parsed,
+				const timeCopy = fulfilmentTimeCopy({
+					...judged,
+					timeMinutes: Number.isNaN(parsed) ? undefined : parsed,
 				});
-				if (issue) {
-					refuseFulfilment(
-						timeIssueCopy(issue, {
-							storeName,
-							verb: collectsFromCustomer ? "collect" : "deliver",
-						}),
-					);
+				if (timeCopy) {
+					// Parts, never flattened: T1 keeps the CTA line's copy whole on a
+					// phone, and a prep refusal carries a time too.
+					refuseFulfilment(timeCopy);
 					return;
 				}
 				fulfilmentTimeMinutes = parsed;
@@ -320,26 +401,31 @@ export function ClaimCheckoutPage({
 		},
 	});
 
+	// A date below the floor (midnight, a raised notice) moves to the first day
+	// that can actually be fulfilled; a date the buyer picked above it never
+	// moves — if the clock rules it out, the inline notice says so.
+	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
+	const watchedPickupId = useStore(
+		form.store,
+		(s) => s.values.pickupLocationId,
+	);
+	const watchedSchedule = scheduleFor(watchedMethod, watchedPickupId);
+	const floorYmd = firstSelectableYmd(watchedSchedule);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
 	useEffect(() => {
 		const current = form.store.state.values.fulfilmentDate;
-		if (current && current < minYmd) {
-			form.setFieldValue("fulfilmentDate", minYmd);
+		if (!current || current < minYmd) {
+			form.setFieldValue("fulfilmentDate", floorYmd);
 		}
-	}, [minYmd]);
+	}, [minYmd, floorYmd]);
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
 	}
 
 	// --- Delivery fee preview (same collapse as the storefront checkout) -----
-	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
-	const quickDays = useMemo(
-		() =>
-			quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
-				isDaySelectable(ymd, watchedMethod),
-			),
-		[minYmd, maxYmd, todayYmd, watchedMethod, isDaySelectable],
+	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
+		isDaySelectable(ymd, watchedSchedule),
 	);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
@@ -366,19 +452,28 @@ export function ClaimCheckoutPage({
 	const systemTimeRef = useRef(form.state.values.fulfilmentTime);
 	const [timeMove, setTimeMove] = useState<TimeMove | null>(null);
 	const [clockTick, setClockTick] = useState(0);
+	// The claim's prep floors the repair too (z8r3fdff97), and a time is only
+	// repaired while this fulfilment asks for one; the clock ticks either way.
+	const repairPrep = watchedSchedule.prep.minutes;
+	const repairTimed = watchedSchedule.timed;
+	// Named in the move note when prep is why a prefilled time moved.
+	const repairPrepName = watchedSchedule.prep.productName;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
-		if (!watchedDate) return;
-		const dayEpoch = mytMidnightFromYmd(watchedDate);
-		if (Number.isNaN(dayEpoch)) return;
+		const dayEpoch = watchedDate
+			? mytMidnightFromYmd(watchedDate)
+			: Number.NaN;
 		const repair = () => {
 			setClockTick((t) => t + 1);
+			if (!repairTimed || Number.isNaN(dayEpoch)) return;
 			const plan = planTimeRepair({
 				hours: openingHours,
 				dayEpoch,
 				currentHhmm: form.store.state.values.fulfilmentTime,
 				systemHhmm: systemTimeRef.current,
+				prepMinutes: repairPrep,
+				prepItemName: repairPrepName,
 			});
 			if (!plan) return;
 			systemTimeRef.current = plan.nextHhmm;
@@ -392,65 +487,70 @@ export function ClaimCheckoutPage({
 			clearInterval(timer);
 			document.removeEventListener("visibilitychange", repair);
 		};
-	}, [watchedDate, openingHours]);
+	}, [watchedDate, openingHours, repairTimed, repairPrep, repairPrepName]);
 
+	// The day, then the time, in the submit refusal's exact words, the moment
+	// the field holds it — the storefront's helpers, prep threaded in.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the deliberate re-read of the wall clock.
 	const dateHoursIssue = useMemo(() => {
-		if (!openingHours || !watchedDate) return null;
-		const epoch = mytMidnightFromYmd(watchedDate);
-		if (Number.isNaN(epoch)) return null;
-		if (!isOpenOnDate(openingHours, epoch)) {
-			return `${storeName} is closed on ${WEEKDAY_NAMES[weekdayIndexMyt(epoch)]}s — pick another day.`;
-		}
-		if (watchedMethod === "delivery") {
-			const day = hoursForDate(openingHours, epoch);
-			if (
-				day &&
-				!isAllDay(day) &&
-				selectableTimeWindow(openingHours, epoch) === null
-			) {
-				return `${storeName} has closed for today — pick another day.`;
-			}
-		}
-		return null;
-	}, [openingHours, watchedDate, watchedMethod, storeName, clockTick]);
-	// Too early, too late, or in a split day's break, in the submit refusal's
-	// exact words, the moment the field holds it.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the deliberate re-read of the wall clock.
-	const timeHoursIssue = useMemo(() => {
-		if (!watchedDate || watchedMethod !== "delivery") return null;
-		if (watchedTimeMinutes === undefined) return null;
-		const dayEpoch = mytMidnightFromYmd(watchedDate);
-		if (Number.isNaN(dayEpoch)) return null;
-		const issue = fulfilmentTimeIssue({
+		if (!watchedDate) return null;
+		const dateEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dateEpoch)) return null;
+		return fulfilmentDayCopy({
 			hours: openingHours,
-			dayEpoch,
-			timeMinutes: watchedTimeMinutes,
-		});
-		if (!issue || issue.kind === "no_slot" || issue.kind === "missing") {
-			return null;
-		}
-		return timeIssueCopy(issue, {
+			dateEpoch,
+			now: Date.now(),
+			prep: watchedSchedule.prep,
+			timed: watchedSchedule.timed,
+			kind: watchedSchedule.kind,
 			storeName,
-			verb: collectsFromCustomer ? "collect" : "deliver",
 		});
 	}, [
 		openingHours,
 		watchedDate,
-		watchedMethod,
-		watchedTimeMinutes,
+		watchedSchedule.prep,
+		watchedSchedule.timed,
+		watchedSchedule.kind,
 		storeName,
-		collectsFromCustomer,
 		clockTick,
 	]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the deliberate re-read of the wall clock.
+	const timeHoursIssue = useMemo(() => {
+		if (!watchedDate || !watchedSchedule.timed) return null;
+		if (watchedTimeMinutes === undefined) return null;
+		const dateEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dateEpoch)) return null;
+		return fulfilmentTimeCopy({
+			hours: openingHours,
+			dateEpoch,
+			now: Date.now(),
+			prep: watchedSchedule.prep,
+			kind: watchedSchedule.kind,
+			storeName,
+			timeMinutes: watchedTimeMinutes,
+		});
+	}, [
+		openingHours,
+		watchedDate,
+		watchedSchedule.prep,
+		watchedSchedule.timed,
+		watchedSchedule.kind,
+		watchedTimeMinutes,
+		storeName,
+		clockTick,
+	]);
+	const claimPrepHint = prepHint({
+		hours: openingHours,
+		now,
+		prep: watchedSchedule.prep,
+		kind: watchedSchedule.kind,
+		noticeDays: minNoticeDays,
+		timed: watchedSchedule.timed,
+	});
 	const timeMoveNote =
 		timeMove && watchedTime === hhmmFromMinutes(timeMove.to)
 			? timeMovedCopy(timeMove, { storeName })
 			: null;
-	// The chosen day's hours, for the hint under the date.
-	const watchedDayHours = watchedDate
-		? hoursForDate(openingHours, mytMidnightFromYmd(watchedDate))
-		: null;
 
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
@@ -552,16 +652,9 @@ export function ClaimCheckoutPage({
 	const watchedLine1 = useStore(form.store, (s) => s.values.address.line1);
 	const addressIncomplete =
 		watchedMethod === "delivery" && watchedLine1.trim().length === 0;
-	const watchedPickupId = useStore(
-		form.store,
-		(s) => s.values.pickupLocationId,
-	);
 
 	// --- Money ---------------------------------------------------------------
-	const selectedPickup =
-		watchedMethod === "self_collect"
-			? (singlePickup ?? sortedPickups.find((p) => p._id === watchedPickupId))
-			: undefined;
+	const selectedPickup = watchedSchedule.point;
 	const pickupFee = selectedPickup ? pickupFeeOf(selectedPickup) : 0;
 	const deliveryFee =
 		watchedMethod === "delivery" && quoteForDelivery?.kind === "fee"
@@ -820,27 +913,36 @@ export function ClaimCheckoutPage({
 											) : null}
 										</div>
 									) : selfCollectAvailable ? (
-										singlePickup ? (
-											<PickupSummaryCard
-												location={singlePickup}
-												currency={store.currency}
+										<div className="flex flex-col gap-2">
+											{singlePickup ? (
+												<PickupSummaryCard
+													location={singlePickup}
+													currency={store.currency}
+												/>
+											) : (
+												<form.AppField name="pickupLocationId">
+													{(field) => (
+														<PickupLocationRadioList
+															locations={sortedPickups}
+															currency={store.currency}
+															value={field.state.value}
+															onChange={(id) => {
+																field.handleChange(id);
+																setPickupError(null);
+															}}
+															error={pickupError ?? undefined}
+														/>
+													)}
+												</form.AppField>
+											)}
+											{/* The seller's collection instructions (z8r3fdff97) —
+											    the storefront checkout's block, before commit. */}
+											<PickupNotes
+												audience="buyer"
+												locale={store.locale}
+												notes={claimPickupNotes}
 											/>
-										) : (
-											<form.AppField name="pickupLocationId">
-												{(field) => (
-													<PickupLocationRadioList
-														locations={sortedPickups}
-														currency={store.currency}
-														value={field.state.value}
-														onChange={(id) => {
-															field.handleChange(id);
-															setPickupError(null);
-														}}
-														error={pickupError ?? undefined}
-													/>
-												)}
-											</form.AppField>
-										)
+										</div>
 									) : null
 								}
 							</form.Subscribe>
@@ -851,12 +953,37 @@ export function ClaimCheckoutPage({
 						step={3}
 						title={
 							watchedMethod === "self_collect"
-								? "When will you collect?"
+								? watchedSchedule.isDropOff
+									? "When should we meet?"
+									: "When will you collect?"
 								: collectsFromCustomer
 									? "When should we collect it?"
 									: "When do you need it delivered?"
 						}
 					>
+						{/* The pickup point's recurring schedule, at the date step —
+						    the storefront checkout has always shown it; the claim page
+						    now does too (z8r3fdff97). */}
+						{watchedSchedule.point?.scheduleNote ? (
+							<CheckoutHint>
+								<span className="font-medium">
+									{watchedSchedule.point.label}
+								</span>{" "}
+								is available{" "}
+								<span className="font-medium">
+									{watchedSchedule.point.scheduleNote}
+								</span>{" "}
+								—{" "}
+								{watchedSchedule.timed
+									? "pick a matching date and time."
+									: "pick a matching date."}
+							</CheckoutHint>
+						) : null}
+						{claimPrepHint ? (
+							<CheckoutHint>
+								<CopyText parts={claimPrepHint} />
+							</CheckoutHint>
+						) : null}
 						{quickDays.length > 0 ? (
 							<div className="flex flex-wrap gap-2">
 								{quickDays.map((day) => {
@@ -883,9 +1010,7 @@ export function ClaimCheckoutPage({
 						) : null}
 						<div
 							className={
-								watchedMethod === "delivery"
-									? "grid grid-cols-2 gap-3"
-									: undefined
+								watchedSchedule.timed ? "grid grid-cols-2 gap-3" : undefined
 							}
 						>
 							<form.AppField name="fulfilmentDate">
@@ -896,37 +1021,29 @@ export function ClaimCheckoutPage({
 										max={maxYmd}
 										required
 										description={
-											<>
-												{minNoticeDays > 0
-													? `${storeName} needs ${minNoticeDays} day${minNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-													: "Pick the date you need this order."}
-												{/* Self-collect has no time field, so the store's
-												    hours ride on the DATE (z8r3fdff8r). Not for a
-												    drop-off meetup, which runs on the point's own
-												    schedule note. */}
-												{watchedMethod === "self_collect" &&
-												selectedPickup?.locationType !== "drop_off" &&
-												watchedDayHours &&
-												!isAllDay(watchedDayHours) ? (
-													<>
-														{" "}
-														{storeName} is open{" "}
-														<DayWindowsInline day={watchedDayHours} /> that day.
-													</>
-												) : null}
-											</>
+											// The store's hours ride on the TIME field, never
+											// the date (pickup asks for a time whenever the
+											// store keeps hours).
+											minNoticeDays > 0
+												? `${storeName} needs ${minNoticeDays} day${minNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+												: "Pick the date you need this order."
 										}
 									/>
 								)}
 							</form.AppField>
-							{watchedMethod === "delivery"
+							{watchedSchedule.timed
 								? (() => {
 										const dayEpoch = watchedDate
 											? mytMidnightFromYmd(watchedDate)
 											: Number.NaN;
 										const window = Number.isNaN(dayEpoch)
 											? null
-											: selectableTimeWindow(openingHours, dayEpoch);
+											: selectableTimeWindow(
+													openingHours,
+													dayEpoch,
+													now,
+													watchedSchedule.prep.minutes,
+												);
 										const day = Number.isNaN(dayEpoch)
 											? null
 											: hoursForDate(openingHours, dayEpoch);
@@ -947,9 +1064,7 @@ export function ClaimCheckoutPage({
 														}
 														description={
 															<>
-																{collectsFromCustomer
-																	? "When the rider should come to you."
-																	: "When you'd like it to arrive."}
+																{TIME_DESCRIPTION[watchedSchedule.kind]}
 																{/* Both windows of a split day, each kept
 																    whole on a narrow phone (z8r3fdff8r). */}
 																{constrained && day ? (
@@ -977,7 +1092,7 @@ export function ClaimCheckoutPage({
 								data-form-error
 								className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
 							>
-								{dateHoursIssue}
+								<CopyText parts={dateHoursIssue} />
 							</p>
 						) : timeHoursIssue ? (
 							<p

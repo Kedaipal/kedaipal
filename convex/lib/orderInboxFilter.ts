@@ -27,7 +27,7 @@ import {
  *
  * Built from the SAME registry the table renders and the CSV writes, so a
  * seller can search anything they can see. Built lazily (only when there IS a
- * term) because it allocates ~36 strings per order.
+ * term) because it allocates a string per column, per order.
  *
  * Every column participates, categories included — they are frozen onto the
  * order at checkout, so no lookup is needed. Sellers who want the precise
@@ -409,17 +409,28 @@ export type InboxSort = "recent" | "due";
  * urgent orders sort to the top. Dateless orders sink to the bottom; the caller
  * must pass an already-createdAt-desc list so the stable sort keeps that as the
  * tiebreaker within each group.
+ *
+ * Same day → by TIME (z8r3fdff97): a pickup counter with orders due at 11:00
+ * and 17:00 works them in that order, not in the order they were placed. A
+ * timed order comes before an untimed one on the same day (it names a moment
+ * the seller has to hit; the untimed one can be done any time that day).
  */
 export function compareInboxOrder(
-	a: { fulfilmentDate?: number },
-	b: { fulfilmentDate?: number },
+	a: { fulfilmentDate?: number; fulfilmentTimeMinutes?: number },
+	b: { fulfilmentDate?: number; fulfilmentTimeMinutes?: number },
 ): number {
 	const ad = a.fulfilmentDate;
 	const bd = b.fulfilmentDate;
 	if (ad === undefined && bd === undefined) return 0; // keep createdAt-desc
 	if (ad === undefined) return 1; // a (dateless) after b
 	if (bd === undefined) return -1; // b (dateless) after a
-	return ad - bd; // both dated → soonest first
+	if (ad !== bd) return ad - bd; // both dated → soonest first
+	const at = a.fulfilmentTimeMinutes;
+	const bt = b.fulfilmentTimeMinutes;
+	if (at === undefined && bt === undefined) return 0; // keep createdAt-desc
+	if (at === undefined) return 1; // untimed after timed, same day
+	if (bt === undefined) return -1;
+	return at - bt; // earliest moment first
 }
 
 /**
@@ -441,7 +452,11 @@ export function compareInboxOrder(
  * obeying different rules.
  */
 export function sortInboxOrders<
-	T extends { fulfilmentDate?: number; pinnedAt?: number },
+	T extends {
+		fulfilmentDate?: number;
+		fulfilmentTimeMinutes?: number;
+		pinnedAt?: number;
+	},
 >(orders: readonly T[], sort: InboxSort): T[] {
 	const pinned: T[] = [];
 	const rest: T[] = [];

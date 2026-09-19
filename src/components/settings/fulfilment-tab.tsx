@@ -2891,7 +2891,7 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 		<Card>
 			<SectionHeading
 				title="Order date notice"
-				description="How much notice you need before a buyer's chosen delivery or pickup date. Buyers can't pick a date sooner than this. Set 0 to take same-day orders."
+				description="How much notice you need before a buyer's chosen delivery or pickup date. Buyers can't pick a date sooner than this. Set 0 to take same-day orders — if an item needs hours rather than days, give it a prep time on the product instead."
 			/>
 			<div className="flex items-end gap-3">
 				<div className="flex flex-col gap-1.5">

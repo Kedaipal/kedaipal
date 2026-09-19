@@ -37,6 +37,7 @@ import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { redactPhone } from "./lib/logRedaction";
 import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
+import { orderPickupNotes } from "./lib/pickupNote";
 import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
@@ -47,6 +48,7 @@ import {
 	renderDeliveryFeeLine,
 	renderMessage,
 	renderPickupBlock,
+	renderPickupNotes,
 	renderSystemMessage,
 	TEMPLATE_LANGUAGE,
 	type DeliveryMethod,
@@ -280,6 +282,8 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// you when it ships" line to collection wording.
 		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// Frozen per-line pickup notes (z8r3fdff97) — "before you collect".
+		pickupNotes: readonly string[];
 		// Frozen delivery charge — renders the fee line in the confirm reply.
 		deliverySnapshot: { fee: number } | undefined;
 		// Order currency — needed to render the pickup-fee line in the block.
@@ -317,6 +321,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
+			pickupNotes: orderPickupNotes(order),
 			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
 			mockupPending: isMockupGateClosed(order),
@@ -348,6 +353,10 @@ async function sendPaymentMessage(
 		storeName: string;
 		trackingUrl: string;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// The frozen per-line pickup notes (z8r3fdff97). Rendered only under a
+		// pickup block, because that is the message where "before you collect"
+		// means something — a delivery buyer is not going anywhere.
+		pickupNotes: readonly string[];
 		// Frozen delivery charge — rendered as its own line under the intro so
 		// the buyer sees why the total is higher than the item sum. Optional;
 		// callers for pickup/counter orders omit it.
@@ -368,6 +377,7 @@ async function sendPaymentMessage(
 		storeName,
 		trackingUrl,
 		pickupSnapshot,
+		pickupNotes,
 		deliverySnapshot,
 		currency,
 		footerLine = "",
@@ -380,13 +390,19 @@ async function sendPaymentMessage(
 		storeName,
 	});
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot, currency);
+	// Appended INSIDE the pickup block, not after the payment ask: it is part
+	// of "here is where you're going and what to bring", not of "here is how
+	// to pay". A delivery order never renders it.
+	const pickupNotesBlock = pickupBlock
+		? renderPickupNotes(locale, pickupNotes)
+		: "";
 	// Delivery-fee line (delivery orders) — sits where the pickup block would
 	// (an order has one or the other), explaining the total before the pay ask.
 	const deliveryFeeLine = renderDeliveryFeeLine(locale, deliverySnapshot, currency);
 	// Layout: intro (carries the order-page link) → [pickup | delivery fee] →
 	// blank line → transfer reference. The WHERE/WHY before the WHEN/HOW of paying.
 	const withPickup = pickupBlock
-		? `${introBody}\n${pickupBlock}`
+		? `${introBody}\n${pickupBlock}${pickupNotesBlock}`
 		: `${introBody}${deliveryFeeLine}`;
 	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
 	// Growth footer (e.g. "Powered by Kedaipal") sits last, quiet and out of the
@@ -643,8 +659,14 @@ export const handleInbound = internalAction({
 				meta?.pickupSnapshot,
 				meta?.currency,
 			);
+			// The notes ride here too. A mockup-gated order is made-to-order, and
+			// made-to-order + self-collect is exactly the order most likely to
+			// have a collection instruction ("bring an ice bag") — leaving them off
+			// this path would drop them for the buyers who need them most.
 			const gatedBody =
-				(pickupBlock ? `${gatedConfirm}\n${pickupBlock}` : gatedConfirm) +
+				(pickupBlock
+					? `${gatedConfirm}\n${pickupBlock}${renderPickupNotes(locale, meta?.pickupNotes ?? [])}`
+					: gatedConfirm) +
 				// Same always-on growth line as the normal confirm — a custom-order
 				// buyer still sees it on their "order received" message.
 				poweredByLine(locale);
@@ -714,6 +736,7 @@ export const handleInbound = internalAction({
 				storeName,
 				trackingUrl,
 				pickupSnapshot: meta?.pickupSnapshot,
+				pickupNotes: meta?.pickupNotes ?? [],
 				deliverySnapshot: meta?.deliverySnapshot,
 				currency: meta?.currency,
 				// Always-on growth line — appended here (not in the confirm template)
@@ -766,6 +789,10 @@ export const getManualReminderContext = internalQuery({
 		trackingToken: string | undefined;
 		locale: Locale;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// A payment REMINDER repeats the pickup block, so it repeats the
+		// instruction with it — the buyer re-reading this message is the one
+		// about to set off.
+		pickupNotes: readonly string[];
 		status: Doc<"orders">["status"];
 		paymentStatus: Doc<"orders">["paymentStatus"];
 		mockupPending: boolean;
@@ -785,6 +812,7 @@ export const getManualReminderContext = internalQuery({
 			trackingToken: order.trackingToken,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			pickupSnapshot: order.pickupSnapshot,
+			pickupNotes: orderPickupNotes(order),
 			status: order.status,
 			paymentStatus: order.paymentStatus,
 			mockupPending: isMockupGateClosed(order),
@@ -894,6 +922,7 @@ export const notifyManualPaymentReminder = internalAction({
 				storeName: meta.storeName,
 				trackingUrl,
 				pickupSnapshot: meta.pickupSnapshot,
+				pickupNotes: meta.pickupNotes,
 				currency: meta.currency,
 			},
 		);
@@ -1684,6 +1713,8 @@ export const notifyCounterOrderCreated = internalAction({
 					trackingUrl,
 					// Counter orders are collected at the counter — no pickup snapshot.
 					pickupSnapshot: undefined,
+					// No pickup block on this path, so no notes to carry.
+					pickupNotes: [],
 				});
 			} catch (err) {
 				console.error("WA counter-order payment ask failed", err);

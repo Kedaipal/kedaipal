@@ -50,7 +50,11 @@ import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatShortDate,
+} from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
@@ -551,13 +555,20 @@ function retailerOptionLabel(r: {
 	plan?: string;
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
+	foundingBenefitsRevoked: boolean;
 	hasPending: boolean;
 }): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	const parts = [`${r.storeName} (/${r.slug})`];
 	if (r.plan) parts.push(cap(r.plan));
 	if (r.status) parts.push(STATUS_LABEL[r.status] ?? cap(r.status));
-	if (r.isFoundingMember) parts.push("Founding");
+	// Membership and benefits are two facts, and when Arif is about to bill
+	// someone he needs the second one: "Founding" alone would read as "charge
+	// them RM104" for a member whose benefits lapsed months ago.
+	if (r.isFoundingMember)
+		parts.push(
+			r.foundingBenefitsRevoked ? "Founding · benefits ended" : "Founding",
+		);
 	else if (r.foundingIntent) parts.push("Founding (trial)");
 	if (r.hasPending) parts.push("has pending");
 	return parts.join(" · ");
@@ -580,23 +591,48 @@ function IssueInvoiceForm() {
 	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
 	const [plan, setPlan] = useState<"starter" | "pro">("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
-	const [founding, setFounding] = useState(false);
+	// The operator's OVERRIDE only — not the effective value. See `founding`.
+	const [foundingOverride, setFoundingOverride] = useState(false);
 	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
 	const blocked = selected?.hasPending === true;
-	// Auto-apply (and lock) the founding discount when the store is already a
-	// Founding Member OR was onboarded as one (foundingIntent, still on the 14-day
-	// trial) — so the conversion/renewal invoice always carries their discount.
+	// Auto-apply (and lock) the founding discount when the store is on founding
+	// PRICING — an existing Founding Member whose benefits still stand, or a store
+	// onboarded as one (foundingIntent, still on the 14-day trial) — so the
+	// conversion/renewal invoice always carries their discount.
+	//
+	// A member whose benefits were revoked (z8r3fdfyw5) is deliberately NEITHER
+	// ticked NOR locked: ticked would hand back the discount the daily pass just
+	// took, and locked would leave Arif unable to untick it — the machine undoing
+	// its own rule, with no manual way out. Unticked but ENABLED keeps the
+	// standing posture that the admin form is Arif's override in both directions.
+	const foundingBenefitsRevoked = selected?.foundingBenefitsRevoked === true;
 	const isExistingFounding =
-		selected?.isFoundingMember === true || selected?.foundingIntent === true;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
+		(selected?.isFoundingMember === true && !foundingBenefitsRevoked) ||
+		selected?.foundingIntent === true;
+	// DERIVED, never stored: a locked store IS on founding pricing, so the
+	// checkbox and the Amount cannot disagree with the lock. This used to be an
+	// effect copying `isExistingFounding` into state on `[retailerId]` — fine
+	// while a store's founding status was fixed for a given retailer, but
+	// revoking or restoring in the Founding members card below now moves it for a
+	// retailerId that never changed. The label and helper copy updated reactively
+	// while the checkbox and Amount did not, so the form read "bills at the
+	// standard price" directly above "RM 104.00 − RM 45.00 founding discount",
+	// and Issue would have charged the founding price to a member whose benefits
+	// had just been taken (found while testing, 18 Sep 2026). Deriving makes that
+	// state unreachable rather than merely re-synced — there is no dependency
+	// array left to get wrong.
+	const founding = isExistingFounding || foundingOverride;
+	// The override is the operator's own tick, so it clears when they pick a
+	// DIFFERENT store — never when a revoke elsewhere on the page changes the
+	// status. Currency clears with it: an SGD pick left over from the previous
+	// store must never silently carry to a Malaysian retailer (an SGD invoice
+	// ships with no bank/DuitNow block).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: retailerId is the TRIGGER, not a read — picking a different store is exactly what clears the operator's override
 	useEffect(() => {
-		setFounding(isExistingFounding);
-		// Currency resets to the default too — an SGD pick left over from the
-		// previous store must never silently carry to a Malaysian retailer (an SGD
-		// invoice ships with no bank/DuitNow block).
+		setFoundingOverride(false);
 		setCurrency("MYR");
 	}, [retailerId]);
 
@@ -626,7 +662,7 @@ function IssueInvoiceForm() {
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
-			setFounding(false);
+			setFoundingOverride(false);
 			// Reset to the default so the next store isn't silently billed in SGD.
 			setCurrency("MYR");
 		} catch (err) {
@@ -754,7 +790,7 @@ function IssueInvoiceForm() {
 					type="checkbox"
 					checked={founding}
 					disabled={isExistingFounding}
-					onChange={(e) => setFounding(e.target.checked)}
+					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
 				<span>
@@ -762,11 +798,13 @@ function IssueInvoiceForm() {
 					<span className="block text-xs text-muted-foreground">
 						{isExistingFounding
 							? "This store is a Founding Member — lifetime 30% discount applied automatically."
-							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
-									spotsRemaining === 0
-										? " (cohort full — no rank will be claimed)"
-										: ""
-								}`}
+							: foundingBenefitsRevoked
+								? "Founding Member, but their founding price ended after 3 months unpaid — this invoice bills at the standard price. Tick to re-grant the discount on this invoice only; to give it back for good, use Restore benefits under Founding members."
+								: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+										spotsRemaining === 0
+											? " (cohort full — no rank will be claimed)"
+											: ""
+									}`}
 					</span>
 				</span>
 			</label>
@@ -1159,6 +1197,17 @@ function AutoRenewOverview() {
 	);
 }
 
+/**
+ * Admin: the 10-slot cohort — who's reserved, where each one sits in the pay
+ * cycle, and the state of their founding BENEFITS (z8r3fdfyw5).
+ *
+ * Membership and benefits are shown as two separate facts because they are two
+ * separate facts: the rank pill is permanent, the benefit line is what can be
+ * taken. The automatic rule does the taking at day 90; this list exists so the
+ * question "why is #4 on standard pricing?" is answerable here rather than from
+ * the logs, and so Arif has a lever either way — revoke a member who has
+ * clearly gone, or restore one revoked wrongly.
+ */
 function FoundingMembersList() {
 	const members = useQuery(
 		convexQuery(api.foundingMembers.listForAdmin, {}),
@@ -1166,13 +1215,55 @@ function FoundingMembersList() {
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
+	const setBenefits = useMutation(api.foundingMembers.adminSetBenefits);
+	// The row awaiting confirmation, and which direction it's going.
+	const [pending, setPending] = useState<{
+		retailerId: Id<"retailers">;
+		storeName: string;
+		rank: number;
+		revoke: boolean;
+	} | null>(null);
+	const [note, setNote] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	async function apply() {
+		if (!pending) return;
+		setBusy(true);
+		try {
+			const changed = await setBenefits({
+				retailerId: pending.retailerId,
+				revoked: pending.revoke,
+				note: note.trim() === "" ? undefined : note.trim(),
+			});
+			// The mutation refuses rather than throws when there is nothing to do
+			// (already in that state, or the retailer is gone) — reporting that as
+			// success would tell Arif he had changed something he hadn't.
+			if (changed) {
+				toast.success(
+					pending.revoke
+						? `Founding benefits revoked for ${pending.storeName} — rank #${pending.rank} and badge kept.`
+						: `Founding benefits restored for ${pending.storeName} — their founding price applies again from now.`,
+				);
+			} else {
+				toast.info(
+					`No change — ${pending.storeName} is already ${pending.revoke ? "revoked" : "on founding pricing"}.`,
+				);
+			}
+			setPending(null);
+			setNote("");
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't update");
+		} finally {
+			setBusy(false);
+		}
+	}
 
 	return (
 		<AdminCard>
 			<AdminSectionHeading
 				icon={<Award className="size-5" />}
 				title="Founding members"
-				description="The 10-slot cohort — who's reserved and where they are in the pay cycle."
+				description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
 				aside={
 					spotsRemaining !== undefined ? (
 						<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -1192,12 +1283,47 @@ function FoundingMembersList() {
 				<ul className="flex flex-col gap-2">
 					{members.map((m) => {
 						const s = foundingStatus(m);
+						const revoked = m.benefitsRevokedAt !== undefined;
+						// The slot is claimed by a store that no longer exists (a partial
+						// account purge). Shown so the header's count and this list agree,
+						// and so the row the daily pass skips is visible rather than
+						// inferred — but with no Revoke/Restore lever, because there is
+						// nothing left to revoke.
+						if (m.retailerMissing) {
+							return (
+								<li
+									key={m.rank}
+									className="flex items-start gap-2.5 rounded-xl border border-dashed border-border bg-muted/30 p-3"
+								>
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+										#{m.rank}
+									</span>
+									<span className="min-w-0">
+										<span className="block truncate text-sm font-semibold text-muted-foreground">
+											Store deleted
+										</span>
+										<span className="mt-0.5 block text-xs text-muted-foreground">
+											This slot stays claimed and the daily benefit check skips
+											it. Nothing to do — it clears if the account purge is
+											completed.
+										</span>
+									</span>
+								</li>
+							);
+						}
 						return (
 							<li
 								key={m.rank}
-								className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background p-3"
+								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 sm:flex-row sm:items-start sm:justify-between"
 							>
-								<div className="flex min-w-0 items-center gap-2.5">
+								{/* Stacked on a phone, side-by-side from sm. Side-by-side all
+								    the way down squeezed the name column between the pill and
+								    the button: "Bearcam…", a slug over three lines, and the
+								    benefit line at two words a row.
+								    items-START, not center: the benefit line makes this block
+								    two or three lines tall, and a centred rank pill drifts down
+								    beside the SLUG instead of the store name it labels. */}
+								<div className="flex w-full items-start gap-2.5 sm:min-w-0 sm:flex-1">
 									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
 										#{m.rank}
 									</span>
@@ -1205,21 +1331,110 @@ function FoundingMembersList() {
 										<span className="block truncate text-sm font-semibold">
 											{m.storeName}
 										</span>
-										<span className="font-mono text-xs text-muted-foreground">
+										<span className="block font-mono text-xs text-muted-foreground">
 											/{m.slug}
 										</span>
+										{/* The benefit line. Silent for a member whose benefits
+										    are live and nowhere near the window — nine identical
+										    "Benefits active" rows would bury the one that isn't. */}
+										{revoked ? (
+											<span className="mt-0.5 block text-xs text-muted-foreground">
+												Benefits ended{" "}
+												{m.benefitsRevokedAt !== undefined
+													? formatShortDate(m.benefitsRevokedAt)
+													: ""}
+												{m.benefitsRevokedReason === "admin"
+													? " · by admin"
+													: " · lapsed"}
+												{m.benefitsRevokedNote
+													? ` · ${m.benefitsRevokedNote}`
+													: ""}
+											</span>
+										) : m.benefitsEndAt !== undefined &&
+											m.status !== "active" &&
+											m.status !== "on_hold" ? (
+											<span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-400">
+												Benefits end {formatShortDate(m.benefitsEndAt)}
+												{m.warned ? " · warned" : " · not yet warned"}
+											</span>
+										) : null}
 									</span>
 								</div>
-								<span
-									className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
-								>
-									{s.label}
-								</span>
+								<div className="flex shrink-0 items-center gap-2 pl-[38px] sm:pl-0">
+									<span
+										className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
+									>
+										{s.label}
+									</span>
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => {
+											setNote("");
+											setPending({
+												retailerId: m.retailerId,
+												storeName: m.storeName,
+												rank: m.rank,
+												revoke: !revoked,
+											});
+										}}
+									>
+										{revoked ? "Restore benefits" : "Revoke benefits"}
+									</Button>
+								</div>
 							</li>
 						);
 					})}
 				</ul>
 			)}
+
+			<Dialog
+				open={pending !== null}
+				onOpenChange={(o) => {
+					if (!o) setPending(null);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>
+							{pending?.revoke
+								? `Revoke founding benefits for ${pending?.storeName}?`
+								: `Restore founding benefits for ${pending?.storeName}?`}
+						</DialogTitle>
+						<DialogDescription>
+							{pending?.revoke
+								? `Their 30% founding price ends now and every plan opens to them again at standard prices. Founding rank #${pending?.rank} and the storefront badge are KEPT — those are permanent. They are not emailed; this is a manual move, so tell them yourself.`
+								: `Their 30% founding price applies again straight away and they go back to Founding Pro only. The 90-day lapse clock restarts from today, so if they still don't renew they'll be warned again 14 days before it ends. Use this for a revocation that was wrong, or a deliberate re-grant.`}
+						</DialogDescription>
+					</DialogHeader>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Note{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional — shown in this list)
+						</span>
+						<Input
+							value={note}
+							onChange={(e) => setNote(e.target.value)}
+							placeholder={
+								pending?.revoke ? "e.g. closed the business" : "e.g. re-granted"
+							}
+							variant="field"
+						/>
+					</label>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setPending(null)}>
+							Cancel
+						</Button>
+						<Button disabled={busy} onClick={apply}>
+							{busy
+								? "Saving…"
+								: pending?.revoke
+									? "Revoke benefits"
+									: "Restore benefits"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</AdminCard>
 	);
 }

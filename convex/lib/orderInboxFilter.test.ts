@@ -643,6 +643,21 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 		expect(hits("changed mind")).toBe(true);
 	});
 
+	test("finds a self-collect order by its pickup note — not a delivery order carrying the same frozen note (z8r3fdff97)", () => {
+		const lines = [
+			{
+				name: "Ice cream puff",
+				quantity: 6,
+				pickupNote: "Bring an ice bag.",
+			},
+		];
+		const collect = order({ deliveryMethod: "self_collect", items: lines });
+		const delivered = order({ deliveryMethod: "delivery", items: lines });
+		const search = buildInboxPredicate({ searchText: "ice bag" });
+		expect(search(collect)).toBe(true);
+		expect(search(delivered)).toBe(false);
+	});
+
 	test("is case-insensitive and still rejects a genuine miss", () => {
 		expect(hits("PUCHONG")).toBe(true);
 		expect(hits("kuala lumpur")).toBe(false);
@@ -757,5 +772,50 @@ describe("narrowsTheInbox — the Pro gate", () => {
 		expect(narrowsTheInbox({ bookingPeriods: ["active"] })).toBe(false);
 		expect(narrowsTheInbox({ paymentStatuses: ["unpaid"] })).toBe(true);
 		expect(narrowsTheInbox({})).toBe(false);
+	});
+});
+
+describe("compareInboxOrder — same-day ties break by TIME (z8r3fdff97)", () => {
+	const DAY = 1_000;
+	test("two orders due the same day run in time order, not placement order", () => {
+		expect(
+			compareInboxOrder(
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 17 * 60 },
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 11 * 60 },
+			),
+		).toBeGreaterThan(0);
+	});
+
+	test("a timed order comes before an untimed one on the same day", () => {
+		const timed = { fulfilmentDate: DAY, fulfilmentTimeMinutes: 15 * 60 };
+		const untimed = { fulfilmentDate: DAY };
+		expect(compareInboxOrder(timed, untimed)).toBe(-1);
+		expect(compareInboxOrder(untimed, timed)).toBe(1);
+	});
+
+	test("two untimed orders on the same day keep the incoming (createdAt) order", () => {
+		expect(compareInboxOrder({ fulfilmentDate: DAY }, { fulfilmentDate: DAY })).toBe(0);
+	});
+
+	test("the DATE still decides first — a late time tomorrow never beats an early one today", () => {
+		expect(
+			compareInboxOrder(
+				{ fulfilmentDate: DAY + 1, fulfilmentTimeMinutes: 1 },
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 23 * 60 },
+			),
+		).toBeGreaterThan(0);
+	});
+
+	test("sortInboxOrders applies it end to end under `due`", () => {
+		const orders = [
+			{ id: "evening", fulfilmentDate: DAY, fulfilmentTimeMinutes: 18 * 60 },
+			{ id: "anytime", fulfilmentDate: DAY },
+			{ id: "morning", fulfilmentDate: DAY, fulfilmentTimeMinutes: 9 * 60 },
+		];
+		expect(sortInboxOrders(orders, "due").map((o) => o.id)).toEqual([
+			"morning",
+			"evening",
+			"anytime",
+		]);
 	});
 });

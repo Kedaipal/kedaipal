@@ -950,6 +950,18 @@ export const internalDailyBillingStatus = internalMutation({
 			}
 		}
 
+		// Founding-benefit lifecycle (z8r3fdfyw5) — T-14 warning, then revocation
+		// past the window. Its own pass over the `foundingMembers` ledger rather
+		// than a branch in the loops above, because a lapsed member is `past_due`
+		// and NONE of those loops walk `past_due` — see the comment on
+		// internalRevokeLapsedBenefits. Scheduled, not inlined, so a failure there
+		// can't roll back the billing writes this pass has already made.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.foundingMembers.internalRevokeLapsedBenefits,
+			{},
+		);
+
 		// Pre-due-date reminder email — once per pending invoice, in the window
 		// [due − 3 days, due). Stamping `reminderSentAt` keeps it idempotent across
 		// daily runs. Overdue invoices are handled by the soft-lock + banner above,

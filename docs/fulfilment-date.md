@@ -1,4 +1,4 @@
-# Fulfilment date at checkout ("bila nak?")
+# Fulfilment date & time at checkout ("bila nak?")
 
 The buyer picks **one date** at checkout — *"When do you need this?"* — for both
 delivery and self-collect orders. It removes the seller's #1 follow-up question
@@ -7,7 +7,15 @@ specific day), kuih batch pre-orders, frozen cook-and-collect cycles.
 
 ClickUp: [`86expm524`](https://app.clickup.com/t/86expm524) — the **lean** Date
 Picker (single native date input). The advanced version (per-product lead time,
-blackout dates, time-of-day, cutoffs) is a deferred follow-up.
+blackout dates, time-of-day, cutoffs) was deferred, and has since shipped in
+parts, each an update section below: a delivery **time** (Aug), **store opening
+hours** (Aug) and **split days** (Sep), a **per-product notice** in days, and a
+**per-product prep time** in minutes with a **pickup time** for self-collect
+(Sep, `z8r3fdff97`). Blackout dates and order cutoffs are still deferred.
+
+The levers, from coarsest to finest: the store's notice (days) → a product's
+notice (days) → a product's prep time (minutes, today only) → the store's
+opening hours (which days and windows exist at all).
 
 ## Scope decision — both methods, not pickup-only
 
@@ -101,6 +109,8 @@ values. Undefined reads as the default (**0**, same-day allowed).
   threading it through the localized template var system is out of lean scope.
 - No per-product lead time, blackout dates, time-of-day, or cutoffs — these are
   the deferred "Date Picker — Advanced" task, to be informed by real usage.
+  *(Since shipped: time-of-day and per-product notice + prep time — see the
+  updates below. Blackout dates and cutoffs remain deferred.)*
 
 ## Unblocks
 
@@ -133,7 +143,9 @@ Delivery orders (both directions — rider to the buyer, or collecting from
 them) now capture **what time** as well as the day: a rider arriving at
 someone's door shouldn't be an all-day window. Zaki's call: datetime for
 both delivery types; pickup/self-collect stays date-only, since a pickup
-point's hours are governed by its own schedule note.
+point's hours are governed by its own schedule note. *(Self-collect gained a
+time — when the store keeps hours or the cart needs prep — in `z8r3fdff97`;
+see the prep-time update below.)*
 
 - **Storage: a separate field, deliberately.** `orders.fulfilmentTimeMinutes`
   (minutes since MYT midnight, 0..1439). `fulfilmentDate` keeps its
@@ -141,8 +153,8 @@ point's hours are governed by its own schedule note.
   inbox sort, due-today counts, urgency badges and window chips all compare
   midnights — so the time composes with the day (`composeFulfilmentMoment`)
   and can never drift from it. Legacy, counter and self-collect orders have
-  no time, and every consumer treats "no time" as the old date-only
-  behaviour.
+  no time *(self-collect may since `z8r3fdff97`)*, and every consumer treats
+  "no time" as the old date-only behaviour.
 - **Checkout: required but prefilled** (zero extra taps): today → **as soon
   as possible**, i.e. the floor itself (8:09 AM → 8:25 AM); a future day →
   10:00 AM (`defaultFulfilmentTimeMinutes`). An hour-out default was tried
@@ -227,7 +239,10 @@ schedule, and the fulfilment moment must fall inside it.
   checkout is exempt** (seller standing there — the min-notice posture,
   pinned by test), and **pickup orders validate day-level only** (they have
   no time field; the pickup point's own `scheduleNote` keeps carrying the
-  point-level detail). A closed day rejects for BOTH methods.
+  point-level detail). A closed day rejects for BOTH methods. *(Since
+  `z8r3fdff97` a TIMED pickup is checked against the windows and the break
+  like a delivery; a timeless one — a drop-off meet-up, or a store using
+  neither hours nor prep — still validates day-level.)*
 - **Checkout UX:** day chips **skip closed days and scan forward** (three
   real choices still show; for delivery, a today whose window has passed is
   skipped too), the default date is the first day the store can actually
@@ -267,7 +282,8 @@ schedule, and the fulfilment moment must fall inside it.
   ("you open at 9 — why can't I pick 9?"), and prep headroom already has
   explicit levers — min notice, the 15-min lead floor, or simply tighter
   hours. An explicit "prep buffer" setting is a clean follow-up if a real
-  seller asks.
+  seller asks. *(A real seller asked: shipped per PRODUCT, not per store, in
+  `z8r3fdff97` — see below.)*
 - **v1 limits** (each a follow-up if a real seller asks): one range per day
   (**lifted 16 Sep 2026 — see below**), no overnight wrap (a mamak open
   6 PM – 2 AM), no holiday/exception dates. Known corner: a long notice
@@ -359,7 +375,10 @@ when nobody is there) or dropped breakfast.
     plain spaces, because they also feed WhatsApp and PDFs.
   - **Pickup gets the hours on its DATE.** Self-collect has no time field, and
     the in-person collector is the buyer who walks into a lunch break. Not
-    shown for drop-off, where the point's schedule note governs.
+    shown for drop-off, where the point's schedule note governs. *(Superseded
+    by `z8r3fdff97`: pickup now asks for a time whenever the store keeps hours,
+    so the hours ride on the time field like delivery, and the date hint —
+    which could no longer render — was removed.)*
   - **Editor errors point at the right control.** `dayHoursIssue` returns
     `{ message, window }`, so only the offending window turns red and the
     sentence sits under it (per row in the 7-row grid, plus "Fix the hours for
@@ -431,7 +450,182 @@ when nobody is there) or dropped breakfast.
   min-notice posture; that is a semantic call living inside
   `minSelectableTimeMinutes`, so changing it later moves no caller. On a
   split day a long prep can swallow the first window whole, and the prefill
-  follows into the second rather than into the break.
+  follows into the second rather than into the break. **Consumed by
+  `z8r3fdff97`** — the next section.
+
+## Update (2026-09-17, z8r3fdff97): prep time per product, and a pickup time when it matters
+
+Huff & Puff's ice-cream puffs take about two hours to make. Neither lever
+above could say so: notice 0 lets a buyer collect in 15 minutes, notice 1
+removes same-day entirely. And the collection instruction ("side counter —
+bring an ice bag") lived in the product description, which never rides the
+order. Three per-product additions:
+
+- **Prep time** — `products.prepMinutes`, whole minutes in
+  `[0, MAX_PREP_MINUTES = 1440]`; `0` / blank → unset, the one spelling for
+  "no rule". The hours-scale sibling of `minNoticeDays`: **notice moves the
+  day, prep moves the clock.**
+- **A pickup time** — self-collect orders keep `fulfilmentTimeMinutes`
+  (they were date-only since Aug, above).
+- **A pickup note** — the collection instruction, frozen onto each order
+  line. It belongs to the pickup subsystem: see [`fulfilment.md`](./fulfilment.md)
+  ("Per-product pickup note").
+
+**The floor.** Today only: `now + max(15, prep)`, rounded up to 5 — through
+the T1 seam above, never a second floor. A future day is untouched (prep is
+absorbed overnight). The **slowest** product in the cart sets it, the way the
+strictest sets notice, and a refusal names it:
+
+- "“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is 11:00 AM"
+- "“Ice Cream Puff” needs 2 hours to prepare — too late for today, pick a later day"
+
+`convex/lib/prepFloor.ts` (`slowestPrep`, `prepFloorIssue`) is the one author
+of the rule and its words, and it is **hours-aware**: it reads the selectable
+windows, so the earliest time it names can always be picked — never inside a
+split day's break, never after closing — and a prep that outlasts today's
+hours says "too late for today" instead of pointing at a slot after the
+shutters. (The first cut floored against midnight and got both wrong.) It is
+deliberately silent on everything that is not prep's fault, so the
+opening-hours gate keeps its own words for a closed day or a break.
+
+**What prep races: closing time, or midnight.** A timed moment is handed over
+inside the store's hours, so its prep races **closing time**. A **date-only**
+order — a drop-off meet-up, or a client that sends no time — isn't: the
+meet-up's hour is its point's own, so its prep races **midnight** on every day
+the store opens. `prepFloorHours(hours, timed)` makes that call at all four
+call sites (`orders.create`, `orderClaims.commit`, and through
+`isFulfilmentDaySelectable` / `fulfilmentDayCopy` / `prepHint` at both
+checkouts): the store's hours for a timed order; for a date-only one, every
+open day widened to the whole day, closed weekdays still closed so "closed on
+Fridays" speaks first. Judged against the hours, a date-only order placed after
+closing found no slot with prep AND none without, so prep looked blameless and
+a 24-hour prep could be booked for that evening's meet-up. The reverse was
+wrong too: a 2-hour prep at 4:30 PM was refused for a meet-up only because the
+store's own counter closes at 6. The date-only hint reads "…so it's ready from
+6:30 PM today".
+
+**One boolean decides whether it applies** — `prepFloorApplies`, in
+`orders.create` and `orderClaims.commit`. Exempt:
+
+| Path | Why |
+| --- | --- |
+| A **collection** trip (the rider collects from the buyer) | The work happens after the rider arrives; prep has nothing to delay. |
+| Counter checkout | Never runs this path — the seller is standing there (the notice posture). |
+| Bookings | Their own flow; a request-to-book IS the preparation. The form hides prep on a booking listing. |
+| Seller reschedule | The seller is the authority on her own exceptions — see "Seller reschedule". |
+| Event orders (T3, `z8r3fdff9u`) | The seller fixed the moment; add `&& eventLock === undefined` to `prepFloorApplies` when T3 lands. |
+
+A product needing **a day or more of notice** can't be ordered for today, so
+its prep changes nothing. The Order rules card says so in amber rather than
+disabling the field — loosening notice back to 0 finds the prep intact — and
+the storefront hides the "Ready in ~2 hours" chip on such a product.
+
+**When checkout asks for a time.** Delivery always has. A **pickup asks only
+when something makes the hour matter** — the store keeps opening hours, or the
+cart needs prep time — and is then required and prefilled like delivery. A
+store using neither keeps its date-only pickup, byte for byte, and a
+**drop-off meet-up never asks**: its schedule note sets the hour
+(`asksForTime`, `src/lib/checkout-fulfilment.ts`). At a time-bearing pickup,
+the server holds the time to the windows and the break like a delivery's.
+
+**Checkout, storefront and claim link alike.** The cart's rules live in one
+pure module, `src/lib/checkout-fulfilment.ts`, built ON T1's time rules
+(`src/lib/fulfilment-time-issue.ts`, the test-round section above) rather than
+beside them — each form keeps only its wiring:
+
+- `fulfilmentDayCopy` / `fulfilmentTimeCopy` — the inline notice and the
+  submit check, one sentence as `CopyPart`s, rendered through `CopyText` in
+  both places: under the field, and beside the CTA (T1's refusal state holds
+  the parts, so a prep refusal's time stays whole in the mobile bar too). They are thin calls into T1's
+  `fulfilmentTimeIssue`, which **carries prep as a cause**: given the cart's
+  `prepMinutes` and `prepItemName`, a `too_early` or `no_slot` that prep
+  produced comes back with `prep: { itemName, minutes }` — decided by
+  `prepFloorProblem`, the function behind orders.create's refusal — and
+  `timeIssueCopy` words it with `prepFloorCopy`, the builder the server joins.
+  One precedence rule and one sentence for both checkouts, inline and at
+  submit: "“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is
+  12:00 PM", or "— too late for today, pick a later day".
+- **"Closed" vs "no time left" for every store**, not just under prep.
+  `no_slot` carries a `reason`: `closed_day` (the store doesn't open that
+  weekday), `closed` (it's past today's LAST closing time) or `too_late` (the
+  store is still open but the checkout lead — or prep — runs past its last
+  slot). Before, any timed store with hours read "has closed for today" at
+  5:50 PM with a 6:00 PM close; it now says "There's no time left to deliver
+  today — pick tomorrow". `timeIssueCopy` also gained a **"pick up"** verb
+  ("Pick a pickup time.", "The earliest you can pick up is …"); "collect"
+  stays the collection service's.
+- `isFulfilmentDaySelectable` — chips and the default date skip a today the
+  store has closed on, or that prep has used up (for a date-only pickup, a
+  today whose prep runs past midnight).
+- `prepHint` — one line under the step title, about **today**: "“Ice Cream
+  Puff” takes about 1 hour to prepare, so the earliest pickup today is
+  9:15 AM", or "…so it can't be ready today" when the chips skip Today. Null
+  whenever prep changes nothing the buyer can see.
+- **Rules read live.** Prep, note and notice days come from the product list
+  the checkout already subscribes to; the cart's own snapshot stands in only
+  while it loads or for a product that has left the list. A seller's edit
+  after the buyer added the item, or a cart saved before prep existed, is
+  judged as `orders.create` will judge it. (Submit now also checks the
+  *effective* notice, store ∨ cart — it used to pass the store notice alone
+  and let a stricter item notice through to a server refusal.)
+- **The repair is T1's**, ownership-aware `planTimeRepair`, floored by the
+  cart's prep through its `prepMinutes` — one loop and one `systemTimeRef`
+  for both methods (a pickup time reuses the delivery time field). A time the
+  buyer typed is never rewritten. Its 30s beat (and tab return) also
+  re-renders the prep hint and re-floors the dates past midnight. When PREP is
+  why a prefilled time moved — the plain lead would still have allowed it —
+  T1's `passed` reason carries `prep` and the note names it: "We moved your
+  time to 1:30 PM — “Ice Cream Puff” needs 1 hour to prepare." (one phrase,
+  `prepNeedsText`, shared with the refusal). A time the clock overtook stays
+  "no longer available".
+- **Refusals retire with their inputs** (T1's `fulfilmentInputsKey`, which
+  already includes the pickup point): switching to a drop-off point, which
+  takes the time requirement away, clears a time refusal made at a self-collect
+  point.
+- **The store's hours sit on the time field only.** A pickup asks for a time
+  whenever the store keeps hours, so T1's date hint for a date-only pickup
+  could never render and was removed rather than kept as dead code; a
+  drop-off meet-up (date-only) runs on its point's schedule note instead.
+- **An untouched date only moves when it slips below the floor** (midnight,
+  a raised notice) — to the first day that can actually be fulfilled. A date
+  the clock makes impossible is left alone: the inline notice explains and the
+  buyer chooses. Silently moving an order to another day is worse than asking.
+- **Claim links** mirror all of it: `orderClaims.getByToken` decorates each
+  frozen line with its product's live prep and note, and commit keeps a
+  self-collect time (it was silently dropped), applies the floor and freezes
+  the note. See [`claim-links.md`](./claim-links.md).
+
+**Where the time shows.** Every surface that already read
+`fulfilmentTimeMinutes` shows a pickup time for free — the buyer's wa.me
+message ("🗓️ Collect on: …"), `/track`, the seller order page, the seller
+alert, the email, the calendar feed, the CSV "Fulfilment time" column. New in
+this ticket: the inbox card's date badge ("Today · 3:30 PM",
+`fulfilmentBadgeLabel`), the notify-manager message ("Collect on …"), and
+**same-day orders sort by time** — in the inbox's due sort
+(`compareInboxOrder`) and the table's Fulfilment date column
+(`fulfilmentMomentSortKey`), untimed after timed, so a kitchen's pickup list
+reads in the order buyers arrive.
+
+**Seller side.** The Order rules card (and the create wizard) puts **Prep
+time** directly under notice, with presets (30 min / 1 hour / 2 hours /
+4 hours, `PREP_PRESETS`), then **Pickup note**; both are hidden on a booking
+listing. The card's own description names all four rules — it used to say
+"leave both blank" beside four fields, and called a collection instruction a
+limit. The prep helper states the **24-hour ceiling** and sends anything longer
+to the notice days above, so the cap isn't first met as a refusal after Save.
+The store's "Order date notice" setting points sellers who need hours rather
+than days at the product's prep time. In the **wizard**, prep time sits on the
+Review step under "More options", while step 5 is called *Preparation* and only
+asks about stock policy — so answering **"Made fresh"** there names prep time
+and says where it is, rather than leaving the made-to-order seller to find it.
+Both fields ride the spreadsheet import/export —
+[`bulk-product-upload-roadmap.md`](./bulk-product-upload-roadmap.md).
+
+**Known limits.** Prep is per product, not per variant; there is no
+store-level prep; prep never bites a future day by design (a product that
+needs a day uses notice); a drop-off point's schedule note is advisory, not
+enforced; and the Meta confirmation template carries no pickup notes — `/track`
+and the order page are the surfaces guaranteed to show them.
 
 ## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
 
@@ -443,14 +637,16 @@ chat and records it on the order.
 
 - **`orders.rescheduleFulfilment`** (owner-or-admin via `requireRetailerAccess`,
   admin act-as audited): patches `fulfilmentDate` (+ `fulfilmentTimeMinutes` on
-  delivery orders) and writes a `fulfilment_rescheduled (from … to …)`
-  orderEvent in the `delivery_fee_set` note style. Omitting the time keeps the
-  existing one — a date-only change can never silently drop the clock. A
-  passed time on a self-collect order is ignored (mirrors create). A dateless
-  legacy order may be *given* a date (`from unset`).
+  delivery and, since `z8r3fdff97`, self-collect orders) and writes a
+  `fulfilment_rescheduled (from … to …)` orderEvent in the `delivery_fee_set`
+  note style. Omitting the time keeps the existing one — a date-only change can
+  never silently drop the clock. `null` clears a self-collect time (see the
+  update below). A dateless legacy order may be *given* a date (`from unset`).
 - **Window**: `pending`/`confirmed`/`packed` only; refused on
-  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), and
-  once a collection order's goods have arrived (`collectedAt`).
+  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), on
+  bookings (their fulfilment date IS the check-in — server backstop added in
+  `z8r3fdff97`; the order page never showed the trigger), and once a collection
+  order's goods have arrived (`collectedAt`).
 - **The hard guard is the ACTIVE Lalamove job**: a booking is frozen against
   its `quotationId` and will NOT follow the order, so rescheduling under it
   would desync the buyer's promise from the trip. Server throws; the dialog
@@ -466,6 +662,19 @@ chat and records it on the order.
   Deliberately **no new WhatsApp send** (one-msg-per-order posture) — messages
   already sent keep the old time; the chat agreement covers that, and the
   dialog's helper copy says so ("agree the new time with them in chat first").
+- **The buyer's page SAYS it moved** (z8r3fdff97 test round). Because nothing
+  is sent, "Collect on Mon, 21 Sep · 1:00 PM" on `/track` reads exactly like
+  the moment the buyer picked themselves — a seller who moves 3 PM to 1 PM
+  leaves no trace the buyer can see. The order now carries `rescheduledAt` +
+  the moment it moved FROM (`rescheduledFromDate` /
+  `rescheduledFromTimeMinutes`, the second absent when the seller cleared the
+  time), and both order pages render `RescheduledNote` from it: the buyer
+  reads "**IndoMart changed this** — it was Mon, 21 Sep 2026 · 3:00 PM. 5m
+  ago", the seller "**You moved this** — …" (they may not be the one who did,
+  and the chat won't tell them either). Stamped only when the moment actually
+  differs, so re-saving the same day never cries "changed"; hidden on the
+  buyer's page once the order is delivered or cancelled — then it's history,
+  not news.
 - **UI**: `RescheduleFulfilmentDialog` on order detail's Fulfillment card —
   renders only inside the reschedule window ("Reschedule", or "Set date" on a
   dateless order), native date+time inputs, live "the buyer's order page will
@@ -493,3 +702,35 @@ chat and records it on the order.
   deliberately NOT bound by opening hours (the vendor is the authority on
   their own exceptions), which is also why the canonical rebook bug
   (86eyp63xn, Wagyu Walid) is fixed by this pair and not by hours alone.
+
+### Update (Sep 2026, `z8r3fdff97`): a pickup time moves too
+
+Self-collect orders carry a pickup time since the prep-time ticket (see the
+section below), so the reschedule dialog and mutation stopped treating pickup
+as date-only.
+
+- **Self-collect: set, keep or clear.** The dialog shows an optional **Pickup
+  time**, prefilled from the order, with "Optional — leave blank for any time
+  that day" and a **Clear time** button. Clearing states its consequence
+  ("Removes the 3:00 PM pickup time — the buyer can come any time that day")
+  and sends `fulfilmentTimeMinutes: null`; a blank field on an order that never
+  had a time sends nothing (keep), so the dialog never invents a time.
+- **Delivery keeps a time.** The server refuses `null` on a delivery —
+  dispatch composes the rider's moment from it. The dialog used to preview an
+  emptied delivery time as date-only while the save quietly kept the old one;
+  it now disables Save with "A delivery keeps a time — pick a new one rather
+  than clearing it", so the preview, the saved value and the toast agree.
+- **Drop-off meet-ups stay date-only**, exactly as checkout offers them: no
+  time input, and the point's frozen `scheduleNote` shows beside the date
+  ("Drop-off schedule: Every Sat 3–5pm").
+- **Neither buyer-side clock rule binds the seller.** Opening hours were
+  already exempt (above). The per-product **prep floor** is too: "the puffs
+  are done early, come in 30 min" is what this dialog is for, and
+  `prepMinutes` is not frozen on the order, so enforcing it would judge an old
+  order by today's product settings. The dialog's own passed-moment refusal is
+  the only clock rule a seller needs.
+- **A pickup time never reaches dispatch.** Lalamove and Delyva both return
+  `not_delivery` before reading the moment (`dispatchBlockReason`), and a
+  self-collect order never fires the dialog's slot-price quote. Pinned by
+  tests in `lalamove.test.ts` and `delyva.test.ts`.
+

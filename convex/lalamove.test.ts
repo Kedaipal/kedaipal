@@ -1965,6 +1965,44 @@ describe("scheduled dispatch (86eyg0n8e follow-up)", () => {
 		expect(context2.requestedMoment).toBeUndefined();
 	});
 
+	test("a timed SELF-COLLECT order composes no moment — it is not a delivery (z8r3fdff97)", async () => {
+		// A pickup carries a time since z8r3fdff97. Dispatch must never read it
+		// as a rider schedule: the method gate refuses before the moment is built.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60198765432",
+				businessAddress: {
+					label: "Fruit Hut HQ",
+					latitude: 3.139,
+					longitude: 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					apiKey: "pk_test_sched",
+					apiSecret: "sk_test_sched",
+				},
+			});
+		});
+		const day = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000) - 8 * 3_600_000;
+		const pickup = await seedOrder(t, retailer._id, {
+			deliveryMethod: "self_collect",
+			fulfilmentDate: day,
+			fulfilmentTimeMinutes: 930,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const o = await ctx.db.get(pickup);
+			return o?.shortId ?? "";
+		});
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		expect(context).toMatchObject({ ok: false, reason: "not_delivery" });
+	});
+
 	test("reserveBooking stamps the schedule; the card payload exposes it", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

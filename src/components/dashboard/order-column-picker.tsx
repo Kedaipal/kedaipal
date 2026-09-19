@@ -20,7 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
  * columns, grouped by the registry's own sections so a seller hunting for the
  * address doesn't scan an alphabetical wall.
  *
- * **Bulk selection is part of the design, not an extra.** With 36 columns,
+ * **Bulk selection is part of the design, not an extra.** With ~40 columns,
  * ticking them one at a time is the whole interaction, so there are three
  * levels of the SAME control: all columns, one group, one column. The first two
  * are TRI-STATE — a parent that read "unchecked" while three of its seven
