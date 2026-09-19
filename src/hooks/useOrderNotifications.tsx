@@ -5,6 +5,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { formatPrice } from "../lib/format";
 
 /**
  * Browser notifications for the seller dashboard (docs/order-notifications.md):
@@ -181,18 +182,37 @@ export function OrderNotificationsBridge({
 		}
 
 		if (activity.newestOrder && orderAt > baseline.current.orderAt) {
-			const { shortId } = activity.newestOrder;
+			const { shortId, customerName, total, currency } = activity.newestOrder;
 			if (prefs.sound) playChime();
 			flashTitle(`🔔 New order ${shortId} — Kedaipal`);
 			const open = () => navigate({ to: `/app/orders/${shortId}` });
+			// Who it's from and what it's worth: enough to triage without opening
+			// it. A counter/anonymous order has no name, so the line degrades to
+			// the id and the money rather than printing a stray separator.
+			const money = formatPrice(total, currency);
+			const details = customerName
+				? `${shortId} · ${customerName} · ${money}`
+				: `${shortId} · ${money}`;
 			showSystemNotification(
-				`New order ${shortId}`,
-				"Tap to open it in Kedaipal.",
+				`New order — ${money}`,
+				`${details}. Tap to open it in Kedaipal.`,
 				open,
 			);
-			toast.success(`New order ${shortId}`, {
-				action: { label: "Open", onClick: open },
-			});
+			// The WHOLE toast opens the order, not just the button: a seller who
+			// sees "new order" reaches for the words, not a 40px target
+			// (z8r3fdff97 test round). The button stays for anyone who reads it
+			// as the only affordance, and for keyboard focus.
+			toast.success(
+				<button
+					type="button"
+					onClick={open}
+					className="flex w-full flex-col items-start gap-0.5 text-left"
+				>
+					<span className="font-semibold">A new order just came in</span>
+					<span className="text-xs font-normal opacity-80">{details}</span>
+				</button>,
+				{ action: { label: "Open", onClick: open }, duration: 10_000 },
+			);
 		}
 
 		if (activity.newestFailedBooking && failedAt > baseline.current.failedAt) {
