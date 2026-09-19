@@ -14,9 +14,12 @@ import {
 
 /**
  * Dashboard subscription banner (app shell). Escalates by urgency:
- *  - `past_due` → red, non-dismissable (the dashboard is soft-locked). When the
- *    lock came from an admin turning the store's comp upgrade off (z8r3fdeub2)
- *    it names that instead of an unpaid bill, and points at choosing a plan.
+ *  - `past_due` → red, non-dismissable: the dashboard is VIEW-ONLY (z8r3fdeub2,
+ *    19 Sep 2026 — every seller action is refused server-side, not just store
+ *    edits), so this bar is where that constraint is surfaced before the seller
+ *    taps anything. When the lock came from an admin turning the store's comp
+ *    upgrade off it names that instead of an unpaid bill, and points at
+ *    choosing a plan.
  *  - a pending invoice due within 5 days → amber warning, dismissable.
  *  - Off-Season Hold → calm accent strip, persistent: ordering is paused and
  *    the seller must not forget it (z8r3fday24).
@@ -172,8 +175,8 @@ export function SubscriptionBanner({
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
 				<p className="text-sm text-foreground/90">
 					<span className="font-medium">Your sponsored access has ended.</span>{" "}
-					Your storefront and existing orders stay live — choose a plan to get
-					editing your store again.
+					Your dashboard is view-only until you choose a plan — your storefront
+					stays live and buyers can still order.
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					<a
@@ -205,8 +208,8 @@ export function SubscriptionBanner({
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
 				<p className="text-sm text-foreground/90">
 					<span className="font-medium">Your subscription is past due.</span>{" "}
-					Your storefront and existing orders stay live — pay to resume editing
-					your store.
+					Your dashboard is view-only until you pay — your storefront stays live
+					and buyers can still order.
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					<Link

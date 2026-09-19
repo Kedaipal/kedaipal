@@ -7,10 +7,12 @@ import {
 	isCrmLocked,
 	isOrderInboxLocked,
 	isRenewing,
+	isStoreReadOnly,
 	orderCapState,
 	resolveBannerState,
 	type SubscriptionView,
 	shouldNudgePayment,
+	storeReadOnlyReason,
 	tierPill,
 	trialDaysLeft,
 } from "./subscription";
@@ -643,5 +645,68 @@ describe("isRenewing — the lapsed-but-not-yet-renewed window", () => {
 			false,
 		);
 		expect(isRenewing(undefined, NOW)).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// View-only lock (z8r3fdeub2) — the client mirror of assertSubscriptionActive
+// ---------------------------------------------------------------------------
+
+describe("isStoreReadOnly", () => {
+	const store = (s: Partial<SubscriptionView>, actingAsAdmin = false) => ({
+		actingAsAdmin,
+		subscription: sub(s),
+	});
+
+	test("a lapsed store is view-only — that IS the lock", () => {
+		expect(isStoreReadOnly(store({ status: "past_due" }))).toBe(true);
+		expect(
+			isStoreReadOnly(store({ status: "past_due", compEnded: { at: NOW } })),
+		).toBe(true);
+	});
+
+	test("every other status is writable, comped included", () => {
+		for (const status of [
+			"active",
+			"trialing",
+			"on_hold",
+			"cancelled",
+		] as const)
+			expect(isStoreReadOnly(store({ status }))).toBe(false);
+		// A comp can't be past_due in practice, but a fail-open row could read
+		// that way — and a sponsored store must never see a lock.
+		expect(isStoreReadOnly(store({ status: "past_due", comped: true }))).toBe(
+			false,
+		);
+	});
+
+	test("mirrors both server bypasses: act-as and an admin's own store", () => {
+		expect(isStoreReadOnly(store({ status: "past_due" }, true))).toBe(false);
+		expect(isStoreReadOnly(store({ status: "past_due" }), true)).toBe(false);
+	});
+
+	test("fails open while loading, and with no subscription at all", () => {
+		// A control that flickers disabled mid-load is worse than one that
+		// refuses the tap — and the server is the real lock either way.
+		expect(isStoreReadOnly(undefined)).toBe(false);
+		expect(isStoreReadOnly(null)).toBe(false);
+		expect(isStoreReadOnly({ actingAsAdmin: false })).toBe(false);
+	});
+});
+
+describe("storeReadOnlyReason", () => {
+	test("a lapsed subscription is told to pay its invoice", () => {
+		const reason = storeReadOnlyReason(sub({ status: "past_due" }));
+		expect(reason).toMatch(/view-only/);
+		expect(reason).toMatch(/invoice/i);
+	});
+
+	test("a revoked comp is never sent hunting for a bill it never had", () => {
+		const reason = storeReadOnlyReason(
+			sub({ status: "past_due", compEnded: { at: NOW } }),
+		);
+		expect(reason).toMatch(/sponsored access has ended/i);
+		expect(reason).toMatch(/view-only/);
+		expect(reason).not.toMatch(/invoice/i);
 	});
 });

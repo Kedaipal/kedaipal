@@ -1,15 +1,16 @@
 // Subscription reads + the soft-lock access guard. The whole manual-billing model
 // rests on `resolveAccess`: it turns a retailer's subscription into an access
 // descriptor that the seller-side dashboard reads (nav pill, disabled-with-reason
-// UI) and that `assertSubscriptionActive` enforces on growth-write mutations.
+// UI) and that `assertSubscriptionActive` enforces on EVERY seller write.
 //
 // Two invariants the rest of the system depends on:
 //  1. FAIL SAFE — a missing subscription row resolves to FULL access (comped),
 //     logged, never locked. So a backfill miss degrades to "works", not "locked
 //     out" (ticket launch-blocker EC).
 //  2. The storefront + order pipeline NEVER call this — they're public and stay
-//     live regardless of subscription status. Soft-lock freezes only the seller's
-//     dashboard growth-writes (products, settings, future broadcast).
+//     live regardless of subscription status. The soft lock freezes the SELLER's
+//     dashboard and nothing else: a lapsed store is view-only, while its buyers
+//     browse, order, pay, track and edit their own orders exactly as before.
 //
 // See docs/manual-subscription.md.
 
@@ -18,6 +19,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalMutation,
+	internalQuery,
 	mutation,
 	type MutationCtx,
 	query,
@@ -338,10 +340,24 @@ export async function endFreePeriodOnFirstOrder(
 }
 
 /**
- * Soft-lock guard for seller dashboard GROWTH-WRITES (product create/update,
- * updateSettings, future broadcast/reminder). Throws a `ConvexError` when the
- * subscription is past_due (and not comped). NEVER call from the storefront or
- * the order pipeline — those must stay live for the buyer.
+ * Soft-lock guard for EVERY seller dashboard write. A store whose subscription
+ * has lapsed — an unpaid invoice, or an admin turning a comp upgrade off
+ * (z8r3fdeub2) — goes VIEW-ONLY: it still reads everything it ever could, and
+ * nothing it does changes a row. That deliberately includes moving an order's
+ * status, packing, shipping and taking payment, which were allowed until 19 Sep
+ * 2026 (owner decision: "same lock as it was for all expired vendors, all
+ * actions locked, it's all view only"). Growth-writes were never the point —
+ * the point is that an unpaid store cannot be RUN.
+ *
+ * Throws a `ConvexError` when the subscription is past_due (and not comped).
+ * NEVER call from the storefront or the order pipeline — the BUYER's side stays
+ * live: browsing, ordering, paying, tracking and editing their own order all
+ * keep working, which is the whole reason the lock is soft. Paying Kedaipal
+ * stays open too, or the seller could never unlock themselves.
+ *
+ * Every public seller mutation and action is either guarded here or listed,
+ * with its reason, in `convex/sellerLock.test.ts` — which fails on any new one
+ * that is neither.
  */
 export async function assertSubscriptionActive(
 	ctx: AnyCtx,
@@ -358,11 +374,65 @@ export async function assertSubscriptionActive(
 			// A lock from a comp ending has no invoice behind it (z8r3fdeub2) —
 			// "pay your invoice" would send the seller hunting for a bill.
 			access.compEnded
-				? "Your sponsored access has ended. Choose a plan in Settings → Billing to keep editing your store — your storefront and existing orders stay live in the meantime."
-				: "Your subscription is past due. Pay your invoice to keep editing your store — your storefront and existing orders stay live in the meantime.",
+				? "Your sponsored access has ended, so your store is view-only. Choose a plan in Settings → Billing to start working again — your storefront stays live and buyers can still order in the meantime."
+				: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again — your storefront stays live and buyers can still order in the meantime.",
 		);
 	}
 }
+
+/**
+ * Same lock, for a seller write whose args carry NO store — the upload-URL
+ * minters (`products.generateUploadUrl`, the three on `retailers`), where the
+ * store is implied by the caller. Resolves the caller's OWN store and locks on
+ * that. A storeless caller passes (there is nothing to lock) and so does an
+ * admin, exactly as in `assertSubscriptionActive`; an admin acting-as is
+ * bypassed there too, so resolving their own store here is never wrong.
+ *
+ * The blob these mint can only ever be attached by a guarded mutation, so this
+ * is belt-and-braces — but a lapsed store shouldn't be able to write into our
+ * storage at all, and a reviewer shouldn't have to reason about it.
+ */
+export async function assertOwnStoreActive(ctx: AnyCtx): Promise<void> {
+	if (await isAdmin(ctx)) return;
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) return; // the caller's own auth check already refused
+	const retailer = await ctx.db
+		.query("retailers")
+		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+		.first();
+	if (retailer) await assertSubscriptionActive(ctx, retailer._id);
+}
+
+/**
+ * The same lock for seller ACTIONS, which have no `ctx.db` and so cannot call
+ * the guard directly (Lalamove/Delyva booking, the payment reminder). Internal
+ * — an action runs it with `ctx.runQuery` before doing anything the seller
+ * would have to undo. A query that throws is the right shape here: it refuses
+ * before the action spends a third-party call or an outbound message.
+ */
+export const assertWritable = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<null> => {
+		await assertSubscriptionActive(ctx, retailerId);
+		return null;
+	},
+});
+
+/** `assertWritable` for the order actions, which know a `shortId` and nothing
+ * else (rider/courier booking, the manual payment reminder). A shortId that
+ * resolves to nothing passes — the action's own "not found" answer is the
+ * clearer one, and there is no store to lock. */
+export const assertWritableForOrder = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<null> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.unique();
+		if (order) await assertSubscriptionActive(ctx, order.retailerId);
+		return null;
+	},
+});
 
 /** Human label for the gate error — kept here (not in the pure module) since
  * it's copy, not catalog. */

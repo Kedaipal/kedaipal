@@ -54,6 +54,7 @@ import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -66,11 +67,11 @@ import {
 	BookingResolutionNote,
 } from "../components/order/booking-request-card";
 import { DispatchHub } from "../components/order/dispatch-hub";
-import { PickupNotes } from "../components/order/pickup-notes";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import { PickupNotes } from "../components/order/pickup-notes";
 import {
 	canPrintLabel,
 	PrintLabelButton,
@@ -104,12 +105,12 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { useStoreLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeBookingSpan } from "../lib/booking-dates";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import { shipsAsParcel } from "../lib/dispatch-surface";
-import { buildNotifyManagerMessage } from "../lib/notify-manager-message";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -120,6 +121,7 @@ import {
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { buildNotifyManagerMessage } from "../lib/notify-manager-message";
 import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
@@ -351,6 +353,9 @@ function OrderDetailRoute() {
 	const markSeen = useMutation(api.orders.markSeen);
 	const setPinned = useMutation(api.orders.setPinned);
 	const [pinBusy, setPinBusy] = useState(false);
+	// A lapsed store is view-only (z8r3fdeub2): the server refuses every action
+	// on this page, so the controls say so instead of failing on tap.
+	const { readOnly } = useStoreLock();
 	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
 	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
 	// server-side in one batched read rather than a lookup per row.
@@ -817,6 +822,11 @@ function OrderDetailRoute() {
 				/>
 			</div>
 
+			{/* View-only (z8r3fdeub2): a lapsed store can read this order and move
+			    nothing on it, so say that above the controls rather than letting
+			    every tap answer with a toast. Renders nothing when writable. */}
+			<ViewOnlyNote />
+
 			{/* A booking request's stage control IS approve/decline (S3): the
 			    stepper can't move it (the server refuses), so its slot holds the
 			    request card until the seller answers. Once resolved without an
@@ -929,6 +939,7 @@ function OrderDetailRoute() {
 											}}
 											disabled={
 												pending !== null ||
+												readOnly ||
 												blocked ||
 												riderManaged ||
 												collectionPending
@@ -937,6 +948,8 @@ function OrderDetailRoute() {
 										>
 											{pending === nextStage.id ? (
 												"Updating…"
+											) : readOnly ? (
+												`${advanceLabel} — view-only`
 											) : blocked ? (
 												`${advanceLabel} — awaiting mockup`
 											) : collectionPending ? (

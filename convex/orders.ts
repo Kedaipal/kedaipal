@@ -1889,6 +1889,9 @@ export const sendPaymentReminder = action({
 		ctx,
 		{ shortId },
 	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
 			shortId,
 		});
@@ -3244,6 +3247,7 @@ export const updateStatus = mutation({
 		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
 		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
@@ -3386,6 +3390,7 @@ export const bulkUpdateStatus = mutation({
 			// first order (the selection is single-retailer); admin act-as bypasses.
 			if (firstResolve && !batchAccess.actingAsAdmin)
 				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -3657,6 +3662,7 @@ export const advanceToStage = mutation({
 		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
@@ -3814,6 +3820,7 @@ export const setShipmentTracking = mutation({
 		{ orderId, courierName, trackingNo, carrierTrackingUrl },
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -4061,6 +4068,7 @@ export const setDeliveryFee = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
 		if (order.status === "cancelled")
@@ -4177,6 +4185,7 @@ export const rescheduleFulfilment = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
 		if (order.status === "shipped" || order.status === "delivered")
@@ -4552,6 +4561,7 @@ export const markPaymentReceived = mutation({
 	},
 	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -4767,6 +4777,7 @@ export const clearGatewayPaymentIssue = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		const issue = order.gatewayPaymentIssue;
 		if (!issue) return; // already resolved (e.g. a payment landed) — no-op
 		const now = Date.now();
@@ -4922,6 +4933,7 @@ export const generateMockupUploadUrl = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		return ctx.storage.generateUploadUrl();
@@ -4942,6 +4954,7 @@ export const discardMockupUploads = mutation({
 		if (!order) return; // order gone → nothing to protect; let the blobs GC
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		const referenced = new Set(resolveMockupImageIds(order));
 		for (const id of storageIds) {
 			const trimmed = id.trim();
@@ -4978,6 +4991,7 @@ export const submitMockup = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5062,6 +5076,7 @@ export const updateMockupQuote = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5184,6 +5199,7 @@ export const waiveMockup = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)

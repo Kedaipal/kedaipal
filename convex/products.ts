@@ -47,7 +47,10 @@ import {
 } from "./lib/popularProducts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
-import { assertSubscriptionActive } from "./subscriptions";
+import {
+	assertOwnStoreActive,
+	assertSubscriptionActive,
+} from "./subscriptions";
 import {
 	cartesian,
 	DEFAULT_CUSTOM_LABEL,
@@ -1266,6 +1269,7 @@ export const updateVariant = mutation({
 			ctx,
 			variantId,
 		);
+		await assertSubscriptionActive(ctx, existing.retailerId);
 
 		if (fields.price !== undefined && fields.price < 0)
 			throw new ConvexError("Price must be non-negative");
@@ -1450,6 +1454,7 @@ export const archive = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		const { product, access } = await requireProductOwnership(ctx, productId);
+		await assertSubscriptionActive(ctx, product.retailerId);
 		const wasVisible = isProductVisible(product);
 		await ctx.db.patch(productId, {
 			active: false,
@@ -1487,6 +1492,7 @@ export const deletePermanently = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		const { product, access } = await requireProductOwnership(ctx, productId);
+		await assertSubscriptionActive(ctx, product.retailerId);
 
 		if (product.orderedAt !== undefined)
 			throw new ConvexError(
@@ -1734,6 +1740,7 @@ export const bulkUpsert = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productBulkImport", { key: userId, throws: true });
 		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		await assertSubscriptionActive(ctx, args.retailerId);
 
 		const products = args.products as ImportProduct[];
 		if (products.length === 0) throw new ConvexError("No products to import");
@@ -2118,6 +2125,7 @@ export const generateUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
@@ -2139,6 +2147,7 @@ export const reorder = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		const access = await requireRetailerOwnership(ctx, retailerId);
+		await assertSubscriptionActive(ctx, retailerId);
 
 		const rows = await ctx.db
 			.query("products")

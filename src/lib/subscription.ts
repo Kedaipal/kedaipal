@@ -113,6 +113,42 @@ export function isOrderInboxLocked(
 	);
 }
 
+/**
+ * True when this dashboard is VIEW-ONLY (z8r3fdeub2, 19 Sep 2026): the store's
+ * subscription lapsed — an unpaid invoice, or an admin turning its comp upgrade
+ * off — so the server refuses every seller write, orders included. Same shape
+ * and same fail-open posture as `isCrmLocked`: a payload still loading, or one
+ * with no subscription at all, reads as NOT locked, because a control that
+ * flickers disabled mid-load is worse than one that refuses a tap.
+ *
+ * `actingAsAdmin` and `isAdmin` mirror the server's two bypasses — white-glove
+ * support on a lapsed store keeps working, and an admin's own store is never
+ * billed (see `assertSubscriptionActive`).
+ */
+export function isStoreReadOnly(
+	retailer:
+		| { actingAsAdmin?: boolean; subscription?: SubscriptionView }
+		| null
+		| undefined,
+	isAdmin = false,
+): boolean {
+	if (!retailer || retailer.actingAsAdmin || isAdmin) return false;
+	const sub = retailer.subscription;
+	return sub?.status === "past_due" && sub.comped !== true;
+}
+
+/**
+ * The one sentence every view-only surface says — the banner, a disabled
+ * control's note, the toast if a tap gets through. Deliberately the same shape
+ * as the server's `ConvexError`, so a seller who sees both reads one message
+ * twice rather than two rules.
+ */
+export function storeReadOnlyReason(sub: SubscriptionView | undefined): string {
+	return sub?.compEnded
+		? "Your sponsored access has ended, so your store is view-only. Choose a plan to start working again."
+		: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again.";
+}
+
 /** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
 export const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",

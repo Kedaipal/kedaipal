@@ -290,8 +290,8 @@ Both mutations (`subscriptions.setComp` / `revokeComp`) are
 who made that write) — a billing-state change is never untraced, and the act-as
 no-op doesn't apply because an admin's own store can't be comped. **Note for
 testing:** turning a comp off while acting-as a store won't show you the lock —
-admins bypass `assertSubscriptionActive` — so the growth-write refusal is only
-visible to the seller's own login. Full lifecycle, edge cases and the "never
+admins bypass `assertSubscriptionActive` — so the view-only refusal (every
+seller action, orders included) is only visible to the seller's own login. Full lifecycle, edge cases and the "never
 charged" guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
 
 ## Deliberate scope / follow-ups
