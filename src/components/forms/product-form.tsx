@@ -20,7 +20,15 @@ import {
 	useState,
 } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import {
+	MAX_NOTICE_DAYS,
+	MAX_PREP_MINUTES,
+	parsePrepMinutesText,
+} from "../../../convex/lib/fulfilmentDate";
+import {
+	MAX_PICKUP_NOTE_LENGTH,
+	pickupNoteFits,
+} from "../../../convex/lib/pickupNote";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	DEFAULT_WEEKEND_DAYS,
@@ -29,7 +37,7 @@ import {
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
-import { bookingSpanNoun } from "../../lib/booking-dates";
+import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
 	highlightRingClass,
@@ -51,7 +59,25 @@ import { cartesian } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
+import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
+
+/**
+ * Prep-time shortcuts. The field is MINUTES because that is what the floor
+ * arithmetic needs, but a seller thinks "about two hours" — nobody should
+ * have to work out that four hours is 240. Tapping a live preset clears it,
+ * so the row is a toggle rather than a one-way door, and typing 45 by hand
+ * still works: these SET the field, they do not replace it.
+ *
+ * Exported so the wizard renders the identical row — two spellings of the
+ * same control is how one app starts looking like two.
+ */
+export const PREP_PRESETS = [
+	{ minutes: 30, label: "30 min" },
+	{ minutes: 60, label: "1 hour" },
+	{ minutes: 120, label: "2 hours" },
+	{ minutes: 240, label: "4 hours" },
+] as const;
 import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
@@ -93,6 +119,12 @@ export interface ProductFormSubmitValues {
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
 	minNoticeDays?: number;
+	// Per-product prep window (minutes). undefined = none; the caller sends 0
+	// to clear on edit, matching minQuantity. Floors the fulfilment TIME the
+	// way minNoticeDays floors the DATE.
+	prepMinutes?: number;
+	// One line the buyer reads before collecting. "" clears on edit.
+	pickupNote?: string;
 	// Minimum order quantity (summed across variants). undefined = no minimum;
 	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
 	minQuantity?: number;
@@ -163,6 +195,8 @@ export type ProductFormDraft = {
 	editor: VariantEditorState;
 	minQuantity: string;
 	minNoticeDays: string;
+	prepMinutes: string;
+	pickupNote: string;
 };
 
 interface ProductFormProps {
@@ -193,6 +227,8 @@ interface ProductFormProps {
 		weekendPrice?: string;
 		weekendDays?: number[];
 		minNoticeDays?: number;
+		prepMinutes?: number;
+		pickupNote?: string;
 		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
@@ -224,6 +260,12 @@ interface ProductFormProps {
 	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
 	 * variant parcel-weight inputs out of Advanced (see VariantEditor). */
 	weightMode?: boolean;
+	/** The store actually offers self-collect (`retailers.offerSelfCollect`).
+	 * The pickup note is written FOR a collecting buyer, so on a
+	 * delivery-only store the input would invite a seller to write something
+	 * nobody will ever read — it degrades to a one-line hint pointing at the
+	 * setting that turns it on, rather than vanishing without explanation. */
+	offerSelfCollect?: boolean;
 	/** Saved variants + their LIVE stock counts — edit mode only (86eypn8ye).
 	 * Their stock renders read-only with an Adjust button, because the product
 	 * save no longer writes `onHand`. Absent on create, where every row is new
@@ -686,6 +728,7 @@ export function ProductForm({
 	submitLabel,
 	onSubmit,
 	weightMode = false,
+	offerSelfCollect = true,
 	liveStock,
 	stickyAction,
 	mode,
@@ -756,6 +799,12 @@ export function ProductForm({
 	const [minNoticeDraft, setMinNoticeDraft] = useState(
 		initialValues?.minNoticeDays ? String(initialValues.minNoticeDays) : "",
 	);
+	const [prepDraft, setPrepDraft] = useState(
+		initialValues?.prepMinutes ? String(initialValues.prepMinutes) : "",
+	);
+	const [pickupNoteDraft, setPickupNoteDraft] = useState(
+		initialValues?.pickupNote ?? "",
+	);
 	// Minimum order quantity — blank = no minimum (stored ≥2; see minOrderRules).
 	const [minQty, setMinQty] = useState(
 		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
@@ -819,7 +868,7 @@ export function ProductForm({
 			// `issues` empty ⇒ built carries the variants.
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
-			if (!minQtyValid) return;
+			if (!minQtyValid || !prepValid || !pickupNoteValid) return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)
@@ -866,6 +915,15 @@ export function ProductForm({
 						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
 							? Math.min(minNoticeParsed, MAX_NOTICE_DAYS)
 							: 0,
+					// 0 clears on the server (one spelling for "no window"), and a
+					// booking listing never carries one — request-to-book IS the
+					// preparation, so its input is not rendered.
+					prepMinutes: isBooking ? 0 : prepParsed,
+					// "" clears. Still sent when the store has self-collect OFF —
+					// the note is already written and turning collection back on
+					// should not find it silently dropped — but never for a
+					// booking, whose orders can't carry one.
+					pickupNote: isBooking ? "" : pickupNoteDraft,
 					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
 					// A booking listing never carries one (its input isn't rendered).
 					minQuantity: isBooking ? 0 : minQtyParsed,
@@ -905,6 +963,8 @@ export function ProductForm({
 			editor,
 			minQuantity: minQty,
 			minNoticeDays: minNoticeDraft,
+			prepMinutes: prepDraft,
+			pickupNote: pickupNoteDraft,
 		});
 		return () => {
 			draftRef.current = null;
@@ -996,6 +1056,24 @@ export function ProductForm({
 			(INT_RE.test(row.stock.trim()) ? Number.parseInt(row.stock, 10) : 0),
 		0,
 	);
+	// Prep window (z8r3fdff97) — blank = none; else whole minutes in
+	// [0, MAX_PREP_MINUTES], digits only — the same parser the spreadsheet
+	// import uses. The server's sanitizePrepMinutes is the judge; this exists so
+	// the seller is told BEFORE the round trip.
+	const prepTrimmed = prepDraft.trim();
+	const prepText = parsePrepMinutesText(prepDraft);
+	const prepValid = prepText.ok;
+	const prepParsed = prepText.ok ? (prepText.minutes ?? 0) : 0;
+	// A notice of a day or more removes same-day ordering entirely, and prep
+	// only ever moves the clock WITHIN today — so the two together leave the
+	// prep value inert. Said out loud rather than enforced: a seller loosening
+	// notice back to 0 should find their prep window still there.
+	const prepInertUnderNotice =
+		prepParsed > 0 &&
+		Number.parseInt(minNoticeDraft, 10) > 0;
+	const pickupNoteLength = pickupNoteDraft.replace(/\s+/g, " ").trim().length;
+	const pickupNoteValid = pickupNoteFits(pickupNoteDraft);
+
 	const minQtyStockShort =
 		minQtyValid &&
 		minQtyParsed >= 2 &&
@@ -1018,6 +1096,7 @@ export function ProductForm({
 									? {
 											capacityPerNight: capacityDraft,
 											packageLength: packageDraft,
+											packageUnit,
 											autoAccept,
 											weekendPrice: weekendDraft,
 											weekendDays,
@@ -1165,8 +1244,8 @@ export function ProductForm({
 						<p className="text-xs leading-relaxed text-muted-foreground">
 							{packageTrimmed.length > 0
 								? packageUnit === "month"
-									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${packageTrimmed} month${packageTrimmed === "1" ? "" : "s"} later, at one flat price.`
-									: `Buyers pick a start date only — the booking runs ${packageTrimmed} days from there, at one flat price.`
+									? `Buyers pick a start date only — a booking starting the 12th runs to the 11th, ${bookingSpanCounted(Number(packageTrimmed), "month")} later, at one flat price.`
+									: `Buyers pick a start date only — the booking runs ${bookingSpanCounted(Number(packageTrimmed), packageUnit)} from there, at one flat price.`
 								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
 						</p>
 					</div>
@@ -1373,10 +1452,11 @@ export function ProductForm({
 				</ProductStepCard>
 			)}
 
-			{/* Order rules — the two constraints on HOW a buyer may order this
-			    product (how many, how soon). Grouped in one card because they're
-			    the same kind of decision: neither is about price/choices (what it
-			    costs) nor publishing (where it shows). Both are optional. */}
+			{/* Order rules — what governs HOW a buyer may order this product (how
+			    many, how soon, how long it takes to make) and the one line they
+			    need when they collect it. Grouped in one card because they're the
+			    same kind of decision: none is about price/choices (what it costs)
+			    nor publishing (where it shows). All are optional. */}
 			<ProductStepCard
 				icon={<ClipboardList className="size-5" />}
 				kicker="Selling"
@@ -1384,7 +1464,7 @@ export function ProductForm({
 				description={
 					isBooking
 						? "How much lead time a booking request needs. Optional."
-						: "Optional limits on how buyers can order this product. Leave both blank for no restrictions."
+						: "How soon buyers can order it, how long you need to make it, and what they should know when collecting. All optional."
 				}
 			>
 				{/* Minimum order quantity (86ey9unyx) — summed across options, so
@@ -1464,17 +1544,15 @@ export function ProductForm({
 								variant="field"
 								className="w-24 text-center"
 							/>
-							<select
-								aria-label="Package length unit"
-								value={packageUnit}
-								onChange={(e) =>
-									setPackageUnit(e.target.value === "day" ? "day" : "month")
-								}
-								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
-							>
-								<option value="month">months</option>
-								<option value="day">days</option>
-							</select>
+							{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
+							    `MAX_NOTICE_DAYS`). A copy-paste had left the PACKAGE LENGTH's
+							    unit dropdown sitting in this row — bound to `packageUnit`, so a
+							    seller adjusting their notice period silently flipped a 1-month
+							    membership into a 1-day pass, and on a normal product met a unit
+							    the save path drops on the floor. The wizard was swept for this;
+							    THIS form was missed — and it is the copy a seller editing a live
+							    product actually meets. */}
+							<span className="text-sm text-muted-foreground">days</span>
 						</div>
 					</div>
 					<p className="text-xs leading-relaxed text-muted-foreground">
@@ -1483,6 +1561,147 @@ export function ProductForm({
 							: "Days of lead time this product needs (custom / made-to-order items). Buyers can't pick a delivery or pickup date sooner than this — it raises your store-level notice when higher, and the strictest item in a cart sets the whole order's earliest date. Leave 0 for no extra notice."}
 					</p>
 				</div>
+
+				{/* Prep time — notice's hours-scale sibling, so it sits directly
+				    under it rather than anywhere else in the card. A booking
+				    listing never shows it: request-to-book IS the preparation,
+				    and the seller accepts when they're ready. */}
+				{isBooking ? null : (
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="prep-minutes" className="text-sm font-medium">
+								Prep time{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</label>
+							<div className="flex items-center gap-1.5">
+								<Input
+									id="prep-minutes"
+									type="number"
+									inputMode="numeric"
+									min={0}
+									max={MAX_PREP_MINUTES}
+									value={prepDraft}
+									onChange={(e) => setPrepDraft(e.target.value)}
+									placeholder="0"
+									variant="field"
+									isError={!prepValid}
+									className="w-24 text-center"
+								/>
+								<span className="text-sm text-muted-foreground">minutes</span>
+							</div>
+							{/* Presets, because the unit is minutes but sellers think in
+							    hours — nobody wants to work out that 4 hours is 240.
+							    They SET the field rather than replacing it, so a seller
+							    who needs 45 can still type it. */}
+							<div className="flex flex-wrap gap-1.5 pt-0.5">
+								{PREP_PRESETS.map((preset) => {
+									const active = prepTrimmed === String(preset.minutes);
+									return (
+										<button
+											key={preset.minutes}
+											type="button"
+											aria-pressed={active}
+											onClick={() =>
+												setPrepDraft(active ? "" : String(preset.minutes))
+											}
+											className={`h-11 rounded-xl border px-3 text-sm transition-colors ${
+												active
+													? "border-accent bg-accent/10 font-medium text-accent-emphasis"
+													: "border-input text-muted-foreground hover:bg-muted"
+											}`}
+										>
+											{preset.label}
+										</button>
+									);
+								})}
+							</div>
+						</div>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							How long you need to make this once an order comes in. Buyers
+							can&apos;t pick a pickup or delivery <em>time</em> sooner than
+							this, and the longest prep time in a cart sets the whole order.
+							Up to 24 hours — for anything longer, use the notice days above.
+							Leave blank if it&apos;s ready to hand over. Counter checkout
+							ignores it.
+						</p>
+						{!prepValid ? (
+							<p className="text-xs text-destructive">
+								Enter a whole number of minutes between 0 and {MAX_PREP_MINUTES}
+								, or leave blank.
+							</p>
+						) : null}
+						{prepInertUnderNotice ? (
+							<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+								Heads up: the minimum notice above already rules out same-day
+								orders, and prep time only moves the clock within a day — so
+								this won&apos;t change anything until notice is back to 0.
+							</p>
+						) : null}
+					</div>
+				)}
+
+				{/* Pickup note — an INSTRUCTION, not a rule, so it comes after the
+				    three limits rather than between them. Hidden on a booking
+				    listing: convex/bookings.ts writes those orders with
+				    deliveryMethod "booking", never self_collect, so a note set
+				    here could never reach a guest. An input that can do nothing
+				    is worse than an absent one. */}
+				{isBooking ? null : (
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="pickup-note" className="text-sm font-medium">
+								Pickup note{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</label>
+							{offerSelfCollect ? (
+								<>
+									<Textarea
+										id="pickup-note"
+										value={pickupNoteDraft}
+										onChange={(e) => setPickupNoteDraft(e.target.value)}
+										placeholder="e.g. Collect from the side counter — bring an ice bag, these melt in 20 minutes."
+										className="min-h-20"
+										aria-invalid={!pickupNoteValid}
+									/>
+									<p
+										className={`self-end text-xs tabular-nums ${
+											pickupNoteValid
+												? "text-muted-foreground"
+												: "text-destructive"
+										}`}
+									>
+										{pickupNoteLength}/{MAX_PICKUP_NOTE_LENGTH}
+									</p>
+								</>
+							) : (
+								// Disabled-with-reason beats a field that quietly isn't there:
+								// the seller learns the note exists AND what switches it on.
+								<p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+									Pickup notes appear once your store offers self-collect. Turn
+									it on in Settings &rarr; Fulfilment and this becomes editable.
+								</p>
+							)}
+						</div>
+						{offerSelfCollect ? (
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								One line collecting buyers see on the product page, at checkout
+								and on their order page — the page their WhatsApp confirmation
+								links to. It&apos;s copied onto each order as it&apos;s placed,
+								so editing it later never rewrites what earlier buyers were
+								told.
+							</p>
+						) : null}
+						{!pickupNoteValid ? (
+							<p className="text-xs text-destructive">
+								Keep it to {MAX_PICKUP_NOTE_LENGTH} characters or fewer.
+							</p>
+						) : null}
+					</div>
+				)}
 			</ProductStepCard>
 
 			{/* Publishing concerns — where the product appears — come after what

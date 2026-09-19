@@ -7,6 +7,7 @@ import { type BillingCurrency, planPrice } from "../../../convex/lib/plans";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { PLAN_LABEL } from "../../lib/subscription";
 import { Button } from "../ui/button";
+import { OwnerOnlyNote } from "./owner-only-note";
 
 /**
  * Inside the pending-invoice card: switch a MACHINE-issued plan invoice to the
@@ -17,17 +18,26 @@ import { Button } from "../ui/button";
  * customer database, order inbox or insights. Admin-issued invoices never
  * show this (Arif may have priced them by hand) — `invoices.switchPendingPlan`
  * refuses those server-side too.
+ *
+ * Never rendered for a switch a Founding Member can't make — they stay on
+ * Founding Pro, so the tab hides the Starter switch and the server refuses it.
  */
 export function FirstInvoiceSwitch({
 	invoicePlan,
 	currency,
 	founding,
+	ownerOnly = false,
 }: {
 	invoicePlan: "starter" | "pro";
 	currency: BillingCurrency;
-	/** The invoice carries a founding discount — the Pro price shown for a
-	 * switch back must be the founding one, or the number lies. */
+	/** SERVER-resolved (`billingGatewayAvailable.foundingPricing`) — the Pro
+	 * price shown for a switch back must be the founding one, or the number
+	 * lies. Not the open invoice's discount: a Starter invoice never carries
+	 * one, so that read quoted a founding member list Pro (z8r3fdfty4). */
 	founding: boolean;
+	/** Admin act-as: the switch resolves the caller's own store server-side —
+	 * disabled with the reason. */
+	ownerOnly?: boolean;
 }) {
 	const switchPlan = useMutation(api.invoices.switchPendingPlan);
 	const [busy, setBusy] = useState(false);
@@ -53,30 +63,33 @@ export function FirstInvoiceSwitch({
 
 	return (
 		<div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between">
-			<p className="text-xs text-muted-foreground">
-				{invoicePlan === "pro" ? (
-					<>
-						This invoice is for{" "}
-						<span className="font-medium text-foreground">Pro</span> — paying it
-						starts Pro. Prefer Starter ({targetPrice}/month)? It has no customer
-						database, order inbox or insights, but everything else works the
-						same.
-					</>
-				) : (
-					<>
-						This invoice is for{" "}
-						<span className="font-medium text-foreground">Starter</span> —
-						paying it moves your store to Starter. Want to keep the customer
-						database, order inbox and insights? Switch back to Pro (
-						{targetPrice}/month).
-					</>
-				)}
-			</p>
+			<div className="flex flex-col gap-2">
+				<p className="text-xs text-muted-foreground">
+					{invoicePlan === "pro" ? (
+						<>
+							This invoice is for{" "}
+							<span className="font-medium text-foreground">Pro</span> — paying
+							it starts Pro. Prefer Starter ({targetPrice}/month)? It has no
+							customer database, order inbox or insights, but everything else
+							works the same.
+						</>
+					) : (
+						<>
+							This invoice is for{" "}
+							<span className="font-medium text-foreground">Starter</span> —
+							paying it moves your store to Starter. Want to keep the customer
+							database, order inbox and insights? Switch back to Pro (
+							{targetPrice}/month).
+						</>
+					)}
+				</p>
+				{ownerOnly ? <OwnerOnlyNote /> : null}
+			</div>
 			<Button
 				type="button"
 				variant="outline"
 				size="sm"
-				disabled={busy}
+				disabled={busy || ownerOnly}
 				onClick={submit}
 				className="h-10 w-fit shrink-0 gap-1.5"
 			>

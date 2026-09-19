@@ -196,13 +196,14 @@ The core transactional entity. Two independent dimensions:
 |---|---|---|
 | `shortId` | string | `ORD-XXXX`. Alphabet excludes `O/0/I/1` (visual clarity in WhatsApp). Acts as a capability token for public mutations. |
 | `customerId` | id? | Link to aggregated customer. Optional — null for phone-less link-in-bio checkouts until the phone is known. |
-| `items` | object[] | Line **snapshots** `{productId, variantId?, name, variantLabel?, price, quantity}` — immune to later product/variant edits. `variantId`/`variantLabel` absent only on legacy (pre-variant) orders. |
+| `items` | object[] | Line **snapshots** `{productId, variantId?, name, variantLabel?, price, quantity, …}` — immune to later product/variant edits. `variantId`/`variantLabel` absent only on legacy (pre-variant) orders. Other frozen line fields include `stockReserved`, `categoryNames` and `pickupNote` (the product's collection instruction, `z8r3fdff97` — see [`fulfilment.md`](./fulfilment.md)). |
 | `subtotal`, `total`, `currency` | — | Computed by `computeOrderTotals` ([`convex/lib/order.ts`](../convex/lib/order.ts)); currently `total === subtotal`. |
 | `status` | union | Fulfilment pipeline (see above). |
 | `customer` | object | Denormalized `{name?, waPhone?}` snapshot — channel-agnostic checkout capture. |
 | `deliveryMethod` | `"delivery"\|"self_collect"`? | Defaults to `"delivery"`. |
 | `deliveryAddress` | object? | **Invariant:** required when `delivery`, forbidden when `self_collect`. Validated by [`convex/lib/address.ts`](../convex/lib/address.ts). |
 | `fulfilmentDate` | number? | When the buyer needs it (delivery **or** pickup) — epoch-ms of a MYT-midnight day. Drives the inbox default sort + "Due" chips. Validated to `[today + retailer notice, today + 30]`. See [`fulfilment-date.md`](./fulfilment-date.md). |
+| `fulfilmentTimeMinutes` | number? | The time on that day, minutes since MYT midnight (0..1439) — a delivery slot, or a pickup time when checkout asked for one (`z8r3fdff97`). Stored apart from the date so the date keeps its whole-day invariant. Floored by per-product prep time today. |
 | `carrierTrackingUrl` | string? | Set by retailer on `shipped`; surfaced in tracking + WhatsApp. |
 | `paymentStatus`, `paymentReference`, `paymentClaimedAt`, `paymentReceivedAt`, `paymentProofStorageId` | — | Payment handshake (independent of `status`). |
 | `mockupStatus`, `mockupImageStorageId`, `mockupChangeNote`, `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt` | — | **Mockup/proof approval** — a *third* independent dimension (like payment), gating `confirmed→packed`. `mockupStatus`: `pending → submitted → approved` (+ `changes_requested` loop). Undefined = order has no proof-required item. ⚠️ "mockup" ≠ payment "proof". See [`proof-approval.md`](./proof-approval.md). |

@@ -9,6 +9,16 @@
  * single-product form. See `src/lib/format.ts` for the inverse.
  */
 
+import {
+	formatPrepDuration,
+	MAX_PREP_MINUTES,
+	parsePrepMinutesText,
+} from "../../convex/lib/fulfilmentDate";
+import {
+	collapseNote,
+	MAX_PICKUP_NOTE_LENGTH,
+	pickupNoteFits,
+} from "../../convex/lib/pickupNote";
 import { cartesian, variantLabel } from "./variant";
 
 export const PRODUCT_IMPORT_REQUIRED_COLUMNS = [
@@ -247,6 +257,9 @@ export const MAX_VARIANTS_PER_PRODUCT = 50;
 export const PRODUCT_HANDLE_MAX_LENGTH = 80;
 export const PRODUCT_WEIGHT_MAX = 1_000_000; // 1000kg, sanity bound
 
+// Columns 1–11 keep their names and positions forever — a seller's sheet keys
+// on them. `prep_minutes` and `pickup_note` (z8r3fdff97) are APPENDED, the
+// product's order rules: both optional, both "blank keeps what the product has".
 export const VARIANT_IMPORT_COLUMNS = [
 	"product_handle",
 	"name",
@@ -259,6 +272,8 @@ export const VARIANT_IMPORT_COLUMNS = [
 	"price",
 	"stock",
 	"weight_grams",
+	"prep_minutes",
+	"pickup_note",
 ] as const;
 
 export const VARIANT_IMPORT_HEADER = VARIANT_IMPORT_COLUMNS.join(",");
@@ -268,6 +283,15 @@ export interface VariantImportRow {
 	rowNumber: number;
 	/** Lowercased grouping key (product_handle ?? name). */
 	groupingKey: string;
+	/**
+	 * The `product_handle` cell exactly as written, before lowercasing.
+	 * The EXPORT writes the product's id here, so keeping the case lets the
+	 * server match a row back to the product it came from — without it, a
+	 * sheet round-tripped through the export re-created every product that
+	 * has no SKU to match on (a booking listing has none at all). Empty when
+	 * the column was blank; grouping still falls back to the name.
+	 */
+	handle: string;
 	name: string;
 	description: string | undefined;
 	optionNames: string[]; // [] for single-variant rows
@@ -302,6 +326,14 @@ export interface VariantImportRow {
 	 * way `name` and `description` are taken.
 	 */
 	productActive: boolean;
+	/**
+	 * Product-level order rules (z8r3fdff97) on a variant row, the grain the
+	 * sheet has. `undefined` = blank cell = keep what an existing product has;
+	 * `0` is a real value that CLEARS prep. The note is stored-spelling
+	 * (`collapseNote`), so the grouping compares what would actually be saved.
+	 */
+	prepMinutes?: number;
+	pickupNote?: string;
 }
 
 export interface GroupedVariant {
@@ -320,6 +352,15 @@ export interface GroupedProductImport {
 	 * path only — the update path never patches `active`, so an existing
 	 * product's archived state is untouched by an import either way. */
 	active: boolean;
+	/** Last non-blank value across the product's rows (z8r3fdff97) — a seller
+	 * fills it once on the first row of a six-flavour product, and the five
+	 * blank rows after it must not erase it. `undefined` = keep. */
+	prepMinutes?: number;
+	pickupNote?: string;
+	/** The group's `product_handle`, as written (see VariantImportRow.handle).
+	 * Handed to the server so an exported sheet updates its own products
+	 * instead of creating copies of the ones with no SKU. */
+	handle?: string;
 	options: { name: string; values: string[] }[];
 	variants: GroupedVariant[];
 	autoFilledCount: number;
@@ -340,6 +381,32 @@ export interface GroupedImportResult {
 		 */
 		ignoredColumns: string[];
 	};
+}
+
+/**
+ * The order-rule half of an import preview line (z8r3fdff97), from the diff
+ * `bulkUpsertPreview` reports — only what actually changes, so a sheet that
+ * repeats the stored prep time says nothing about it. There is no "note
+ * removed": a blank cell keeps the note.
+ */
+export function describeOrderRuleChanges(entry: {
+	prepChange: { from: number | null; to: number | null } | null;
+	pickupNoteChange: "added" | "changed" | null;
+}): string[] {
+	const parts: string[] = [];
+	const prep = entry.prepChange;
+	if (prep !== null) {
+		if (prep.to === null) parts.push("prep time removed");
+		else if (prep.from === null)
+			parts.push(`prep time ${formatPrepDuration(prep.to)}`);
+		else
+			parts.push(
+				`prep time ${formatPrepDuration(prep.from)} → ${formatPrepDuration(prep.to)}`,
+			);
+	}
+	if (entry.pickupNoteChange === "added") parts.push("pickup note added");
+	if (entry.pickupNoteChange === "changed") parts.push("pickup note updated");
+	return parts;
 }
 
 /** Parse the two option columns for one row into aligned name/value arrays. */
@@ -437,6 +504,20 @@ export function validateVariantRow(
 		}
 	}
 
+	// Order rules (z8r3fdff97). The same digits-only rule as the product form,
+	// and the same stored-length cap as the server, so a cell is refused here
+	// with its row number rather than as a product-level error at preview.
+	const prep = parsePrepMinutesText(raw.prep_minutes);
+	if (!prep.ok)
+		errors.push(
+			`prep_minutes must be a whole number of minutes from 0 to ${MAX_PREP_MINUTES} (e.g. 120 for 2 hours)`,
+		);
+	const pickupNote = collapseNote(raw.pickup_note);
+	if (!pickupNoteFits(raw.pickup_note))
+		errors.push(
+			`pickup_note must be ${MAX_PICKUP_NOTE_LENGTH} characters or fewer (this one is ${pickupNote?.length ?? 0})`,
+		);
+
 	if (errors.length > 0) return { rowNumber, raw, errors };
 
 	const groupingKey = (handle.length > 0 ? handle : name).toLowerCase();
@@ -451,6 +532,7 @@ export function validateVariantRow(
 	return {
 		rowNumber,
 		groupingKey,
+		handle,
 		name,
 		description,
 		optionNames,
@@ -461,6 +543,8 @@ export function validateVariantRow(
 		parcelWeightG,
 		active,
 		productActive,
+		prepMinutes: prep.ok ? prep.minutes : undefined,
+		pickupNote,
 	};
 }
 
@@ -613,10 +697,19 @@ export function buildVariantGrid(
 	return { variants, autoFilled };
 }
 
-/** Product-level fields are last-writer-wins; warn when rows disagree. */
+/**
+ * Product-level fields are last-writer-wins; warn when rows disagree.
+ *
+ * The order rules (z8r3fdff97) skip BLANK cells when picking the winner: they
+ * mean "keep", and a product filled in on its first row must not be erased by
+ * the blank rows of its other variants. Only non-blank values that disagree
+ * are drift.
+ */
 function productFieldsWithWarnings(groupRows: VariantImportRow[]): {
 	name: string;
 	description: string | undefined;
+	prepMinutes: number | undefined;
+	pickupNote: string | undefined;
 	warnings: string[];
 } {
 	const last = groupRows[groupRows.length - 1];
@@ -625,7 +718,27 @@ function productFieldsWithWarnings(groupRows: VariantImportRow[]): {
 		warnings.push(`Multiple names; using "${last.name}"`);
 	if (new Set(groupRows.map((r) => r.description ?? "")).size > 1)
 		warnings.push("Multiple descriptions; using the last row's");
-	return { name: last.name, description: last.description, warnings };
+	const preps = groupRows.flatMap((r) =>
+		r.prepMinutes === undefined ? [] : [r.prepMinutes],
+	);
+	const prepMinutes = preps.at(-1);
+	if (new Set(preps).size > 1)
+		warnings.push(
+			`Multiple prep times; using ${formatPrepDuration(prepMinutes) || "none"}`,
+		);
+	const notes = groupRows.flatMap((r) =>
+		r.pickupNote === undefined ? [] : [r.pickupNote],
+	);
+	const pickupNote = notes.at(-1);
+	if (new Set(notes).size > 1)
+		warnings.push("Multiple pickup notes; using the last one");
+	return {
+		name: last.name,
+		description: last.description,
+		prepMinutes,
+		pickupNote,
+		warnings,
+	};
 }
 
 /**
@@ -675,17 +788,19 @@ export function groupVariantRows(
 			continue;
 		}
 
-		const { name, description, warnings } =
+		const { name, description, prepMinutes, pickupNote, warnings } =
 			productFieldsWithWarnings(groupRows);
 		autoFilledTotal += grid.autoFilled;
 		variantCount += grid.variants.length;
 		products.push({
 			name,
 			description,
-			// Product-level, so taken from the group's first row like name and
-			// description. A sheet that disagrees row-to-row is a sheet whose
-			// product-level cells disagree; first-row-wins is already the rule.
+			// Product-level, taken from the group's FIRST row (name and
+			// description are last-row-wins; see productFieldsWithWarnings).
 			active: first.productActive,
+			prepMinutes,
+			pickupNote,
+			handle: first.handle.length > 0 ? first.handle : undefined,
 			options: axes.options,
 			variants: grid.variants,
 			autoFilledCount: grid.autoFilled,

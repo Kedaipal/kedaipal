@@ -47,7 +47,16 @@ understood. All three cost a round trip:
    ignores the minimum entirely; shrinking the box means shrinking the CONTENT
    (font sizes, avatar sizes, gaps, padding). Measure the real element and
    subtract the parts rather than assuming the minimum won.
-3. **A CSS grid row stretches every cell to its tallest sibling.** One cell with
+3. **A flex item needs `min-w-0` to shrink at all.** Its default
+   `min-width: auto` refuses to go below the content's min-content width, so a
+   wide child — a data table, a long unbroken string — pushes the *whole* row
+   past the viewport instead of scrolling inside its own box. The dashboard
+   shell's main column lacked it, so switching on two orders-table columns at
+   1281px made the page scroll sideways and pushed the toolbar's right-hand
+   controls off screen (z8r3fdff97 test round; `src/routes/app.tsx`, pinned by
+   `src/routes/app-shell-layout.test.ts`). Put `min-w-0` on every flex item
+   whose content can outgrow it, and let an inner `overflow-x-auto` scroll.
+4. **A CSS grid row stretches every cell to its tallest sibling.** One cell with
    an extra line makes the whole row taller, so a rare state can cost height on
    every screen. Prefer a FIXED number of content lines (drop one item to make
    room for the "+N more") over a variable one — the height becomes
@@ -80,7 +89,7 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Textarea | `Textarea` | |
 | Phone | `MyPhoneInput` (plain state) / `TextField prefix={<MyPhonePrefix />}` (form-bound) | **every** Malaysian phone field — see below. |
 | Composite control | `InputPrefixFrame` | one border owning a fixed plate + a `bare` input (the `+60` plate, an "RM"). |
-| Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. **`DialogContent` caps itself at `calc(100dvh-2rem)` and scrolls** — put long content straight in, no hand-rolled `max-h`; see below. |
+| Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog` — **never `window.confirm`/`alert`**: a native dialog is unstyled, theme-blind, and BLOCKS the renderer until it is dismissed (the product wizard's discard froze the page for as long as it stood, found in the z8r3fdff97 test round). **`DialogContent` caps itself at `calc(100dvh-2rem)` and scrolls** — put long content straight in, no hand-rolled `max-h`; see below. |
 | Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |

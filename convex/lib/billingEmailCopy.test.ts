@@ -147,6 +147,85 @@ describe("renderTrialEmail", () => {
 		).toContain("免费期");
 	});
 
+	/**
+	 * Founding-benefit notices (z8r3fdfyw5). Both are sent to a member who is
+	 * LOSING something, so the assertions are mostly about what must still be
+	 * there: the date they can act on, and the promise that survives.
+	 */
+	describe("founding benefit notices", () => {
+		const endsOn = { ...tv, endsOnFormatted: "28 Oct 2026" };
+
+		it("the T-14 warning names the date, says renewing later won't undo it, and keeps the badge promise", () => {
+			const { subject, html, text } = renderTrialEmail(
+				"en",
+				"foundingBenefitsEndingSoon",
+				endsOn,
+			);
+			expect(subject).toContain("28 Oct 2026");
+			// The date is the whole point of a T-14 notice — it must survive into
+			// the body and the plain-text part, not just the subject line.
+			expect(html).toContain("28 Oct 2026");
+			expect(text).toContain("28 Oct 2026");
+			// Renewing in time keeps it; renewing after does NOT bring it back.
+			expect(html).toMatch(/Renew before then/i);
+			expect(html).toMatch(/won't bring the discount back/i);
+			// The promise that outlives the discount.
+			expect(html).toMatch(/rank and badge are yours for good/i);
+			expect(html).toContain(tv.billingUrl);
+		});
+
+		it("the revocation notice is permanent, opens every plan, and never says renewing restores it", () => {
+			const { subject, html, text } = renderTrialEmail(
+				"en",
+				"foundingBenefitsEnded",
+				endsOn,
+			);
+			expect(subject.toLowerCase()).toContain("ended");
+			expect(html).toMatch(/ordinary Pro seller/i);
+			expect(html).toMatch(/rank and badge stay yours, permanently/i);
+			// Must not imply the discount comes back — it doesn't, that's the ticket.
+			expect(html).not.toMatch(/renew.{0,40}keep your founding price/i);
+			expect(html).not.toMatch(/discount is locked in/i);
+			// A wrong revocation needs a way back, and the seller has to be told.
+			expect(html).toMatch(/Message us/i);
+			expect(text).toMatch(/rank and badge stay yours/i);
+		});
+
+		it("BOTH keep the rank + badge promise in all three locales", () => {
+			// The one sentence a member losing their discount most needs to still
+			// be true, and the easiest to drop when translating.
+			const promise = {
+				en: /rank and badge/i,
+				ms: /[Pp]angkat dan lencana/,
+				zh: /创始会员等级和徽章/,
+			} as const;
+			for (const locale of ["en", "ms", "zh"] as const) {
+				for (const key of [
+					"foundingBenefitsEndingSoon",
+					"foundingBenefitsEnded",
+				] as const) {
+					const { subject, html, text } = renderTrialEmail(locale, key, endsOn);
+					expect(subject.length).toBeGreaterThan(0);
+					expect(html).toMatch(promise[locale]);
+					expect(text).toMatch(promise[locale]);
+					expect(html).toContain(tv.billingUrl);
+				}
+			}
+		});
+
+		it("the warning degrades to a readable sentence if the date is missing", () => {
+			// endsOnFormatted is optional on the shared vars type, so a caller that
+			// forgets it must not produce "ends on undefined".
+			const { subject, html } = renderTrialEmail(
+				"en",
+				"foundingBenefitsEndingSoon",
+				tv,
+			);
+			expect(subject).not.toMatch(/undefined/);
+			expect(html).not.toMatch(/undefined/);
+		});
+	});
+
 	it("subscriptionLapsed reads as a lapsed-renewal notice (no invoice)", () => {
 		const { subject, html } = renderTrialEmail("en", "subscriptionLapsed", tv);
 		expect(subject.toLowerCase()).toContain("lapsed");

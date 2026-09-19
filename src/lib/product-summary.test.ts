@@ -231,7 +231,7 @@ describe("describeProduct — weekend rate (S13)", () => {
 				},
 				"RM",
 			),
-		).toBe("Booking · 30-day package · Unlimited spots · RM 150 per package");
+		).toBe("Booking · 30-day package · Unlimited spots · RM 150/30 days");
 	});
 
 	it("blank rate or no nights adds nothing", () => {
@@ -297,5 +297,101 @@ describe("weekendRateConsequence", () => {
 				"RM",
 			),
 		).toMatch(/every night/);
+	});
+});
+
+describe("describeProduct — a package names its UNIT (hotfix to #280)", () => {
+	// The strip was written when every package was days. After units shipped
+	// it kept saying "1-day package … per package" on a 1-month membership —
+	// on the edit page, that reads exactly like the unit silently reverting.
+	const base = {
+		options: [],
+		rows: [row({ price: "100", blockWhenOutOfStock: false })],
+		customLine: null,
+	};
+
+	it("a monthly membership says month, at a time, per month", () => {
+		expect(
+			describeProduct(
+				{
+					...base,
+					booking: {
+						capacityPerNight: "1",
+						packageLength: "1",
+						packageUnit: "month",
+					},
+				},
+				"MYR",
+			),
+		).toBe("Booking · 1-month package · 1 at a time · MYR 100/month");
+	});
+
+	it("a multi-month package pluralises the price span, not the adjective", () => {
+		expect(
+			describeProduct(
+				{
+					...base,
+					booking: {
+						capacityPerNight: "20",
+						packageLength: "3",
+						packageUnit: "month",
+					},
+				},
+				"RM",
+			),
+		).toBe("Booking · 3-month package · 20 at a time · RM 100/3 months");
+	});
+
+	it("a night package says nights", () => {
+		expect(
+			describeProduct(
+				{
+					...base,
+					booking: {
+						capacityPerNight: "2",
+						packageLength: "2",
+						packageUnit: "night",
+					},
+				},
+				"RM",
+			),
+		).toBe("Booking · 2-night package · 2 at a time · RM 100/2 nights");
+	});
+
+	it("no stored unit reads as days — the pre-units default isMonthlyUnit uses", () => {
+		expect(
+			describeProduct(
+				{
+					...base,
+					booking: { capacityPerNight: "5", packageLength: "7" },
+				},
+				"RM",
+			),
+		).toBe("Booking · 7-day package · 5 at a time · RM 100/7 days");
+	});
+
+	it("a free-range stay is untouched — still per night", () => {
+		expect(
+			describeProduct(
+				{
+					...base,
+					booking: { capacityPerNight: "5", packageUnit: "month" },
+				},
+				"RM",
+			),
+		).toBe("Booking · 5 spots/night · RM 100/night");
+	});
+
+	it("never says 'per package' again", () => {
+		for (const packageUnit of ["day", "night", "month"] as const) {
+			const out = describeProduct(
+				{
+					...base,
+					booking: { capacityPerNight: "", packageLength: "1", packageUnit },
+				},
+				"RM",
+			);
+			expect(out).not.toMatch(/per package|-day package.*month/);
+		}
 	});
 });

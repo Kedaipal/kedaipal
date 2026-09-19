@@ -32,7 +32,7 @@ import {
 	type MutationCtx,
 	query,
 } from "./_generated/server";
-import { requireAdmin } from "./lib/auth";
+import { requireAdmin, requireRetailerAccess } from "./lib/auth";
 import {
 	decimalStringToSen,
 	HITPAY_API_BASE,
@@ -52,9 +52,12 @@ import {
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
-	foundingPricingApplies,
-	HOLD_MONTHLY_PRICES,
-	planPrice,
+	foundingBenefitsAtRisk,
+	foundingBenefitsEndAt,
+	foundingPriceEligible,
+	type RenewalQuote,
+	renewalCurrency,
+	renewalQuote,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
 import { HOLD_LABEL } from "./lib/seasonalHold";
@@ -89,60 +92,141 @@ function billingPageUrl(extra?: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether the online rails exist for the CALLER's store, and with which
- * methods. Presence booleans only — credentials never leave the server. The
- * billing tab hides Pay-now / auto-renewal / the self-serve plan picker when
- * this says off, so the manual-only world renders exactly as before.
+ * Whether the online rails exist for the store, and with which methods, plus
+ * every SERVER-resolved pricing fact the billing tab quotes. Presence booleans
+ * only — credentials never leave the server. The billing tab hides Pay-now /
+ * auto-renewal / the self-serve plan picker when this says off, so the
+ * manual-only world renders exactly as before.
  *
- * `foundingPricing` is the server-resolved answer the plan picker MUST use
- * for its Pro price — reading `foundingIntent` client-side would show a
- * lapsed founding member the discount while `subscribeSelf` bills list
- * (the silent price divergence this field exists to prevent);
- * `foundingPricingLapsed` powers the one-line explanation instead.
+ * Every price on the billing page is built from these fields and nothing the
+ * client derives (z8r3fdfty4) — the page used to decide "founding?" three
+ * ways, and only this one matched what the server bills:
+ *  - `foundingPricing` — the store is on founding pricing (tier-agnostic,
+ *    `foundingPriceEligible`). Reading `foundingIntent` client-side misses
+ *    every member marked founding by admin and shows a lapsed one a discount
+ *    `subscribeSelf` won't bill; `foundingPricingLapsed` powers the one-line
+ *    explanation instead. A store on it is locked to Founding Pro.
+ *  - `currency` — what a NEW self-serve subscription bills in (the country).
+ *  - `renewalCurrency` — what renewals and plan changes bill in (the last
+ *    paid invoice's currency, else the country).
+ *  - `nextRenewal` — the renewal bill itself (`renewalQuote`, the author the
+ *    cron's invoice and the heads-up email read), or null for a comped store
+ *    or one with no subscription row.
+ *
+ * `retailerId` is the admin act-as path. Omitted, the query resolves the
+ * CALLER's store — which, inside act-as, is the ADMIN's own: the tab then
+ * priced a founding seller's plan at the admin's (list) rate and currency.
+ * Owner-or-admin gated by `requireRetailerAccess`.
  */
 export const billingGatewayAvailable = query({
-	args: {},
+	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (
 		ctx,
+		{ retailerId },
 	): Promise<{
 		payNow: boolean;
 		autoRenew: boolean;
 		methods: string[];
 		currency: BillingCurrency;
+		renewalCurrency: BillingCurrency;
 		foundingPricing: boolean;
 		foundingPricingLapsed: boolean;
+		/** Benefits ended for good (z8r3fdfyw5) — a DIFFERENT state from
+		 * `foundingPricingLapsed`, and the ribbon copy must not conflate them:
+		 * lapsed-not-yet-revoked is recoverable by paying (the period advances and
+		 * the window reopens), revoked is not. Telling a revoked member to "renew
+		 * to keep your founding price" would be a lie the billing page tells. */
+		foundingBenefitsRevoked: boolean;
+		/** When benefits end if this member never renews — drives the T-14
+		 * warning banner and the date in the ribbon. Gated on
+		 * `foundingBenefitsAtRisk`, the SAME predicate the cron's warn and revoke
+		 * gates use, so the page can never count down to a deadline the pass will
+		 * not enforce: undefined once revoked, for a member with no paid period,
+		 * for a non-member, and for any store the pass skips (`active`,
+		 * `on_hold`, `comped`). A comped founding member was otherwise shown a red
+		 * "your founding price ends on …" alert that could never come true. */
+		foundingBenefitsEndAt: number | undefined;
+		nextRenewal: RenewalQuote | null;
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-			.first();
+		const retailer = retailerId
+			? (await requireRetailerAccess(ctx, retailerId)).retailer
+			: await ctx.db
+					.query("retailers")
+					.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+					.first();
 		if (!retailer) return null;
 		const sub = await ctx.db
 			.query("subscriptions")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.first();
+		// Newest paid invoice only — `renewalCurrency` needs nothing else, and
+		// this query stays live on the billing tab.
+		const lastPaid = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.order("desc")
+			.filter((q) => q.eq(q.field("status"), "paid"))
+			.first();
 		const available = billingCredentials() !== null;
+		const now = Date.now();
 		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
 		const foundingShaped =
 			retailer.isFoundingMember === true || sub?.foundingIntent === true;
+		const eligibility = sub
+			? {
+					isFoundingMember: retailer.isFoundingMember === true,
+					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
+					foundingIntent: sub.foundingIntent === true,
+					paidThrough: sub.currentPeriodEnd,
+					now,
+				}
+			: null;
 		const foundingPricing =
-			sub !== null &&
-			foundingPricingApplies({
-				plan: "pro", // the picker's founding-priced tier
-				isFoundingMember: retailer.isFoundingMember === true,
-				foundingIntent: sub.foundingIntent === true,
-				paidThrough: sub.currentPeriodEnd,
-				now: Date.now(),
-			});
+			eligibility !== null && foundingPriceEligible(eligibility);
 		return {
 			payNow: available,
 			autoRenew: available,
 			methods: AUTO_RENEW_METHODS[currency],
 			currency,
+			renewalCurrency: renewalCurrency({
+				lastPaidCurrency: lastPaid?.currency,
+				country: retailer.country,
+			}),
 			foundingPricing,
 			foundingPricingLapsed: foundingShaped && !foundingPricing,
+			foundingBenefitsRevoked:
+				retailer.foundingBenefitsRevokedAt !== undefined,
+			foundingBenefitsEndAt:
+				retailer.isFoundingMember === true &&
+				sub !== null &&
+				foundingBenefitsAtRisk({
+					status: sub.status,
+					comped: sub.comped === true,
+					paidThrough: sub.currentPeriodEnd,
+					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
+					now,
+				})
+					? foundingBenefitsEndAt(
+							sub.currentPeriodEnd,
+							retailer.foundingBenefitsRestoredAt,
+						)
+					: undefined,
+			nextRenewal:
+				sub && eligibility && sub.comped !== true
+					? renewalQuote({
+							...eligibility,
+							status: sub.status,
+							plan: sub.plan,
+							billingCycle: sub.billingCycle,
+							pendingPlanChange: sub.pendingPlanChange?.plan,
+							lastPaidCurrency: lastPaid?.currency,
+							country: retailer.country,
+						})
+					: null,
 		};
 	},
 });
@@ -563,12 +647,13 @@ export const autoRenewSetupContext = internalQuery({
 		subscriptionId: Id<"subscriptions">;
 		storeName: string;
 		notifyEmail: string | undefined;
-		currency: BillingCurrency;
-		plan: Doc<"subscriptions">["plan"];
-		/** Off-Season Hold (z8r3fday24): the next charge is the hold price. */
-		onHold: boolean;
+		/** What the NEXT renewal bills (`renewalQuote` — the author the cron's
+		 * invoice, the heads-up email and the billing page read). With no open
+		 * bill, the authorisation page displays this: the plan (a scheduled
+		 * downgrade included), the cycle, the founding price and the renewal
+		 * currency — or the hold price for a paused store. */
+		renewal: RenewalQuote;
 		comped: boolean;
-		founding: boolean;
 		attached: boolean;
 		existingSetup: Doc<"subscriptions">["autoRenewSetup"] | null;
 		existingSessionId: string | undefined;
@@ -601,24 +686,35 @@ export const autoRenewSetupContext = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.filter((q) => q.eq(q.field("status"), "pending"))
 			.first();
+		const lastPaid = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.order("desc")
+			.filter((q) => q.eq(q.field("status"), "paid"))
+			.first();
 		return {
 			retailerId: retailer._id,
 			subscriptionId: sub._id,
 			storeName: retailer.storeName,
 			notifyEmail: retailer.notifyEmail,
-			currency: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"],
-			plan: sub.plan,
-			onHold: sub.status === "on_hold",
-			comped: sub.comped === true,
-			// Display amount on HitPay's page mirrors what the next bill will
-			// actually be — founding pricing honours the 3-month lapse window.
-			founding: foundingPricingApplies({
+			// HitPay's page quotes what the next bill will actually be — this
+			// used to be the MONTHLY price in the COUNTRY currency, so an annual
+			// or an SGD-billed store was shown a number no bill would carry.
+			renewal: renewalQuote({
+				status: sub.status,
 				plan: sub.plan,
+				billingCycle: sub.billingCycle,
+				pendingPlanChange: sub.pendingPlanChange?.plan,
 				isFoundingMember: retailer.isFoundingMember === true,
+				benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+				benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 				foundingIntent: sub.foundingIntent === true,
 				paidThrough: sub.currentPeriodEnd,
+				lastPaidCurrency: lastPaid?.currency,
+				country: retailer.country,
 				now: Date.now(),
 			}),
+			comped: sub.comped === true,
 			attached: sub.autoRenew !== undefined,
 			existingSetup: sub.autoRenewSetup ?? null,
 			existingSessionId: sub.autoRenewSessionId,
@@ -718,14 +814,15 @@ export const startAutoRenewSetup = action({
 		// The plan being BILLED — the sub's own `plan` is the OLD tier until
 		// settle (every trial row reads "pro"), so titling the authorisation
 		// page from it shows "Kedaipal Pro" above a Starter amount.
-		const billedPlan = context.pendingInvoicePlan ?? context.plan;
+		const billedPlan = context.pendingInvoicePlan ?? context.renewal.plan;
 		// …and an Off-Season Hold bill carries the TIER in `plan` (it is what
 		// the seller resumes to), so it needs naming as the hold it is — either
 		// the open bill IS a hold invoice, or there is no bill and the paused
 		// store's next charge will be one.
 		const billingHold =
 			context.pendingInvoiceKind === "hold" ||
-			(context.pendingInvoiceKind === undefined && context.onHold);
+			(context.pendingInvoiceKind === undefined &&
+				context.renewal.kind === "hold");
 		const planLabel = billingHold
 			? HOLD_LABEL
 			: `${billedPlan.charAt(0).toUpperCase()}${billedPlan.slice(1)}`;
@@ -746,24 +843,15 @@ export const startAutoRenewSetup = action({
 			customerName: context.storeName,
 			// Show the amount attach will actually charge: the open bill when one
 			// exists (the subscribe-with-auto-renewal flow — possibly an annual
-			// total), else the next renewal price — which for a PAUSED store is
+			// total), else the next renewal bill — which for a PAUSED store is
 			// the flat hold price, not the tier. Display-only either way; charges
 			// always pass the invoice total at charge time.
-			amountSen:
-				context.pendingInvoiceTotalSen ??
-				(context.onHold
-					? HOLD_MONTHLY_PRICES[context.currency]
-					: planPrice(
-							context.plan,
-							"monthly",
-							context.founding,
-							context.currency,
-						)),
+			amountSen: context.pendingInvoiceTotalSen ?? context.renewal.amount,
 			currency:
 				context.pendingInvoiceCurrency === "SGD" ||
 				context.pendingInvoiceCurrency === "MYR"
 					? context.pendingInvoiceCurrency
-					: context.currency,
+					: context.renewal.currency,
 			redirectUrl: billingPageUrl("autorenew=return"),
 			reference: context.subscriptionId,
 		};

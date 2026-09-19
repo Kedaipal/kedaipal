@@ -24,9 +24,8 @@ import type { Locale } from "./lib/emailCopy";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
-	foundingPricingApplies,
 	HOLD_MONTHLY_PRICES,
-	planPrice,
+	renewalQuote,
 } from "./lib/plans";
 
 function billingPageUrl(): string {
@@ -370,7 +369,11 @@ async function sendRetailerNotice(
 	ctx: ActionCtx,
 	retailerId: Id<"retailers">,
 	key: TrialEmailKey,
-	extra: { daysLeft?: number; sponsorLabel?: string } = {},
+	extra: {
+		daysLeft?: number;
+		sponsorLabel?: string;
+		endsOnFormatted?: string;
+	} = {},
 ): Promise<void> {
 	let meta: {
 		notifyEmail: string | undefined;
@@ -391,6 +394,7 @@ async function sendRetailerNotice(
 		billingUrl: billingPageUrl(),
 		daysLeft: extra.daysLeft,
 		sponsorLabel: extra.sponsorLabel,
+		endsOnFormatted: extra.endsOnFormatted,
 	});
 	try {
 		await sendEmail(meta.notifyEmail, subject, html, text);
@@ -426,6 +430,32 @@ export const notifyTrialEmail = internalAction({
 		{ retailerId, key, daysLeft, sponsorLabel },
 	): Promise<void> => {
 		await sendRetailerNotice(ctx, retailerId, key, { daysLeft, sponsorLabel });
+	},
+});
+
+/**
+ * Founding-benefit lifecycle notices (z8r3fdfyw5), both scheduled by the daily
+ * pass (`foundingMembers.internalRevokeLapsedBenefits`):
+ * `foundingBenefitsEndingSoon` at T-14 and `foundingBenefitsEnded` once it is
+ * taken. `endsOnAt` is the date from `foundingBenefitsEndAt` — the SAME author
+ * the cron's gate and the billing-tab banner read, so the email can't promise a
+ * date the cron doesn't honour. Fire-and-forget like every other billing email:
+ * the revoke itself has already committed, so a bounced email must never undo
+ * it (and never blocks it — Zaki, 18 Sep 2026).
+ */
+export const notifyFoundingBenefitsEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(
+			v.literal("foundingBenefitsEndingSoon"),
+			v.literal("foundingBenefitsEnded"),
+		),
+		endsOnAt: v.number(),
+	},
+	handler: async (ctx, { retailerId, key, endsOnAt }): Promise<void> => {
+		await sendRetailerNotice(ctx, retailerId, key, {
+			endsOnFormatted: formatDueDate(endsOnAt),
+		});
 	},
 });
 
@@ -588,37 +618,32 @@ export const getAutoRenewEmailContext = internalQuery({
 			.collect();
 		const lastPaid = invoices.find((inv) => inv.status === "paid");
 		const pending = invoices.find((inv) => inv.status === "pending");
-		const currency: BillingCurrency =
-			lastPaid?.currency === "SGD" || lastPaid?.currency === "MYR"
-				? lastPaid.currency
-				: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
-		// A scheduled downgrade lands WITH the next renewal, so the heads-up must
-		// quote the plan and price the seller is actually about to be charged —
-		// not the tier they are on their way out of.
-		const renewingPlan = sub.pendingPlanChange?.plan ?? sub.plan;
-		const founding = foundingPricingApplies({
-			plan: renewingPlan,
+		// The heads-up must quote exactly what the renewal will charge, so it
+		// reads the same author as the cron's invoice (z8r3fdfty4): a scheduled
+		// downgrade lands WITH the renewal (quote the plan they're moving to,
+		// not the one they're leaving), and a PAUSED subscription renews the
+		// hold, not the tier — the hold price outranks a scheduled plan change,
+		// which only lands when they resume (z8r3fday24 × 86eyb6z4r).
+		const quote = renewalQuote({
+			status: sub.status,
+			plan: sub.plan,
+			billingCycle: sub.billingCycle,
+			pendingPlanChange: sub.pendingPlanChange?.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			paidThrough: sub.currentPeriodEnd,
+			lastPaidCurrency: lastPaid?.currency,
+			country: retailer.country,
 			now: Date.now(),
 		});
-		// A PAUSED subscription renews the hold, not the tier — the hold price
-		// outranks a scheduled plan change, which only lands when they resume
-		// (z8r3fday24 × 86eyb6z4r). Otherwise `renewingPlan` already accounts
-		// for a scheduled downgrade landing with this renewal.
-		const onHold = sub.status === "on_hold";
-		const amount = onHold
-			? HOLD_MONTHLY_PRICES[currency]
-			: planPrice(renewingPlan, sub.billingCycle, founding, currency);
 		return {
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
-			planLabel: onHold
-				? planLabel(sub.plan, "monthly", "hold")
-				: planLabel(renewingPlan, sub.billingCycle),
-			amountFormatted: formatMoney(amount, currency),
+			planLabel: planLabel(quote.plan, quote.billingCycle, quote.kind),
+			amountFormatted: formatMoney(quote.amount, quote.currency),
 			payNowUrl: pending?.gatewayPayment?.url,
 		};
 	},

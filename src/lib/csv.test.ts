@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { buildProductCsvTemplate, parseProductsCsv } from "./csv";
+import {
+	buildProductCsvTemplate,
+	buildSampleProductsCsv,
+	parseProductsCsv,
+} from "./csv";
 
 describe("parseProductsCsv", () => {
 	test("groups legacy rows into single-variant products, price → sen", () => {
@@ -97,6 +101,29 @@ describe("parseProductsCsv", () => {
 		const result = parseProductsCsv(buildProductCsvTemplate());
 		expect(result.errorRows).toEqual([]);
 		expect(result.products.length).toBeGreaterThan(0);
+	});
+
+	test("the template's made-to-order row shows the order-rule columns in use (z8r3fdff97)", () => {
+		// The example is how a seller learns prep is in MINUTES.
+		const result = parseProductsCsv(buildProductCsvTemplate());
+		const puff = result.products.find((p) => p.name === "Ice cream puff");
+		expect(puff?.prepMinutes).toBe(120);
+		expect(puff?.pickupNote).toBe("Bring an ice bag. They melt in 20 minutes.");
+		const tent = result.products.find((p) => p.name === "Sample tent");
+		expect(tent?.prepMinutes).toBeUndefined();
+		expect(tent?.pickupNote).toBeUndefined();
+	});
+
+	test("the sample catalogue parses, with rules only on the cake", () => {
+		const result = parseProductsCsv(buildSampleProductsCsv());
+		expect(result.errorRows).toEqual([]);
+		for (const product of result.products) {
+			const isCake = product.name === "Chocolate cake";
+			expect(product.prepMinutes).toBe(isCake ? 120 : undefined);
+			expect(product.pickupNote).toBe(
+				isCake ? "Collect from the side counter" : undefined,
+			);
+		}
 	});
 
 	test("rejects an oversized sku", () => {

@@ -325,7 +325,7 @@ function ProductsRoute() {
 				api.categories.namesByProduct,
 				{ retailerId: retailer._id },
 			);
-			// One row per exportable variant. The first eleven columns stay
+			// One row per exportable variant. The leading template columns stay
 			// round-trippable with the import parser; the rest are the catalogue
 			// report (86eyrtz74) — see src/lib/product-export.ts.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
@@ -341,6 +341,9 @@ function ProductsRoute() {
 				url: `${storefrontUrl(retailer.slug)}/p/${p.slug}`,
 				minQuantity: p.minQuantity,
 				minNoticeDays: p.minNoticeDays,
+				prepMinutes: p.prepMinutes,
+				pickupNote: p.pickupNote,
+				kind: p.kind,
 				imageCount: p.imageUrls?.length ?? 0,
 				variants: p.variants.map((vr) => ({
 					optionValues: vr.optionValues,

@@ -16,7 +16,7 @@
  * least as often as after.
  */
 
-import { displayAddressState } from "../address";
+import { displayAddressState, formatBusinessAddress } from "../address";
 import { type Country, DEFAULT_COUNTRY } from "../country";
 import { formatPhone } from "../customer";
 import { formatFulfilmentDateTime } from "../fulfilmentDate";
@@ -317,7 +317,7 @@ export type RetailerForAwb = {
 	 * capture country to catch a return address left behind by a country
 	 * switch (86eyqgujv). */
 	country?: Country;
-	businessAddress?: { label: string; country?: Country };
+	businessAddress?: { label: string; unit?: string; country?: Country };
 };
 
 /**
@@ -414,7 +414,10 @@ export function orderToAwbLabelData(args: {
 		retailer.businessAddress.country !== (retailer.country ?? DEFAULT_COUNTRY);
 	const storeAddress = clampLines(
 		retailer.businessAddress && !foreignReturnAddress
-			? [retailer.businessAddress.label]
+			// Unit / floor / building included (z8r3fdff8r): a returned parcel
+			// has the same find-the-door problem as an arriving rider, and this
+			// block IS the return address.
+			? [formatBusinessAddress(retailer.businessAddress)]
 			: [],
 	);
 	const storeParty: Omit<AwbParty, "heading"> = {

@@ -264,6 +264,24 @@ export function bookingSpanNoun(
 }
 
 /**
+ * The span WITH its count, always — "1 month", "3 days", "2 nights" — for
+ * prose that states the length outright ("the booking runs 3 days from
+ * there"). It sits beside bookingSpanNoun, which drops the "1" because it
+ * reads as a price suffix ("per month").
+ *
+ * Both product forms hand-rolled this and both got it wrong: the edit form
+ * printed "runs 1 days" and said "days" even on a NIGHT package; the wizard
+ * printed "1 month(s)" and "1 days". Same class as "How many 2 dayss?" below —
+ * a span formatted anywhere but here drifts.
+ */
+export function bookingSpanCounted(
+	packageLength: number,
+	packageUnit: PackageUnit = "day",
+): string {
+	return `${packageLength} ${packageUnit}${packageLength === 1 ? "" : "s"}`;
+}
+
+/**
  * What the stepper asks. Two shapes, because one doesn't read in both cases:
  * a length of ONE is just its unit ("How many months?"), anything longer is a
  * hyphenated adjective on "packages" ("How many 2-night packages?").

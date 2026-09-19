@@ -30,8 +30,9 @@ grace. The overdue flip at `dueDate` is still the only lock.
 
 And **self-serve subscribe** (`invoices.subscribeSelf`): a trialing /
 past-due / cancelled seller picks Starter or Pro, monthly or annual (framed
-"2 months free"), gets an invoice + Pay-now button, pays, done. A
-`foundingIntent` store automatically gets its promised founding price;
+"2 months free"), gets an invoice + Pay-now button, pays, done. A store on
+founding pricing automatically gets its founding price — and is offered
+**Founding Pro only** (see "Founding Members stay on Founding Pro" below);
 founding is never otherwise self-selectable — the last slots stay Arif's to
 hand out via the admin console, and **manual admin issue/mark-paid is fully
 retained** for bank-transfer holdouts.
@@ -375,22 +376,242 @@ exactly when a stale date would be most misleading.
 ## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
 
 The 30% founding price survives a subscription lapse of up to **3 months**
-(`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and NEW bills are
-at list price. The **rank + badge never revert** (existing rule) — only the
-pricing is forfeited. One rule for every automated issuer
-(`foundingPricingApplies`): cron renewals, `subscribeSelf`, the auto-renewal
-setup display amount and the pre-charge notice all resolve it identically —
-the check keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a
-claimed member's never-cleared `foundingIntent` flag deliberately cannot
-bypass it (unclaimed intent = the first conversion, no lapse to measure, so
-it always qualifies). The **admin issue form keeps its explicit founding
-checkbox** — Arif's judgment can override in either direction.
+(`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and the benefits
+are **revoked for good** (see "Revocation" below — before z8r3fdfyw5 this was a
+read-time window only, so paying later silently brought the discount back). The
+**rank + badge never revert** — that is a promise in the signed agreement and in
+the billing ribbon's own copy, and revocation deliberately does not touch them.
+Only the *entitlements* are forfeited. One rule for every automated issuer, in
+two shapes (lib/plans.ts):
 
-Never enforced silently: the founding ribbon states the condition, and a
-lapsed member's plan picker explains why prices read standard
-(`billingGatewayAvailable.foundingPricing` / `foundingPricingLapsed` — the
-picker must use the server-resolved flag, never client-side `foundingIntent`,
-or a lapsed member would SEE the discount while being BILLED list).
+- **`foundingPriceEligible`** — is this STORE on founding pricing? Tier-agnostic:
+  it keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a claimed
+  member's never-cleared `foundingIntent` flag deliberately cannot bypass the
+  window (unclaimed intent = the first conversion, no lapse to measure, so it
+  always qualifies). This is the answer for anything that prices MORE than one
+  tier — the billing page's cards, a Starter → Pro carryover at settle.
+- **`foundingPricingApplies`** — does a bill for `plan` get the founding price?
+  Eligibility narrowed to the tiers that have one. Asked with the store's
+  *current* plan it says "no" for a founding member on Starter — which is how
+  settle once priced their move back up at list (z8r3fdfty4, below).
+
+Cron renewals, `subscribeSelf`, `changePlan`, `switchPendingPlan`, the
+auto-renewal setup display amount and the pre-charge notice all resolve it
+identically. The **admin issue form keeps its explicit founding checkbox** —
+Arif's judgment can override in either direction.
+
+Never enforced silently: the founding ribbon states the condition (and stops
+saying "locked in" once it has lapsed), and a lapsed member's plan picker
+explains why prices read standard (`billingGatewayAvailable.foundingPricing` /
+`foundingPricingLapsed` — every card must use the server-resolved flag, never
+client-side `foundingIntent` or `isFoundingMember`, or a member would SEE one
+price while being BILLED another).
+
+### Revocation — membership is permanent, benefits are not (z8r3fdfyw5)
+
+**The split that governs everything here.** A Founding Member has an **honour**
+(rank, storefront badge, nav pill, their slot in the 10) and a set of
+**benefits** (the 30% price, the Founding-Pro lock, white-glove onboarding). The
+honour is permanent: Arif's signed agreement (`86exq9kz9`) promises "RM104/mo
+for life" with no lapse clause, and this app's own billing ribbon has told
+members since 3 Sep that "your rank and badge are permanent either way". Only
+the benefits can be taken. **Never revoke by clearing `isFoundingMember`** —
+that strips a badge we promised *and* drops through to the `foundingIntent`
+fallback in `foundingPriceEligible`, granting founding pricing for ever.
+
+**Data.** `foundingMembers.benefitsRevokedAt` / `benefitsRevokedReason`
+(`lapsed` | `admin`) / `benefitsRevokedNote` is the audit record;
+`retailers.foundingBenefitsRevokedAt` is the denormalized flag every
+`foundingPriceEligible` caller reads off the retailer doc it already loaded
+(zero extra reads, mirroring `isFoundingMember`). `benefitsRevokedAt` is a
+**required** field on `FoundingEligibilityArgs`, so a new pricing path is a
+compile error until it answers the question. The row is stamped, never deleted —
+`getSpotsRemaining` counts rows, so **a revoked slot does not free up** and
+re-granting is a deliberate admin act rather than a race for a freed spot.
+
+**The pass** (`foundingMembers.internalRevokeLapsedBenefits`, scheduled by the
+daily billing cron). It walks the `foundingMembers` ledger, not that cron's
+subscription loops, and **that is load-bearing**: those loops cover `trialing`,
+`active` and `on_hold`, while a lapsed member is `past_due` within ~14 days of
+their period ending. A pass built on them would never fire for the exact
+population it targets. The ledger is bounded at 10 for ever (the programme
+closed 30 Aug 2026), so a full `collect()` is correct.
+
+- **T-14:** `foundingBenefitsWarningDue` → one email
+  (`foundingBenefitsEndingSoon`) + the ribbon's red state. Deduped by
+  `benefitsWarningSentForPeriodEnd`, which stores the `currentPeriodEnd` the
+  warning was about (the `renewalNoticeSentForPeriodEnd` idiom) — paying
+  advances the period, so a later lapse warns again with no clearing logic.
+- **T-0:** `foundingBenefitsRevocable` → revoke + `foundingBenefitsEnded` email.
+  **Not gated on the warning** (Zaki, 18 Sep 2026): the rule is the rule, and 14
+  daily runs sit between the two.
+- **Never revoked:** `on_hold` (an Off-Season Hold is a PAYING store — its hold
+  invoice advances the period, so the status guard and the paid-through guard
+  both protect it, and both are tested), `active`, `comped`, and a member with
+  no paid period at all (`paidThrough` undefined → fail toward the promise,
+  exactly as `foundingPriceEligible` does).
+- **Orphaned rows are skipped, counted and LISTED.** A founding row can outlive
+  its retailer (a partially completed account purge — dev has a live example).
+  Revoking one patches a deleted document, which throws; and since the pass is a
+  single transaction, one bad row would abort the run so **nobody** is ever
+  revoked. The loop skips them (`orphaned` in the return), `revokeBenefits` /
+  `restoreBenefits` refuse rather than throw, and `listForAdmin` renders them as
+  "Store deleted" — because the header counts ROWS, hiding them made the console
+  read "2/10 claimed" above a single store and concealed the exact row the pass
+  has to step around. Tidying the leftovers stays `accountDeletion`'s job.
+- `foundingBenefitsEndAt` is the **one author** of the end date, and
+  **`foundingBenefitsAtRisk` is the one author of whether a date is shown at
+  all** — the revoke gate, the warning gate, the seller's ribbon and the admin
+  list all ask it. Without that second author the two disagreed: the ribbon
+  derived its countdown from paid-through alone and showed a red "your founding
+  price ends on 29 Sept" alert to a store the pass SKIPS (found 19 Sep 2026
+  testing an aged store). The realistic victim is a **comped** founding member —
+  Kedaipal is giving them the product while the page threatens to take their
+  discount on a date that can never arrive. Whatever surface shows the date must
+  gate on the same predicate the cron acts on; pinned both in `plans.test.ts`
+  and against the real queries in `foundingMembers.test.ts`. `foundingBenefitsRevocable` is
+  the **exact complement** of `foundingPriceEligible` (eligible while
+  `now <= endAt`, revocable while `now > endAt`), pinned by an hour-by-hour
+  invariant test across the boundary — a day where both said "yes" would revoke
+  a member the billing page was still quoting the discount to.
+
+**The plan lock opens for free.** `foundingPlanLocked` keys off
+`foundingPriceEligible`, so a revoked seller regains the Starter/Pro choice with
+no extra code. Pinned by a test, because it is an acceptance criterion.
+
+**Surfaces.** The billing ribbon is ONE control with **four** tones — amber
+("locked in"), red (T-14, naming the date), muted (ended, and never "renew to
+keep your founding price", which would be a lie), and a **pending** state that
+exists because its absence was one: the retailer doc resolves before
+`billingGatewayAvailable`, so every flag read `false` and the ribbon told a
+revoked member their discount was "locked in" on every page load (~310ms
+measured on localhost, longer on mobile data). The rank is true in every state
+so the title still renders; only the CLAIM waits for the server. The admin issue
+form derives its founding toggle from the same server answer rather than copying
+it into state — an effect keyed on the selection alone left the checkbox and
+Amount showing the founding discount under copy that said "standard price". The plan picker's lapsed note
+splits the same way. White-glove (`foundingMembers.myStatus.benefitsRevoked`)
+stops being offered, since it is a benefit. **The storefront badge and nav pill
+are untouched, by design.** Admin → Billing → Founding members shows each
+member's benefit state, the end date, whether they were warned, and a
+revoke/restore lever (`adminSetBenefits`) — the escape hatch for a wrong
+revocation or a deliberate re-grant; a restore also clears the warning stamp so
+a future lapse warns again.
+
+**The window: 90 days, confirmed by Arif on 19 Sep 2026** (z8r3fdfyw5). It had
+come from a verbal call (Zaki, 3 Sep 2026) and lived only in
+`FOUNDING_PRICE_LAPSE_MS` and this file, with no ticket carrying it — worth
+recording, because the signed agreement (86exq9kz9) still reads "RM104/mo for
+life" with no lapse clause, so these two lines remain the only written statement
+of the rule the code enforces. If the agreement is ever revised, revise it to
+match this.
+
+**Notice to the cohort.** The condition has been stated in-product since 3 Sep —
+the founding ribbon says the price "stays yours as long as your subscription
+doesn't lapse for more than 3 months" — and from this ticket a member also gets
+an email plus a red banner 14 days before anything is taken. Whether Arif also
+wants a direct message to the three unpaid members ahead of the first revocation
+(lekor-mr-ganu, 28 Oct 2026) is a GTM call, not a code gap.
+
+**A re-grant RESTARTS the clock** (`foundingMembers.benefitsRestoredAt`, mirrored
+to `retailers.foundingBenefitsRestoredAt`; `foundingClockFrom` takes the later of
+paid-through and the re-grant). This is not bookkeeping — without it the lever
+did nothing for the only people it exists for. A lapsed member is by definition
+past the window, so clearing the revocation stamp left `foundingPriceEligible`
+measuring from a paid-through that had already expired: the seller stayed on
+list price the moment Arif told them otherwise, and the next daily pass revoked
+them again and sent a **second** "your founding price has ended" email. Found in
+review of PR #288. A restored member now gets a fresh full window and is warned
+again at T-14 before it can lapse a second time — a re-grant, not immunity. This
+also covers the comp-through-lapse edge that was previously listed as known and
+unhandled: restore is the remedy and it now actually works.
+
+**A date already in the past is never rendered as a deadline.** The pass runs
+daily, so for up to a day a member can be past the window but not yet revoked.
+The ribbon's T-14 branch requires a FUTURE date, or it would say "founding price
+ends <yesterday> — renew before then"; it falls through to the lapsed copy for
+that day instead.
+
+## Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)
+
+A store on founding pricing has **one tier: Founding Pro** (`FOUNDING_PLAN`).
+It can move between **monthly and yearly** on that tier (RM104 / RM1,040,
+S$41 / S$410), and it can **stop renewing** (turn auto-renewal off) — it
+cannot change tier — not down to Starter, and not back to list Pro, which
+costs more for the same features. That holds until Scale launches; whether a
+founding member may then move to Scale is Arif's call. Once the subscription
+lapses past the 3-month window the founding price is revoked, and from then on
+the store is an ordinary seller who can pick any plan.
+
+- **Server:** `foundingPlanLocked(plan, eligible)` is refused by
+  `subscribeSelf`, `changePlan` (both directions, before anything is scheduled
+  or billed) and `switchPendingPlan` (before the void, so a refused switch
+  leaves the bill intact), with one message that names what they CAN do.
+- **Billing page:** the plan picker shows a single "Founding Pro" card with the
+  monthly/yearly toggle; the change-plan slot reads "Your plan stays Founding
+  Pro" with the price and the lapse clause instead of offering a move; the
+  first-invoice "Switch to Starter" is not offered; the current-plan card says
+  "Founding Pro"; the annual card never describes moving up or down a tier to
+  them ("You stay on Founding Pro for the whole year, at your founding price",
+  both on the offer and once they're on annual); and the auto-renewal turn-off
+  dialog states the lapse clause.
+- **Downgrades scheduled before the lock are cancelled** (Zaki, 17 Sep 2026).
+  `renewalQuote` ignores a `pendingPlanChange` the lock forbids, so the renewal
+  bills Founding Pro and `internalIssueRenewalInvoice` clears the stale flag as
+  it writes the bill; the change card never shows it as a move that will land.
+  No backfill: the rule cancels them wherever they are read.
+- **Deliberately left alone:** the Off-Season Hold card is unchanged for
+  founding members (the credits model removes holds for everyone on 14 Oct). A
+  founding member already sitting on Starter (from before the lock, if any)
+  renews on Starter and is offered only "Move up to Founding Pro" — the lock
+  never raises a bill without the seller's own tap.
+
+## Every billing-page price is server-resolved (z8r3fdfty4, 17 Sep 2026)
+
+Reported by Arif: a founding member's billing tab quoted **RM149** where they
+pay **RM104** (S$59 vs S$41). Two defects stacked:
+
+1. **Admin act-as read the wrong store.** `invoices.myInvoices` and
+   `subscriptionPayments.billingGatewayAvailable` resolved the CALLER — inside
+   act-as, the admin's own store — so the tab showed the seller's plan priced
+   at the admin's founding status and currency, above the admin's invoices.
+   Both now take an optional `retailerId` (owner-or-admin via
+   `requireRetailerAccess`); the tab passes it only while acting-as.
+   **Billing is view-only under act-as** (Zaki, 17 Sep 2026): it is the
+   seller's money and consent, and every legitimate admin billing action
+   (issue, void, mark paid, comp) already lives in Admin → Billing. A banner
+   at the top of the tab says so; every billing control renders disabled with
+   a one-line reason — subscribe, auto-renewal on/off, plan change and its
+   undo, the first-invoice switch, the Off-Season Hold switch, the annual
+   request, "Pay online now", "I've paid — notify us" and the manual "Message
+   us". Server-side, the self-serve writes resolve the caller's own store, and
+   `setSeasonalHold` — the one billing write that accepted `retailerId` —
+   now refuses `actingAsAdmin`. Every other settings tab keeps act-as edits.
+2. **The page decided "founding?" three ways.** The picker used the server
+   flag; the plan-change card used `sub.foundingIntent` (missing every
+   admin-marked member); the annual card used the raw rank flag (ignoring the
+   lapse window); the first-invoice switch read the open invoice's discount
+   (which a Starter bill never has). All four now take
+   `billingGatewayAvailable.foundingPricing`, and cards whose price is
+   founding-sensitive wait for that read instead of flashing list.
+
+**One number everywhere.** `renewalQuote` (lib/plans.ts) is the single author
+of what the next renewal bills — tier (a scheduled downgrade lands with it),
+cycle, founding, currency (`renewalCurrency`: last PAID invoice, else the
+country) and amount (the hold price for a paused store). The cron's renewal
+invoice, the pre-charge email, HitPay's authorisation page (which used to show
+the MONTHLY price in the COUNTRY currency — wrong for annual and SGD-billed
+stores) and the billing page (`billingGatewayAvailable.nextRenewal`) all read
+it; `subscriptionPayments.test.ts` pins that all four agree across founding
+MY/SG, annual, SGD-billed MY, lapsed, scheduled-downgrade and hold stores. The
+auto-renewal card now states the amount in every state ("Next charge of
+RM104.00 on …", the off-state pitch, an unfinished setup, the declined-charge
+line).
+
+**Found on the way:** settle priced a Starter → Pro carryover with
+`foundingPricingApplies({ plan: sub.plan })` — "no" for a founding member on
+Starter — so the remainder bought 5 days of list Pro while the page (and the
+invoice) said 8 at the founding rate. Settle now uses `foundingPriceEligible`.
 
 At go-live this needs nothing: the current founding cohort is active (inside
 the window) so they keep renewing at their price automatically; everyone else

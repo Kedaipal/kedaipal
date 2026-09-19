@@ -86,6 +86,9 @@ describe("RescheduleFulfilmentDialog — trigger window", () => {
 			{ status: "cancelled" },
 			{ source: "counter" },
 			{ collectedAt: Date.now() },
+			// A booking's dates are its check-in and check-out (z8r3fdff97 adds
+			// the server backstop).
+			{ deliveryMethod: "booking" },
 		]) {
 			const { unmount } = render(
 				<RescheduleFulfilmentDialog order={threeAmOrder(overrides)} />,
@@ -114,7 +117,7 @@ describe("RescheduleFulfilmentDialog — form", () => {
 		expect(timeInput.value).toBe(hhmmFromMinutes(3 * 60));
 
 		fireEvent.change(timeInput, { target: { value: "10:00" } });
-		fireEvent.click(screen.getByText("Save new date"));
+		fireEvent.click(screen.getByText("Save changes"));
 
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith({
@@ -125,20 +128,19 @@ describe("RescheduleFulfilmentDialog — form", () => {
 		);
 	});
 
-	it("hides the time input on self-collect orders — they are date-only", () => {
-		render(
-			<RescheduleFulfilmentDialog
-				order={threeAmOrder({
-					deliveryMethod: "self_collect",
-					fulfilmentTimeMinutes: undefined,
-				})}
-			/>,
-		);
+	it("an emptied delivery time disables Save with a reason — the preview can't lie", () => {
+		// It used to preview date-only while the save quietly kept 3:00 AM.
+		render(<RescheduleFulfilmentDialog order={threeAmOrder()} />);
 		fireEvent.click(screen.getByText("Reschedule"));
-		expect(screen.getByLabelText(/Pickup date/)).toBeTruthy();
-		expect(screen.queryByLabelText(/time/i)).toBeNull();
+		fireEvent.change(screen.getByLabelText(/Delivery time/), {
+			target: { value: "" },
+		});
+		expect(screen.getByText(/A delivery keeps a time/)).toBeTruthy();
+		expect(
+			(screen.getByText("Save changes").closest("button") as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
 	});
-
 	it("an ACTIVE rider booking opens onto the blocked explanation, not the form", () => {
 		state.dispatch = {
 			job: { status: "assigning" },
@@ -149,7 +151,167 @@ describe("RescheduleFulfilmentDialog — form", () => {
 		fireEvent.click(screen.getByText("Reschedule"));
 
 		expect(screen.getByText(/booking is active/i)).toBeTruthy();
+		expect(screen.queryByText("Save changes")).toBeNull();
+	});
+});
+
+describe("RescheduleFulfilmentDialog — self-collect pickup time (z8r3fdff97)", () => {
+	const pickupOrder = (overrides: Record<string, unknown> = {}) =>
+		threeAmOrder({
+			deliveryMethod: "self_collect",
+			fulfilmentTimeMinutes: 15 * 60,
+			...overrides,
+		});
+
+	it("shows an optional Pickup time, prefilled, and saves a new one", async () => {
+		const mutate = vi.fn().mockResolvedValue(undefined);
+		state.mutation = mutate;
+		const order = pickupOrder();
+		render(<RescheduleFulfilmentDialog order={order} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+
+		const time = screen.getByLabelText(/Pickup time/) as HTMLInputElement;
+		expect(time.value).toBe("15:00");
+		expect(screen.getByText(/Optional — leave blank/)).toBeTruthy();
+		fireEvent.change(time, { target: { value: "17:00" } });
+		fireEvent.click(screen.getByText("Save changes"));
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith({
+				orderId: order._id,
+				fulfilmentDate: order.fulfilmentDate,
+				fulfilmentTimeMinutes: 17 * 60,
+			}),
+		);
+	});
+
+	it("the save button doesn't promise a new DATE when only the time moved", async () => {
+		// The dialog was date-only when it was built; z8r3fdff97 gave it a time,
+		// so "Save new date" sat under a form whose only change was 3 PM → 5 PM.
+		const mutate = vi.fn().mockResolvedValue(undefined);
+		state.mutation = mutate;
+		const order = pickupOrder();
+		render(<RescheduleFulfilmentDialog order={order} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+
+		fireEvent.change(screen.getByLabelText(/Pickup time/), {
+			target: { value: "17:00" },
+		});
+		const save = screen.getByText("Save changes").closest("button");
+		expect(save).toBeTruthy();
 		expect(screen.queryByText("Save new date")).toBeNull();
+		fireEvent.click(save as HTMLButtonElement);
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith({
+				orderId: order._id,
+				fulfilmentDate: order.fulfilmentDate,
+				fulfilmentTimeMinutes: 17 * 60,
+			}),
+		);
+	});
+
+	it("Clear time removes the pickup time and says what that means", async () => {
+		const mutate = vi.fn().mockResolvedValue(undefined);
+		state.mutation = mutate;
+		const order = pickupOrder();
+		render(<RescheduleFulfilmentDialog order={order} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+
+		fireEvent.click(screen.getByRole("button", { name: "Clear time" }));
+		expect(
+			screen.getByText(
+				"Removes the 3:00 PM pickup time — the buyer can come any time that day.",
+			),
+		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Clear time" })).toBeNull();
+		fireEvent.click(screen.getByText("Save changes"));
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith({
+				orderId: order._id,
+				fulfilmentDate: order.fulfilmentDate,
+				fulfilmentTimeMinutes: null,
+			}),
+		);
+	});
+
+	it("a pickup with no time saves as 'keep' — never inventing one, never a clear", async () => {
+		const mutate = vi.fn().mockResolvedValue(undefined);
+		state.mutation = mutate;
+		const order = pickupOrder({ fulfilmentTimeMinutes: undefined });
+		render(<RescheduleFulfilmentDialog order={order} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+
+		expect((screen.getByLabelText(/Pickup time/) as HTMLInputElement).value).toBe(
+			"",
+		);
+		expect(screen.queryByRole("button", { name: "Clear time" })).toBeNull();
+		expect(screen.queryByText(/Removes the/)).toBeNull();
+		fireEvent.click(screen.getByText("Save changes"));
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith({
+				orderId: order._id,
+				fulfilmentDate: order.fulfilmentDate,
+				fulfilmentTimeMinutes: undefined,
+			}),
+		);
+	});
+
+	it("a passed pickup time today is refused (fixed clock: 12:00 MYT)", () => {
+		vi.useFakeTimers({ now: new Date("2026-08-20T04:00:00Z") }); // 12:00 MYT
+		try {
+			render(<RescheduleFulfilmentDialog order={pickupOrder()} />);
+			fireEvent.click(screen.getByText("Reschedule"));
+			fireEvent.change(screen.getByLabelText(/Pickup date/), {
+				target: { value: ymdFromEpoch(todayMytMidnight()) },
+			});
+			fireEvent.change(screen.getByLabelText(/Pickup time/), {
+				target: { value: "09:00" },
+			});
+			expect(
+				screen.getByText(/That time has already passed today/),
+			).toBeTruthy();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("a drop-off meet-up stays date-only and shows the point's own schedule", () => {
+		render(
+			<RescheduleFulfilmentDialog
+				order={pickupOrder({
+					fulfilmentTimeMinutes: undefined,
+					pickupSnapshot: {
+						label: "Pasar Tani SS2",
+						address: "SS2",
+						locationType: "drop_off",
+						scheduleNote: "Every Sat 3–5pm",
+					},
+				})}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Reschedule"));
+		expect(screen.getByLabelText(/Meet-up date/)).toBeTruthy();
+		expect(screen.queryByLabelText(/time/i)).toBeNull();
+		expect(screen.getByText("Every Sat 3–5pm")).toBeTruthy();
+		expect(
+			screen.getByText(/meet the buyer at the drop-off point/),
+		).toBeTruthy();
+	});
+
+	it("never asks Lalamove for a price", async () => {
+		state.dispatch = {
+			job: null,
+			blockReason: null,
+			bookingEnabled: true,
+			riderOnlyStore: true,
+			promptBookOnPacked: false,
+		};
+		const prepare = vi.fn();
+		state.action = prepare;
+		render(<RescheduleFulfilmentDialog order={pickupOrder()} />);
+		fireEvent.click(screen.getByText("Reschedule"));
+		await new Promise((r) => setTimeout(r, 800));
+		expect(prepare).not.toHaveBeenCalled();
+		expect(screen.queryByText("Lalamove for this slot")).toBeNull();
 	});
 });
 
@@ -235,7 +397,7 @@ describe("RescheduleFulfilmentDialog — past moments are refused (86eyp63xn fol
 			target: { value: ymdFromEpoch(todayMytMidnight() - DAY_MS) },
 		});
 		expect(screen.getByText(/That day has already passed/)).toBeTruthy();
-		const save = screen.getByText("Save new date").closest("button");
+		const save = screen.getByText("Save changes").closest("button");
 		expect(save?.disabled).toBe(true);
 	});
 
@@ -247,7 +409,7 @@ describe("RescheduleFulfilmentDialog — past moments are refused (86eyp63xn fol
 		});
 		expect(screen.getByText(/at most 30 days/)).toBeTruthy();
 		expect(
-			(screen.getByText("Save new date").closest("button") as HTMLButtonElement)
+			(screen.getByText("Save changes").closest("button") as HTMLButtonElement)
 				.disabled,
 		).toBe(true);
 	});
@@ -342,7 +504,7 @@ describe("RescheduleFulfilmentDialog — PR #201 review regressions", () => {
 				target: { value: "13:00" }, // an hour ahead — valid, Save enabled
 			});
 			const save = screen
-				.getByText("Save new date")
+				.getByText("Save changes")
 				.closest("button") as HTMLButtonElement;
 			expect(save.disabled).toBe(false);
 

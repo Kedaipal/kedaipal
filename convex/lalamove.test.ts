@@ -1488,6 +1488,45 @@ describe("collection service (86eyg0n8e) — reversed trips", () => {
 		expect(context.deliveryDirection).toBe("standard");
 	});
 
+	test("the store stop carries the unit / floor line (z8r3fdff8r)", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			const booking = row?.deliveryBooking;
+			if (!booking) throw new Error("seed missing booking");
+			await ctx.db.patch(retailer._id, {
+				// Standard direction so the STORE is the origin — the pickup stop
+				// the rider actually drives to.
+				deliveryBooking: { ...booking, deliveryDirection: undefined },
+				businessAddress: {
+					label: "Bearcamp Wash Bay",
+					latitude: 3.139,
+					longitude: 101.6869,
+					unit: "Unit 3-1, Block B",
+				},
+			});
+		});
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: BUYER_ADDRESS,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		// The rider reads the door first, then the building.
+		expect(context.origin.label).toBe("Unit 3-1, Block B, Bearcamp Wash Bay");
+		// The PIN is untouched — the quote keys on lat/lng, the address is display.
+		expect(context.origin.latitude).toBe(3.139);
+		expect(context.origin.longitude).toBe(101.6869);
+	});
+
 	test("reserveBooking stamps the job's frozen direction; standard stays unset", async () => {
 		const t = setup();
 		const retailer = await seedCollectionStore(t);
@@ -1924,6 +1963,44 @@ describe("scheduled dispatch (86eyg0n8e follow-up)", () => {
 		);
 		if (!context2.ok) throw new Error(`expected ok, got ${context2.reason}`);
 		expect(context2.requestedMoment).toBeUndefined();
+	});
+
+	test("a timed SELF-COLLECT order composes no moment — it is not a delivery (z8r3fdff97)", async () => {
+		// A pickup carries a time since z8r3fdff97. Dispatch must never read it
+		// as a rider schedule: the method gate refuses before the moment is built.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60198765432",
+				businessAddress: {
+					label: "Fruit Hut HQ",
+					latitude: 3.139,
+					longitude: 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					apiKey: "pk_test_sched",
+					apiSecret: "sk_test_sched",
+				},
+			});
+		});
+		const day = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000) - 8 * 3_600_000;
+		const pickup = await seedOrder(t, retailer._id, {
+			deliveryMethod: "self_collect",
+			fulfilmentDate: day,
+			fulfilmentTimeMinutes: 930,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const o = await ctx.db.get(pickup);
+			return o?.shortId ?? "";
+		});
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		expect(context).toMatchObject({ ok: false, reason: "not_delivery" });
 	});
 
 	test("reserveBooking stamps the schedule; the card payload exposes it", async () => {

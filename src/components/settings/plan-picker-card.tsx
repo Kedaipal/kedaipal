@@ -6,11 +6,14 @@ import { api } from "../../../convex/_generated/api";
 import {
 	ANNUAL_MONTHS_CHARGED,
 	type BillingCurrency,
+	FOUNDING_PLAN,
+	foundingPlanLocked,
 	planPrice,
 } from "../../../convex/lib/plans";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
+import { OwnerOnlyNote } from "./owner-only-note";
 
 type PickablePlan = "starter" | "pro";
 type Cycle = "monthly" | "annual";
@@ -34,6 +37,10 @@ const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
  * the bill and the plan renews itself from then on. Nobody at Kedaipal in
  * the loop. Founding pricing is server-resolved; annual leads with its real
  * hook: 2 months free.
+ *
+ * A store on founding pricing is offered Founding Pro and nothing else — the
+ * cycle is still theirs to choose (Zaki, 17 Sep 2026). `subscribeSelf` refuses
+ * any other tier server-side.
  */
 export function PlanPickerCard({
 	sub,
@@ -41,6 +48,8 @@ export function PlanPickerCard({
 	renewing,
 	foundingPricing,
 	foundingPricingLapsed,
+	foundingBenefitsRevoked = false,
+	ownerOnly = false,
 	onRedirectingChange,
 }: {
 	sub: SubscriptionView;
@@ -54,6 +63,13 @@ export function PlanPickerCard({
 	/** Founding-shaped store whose 3-month lapse window passed — explain why
 	 * the price reads standard instead of leaving them to wonder. */
 	foundingPricingLapsed: boolean;
+	/** Benefits revoked for good (z8r3fdfyw5). Distinct from the line above:
+	 * the lapsed wording implies the discount comes back when they pay, and for
+	 * a revoked member it does not. */
+	foundingBenefitsRevoked?: boolean;
+	/** Admin act-as: the prices are the seller's, but subscribing authorises
+	 * the OWNER's card or wallet — Subscribe is disabled with the reason. */
+	ownerOnly?: boolean;
 	/** Signals the tab that a HitPay redirect is in flight, so the freshly
 	 * created invoice's card shows a spinner instead of the manual rails. */
 	onRedirectingChange?: (redirecting: boolean) => void;
@@ -62,11 +78,19 @@ export function PlanPickerCard({
 	const startAutoRenewSetup = useAction(
 		api.subscriptionPayments.startAutoRenewSetup,
 	);
+	const founding = foundingPricing;
+	// Only the tiers this store may buy: a Founding Member stays on Founding Pro.
+	const plans = (["starter", "pro"] as const).filter(
+		(p) => !foundingPlanLocked(p, founding),
+	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
-	const [plan, setPlan] = useState<PickablePlan>(
+	const [picked, setPlan] = useState<PickablePlan>(
 		sub.plan === "starter" ? "starter" : "pro",
 	);
+	// Derived, not stored: founding pricing is a live server answer, and a
+	// selection it rules out must never be what Subscribe sends.
+	const plan = plans.includes(picked) ? picked : FOUNDING_PLAN;
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const [busy, setBusy] = useState(false);
 	// Back from HitPay: re-arm Subscribe instead of leaving it disabled on
@@ -78,7 +102,6 @@ export function PlanPickerCard({
 		}, [onRedirectingChange]),
 	);
 
-	const founding = foundingPricing;
 	// A seller who still has a saved method (auto-renewal left on through a
 	// lapse, a voided bill, or a sponsorship that ended) never sees HitPay's
 	// page: subscribeSelf charges the method on file straight away. The words
@@ -88,6 +111,8 @@ export function PlanPickerCard({
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
 	);
+	const planName = (p: PickablePlan) =>
+		founding && p === FOUNDING_PLAN ? "Founding Pro" : PLAN_PITCH[p].name;
 
 	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
 	// like every mainstream subscription: invoice created, then straight to
@@ -143,15 +168,23 @@ export function PlanPickerCard({
 					{renewing ? "Renew your subscription" : "Ready to choose a plan?"}
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
+					{founding ? "Choose monthly or yearly" : "Pick a plan"} —{" "}
 					{savedMethod
-						? `Pick a plan — we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
-						: "Pick a plan — you'll pay on HitPay's secure page and your plan activates straight away."}
+						? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
+						: "you'll pay on HitPay's secure page and your plan activates straight away."}
 				</p>
+				{founding ? (
+					<p className="mt-2 text-xs text-muted-foreground">
+						As a Founding Member you stay on Founding Pro. Your founding price
+						holds as long as your subscription doesn't lapse for more than 3
+						months.
+					</p>
+				) : null}
 				{foundingPricingLapsed ? (
 					<p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-						Your Founding Member rank is yours for good, but the founding
-						price lapses after 3 months without an active subscription — so
-						these are the standard prices. Questions? Message us.
+						{foundingBenefitsRevoked
+							? "Your Founding Member rank is yours for good, but your founding price ended after more than 3 months without an active subscription — so these are the standard prices, and every plan is open to you again. Questions? Message us."
+							: "Your Founding Member rank is yours for good, but the founding price lapses after 3 months without an active subscription — so these are the standard prices. Questions? Message us."}
 					</p>
 				) : null}
 			</div>
@@ -187,9 +220,38 @@ export function PlanPickerCard({
 			</div>
 
 			<div className="flex flex-col gap-2">
-				{(["starter", "pro"] as const).map((p) => {
+				{plans.map((p) => {
 					const selected = plan === p;
 					const foundingApplies = founding && p === "pro";
+					const details = (
+						<div>
+							<p className="flex items-center gap-2 text-sm font-semibold">
+								{planName(p)}
+								{foundingApplies ? (
+									<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+										Founding 30% off
+									</span>
+								) : null}
+							</p>
+							<p className="mt-0.5 text-xs text-muted-foreground">
+								{PLAN_PITCH[p].pitch}
+							</p>
+							<p className="mt-1.5 text-sm font-medium tabular-nums">
+								{priceLine(p)}
+							</p>
+						</div>
+					);
+					// One plan on offer (a Founding Member) is a summary, not a
+					// choice — no radio to tick, nothing to press.
+					if (plans.length === 1)
+						return (
+							<div
+								key={p}
+								className="rounded-xl border border-foreground bg-muted/50 p-4"
+							>
+								{details}
+							</div>
+						);
 					return (
 						<button
 							key={p}
@@ -202,22 +264,7 @@ export function PlanPickerCard({
 									: "border-border hover:border-foreground/40"
 							}`}
 						>
-							<div>
-								<p className="flex items-center gap-2 text-sm font-semibold">
-									{PLAN_PITCH[p].name}
-									{foundingApplies ? (
-										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-											Founding 30% off
-										</span>
-									) : null}
-								</p>
-								<p className="mt-0.5 text-xs text-muted-foreground">
-									{PLAN_PITCH[p].pitch}
-								</p>
-								<p className="mt-1.5 text-sm font-medium tabular-nums">
-									{priceLine(p)}
-								</p>
-							</div>
+							{details}
 							<span
 								aria-hidden
 								className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${
@@ -237,15 +284,16 @@ export function PlanPickerCard({
 				<button
 					type="button"
 					onClick={subscribeAuto}
-					disabled={busy}
+					disabled={busy || ownerOnly}
 					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
 					{busy
 						? savedMethod
 							? "Charging your saved method…"
 							: "Opening secure payment…"
-						: `Subscribe to ${PLAN_PITCH[plan].name}`}
+						: `Subscribe to ${planName(plan)}`}
 				</button>
+				{ownerOnly ? <OwnerOnlyNote /> : null}
 				<p className="text-[11px] text-muted-foreground">
 					{savedMethod
 						? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`

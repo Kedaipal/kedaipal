@@ -7,6 +7,7 @@ import {
 	Banknote,
 	CreditCard,
 	ExternalLink,
+	Eye,
 	Gift,
 	LifeBuoy,
 	Loader2,
@@ -15,10 +16,21 @@ import {
 	QrCode,
 	ShieldCheck,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { isUnlimited } from "../../../convex/lib/plans";
+import {
+	FOUNDING_BENEFIT_WARNING_MS,
+	FOUNDING_PLAN,
+	foundingPlanLocked,
+	isUnlimited,
+} from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -44,6 +56,7 @@ import { AutoRenewalCard } from "./auto-renewal-card";
 import { FirstInvoiceSwitch } from "./first-invoice-switch";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 import { PlanChangeCard } from "./plan-change-card";
+import { OwnerOnlyNote } from "./owner-only-note";
 import { PlanPickerCard } from "./plan-picker-card";
 import { SeasonalHoldCard } from "./seasonal-hold-card";
 
@@ -74,14 +87,32 @@ export function BillingTab({
 	const ring = (anchor: string): FixHighlight | undefined =>
 		target?.anchor === anchor ? target.highlight : undefined;
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
+	// Admin act-as (z8r3fdfty4): every store-scoped billing READ names the
+	// seller's store. Omitted, the server answers for the CALLER — inside
+	// act-as that is the admin's OWN store, which priced a founding seller's
+	// plan at the admin's list rate and listed the admin's invoices under it.
+	const actingAsAdmin = retailer.actingAsAdmin === true;
+	const storeArgs = { retailerId: actingAsAdmin ? retailer._id : undefined };
 	const invoices =
-		useQuery(convexQuery(api.invoices.myInvoices, {})).data ?? [];
+		useQuery(convexQuery(api.invoices.myInvoices, storeArgs)).data ?? [];
 	const instructions = useQuery(
 		convexQuery(api.billing.paymentInstructions, {}),
 	).data;
 	const gateway = useQuery(
-		convexQuery(api.subscriptionPayments.billingGatewayAvailable, {}),
+		convexQuery(api.subscriptionPayments.billingGatewayAvailable, storeArgs),
 	).data;
+	// …while billing itself is VIEW-ONLY under act-as (Zaki, 17 Sep 2026): it is
+	// the seller's money and consent, and every legitimate admin billing action
+	// (issue, void, mark paid, comp) already lives in Admin → Billing. Every
+	// control stays visible but disabled with the reason; the self-serve
+	// writes resolve the caller's own store and `setSeasonalHold` refuses
+	// act-as server-side, so nothing here can reach the seller's billing.
+	const ownerOnly = actingAsAdmin;
+	// On founding pricing — SERVER-resolved, the only founding answer any price
+	// on this page may use (z8r3fdfty4). False until the gateway read lands, so
+	// every card that quotes a founding-sensitive price waits for it instead of
+	// flashing list.
+	const foundingPricing = gateway?.foundingPricing === true;
 	const supportWa = useSupportWaNumber();
 
 	// Back from the invoice's HitPay checkout: reconcile against HitPay's
@@ -149,7 +180,8 @@ export function BillingTab({
 	// swaps the trial/past-due nag for an "Admin" badge and hides the subscription
 	// banner) by replacing the plan/usage/renew UI here with a plain admin note.
 	// While acting-as a seller we keep the seller's real plan fully visible —
-	// white-glove support needs to see and manage it. See docs/admin-console.md.
+	// white-glove support needs to SEE it — view-only, never actionable
+	// (billing is the seller's money; see `ownerOnly`). See docs/admin-console.md.
 	const adminOwnAccount = isAdmin && !retailer.actingAsAdmin;
 
 	const pending = invoices.find((i) => i.status === "pending");
@@ -159,15 +191,22 @@ export function BillingTab({
 	// Annual billing is offered here rather than on /pricing: manual billing has
 	// no self-serve checkout, so a public annual price would be a dead-end CTA,
 	// while a year paid by one transfer is exactly what these rails already do
-	// well. See src/lib/annual-billing.ts + docs/pricing.md.
-	const isFounding = retailer.isFoundingMember === true;
-	const annualOffer = resolveAnnualOffer({
-		subscription: sub,
-		invoices,
-		now,
-		founding: isFounding,
-		adminOwnAccount,
-	});
+	// well. See src/lib/annual-billing.ts + docs/pricing.md. Held back until the
+	// gateway read lands — its quote is founding-sensitive.
+	const annualOffer = gateway
+		? resolveAnnualOffer({
+				subscription: sub,
+				invoices,
+				now,
+				founding: foundingPricing,
+				adminOwnAccount,
+			})
+		: ({ kind: "hidden" } as const);
+	// Founding Members stay on Founding Pro — named as such wherever the plan is.
+	const planLabel =
+		foundingPricing && (sub?.plan ?? "pro") === FOUNDING_PLAN
+			? "Founding Pro"
+			: PLAN_LABEL[sub?.plan ?? "pro"];
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
@@ -231,21 +270,33 @@ export function BillingTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
-			{retailer.isFoundingMember ? (
-				<div className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
-					<Award className="size-6 shrink-0 text-amber-600" />
+			{/* Said once, first, so every disabled control below has its why. */}
+			{actingAsAdmin ? (
+				<section className="flex items-start gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-5 dark:border-indigo-900 dark:bg-indigo-950/40 lg:p-6">
+					<Eye className="mt-0.5 size-5 shrink-0 text-indigo-600 dark:text-indigo-300" />
 					<div>
-						<p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-							Founding Member #{retailer.foundingMemberRank} of 10
+						<p className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">
+							View-only billing
 						</p>
-						<p className="text-xs text-amber-800/80 dark:text-amber-300/80">
-							Your 30% discount is locked in — thank you for backing Kedaipal
-							early. It stays yours as long as your subscription doesn't lapse
-							for more than 3 months; your rank and badge are permanent either
-							way.
+						<p className="mt-1 text-xs text-indigo-800/80 dark:text-indigo-300/80">
+							You're acting as {retailer.storeName}. Their plan, prices and
+							invoices show exactly as they see them, but billing is the owner's
+							— nothing here can be changed from act-as. To issue, void or mark
+							an invoice paid, use Admin → Billing.
 						</p>
 					</div>
-				</div>
+				</section>
+			) : null}
+			{retailer.isFoundingMember ? (
+				<FoundingRibbon
+					rank={retailer.foundingMemberRank}
+					// undefined = the server hasn't answered yet, which is NOT the same
+					// as "nothing is wrong" — see the ribbon's `pending` branch.
+					pending={gateway === undefined}
+					revoked={gateway?.foundingBenefitsRevoked === true}
+					lapsed={gateway?.foundingPricingLapsed === true}
+					endsAt={gateway?.foundingBenefitsEndAt}
+				/>
 			) : null}
 
 			{/* Admins aren't on a plan — show a plain account note instead of the
@@ -303,7 +354,7 @@ export function BillingTab({
 							<p className="mt-1 text-lg font-semibold">
 								{compEnded
 									? `Ended ${formatShortDate(compEnded.at)}`
-									: PLAN_LABEL[sub?.plan ?? "pro"]}
+									: planLabel}
 							</p>
 						</div>
 						<span
@@ -328,9 +379,8 @@ export function BillingTab({
 					) : null}
 					{held ? (
 						<p className="text-xs text-muted-foreground">
-							{HOLD_LABEL} — ordering is paused. Your{" "}
-							{PLAN_LABEL[sub?.plan ?? "pro"]} plan comes back with one tap
-							below.
+							{HOLD_LABEL} — ordering is paused. Your {planLabel} plan comes
+							back with one tap below.
 						</p>
 					) : null}
 					{freePeriod.kind === "free" ? (
@@ -415,7 +465,9 @@ export function BillingTab({
 					id={SPOTLIGHT_ANCHOR.plan_change.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
-					currency={gateway.currency}
+					currency={gateway.renewalCurrency}
+					foundingPricing={gateway.foundingPricing}
+					ownerOnly={ownerOnly}
 					openInvoiceNumber={pending?.invoiceNumber}
 				/>
 			) : null}
@@ -435,6 +487,7 @@ export function BillingTab({
 					country={retailer.country}
 					sub={sub}
 					pendingKind={pending ? (pending.kind ?? "plan") : undefined}
+					ownerOnly={ownerOnly}
 				/>
 			) : null}
 
@@ -447,7 +500,8 @@ export function BillingTab({
 				state={annualOffer}
 				slug={retailer.slug}
 				supportWa={supportWa}
-				founding={isFounding}
+				founding={foundingPricing}
+				ownerOnly={ownerOnly}
 			/>
 
 			{/* Pending invoice + how to pay */}
@@ -494,15 +548,24 @@ export function BillingTab({
 					) : null}
 					{/* Switch tier before paying (z8r3fday24): machine-issued plan
 					    invoices only — the first invoice, or a self-serve pick. The
-					    server refuses admin-issued and hold invoices too. */}
-					{(pending.kind ?? "plan") === "plan" &&
+					    server refuses admin-issued and hold invoices too, and a
+					    Founding Member's move off Founding Pro (they have no other
+					    tier). Waits for the gateway read: the quoted price is
+					    founding-sensitive. */}
+					{gateway &&
+					(pending.kind ?? "plan") === "plan" &&
 					(pending.origin === "free_period_end" ||
 						pending.origin === "self_serve") &&
-					(pending.plan === "pro" || pending.plan === "starter") ? (
+					(pending.plan === "pro" || pending.plan === "starter") &&
+					!foundingPlanLocked(
+						pending.plan === "pro" ? "starter" : "pro",
+						foundingPricing,
+					) ? (
 						<FirstInvoiceSwitch
 							invoicePlan={pending.plan}
 							currency={pending.currency === "SGD" ? "SGD" : "MYR"}
-							founding={(pending.foundingDiscount ?? 0) > 0}
+							founding={foundingPricing}
+							ownerOnly={ownerOnly}
 						/>
 					) : null}
 
@@ -527,13 +590,14 @@ export function BillingTab({
 						    hosted page, auto-confirmed — the manual rails stay below. */}
 								{pending.gatewayPayment?.url ? (
 									<div className="mt-2">
-										<a
+										<ActionLink
 											href={pending.gatewayPayment.url}
+											disabled={ownerOnly}
 											className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-700"
 										>
 											<CreditCard className="size-4" />
 											Pay online now
-										</a>
+										</ActionLink>
 										<p className="mt-1.5 text-xs text-muted-foreground">
 											Confirmed automatically — no need to message us after.
 										</p>
@@ -592,18 +656,23 @@ export function BillingTab({
 										Message us on WhatsApp to receive payment details.
 									</p>
 								)}
-								<a
+								<ActionLink
 									href={buildWaContactLink(
 										`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
 										supportWa,
 									)}
-									target="_blank"
-									rel="noopener noreferrer"
+									external
+									disabled={ownerOnly}
 									className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 								>
 									<ExternalLink className="size-4" />
 									I've paid — notify us
-								</a>
+								</ActionLink>
+								{ownerOnly ? (
+									<div className="mt-2">
+										<OwnerOnlyNote />
+									</div>
+								) : null}
 							</>
 						)}
 					</div>
@@ -636,6 +705,8 @@ export function BillingTab({
 							renewing={sub.status !== "trialing" && !compEnded}
 							foundingPricing={gateway.foundingPricing}
 							foundingPricingLapsed={gateway.foundingPricingLapsed}
+							foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
+							ownerOnly={ownerOnly}
 							onRedirectingChange={setRedirecting}
 						/>
 					</div>
@@ -655,20 +726,21 @@ export function BillingTab({
 									: "Message us on WhatsApp and we'll send your invoice. Your plan activates once payment lands."}
 							</p>
 						</div>
-						<a
+						<ActionLink
 							href={buildWaContactLink(
 								sub.status === "trialing" || compEnded
 									? `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`
 									: `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`,
 								supportWa,
 							)}
-							target="_blank"
-							rel="noopener noreferrer"
+							external
+							disabled={ownerOnly}
 							className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 						>
 							<ExternalLink className="size-4" />
 							Message us
-						</a>
+						</ActionLink>
+						{ownerOnly ? <OwnerOnlyNote /> : null}
 					</section>
 				)
 			) : null}
@@ -699,6 +771,14 @@ export function BillingTab({
 					highlight={ring(SPOTLIGHT_ANCHOR.auto_renewal.anchor)}
 					sub={sub}
 					methods={gateway.methods}
+					renewal={gateway.nextRenewal}
+					pendingCharge={
+						pending
+							? { amount: pending.total, currency: pending.currency }
+							: undefined
+					}
+					founding={gateway.foundingPricing}
+					ownerOnly={ownerOnly}
 					returnFromSetup={billingReturn === "autorenew"}
 					onReturnHandled={(attached) => {
 						// Setup abandoned → nothing will charge; re-expose the pay
@@ -825,5 +905,183 @@ export function BillingTab({
 				</div>
 			</section>
 		</div>
+	);
+}
+
+/**
+ * A billing CTA that leaves the page — HitPay's checkout, or a WhatsApp
+ * message to us about the seller's bill. Billing is view-only under admin
+ * act-as, so there it renders as the same control, disabled: never a live
+ * link that pays or claims a payment on the seller's behalf.
+ */
+/**
+ * The founding ribbon — ONE control, three tones, because all three say the
+ * same thing (where this member's founding price stands) and a second stacked
+ * box about the same subject is noise, not emphasis:
+ *
+ *  - **amber, "locked in"** — benefits live, nothing due;
+ *  - **red, "ends on {date}"** — inside the last 14 days (z8r3fdfyw5). This is
+ *    the T-14 warning: the price is about to be taken, so the tone escalates
+ *    and the copy carries the DATE and the fact that renewing later won't undo
+ *    it. The renew affordance is the picker/Pay-now immediately below — one
+ *    renew button on the page, not two;
+ *  - **muted, "has ended"** — revoked for good. Never says "renew to keep your
+ *    founding price": paying no longer brings it back, and the lapsed-but-not-
+ *    yet-revoked wording would be a promise the server won't honour.
+ *
+ * Every tone repeats that the RANK AND BADGE ARE KEPT. That is the standing
+ * promise (agreement 86exq9kz9 + this ribbon's own copy since 3 Sep), and the
+ * one sentence a member losing their discount most needs to still be true.
+ * `revoked`, `lapsed` and `endsAt` are all SERVER-resolved
+ * (`billingGatewayAvailable`) — deriving founding state client-side is the bug
+ * z8r3fdfty4 closed.
+ *
+ * **The fourth state is `pending`, and it exists because its absence was a lie.**
+ * The retailer doc resolves before the gateway query, so while the latter is
+ * `undefined` all three flags read `false` and this fell through to the amber
+ * "your 30% discount is locked in" — told to a member whose discount had ENDED,
+ * on every single page load (measured at ~310ms on localhost, and a seller on
+ * mobile data reads for longer than that). The rank is known from the retailer
+ * doc and is true in every state, so the title still renders; only the CLAIM
+ * waits for the server, behind a skeleton line that holds the same height and
+ * keeps the ribbon from jumping.
+ */
+function FoundingRibbon({
+	rank,
+	pending,
+	revoked,
+	lapsed,
+	endsAt,
+}: {
+	rank?: number;
+	pending: boolean;
+	revoked: boolean;
+	lapsed: boolean;
+	endsAt?: number;
+}) {
+	// A FUTURE date only. The pass runs daily, so between the window closing and
+	// the next run there is a window of up to a day where `endsAt` is already in
+	// the past — this branch would then render "founding price ends <yesterday>"
+	// and tell them to "renew before then". Falling through to `lapsed` says the
+	// true thing for that day, and `revoked` takes over once the pass catches up.
+	const now = Date.now();
+	const endingSoon =
+		!pending &&
+		!revoked &&
+		endsAt !== undefined &&
+		endsAt > now &&
+		endsAt - now <= FOUNDING_BENEFIT_WARNING_MS;
+	const muted = pending || revoked;
+	const tone = muted
+		? "border-border bg-muted/50"
+		: endingSoon
+			? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
+			: "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40";
+	const iconTone = muted
+		? "text-muted-foreground"
+		: endingSoon
+			? "text-red-600 dark:text-red-400"
+			: "text-amber-600";
+	const titleTone = muted
+		? "text-foreground"
+		: endingSoon
+			? "text-red-900 dark:text-red-200"
+			: "text-amber-900 dark:text-amber-200";
+	const bodyTone = revoked
+		? "text-muted-foreground"
+		: endingSoon
+			? "text-red-800/90 dark:text-red-300/90"
+			: "text-amber-800/80 dark:text-amber-300/80";
+
+	return (
+		<div
+			className={`flex items-start gap-3 rounded-2xl border p-4 ${tone}`}
+			role={endingSoon ? "alert" : undefined}
+		>
+			<Award className={`mt-0.5 size-6 shrink-0 ${iconTone}`} />
+			<div className="min-w-0">
+				<p className={`text-sm font-semibold ${titleTone}`}>
+					Founding Member #{rank} of 10
+					{pending
+						? null
+						: endingSoon && endsAt !== undefined
+							? ` · founding price ends ${formatShortDate(endsAt)}`
+							: revoked
+								? " · founding price ended"
+								: null}
+				</p>
+				{pending ? (
+					<div
+						className="mt-1.5 h-3 w-48 max-w-full animate-pulse rounded bg-muted-foreground/20"
+						aria-hidden="true"
+					/>
+				) : (
+					<p className={`mt-0.5 text-xs ${bodyTone}`}>
+						{revoked ? (
+							<>
+								Your subscription stayed unrenewed past the 3-month window, so
+								your founding price has ended and every plan is open to you
+								again at the standard prices.{" "}
+								<strong className="font-semibold text-foreground">
+									Your rank and badge stay yours, permanently
+								</strong>{" "}
+								— your storefront is unchanged. Think this is wrong? Message us.
+							</>
+						) : endingSoon && endsAt !== undefined ? (
+							<>
+								Your subscription hasn't renewed, so your 30% founding price
+								ends on{" "}
+								<strong className="font-semibold">
+									{formatShortDate(endsAt)}
+								</strong>
+								. Renew below before then and you keep it — after that date your
+								plan bills at the standard price, and renewing later won't bring
+								the discount back. Your rank and badge are yours for good either
+								way.
+							</>
+						) : lapsed ? (
+							"Your rank and badge are yours for good. Your founding price lapsed after more than 3 months without an active subscription, so new bills are at the standard price."
+						) : (
+							"Your 30% discount is locked in — thank you for backing Kedaipal early. It stays yours as long as your subscription doesn't lapse for more than 3 months; your rank and badge are permanent either way."
+						)}
+					</p>
+				)}
+			</div>
+		</div>
+	);
+}
+
+function ActionLink({
+	href,
+	disabled,
+	external = false,
+	className,
+	children,
+}: {
+	href: string;
+	disabled: boolean;
+	/** Opens in a new tab (WhatsApp); HitPay's checkout replaces this page. */
+	external?: boolean;
+	className: string;
+	children: ReactNode;
+}) {
+	if (disabled)
+		return (
+			<button
+				type="button"
+				disabled
+				className={`${className} disabled:cursor-not-allowed disabled:opacity-50`}
+			>
+				{children}
+			</button>
+		);
+	return (
+		<a
+			href={href}
+			className={className}
+			{...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+		>
+			{children}
+		</a>
 	);
 }

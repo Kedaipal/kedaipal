@@ -4,6 +4,7 @@ import {
 	ExternalLink,
 	FileClock,
 } from "lucide-react";
+import { FOUNDING_PLAN } from "../../../convex/lib/plans";
 import type { AnnualOfferState } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
 import {
@@ -13,6 +14,7 @@ import {
 import { formatPrice, formatShortDate } from "../../lib/format";
 import { PLAN_LABEL } from "../../lib/subscription";
 import { Button } from "../ui/button";
+import { OwnerOnlyNote } from "./owner-only-note";
 
 /** "2 months free" — pluralised from the quote so the claim can never outlive a
  * change to ANNUAL_MONTHS_CHARGED. Never a percentage: a standing % reads as a
@@ -83,6 +85,7 @@ export function AnnualBillingCard({
 	slug,
 	supportWa,
 	founding = false,
+	ownerOnly = false,
 	id,
 	highlight,
 }: CardFrame & {
@@ -94,6 +97,9 @@ export function AnnualBillingCard({
 	/** Founding members are quoted their discounted rate, and the message says so
 	 * — those words are what tell the operator to tick the founding flag. */
 	founding?: boolean;
+	/** Admin act-as: billing is view-only, and this request is the owner's to
+	 * send — the CTA is disabled with the reason. */
+	ownerOnly?: boolean;
 }) {
 	if (state.kind === "hidden") return null;
 
@@ -129,8 +135,11 @@ export function AnnualBillingCard({
 	// they have already bought is how an app stops being believed. Note this
 	// deliberately does NOT promise a renewal email: the renewal chase is a log
 	// line today (see docs/manual-subscription.md), so a promise here would be
-	// one the backend keeps by luck.
+	// one the backend keeps by luck. Nor a plan change to a Founding Member:
+	// they stay on Founding Pro (`foundingPlanLocked`, Zaki 17 Sep 2026), so
+	// "change plan part-way through" is a promise nothing keeps.
 	if (state.kind === "onAnnual") {
+		const foundingPro = founding && state.plan === FOUNDING_PLAN;
 		return (
 			<NoteCard
 				id={id}
@@ -140,19 +149,21 @@ export function AnnualBillingCard({
 				}
 				title="You're on annual billing"
 			>
-				{PLAN_LABEL[state.plan]}, invoiced once a year — two months of every
-				twelve are free.
+				{foundingPro ? "Founding Pro" : PLAN_LABEL[state.plan]}, invoiced once a
+				year — two months of every twelve are free.
 				{state.renewsAt
 					? ` Your current year runs to ${formatShortDate(state.renewsAt)}.`
 					: ""}{" "}
-				If you change plan part-way through, the months you haven't used are
-				credited to the new one.
+				{foundingPro
+					? "As a Founding Member you stay on Founding Pro for the whole year, at your founding price."
+					: "If you change plan part-way through, the months you haven't used are credited to the new one."}
 			</NoteCard>
 		);
 	}
 
 	const { quote, currency, plan } = state;
 	const rate = founding ? " at my Founding Member rate" : "";
+	const foundingPro = founding && plan === FOUNDING_PLAN;
 	const amount = formatPrice(quote.annualTotal, currency);
 
 	const waMessage =
@@ -235,13 +246,15 @@ export function AnnualBillingCard({
 			    scheduled for the end of the paid term (pendingPlanChange), so the
 			    months already bought are kept rather than refunded. The previous
 			    wording promised a cash-equivalent credit that nothing computed and
-			    that Arif had no way to issue by hand. */}
+			    that Arif had no way to issue by hand. A Founding Member has neither
+			    move — they stay on Founding Pro (`foundingPlanLocked`) — so their
+			    copy states that instead of promising machinery that refuses them. */}
 			<p className="text-[11px] leading-relaxed text-muted-foreground">
 				One invoice, paid the same way as your monthly one. A year already paid
-				isn't refunded in cash. Move up a plan and we only charge the new
-				price — the time you'd already paid for carries over as extra days.
-				Move down and the change waits until your year is up, so you keep what
-				you've paid for until then.
+				isn't refunded in cash.{" "}
+				{foundingPro
+					? "You stay on Founding Pro for the whole year, at your founding price."
+					: "Move up a plan and we only charge the new price — the time you'd already paid for carries over as extra days. Move down and the change waits until your year is up, so you keep what you've paid for until then."}
 			</p>
 
 			{/* Emphasis ladder: full primary only when nothing competes. Whenever an
@@ -250,20 +263,35 @@ export function AnnualBillingCard({
 			    never outranks a bill. (The five hand-rolled anchors elsewhere in
 			    billing-tab predate this primitive; converting them is its own
 			    ticket, not silent churn in this diff.) */}
-			<Button
-				asChild
-				variant={state.kind === "offer" ? "default" : "outline"}
-				className="tap-target w-full sm:w-auto"
-			>
-				<a
-					href={buildWaContactLink(waMessage, supportWa)}
-					target="_blank"
-					rel="noopener noreferrer"
+			{ownerOnly ? (
+				<>
+					<Button
+						type="button"
+						disabled
+						variant={state.kind === "offer" ? "default" : "outline"}
+						className="tap-target w-full sm:w-auto"
+					>
+						<ExternalLink className="size-4" />
+						{cta}
+					</Button>
+					<OwnerOnlyNote />
+				</>
+			) : (
+				<Button
+					asChild
+					variant={state.kind === "offer" ? "default" : "outline"}
+					className="tap-target w-full sm:w-auto"
 				>
-					<ExternalLink className="size-4" />
-					{cta}
-				</a>
-			</Button>
+					<a
+						href={buildWaContactLink(waMessage, supportWa)}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<ExternalLink className="size-4" />
+						{cta}
+					</a>
+				</Button>
+			)}
 			<p className="text-[11px] text-muted-foreground">
 				Nothing changes until we confirm on WhatsApp — keep paying as usual
 				until then.

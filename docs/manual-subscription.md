@@ -51,6 +51,30 @@ A **plain Pro invoice never claims a rank** — founding must be deliberate. The
 for `isFoundingMember || foundingIntent`. `paidAt`/`firstInvoiceId` on the
 `foundingMembers` row fill in when the first founding invoice is paid.
 
+**Founding Members stay on Founding Pro** (Zaki, 17 Sep 2026): monthly or yearly,
+never another tier, until their founding benefits are revoked (3 months without
+an active subscription), after which they are ordinary sellers. Every self-serve
+plan path refuses the move server-side (`foundingPlanLocked`), and a downgrade
+scheduled before the lock is cancelled at renewal (`renewalQuote`); the admin
+issue form is not gated — Arif's judgment stays the override. See
+[`hitpay-recurring.md`](./hitpay-recurring.md#founding-members-stay-on-founding-pro-zaki-17-sep-2026).
+
+**⚠️ Membership is permanent; BENEFITS are revocable (z8r3fdfyw5).** The rank,
+the storefront badge, the nav pill and the slot in the 10 never revert — that is
+promised in the signed agreement *and* in the billing ribbon's own copy. What
+lapses after 90 days unpaid is the **benefit set**: the 30% price, the
+Founding-Pro lock and white-glove. It is stamped on
+`foundingMembers.benefitsRevokedAt` (+ reason and note) and mirrored onto
+`retailers.foundingBenefitsRevokedAt`, by the daily pass
+`foundingMembers.internalRevokeLapsedBenefits`, after one T-14 warning email and
+banner. **Never revoke by clearing `isFoundingMember`** — it strips a badge we
+promised, and `foundingPriceEligible` then falls through to `foundingIntent`
+(never cleared after a claim, no lapse check) and grants founding pricing for
+ever. A store on hold, on an active period, comped, or with no paid period is
+never revoked. Arif can revoke or restore by hand in Admin → Billing → Founding
+members; the full rule, the surfaces and the unresolved terms conflict are in
+[`hitpay-recurring.md`](./hitpay-recurring.md#revocation--membership-is-permanent-benefits-are-not-z8r3fdfyw5).
+
 **Nav pill (`TierPill`, sidebar + mobile header + settings card).** A founding
 member's status chip reads **"Founding #N"** (± trial/past-due state), which on
 its own hides their actual tier — so the pill renders a **second neutral tier
@@ -269,8 +293,9 @@ A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
   cannot fulfil, the claim TTL is minutes, and one rule with no exceptions beats
   an invariant with an asterisk. The pause confirm dialog says so before the
   tap.
-- **Entry** (`subscriptions.setSeasonalHold({ hold: true })`, owner or admin
-  act-as, audited): from `active` or `past_due` only — never a free store (a
+- **Entry** (`subscriptions.setSeasonalHold({ hold: true })`, the owner only —
+  refused under admin act-as, where billing is view-only (z8r3fdfty4)): from
+  `active` or `past_due` only — never a free store (a
   store that isn't selling simply doesn't convert) or a comped row. A pending
   PLAN invoice is voided ("rather pause than pay"). **Billing:** paid through a
   future date by the plan → nothing now, the cron issues the hold invoice at

@@ -9,7 +9,15 @@ import {
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	FOUNDING_MONTHLY_PRICES,
+	FOUNDING_PLAN,
+	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PRICE_LAPSE_MS,
+	foundingBenefitsAtRisk,
+	foundingBenefitsEndAt,
+	foundingBenefitsRevocable,
+	foundingBenefitsWarningDue,
+	foundingPlanLocked,
+	foundingPriceEligible,
 	foundingPricingApplies,
 	HOLD_MONTHLY_PRICES,
 	isPlanSelectable,
@@ -24,6 +32,8 @@ import {
 	planPrice,
 	planQualifiesForFounding,
 	PLANS,
+	renewalCurrency,
+	renewalQuote,
 	starterPricePerDay,
 	UNLIMITED,
 } from "./plans";
@@ -253,6 +263,8 @@ describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
 		plan: "pro" as const,
 		isFoundingMember: true,
 		foundingIntent: true, // never cleared after the claim — must not bypass the window
+		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
 		now: NOW,
 	};
 
@@ -298,10 +310,211 @@ describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
 				plan: "pro",
 				isFoundingMember: false,
 				foundingIntent: false,
+				benefitsRevokedAt: undefined,
+				benefitsRestoredAt: undefined,
 				paidThrough: NOW - DAY,
 				now: NOW,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("foundingPriceEligible — the STORE is on founding pricing (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const claimed = {
+		isFoundingMember: true,
+		foundingIntent: false, // marked founding by admin — the v1 path
+		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
+		now: NOW,
+	};
+
+	test("tier-agnostic: a founding member is eligible whatever plan they sit on", () => {
+		// The trap it closes: asking foundingPricingApplies with the store's
+		// CURRENT plan says "no" for a member on Starter, pricing their move back
+		// up to Founding Pro at list.
+		expect(foundingPriceEligible({ ...claimed, paidThrough: NOW - DAY })).toBe(
+			true,
+		);
+		expect(
+			foundingPricingApplies({
+				...claimed,
+				plan: "starter",
+				paidThrough: NOW - DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("an admin-marked member with foundingIntent unset is eligible", () => {
+		expect(foundingPriceEligible({ ...claimed, paidThrough: NOW + DAY })).toBe(
+			true,
+		);
+	});
+
+	test("the lapse window revokes it; rank flags alone never rescue it", () => {
+		expect(
+			foundingPriceEligible({ ...claimed, paidThrough: NOW - 90 * DAY }),
+		).toBe(true);
+		expect(
+			foundingPriceEligible({
+				...claimed,
+				foundingIntent: true,
+				paidThrough: NOW - 91 * DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("foundingPricingApplies is eligibility narrowed to founding-priced tiers", () => {
+		for (const plan of PLANS) {
+			for (const paidThrough of [undefined, NOW - DAY, NOW - 91 * DAY]) {
+				const args = { ...claimed, paidThrough };
+				expect(foundingPricingApplies({ ...args, plan })).toBe(
+					plan !== "starter" && foundingPriceEligible(args),
+				);
+			}
+		}
+	});
+});
+
+describe("foundingPlanLocked — Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)", () => {
+	test("a store on founding pricing may only be billed for Founding Pro", () => {
+		expect(FOUNDING_PLAN).toBe("pro");
+		expect(foundingPlanLocked("pro", true)).toBe(false);
+		expect(foundingPlanLocked("starter", true)).toBe(true);
+		expect(foundingPlanLocked("scale", true)).toBe(true);
+	});
+
+	test("once the founding price is revoked, every plan is open again", () => {
+		for (const plan of PLANS) expect(foundingPlanLocked(plan, false)).toBe(false);
+	});
+});
+
+describe("renewalCurrency", () => {
+	test("follows the last PAID invoice, else the country", () => {
+		expect(renewalCurrency({ lastPaidCurrency: "SGD", country: "MY" })).toBe(
+			"SGD",
+		);
+		expect(renewalCurrency({ lastPaidCurrency: "MYR", country: "SG" })).toBe(
+			"MYR",
+		);
+		expect(renewalCurrency({ lastPaidCurrency: undefined, country: "SG" })).toBe(
+			"SGD",
+		);
+		// An unreadable currency on an old row never beats the country.
+		expect(renewalCurrency({ lastPaidCurrency: "USD", country: "SG" })).toBe(
+			"SGD",
+		);
+		expect(
+			renewalCurrency({ lastPaidCurrency: undefined, country: undefined }),
+		).toBe("MYR");
+	});
+});
+
+describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const activePro = {
+		status: "active" as const,
+		plan: "pro" as const,
+		billingCycle: "monthly" as const,
+		pendingPlanChange: undefined,
+		isFoundingMember: false,
+		foundingIntent: false,
+		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
+		paidThrough: NOW - 1000,
+		lastPaidCurrency: undefined,
+		country: "MY" as const,
+		now: NOW,
+	};
+	const founding = { ...activePro, isFoundingMember: true };
+
+	test("the four-cell matrix: founding / list × MYR / SGD (Pro monthly)", () => {
+		expect(renewalQuote(founding)).toEqual({
+			kind: "plan",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: true,
+			currency: "MYR",
+			amount: 10400,
+		});
+		expect(renewalQuote({ ...founding, country: "SG" })).toMatchObject({
+			currency: "SGD",
+			amount: 4100,
+		});
+		expect(renewalQuote(activePro)).toMatchObject({
+			founding: false,
+			currency: "MYR",
+			amount: 14900,
+		});
+		expect(renewalQuote({ ...activePro, country: "SG" })).toMatchObject({
+			currency: "SGD",
+			amount: 5900,
+		});
+	});
+
+	test("annual bills 10 months at the store's own rate", () => {
+		expect(
+			renewalQuote({ ...founding, billingCycle: "annual" }).amount,
+		).toBe(104000);
+		expect(
+			renewalQuote({ ...founding, billingCycle: "annual", country: "SG" })
+				.amount,
+		).toBe(41000);
+	});
+
+	test("the currency follows the last paid invoice, not the country", () => {
+		expect(
+			renewalQuote({ ...founding, country: "MY", lastPaidCurrency: "SGD" }),
+		).toMatchObject({ currency: "SGD", amount: 4100 });
+	});
+
+	test("a lapsed founding member renews at list", () => {
+		expect(
+			renewalQuote({ ...founding, paidThrough: NOW - 91 * DAY }),
+		).toMatchObject({ founding: false, amount: 14900 });
+	});
+
+	test("a scheduled downgrade lands with the renewal — plan AND price", () => {
+		expect(
+			renewalQuote({ ...activePro, pendingPlanChange: "starter" }),
+		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
+	});
+
+	test("a Founding Member's scheduled downgrade is cancelled — Founding Pro renews (Zaki, 17 Sep 2026)", () => {
+		expect(
+			renewalQuote({ ...founding, pendingPlanChange: "starter" }),
+		).toMatchObject({ plan: "pro", founding: true, amount: 10400 });
+		// Once the founding price is revoked they are an ordinary seller, and a
+		// change they scheduled is theirs to keep.
+		expect(
+			renewalQuote({
+				...founding,
+				pendingPlanChange: "starter",
+				paidThrough: NOW - 91 * DAY,
+			}),
+		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
+	});
+
+	test("a paused store renews the hold: flat, monthly, never founding, tier kept", () => {
+		const held = {
+			...founding,
+			status: "on_hold" as const,
+			billingCycle: "annual" as const,
+			pendingPlanChange: "starter" as const,
+		};
+		expect(renewalQuote(held)).toEqual({
+			kind: "hold",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			amount: HOLD_MONTHLY_PRICES.MYR,
+		});
+		expect(renewalQuote({ ...held, country: "SG" }).amount).toBe(
+			HOLD_MONTHLY_PRICES.SGD,
+		);
 	});
 });
 
@@ -589,5 +802,235 @@ describe("plan changes — direction and carried-over days (86eyb6z4r)", () => {
 				now: NOW,
 			}),
 		).toBe(5);
+	});
+});
+
+describe("founding benefit REVOCATION — membership is permanent, benefits aren't (z8r3fdfyw5)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const WINDOW = FOUNDING_PRICE_LAPSE_MS;
+	/** A claimed member whose never-cleared `foundingIntent` is still set — the
+	 * exact shape of the trap this feature had to close. */
+	const claimed = {
+		isFoundingMember: true,
+		foundingIntent: true,
+		paidThrough: NOW - 10 * DAY,
+		benefitsRevokedAt: undefined as number | undefined,
+		benefitsRestoredAt: undefined as number | undefined,
+		now: NOW,
+	};
+	const gate = {
+		status: "past_due" as const,
+		comped: false,
+		paidThrough: NOW - (WINDOW + DAY),
+		benefitsRevokedAt: undefined as number | undefined,
+		benefitsRestoredAt: undefined as number | undefined,
+		now: NOW,
+	};
+
+	test("THE TRAP: revocation beats a still-set foundingIntent", () => {
+		// Un-revoked, this store is eligible only via the window; revoked, it must
+		// be ineligible EVEN THOUGH `foundingIntent` is true. Delete the
+		// `benefitsRevokedAt` short-circuit in foundingPriceEligible and this
+		// flips to `true` — the store would keep founding pricing forever, which
+		// is the opposite of revoking it.
+		expect(foundingPriceEligible(claimed)).toBe(true);
+		expect(
+			foundingPriceEligible({ ...claimed, benefitsRevokedAt: NOW - DAY }),
+		).toBe(false);
+		// And with the retailer flag cleared too (the shape a naive revocation
+		// would leave behind), intent alone still must not resurrect it.
+		expect(
+			foundingPriceEligible({
+				...claimed,
+				isFoundingMember: false,
+				benefitsRevokedAt: NOW - DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("revocation ends founding pricing for every tier that has one", () => {
+		for (const plan of PLANS) {
+			expect(
+				foundingPricingApplies({
+					...claimed,
+					plan,
+					benefitsRevokedAt: NOW - DAY,
+				}),
+			).toBe(false);
+		}
+	});
+
+	test("foundingBenefitsEndAt is paid-through + the window, or nothing to measure", () => {
+		expect(foundingBenefitsEndAt(NOW)).toBe(NOW + WINDOW);
+		expect(foundingBenefitsEndAt(undefined)).toBeUndefined();
+	});
+
+	test("the day-90 boundary: window−1 and window are safe, window+1 revokes", () => {
+		const at = (age: number) =>
+			foundingBenefitsRevocable({ ...gate, paidThrough: NOW - age });
+		expect(at(WINDOW - DAY)).toBe(false);
+		expect(at(WINDOW)).toBe(false);
+		expect(at(WINDOW + DAY)).toBe(true);
+	});
+
+	test("INVARIANT: revocable is the exact complement of eligible", () => {
+		// The pairing that makes "quoted the discount on the page, revoked the
+		// same day" impossible. Walk the boundary hour by hour around day 90.
+		for (let h = -26; h <= 26; h++) {
+			const paidThrough = NOW - WINDOW - h * 60 * 60 * 1000;
+			const eligible = foundingPriceEligible({ ...claimed, paidThrough });
+			const revocable = foundingBenefitsRevocable({ ...gate, paidThrough });
+			expect(revocable).toBe(!eligible);
+		}
+	});
+
+	test("never revoked: on hold, active, comped, no paid period, or already done", () => {
+		// An Off-Season Hold is a PAYING store. Both guards are deliberate, so
+		// each is asserted with the OTHER one made unsafe.
+		expect(foundingBenefitsRevocable({ ...gate, status: "on_hold" })).toBe(
+			false,
+		);
+		expect(foundingBenefitsRevocable({ ...gate, status: "active" })).toBe(false);
+		expect(foundingBenefitsRevocable({ ...gate, comped: true })).toBe(false);
+		// A founding trial that never paid has nothing to lapse — fail toward the
+		// promise, exactly as foundingPriceEligible does.
+		expect(
+			foundingBenefitsRevocable({ ...gate, paidThrough: undefined }),
+		).toBe(false);
+		expect(
+			foundingPriceEligible({ ...claimed, paidThrough: undefined }),
+		).toBe(true);
+		// Revocation happens once.
+		expect(
+			foundingBenefitsRevocable({ ...gate, benefitsRevokedAt: NOW - DAY }),
+		).toBe(false);
+	});
+
+	test("the T-14 warning fires inside its window, and only inside it", () => {
+		const warn = (age: number, sentForPeriodEnd?: number) =>
+			foundingBenefitsWarningDue({
+				...gate,
+				paidThrough: NOW - age,
+				sentForPeriodEnd,
+			});
+		// Too early: benefits end more than 14 days out.
+		expect(warn(WINDOW - FOUNDING_BENEFIT_WARNING_MS - DAY)).toBe(false);
+		// Exactly T-14, mid-window, and the last day all warn.
+		expect(warn(WINDOW - FOUNDING_BENEFIT_WARNING_MS)).toBe(true);
+		expect(warn(WINDOW - 3 * DAY)).toBe(true);
+		expect(warn(WINDOW)).toBe(true);
+		// Past the end it's revocation's job, not the warning's.
+		expect(warn(WINDOW + DAY)).toBe(false);
+	});
+
+	test("the warning dedupes per PAID PERIOD, so a later lapse warns again", () => {
+		const paidThrough = NOW - (WINDOW - 3 * DAY);
+		const args = { ...gate, paidThrough };
+		expect(
+			foundingBenefitsWarningDue({ ...args, sentForPeriodEnd: undefined }),
+		).toBe(true);
+		// Already sent for THIS period → silent.
+		expect(
+			foundingBenefitsWarningDue({ ...args, sentForPeriodEnd: paidThrough }),
+		).toBe(false);
+		// A stamp from an earlier period doesn't suppress the new one.
+		expect(
+			foundingBenefitsWarningDue({
+				...args,
+				sentForPeriodEnd: paidThrough - 40 * DAY,
+			}),
+		).toBe(true);
+	});
+
+	test("warning and revocation never both fire, and neither touches a hold", () => {
+		for (const age of [WINDOW - DAY, WINDOW, WINDOW + DAY]) {
+			const args = { ...gate, paidThrough: NOW - age };
+			const w = foundingBenefitsWarningDue({
+				...args,
+				sentForPeriodEnd: undefined,
+			});
+			const r = foundingBenefitsRevocable(args);
+			expect(w && r).toBe(false);
+			// On hold, both are silent whatever the age.
+			const held = { ...args, status: "on_hold" as const };
+			expect(foundingBenefitsRevocable(held)).toBe(false);
+			expect(
+				foundingBenefitsWarningDue({ ...held, sentForPeriodEnd: undefined }),
+			).toBe(false);
+		}
+	});
+
+	test("INVARIANT: a date is only SHOWN when the pass would actually act on it", () => {
+		// The bug this closes: the ribbon derived its countdown from paid-through
+		// alone, so a store the pass skips — most plausibly a COMPED founding
+		// member — was shown a red "your founding price ends on 29 Sept" alert
+		// for a deadline that could never arrive. Whatever surface shows a date
+		// must gate on the same predicate the cron warns and revokes on.
+		const skipped = [
+			{ ...gate, status: "active" as const },
+			{ ...gate, status: "on_hold" as const },
+			{ ...gate, comped: true },
+			{ ...gate, paidThrough: undefined },
+			{ ...gate, benefitsRevokedAt: NOW - DAY },
+		];
+		for (const args of skipped) {
+			expect(foundingBenefitsAtRisk(args)).toBe(false);
+			// …and therefore neither gate can fire, at ANY point on the clock.
+			for (const age of [0, WINDOW - DAY, WINDOW, WINDOW + DAY]) {
+				const at = { ...args, paidThrough: args.paidThrough && NOW - age };
+				expect(foundingBenefitsRevocable(at)).toBe(false);
+				expect(
+					foundingBenefitsWarningDue({ ...at, sentForPeriodEnd: undefined }),
+				).toBe(false);
+			}
+		}
+		// A lapsing store IS at risk, and both gates become reachable.
+		expect(foundingBenefitsAtRisk(gate)).toBe(true);
+	});
+
+	test("at-risk is the shared precondition, never the whole answer", () => {
+		// Being at risk must not by itself warn or revoke — the clock still rules.
+		const fresh = { ...gate, paidThrough: NOW - DAY };
+		expect(foundingBenefitsAtRisk(fresh)).toBe(true);
+		expect(foundingBenefitsRevocable(fresh)).toBe(false);
+		expect(
+			foundingBenefitsWarningDue({ ...fresh, sentForPeriodEnd: undefined }),
+		).toBe(false);
+	});
+
+	test("AC: the Founding Pro plan lock OPENS on revocation, with no extra code", () => {
+		// The lock keys off eligibility, so this follows automatically — pinned
+		// because "a revoked seller can pick Starter again" is an acceptance
+		// criterion, not an implementation detail.
+		const live = foundingPriceEligible(claimed);
+		const gone = foundingPriceEligible({
+			...claimed,
+			benefitsRevokedAt: NOW - DAY,
+		});
+		expect(foundingPlanLocked("starter", live)).toBe(true);
+		for (const plan of PLANS) expect(foundingPlanLocked(plan, gone)).toBe(false);
+	});
+
+	test("AC: the next renewal bills LIST price once revoked", () => {
+		const base = {
+			status: "past_due" as const,
+			plan: "pro" as const,
+			billingCycle: "monthly" as const,
+			pendingPlanChange: undefined,
+			isFoundingMember: true,
+			foundingIntent: true,
+			paidThrough: NOW - 10 * DAY,
+			lastPaidCurrency: undefined,
+			country: "MY" as const,
+			benefitsRestoredAt: undefined,
+			now: NOW,
+		};
+		const founding = renewalQuote({ ...base, benefitsRevokedAt: undefined });
+		const revoked = renewalQuote({ ...base, benefitsRevokedAt: NOW - DAY });
+		expect(founding.founding).toBe(true);
+		expect(revoked.founding).toBe(false);
+		expect(revoked.amount).toBeGreaterThan(founding.amount);
+		expect(revoked.amount).toBe(planPrice("pro", "monthly", false, "MYR"));
 	});
 });

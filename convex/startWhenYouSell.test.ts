@@ -482,7 +482,7 @@ describe("invoices.switchPendingPlan — switch before paying", () => {
 		expect(after?.plan).toBe("pro");
 	});
 
-	test("a founding-intent store keeps its promised price when switching back to Pro", async () => {
+	test("a founding-intent store's first invoice stays Founding Pro — the Starter switch is refused (Zaki, 17 Sep 2026)", async () => {
 		const t = setup();
 		const seeded = await seedRetailer(t, "u_swf");
 		await t.run((ctx) => ctx.db.patch(seeded.subId, { foundingIntent: true }));
@@ -492,10 +492,47 @@ describe("invoices.switchPendingPlan — switch before paying", () => {
 			subscriptionId: seeded.subId,
 		});
 		const asUser = t.withIdentity({ subject: seeded.userId });
-		await asUser.mutation(api.invoices.switchPendingPlan, { plan: "starter" });
-		const { invoiceId } = await asUser.mutation(api.invoices.switchPendingPlan, {
-			plan: "pro",
+		await expect(
+			asUser.mutation(api.invoices.switchPendingPlan, { plan: "starter" }),
+		).rejects.toThrow(/Founding Members stay on Founding Pro/);
+		const pending = await t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", seeded.retailerId))
+				.collect(),
+		);
+		// The refused switch voided nothing — the founding bill is still the one.
+		expect(pending.map((i) => [i.status, i.plan, i.total])).toEqual([
+			["pending", "pro", 10400],
+		]);
+	});
+
+	test("a founding-intent store's Starter bill from before the lock switches back to Pro at the founding price", async () => {
+		const t = setup();
+		const seeded = await seedRetailer(t, "u_swb");
+		const now = Date.now();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(seeded.subId, { foundingIntent: true });
+			await ctx.db.insert("invoices", {
+				retailerId: seeded.retailerId,
+				subscriptionId: seeded.subId,
+				invoiceNumber: "INV-PRELOCK-ST",
+				plan: "starter",
+				billingCycle: "monthly",
+				amount: 7900,
+				total: 7900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * DAY,
+				dueDate: now + 14 * DAY,
+				status: "pending",
+				origin: "self_serve",
+				createdAt: now,
+			});
 		});
+		const { invoiceId } = await t
+			.withIdentity({ subject: seeded.userId })
+			.mutation(api.invoices.switchPendingPlan, { plan: "pro" });
 		const inv = await t.run((ctx) => ctx.db.get(invoiceId));
 		expect(inv?.total).toBe(10400);
 		expect(inv?.foundingDiscount).toBe(4500);

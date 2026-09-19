@@ -19,6 +19,7 @@ import {
 import { PLAN_LABEL, type SubscriptionView } from "../../lib/subscription";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { OwnerOnlyNote } from "./owner-only-note";
 
 /**
  * Settings → Billing: the Off-Season Hold switch (z8r3fday24). Rendered for
@@ -40,6 +41,7 @@ export function SeasonalHoldCard({
 	country,
 	sub,
 	pendingKind,
+	ownerOnly = false,
 	id,
 	highlight,
 }: {
@@ -53,6 +55,9 @@ export function SeasonalHoldCard({
 	/** Kind of the seller's pending invoice, if any — a past_due seller's
 	 * way out differs by whether the unpaid bill is the tier or the hold. */
 	pendingKind?: "plan" | "hold";
+	/** Admin act-as: billing is view-only — `setSeasonalHold` refuses it
+	 * server-side, so the switch is disabled here with the reason. */
+	ownerOnly?: boolean;
 }) {
 	const setHold = useMutation(api.subscriptions.setSeasonalHold);
 	const [confirm, setConfirm] = useState<"pause" | "resume" | null>(null);
@@ -154,12 +159,14 @@ export function SeasonalHoldCard({
 					<Button
 						type="button"
 						onClick={() => setConfirm("resume")}
+						disabled={ownerOnly}
 						className="h-11 w-fit shrink-0 gap-1.5"
 					>
 						<PlayCircle className="size-4" aria-hidden />
 						Resume {plan}
 					</Button>
 				</div>
+				{ownerOnly ? <OwnerOnlyNote /> : null}
 				<ConfirmDialog
 					open={confirm === "resume"}
 					onOpenChange={(open) => setConfirm(open ? "resume" : null)}
@@ -236,12 +243,14 @@ export function SeasonalHoldCard({
 					type="button"
 					variant="outline"
 					onClick={() => setConfirm("pause")}
+					disabled={ownerOnly}
 					className="h-11 w-fit shrink-0 gap-1.5"
 				>
 					<PauseCircle className="size-4" aria-hidden />
 					{lockedOverPlan ? "Pause instead" : "Pause for the season"}
 				</Button>
 			</div>
+			{ownerOnly ? <OwnerOnlyNote /> : null}
 			<ConfirmDialog
 				open={confirm === "pause"}
 				onOpenChange={(open) => setConfirm(open ? "pause" : null)}
