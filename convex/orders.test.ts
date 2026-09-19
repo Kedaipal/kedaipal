@@ -8242,6 +8242,81 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		expect(note?.note).toMatch(/from \d{4}-\d{2}-\d{2} 03:00 to \d{4}-\d{2}-\d{2} 10:00/);
 	});
 
+	test("the order carries what /track needs to SAY it moved", async () => {
+		// No message goes out on a reschedule, so the buyer's page is the only
+		// place the change can surface — and "Deliver on 10:00 AM" alone reads
+		// exactly like the time they picked (z8r3fdff97 test round).
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 10 * 60,
+		});
+		const moved = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(moved?.rescheduledAt).toBeGreaterThan(0);
+		expect(moved?.rescheduledFromDate).toBe(date);
+		expect(moved?.rescheduledFromTimeMinutes).toBe(3 * 60);
+
+		// Moving again re-points "was" at the moment just left, never the first.
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date + DAY_MS,
+			fulfilmentTimeMinutes: 11 * 60,
+		});
+		const again = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(again?.rescheduledFromDate).toBe(date);
+		expect(again?.rescheduledFromTimeMinutes).toBe(10 * 60);
+	});
+
+	test("clearing a pickup time leaves no stale 'was' time behind", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const date = todayMytMidnight() + 2 * DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 15 * 60,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		if (!order) throw new Error("seed failed");
+
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.orders.rescheduleFulfilment,
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
+		);
+		const cleared = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(cleared?.fulfilmentTimeMinutes).toBeUndefined();
+		// It moved FROM 3:00 PM — that is what the buyer needs contrasted.
+		expect(cleared?.rescheduledFromTimeMinutes).toBe(15 * 60);
+		expect(cleared?.rescheduledAt).toBeGreaterThan(0);
+	});
+
+	test("re-saving the SAME moment is not a change — the buyer is told nothing", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.orders.rescheduleFulfilment,
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: 3 * 60 },
+		);
+		const same = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(same?.rescheduledAt).toBeUndefined();
+		expect(same?.rescheduledFromDate).toBeUndefined();
+	});
+
 	test("date-only change keeps the existing time — the clock never silently drops", async () => {
 		const t = setup();
 		const { order, date } = await seedThreeAmOrder(t);

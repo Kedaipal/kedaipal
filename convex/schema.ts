@@ -1620,6 +1620,18 @@ export default defineSchema({
 		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
+		// The seller MOVED this order's moment (z8r3fdff97 test round). The
+		// buyer is never messaged about a reschedule — the dialog says so and
+		// tells the seller to agree it in chat — so `/track` is the only place
+		// they can see it changed, and "Collect on Mon 3:00 PM" alone looks
+		// exactly like the time they chose. These three carry what the page
+		// needs to say so: WHEN it was moved, and the moment it moved FROM
+		// (date-only when the seller cleared the time). Absent = never moved,
+		// which is every order before this shipped. Stamped only when the
+		// moment actually differs, so re-saving the same day is not "changed".
+		rescheduledAt: v.optional(v.number()),
+		rescheduledFromDate: v.optional(v.number()),
+		rescheduledFromTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery

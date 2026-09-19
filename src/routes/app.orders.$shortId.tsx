@@ -77,6 +77,7 @@ import {
 } from "../components/order/print-label-button";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
+import { RescheduledNote } from "../components/order/rescheduled-note";
 import { SecurityDepositCard } from "../components/order/security-deposit-card";
 import {
 	MarkShippedDialog,
@@ -1655,6 +1656,21 @@ function OrderDetailRoute() {
 								{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
 							</span>
 						) : null}
+					</div>
+				) : null}
+				{/* The moment was MOVED (z8r3fdff97 test round). The buyer's page
+				    says who changed it; this one says when, because the seller
+				    reading it may not be the one who did — and no message went
+				    out, so the chat won't tell them either. */}
+				{!isBooking && order.rescheduledAt !== undefined ? (
+					<div className="border-t border-border pt-3">
+						<RescheduledNote
+							audience="seller"
+							rescheduledAt={order.rescheduledAt}
+							fromDate={order.rescheduledFromDate}
+							fromTimeMinutes={order.rescheduledFromTimeMinutes}
+							storeName={order.storeName || "The store"}
+						/>
 					</div>
 				) : null}
 				{/* What the buyer was told to do before collecting (z8r3fdff97).

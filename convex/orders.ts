@@ -4242,9 +4242,26 @@ export const rescheduleFulfilment = mutation({
 				: tm === undefined
 					? ymdFromEpoch(d)
 					: `${ymdFromEpoch(d)} ${hhmmFromMinutes(tm)}`;
+		// The buyer gets no message about this (the dialog says so), so the
+		// order carries what `/track` needs to SHOW that it moved: when, and
+		// from what. Only a real change counts — re-saving the same moment
+		// must not make the buyer's page cry "changed" (z8r3fdff97 test round).
+		const moved =
+			sanitizedDate !== order.fulfilmentDate ||
+			nextTime !== order.fulfilmentTimeMinutes;
 		await ctx.db.patch(orderId, {
 			fulfilmentDate: sanitizedDate,
 			fulfilmentTimeMinutes: nextTime,
+			...(moved
+				? {
+						rescheduledAt: now,
+						rescheduledFromDate: order.fulfilmentDate,
+						// Convex patches read `undefined` as "remove", which is
+						// exactly right: a moment moved FROM a date-only day has no
+						// previous time to show.
+						rescheduledFromTimeMinutes: order.fulfilmentTimeMinutes,
+					}
+				: {}),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {

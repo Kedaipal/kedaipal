@@ -51,6 +51,7 @@ import {
 } from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
+import { RescheduledNote } from "../components/order/rescheduled-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -1569,6 +1570,21 @@ function TrackingRoute() {
 						)}
 					</span>
 				</div>
+			) : null}
+
+			{/* …and, when the seller MOVED that moment, say so (z8r3fdff97 test
+			    round). No message goes out on a reschedule, so without this the
+			    new time is indistinguishable from the one the buyer chose.
+			    Hidden once the order is done: history, not news. */}
+			{!isBooking && !isCancelled && order.status !== "delivered" ? (
+				<RescheduledNote
+					className="mt-2"
+					audience="buyer"
+					rescheduledAt={order.rescheduledAt}
+					fromDate={order.rescheduledFromDate}
+					fromTimeMinutes={order.rescheduledFromTimeMinutes}
+					storeName={order.storeName || "The store"}
+				/>
 			) : null}
 
 			<AddressEditDialog

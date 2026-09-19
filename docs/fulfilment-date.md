@@ -662,6 +662,19 @@ chat and records it on the order.
   Deliberately **no new WhatsApp send** (one-msg-per-order posture) — messages
   already sent keep the old time; the chat agreement covers that, and the
   dialog's helper copy says so ("agree the new time with them in chat first").
+- **The buyer's page SAYS it moved** (z8r3fdff97 test round). Because nothing
+  is sent, "Collect on Mon, 21 Sep · 1:00 PM" on `/track` reads exactly like
+  the moment the buyer picked themselves — a seller who moves 3 PM to 1 PM
+  leaves no trace the buyer can see. The order now carries `rescheduledAt` +
+  the moment it moved FROM (`rescheduledFromDate` /
+  `rescheduledFromTimeMinutes`, the second absent when the seller cleared the
+  time), and both order pages render `RescheduledNote` from it: the buyer
+  reads "**IndoMart changed this** — it was Mon, 21 Sep 2026 · 3:00 PM. 5m
+  ago", the seller "**You moved this** — …" (they may not be the one who did,
+  and the chat won't tell them either). Stamped only when the moment actually
+  differs, so re-saving the same day never cries "changed"; hidden on the
+  buyer's page once the order is delivered or cancelled — then it's history,
+  not news.
 - **UI**: `RescheduleFulfilmentDialog` on order detail's Fulfillment card —
   renders only inside the reschedule window ("Reschedule", or "Set date" on a
   dateless order), native date+time inputs, live "the buyer's order page will
