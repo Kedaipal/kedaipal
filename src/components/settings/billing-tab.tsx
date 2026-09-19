@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import {
+	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PLAN,
 	foundingPlanLocked,
 	isUnlimited,
@@ -278,19 +279,15 @@ export function BillingTab({
 				</section>
 			) : null}
 			{retailer.isFoundingMember ? (
-				<div className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
-					<Award className="size-6 shrink-0 text-amber-600" />
-					<div>
-						<p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-							Founding Member #{retailer.foundingMemberRank} of 10
-						</p>
-						<p className="text-xs text-amber-800/80 dark:text-amber-300/80">
-							{gateway?.foundingPricingLapsed
-								? "Your rank and badge are yours for good. Your founding price lapsed after more than 3 months without an active subscription, so new bills are at the standard price."
-								: "Your 30% discount is locked in — thank you for backing Kedaipal early. It stays yours as long as your subscription doesn't lapse for more than 3 months; your rank and badge are permanent either way."}
-						</p>
-					</div>
-				</div>
+				<FoundingRibbon
+					rank={retailer.foundingMemberRank}
+					// undefined = the server hasn't answered yet, which is NOT the same
+					// as "nothing is wrong" — see the ribbon's `pending` branch.
+					pending={gateway === undefined}
+					revoked={gateway?.foundingBenefitsRevoked === true}
+					lapsed={gateway?.foundingPricingLapsed === true}
+					endsAt={gateway?.foundingBenefitsEndAt}
+				/>
 			) : null}
 
 			{/* Admins aren't on a plan — show a plain account note instead of the
@@ -662,6 +659,7 @@ export function BillingTab({
 							renewing={sub.status !== "trialing"}
 							foundingPricing={gateway.foundingPricing}
 							foundingPricingLapsed={gateway.foundingPricingLapsed}
+							foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
 							ownerOnly={ownerOnly}
 							onRedirectingChange={setRedirecting}
 						/>
@@ -868,6 +866,143 @@ export function BillingTab({
  * act-as, so there it renders as the same control, disabled: never a live
  * link that pays or claims a payment on the seller's behalf.
  */
+/**
+ * The founding ribbon — ONE control, three tones, because all three say the
+ * same thing (where this member's founding price stands) and a second stacked
+ * box about the same subject is noise, not emphasis:
+ *
+ *  - **amber, "locked in"** — benefits live, nothing due;
+ *  - **red, "ends on {date}"** — inside the last 14 days (z8r3fdfyw5). This is
+ *    the T-14 warning: the price is about to be taken, so the tone escalates
+ *    and the copy carries the DATE and the fact that renewing later won't undo
+ *    it. The renew affordance is the picker/Pay-now immediately below — one
+ *    renew button on the page, not two;
+ *  - **muted, "has ended"** — revoked for good. Never says "renew to keep your
+ *    founding price": paying no longer brings it back, and the lapsed-but-not-
+ *    yet-revoked wording would be a promise the server won't honour.
+ *
+ * Every tone repeats that the RANK AND BADGE ARE KEPT. That is the standing
+ * promise (agreement 86exq9kz9 + this ribbon's own copy since 3 Sep), and the
+ * one sentence a member losing their discount most needs to still be true.
+ * `revoked`, `lapsed` and `endsAt` are all SERVER-resolved
+ * (`billingGatewayAvailable`) — deriving founding state client-side is the bug
+ * z8r3fdfty4 closed.
+ *
+ * **The fourth state is `pending`, and it exists because its absence was a lie.**
+ * The retailer doc resolves before the gateway query, so while the latter is
+ * `undefined` all three flags read `false` and this fell through to the amber
+ * "your 30% discount is locked in" — told to a member whose discount had ENDED,
+ * on every single page load (measured at ~310ms on localhost, and a seller on
+ * mobile data reads for longer than that). The rank is known from the retailer
+ * doc and is true in every state, so the title still renders; only the CLAIM
+ * waits for the server, behind a skeleton line that holds the same height and
+ * keeps the ribbon from jumping.
+ */
+function FoundingRibbon({
+	rank,
+	pending,
+	revoked,
+	lapsed,
+	endsAt,
+}: {
+	rank?: number;
+	pending: boolean;
+	revoked: boolean;
+	lapsed: boolean;
+	endsAt?: number;
+}) {
+	// A FUTURE date only. The pass runs daily, so between the window closing and
+	// the next run there is a window of up to a day where `endsAt` is already in
+	// the past — this branch would then render "founding price ends <yesterday>"
+	// and tell them to "renew before then". Falling through to `lapsed` says the
+	// true thing for that day, and `revoked` takes over once the pass catches up.
+	const now = Date.now();
+	const endingSoon =
+		!pending &&
+		!revoked &&
+		endsAt !== undefined &&
+		endsAt > now &&
+		endsAt - now <= FOUNDING_BENEFIT_WARNING_MS;
+	const muted = pending || revoked;
+	const tone = muted
+		? "border-border bg-muted/50"
+		: endingSoon
+			? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
+			: "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40";
+	const iconTone = muted
+		? "text-muted-foreground"
+		: endingSoon
+			? "text-red-600 dark:text-red-400"
+			: "text-amber-600";
+	const titleTone = muted
+		? "text-foreground"
+		: endingSoon
+			? "text-red-900 dark:text-red-200"
+			: "text-amber-900 dark:text-amber-200";
+	const bodyTone = revoked
+		? "text-muted-foreground"
+		: endingSoon
+			? "text-red-800/90 dark:text-red-300/90"
+			: "text-amber-800/80 dark:text-amber-300/80";
+
+	return (
+		<div
+			className={`flex items-start gap-3 rounded-2xl border p-4 ${tone}`}
+			role={endingSoon ? "alert" : undefined}
+		>
+			<Award className={`mt-0.5 size-6 shrink-0 ${iconTone}`} />
+			<div className="min-w-0">
+				<p className={`text-sm font-semibold ${titleTone}`}>
+					Founding Member #{rank} of 10
+					{pending
+						? null
+						: endingSoon && endsAt !== undefined
+							? ` · founding price ends ${formatShortDate(endsAt)}`
+							: revoked
+								? " · founding price ended"
+								: null}
+				</p>
+				{pending ? (
+					<div
+						className="mt-1.5 h-3 w-48 max-w-full animate-pulse rounded bg-muted-foreground/20"
+						aria-hidden="true"
+					/>
+				) : (
+					<p className={`mt-0.5 text-xs ${bodyTone}`}>
+						{revoked ? (
+							<>
+								Your subscription stayed unrenewed past the 3-month window, so
+								your founding price has ended and every plan is open to you
+								again at the standard prices.{" "}
+								<strong className="font-semibold text-foreground">
+									Your rank and badge stay yours, permanently
+								</strong>{" "}
+								— your storefront is unchanged. Think this is wrong? Message us.
+							</>
+						) : endingSoon && endsAt !== undefined ? (
+							<>
+								Your subscription hasn't renewed, so your 30% founding price
+								ends on{" "}
+								<strong className="font-semibold">
+									{formatShortDate(endsAt)}
+								</strong>
+								. Renew below before then and you keep it — after that date your
+								plan bills at the standard price, and renewing later won't bring
+								the discount back. Your rank and badge are yours for good either
+								way.
+							</>
+						) : lapsed ? (
+							"Your rank and badge are yours for good. Your founding price lapsed after more than 3 months without an active subscription, so new bills are at the standard price."
+						) : (
+							"Your 30% discount is locked in — thank you for backing Kedaipal early. It stays yours as long as your subscription doesn't lapse for more than 3 months; your rank and badge are permanent either way."
+						)}
+					</p>
+				)}
+			</div>
+		</div>
+	);
+}
+
 function ActionLink({
 	href,
 	disabled,
