@@ -96,6 +96,13 @@ function NewProductRoute() {
 				prepMinutes: values.prepMinutes,
 				pickupNote: values.pickupNote,
 				minQuantity: values.minQuantity,
+				// The form says null for "toggle off"; on CREATE there is nothing to
+				// clear, and the create validator takes an object or nothing — so
+				// null converts to undefined here. (This line vanished once in the
+				// T2 rebase — git kept both sides quietly and every convex test
+				// stayed green because they call the API directly. The payload scan
+				// test now pins it.)
+				event: values.event ?? undefined,
 				variants: values.variants,
 			}));
 		createdProductId.current = productId;

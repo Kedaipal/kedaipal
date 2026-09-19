@@ -157,8 +157,10 @@ for free. `isFreeOrder` = zero **AND** no outstanding price to name.
 
 It drives: the confirmation template's money parameter (`NO_PAYMENT_LABEL`,
 "no payment needed" — a parameter VALUE, so **no Meta re-approval**), the
-free-RSVP reply on the legacy inbound path, and the tracking page's payment
-section. Paid events run the normal handshake unchanged.
+free-RSVP reply on the legacy inbound path, the tracking page's payment
+surfaces (both the status card and the how-to-pay section drop entirely), and
+the seller order page (the unpaid card becomes "Free order — there's nothing to
+collect"). Paid events run the normal handshake unchanged.
 
 > **Open, needs Arif:** a proper "RSVP confirmed for <event> at <venue>"
 > WhatsApp template would need a new Meta submission — the approved
@@ -175,7 +177,7 @@ section. Paid events run the normal handshake unchanged.
 | Product page | `EventNotice` — the moment, the seats, and that there's no delivery and no date to pick. CTA reads **RSVP** |
 | Cart | Refuses a second event date with the reason; the stepper is capped by seats as well as stock |
 | Checkout | A lock banner at the TOP (adding an RSVP changes the terms of the whole order) with a one-tap "remove the RSVP" escape; section 3 reads the moment back instead of asking |
-| Seller product page | The **RSVPs panel**, above the form: total, per-option tally, seats left, and a link into the inbox filtered to that day |
+| Seller product page | The **RSVPs panel**, above the form: total, per-option tally, seats left, and a link into the inbox searching the product's frozen item name (the inbox's `from`/`to` bind to createdAt, and no arbitrary fulfilment-day filter exists) |
 | Seller product form | Its own **Event** card above "Order rules" (see below) |
 | `/track/<token>` | "Event: Fri 25 Sep · 8:00 AM — set by the store for this event" |
 | Product CSV export | `event_date`, `event_time`, `event_seats` (export-only) |

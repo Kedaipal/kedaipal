@@ -121,9 +121,16 @@ export function EventRsvpPanel({
 					    event's day — never "go to the inbox and find them". */}
 					<Link
 						to="/app/orders"
-						// The inbox's fulfilment-date window is an epoch pair; an event
-						// is one day, so both ends are the same MYT midnight.
-						search={{ from: headcount.date, to: headcount.date }}
+						// ITEM search, not the date-range filter: the inbox's from/to
+						// bind to createdAt (when the order was PLACED), so pointing
+						// them at the event day found nothing — caught live, the link
+						// landed on "No orders match your filters". There is no
+						// arbitrary fulfilment-day filter to use (fwin is only
+						// today/tomorrow/this week), and every RSVP's frozen item name
+						// is this product's name, so the search IS the tally's list.
+						// A rename only affects future orders' frozen names — same
+						// staleness the CSV's live category lookup already accepts.
+						search={{ q: productName }}
 						className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-sm font-medium transition-colors hover:bg-muted"
 					>
 						<Inbox className="size-4" aria-hidden />

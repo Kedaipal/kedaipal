@@ -42,7 +42,7 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
-import { isMockupGateClosed } from "../../convex/lib/order";
+import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import {
 	COUNTRY_PAYMENT_METHODS,
@@ -1288,8 +1288,30 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
+			{/* A FREE order (`z8r3fdff9u` — the RM0 RSVP) says so instead of asking
+			    the seller to collect: the unpaid card below would offer "Mark
+			    payment received" and promise a day-11 reminder for a debt that
+			    doesn't exist. Same predicate as the buyer's page, so the two sides
+			    can never disagree about whether money is owed. */}
+			{isFreeOrder(order) && order.status !== "cancelled" ? (
+				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<div className="flex items-center gap-2">
+						<HandCoins className="size-4 text-muted-foreground" />
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Payment
+						</p>
+					</div>
+					<p className="text-sm text-muted-foreground">
+						Free order — there&apos;s nothing to collect, and the buyer
+						isn&apos;t asked to pay.
+					</p>
+				</section>
+			) : null}
+
 			{/* Unpaid → retailer can confirm directly without waiting for shopper claim. */}
-			{paymentStatus === "unpaid" && order.status !== "cancelled" ? (
+			{paymentStatus === "unpaid" &&
+			order.status !== "cancelled" &&
+			!isFreeOrder(order) ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center gap-2">
 						<HandCoins className="size-4 text-amber-600" />
