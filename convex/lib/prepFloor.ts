@@ -174,3 +174,47 @@ export function prepFloorIssue(args: {
 		)
 		.join("");
 }
+
+/**
+ * The WHOLE prep rule for a placed order — what `orders.create` and
+ * `orderClaims.commit` call (ClickUp `z8r3fdg9aa`). `prepFloorIssue` judges
+ * one deadline; an order has two, and must clear both:
+ *
+ *  - **The handover's** — closing time when the store's hours bound it, else
+ *    midnight (`prepFloorHours`, `timed` = the checkout's `asksForTime`). A
+ *    counter can't hand anything over at 7 PM if it shut at 6.
+ *  - **The day's** — midnight, for a request that named no hour at all. A
+ *    date-only order has claimed a whole day, so prep that outlasts the day
+ *    itself makes it impossible on its face.
+ *
+ * Both matter because neither implies the other. Inside the open window the
+ * handover deadline is the stricter one — a 2-hour prep started at 4:30 PM at
+ * a 6 PM counter is too late today, though it would be done by 6:30. AFTER
+ * closing the handover deadline goes silent instead — with no slot left with
+ * prep and none without, prep isn't what emptied the day, so it defers (see
+ * `prepFloorProblem`) — and only the day's deadline is left to refuse a
+ * 24-hour prep booked for tonight.
+ *
+ * A request that DID name an hour is judged on that hour alone: the day's
+ * deadline is the date-only reading of "today", and `prepFloorProblem` already
+ * holds a named time to its own slot.
+ */
+export function orderPrepFloorIssue(args: {
+	hours: OpeningHours | undefined;
+	dateEpoch: number;
+	timeMinutes: number | undefined;
+	now: number;
+	prep: CartPrep;
+	kind: PrepFloorKind;
+	/** `asksForTime` — whether the store's hours bound this handover. */
+	timed: boolean;
+}): string | null {
+	const handover = prepFloorIssue({
+		...args,
+		hours: prepFloorHours(args.hours, args.timed),
+	});
+	if (handover !== null) return handover;
+	// An untimed handover was already judged to midnight above.
+	if (args.timeMinutes !== undefined || !args.timed) return null;
+	return prepFloorIssue({ ...args, hours: prepFloorHours(args.hours, false) });
+}
