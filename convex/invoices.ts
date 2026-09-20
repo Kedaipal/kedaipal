@@ -214,6 +214,10 @@ async function settleInvoicePaid(
 		userCap: caps.userCap,
 		broadcastQuota: caps.broadcastQuota,
 		updatedAt: now,
+		// A store that was locked by a comp ending (z8r3fdeub2) is a paying
+		// seller again — drop the marker so a future lapse reads "past due",
+		// not "your sponsored access ended".
+		compEndedAt: undefined,
 		...(sub.autoRenew
 			? {
 					autoRenew: {
@@ -521,6 +525,12 @@ export const issueInvoice = mutation({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.first();
 		if (!sub) throw new ConvexError("Retailer has no subscription");
+		// The machine paths already skip comped rows; the manual path must refuse
+		// too, or "never charged" (z8r3fdeub2) dies to one absent-minded click.
+		if (sub.comped === true)
+			throw new ConvexError(
+				"This store is comped — it's on the house. End the comp first if you really mean to bill it.",
+			);
 
 		// Prevent accidental duplicate pendings — settle/void the existing one first.
 		const existingPending = await ctx.db
@@ -1248,6 +1258,10 @@ export const listRetailersForAdmin = query({
 			 * lock in) a discount the daily pass has taken away. */
 			foundingBenefitsRevoked: boolean;
 			hasPending: boolean;
+			/** On the house (z8r3fdeub2) — the picker labels these so nobody
+			 * drafts a bill `issueInvoice` will refuse anyway. */
+			comped: boolean;
+			compLabel?: string;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -1273,6 +1287,8 @@ export const listRetailersForAdmin = query({
 				foundingIntent: sub?.foundingIntent === true,
 				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
 				hasPending: pending !== null,
+				comped: sub?.comped === true,
+				compLabel: sub?.comp?.label,
 			});
 		}
 		return rows;

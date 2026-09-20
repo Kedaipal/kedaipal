@@ -233,6 +233,12 @@ export const generateAwbPdf = action({
 	> => {
 		const inputs = await ctx.runQuery(internal.awb.singleLabelInputs, { shortId });
 		if (!inputs.ok) return inputs;
+		// Printing a label IS despatching — refused on a lapsed store, like every
+		// other order action (z8r3fdeub2). After the lookup so an unknown shortId
+		// still answers "not found" rather than a lock message.
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: inputs.retailerId,
+		});
 		const bytes = await buildAwbPdf([inputs.label], {
 			paperSize: inputs.paperSize,
 			logo: await fetchLogoBytes(inputs.logoUrl),
@@ -437,6 +443,7 @@ export const generateAwbBatchPdf = action({
 		sort: v.optional(awbSortValidator),
 	},
 	handler: async (ctx, { retailerId, orderIds, sort }): Promise<AwbBatchResult> => {
+		await ctx.runQuery(internal.subscriptions.assertWritable, { retailerId });
 		let ids: Array<Id<"orders">>;
 		let remaining = 0;
 		let filenamePrefix: string;

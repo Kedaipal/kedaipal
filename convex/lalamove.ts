@@ -1077,6 +1077,9 @@ export const prepareBooking = action({
 				expiresAt?: number;
 		  }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
 			shortId,
 		});
@@ -1187,6 +1190,9 @@ export const confirmBooking = action({
 		  }
 		| { ok: true; providerOrderId: string; costActual: number }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: args.shortId,
+		});
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
 			shortId: args.shortId,
 		});
@@ -1622,6 +1628,9 @@ export const cancelBooking = action({
 		ctx,
 		{ shortId },
 	): Promise<{ ok: boolean; message?: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const target = await ctx.runQuery(internal.lalamove.getCancelContext, {
 			shortId,
 		});
