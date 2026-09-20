@@ -485,8 +485,10 @@ windows, so the earliest time it names can always be picked — never inside a
 split day's break, never after closing — and a prep that outlasts today's
 hours says "too late for today" instead of pointing at a slot after the
 shutters. (The first cut floored against midnight and got both wrong.) It is
-deliberately silent on everything that is not prep's fault, so the
-opening-hours gate keeps its own words for a closed day or a break.
+deliberately silent where the opening-hours gate always speaks — a closed
+weekday, a break, a named time outside the windows — but an emptied **open**
+day refuses here even when prep isn't all that emptied it (see the 23:41-gap
+update below).
 
 **What prep races: closing time, or midnight.** A handover the store's hours
 bound is made across its counter, so its prep races **closing time**. A
@@ -514,27 +516,45 @@ missing time is still **accepted** — a date-only order is a legitimate shape,
 the one every pickup had before `z8r3fdff97`, and the seller can set an hour
 with Reschedule — it is only judged honestly now.
 
-**An order clears BOTH deadlines** — `orderPrepFloorIssue`, the entry point
-`orders.create` and `orderClaims.commit` call (`prepFloorIssue` judges one).
-Neither deadline implies the other:
+**One deadline per order** — `orderPrepFloorIssue`, the entry point
+`orders.create` and `orderClaims.commit` call: `prepFloorIssue` against the
+deadline this handover races (`prepFloorHours`) — closing time when the
+store's hours bound it, else midnight. This was briefly TWO passes (a
+"handover's" and a "day's" deadline): after closing, the hours-bound pass
+found no slot with prep and none without, so `prepFloorProblem` deferred to
+the opening-hours rules, and a second midnight-widened pass was needed to
+refuse a 24-hour prep booked for tonight.
 
-| Deadline | What it is | When it bites |
-| --- | --- | --- |
-| The **handover's** | Closing time when the store's hours bound it, else midnight | Inside the open window — a 2-hour prep at 4:30 PM at a 6 PM counter |
-| The **day's** | Midnight, for a request that named no hour at all | After closing, where the handover deadline goes *silent* — no slot left with prep and none without, so prep isn't what emptied the day and it defers (`prepFloorProblem`) |
-
-Without the second, holding a counter to its real hours would have *unrefused*
-the case `z8r3fdff97` fixed: at 8 PM a 24-hour prep books tonight, because prep
-has nothing left to measure. A request that DID name an hour is judged on that
-hour alone — the day's deadline is the date-only reading of "today".
+**Update (2026-09-21): the 23:41 gap — an emptied open day refuses, whoever
+emptied it.** That deferral assumed the opening-hours rules would speak for a
+"closed or finished anyway" day — but they no-op with hours unset, and they
+hold a *named* time only to its window, never to the clock. Two real holes:
+from **23:41 MYT** the flat 15-minute checkout lead alone runs past 23:59, so
+an all-day store had no slot even without prep, prep deferred, nobody refused,
+and a same-day order with a 4-hour prep **resolved** (found when the 2026.09.6
+release gate ran at 23:44 and five prep tests went red *by resolving*); and
+after closing, a prep order naming an **in-window** time (5 PM at 8 PM behind
+9-to-6 shutters) satisfied the hours gate outright and resolved too.
+`prepFloorProblem` now refuses every **open** day with no prep-able slot left
+— "too late for today, pick a later day" is the right instruction whoever
+emptied the day — and only a **closed weekday** still defers ("closed on
+Fridays" stays the opening-hours words). That refusal subsumes the second
+pass (midnight-widening only ever enlarges the windows), so
+`orderPrepFloorIssue` is one pass again. A request that named an hour is no
+longer sent window-shopping either: at 8 PM with a day-long prep, "pick a
+time inside those hours" was a trap — no time today clears the prep. The
+checkout ladder (`fulfilmentTimeIssue`) keeps its truer words where it has
+them: a day the store *genuinely finished* says "closed for today" before
+prep speaks; an all-day store's last minutes now name the prep item instead
+of the generic "no time left" line.
 
 **Still open, deliberately** ([`z8r3fdg9pv`](https://app.clickup.com/t/z8r3fdg9pv)):
-a date-only order for a day whose window has already passed is accepted when
-prep is small or zero — at 8 PM a 2-hour cake for today still goes through,
-from that same shut counter. Prep declines to speak (it isn't prep's fault) and
-`assertWithinOpeningHours` applies its **window** test only where a time
-exists. That is the opening-hours gate's gap, not prep's, and closing it moves
-prep-free orders too.
+a **prep-free** date-only order for a day whose window has already passed is
+accepted — at 8 PM a no-prep order for today still goes through from that
+same shut counter. Prep has no jurisdiction without a prep window in the cart
+(`prepFloorApplies`), and `assertWithinOpeningHours` applies its **window**
+test only where a time exists. That is the opening-hours gate's gap; the prep
+half of it closed with the 23:41 fix above.
 
 **One boolean decides whether it applies** — `prepFloorApplies`, in
 `orders.create` and `orderClaims.commit`. Exempt:

@@ -800,6 +800,37 @@ describe("orderClaims — prep time + pickup note (z8r3fdff97)", () => {
 		expect((await orderOf(t, claimId))?.fulfilmentTimeMinutes).toBe(540);
 	});
 
+	test("the last minutes of the day refuse a same-day commit too (the 23:41 gap)", async () => {
+		// From 23:41 MYT the flat 15-minute lead alone empties an all-day
+		// store; the prep rule used to defer to opening-hours rules that no-op
+		// with hours unset, and the commit RESOLVED. Same gate as
+		// orders.create, pinned at 23:45 so the gap's window is always tested.
+		vi.useFakeTimers();
+		try {
+			const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+			vi.setSystemTime(FRI + (23 * 60 + 45) * 60_000);
+			const t = setup();
+			const { claimId, token } = await sendPuffs(t, { prepMinutes: 240 });
+			await expect(
+				t.mutation(api.orderClaims.commit, {
+					token,
+					deliveryMethod: "self_collect",
+					fulfilmentDate: FRI,
+					fulfilmentTimeMinutes: 1439,
+				}),
+			).rejects.toThrow(/4 hours to prepare.*too late for today/s);
+			await t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: FRI + DAY,
+				fulfilmentTimeMinutes: 9 * 60,
+			});
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI + DAY);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("a DATE-ONLY commit's prep runs to midnight — closing time can't hide a day-long prep", async () => {
 		// orders.create's rule: no time sent, so prep is judged to the end of
 		// the day. At 8 PM a 9-to-6 store had no slots with prep AND none
