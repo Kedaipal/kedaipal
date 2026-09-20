@@ -666,6 +666,15 @@ customers, calendar-feed rotation and the upload-URL minters
 Actions have no `ctx.db`, so they run the same guard through
 `internal.subscriptions.assertWritable` (by store) or `assertWritableForOrder`
 (by `shortId`) before spending a third-party call or an outbound message.
+**Both are OWNER-GATED** (PR #279 review): they run before the action's own
+auth, and a public action is callable by anyone holding the deployment URL —
+if the lock threw for every caller, "sponsored access has ended" vs "not
+found" would be an unauthenticated oracle for order existence and billing
+state over the enumerable `shortId` space (the exact channel the
+trackingToken rule closes). Only the owner trips the lock; anonymous, foreign
+and admin callers pass through to the action's own auth, byte-identical to an
+unlocked store. `sellerLock.test.ts` pins probe ≡ ghost-shortId, and deleting
+either gate turns a test red.
 
 **Never locked**, and why:
 

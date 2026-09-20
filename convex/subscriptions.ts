@@ -356,8 +356,8 @@ export async function endFreePeriodOnFirstOrder(
  * stays open too, or the seller could never unlock themselves.
  *
  * Every public seller mutation and action is either guarded here or listed,
- * with its reason, in `convex/sellerLock.test.ts` — which fails on any new one
- * that is neither.
+ * with its reason, in `convex/sellerLockCoverage.test.ts` — which fails on any
+ * new one that is neither.
  */
 export async function assertSubscriptionActive(
 	ctx: AnyCtx,
@@ -405,14 +405,32 @@ export async function assertOwnStoreActive(ctx: AnyCtx): Promise<void> {
 
 /**
  * The same lock for seller ACTIONS, which have no `ctx.db` and so cannot call
- * the guard directly (Lalamove/Delyva booking, the payment reminder). Internal
- * — an action runs it with `ctx.runQuery` before doing anything the seller
- * would have to undo. A query that throws is the right shape here: it refuses
- * before the action spends a third-party call or an outbound message.
+ * the guard directly (Lalamove/Delyva booking, despatch labels, the payment
+ * reminder). Internal — an action runs it with `ctx.runQuery` before doing
+ * anything the seller would have to undo. A query that throws is the right
+ * shape here: it refuses before the action spends a third-party call or an
+ * outbound message.
+ *
+ * **OWNER-GATED** (PR #279 review). These run FIRST in public actions — before
+ * the action's own auth — and a public action is callable by anyone holding
+ * the deployment URL (it ships in the client bundle). If the lock threw for
+ * every caller, "sponsored access has ended" vs the action's ordinary
+ * not-found/auth answer would be an unauthenticated oracle for order
+ * existence and a store's billing state over the enumerable `shortId` space —
+ * the exact channel the trackingToken rule exists to close. So only the
+ * store's OWNER can trip the lock; anonymous, foreign and admin callers all
+ * pass through to the action's own auth, byte-identical to an unlocked store.
+ * (Admins bypass the lock inside `assertSubscriptionActive` anyway, and the
+ * action's own access check still refuses outsiders — this guard only ever
+ * ADDS the lock refusal, never grants access.)
  */
 export const assertWritable = internalQuery({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer || retailer.userId !== identity.subject) return null;
 		await assertSubscriptionActive(ctx, retailerId);
 		return null;
 	},
@@ -421,15 +439,21 @@ export const assertWritable = internalQuery({
 /** `assertWritable` for the order actions, which know a `shortId` and nothing
  * else (rider/courier booking, the manual payment reminder). A shortId that
  * resolves to nothing passes — the action's own "not found" answer is the
- * clearer one, and there is no store to lock. */
+ * clearer one, and there is no store to lock. Same owner gate as above, for
+ * the same oracle reason. */
 export const assertWritableForOrder = internalQuery({
 	args: { shortId: v.string() },
 	handler: async (ctx, { shortId }): Promise<null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
 		const order = await ctx.db
 			.query("orders")
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.unique();
-		if (order) await assertSubscriptionActive(ctx, order.retailerId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer || retailer.userId !== identity.subject) return null;
+		await assertSubscriptionActive(ctx, order.retailerId);
 		return null;
 	},
 });
@@ -705,6 +729,17 @@ async function endComp(
 	sub: Doc<"subscriptions">,
 	now: number,
 ): Promise<void> {
+	// Defensive: a comped row can't be `on_hold` today (`setComp` releases the
+	// hold, `canEnterHold` refuses comped rows) — but if a fifth producer of
+	// `comped` ever appears, leaving `orderingPausedAt` set under `past_due`
+	// would pause the storefront with no path that ever resumes it (neither
+	// hold flow accepts a past_due row). Cheap to make impossible.
+	if (sub.status === "on_hold") {
+		await ctx.db.patch(sub.retailerId, {
+			orderingPausedAt: undefined,
+			updatedAt: now,
+		});
+	}
 	await ctx.db.patch(sub._id, {
 		comped: false,
 		comp: undefined,

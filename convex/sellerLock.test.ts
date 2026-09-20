@@ -17,7 +17,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -359,5 +359,91 @@ describe("comp upgrade", () => {
 		await expect(
 			asSeller.mutation(api.orders.markPaymentReceived, { orderId }),
 		).rejects.not.toThrow(/invoice/i);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The lock is not an oracle (PR #279 review): the action guards run BEFORE the
+// action's own auth, and public actions are callable by anyone holding the
+// deployment URL — so the lock refusal must be visible to the store's OWNER
+// and to nobody else. Anyone else gets the action's ordinary auth answer,
+// byte-identical to an unlocked store, or shortIds become an enumerable probe
+// for order existence and billing state.
+// ---------------------------------------------------------------------------
+
+describe("the lock never leaks to anyone but the owner", () => {
+	test("anonymous probe of a frozen store's shortId ≡ a shortId that never existed", async () => {
+		const t = setup();
+		const { retailer, shortId } = await seedStore(t);
+		await setStatus(t, retailer._id, "past_due");
+
+		// The guard itself passes silently with no identity…
+		await expect(
+			t.query(internal.subscriptions.assertWritableForOrder, { shortId }),
+		).resolves.toBeNull();
+
+		// …and end to end the action's answer is byte-identical to a ghost
+		// shortId — the action's own auth speaks, never the lock.
+		const answer = (p: Promise<unknown>) =>
+			p.then(
+				(v) => `ok:${JSON.stringify(v)}`,
+				(e) => `threw:${e instanceof Error ? e.message : String(e)}`,
+			);
+		const probed = await answer(
+			t.action(api.lalamove.prepareBooking, { shortId }),
+		);
+		const ghost = await answer(
+			t.action(api.lalamove.prepareBooking, { shortId: "ORD-NOPE" }),
+		);
+		expect(probed).toBe(ghost);
+		expect(probed).not.toMatch(/view-only|sponsored|past due/i);
+	});
+
+	test("a FOREIGN seller probing by retailerId or shortId never sees the lock either", async () => {
+		const t = setup();
+		const { retailer, shortId } = await seedStore(t);
+		await setStatus(t, retailer._id, "past_due");
+		const asStranger = t.withIdentity({ subject: "user_lock_stranger" });
+
+		await expect(
+			asStranger.query(internal.subscriptions.assertWritable, {
+				retailerId: retailer._id,
+			}),
+		).resolves.toBeNull();
+		await expect(
+			asStranger.query(internal.subscriptions.assertWritableForOrder, {
+				shortId,
+			}),
+		).resolves.toBeNull();
+		// End to end, the batch-AWB probe (caller-supplied retailerId, no
+		// enumeration needed) answers with the action's own auth refusal —
+		// never the billing state.
+		const err = await t
+			.action(api.awb.generateAwbBatchPdf, { retailerId: retailer._id })
+			.then(
+				() => "resolved",
+				(e) => (e instanceof Error ? e.message : String(e)),
+			);
+		expect(err).not.toMatch(/view-only|sponsored|past due/i);
+	});
+
+	test("the OWNER still gets the lock refusal, from the guard and from an action", async () => {
+		const t = setup();
+		const { retailer, shortId, asSeller } = await seedStore(t);
+		await setStatus(t, retailer._id, "past_due");
+
+		await expect(
+			asSeller.query(internal.subscriptions.assertWritable, {
+				retailerId: retailer._id,
+			}),
+		).rejects.toThrow(/past due/);
+		await expect(
+			asSeller.query(internal.subscriptions.assertWritableForOrder, {
+				shortId,
+			}),
+		).rejects.toThrow(/past due/);
+		await expect(
+			asSeller.action(api.orders.sendPaymentReminder, { shortId }),
+		).rejects.toThrow(/view-only/);
 	});
 });

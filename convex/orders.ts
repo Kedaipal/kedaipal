@@ -3394,7 +3394,12 @@ export const bulkUpdateStatus = mutation({
 			// first order (the selection is single-retailer); admin act-as bypasses.
 			if (firstResolve && !batchAccess.actingAsAdmin)
 				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
-		await assertSubscriptionActive(ctx, order.retailerId);
+			// The view-only lock, gated once too: an owner's selection is
+			// single-retailer by construction (1:1 user↔store), so order 1's
+			// answer is order 50's — per-order would just be 50 subscription
+			// reads for one refusal. The admin bypass lives inside the guard.
+			if (firstResolve)
+				await assertSubscriptionActive(ctx, order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).

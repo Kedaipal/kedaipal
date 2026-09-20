@@ -671,3 +671,31 @@ describe("backfill", () => {
 		expect(stampedSub?.comp?.label).toBe("Sponsored by Z");
 	});
 });
+
+test("turning a comp off releases a hold's storefront pause — defensive against a comped+held row", async () => {
+	const t = setup();
+	const s = await seedSeller(t, "user_comp_heldoff");
+	// Unreachable through today's producers (`setComp` releases holds and
+	// `canEnterHold` refuses comped rows) — built directly, the way a future
+	// fifth producer of `comped` might. Without the release in `endComp`,
+	// `orderingPausedAt` would survive under `past_due`, pausing the
+	// storefront with no path that ever resumes it.
+	const now = Date.now();
+	await t.run(async (ctx) => {
+		await ctx.db.patch(s.subId, {
+			comped: true,
+			comp: { kind: "sponsor" as const, grantedBy: ADMIN, grantedAt: now },
+			status: "on_hold" as const,
+			heldAt: now,
+		});
+		await ctx.db.patch(s.retailerId, { orderingPausedAt: now });
+	});
+	await t
+		.withIdentity({ subject: ADMIN })
+		.mutation(api.subscriptions.revokeComp, { retailerId: s.retailerId });
+	const retailer = await getRetailer(t, s.retailerId);
+	expect(retailer?.orderingPausedAt).toBeUndefined();
+	const sub = await getSub(t, s.subId);
+	expect(sub?.status).toBe("past_due");
+	expect(sub?.heldAt).toBeUndefined();
+});
