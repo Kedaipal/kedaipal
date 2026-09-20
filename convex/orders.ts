@@ -763,9 +763,13 @@ export const create = mutation({
 		// need to pass it; the storefront UI requires it. Validated against the
 		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
-		// What time on that day (minutes since MYT midnight) — captured for
-		// delivery orders; ignored on self-collect (their moment is governed by
-		// the pickup point's own schedule). See the schema comment.
+		// What time on that day (minutes since MYT midnight). Kept for a
+		// delivery AND for a self-collect order (z8r3fdff97) — a buyer
+		// collecting a made-to-order item has to say when, and the seller has
+		// to know. Optional on the wire: a request that names no hour is a
+		// legitimate date-only order, judged against the store's real hours
+		// all the same (`asksForTime`, z8r3fdg9aa). A drop-off meet-up is the
+		// one that genuinely has no hour to give — its point sets that.
 		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
