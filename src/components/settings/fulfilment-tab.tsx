@@ -76,6 +76,7 @@ import {
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { cn } from "../../lib/utils";
 import {
 	convexErrorMessage,
@@ -395,7 +396,10 @@ export function FulfilmentTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
-			<OpeningHoursCard initial={openingHours} />
+			<OpeningHoursCard
+				initial={openingHours}
+				highlight={ring(SPOTLIGHT_ANCHOR.opening_hours.anchor)}
+			/>
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} currency={currency} />
 			<BusinessAddressCard
@@ -2385,7 +2389,14 @@ function joinDayNames(indexes: number[]): string {
  * above the notice window. Default (unset) = open 24/7; the server normalizes
  * an all-24h week back to unset and rejects an all-closed one.
  */
-function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
+function OpeningHoursCard({
+	initial,
+	highlight,
+}: {
+	initial: OpeningHours | undefined;
+	/** Ring from a What's-new deep link (`?spot=opening_hours`). */
+	highlight?: FixHighlight;
+}) {
 	const updateSettings = useUpdateSettings();
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState<DayDraft[]>(() => draftFromHours(initial));
@@ -2545,7 +2556,7 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	);
 
 	return (
-		<Card>
+		<Card id={SPOTLIGHT_ANCHOR.opening_hours.anchor} highlight={highlight}>
 			<SectionHeading
 				title="Opening hours"
 				description="When your store operates. Buyers can browse and place orders any time — but the delivery or pickup date and time they pick at checkout must fall inside these hours, and closed days can't be picked at all. Counter sales aren't affected."
