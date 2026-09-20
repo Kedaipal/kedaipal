@@ -23,6 +23,7 @@ import {
 	formatPrepDuration,
 } from "./fulfilmentDate";
 import {
+	isOpenOnDate,
 	OPEN_ALL_DAY,
 	type OpeningHours,
 	selectableTimeWindows,
@@ -90,10 +91,21 @@ export type PrepFloorProblem =
 /**
  * What prep refuses about this fulfilment moment, or `null`.
  *
- * Deliberately silent on everything that is not prep's fault — a closed day, a
- * time in a lunch break, a time after closing — so the opening-hours rules speak
- * for those in their own words. The two are complementary, not stacked: this
- * one only fires when prep is the reason a slot disappeared.
+ * Deliberately silent on what the opening-hours rules ALWAYS refuse in their
+ * own words — a closed weekday, a time in a lunch break, a named time outside
+ * the windows. The two are complementary, not stacked: prep speaks only where
+ * it has something true to say.
+ *
+ * But an OPEN day with no prep-able slot left refuses HERE, even when prep
+ * isn't the only thing that emptied it (the store finished for the day, or the
+ * flat checkout lead crossed midnight). The first cut deferred that case to
+ * the opening-hours rules too — which no-op with hours unset and hold a named
+ * time only to its window, never to the clock — so from 23:41 MYT, when the
+ * 15-minute lead alone empties an all-day store, a same-day order with a
+ * 4-hour prep sailed through `orders.create` (the 2026.09.6 release gap). An
+ * order whose prep can't finish today is impossible whoever emptied the day,
+ * and "too late for today, pick a later day" is the right instruction either
+ * way.
  *
  * A future day's windows are identical with and without prep (prep is absorbed
  * overnight — `minSelectableTimeMinutes` floors only today), so a future day is
@@ -115,10 +127,11 @@ export function prepFloorProblem(args: {
 	const withoutPrep = selectableTimeWindows(hours, dateEpoch, now, 0);
 
 	if (withPrep.length === 0) {
-		// The day still had slots WITHOUT prep, so prep is what used them up.
-		// Both empty means the store is closed or finished anyway — the
-		// opening-hours rules own that message.
-		return withoutPrep.length > 0 ? { kind: "too_late_today" } : null;
+		// A weekday the store never opens stays the opening-hours rules'
+		// refusal ("closed on Fridays"). Every OTHER empty day refuses here —
+		// see the header: deferring "finished anyway" to rules that no-op with
+		// hours unset is how the 23:41 gap opened.
+		return isOpenOnDate(hours, dateEpoch) ? { kind: "too_late_today" } : null;
 	}
 	if (timeMinutes === undefined) return null;
 
@@ -177,27 +190,18 @@ export function prepFloorIssue(args: {
 
 /**
  * The WHOLE prep rule for a placed order — what `orders.create` and
- * `orderClaims.commit` call (ClickUp `z8r3fdg9aa`). `prepFloorIssue` judges
- * one deadline; an order has two, and must clear both:
+ * `orderClaims.commit` call (ClickUp `z8r3fdg9aa`): `prepFloorIssue` against
+ * the deadline this handover races (`prepFloorHours`, `timed` = the checkout's
+ * `asksForTime`) — closing time when the store's hours bound it, else
+ * midnight. A counter can't hand anything over at 7 PM if it shut at 6; a
+ * drop-off meet-up keeps its point's own hour and races only the day.
  *
- *  - **The handover's** — closing time when the store's hours bound it, else
- *    midnight (`prepFloorHours`, `timed` = the checkout's `asksForTime`). A
- *    counter can't hand anything over at 7 PM if it shut at 6.
- *  - **The day's** — midnight, for a request that named no hour at all. A
- *    date-only order has claimed a whole day, so prep that outlasts the day
- *    itself makes it impossible on its face.
- *
- * Both matter because neither implies the other. Inside the open window the
- * handover deadline is the stricter one — a 2-hour prep started at 4:30 PM at
- * a 6 PM counter is too late today, though it would be done by 6:30. AFTER
- * closing the handover deadline goes silent instead — with no slot left with
- * prep and none without, prep isn't what emptied the day, so it defers (see
- * `prepFloorProblem`) — and only the day's deadline is left to refuse a
- * 24-hour prep booked for tonight.
- *
- * A request that DID name an hour is judged on that hour alone: the day's
- * deadline is the date-only reading of "today", and `prepFloorProblem` already
- * holds a named time to its own slot.
+ * This used to be TWO passes: after closing, the hours-bound pass found no
+ * slot with prep and none without, `prepFloorProblem` deferred, and a second
+ * midnight-widened pass was needed so a 24-hour prep couldn't book tonight.
+ * `prepFloorProblem` no longer defers on an open day with nothing left, so
+ * the first pass refuses everything the second did (widening only ever
+ * enlarges the windows) and the day's deadline needs no pass of its own.
  */
 export function orderPrepFloorIssue(args: {
 	hours: OpeningHours | undefined;
@@ -209,12 +213,8 @@ export function orderPrepFloorIssue(args: {
 	/** `asksForTime` — whether the store's hours bound this handover. */
 	timed: boolean;
 }): string | null {
-	const handover = prepFloorIssue({
+	return prepFloorIssue({
 		...args,
 		hours: prepFloorHours(args.hours, args.timed),
 	});
-	if (handover !== null) return handover;
-	// An untimed handover was already judged to midnight above.
-	if (args.timeMinutes !== undefined || !args.timed) return null;
-	return prepFloorIssue({ ...args, hours: prepFloorHours(args.hours, false) });
 }

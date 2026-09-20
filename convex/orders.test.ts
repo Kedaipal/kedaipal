@@ -10333,6 +10333,44 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		});
 	});
 
+	describe("the last minutes of the day (the 23:41 gap)", () => {
+		// From 23:41 MYT the flat 15-minute lead alone runs past 23:59, so an
+		// all-day store has no slot even WITHOUT prep. `prepFloorProblem` used
+		// to read that as "not prep's fault" and defer to opening-hours rules
+		// that no-op with hours unset — and the create RESOLVED (found when
+		// the 2026.09.6 release gate ran at 23:44 and five prep tests went red
+		// by resolving). Pinned clock: Fri 26 Jun 2026, 23:45 MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		afterEach(() => vi.useRealTimers());
+
+		test("at 23:45 with hours unset, a same-day prep order is refused; tomorrow is fine", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(FRI + (23 * 60 + 45) * 60_000);
+			const t = setup();
+			const { retailer, productId } = await storeWithPrep(t, 240);
+			const order = (fulfilmentDate: number, fulfilmentTimeMinutes?: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					fulfilmentDate,
+					fulfilmentTimeMinutes,
+				});
+			// The exact repro: today, 11:59 PM, a 4-hour prep — used to resolve.
+			await expect(order(FRI, 1439)).rejects.toThrow(
+				/Ice Cream Puff.*4 hours to prepare.*too late for today/s,
+			);
+			// A date-only request is judged the same, not widened past the gap.
+			await expect(order(FRI)).rejects.toThrow(/too late for today/);
+			await expect(order(FRI + DAY_MS, 9 * 60)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+	});
+
 	test("a COLLECTION trip is exempt: the rider collects first, prep comes after", async () => {
 		const t = setup();
 		const { retailer, productId } = await storeWithPrep(t, 240);

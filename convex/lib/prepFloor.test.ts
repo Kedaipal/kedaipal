@@ -194,12 +194,16 @@ describe("prepFloorHours — the deadline a prep window races", () => {
 		expect(judged?.filter((day) => !day.closed)).toHaveLength(6);
 	});
 
-	test("THE GAP: after closing, a day-long prep is still too late for a date-only today", () => {
-		// Against the store's hours, 8 PM has no slot with prep AND none
-		// without — right for a timed order, where the hours rules speak, but a
-		// date-only order then had nobody refusing it.
+	test("after closing, a day-long prep is too late for today on EITHER deadline", () => {
+		// At 8 PM the store's own hours leave no slot with prep and none
+		// without. That used to read as null against the real hours ("the
+		// hours rules speak") — but they only speak for a time OUTSIDE the
+		// windows, which is how the 23:41 gap opened — so an empty open day
+		// now refuses on both readings.
 		const args = { ...base, prep: DAY_PREP, now: at(20) };
-		expect(prepFloorIssue({ ...args, hours: shop })).toBeNull();
+		expect(prepFloorIssue({ ...args, hours: shop })).toBe(
+			"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day",
+		);
 		expect(prepFloorIssue({ ...args, hours: prepFloorHours(shop, false) })).toBe(
 			"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day",
 		);
@@ -292,19 +296,26 @@ describe("orderPrepFloorIssue — an order clears BOTH deadlines (z8r3fdg9aa)", 
 		);
 	});
 
-	test("a request that NAMED an hour is judged on that hour alone", () => {
-		// The day's deadline is the date-only reading of "today"; a named time
-		// is already held to its own slot. At 8 PM the store is shut, so prep
-		// isn't what emptied the day — the opening-hours gate owns that.
-		expect(
-			orderPrepFloorIssue({
-				...base,
-				prep: DAY_PREP,
-				now: at(20),
-				timeMinutes: hm(23),
-				timed: true,
-			}),
-		).toBeNull();
+	test("a NAMED hour on an emptied day is refused as too late — not sent window-shopping", () => {
+		// 11 PM with a day-long prep at 8 PM: it used to be null here, leaving
+		// `assertWithinOpeningHours` to say "pick a time inside those hours" —
+		// a trap, since no time today clears the prep. And a named time INSIDE
+		// the windows (5 PM at 8 PM) satisfied the hours gate outright and
+		// resolved — the same class as the 23:41 gap. Both now refuse with the
+		// instruction that actually works: pick a later day.
+		for (const timeMinutes of [hm(23), hm(17)]) {
+			expect(
+				orderPrepFloorIssue({
+					...base,
+					prep: DAY_PREP,
+					now: at(20),
+					timeMinutes,
+					timed: true,
+				}),
+			).toBe(
+				"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day",
+			);
+		}
 	});
 
 	test("tomorrow is untouched by either deadline — prep is absorbed overnight", () => {
@@ -342,5 +353,60 @@ describe("orderPrepFloorIssue — an order clears BOTH deadlines (z8r3fdg9aa)", 
 		expect(orderPrepFloorIssue({ ...args, timed: false })).toMatch(
 			/too late for today/,
 		);
+	});
+});
+
+describe("the 23:41 gap — the flat lead empties the day, and prep still refuses", () => {
+	// From 23:41 MYT the 15-minute checkout lead alone runs past 23:59, so an
+	// all-day store has no slot even WITHOUT prep. The old rule read that as
+	// "not prep's fault" and deferred to opening-hours rules that no-op with
+	// hours unset — and a same-day order with a 4-hour prep resolved (the
+	// 2026.09.6 release found five prep tests going red by RESOLVING at 23:44).
+	const args = {
+		hours: undefined as OpeningHours | undefined,
+		dateEpoch: FRI,
+		now: at(23, 45),
+		prep: { minutes: 240, productName: "Ice Cream Puff" },
+		kind: "pickup" as const,
+	};
+
+	test("a same-day timed order at 23:45 with hours unset is refused", () => {
+		expect(
+			orderPrepFloorIssue({ ...args, timeMinutes: hm(23, 59), timed: true }),
+		).toBe(
+			"“Ice Cream Puff” needs 4 hours to prepare — too late for today, pick a later day",
+		);
+	});
+
+	test("so is a date-only one, on both readings of the deadline", () => {
+		for (const timed of [true, false]) {
+			expect(
+				orderPrepFloorIssue({ ...args, timeMinutes: undefined, timed }),
+			).toMatch(/too late for today/);
+		}
+	});
+
+	test("tomorrow absorbs the prep overnight, exactly as before", () => {
+		expect(
+			orderPrepFloorIssue({
+				...args,
+				dateEpoch: TOMORROW,
+				timeMinutes: hm(9),
+				timed: true,
+			}),
+		).toBeNull();
+	});
+
+	test("a cart with no prep window stays outside prep's jurisdiction", () => {
+		// The last-minutes acceptance of a PREP-FREE order is the opening-hours
+		// gate's open question (z8r3fdg9pv), not prep's to answer.
+		expect(
+			orderPrepFloorIssue({
+				...args,
+				prep: NO_CART_PREP,
+				timeMinutes: hm(23, 59),
+				timed: true,
+			}),
+		).toBeNull();
 	});
 });

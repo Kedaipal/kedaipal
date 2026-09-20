@@ -159,7 +159,10 @@ describe("the cart's prep window is a CAUSE the ladder carries (z8r3fdff97)", ()
 	});
 
 	test("prep is never blamed for what the hours already refuse", () => {
-		// Friday 21:30: closed with or without prep — the hours speak.
+		// Friday 21:30: closed with or without prep — the hours speak. Pinned
+		// hard: `prepFloorProblem` now refuses every emptied open day (the
+		// 23:41 gap), so only the ladder's order keeps the shutters' truer
+		// words in front of prep's.
 		expect(
 			fulfilmentTimeIssue({
 				hours,
@@ -179,6 +182,35 @@ describe("the cart's prep window is a CAUSE the ladder carries (z8r3fdff97)", ()
 				...prep,
 			}),
 		).toEqual({ kind: "too_early", earliest: 990 });
+	});
+
+	test("the last minutes of an all-day store still name prep (the 23:41 gap)", () => {
+		// 23:45 with no hours kept: the flat 15-minute lead alone leaves today
+		// no slot. An all-day store never reads as "closed", and the server's
+		// prep gate refuses the same moment — so the notice names prep too,
+		// instead of a generic line beside a refusal that blames the cake.
+		expect(
+			fulfilmentTimeIssue({
+				hours: undefined,
+				dayEpoch: FRI,
+				timeMinutes: 1439,
+				now: at(23, 45),
+				...prep,
+			}),
+		).toEqual({
+			kind: "no_slot",
+			reason: "too_late",
+			prep: { itemName: "Ice Cream Puff", minutes: 120 },
+		});
+		// Without prep in the cart, the plain "no time left" line stands.
+		expect(
+			fulfilmentTimeIssue({
+				hours: undefined,
+				dayEpoch: FRI,
+				timeMinutes: 1439,
+				now: at(23, 45),
+			}),
+		).toEqual({ kind: "no_slot", reason: "too_late" });
 	});
 });
 
