@@ -7,6 +7,11 @@
  * `orders.create`, the claim-link commit, and the storefront checkout's inline
  * check. If the server said "earliest pickup is 7:00 PM" while the checkout
  * offered 6:45, the buyer would be told two different things by the same app.
+ * The RULE never diverges; the words may, in one deliberate spot — on a day
+ * the store genuinely finished, the checkout's ladder says "closed for today"
+ * before prep speaks, while this module's server error still names the prep
+ * (reachable only from a stale tab or a direct call, since the checkout
+ * blocks submit first).
  *
  * Hours-aware on purpose. The first version floored against the whole day
  * ("now + prep") and named an earliest time the store could not honour: with
