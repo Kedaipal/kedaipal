@@ -9,18 +9,34 @@ import type { AdminSellerRow } from "../../convex/admin";
 import { formatShortDate } from "../lib/format";
 
 // The route module pulls in the router + data layer at import time — stub all
-// of it; the dialog under test only needs `useMutation`.
+// of it; the components under test need `useMutation` plus stable spies for
+// the act-as entry (SellerCard's menu asserts on them).
+const { navigateSpy, setActAsSpy } = vi.hoisted(() => ({
+	navigateSpy: vi.fn(),
+	setActAsSpy: vi.fn(),
+}));
 vi.mock("@tanstack/react-router", () => ({
 	createFileRoute: () => (opts: unknown) => opts,
-	useNavigate: () => vi.fn(),
+	useNavigate: () => navigateSpy,
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn(() => ({})) }));
 vi.mock("../hooks/useActAs", () => ({
-	useActAs: () => ({ setActAs: vi.fn() }),
+	useActAs: () => ({ setActAs: setActAsSpy }),
 }));
+
+// Radix positions the menu with floating-ui, which watches the trigger with a
+// ResizeObserver jsdom doesn't ship.
+vi.stubGlobal(
+	"ResizeObserver",
+	class {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+	},
+);
 
 const mutationSpies = new Map<string, ReturnType<typeof vi.fn>>();
 vi.mock("convex/react", () => ({
@@ -33,14 +49,18 @@ vi.mock("convex/react", () => ({
 	},
 }));
 
-import { CompDialog } from "./app.admin.sellers";
+import { CompDialog, SellerCard } from "./app.admin.sellers";
 
 const setCompSpy = () =>
 	mutationSpies.get(getFunctionName(api.subscriptions.setComp));
 const revokeCompSpy = () =>
 	mutationSpies.get(getFunctionName(api.subscriptions.revokeComp));
 
-beforeEach(() => mutationSpies.clear());
+beforeEach(() => {
+	mutationSpies.clear();
+	navigateSpy.mockClear();
+	setActAsSpy.mockClear();
+});
 afterEach(cleanup);
 
 function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
@@ -153,5 +173,103 @@ describe("CompDialog — comp upgrade ON", () => {
 		await vi.waitFor(() => expect(revokeCompSpy()).toHaveBeenCalledTimes(1));
 		expect(revokeCompSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
 		await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SellerCard — one Manage menu per row (owner decision, 20 Sep 2026)
+// ---------------------------------------------------------------------------
+
+const startActAsSpy = () =>
+	mutationSpies.get(getFunctionName(api.admin.startActAsSession));
+
+/** Radix opens the menu on pointerdown alone — firing Enter as well would
+ * TOGGLE it straight back shut. */
+function openMenu(name = /Manage Mak Kuih/) {
+	const trigger = screen.getByRole("button", { name });
+	fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerId: 1 });
+	return trigger;
+}
+
+describe("SellerCard — the Manage menu", () => {
+	it("one door: the row itself is inert, and the menu names all three actions with their consequences", () => {
+		render(
+			<ul>
+				<SellerCard seller={seller()} purgeEnabled={true} />
+			</ul>,
+		);
+		// Before the menu opens, the ONLY button on the row is the trigger — the
+		// card stopped being a giant act-as button, so a mis-tap enters nothing.
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+
+		openMenu();
+		expect(screen.getByText("Open store")).toBeTruthy();
+		expect(screen.getByText(/Act-as mode/)).toBeTruthy();
+		expect(screen.getByText("Turn on comp upgrade")).toBeTruthy();
+		expect(screen.getByText(/never billed/)).toBeTruthy();
+		expect(screen.getByText("Delete store")).toBeTruthy();
+		expect(screen.getByText(/Dev only/)).toBeTruthy();
+	});
+
+	it("Open store enters act-as: session started, audit fired, dashboard opened", () => {
+		render(<SellerCard seller={seller()} purgeEnabled={false} />);
+		openMenu();
+		fireEvent.click(screen.getByText("Open store"));
+		expect(setActAsSpy).toHaveBeenCalledWith("r_comp");
+		expect(startActAsSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
+		expect(navigateSpy).toHaveBeenCalledWith({ to: "/app" });
+	});
+
+	it("the comp item opens the comp dialog, worded for the toggle's position", async () => {
+		render(<SellerCard seller={seller()} purgeEnabled={false} />);
+		openMenu();
+		fireEvent.click(screen.getByText("Turn on comp upgrade"));
+		expect(await screen.findByText("Comp upgrade — Mak Kuih")).toBeTruthy();
+		// A comped row's item reads as the edit door instead.
+		cleanup();
+		render(
+			<SellerCard
+				seller={seller({
+					comped: true,
+					subscriptionStatus: "active",
+					comp: {
+						kind: "sponsor",
+						label: "Sponsored by Bearcamp",
+						grantedAt: new Date(2026, 8, 14).getTime(),
+					},
+				})}
+				purgeEnabled={false}
+			/>,
+		);
+		openMenu();
+		expect(screen.getByText("Comp upgrade — on")).toBeTruthy();
+		expect(screen.getByText(/turn it off/)).toBeTruthy();
+	});
+
+	it("an admin-owned store: comp disabled with the reason readable in place, not behind a hover", () => {
+		render(
+			<SellerCard seller={seller({ ownerIsAdmin: true })} purgeEnabled={false} />,
+		);
+		openMenu();
+		const item = screen
+			.getByText("Turn on comp upgrade")
+			.closest('[role="menuitem"]');
+		expect(item?.getAttribute("aria-disabled")).toBe("true");
+		expect(screen.getByText("Admin store — always free already")).toBeTruthy();
+	});
+
+	it("Delete store exists only where the dev purge is enabled, and goes through the slug confirm", async () => {
+		render(<SellerCard seller={seller()} purgeEnabled={false} />);
+		openMenu();
+		expect(screen.queryByText("Delete store")).toBeNull();
+		cleanup();
+
+		render(<SellerCard seller={seller()} purgeEnabled={true} />);
+		openMenu();
+		fireEvent.click(screen.getByText("Delete store"));
+		expect(await screen.findByText("Delete Mak Kuih?")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Delete store" }),
+		).toBeTruthy();
 	});
 });

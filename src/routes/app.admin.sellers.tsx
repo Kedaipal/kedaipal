@@ -4,7 +4,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
-	ChevronRight,
+	ChevronDown,
 	Gift,
 	Loader2,
 	ShieldCheck,
@@ -34,6 +34,13 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../components/ui/dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
@@ -195,7 +202,7 @@ export function SellerCard({
 			// The cascade is async — the row vanishes from this list when the
 			// retailer doc goes in its final phase, usually within seconds.
 			toast.success(
-				`Purging ${result.storeName} — the row disappears once the erase finishes, then that login onboards fresh.`,
+				`Deleting ${result.storeName} — the row disappears once the erase finishes, then that login onboards fresh.`,
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -205,178 +212,196 @@ export function SellerCard({
 	}
 
 	return (
-		// The purge control sits BESIDE the row, not inside it — the whole row is
-		// already the "Manage" button, and a button can't nest a button.
-		<li className="flex items-center gap-1.5">
-			<button
-				type="button"
-				onClick={manage}
-				disabled={purging}
-				className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm disabled:pointer-events-none disabled:opacity-60"
-			>
-				<div className="flex min-w-0 flex-1 flex-col gap-1">
-					<div className="flex items-center gap-2">
-						<span className="truncate font-semibold">{seller.storeName}</span>
-						{seller.foundingMemberRank !== undefined ? (
-							<span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
-								<Award className="size-3" />#{seller.foundingMemberRank}
-							</span>
-						) : null}
-					</div>
-					<span className="truncate font-mono text-xs text-muted-foreground">
-						/{seller.slug}
-						{seller.signupSource ? (
-							// Acquisition tag the signup arrived with (z8r3fdd1v0) —
-							// verbatim, these are Kedaipal's own `?src=` tags. Absent =
-							// direct/untagged, so nothing renders for the common case.
-							// A powered-by signup also names the store whose badge it
-							// came through (z8r3fdcwd0) — the CAC ledger's "who brings
-							// us sellers" column, in the same pill.
-							<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px]">
-								via {seller.signupSource}
-								{seller.signupReferrer
-									? ` · /${seller.signupReferrer.slug}`
-									: null}
-							</span>
-						) : null}
-					</span>
-					{/* flex-wrap so the comp chip gets a full line on 375px instead of
-					    truncating its text away to a bare icon. */}
-					<div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-						{seller.ownerIsAdmin ? (
-							// Admin-owned store: a single "Admin" pill, not a trial/plan
-							// countdown — admins run the app for free with the highest tier
-							// unlocked. Matches the dashboard tier-pill's `admin` tone.
-							<span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-								<ShieldCheck className="size-3" />
-								Admin
-							</span>
-						) : (
-							<>
-								{status ? (
-									<span
-										className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
-											STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"
-										}`}
-									>
-										{status.replace("_", " ")}
-									</span>
-								) : (
-									<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-										no subscription
-									</span>
-								)}
-								{seller.plan && !seller.comped ? (
-									<span className="text-[11px] capitalize text-muted-foreground">
-										{seller.plan}
-									</span>
-								) : null}
-								{seller.compEnded && status === "past_due" ? (
-									// Why this store is past due: its comp upgrade was turned off,
-									// not an unpaid bill — so nobody chases an invoice that doesn't
-									// exist. Short enough for the ~135px text column at 375px; the
-									// full date rides the title.
-									<span
-										className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground"
-										title={`Comp upgrade turned off on ${formatShortDate(seller.compEnded.at)}`}
-									>
-										<Gift className="size-3 shrink-0" />
-										Comp off ·{" "}
-										{new Date(seller.compEnded.at).toLocaleDateString(undefined, {
-											day: "numeric",
-											month: "short",
-										})}
-									</span>
-								) : null}
-								{seller.comped ? (
-									// Comp upgrade on (z8r3fdeub2): kind + label at a glance, so
-									// "why is this store free?" never needs a click. The title
-									// repeats the full text (plus since-when and the note) for the
-									// narrow-screen case where the chip truncates.
-									<span
-										className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950 dark:text-violet-300"
-										title={[
-											compChipText(seller),
-											seller.comp
-												? `on since ${formatShortDate(seller.comp.grantedAt)}`
-												: undefined,
-											seller.comp?.note,
-										]
-											.filter(Boolean)
-											.join(" — ")}
-									>
-										<Gift className="size-3 shrink-0" />
-										<span className="truncate">{compChipText(seller)}</span>
-									</span>
-								) : null}
-							</>
-						)}
-					</div>
+		// One door per row: everything an admin can do to a store lives in the
+		// Manage menu (owner decision, 20 Sep 2026). The row used to BE the
+		// act-as button with two bare icons beside it — three targets, two of
+		// them unlabelled, and a mis-tap on the row entered act-as. Now the card
+		// is inert and the menu names each action with its consequence.
+		<li
+			className={`flex items-center gap-3 rounded-2xl border border-border bg-card p-4 ${
+				purging ? "opacity-60" : ""
+			}`}
+		>
+			<div className="flex min-w-0 flex-1 flex-col gap-1">
+				<div className="flex items-center gap-2">
+					<span className="truncate font-semibold">{seller.storeName}</span>
+					{seller.foundingMemberRank !== undefined ? (
+						<span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+							<Award className="size-3" />#{seller.foundingMemberRank}
+						</span>
+					) : null}
 				</div>
-				{purging ? (
-					<span className="flex shrink-0 items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-muted-foreground">
-						<Loader2 className="size-4 animate-spin" />
-						Purging…
-					</span>
-				) : (
-					<span className="flex shrink-0 items-center gap-1 rounded-lg bg-accent/10 px-3 py-2 text-sm font-semibold text-accent">
-						Manage
-						<ChevronRight className="size-4" />
-					</span>
-				)}
-			</button>
-			{/* Side controls stack vertically on phones — three columns of controls
-			    (Manage + comp + purge) would squeeze the text to nothing at 375px. */}
-			<div className="flex shrink-0 flex-col gap-1 self-center sm:flex-row sm:items-center sm:gap-1.5">
-				{/* Comp upgrade toggle (z8r3fdeub2) — beside the row like the purge
-				    control (the whole row is already the Manage button). One dialog turns
-				    it on, edits its details, or turns it off. Admin stores keep the button
-				    visible but disabled-with-reason. */}
-				<button
-					type="button"
-					onClick={() => setCompOpen(true)}
-					disabled={seller.ownerIsAdmin || purging}
-					title={
-						seller.ownerIsAdmin
-							? "Admin store — always free already"
-							: seller.comped
-								? `Comp upgrade is on for ${seller.storeName} — edit or turn off`
-								: `Turn on comp upgrade for ${seller.storeName}`
-					}
-					aria-label={
-						seller.ownerIsAdmin
-							? `${seller.storeName} is an admin store — always free`
-							: seller.comped
-								? `Comp upgrade is on for ${seller.storeName} — edit or turn off`
-								: `Turn on comp upgrade for ${seller.storeName}`
-					}
-					className={`flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors disabled:opacity-40 ${
-						seller.comped
-							? "text-violet-600 hover:bg-violet-100 dark:text-violet-300 dark:hover:bg-violet-950"
-							: "text-muted-foreground/60 hover:bg-muted hover:text-foreground"
-					}`}
-				>
-					<Gift className="size-4" />
-				</button>
-				{purgeEnabled ? (
-					// Quiet until hovered — a rare dev tool shouldn't shout red down
-					// the whole directory. Compact square, centered on the row.
-					<button
-						type="button"
-						onClick={() => setPurgeOpen(true)}
-						disabled={purging}
-						title="Purge store (dev only)"
-						aria-label={`Purge ${seller.storeName} (dev only)`}
-						className="flex size-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40"
-					>
-						{purging ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Trash2 className="size-4" />
-						)}
-					</button>
-				) : null}
+				<span className="truncate font-mono text-xs text-muted-foreground">
+					/{seller.slug}
+					{seller.signupSource ? (
+						// Acquisition tag the signup arrived with (z8r3fdd1v0) —
+						// verbatim, these are Kedaipal's own `?src=` tags. Absent =
+						// direct/untagged, so nothing renders for the common case.
+						// A powered-by signup also names the store whose badge it
+						// came through (z8r3fdcwd0) — the CAC ledger's "who brings
+						// us sellers" column, in the same pill.
+						<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px]">
+							via {seller.signupSource}
+							{seller.signupReferrer
+								? ` · /${seller.signupReferrer.slug}`
+								: null}
+						</span>
+					) : null}
+				</span>
+				{/* flex-wrap so the comp chip gets a full line on 375px instead of
+				    truncating its text away to a bare icon. */}
+				<div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+					{seller.ownerIsAdmin ? (
+						// Admin-owned store: a single "Admin" pill, not a trial/plan
+						// countdown — admins run the app for free with the highest tier
+						// unlocked. Matches the dashboard tier-pill's `admin` tone.
+						<span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+							<ShieldCheck className="size-3" />
+							Admin
+						</span>
+					) : (
+						<>
+							{status ? (
+								<span
+									className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
+										STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"
+									}`}
+								>
+									{status.replace("_", " ")}
+								</span>
+							) : (
+								<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+									no subscription
+								</span>
+							)}
+							{seller.plan && !seller.comped ? (
+								<span className="text-[11px] capitalize text-muted-foreground">
+									{seller.plan}
+								</span>
+							) : null}
+							{seller.compEnded && status === "past_due" ? (
+								// Why this store is past due: its comp upgrade was turned off,
+								// not an unpaid bill — so nobody chases an invoice that doesn't
+								// exist. Short enough for the ~135px text column at 375px; the
+								// full date rides the title.
+								<span
+									className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground"
+									title={`Comp upgrade turned off on ${formatShortDate(seller.compEnded.at)}`}
+								>
+									<Gift className="size-3 shrink-0" />
+									Comp off ·{" "}
+									{new Date(seller.compEnded.at).toLocaleDateString(undefined, {
+										day: "numeric",
+										month: "short",
+									})}
+								</span>
+							) : null}
+							{seller.comped ? (
+								// Comp upgrade on (z8r3fdeub2): kind + label at a glance, so
+								// "why is this store free?" never needs a click. The title
+								// repeats the full text (plus since-when and the note) for the
+								// narrow-screen case where the chip truncates.
+								<span
+									className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+									title={[
+										compChipText(seller),
+										seller.comp
+											? `on since ${formatShortDate(seller.comp.grantedAt)}`
+											: undefined,
+										seller.comp?.note,
+									]
+										.filter(Boolean)
+										.join(" — ")}
+								>
+									<Gift className="size-3 shrink-0" />
+									<span className="truncate">{compChipText(seller)}</span>
+								</span>
+							) : null}
+						</>
+					)}
+				</div>
 			</div>
+			{purging ? (
+				<span className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-muted px-4 text-sm font-semibold text-muted-foreground">
+					<Loader2 className="size-4 animate-spin" />
+					Deleting…
+				</span>
+			) : (
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<button
+							type="button"
+							aria-label={`Manage ${seller.storeName}`}
+							className="flex h-11 shrink-0 items-center gap-1 rounded-xl bg-accent/10 px-4 text-sm font-semibold text-accent transition-colors hover:bg-accent/15 data-open:bg-accent/15"
+						>
+							Manage
+							<ChevronDown className="size-4" aria-hidden="true" />
+						</button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-72">
+						{/* Each item carries its consequence — the old bare icons made
+						    the admin hover to learn what they did. */}
+						<DropdownMenuItem onSelect={manage} className="items-start">
+							<Store
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">Open store</span>
+								<span className="text-xs text-muted-foreground">
+									Act-as mode — you operate it as the seller, logged to your
+									admin account
+								</span>
+							</span>
+						</DropdownMenuItem>
+						{/* Disabled-with-reason IN the item — a disabled menu row can't
+						    show a hover title, so the reason is the subtitle. */}
+						<DropdownMenuItem
+							onSelect={() => setCompOpen(true)}
+							disabled={seller.ownerIsAdmin}
+							className="items-start"
+						>
+							<Gift
+								className={`mt-0.5 size-4 ${
+									seller.comped
+										? "text-violet-600 dark:text-violet-300"
+										: "text-muted-foreground"
+								}`}
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">
+									{seller.comped ? "Comp upgrade — on" : "Turn on comp upgrade"}
+								</span>
+								<span className="text-xs text-muted-foreground">
+									{seller.ownerIsAdmin
+										? "Admin store — always free already"
+										: seller.comped
+											? "Edit the sponsorship or turn it off"
+											: "Every feature, no limits, never billed"}
+								</span>
+							</span>
+						</DropdownMenuItem>
+						{purgeEnabled ? (
+							<>
+								<DropdownMenuSeparator />
+								<DropdownMenuItem
+									onSelect={() => setPurgeOpen(true)}
+									className="items-start text-destructive focus:bg-destructive/10 focus:text-destructive data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive"
+								>
+									<Trash2 className="mt-0.5 size-4" aria-hidden="true" />
+									<span className="flex min-w-0 flex-col">
+										<span className="font-medium">Delete store</span>
+										<span className="text-xs opacity-80">
+											Dev only — erases everything; the login onboards fresh
+										</span>
+									</span>
+								</DropdownMenuItem>
+							</>
+						) : null}
+					</DropdownMenuContent>
+				</DropdownMenu>
+			)}
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
 			) : null}
@@ -385,18 +410,18 @@ export function SellerCard({
 					open={purgeOpen}
 					onOpenChange={setPurgeOpen}
 					destructive
-					title={`Purge ${seller.storeName}?`}
+					title={`Delete ${seller.storeName}?`}
 					description={
 						<>
-							Dev-only test reset. Erases <strong>everything</strong> this
-							store owns — products, orders, customers, settings, images — and
-							the store itself, exactly like the account-deletion cascade. The
-							owner's login survives, so opening /onboarding afterwards starts
-							a fresh store. This cannot be undone.
+							Dev-only test reset. Erases <strong>everything</strong> this store
+							owns — products, orders, customers, settings, images — and the
+							store itself, exactly like the account-deletion cascade. The
+							owner's login survives, so opening /onboarding afterwards starts a
+							fresh store. This cannot be undone.
 						</>
 					}
 					confirmPhrase={seller.slug}
-					confirmLabel="Purge store"
+					confirmLabel="Delete store"
 					onConfirm={confirmPurge}
 				/>
 			) : null}
