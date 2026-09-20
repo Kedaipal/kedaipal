@@ -227,6 +227,37 @@ describe("renderTrialEmail", () => {
 	});
 });
 
+describe("comp emails (z8r3fdeub2)", () => {
+	const cv = {
+		storeName: "Huff & Puff",
+		billingUrl: "https://kedaipal.com/app/settings?tab=billing",
+		sponsorLabel: "Sponsored by Maybank SME",
+	};
+
+	it("compEnded: storefront + ordering live, the dashboard view-only until a plan — no second free period", () => {
+		const { subject, html, text } = renderTrialEmail("en", "compEnded", cv);
+		expect(subject).toMatch(/sponsored Kedaipal access has ended/);
+		expect(html).toContain("buyers can still place orders");
+		// The lock is the whole dashboard, not just editing (z8r3fdeub2,
+		// 19 Sep) — an email promising they can still work their orders would
+		// send them to a screen that refuses every tap.
+		expect(text).toContain("view-only until you choose a plan");
+		expect(html).toMatch(/working orders/);
+		expect(text).not.toMatch(/14-day|free period|invoice/i);
+	});
+
+	it("renders Malay + Chinese comp copy, and a label-less comp reads cleanly", () => {
+		expect(renderTrialEmail("ms", "compEnded", cv).subject).toContain("tajaan");
+		expect(renderTrialEmail("zh", "compEnded", cv).subject).toContain("赞助");
+		const bare = renderTrialEmail("en", "compEnded", {
+			...cv,
+			sponsorLabel: undefined,
+		});
+		expect(bare.text).not.toContain("()");
+		expect(bare.html).not.toContain("undefined");
+	});
+});
+
 describe("first-invoice emails (start-when-you-sell, z8r3fday24)", () => {
 	it("first order: celebrates, names the plan + due date, says the store keeps running and the plan can be switched", () => {
 		const { subject, html, text } = renderBillingEmail("en", "firstInvoiceOrder", base);

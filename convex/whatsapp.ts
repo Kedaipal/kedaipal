@@ -1930,8 +1930,11 @@ export const getInvoiceForBillingAlert = internalQuery({
 /**
  * The ONE WhatsApp in the billing chain (z8r3fdg3mh): the seller's dashboard
  * just locked. Scheduled beside `billingEmail.notifyInvoiceOverdue` at the two
- * real `past_due` transitions — never at the legacy comped flip, where nothing
- * actually locks.
+ * overdue-invoice lock transitions. The other `past_due` entry points send
+ * nothing here: the legacy comped flip is retired outright (z8r3fdeub2 —
+ * comped rows are skipped whole), and a comp turned off enters `past_due`
+ * with NO invoice, so its notice is the `compEnded` email, not a lockout
+ * alert about a bill that doesn't exist.
  *
  * Deliberately NOT gated on `retailers.orderWaAlerts`. That toggle is order-
  * alert scope and defaults off, so hanging this off it would mean almost no

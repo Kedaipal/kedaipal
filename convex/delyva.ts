@@ -308,6 +308,9 @@ export const connect = action({
 			retailerId: args.retailerId,
 		});
 		if (!context.ok) return context;
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: context.retailerId,
+		});
 		const apiKey = args.apiKey.trim();
 		if (!apiKey) {
 			return { ok: false, message: "Paste your Delyva API key first." };
@@ -493,6 +496,9 @@ export const resubscribeWebhooks = action({
 			retailerId: args.retailerId,
 		});
 		if (!target) return { ok: false, message: "Connect Delyva first." };
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
 		const siteUrl = process.env.CONVEX_SITE_URL;
 		if (!siteUrl) {
 			return { ok: false, message: "Webhook URL unavailable — contact support." };
@@ -636,6 +642,9 @@ export const refreshEnvironment = action({
 		if (!target || !target.environmentUnknown || !target.companyId) {
 			return { ok: false };
 		}
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
 		try {
 			const live = await decryptDelyvaCredentials(target.credentials);
 			const company = parseCompanyResponse(
@@ -689,6 +698,9 @@ export const disconnect = action({
 			retailerId: args.retailerId,
 		});
 		if (target) {
+			await ctx.runQuery(internal.subscriptions.assertWritable, {
+				retailerId: target.retailerId,
+			});
 			const siteUrl = process.env.CONVEX_SITE_URL;
 			if (siteUrl) {
 				try {
@@ -1154,6 +1166,9 @@ export const prepareBooking = action({
 				coldChainUnavailable?: boolean;
 		  }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: args.shortId,
+		});
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
 			shortId: args.shortId,
 		});
@@ -1424,6 +1439,9 @@ export const confirmBooking = action({
 		  }
 		| { ok: true; providerOrderId: string; costActual: number; awb?: string }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: args.shortId,
+		});
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
 			shortId: args.shortId,
 		});
@@ -1544,6 +1562,9 @@ export const cancelBooking = action({
 		ctx,
 		{ shortId },
 	): Promise<{ ok: boolean; message?: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const target = await ctx.runQuery(internal.delyva.getCancelContext, {
 			shortId,
 		});

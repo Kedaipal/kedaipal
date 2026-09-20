@@ -133,6 +133,14 @@ export function fulfilmentTimeIssue(
 				weekday: weekdayIndexMyt(dayEpoch),
 			};
 		}
+		// A day the store genuinely finished says so BEFORE prep speaks: at
+		// 8 PM behind 9-to-6 shutters, "closed for today" is the truer reason
+		// than the cake's two hours. `prepFloorProblem` no longer defers on an
+		// empty open day (the 23:41 gap), so without this order it would blame
+		// prep for the shutters.
+		if (hoursOverToday(day, dayEpoch, now)) {
+			return { kind: "no_slot", reason: "closed" };
+		}
 		const prepProblem = prepFloorProblem({
 			hours,
 			dateEpoch: dayEpoch,
@@ -143,10 +151,7 @@ export function fulfilmentTimeIssue(
 		if (prepProblem?.kind === "too_late_today") {
 			return { kind: "no_slot", reason: "too_late", prep: prepCause };
 		}
-		return {
-			kind: "no_slot",
-			reason: hoursOverToday(day, dayEpoch, now) ? "closed" : "too_late",
-		};
+		return { kind: "no_slot", reason: "too_late" };
 	}
 	if (timeMinutes === undefined || Number.isNaN(timeMinutes)) {
 		return { kind: "missing" };

@@ -588,9 +588,10 @@ function TierCard({
 					>
 						{m.pricingpage_cta_trial()}
 					</Button>
-				) : cta === "current" ? (
-					// The seller is already on this tier — a non-actionable pill, not a
-					// link, so the card doesn't pretend there's something to do here.
+				) : cta === "current" || cta === "sponsored" ? (
+					// The seller already has this tier (or, sponsored, every tier) — a
+					// non-actionable pill, not a link, so the card doesn't pretend
+					// there's something to do here.
 					<div
 						className={cn(
 							"flex h-11 w-full items-center justify-center gap-1.5 rounded-full border text-sm font-semibold",
@@ -600,7 +601,9 @@ function TierCard({
 						)}
 					>
 						<Check className="size-4" />
-						{m.pricingpage_current_plan()}
+						{cta === "sponsored"
+							? m.pricingpage_sponsored_included()
+							: m.pricingpage_current_plan()}
 					</div>
 				) : (
 					<Button
@@ -645,7 +648,10 @@ function TierCard({
 				    directly under its CTA (86eye3p6z §B) — and only while that CTA is
 				    still an invitation. A seller already on this plan has been
 				    onboarded; promising them a first order would read as a bug. */}
-				{tier.popular && cta !== "coming_soon" && cta !== "current" ? (
+				{tier.popular &&
+				cta !== "coming_soon" &&
+				cta !== "current" &&
+				cta !== "sponsored" ? (
 					<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
 				) : null}
 			</div>

@@ -69,6 +69,16 @@ describe("TierPill", () => {
 		expect(screen.getByText("Pro")).toBeTruthy();
 	});
 
+	it("a sponsored store reads 'Sponsored' → billing, with no tier chip even for a founding member", () => {
+		render(<TierPill subscription={sub({ comped: true })} foundingRank={4} />);
+		expect(screen.getByText("Founding #4 · Sponsored")).toBeTruthy();
+		// A comp resolves to every tier — naming "Pro" beside it would mislead.
+		expect(screen.queryByText("Pro")).toBeNull();
+		expect(screen.getByTestId("tier-link").getAttribute("href")).toBe(
+			"/app/settings?tab=billing",
+		);
+	});
+
 	it("shows only the Admin pill (→ console) for an admin's own store", () => {
 		render(<TierPill subscription={sub()} admin foundingRank={2} />);
 		expect(screen.getByText("Admin")).toBeTruthy();

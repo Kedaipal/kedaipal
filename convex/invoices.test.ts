@@ -1777,9 +1777,9 @@ describe("billing past-due WhatsApp (z8r3fdg3mh)", () => {
 		expect(await waJobs(t)).toContain(invoiceId);
 	});
 
-	test("the legacy COMPED flip locks nothing, so it sends nothing", async () => {
-		// A comped row can't be billed and is never frozen — the flip only keeps
-		// its status honest. Pinging that seller would be a lie on both channels.
+	test("a COMPED trialing row past its backstop is skipped whole — no flip, no WhatsApp", async () => {
+		// z8r3fdeub2 retired the legacy comped→past_due flip: a comped row is
+		// never billed and never flipped, so nothing locks and nothing may send.
 		const t = setup();
 		await t
 			.withIdentity({ subject: "u_wa2" })
@@ -1805,7 +1805,7 @@ describe("billing past-due WhatsApp (z8r3fdg3mh)", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.trialExpired).toBe(1);
+		expect(res.trialExpired).toBe(0);
 		expect(await waJobs(t)).toHaveLength(0);
 	});
 

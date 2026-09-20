@@ -8,6 +8,7 @@ import {
 	CreditCard,
 	ExternalLink,
 	Eye,
+	Gift,
 	LifeBuoy,
 	Loader2,
 	Mail,
@@ -209,6 +210,11 @@ export function BillingTab({
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
+	// An expired seller whose lock came from an admin turning their comp upgrade
+	// off (z8r3fdeub2). They never had a subscription, so every "renew" / "past
+	// due" framing below swaps for "your sponsored access ended — choose a plan".
+	const compEnded =
+		sub?.status === "past_due" && !sub.comped ? sub.compEnded : undefined;
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
@@ -223,7 +229,7 @@ export function BillingTab({
 		}
 		if (sub.status === "on_hold")
 			return `On hold${sub.heldAt ? ` · since ${formatShortDate(sub.heldAt)}` : ""}`;
-		if (sub.status === "past_due") return "Past due";
+		if (sub.status === "past_due") return compEnded ? "Expired" : "Past due";
 		if (sub.status === "cancelled") return "Cancelled";
 		// The lapsed-but-not-yet-renewed window: access is still on, so the tier
 		// is still "Active", but quoting the expiry would name a date that has
@@ -243,8 +249,11 @@ export function BillingTab({
 	// Monthly order meter vs the plan's SOFT cap (hidden for comped accounts and
 	// unlimited caps). `ordersThisMonth` rides on the retailer payload.
 	const orderCap = sub?.caps?.orderCap;
+	// Hidden for comped stores (unlimited) and for a store whose comp ENDED —
+	// "included orders on your plan" is wrong when there is no plan yet.
 	const capMeter =
 		!sub?.comped &&
+		!compEnded &&
 		orderCap !== undefined &&
 		orderCap > 0 &&
 		!isUnlimited(orderCap) &&
@@ -306,15 +315,47 @@ export function BillingTab({
 						</p>
 					</div>
 				</section>
+			) : sub?.comped ? (
+				/* Sponsored (comped) store — like the admin note above, NOT a plan:
+				   no tier, meter, countdown or renew apparatus, because a comp is a
+				   toggle an admin turns on with no end date, and there is nothing to
+				   subscribe to, change, pause or cancel (z8r3fdeub2). */
+				<section className="flex items-start gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-5 dark:border-violet-900 dark:bg-violet-950/40 lg:p-6">
+					<Gift className="mt-0.5 size-5 shrink-0 text-violet-600 dark:text-violet-300" />
+					<div className="flex min-w-0 flex-col gap-1.5">
+						<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+							<p className="text-sm font-semibold text-violet-900 dark:text-violet-200">
+								Sponsored account
+							</p>
+							<span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
+								No limits
+							</span>
+						</div>
+						{sub.comp?.label ? (
+							<p className="text-sm text-violet-900 dark:text-violet-200">
+								{sub.comp.label}
+							</p>
+						) : null}
+						<p className="text-xs text-violet-800/80 dark:text-violet-300/80">
+							Every feature is unlocked and there are no limits on orders.
+							There's no plan to subscribe to, change or cancel, and nothing to
+							pay.
+						</p>
+					</div>
+				</section>
 			) : (
 				/* Current plan */
 				<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
 					<div className="flex items-center justify-between gap-3">
 						<div>
 							<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-								Current plan
+								{compEnded ? "Sponsored access" : "Current plan"}
 							</p>
-							<p className="mt-1 text-lg font-semibold">{planLabel}</p>
+							<p className="mt-1 text-lg font-semibold">
+								{compEnded
+									? `Ended ${formatShortDate(compEnded.at)}`
+									: planLabel}
+							</p>
 						</div>
 						<span
 							className={`rounded-full px-2.5 py-1 text-xs font-medium ${
@@ -330,9 +371,11 @@ export function BillingTab({
 							{statusLine}
 						</span>
 					</div>
-					{sub?.comped ? (
+					{compEnded ? (
 						<p className="text-xs text-muted-foreground">
-							Your account is on the house — no invoices to settle.
+							Your storefront stays live and buyers can still order. Your
+							dashboard is view-only — choose a plan below to start working
+							again.
 						</p>
 					) : null}
 					{held ? (
@@ -345,8 +388,12 @@ export function BillingTab({
 					    says what that MEANS and what happens next, so neither the
 					    lock nor the reminders that follow it are a surprise. The
 					    chain is deliberately not opt-out-able, so it is stated
-					    rather than offered as a setting. */}
-					{sub?.status === "past_due" && !sub?.comped ? (
+					    rather than offered as a setting. NOT for a comp-ended row
+					    (z8r3fdeub2): that seller is `past_due` with NO invoice —
+					    nothing will chase them and there is nothing to "pay", so
+					    this copy would be false on both counts; the compEnded line
+					    above already tells their story. */}
+					{sub?.status === "past_due" && !sub?.comped && !compEnded ? (
 						<p className="text-xs text-muted-foreground">
 							Your storefront and existing orders stay live — only editing your
 							store is paused until this is settled. We'll follow up by email,
@@ -448,7 +495,9 @@ export function BillingTab({
 			    common move first, the seasonal one after. Every real paid seller
 			    sees it (discoverable where billing lives); the card itself decides
 			    which of its four states to render. */}
-			{!adminOwnAccount && sub && !sub.comped ? (
+			{/* Not for a store whose comp just ended: there's no plan behind that
+			    lock to pause (the server refuses it too) — they choose a plan. */}
+			{!adminOwnAccount && sub && !sub.comped && !compEnded ? (
 				<SeasonalHoldCard
 					id={SPOTLIGHT_ANCHOR.seasonal_hold.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.seasonal_hold.anchor)}
@@ -669,7 +718,9 @@ export function BillingTab({
 						<PlanPickerCard
 							sub={sub}
 							currency={gateway.currency}
-							renewing={sub.status !== "trialing"}
+							// A store whose comp ended is choosing its FIRST plan, not
+							// renewing one it never had.
+							renewing={sub.status !== "trialing" && !compEnded}
 							foundingPricing={gateway.foundingPricing}
 							foundingPricingLapsed={gateway.foundingPricingLapsed}
 							foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
@@ -683,7 +734,9 @@ export function BillingTab({
 							<p className="text-sm font-medium">
 								{sub.status === "trialing"
 									? "Want to start your plan now?"
-									: "Renew your subscription"}
+									: compEnded
+										? "Choose a plan to start working again"
+										: "Renew your subscription"}
 							</p>
 							<p className="mt-1 text-xs text-muted-foreground">
 								{freePeriod.kind === "free"
@@ -693,7 +746,7 @@ export function BillingTab({
 						</div>
 						<ActionLink
 							href={buildWaContactLink(
-								sub.status === "trialing"
+								sub.status === "trialing" || compEnded
 									? `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`
 									: `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`,
 								supportWa,

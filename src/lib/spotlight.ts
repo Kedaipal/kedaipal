@@ -95,10 +95,32 @@ export const SPOTLIGHT_ANCHOR = {
 		anchor: "settings-business-details",
 	},
 	store_country: { page: "settings", tab: "store", anchor: "settings-country" },
+	// The Business address card — the post-switch checklist already anchors it
+	// (`?fix=business_address`), so this key reuses that exact id, as the
+	// hitpay/delivery_charge precedent does. Added for the v2026.09.6 unit-line
+	// note (z8r3fdff8r): the field is on this card and the pickup dialog both,
+	// and the card is the one a note can land on.
+	business_address: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-business-address",
+	},
+	// The Opening hours card (z8r3fdff8r) — where the second daily window
+	// lives. The card, not the editor: the ring answers "where are my hours?",
+	// and the split is inside Edit.
+	opening_hours: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-opening-hours",
+	},
 	// The Pricing & capacity card of a stay listing — where the weekend rate
 	// (S13, z8r3fddkp8) lives. The card, not the field: every spotlight rings
 	// a card, and the field is its third row, labelled "Weekend rate".
 	weekend_rate: { page: "product", anchor: "product-booking-pricing" },
+	// The Order rules card of a non-booking product (z8r3fdff97) — prep time
+	// and the pickup note live there, beside the minimum quantity and notice
+	// rules they compose with.
+	prep_time: { page: "product", anchor: "product-order-rules" },
 } as const satisfies Record<string, SpotlightTarget>;
 
 export type SpotlightKey = keyof typeof SPOTLIGHT_ANCHOR;

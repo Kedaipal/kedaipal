@@ -811,3 +811,21 @@ export const UNLIMITED = 1_000_000_000;
 export function isUnlimited(cap: number): boolean {
 	return cap >= UNLIMITED;
 }
+
+/** The tier whose FEATURES "full access" resolves to. Full access is what a
+ * Kedaipal admin gets on their own store and what a comped store gets
+ * (z8r3fdeub2) — one definition, so the two can never drift. */
+export const FULL_ACCESS_PLAN: Plan = "scale";
+
+/** Entitlement caps for full access: no limits on anything — orders, seats or
+ * broadcasts (Zaki, 17 Sep: a comp gets "the same limit as admin"). Resolved
+ * at read time by `resolveAccess`, never stored, so turning full access off
+ * needs no cap rewrite. When broadcasts ship, this is where their cost for
+ * admin + comped stores gets decided. */
+export function fullAccessCaps(): PlanCaps {
+	return {
+		orderCap: UNLIMITED,
+		userCap: UNLIMITED,
+		broadcastQuota: UNLIMITED,
+	};
+}

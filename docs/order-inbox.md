@@ -952,6 +952,15 @@ and escalates for `pending` **or** unseen.
 
 ## Phase 2 — bulk actions (shipped)
 
+> **A lapsed store can't use any of this.** From 19 Sep 2026 an expired seller's
+> dashboard is **view-only** (`z8r3fdeub2`): `updateStatus`/`bulkUpdateStatus`
+> and every other order action are refused server-side. The inbox's **Select**
+> button — the door to bulk actions — is disabled with the reason, and a
+> `ViewOnlyNote` sits under the header. Export stays enabled: a seller's own
+> data is never held hostage. See
+> [`manual-subscription.md`](./manual-subscription.md#soft-lock-past_due).
+
+
 - **`convex/orders.ts`**: the core of `updateStatus` was extracted into a shared
   `applyStatusTransition(ctx, order, status)` helper (stock-restore-on-cancel +
   aggregates, `statusChangedAt`, `orderEvent`, WhatsApp notify). New

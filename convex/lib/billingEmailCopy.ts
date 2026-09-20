@@ -77,7 +77,7 @@ const t = {
 		wasPrefix: "was",
 		foundingDiscount: "founding discount",
 		storeStaysLive:
-			"Your storefront and existing orders stay live — editing your store is paused until you pay.",
+			"Your storefront stays live and buyers can still order — your dashboard is view-only until you pay.",
 		choosePlan: "Choose a plan",
 		payNow: "Pay online now",
 		payNowHint: "Card, banking or eWallet — confirmed automatically.",
@@ -108,7 +108,7 @@ const t = {
 		wasPrefix: "asal",
 		foundingDiscount: "diskaun pengasas",
 		storeStaysLive:
-			"Storefront dan pesanan sedia ada kekal aktif — penyuntingan kedai dijeda sehingga anda membayar.",
+			"Etalase anda kekal aktif dan pembeli masih boleh memesan — papan pemuka anda hanya boleh dilihat sehingga anda membayar.",
 		choosePlan: "Pilih pelan",
 		payNow: "Bayar dalam talian",
 		payNowHint: "Kad, perbankan atau eWallet — disahkan secara automatik.",
@@ -140,7 +140,7 @@ const t = {
 		wasPrefix: "原价",
 		foundingDiscount: "创始会员折扣",
 		storeStaysLive:
-			"您的商店和现有订单会继续正常运作 —— 付款前暂停编辑功能。",
+			"您的店面继续在线，买家仍可下单 —— 付款前您的后台仅可查看。",
 		choosePlan: "选择套餐",
 		payNow: "立即在线付款",
 		payNowHint: "银行卡、网银或电子钱包 —— 自动确认到账。",
@@ -653,8 +653,13 @@ const render: Record<
 	},
 };
 
-/** Retailer notices with no invoice attached — the free-period nudge and the
- * founding-benefit lifecycle — so a separate (smaller) var shape.
+/** Retailer notices with no invoice attached — the free-period nudge, the
+ * comp-ended notice and the founding-benefit lifecycle — so a separate
+ * (smaller) var shape. `compEnded` (z8r3fdeub2) tells a store an admin turned
+ * its comp upgrade off — it's an expired seller now (storefront + buyer
+ * ordering live, the dashboard read-only until it picks a plan). No bill
+ * exists, so it belongs here, not with the invoice emails. Comps have no end
+ * date, so there is no "ending soon" notice.
  *
  * Two siblings have been retired here. `trialEnded` went with z8r3fday24: a
  * free period ending now ISSUES the first invoice (`firstInvoice*` above), and
@@ -666,6 +671,7 @@ const render: Record<
  * `invoiceOverdue` followed by the `recovery*` chain. */
 export type TrialEmailKey =
 	| "trialEndingSoon"
+	| "compEnded"
 	// Founding-benefit lifecycle (z8r3fdfyw5): the T-14 warning, then the
 	// notice that benefits ended. Both say the rank and badge are KEPT — that
 	// is the promise, and an email that failed to repeat it would read as
@@ -677,6 +683,7 @@ export type TrialEmailVars = {
 	storeName: string;
 	billingUrl: string;
 	daysLeft?: number; // only for trialEndingSoon
+	sponsorLabel?: string; // only for compEnded, e.g. "Sponsored by Maybank SME"
 	/** Pre-formatted date the founding benefits end / ended (founding keys). */
 	endsOnFormatted?: string;
 };
@@ -696,6 +703,17 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("⏰", `Your free period ends in ${dayStr}`, lines, v.billingUrl, t.en.choosePlan);
 			const text = `⏰ Your free period ends in ${dayStr} — or sooner, the moment you take your first live order.\nYour first invoice arrives then, with 14 days to pay; your storefront stays live throughout.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		compEnded: (v) => {
+			const via = v.sponsorLabel ? ` (${escapeHtml(v.sponsorLabel)})` : "";
+			const subject = "🎁 Your sponsored Kedaipal access has ended";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your complimentary Kedaipal access${via} has ended.`,
+				"Your storefront stays live and buyers can still place orders — nothing on their side changes. Your dashboard is view-only until you choose a plan: you can see everything, but working orders, editing products and changing settings are all paused. Paying online unlocks it straight away.",
+			];
+			const html = wrapHtml("🎁", "Your sponsored access has ended", lines, v.billingUrl, t.en.choosePlan);
+			const text = `🎁 Your sponsored Kedaipal access${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} has ended.\nYour storefront stays live and buyers can still order. Your dashboard is view-only until you choose a plan — paying online unlocks it straight away.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {
@@ -736,6 +754,17 @@ const trialRender: Record<
 			const text = `⏰ Tempoh percuma anda tamat dalam ${dayStr} — atau lebih awal, sebaik sahaja anda terima pesanan pertama.\nBil pertama anda tiba ketika itu, dengan 14 hari untuk membayar; etalase anda kekal aktif sepanjang masa.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		compEnded: (v) => {
+			const via = v.sponsorLabel ? ` (${escapeHtml(v.sponsorLabel)})` : "";
+			const subject = "🎁 Akses tajaan Kedaipal anda telah tamat";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, akses percuma Kedaipal anda${via} telah tamat.`,
+				"Etalase anda kekal aktif dan pembeli masih boleh membuat pesanan — tiada apa yang berubah bagi mereka. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan: anda nampak semuanya, tetapi menguruskan pesanan, menyunting produk dan menukar tetapan semuanya dijeda. Bayaran dalam talian membukanya serta-merta.",
+			];
+			const html = wrapHtml("🎁", "Akses tajaan anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
+			const text = `🎁 Akses tajaan Kedaipal anda${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} telah tamat.\nEtalase anda kekal aktif dan pembeli masih boleh memesan. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan — bayaran dalam talian membukanya serta-merta.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 		foundingBenefitsEndingSoon: (v) => {
 			const on = v.endsOnFormatted ?? "tidak lama lagi";
 			const subject = `⏳ Harga pengasas anda tamat pada ${on}`;
@@ -772,6 +801,17 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("⏰", `您的免费期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
 			const text = `⏰ 您的免费期还剩 ${dayStr} —— 一旦收到第一笔订单，免费期会提前结束。\n届时您会收到第一张账单，有 14 天付款时间；您的商店保持在线。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		compEnded: (v) => {
+			const via = v.sponsorLabel ? `（${escapeHtml(v.sponsorLabel)}）` : "";
+			const subject = "🎁 您的 Kedaipal 赞助权益已结束";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 免费权益${via}已经结束。`,
+				"您的商店继续在线，买家仍可下单 —— 他们那边没有任何变化。在您选择套餐之前，后台仅可查看：您能看到全部内容，但处理订单、编辑商品和更改设置都已暂停。在线付款后立即恢复。",
+			];
+			const html = wrapHtml("🎁", "您的赞助权益已结束", lines, v.billingUrl, t.zh.choosePlan);
+			const text = `🎁 您的 Kedaipal 赞助权益${v.sponsorLabel ? `（${v.sponsorLabel}）` : ""}已结束。\n商店继续在线，买家仍可下单。在您选择套餐之前后台仅可查看 —— 在线付款后立即恢复。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {

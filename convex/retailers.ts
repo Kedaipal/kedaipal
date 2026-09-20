@@ -209,6 +209,7 @@ import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
 	type AccessState,
 	assertPlanFeature,
+	assertOwnStoreActive,
 	assertSubscriptionActive,
 	loadSubscription,
 	resolveAccess,
@@ -2732,6 +2733,7 @@ export const generateLogoUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
@@ -2746,6 +2748,7 @@ export const generateCoverImageUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
@@ -2760,6 +2763,7 @@ export const generatePaymentQrUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
