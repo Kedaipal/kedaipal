@@ -271,6 +271,7 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("firstInvoiceOrder"),
 			v.literal("firstInvoiceBackstop"),
 			v.literal("trialEndingSoon"),
+			v.literal("compEnded"),
 			v.literal("holdStarted"),
 			v.literal("holdResumed"),
 			v.literal("welcome"),
@@ -311,11 +312,13 @@ export const sendSampleBillingEmail = internalAction({
 						totalFormatted: sampleTotal,
 						dashboardUrl: url,
 					})
-				: key === "trialEndingSoon"
+				: key === "trialEndingSoon" || key === "compEnded"
 					? renderTrialEmail(loc, key, {
 							storeName: "Sample Store",
 							billingUrl: url,
 							daysLeft: 3,
+							sponsorLabel:
+								key === "compEnded" ? "Sponsored by Maybank SME" : undefined,
 						})
 					: key === "holdStarted" || key === "holdResumed"
 						? renderHoldEmail(loc, key, {
@@ -359,13 +362,18 @@ export const sendSampleBillingEmail = internalAction({
 	},
 });
 
-/** Send a retailer-only (no invoice) notice — trial nudges or the lapsed notice.
- * Shared by the named actions below. Fire-and-forget. */
+/** Send a retailer-only (no invoice) notice — the free-period nudge, the
+ * lapsed notice or the comp-ended notice. Shared by the named actions below.
+ * Fire-and-forget. */
 async function sendRetailerNotice(
 	ctx: ActionCtx,
 	retailerId: Id<"retailers">,
 	key: TrialEmailKey,
-	daysLeft?: number,
+	extra: {
+		daysLeft?: number;
+		sponsorLabel?: string;
+		endsOnFormatted?: string;
+	} = {},
 ): Promise<void> {
 	let meta: {
 		notifyEmail: string | undefined;
@@ -384,7 +392,9 @@ async function sendRetailerNotice(
 	const { subject, html, text } = renderTrialEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		billingUrl: billingPageUrl(),
-		daysLeft,
+		daysLeft: extra.daysLeft,
+		sponsorLabel: extra.sponsorLabel,
+		endsOnFormatted: extra.endsOnFormatted,
 	});
 	try {
 		await sendEmail(meta.notifyEmail, subject, html, text);
@@ -397,19 +407,55 @@ async function sendRetailerNotice(
 	}
 }
 
-/** Free-period nudge (no invoice): `trialEndingSoon` (~3 days before the
- * backstop) — scheduled by the daily cron. The old `trialEnded` lock notice is
- * gone with start-when-you-sell: the free period ending now ISSUES a first
- * invoice (`firstInvoice*` keys above), and only that invoice going overdue
- * locks — which sends the ordinary `invoiceOverdue`. */
+/** Retailer notices with no invoice attached, scheduled by the daily cron and
+ * the comp toggle:
+ *  - `trialEndingSoon` — ~3 days before the free period's backstop.
+ *  - `compEnded` — an admin turned the store's comp upgrade off (z8r3fdeub2):
+ *    it's an expired seller now (storefront + ordering live, editing locked
+ *    until they pick a plan).
+ * The old `trialEnded` lock notice is gone with start-when-you-sell: the free
+ * period ending now ISSUES a first invoice (`firstInvoice*` keys above), and
+ * only that invoice going overdue locks — which sends the ordinary
+ * `invoiceOverdue`. */
 export const notifyTrialEmail = internalAction({
 	args: {
 		retailerId: v.id("retailers"),
-		key: v.union(v.literal("trialEndingSoon")),
+		key: v.union(v.literal("trialEndingSoon"), v.literal("compEnded")),
 		daysLeft: v.optional(v.number()),
+		/** compEnded: the comp's seller-facing label, named in the email. */
+		sponsorLabel: v.optional(v.string()),
 	},
-	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {
-		await sendRetailerNotice(ctx, retailerId, key, daysLeft);
+	handler: async (
+		ctx,
+		{ retailerId, key, daysLeft, sponsorLabel },
+	): Promise<void> => {
+		await sendRetailerNotice(ctx, retailerId, key, { daysLeft, sponsorLabel });
+	},
+});
+
+/**
+ * Founding-benefit lifecycle notices (z8r3fdfyw5), both scheduled by the daily
+ * pass (`foundingMembers.internalRevokeLapsedBenefits`):
+ * `foundingBenefitsEndingSoon` at T-14 and `foundingBenefitsEnded` once it is
+ * taken. `endsOnAt` is the date from `foundingBenefitsEndAt` — the SAME author
+ * the cron's gate and the billing-tab banner read, so the email can't promise a
+ * date the cron doesn't honour. Fire-and-forget like every other billing email:
+ * the revoke itself has already committed, so a bounced email must never undo
+ * it (and never blocks it — Zaki, 18 Sep 2026).
+ */
+export const notifyFoundingBenefitsEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(
+			v.literal("foundingBenefitsEndingSoon"),
+			v.literal("foundingBenefitsEnded"),
+		),
+		endsOnAt: v.number(),
+	},
+	handler: async (ctx, { retailerId, key, endsOnAt }): Promise<void> => {
+		await sendRetailerNotice(ctx, retailerId, key, {
+			endsOnFormatted: formatDueDate(endsOnAt),
+		});
 	},
 });
 
@@ -585,6 +631,8 @@ export const getAutoRenewEmailContext = internalQuery({
 			pendingPlanChange: sub.pendingPlanChange?.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub.foundingIntent === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,

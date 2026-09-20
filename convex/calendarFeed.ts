@@ -15,6 +15,7 @@ import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { internalQuery, mutation } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
+import { assertSubscriptionActive } from "./subscriptions";
 import {
 	bookingsOverlapping,
 	loadBlocksForWindow,
@@ -118,6 +119,7 @@ export const rotateCalendarFeedToken = mutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<string> => {
 		const access = await requireRetailerAccess(ctx, retailerId);
+		await assertSubscriptionActive(ctx, retailerId);
 		if (!access.retailer.calendarFeedToken) {
 			throw new ConvexError("Connect the calendar first");
 		}

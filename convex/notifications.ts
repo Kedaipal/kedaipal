@@ -20,7 +20,17 @@ export const latestActivity = query({
 		ctx,
 		{ retailerId },
 	): Promise<{
-		newestOrder: { createdAt: number; shortId: string } | null;
+		newestOrder: {
+			createdAt: number;
+			shortId: string;
+			/** Who it's from and what it's worth — the two facts that make the
+			 * alert readable without opening it (z8r3fdff97 test round). Both
+			 * come off the order doc already read below, so they cost nothing.
+			 * Empty when the buyer left no name (counter/anonymous orders). */
+			customerName: string;
+			total: number;
+			currency: string;
+		} | null;
 		newestFailedBooking: {
 			failedAt: number;
 			shortId: string;
@@ -63,7 +73,13 @@ export const latestActivity = query({
 
 		return {
 			newestOrder: newest
-				? { createdAt: newest.createdAt, shortId: newest.shortId }
+				? {
+						createdAt: newest.createdAt,
+						shortId: newest.shortId,
+						customerName: newest.customer.name ?? "",
+						total: newest.total,
+						currency: newest.currency,
+					}
 				: null,
 			newestFailedBooking: failedBooking,
 		};

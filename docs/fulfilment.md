@@ -14,9 +14,11 @@ storefront always keeps at least one _working_ method.**
 > **delivery optional** (ClickUp `86exu4grm`) and the cross-method invariant that ties the
 > two together.
 
-> **Related:** the **fulfilment date** captured at checkout (the buyer's "when do you need
-> this?", applies to both methods) has its own reference: [`fulfilment-date.md`](./fulfilment-date.md).
-> The `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab.
+> **Related:** the **fulfilment date and time** captured at checkout (the buyer's "when do you
+> need this?", both methods), store and per-product notice, per-product **prep time** and store
+> opening hours have their own reference: [`fulfilment-date.md`](./fulfilment-date.md). The
+> `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab. The
+> per-product **pickup note** is below: [Per-product pickup note](#per-product-pickup-note-2026-09-17-clickup-z8r3fdff97).
 
 ## Delivery charge — flat fee + radius bands (2026-07-16, ClickUp `86extzdr8`)
 
@@ -480,6 +482,60 @@ part that survived), end-to-end transition/set/clear/auth cases in
 `src/components/order/shipment-tracking.test.tsx`, block copy in
 `src/lib/dispatch-block.test.ts`.
 
+## Per-product pickup note (2026-09-17, ClickUp `z8r3fdff97`)
+
+The one line a buyer must read before collecting — "side counter", "bring an ice bag, these
+melt in 20 minutes", "ring the bell, the shutter looks closed". It used to live in the product
+description, where it reached the storefront and died: the description never rides the order,
+so the instruction was missing from checkout, the WhatsApp confirmation and `/track` — exactly
+where a buyer standing outside the shop needs it. Its sibling, per-product **prep time**, lives
+in [`fulfilment-date.md`](./fulfilment-date.md).
+
+- **Storage.** `products.pickupNote`, stored as ONE line (`collapseNote`: inner whitespace
+  collapsed, trimmed; empty → unset) and capped at `MAX_PICKUP_NOTE_LENGTH` = 200 counted on
+  the stored text — `convex/lib/pickupNote.ts`, shared by the server sanitizer and the form's
+  counter so they can't disagree about what fits. Plain text, rendered escaped everywhere.
+- **Frozen per line at create** as `orders.items[].pickupNote`, from the LIVE product — the
+  `pickupSnapshot` posture: a later edit never rewrites what earlier buyers were told. Not
+  backfilled; older orders simply have none.
+
+  | Create path | Freezes the note? |
+  | --- | --- |
+  | Storefront checkout (`orders.create`) | Yes — every order, whatever the method (the read gate below decides where it shows). |
+  | Claim links (`orderClaims.commit`) | Yes — from the live product at the buyer's commit, so a typo fixed after the link went out still reaches them. |
+  | Counter checkout | No, deliberately — the buyer is at the counter. |
+  | Bookings | Never — a booking's form hides the note. |
+
+- **One read gate: `orderPickupNotes(order)`.** Self-collect orders only (drop-off meet-ups
+  included — the instruction still applies), never a counter sale; the distinct notes in cart
+  order, exact duplicates removed (six flavours of one puff carry one note once), product
+  names left out (the instruction is about collecting the order, not about a line). Every
+  surface reads through it, so none can print "Before you collect" on a delivery.
+- **Seller surfaces.** The Order rules card and the create wizard (hidden on a booking
+  listing). On a store without self-collect the field degrades to a line naming
+  Settings → Fulfilment — the note is kept, not lost, in case collection is switched back on.
+  The seller order page shows the frozen notes in the Fulfilment card ("Before they collect",
+  with a caption saying they are the note as it read when the order was placed), the orders
+  table/CSV has a **Pickup notes** column, and both fields ride the product spreadsheet
+  import/export.
+- **Buyer surfaces.** The product page ("Collecting?" under the purchase controls, clamped to
+  three lines), checkout (one deduped **"Before you collect"** block under the chosen pickup
+  point, read live from the product), and `/track` (in the "Pick up at" card while the order
+  is live; hidden once cancelled or delivered). One component, `PickupNotes`, and one heading
+  per locale (`PICKUP_NOTES_HEADING`) everywhere. The **point's own note** — the seller's
+  "Notes for buyers" on the location — sits directly above it on `/track` and the seller order
+  page, so it carries its own heading, **"About this spot"**: two instruction boxes in one card,
+  each saying whose it is (the place vs. what was bought).
+- **WhatsApp — honestly scoped.** `renderPickupNotes` appends "📝 Before you collect" and the
+  notes inside the pickup block of the **free-form** confirm (legacy / no-template path), the
+  **mockup-gated** confirm, and the **free-form** manual payment reminder. The **Meta template
+  push** at checkout and the template reminder carry fixed parameters and NO notes, and with
+  the push path on the free-form confirm is suppressed (`pushOwnsTheMessage`) — so in
+  production `/track`, linked from that one message, is the surface guaranteed to carry them.
+  Adding notes to the template would need a Meta template change; the one-message-per-order
+  rule means no new send was added instead. The buyer's own wa.me message doesn't carry them
+  (that message is written TO the seller).
+
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
 
 A seller can attach an **optional flat fee** (minor units / sen) to any pickup location —
@@ -554,9 +610,10 @@ picker, the snapshot. Only a badge, a grouping heading and a schedule field diff
 - **Storefront:** the top-level picker shows **Delivery / Pickup**. Inside the Pickup form,
   points are grouped under **Self-collect** / **Drop-off** sub-headings — but **only when
   both kinds exist**; a single-kind seller (the legacy 100%-self-collect case) sees a flat
-  list, identical to before. The chosen point's `scheduleNote` is surfaced **at the date
-  picker step** (advisory, no hard date constraint — decision locked with the CTO) so the
-  buyer picks a sensible day for a recurring meetup.
+  list, identical to before. The chosen point's `scheduleNote` is surfaced **at the date/time
+  step** (advisory, no hard date constraint — decision locked with the CTO) so the
+  buyer picks a sensible day for a recurring meetup. A drop-off point never asks for a time
+  (`z8r3fdff97`) — its schedule note sets the hour.
 - **Render surfaces:** the WhatsApp confirm (`renderPickupBlock`, kind-aware header +
   `🗓️ scheduleNote`), the seller new-order/confirmed email (kind-aware `Method:` label +
   point/schedule/maps block), and `/track/<token>` ("Meet at" vs "Pick up at" + kind badge +
@@ -823,14 +880,18 @@ Single-message confirm. The pickup info (label, address, **clickable maps URL**,
                                   //   - lat/lng form: search by coords
    \n
    {notes?}
+   \n
+   📝 Before you collect          // renderPickupNotes — the frozen per-product
+   • {note}                       //   notes, deduped (z8r3fdff97); omitted when none
    \n\n
    {transferReferenceLine}        // system message, non-overridable
-   \n
-   💳 Payment details             // renderPaymentInstructions, if any
-   [I've paid button]             // CTA
-
-2. Payment QR image (separate)    // if configured
+   [Make payment button]          // CTA onto the order page
 ```
+
+Bank details and the payment QR no longer ride this message (`86ey98ju1`) — the CTA opens the
+order page, where "How to pay" lives. This composition is the **legacy / no-template** path;
+with the confirmation template on, the push at checkout owns the one message
+([`one-message-per-order.md`](./one-message-per-order.md)).
 
 The pickup block is appended *after* the user-overridable confirm template — retailers can customise their own copy without being able to break the pickup info. No new template variables were added to the override surface.
 
@@ -897,6 +958,7 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
 
   ```
   📦 New pickup order ORD-AB23 — Main Store
+  Collect on: Thu, 18 Sep 2026 · 11:30 AM
   Customer: Ali (+60 12-345 6789)
 
   Items:
@@ -907,7 +969,7 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
   Please prepare for collection.
   ```
 
-  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after the wa.me link opens WhatsApp (or after pasting from the Copy button).
+  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. The "Collect on" line (`z8r3fdff97` — "Meet on" at a drop-off point) is the moment the manager actually needs; it's omitted on a dateless order. Built by `buildNotifyManagerMessage` (`src/lib/notify-manager-message.ts`, unit-tested). Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after the wa.me link opens WhatsApp (or after pasting from the Copy button).
 
 ### Store manager contact (per pickup location)
 
@@ -930,6 +992,68 @@ The seller order detail page uses these fields to render either the primary "Not
 
 The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have unlimited. **Not implemented in v1** — there's no plan/tier field on `retailers` yet (subscription billing is Sprint 1–3). All retailers currently get unlimited locations. The cap will be added inside `pickupLocations.create` (and a "N locations hidden — upgrade to Pro" banner in `listForRetailer`) when the subscription-billing task lands.
 
+## Unit / floor / building line (2026-09-16, ClickUp `z8r3fdff8r`)
+
+Google's formatted address stops at the block. Riders were arriving at Huff &
+Puff's building and phoning her. Both of the seller's own premises — the
+**business address** and each **pickup point** — now carry an optional free-text
+unit line.
+
+- **Storage:** `retailers.businessAddress.unit` and `pickupLocations.unit`,
+  both `v.optional(v.string())` — optional widenings, no migration. ≤ **80
+  chars**, whitespace collapsed to ONE line (this prints on a rider's screen
+  and a parcel label), blank → unset so "no unit" has one spelling.
+  `sanitizeUnitLine` in `convex/lib/address.ts` is the single normalizer;
+  both mutations throw the same cap message.
+- **It is a DISPLAY composition, never a key.** `formatPremiseAddress` puts
+  the unit FIRST (`"Unit 3-1, Block B, 12 Jln Tun Razak"`) — the part a human
+  needs last and reads first — and returns the label untouched when there is
+  no unit, so every existing surface is byte-identical. Nothing keys on it:
+  the Lalamove quote and the radius price both key on lat/lng.
+- **Where the business address unit rides:** the **Lalamove pickup stop**
+  (both stop builders) and the **despatch label's return address** — a
+  returned parcel has the same find-the-door problem as an arriving rider,
+  and that block IS the return address. It stays **owner-only**:
+  `buildRetailerPublic` strips `businessAddress` entirely, unit included.
+  A **foreign-stamped** address still drops the whole block, unit with it
+  (86eyqgujv). **Delyva is untouched** — it keeps its own structured
+  `pickupAddress.address2`, deliberately not derived from this.
+- **Where the pickup unit rides:** composed into the ONE address string every
+  buyer surface already prints — at the public query boundary
+  (`listActivePublicBySlug`) and frozen into `orders.pickupSnapshot.address`
+  at order create. Checkout, `/track`, the seller's order email and the CSV
+  export therefore carry it with **no plumbing of their own**, and a later
+  edit to the location can't rewrite a placed order.
+- **The WhatsApp confirmation does NOT carry it** — and the seller-facing
+  helper must never say it does (it did twice; fixed in the 17 Sep evening
+  round). The checkout confirmation is the Meta TEMPLATE push, whose only
+  parameters are order number, store name and total plus a button to
+  `/track`, where the unit is. `renderPickupBlock` prints the address only
+  on the legacy buyer-messages-first path, which is off whenever
+  `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is set. Adding the address to the
+  template would be a new outbound payload, which buyer-info-lives-on-the-
+  order-page rules out.
+- **Why it's a separate field and not "just type it into the address".**
+  The pickup address IS free text — but editing it away from its Google pick
+  **drops the coordinates**, and with them the buyer's one-tap Waze / Maps
+  button. A seller should not have to pay for a unit number with their map
+  pin.
+- **Seller UX:** an optional input under the Google autocomplete on both
+  cards, capped at 80 with the browser's own `maxLength`, and the cap is
+  **stated in the hint** so a long building name isn't cut off unnoticed. The
+  business address card's Save button now also enables when **only the unit
+  changed**. Before, it required a fresh autocomplete pick, which would have
+  made adding a unit number a re-pin.
+- **Test-round fixes (17 Sep):** with **no address yet**, the unit field is
+  disabled and says "Pick your address first — the unit rides in front of it".
+  It used to accept typing that Save then silently refused. The "is this a
+  change?" check runs the **server's** `sanitizeUnitLine`, and the saved
+  spelling is written back into the field. With a plain trim, a saved
+  "Unit 3-1,   Block B" still looked unsaved: the padded text stayed in the
+  field and Save stayed lit. The pickup point's "Availability" helper now says
+  it's *only for a point that keeps different hours from your store's opening
+  hours*, so it stops inviting a second, driftable copy of the store's hours.
+
 ## Known limitations
 
 - **Delivery distance trusts the buyer's chosen coordinates.** Radius pricing measures to the lat/lng from the buyer's Google-autocomplete pick — there's no server-side geocode of the typed address (the deliberate no-Distance-Matrix design). A buyer could pick a *nearer* suggestion than their real address to land a cheaper band. Mitigations: the seller sees the real address label on the order, and the frozen `deliverySnapshot.distanceKm` audits what was charged, so a mismatch is catchable at fulfilment. Acceptable for v1 given the manual-close model; a server geocode is the escape hatch if abuse shows up.
@@ -940,5 +1064,5 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 ## Future work
 
 - **Tier cap enforcement** when subscription billing lands (Starter = 1 active, Pro+ = unlimited) — single check inside `pickupLocations.create`, plus a soft over-cap banner in `listForRetailer` for retailers downgraded from Pro.
-- **Pickup time slots / appointments** — currently a free-form `notes` field. A structured slot picker (Mon–Sat 10am–6pm, etc.) would unlock the cake/kuih cohort's actual workflow.
+- **Pickup time slots / appointments** — a pickup TIME shipped in `z8r3fdff97` (asked when the store keeps opening hours or the cart needs prep, bound by both). Still future: per-point hours (a drop-off point's schedule is free text) and slot capacity (how many pickups per half hour).
 - **Pickup location attached to a specific product** — for retailers where only some products are pickup-eligible (e.g. frozen-only). Not requested yet; flag the use case if it surfaces.

@@ -52,6 +52,8 @@ import {
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	foundingBenefitsAtRisk,
+	foundingBenefitsEndAt,
 	foundingPriceEligible,
 	type RenewalQuote,
 	renewalCurrency,
@@ -129,6 +131,21 @@ export const billingGatewayAvailable = query({
 		renewalCurrency: BillingCurrency;
 		foundingPricing: boolean;
 		foundingPricingLapsed: boolean;
+		/** Benefits ended for good (z8r3fdfyw5) — a DIFFERENT state from
+		 * `foundingPricingLapsed`, and the ribbon copy must not conflate them:
+		 * lapsed-not-yet-revoked is recoverable by paying (the period advances and
+		 * the window reopens), revoked is not. Telling a revoked member to "renew
+		 * to keep your founding price" would be a lie the billing page tells. */
+		foundingBenefitsRevoked: boolean;
+		/** When benefits end if this member never renews — drives the T-14
+		 * warning banner and the date in the ribbon. Gated on
+		 * `foundingBenefitsAtRisk`, the SAME predicate the cron's warn and revoke
+		 * gates use, so the page can never count down to a deadline the pass will
+		 * not enforce: undefined once revoked, for a member with no paid period,
+		 * for a non-member, and for any store the pass skips (`active`,
+		 * `on_hold`, `comped`). A comped founding member was otherwise shown a red
+		 * "your founding price ends on …" alert that could never come true. */
+		foundingBenefitsEndAt: number | undefined;
 		nextRenewal: RenewalQuote | null;
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -160,6 +177,8 @@ export const billingGatewayAvailable = query({
 		const eligibility = sub
 			? {
 					isFoundingMember: retailer.isFoundingMember === true,
+					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 					foundingIntent: sub.foundingIntent === true,
 					paidThrough: sub.currentPeriodEnd,
 					now,
@@ -178,6 +197,24 @@ export const billingGatewayAvailable = query({
 			}),
 			foundingPricing,
 			foundingPricingLapsed: foundingShaped && !foundingPricing,
+			foundingBenefitsRevoked:
+				retailer.foundingBenefitsRevokedAt !== undefined,
+			foundingBenefitsEndAt:
+				retailer.isFoundingMember === true &&
+				sub !== null &&
+				foundingBenefitsAtRisk({
+					status: sub.status,
+					comped: sub.comped === true,
+					paidThrough: sub.currentPeriodEnd,
+					benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+					benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
+					now,
+				})
+					? foundingBenefitsEndAt(
+							sub.currentPeriodEnd,
+							retailer.foundingBenefitsRestoredAt,
+						)
+					: undefined,
 			nextRenewal:
 				sub && eligibility && sub.comped !== true
 					? renewalQuote({
@@ -669,6 +706,8 @@ export const autoRenewSetupContext = internalQuery({
 				billingCycle: sub.billingCycle,
 				pendingPlanChange: sub.pendingPlanChange?.plan,
 				isFoundingMember: retailer.isFoundingMember === true,
+				benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+				benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 				foundingIntent: sub.foundingIntent === true,
 				paidThrough: sub.currentPeriodEnd,
 				lastPaidCurrency: lastPaid?.currency,

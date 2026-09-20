@@ -9,6 +9,11 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
+import {
+	formatPickupAddress,
+	sanitizeUnitLine,
+	UNIT_LINE_MAX_LENGTH,
+} from "./lib/address";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { assertValidMobileForCountry } from "./lib/slug";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
@@ -84,6 +89,20 @@ function sanitizeAddress(raw: string): string {
 		throw new ConvexError(`Address must be at most ${ADDRESS_MAX} characters`);
 	}
 	return trimmed;
+}
+
+/** Unit / floor / building line (z8r3fdff8r) — one line of door detail beside
+ * the Google-pinned address. Kept out of `address` so a seller adding it never
+ * has to edit the autocomplete text, which would drop the coordinates and with
+ * them the buyer's one-tap Waze / Maps button. */
+function sanitizeUnit(raw: string | undefined): string | undefined {
+	const result = sanitizeUnitLine(raw);
+	if (!result.ok) {
+		throw new ConvexError(
+			`Unit / floor / building must be at most ${UNIT_LINE_MAX_LENGTH} characters`,
+		);
+	}
+	return result.value;
 }
 
 function sanitizeMapsUrl(raw: string | undefined): string | undefined {
@@ -277,7 +296,11 @@ export const listActivePublicBySlug = query({
 			.map((r) => ({
 				_id: r._id,
 				label: r.label,
-				address: r.address,
+				// The unit line is COMPOSED here, at the buyer boundary
+				// (z8r3fdff8r) — the storefront picker, checkout and every
+				// downstream snapshot read one address string, so the door
+				// detail needs no plumbing of its own.
+				address: formatPickupAddress(r),
 				// Legacy rows (created before drop-off) read as self-collect so
 				// the storefront never groups them under a blank/wrong heading.
 				locationType: r.locationType ?? "self_collect",
@@ -352,6 +375,9 @@ export const create = mutation({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Unit / floor / building (z8r3fdff8r), composed onto `address` for
+		// every buyer surface by `formatPickupAddress`.
+		unit: v.optional(v.string()),
 		// Pickup kind. Omitted → "self_collect" (the legacy default + the
 		// common case), so older clients that don't send it keep working.
 		locationType: v.optional(
@@ -380,6 +406,7 @@ export const create = mutation({
 			retailerId,
 			label,
 			address,
+			unit,
 			locationType,
 			scheduleNote,
 			mapsUrl,
@@ -408,6 +435,7 @@ export const create = mutation({
 
 		const cleanLabel = sanitizeLabel(label);
 		const cleanAddress = sanitizeAddress(address);
+		const cleanUnit = sanitizeUnit(unit);
 		const cleanLocationType = locationType ?? "self_collect";
 		const cleanScheduleNote = sanitizeScheduleNote(scheduleNote);
 		const cleanMapsUrl = sanitizeMapsUrl(mapsUrl);
@@ -440,6 +468,7 @@ export const create = mutation({
 			retailerId,
 			label: cleanLabel,
 			address: cleanAddress,
+			unit: cleanUnit,
 			locationType: cleanLocationType,
 			scheduleNote: cleanScheduleNote,
 			mapsUrl: cleanMapsUrl,
@@ -474,6 +503,11 @@ export const update = mutation({
 		pickupLocationId: v.id("pickupLocations"),
 		label: v.optional(v.string()),
 		address: v.optional(v.string()),
+		// Unit / floor / building (z8r3fdff8r). Empty string clears it,
+		// undefined = no change — the scheduleNote convention. Deliberately NOT
+		// part of `addressMoved` below: door detail inside the same building
+		// can't change which country the address was captured in.
+		unit: v.optional(v.string()),
 		// Pickup kind. Undefined = "no change"; a value re-tags the point.
 		locationType: v.optional(
 			v.union(v.literal("self_collect"), v.literal("drop_off")),
@@ -503,6 +537,7 @@ export const update = mutation({
 			pickupLocationId,
 			label,
 			address,
+			unit,
 			locationType,
 			scheduleNote,
 			mapsUrl,
@@ -537,6 +572,7 @@ export const update = mutation({
 		const patch: Partial<{
 			label: string;
 			address: string;
+			unit: string | undefined;
 			locationType: "self_collect" | "drop_off";
 			scheduleNote: string | undefined;
 			mapsUrl: string | undefined;
@@ -556,6 +592,7 @@ export const update = mutation({
 
 		if (label !== undefined) patch.label = sanitizeLabel(label);
 		if (address !== undefined) patch.address = sanitizeAddress(address);
+		if (unit !== undefined) patch.unit = sanitizeUnit(unit);
 		// Re-stamp the captured country only when the ADDRESS itself moved, or a
 		// fresh Places pick landed. The edit dialog submits every field on every
 		// save, so stamping on any save would let a seller clear a wrong-country

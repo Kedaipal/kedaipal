@@ -41,8 +41,10 @@ Two deliberate details:
   `npx convex run migrations:backfillOrderCategoryNames` — see
   [product-categories.md](./product-categories.md).
 
-The haystack is built lazily (only when there IS a term), since it allocates ~36
-strings per order. Expect broader matches than before: a term appearing in a
+The haystack is built lazily (only when there IS a term), since it allocates a
+string per column, per order. Pickup notes participate (`z8r3fdff97`) through the
+same gate as the column — a self-collect order matches "ice bag", a delivery
+order whose line froze the same note does not. Expect broader matches than before: a term appearing in a
 shared field — a city every order ships to — now legitimately matches all of
 them. That breadth is the point.
 
@@ -688,7 +690,7 @@ WhatsApp.
   the already-sorted model keeps the active sort applying inside both halves.
   Pinning stays a partition, never a competing sort key.
 - **Export honours the view.** In table view the Export button becomes a
-  two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
+  two-item menu — *Export visible columns (N)* / *Export all columns (N)* —
   rather than a dialog, which would tax a path sellers hit often. In cards view
   there is no column selection to honour, so it stays a one-tap button that
   exports everything.
@@ -823,8 +825,11 @@ returns **the filtered page plus the per-bucket counts in a single subscription*
     from burying one that just arrived (the old due-date default did exactly that,
     which confused sellers — see the Sort control below).
   - **Due date** — `compareInboxOrder`: fulfilment date ascending (soonest-first,
-    the fulfilment queue), dateless orders sink to the bottom. Relies on the
-    newest-first input for its within-date tiebreaker.
+    the fulfilment queue), dateless orders sink to the bottom. **Same-day orders
+    fall in time order, untimed after timed** (`z8r3fdff97` — pickups carry a
+    time now, so a kitchen's list reads in the order buyers arrive); the table's
+    Fulfilment date column sorts the same way (`fulfilmentMomentSortKey`). Relies
+    on the newest-first input for its tiebreaker between untimed same-day orders.
   Fulfilment urgency is *also* surfaced by the Due chips + due-today banner + Home
   strip, so due-date is a deliberate opt-in, not the default. Export sorts
   independently (still `compareInboxOrder`, a stable bookkeeping order). See
@@ -876,8 +881,10 @@ and escalates for `pending` **or** unseen.
   `fwin`) sits inline above the advanced filters — fulfilment urgency is a
   primary axis for F&B sellers, not a buried filter. Each order row carries a
   **fulfilment-date badge** (`fulfilment-date-badge.tsx`) that leads with urgency
-  (Overdue / Today / Tomorrow coloured) — **suppressed to neutral on terminal
-  orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
+  (Overdue / Today / Tomorrow coloured), with the order's time when it has one
+  ("Today · 3:30 PM", `fulfilmentBadgeLabel`, `z8r3fdff97` — never on the
+  muted or Overdue variants, where the day is the whole message) — **suppressed
+  to neutral on terminal orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
   see [`fulfilment-date.md`](./fulfilment-date.md)). Each card's meta line shows
   the **absolute placed-at datetime + relative age** (`formatOrderTimestamp` +
   `formatStatusAge`, e.g. "12 Jul, 3:45 PM (3h ago)") so the seller reads both
@@ -944,6 +951,15 @@ and escalates for `pending` **or** unseen.
   lands on `?bucket=new` (and doesn't filter when there's nothing new).
 
 ## Phase 2 — bulk actions (shipped)
+
+> **A lapsed store can't use any of this.** From 19 Sep 2026 an expired seller's
+> dashboard is **view-only** (`z8r3fdeub2`): `updateStatus`/`bulkUpdateStatus`
+> and every other order action are refused server-side. The inbox's **Select**
+> button — the door to bulk actions — is disabled with the reason, and a
+> `ViewOnlyNote` sits under the header. Export stays enabled: a seller's own
+> data is never held hostage. See
+> [`manual-subscription.md`](./manual-subscription.md#soft-lock-past_due).
+
 
 - **`convex/orders.ts`**: the core of `updateStatus` was extracted into a shared
   `applyStatusTransition(ctx, order, status)` helper (stock-restore-on-cancel +

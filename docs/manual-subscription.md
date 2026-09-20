@@ -52,12 +52,28 @@ for `isFoundingMember || foundingIntent`. `paidAt`/`firstInvoiceId` on the
 `foundingMembers` row fill in when the first founding invoice is paid.
 
 **Founding Members stay on Founding Pro** (Zaki, 17 Sep 2026): monthly or yearly,
-never another tier, until the founding price lapses (3 months without an active
-subscription), after which they are ordinary sellers. Every self-serve plan path
-refuses the move server-side (`foundingPlanLocked`), and a downgrade scheduled
-before the lock is cancelled at renewal (`renewalQuote`); the admin issue form is
-not gated — Arif's judgment stays the override. See
+never another tier, until their founding benefits are revoked (3 months without
+an active subscription), after which they are ordinary sellers. Every self-serve
+plan path refuses the move server-side (`foundingPlanLocked`), and a downgrade
+scheduled before the lock is cancelled at renewal (`renewalQuote`); the admin
+issue form is not gated — Arif's judgment stays the override. See
 [`hitpay-recurring.md`](./hitpay-recurring.md#founding-members-stay-on-founding-pro-zaki-17-sep-2026).
+
+**⚠️ Membership is permanent; BENEFITS are revocable (z8r3fdfyw5).** The rank,
+the storefront badge, the nav pill and the slot in the 10 never revert — that is
+promised in the signed agreement *and* in the billing ribbon's own copy. What
+lapses after 90 days unpaid is the **benefit set**: the 30% price, the
+Founding-Pro lock and white-glove. It is stamped on
+`foundingMembers.benefitsRevokedAt` (+ reason and note) and mirrored onto
+`retailers.foundingBenefitsRevokedAt`, by the daily pass
+`foundingMembers.internalRevokeLapsedBenefits`, after one T-14 warning email and
+banner. **Never revoke by clearing `isFoundingMember`** — it strips a badge we
+promised, and `foundingPriceEligible` then falls through to `foundingIntent`
+(never cleared after a claim, no lapse check) and grants founding pricing for
+ever. A store on hold, on an active period, comped, or with no paid period is
+never revoked. Arif can revoke or restore by hand in Admin → Billing → Founding
+members; the full rule, the surfaces and the unresolved terms conflict are in
+[`hitpay-recurring.md`](./hitpay-recurring.md#revocation--membership-is-permanent-benefits-are-not-z8r3fdfyw5).
 
 **Nav pill (`TierPill`, sidebar + mobile header + settings card).** A founding
 member's status chip reads **"Founding #N"** (± trial/past-due state), which on
@@ -187,8 +203,9 @@ claims via admin mark-paid, so a hand-crafted link grants nothing.
    not "locked out". (`resolveAccess(null)` in `convex/subscriptions.ts`.)
 2. **Pressure on the seller, never the buyer.** The storefront + order pipeline are
    public and **never call the subscription guard** — they stay live regardless of
-   status. Soft-lock (`past_due`) freezes **only** the seller's dashboard
-   growth-writes.
+   status. The lock (`past_due`) freezes **only** the seller's dashboard, which
+   goes fully **view-only** (19 Sep 2026): they read everything and change
+   nothing, while their buyers browse, order, pay and track exactly as before.
 
 ## Start-when-you-sell + Off-Season Hold (Sep 2026, ClickUp `z8r3fday24`)
 
@@ -364,10 +381,113 @@ The daily cron locks a vendor on any of:
 3. ~~Period lapsed, no invoice~~ — retired with `86eyb6z4r`: the cron issues the
    renewal (or the hold renewal) and the seller rides its grace.
 
-A pending invoice with a *future* due date always keeps them in grace. Comped subs
-never lock (a comped trial that runs out its backstop still takes the legacy
-`past_due` flip, which for a comped row locks nothing). Each transition fires its
-one email (`notifyInvoiceOverdue`).
+A pending invoice with a *future* due date always keeps them in grace. Comped
+subs never lock — the cron **skips comped rows outright** in both loops (the old
+"legacy flip" that moved a lapsed comped trial to `past_due` is retired with
+comp accounts, `z8r3fdeub2`; a leftover comped trial just waits for the backfill
+to heal it). A comp ENDING is the one non-invoice path into `past_due` — see
+"Comp accounts" above. Each transition fires its one email
+(`notifyInvoiceOverdue`).
+
+## Comp accounts — admin-granted free access (Sep 2026, ClickUp `z8r3fdeub2`)
+
+Partner/sponsor deals (Huff & Puff, HCM) need a store that runs free with **no
+founder in the billing loop**. A comp is a **subscription state, not a user
+type** — the seller signs in like anyone else — and it is a **toggle**: an
+admin turns the **comp upgrade** on for a store and it stays on until an admin
+turns it off. **There is no end date** (Zaki, 17 Sep). `subscriptions.comped`
+(the read seam every consumer already gates on) plus a `comp` stamp (`kind` ∈
+partner | sponsor | pilot | internal, optional seller-facing `label`,
+admin-only `note`, `grantedBy/At` = who first turned it on and when) make the
+whole machine treat the store as never-charged. Catalog: `convex/lib/comp.ts`.
+
+### What it grants — exactly an admin store's entitlements, minus admin access
+
+- **Full access, one definition.** `resolveAccess` resolves a comped store and
+  an admin's own store through the SAME `FULL_ACCESS_PLAN` features and
+  `fullAccessCaps()` (`convex/lib/plans.ts`): the highest tier's features and
+  **no limits on anything** — orders, seats, broadcasts ("same limit as admin",
+  test-pinned as equality). Resolved at read time, never stored, so the row's
+  own `plan` + caps stay untouched as the default for when the comp is turned
+  off. When broadcasts ship, `fullAccessCaps()` is where their cost for admin +
+  comped stores gets decided.
+- **Never billed, nothing to buy.** The renewal / first-invoice / dunning loops
+  all skip comped rows; `subscribeSelf`, `changePlan`, `setSeasonalHold` and
+  `startAutoRenewSetup` refuse; the **manual** `issueInvoice` refuses too (the
+  admin billing picker labels comped stores "on the house" and disables Issue
+  with the reason). No cancel flow exists yet (`z8r3fdet8t`) — when it does, it
+  must refuse a comped row the same way.
+- **Seller surfaces**: tier pill **Sponsored**; billing tab swaps the plan card
+  for a **Sponsored account** card (label, "No limits", "nothing to subscribe
+  to, change or cancel, and nothing to pay") and renders no plan picker, plan
+  change, hold, annual or auto-renewal card; `/pricing` shows every live tier as
+  **Included · you're sponsored** (never a link); no banner of any kind.
+  AccessState ships the seller-facing slice only (`kind/label`) — `note` and
+  `grantedBy` never leave the server (test-pinned).
+
+### Turning it on — `subscriptions.setComp` (admin, audited)
+
+Stamps `comped` + `comp`, forces `active`, clears every trial / free-period /
+paid-period stamp (a leftover `currentPeriodEnd` would read "expires {date}"
+under a sponsor line) and a pending plan change, **voids any pending invoice**
+(Pay-now link killed — comping a `past_due` store lifts the lock in the same
+beat), releases an `on_hold` store (`orderingPausedAt` unset; `canEnterHold`
+refuses comped from then on), and clears a previous off-marker. Calling it on a
+store whose comp is already on **edits the details in place** — kind, label,
+note — keeping `grantedBy/At` and `updatedAt` (an edit is not a status flip);
+the audit log records every write. A store with no subscription row gets a
+comped row minted; an admin-owned store is refused (already free via
+`ADMIN_USER_IDS`).
+
+### Turning it off — `subscriptions.revokeComp` → an EXPIRED seller
+
+`endComp` flips the row to `past_due` **with no invoice** — the same lock a
+lapsed subscription is in — and stamps `compEndedAt`. No second free period: a
+comped store already had its runway, and a trial would turn "off" into two more
+free weeks. What that means on each side:
+
+- **Buyers**: nothing changes. The storefront stays live and orders go through
+  (the order pipeline never reads subscription status).
+- **Seller**: the store is **view-only** — `assertSubscriptionActive` refuses
+  every seller write, including order status, with "Your sponsored access has
+  ended, so your store is view-only. Choose a plan in Settings → Billing…".
+  Order actions were exempt for two days after this shipped; the owner closed
+  that on 19 Sep 2026 so an ex-sponsored store is locked exactly like any other
+  expired seller. See [Soft-lock](#soft-lock-past_due).
+- **Surfaces**: tier pill **Expired** (never "Past due" — there's no bill);
+  red persistent banner "Your sponsored access has ended… choose a plan" with
+  **Choose a plan** + **Message us**; billing tab "Sponsored access · Ended
+  {date} · Expired", no order meter, the plan picker in *choose* framing (never
+  "Renew your subscription"), and **no Off-Season Hold offer** — there's no
+  plan behind the lock to pause (`canEnterHold` refuses, server-side too).
+- **Email**: `compEnded` (en/ms/zh) — storefront + ordering live, editing
+  paused until they choose a plan, paying online unlocks it straight away.
+- **Getting back**: `subscribeSelf` → pay → `settleInvoicePaid` → `active`,
+  which also clears `compEndedAt` (so a later ordinary lapse reads "past
+  due"). Turning the comp back on clears it too, and starts a fresh stamp. A
+  saved auto-renew method is deliberately KEPT through a comp: nothing charges
+  while there's no invoice, and when the seller picks a plan the picker says
+  plainly that the saved method is charged (it used to promise a HitPay page —
+  fixed in this ticket, since comped stores with a method on file make that
+  path common).
+
+**Founder report**: a store whose comp was turned off files under its own
+`pastDue.compEnded` bucket — not churn (it never paid for what it lost), but the
+conversion moment of a partner deal. **Founding**: comped settles claim no rank
+(`invoices.ts` guard) — moot, since no invoice can exist to settle.
+
+Tests: `convex/sellerLock.test.ts` + `convex/sellerLockCoverage.test.ts` (the
+view-only lock and its coverage gate), `convex/compAccounts.test.ts`
+(admin-equivalent entitlements, self-serve
+refusals, turn on / edit keeps who-when / validation, void-on-comp, hold
+release, turn off → expired, storefront live + view-only lock, pay-to-unlock
+clears the marker, no hold when expired, re-comp, a year of cron runs never ends
+a comp, auto-renew never charged, backfill survival),
+`convex/lib/businessReport.test.ts`, `convex/lib/billingEmailCopy.test.ts`,
+`src/lib/subscription.test.ts`, `src/lib/pricing-cta.test.ts`,
+`src/components/settings/billing-tab.test.tsx`,
+`src/components/dashboard/tier-pill.test.tsx`,
+`src/routes/app.admin.sellers.test.tsx`. Admin how-to: `docs/admin-console.md`.
 
 ## Issuing — system-set due date, cycle starts at payment
 
@@ -525,16 +645,61 @@ conversation). But three premises above changed when HitPay recurring landed:
 `assertSubscriptionActive(ctx, retailerId)` throws `ConvexError` when the
 subscription is `past_due` **and not comped** — **unless the caller is a
 Kedaipal admin** (`isAdmin(ctx)`, the `ADMIN_USER_IDS` allowlist), who is never
-soft-locked on any store (their own, dogfooded free forever, or a seller's
-during act-as; see [`admin-console.md`](./admin-console.md)). Wired onto seller
-**growth-writes** only: product create/update/`saveVariantGrid`,
-`updateSettings`, `renameSlug`, `pickupLocations`
-create/update/setActive/reorder (the last two added Jul 2026 — they'd escaped
-the original sweep), future broadcast/reminder. Explicitly **NOT** wired onto:
-`orders.create` (public), order pipeline (confirm/pack/ship/deliver/
-payment-claim/mockup), customer views, storefront. **Order cap is SOFT** — a
-nudge in the dashboard, never a block on `orders.create`;
-`userCap`/`broadcastQuota` are hard (seller-side surfaces).
+locked on any store (their own, dogfooded free forever, or a seller's during
+act-as; see [`admin-console.md`](./admin-console.md)).
+
+**Scope: every seller write** (19 Sep 2026, `z8r3fdeub2`). It used to cover
+"growth-writes" only — products, settings, slug, pickup points — which left a
+lapsed seller able to keep RUNNING the shop: move orders to packed and shipped,
+mark payment received, book a rider, print despatch labels, ring up counter
+sales. Owner call: *"all actions will be locked, it's all view only. BE should
+also reject it if they try something funny on the FE."* So the guard is now on
+the order pipeline (`updateStatus`, `bulkUpdateStatus`, `advanceToStage`,
+`setShipmentTracking`, `setDeliveryFee`, `rescheduleFulfilment`,
+`markPaymentReceived`, `clearGatewayPaymentIssue`, the mockup writes,
+`setPinned`), the courier actions (`lalamove.*`/`delyva.*` prepare/confirm/
+cancel + connect/disconnect), despatch labels (`awb.*` — printing IS
+despatching, and it stamps `labelsPrinted`), claim links, counter checkout,
+customers, calendar-feed rotation and the upload-URL minters
+(`assertOwnStoreActive`, which resolves the caller's own store).
+
+Actions have no `ctx.db`, so they run the same guard through
+`internal.subscriptions.assertWritable` (by store) or `assertWritableForOrder`
+(by `shortId`) before spending a third-party call or an outbound message.
+**Both are OWNER-GATED** (PR #279 review): they run before the action's own
+auth, and a public action is callable by anyone holding the deployment URL —
+if the lock threw for every caller, "sponsored access has ended" vs "not
+found" would be an unauthenticated oracle for order existence and billing
+state over the enumerable `shortId` space (the exact channel the
+trackingToken rule closes). Only the owner trips the lock; anonymous, foreign
+and admin callers pass through to the action's own auth, byte-identical to an
+unlocked store. `sellerLock.test.ts` pins probe ≡ ghost-shortId, and deleting
+either gate turns a test red.
+
+**Never locked**, and why:
+
+| Kind | Examples | Why |
+| --- | --- | --- |
+| Buyer | `orders.create`, `claimPayment`, `updateDeliveryAddress`, `approveMockup`, `bookings.requestBooking`, `orderClaims.commit` | the lock is pressure on the seller, never their customers |
+| Billing | `subscribeSelf`, `changePlan`, `cancelAutoRenew`, invoice/receipt PDFs | locking the way out would trap the seller in the lock |
+| Account / view | `recordConsentAcceptance`, onboarding + dismissal markers, `orders.markSeen` (fires on page VIEW), `exportOrders`, `generateReceiptPdf`, the two `ensure*Token` view-enablers | none of them change the store or its orders |
+
+`convex/sellerLockCoverage.test.ts` **enforces that table**: it scans every
+public `mutation`/`action` in `convex/` and fails when one is neither guarded
+nor listed with a reason — so a new mutation can't quietly ship unlocked.
+
+**Order cap is SOFT** — a nudge in the dashboard, never a block on
+`orders.create`; `userCap`/`broadcastQuota` are hard (seller-side surfaces).
+
+**Seller-facing:** the app-shell banner is the primary surface ("Your
+subscription is past due. Your dashboard is view-only until you pay — your
+storefront stays live and buyers can still order"), and `ViewOnlyNote`
+(`src/components/app/view-only-note.tsx`, driven by `useStoreLock`) repeats it
+in place on the order detail and the inbox, where the seller is about to tap.
+The order detail's advance button reads `{stage} — view-only` and is disabled;
+the inbox's **Select** button (the door to every bulk action) is disabled with
+the reason. Export is deliberately left enabled — reading their own data is
+never withheld.
 
 ## Plan-feature gating (Pro+) — CRM + Order Inbox (Jul 2026)
 
@@ -596,7 +761,9 @@ The promised "X/100 orders used" surface behind the SOFT `orderCap`:
   meter. Pure logic `orderCapState` in `src/lib/subscription.ts`. Comped subs
   and `UNLIMITED` caps never nudge.
 
-Tests: `convex/planGating.test.ts` (gates, bypasses, meter, soft-lock),
+Tests: `convex/sellerLock.test.ts` (view-only behaviour both sides) +
+`convex/sellerLockCoverage.test.ts` (no unclassified mutation),
+`convex/planGating.test.ts` (gates, bypasses, meter, soft-lock),
 `convex/lib/usagePeriod.test.ts`, plus additions to `plans.test.ts`,
 `subscriptions.test.ts`, `counterCheckout.test.ts`,
 `src/lib/subscription.test.ts`.
@@ -766,8 +933,11 @@ doesn't change.
 
 Until step 2, existing retailers have no subscription row → `resolveAccess` fails
 open to comped full access, so they keep working between steps regardless. The
-`comped` state is now reserved for that **missing-row fail-safe only** — the
-backfill no longer mints comped subscriptions.
+`comped` state has exactly **two producers**: the missing-row fail-safe, and a
+deliberate **admin grant** (`setComp`, `z8r3fdeub2` — see "Comp accounts" above).
+The backfill no longer mints comped subscriptions, and it heals a comped row
+into the trial **only when the `comp` stamp is absent** (legacy fail-safe rows)
+— a stamped comp survives a backfill re-run.
 
 ## Phasing
 

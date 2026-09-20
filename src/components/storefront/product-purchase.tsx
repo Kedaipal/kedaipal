@@ -1,6 +1,7 @@
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
+	Clock,
 	ImagePlus,
 	Link as LinkIcon,
 	Loader2,
@@ -13,6 +14,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { formatPrepDuration } from "../../../convex/lib/fulfilmentDate";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
@@ -402,6 +404,10 @@ export function addVariantToCart(
 			imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 			quoteOnRequest: variant.requiresProof === true && variant.price === 0,
 			minNoticeDays: p.minNoticeDays,
+			// Frozen at add time alongside the notice override — the cart line
+			// is what checkout reads to floor the date and the time.
+			prepMinutes: p.prepMinutes,
+			pickupNote: p.pickupNote,
 			isCustom: variant.isCustom,
 			minQuantity: p.minQuantity,
 			note: custom?.note,
@@ -531,6 +537,15 @@ export function OptionPills({ pp }: { pp: ProductPurchase }) {
 /** Stock hint + minimum-order hint/unreachable alert — surfaced on the product
  * (not only at checkout) so neither rule is ever a surprise. */
 export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
+	// "Ready in ~2 hours" is only TRUE when same-day is possible. A product that
+	// needs a day or more of notice can never be ready two hours from now, so
+	// the chip would promise something checkout then refuses — the buyer-side
+	// twin of the seller form's "prep won't apply" note.
+	const prepLabel =
+		(pp.product?.minNoticeDays ?? 0) >= 1
+			? ""
+			: formatPrepDuration(pp.product?.prepMinutes);
+	const pickupNote = pp.product?.pickupNote?.trim();
 	const product = pp.product;
 	if (!product) return null;
 	return (
@@ -569,6 +584,34 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 							: ""}
 					</p>
 				)
+			) : null}
+
+			{/* Prep window (z8r3fdff97) — said BEFORE the buyer commits, not
+			    discovered as a floor at checkout. The tilde is doing work: this
+			    is the seller's making time, not a promise of a slot. */}
+			{prepLabel ? (
+				<p className="mt-3 flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold text-accent-emphasis">
+					<Clock className="size-3.5 shrink-0" aria-hidden="true" />
+					Ready in ~{prepLabel}
+				</p>
+			) : null}
+
+			{/* The seller's collection instruction. Deliberately NOT gated on the
+			    store's offerSelfCollect here: this component is handed only a
+			    retailerId, and the buyer has not chosen a method yet anyway — so
+			    the copy self-qualifies with "Collecting?" and the authoritative
+			    gate lives at checkout, where the method IS known. Escaped text,
+			    clamped, so a long note can't take over the card. */}
+			{pickupNote ? (
+				<p className="mt-3 rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+					{/* Two lines on purpose: `line-clamp-3` makes the note a block
+					    anyway (it sets display:-webkit-box), so an inline prefix
+					    with a trailing space would be a lie about the layout. */}
+					<span className="block font-semibold text-foreground">
+						Collecting?
+					</span>
+					<span className="line-clamp-3">{pickupNote}</span>
+				</p>
 			) : null}
 		</>
 	);

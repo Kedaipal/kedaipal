@@ -231,6 +231,25 @@ describe("wizardStepIssues", () => {
 			wizardStepIssues({ ...base, minQuantity: "20", minNoticeDays: "0" }, 5),
 		).toHaveLength(0);
 	});
+
+	it("prep time takes whole minutes as TYPED — '1e2' is not 100 (z8r3fdff97)", () => {
+		const base = browniesState();
+		for (const bad of ["1e2", "0x10", "90.5", "1441"]) {
+			expect(
+				wizardStepIssues({ ...base, prepMinutes: bad }, 5).map((i) => i.field),
+			).toEqual(["prepMinutes"]);
+		}
+		expect(wizardStepIssues({ ...base, prepMinutes: " 120 " }, 5)).toHaveLength(
+			0,
+		);
+		// Nothing the step refuses can reach the submit values either.
+		expect(
+			buildWizardSubmitValues({ ...base, prepMinutes: "1e2" }).prepMinutes,
+		).toBeUndefined();
+		expect(
+			buildWizardSubmitValues({ ...base, prepMinutes: "120" }).prepMinutes,
+		).toBe(120);
+	});
 });
 
 describe("buildWizardSubmitValues", () => {
@@ -362,6 +381,8 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 			hidden: true,
 			kind: "physical" as const,
 			capacityPerNight: "1",
+			prepMinutes: "90",
+			pickupNote: "Side counter.",
 			categoryIds: [],
 			images: [{ id: "st1", url: "blob:p1" }],
 			editor: {
@@ -412,6 +433,8 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 			editor: handoff.initialEditor,
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 		};
 		const back = formDraftToWizardState(draft);
 		expect(back.editor).toEqual(s.editor);
@@ -717,6 +740,8 @@ describe("wizard — made-to-order product type", () => {
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 			editor: madeToOrderState().editor,
 		};
 		expect(formDraftToWizardState(draft).shape).toBe("made_to_order");
@@ -733,6 +758,8 @@ describe("wizard — made-to-order product type", () => {
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 			editor: {
 				options: [],
 				rows: [row({ price: "20" })],
@@ -753,6 +780,8 @@ describe("wizard — made-to-order product type", () => {
 			categoryIds: [],
 			minQuantity: "",
 			minNoticeDays: "",
+			prepMinutes: "",
+			pickupNote: "",
 			editor: {
 				options: [],
 				// Made fresh, but priced and NOT mockup-gated.

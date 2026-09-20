@@ -497,6 +497,28 @@ describe("getDispatchState", () => {
 		expect(state?.blockReason).toBe("job_active");
 	});
 
+	test("a timed self-collect order never reaches dispatch (z8r3fdff97)", async () => {
+		// A pickup carries a time since z8r3fdff97. It must not look bookable:
+		// the method gate refuses before anything reads the moment.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryMethod: "self_collect",
+			deliveryAddress: undefined,
+			fulfilmentDate: Date.now() - (Date.now() % 86_400_000),
+			fulfilmentTimeMinutes: 930,
+		});
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const asUser = t.withIdentity({ subject: USER });
+		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.blockReason).toBe("not_delivery");
+		const context = await asUser.query(internal.delyva.getDispatchContext, {
+			shortId,
+		});
+		expect(context).toMatchObject({ ok: false, reason: "not_delivery" });
+	});
+
 	test("empty cart weight surfaces as missing_weights for the dialog", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

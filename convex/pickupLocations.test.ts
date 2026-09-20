@@ -66,6 +66,125 @@ async function seedLocation(
 	return pickupLocationId;
 }
 
+describe("pickup unit / floor line (z8r3fdff8r)", () => {
+	test("the unit rides the BUYER-facing address, and the map pin survives", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main Store",
+				address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+				unit: "  Lot 2-4,\nMenara Suria  ",
+				latitude: 3.158,
+				longitude: 101.712,
+				placeId: "place-main",
+			},
+		);
+		// Stored trimmed and collapsed to one line, separate from the address.
+		const stored = await t.run((ctx) => ctx.db.get(pickupLocationId));
+		expect(stored?.unit).toBe("Lot 2-4, Menara Suria");
+		expect(stored?.address).toBe("12 Jln Tun Razak, 50400 Kuala Lumpur");
+		// Adding door detail never costs the coordinates — the whole reason it
+		// is its own field rather than typed into the address.
+		expect(stored?.latitude).toBeCloseTo(3.158);
+		expect(stored?.placeId).toBe("place-main");
+
+		// The public picker composes it into the one address string buyers read.
+		const publicRows = await t.query(api.pickupLocations.listActivePublicBySlug, {
+			slug: retailer.slug,
+		});
+		expect(publicRows[0].address).toBe(
+			"Lot 2-4, Menara Suria, 12 Jln Tun Razak, 50400 Kuala Lumpur",
+		);
+	});
+
+	test("the frozen order snapshot carries it, and a later edit can't rewrite history", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main Store",
+				address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+				unit: "Lot 2-4",
+			},
+		);
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kuih",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 1000, onHand: 50 }],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.pickupSnapshot?.address).toBe(
+			"Lot 2-4, 12 Jln Tun Razak, 50400 Kuala Lumpur",
+		);
+
+		// Clearing the unit later leaves the placed order exactly as it was.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			unit: "",
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].unit).toBeUndefined();
+		const reread = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(reread?.pickupSnapshot?.address).toBe(
+			"Lot 2-4, 12 Jln Tun Razak, 50400 Kuala Lumpur",
+		);
+	});
+
+	test("a unit past the cap is refused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await expect(
+			asUser.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Main Store",
+				address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+				unit: "x".repeat(81),
+			}),
+		).rejects.toThrow(/at most 80 characters/i);
+	});
+
+	test("no unit is byte-identical to before — nothing stored, nothing composed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const pickupLocationId = await seedLocation(
+			t,
+			USER_A,
+			retailer._id,
+			"Main Store",
+		);
+		const stored = await t.run((ctx) => ctx.db.get(pickupLocationId));
+		expect(stored?.unit).toBeUndefined();
+		const publicRows = await t.query(api.pickupLocations.listActivePublicBySlug, {
+			slug: retailer.slug,
+		});
+		expect(publicRows[0].address).toBe("12 Jln Tun Razak, 50400 Kuala Lumpur");
+	});
+});
+
 describe("pickupLocations — CRUD", () => {
 	test("create persists trimmed fields and seeds sortOrder = 0", async () => {
 		const t = setup();

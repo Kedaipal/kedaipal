@@ -12,12 +12,25 @@ import {
 	Plus,
 	Trash2,
 	Truck,
+	X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import { MY_STATES } from "../../../convex/lib/address";
+import {
+	formatPickupAddress,
+	MY_STATES,
+	sanitizeUnitLine,
+	UNIT_LINE_MAX_LENGTH,
+} from "../../../convex/lib/address";
 import {
 	resolveAwbConfig,
 	type StoredAwbConfig,
@@ -42,7 +55,11 @@ import {
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	type DayHours,
-	formatDayWindow,
+	type DayHoursIssue,
+	dayGaps,
+	dayHoursIssue,
+	hasSecondWindow,
+	MAX_CLOSE_MINUTES,
 	OPEN_ALL_DAY,
 	type OpeningHours,
 	WEEKDAY_NAMES,
@@ -59,6 +76,8 @@ import {
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
+import { cn } from "../../lib/utils";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -84,6 +103,7 @@ import { TimePicker } from "../ui/time-picker";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CourierBookingSection } from "./courier-booking-section";
 import { DespatchLabelCard } from "./despatch-label-card";
+import { DayWindowsStacked, TimeRange } from "../hours/hours-text";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
@@ -93,6 +113,9 @@ type BusinessAddress = {
 	latitude: number;
 	longitude: number;
 	placeId?: string;
+	/** Unit / floor / building line (z8r3fdff8r) — owner-only, like the rest
+	 * of this object. */
+	unit?: string;
 };
 
 /** Secret-free booking summary — mirrors retailers.DeliveryBookingSummary. */
@@ -373,7 +396,10 @@ export function FulfilmentTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
-			<OpeningHoursCard initial={openingHours} />
+			<OpeningHoursCard
+				initial={openingHours}
+				highlight={ring(SPOTLIGHT_ANCHOR.opening_hours.anchor)}
+			/>
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} currency={currency} />
 			<BusinessAddressCard
@@ -2100,8 +2126,14 @@ function WeightZoneCard({
 const DAY_RENDER_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 /** Editor draft — times as the native input's own "HH:MM" strings so a
- * half-typed value never fights the controlled input; parsed at save. */
-type DayDraft = { openHhmm: string; closeHhmm: string; closed: boolean };
+ * half-typed value never fights the controlled input; parsed at save.
+ * `second` is the optional lunch/dinner split (z8r3fdff8r), null when the day
+ * runs straight through. */
+type DraftWindow = { openHhmm: string; closeHhmm: string };
+type DayDraft = DraftWindow & {
+	closed: boolean;
+	second: DraftWindow | null;
+};
 
 function draftFromHours(initial: OpeningHours | undefined): DayDraft[] {
 	const week = initial ?? Array.from({ length: 7 }, () => OPEN_ALL_DAY);
@@ -2109,15 +2141,245 @@ function draftFromHours(initial: OpeningHours | undefined): DayDraft[] {
 		openHhmm: hhmmFromMinutes(day.open),
 		closeHhmm: hhmmFromMinutes(day.close),
 		closed: day.closed === true,
+		second: hasSecondWindow(day)
+			? {
+					openHhmm: hhmmFromMinutes(day.open2 as number),
+					closeHhmm: hhmmFromMinutes(day.close2 as number),
+				}
+			: null,
 	}));
 }
 
-/** Parse one draft row. Null = invalid (unparseable or open ≥ close). */
-function parseDayDraft(row: DayDraft): DayHours | null {
-	const open = timeMinutesFromHhmm(row.openHhmm);
+/** The draft as the `DayHours` the server would store — unparseable times come
+ * through as NaN on purpose, so `dayHoursIssue` judges the row with the SAME
+ * rule-set the save call will, and the seller reads the same sentence here as
+ * they would from the server. */
+function dayFromDraft(row: DayDraft): DayHours {
+	const base: DayHours = {
+		open: timeMinutesFromHhmm(row.openHhmm),
+		close: timeMinutesFromHhmm(row.closeHhmm),
+		...(row.closed ? { closed: true as const } : {}),
+	};
+	if (!row.second) return base;
+	return {
+		...base,
+		open2: timeMinutesFromHhmm(row.second.openHhmm),
+		close2: timeMinutesFromHhmm(row.second.closeHhmm),
+	};
+}
+
+/** Whether two draft rows describe the same schedule — drives the "same every
+ * day" derivation, so a week that shares one SPLIT schedule still reads as
+ * "same" rather than being forced into the 7-row editor. */
+function sameSchedule(a: DayDraft, b: DayDraft): boolean {
+	return (
+		a.openHhmm === b.openHhmm &&
+		a.closeHhmm === b.closeHhmm &&
+		(a.second?.openHhmm ?? null) === (b.second?.openHhmm ?? null) &&
+		(a.second?.closeHhmm ?? null) === (b.second?.closeHhmm ?? null)
+	);
+}
+
+/** Minutes of headroom a second window needs after the first one closes: one
+ * minute to start, one to run. */
+const SECOND_WINDOW_MIN_HEADROOM = 2;
+
+/** Why this day can't take a second window — or null when it can. Drives a
+ * DISABLED-with-reason button rather than a click that quietly does nothing. */
+function secondWindowBlockedReason(row: DayDraft): string | null {
 	const close = timeMinutesFromHhmm(row.closeHhmm);
-	if (Number.isNaN(open) || Number.isNaN(close) || open >= close) return null;
-	return row.closed ? { open, close, closed: true } : { open, close };
+	const open = timeMinutesFromHhmm(row.openHhmm);
+	if (Number.isNaN(close) || Number.isNaN(open) || open >= close) {
+		return "Set a valid first window before adding a second.";
+	}
+	if (open === 0 && close === MAX_CLOSE_MINUTES) {
+		return "This day is already open 24 hours — narrow the first window to add a second.";
+	}
+	if (close > MAX_CLOSE_MINUTES - SECOND_WINDOW_MIN_HEADROOM) {
+		return "The first window runs to the end of the day — close it earlier to add a second.";
+	}
+	return null;
+}
+
+/** Sensible starting times for a newly added second window: a two-hour break,
+ * then a six-hour stretch, clamped inside the day. A cafe closing breakfast at
+ * 10:00 lands on 12:00 – 6:00 PM, which is the shape that asked for this. */
+function suggestSecondWindow(row: DayDraft): DraftWindow {
+	const close = timeMinutesFromHhmm(row.closeHhmm);
+	const open2 = Math.min(close + 120, MAX_CLOSE_MINUTES - 1);
+	const close2 = Math.min(open2 + 360, MAX_CLOSE_MINUTES);
+	return {
+		openHhmm: hhmmFromMinutes(open2),
+		closeHhmm: hhmmFromMinutes(close2),
+	};
+}
+
+/** One window's two pickers. ONE control for both editor modes (z8r3fdff8r):
+ * "same every day" and the 7-row grid express the identical idea, so they use
+ * the identical component — two shapes for one concept is how a settings tab
+ * starts looking like two settings tabs. */
+function WindowPickers({
+	window,
+	onChange,
+	disabled,
+	isError,
+	showIcon = true,
+	ariaPrefix,
+	windowLabel,
+}: {
+	window: DraftWindow;
+	onChange: (patch: Partial<DraftWindow>) => void;
+	disabled: boolean;
+	isError: boolean;
+	showIcon?: boolean;
+	/** "Monday " in the per-day grid, "" in same-every-day mode. */
+	ariaPrefix: string;
+	/** "second window " once a day is split, "" while it runs straight
+	 * through — so an unsplit store's labels read exactly as they always did. */
+	windowLabel: string;
+}) {
+	// "Opening time" / "Monday opening time" / "Monday second window closing
+	// time" — the prefix-less form is sentence-cased so an unsplit store's
+	// labels read exactly as they always did.
+	const ariaLabel = (which: "opening" | "closing") => {
+		const raw = `${ariaPrefix}${windowLabel}${which} time`;
+		return ariaPrefix ? raw : capitalizeFirst(raw);
+	};
+	return (
+		<div className="flex min-w-0 flex-1 items-center gap-1.5">
+			<TimePicker
+				value={window.openHhmm}
+				onChange={(next) => onChange({ openHhmm: next })}
+				disabled={disabled}
+				isError={isError}
+				showIcon={showIcon}
+				aria-label={ariaLabel("opening")}
+				className="min-w-0 flex-1"
+			/>
+			<span className="shrink-0 text-muted-foreground" aria-hidden="true">
+				–
+			</span>
+			<TimePicker
+				value={window.closeHhmm}
+				onChange={(next) => onChange({ closeHhmm: next })}
+				disabled={disabled}
+				isError={isError}
+				showIcon={showIcon}
+				aria-label={ariaLabel("closing")}
+				className="min-w-0 flex-1"
+			/>
+		</div>
+	);
+}
+
+/**
+ * "+ Add a second window" and "× Remove second window": ONE control, in the
+ * same place under a day's windows, in both editor modes. Adding and taking
+ * away the split happen where it is read, and neither parks a 44px button
+ * beside the pickers — that column cost each picker 25px, which on a 360px
+ * phone cut every time to "6:30 …" and hid the AM/PM a split schedule is
+ * about.
+ *
+ * Add is disabled WITH ITS REASON where the day can't take a second window —
+ * a click that quietly does nothing is the thing this exists to avoid. Both
+ * are full 44px targets, pulled back to text height with negative margins so
+ * the column keeps its rhythm.
+ */
+function SecondWindowButton({
+	action,
+	blockedReason = null,
+	dayName,
+	disabled,
+	onClick,
+}: {
+	action: "add" | "remove";
+	blockedReason?: string | null;
+	/** Per-day rows only: names the day for assistive tech, since seven rows
+	 * carry the same visible label. */
+	dayName?: string;
+	disabled: boolean;
+	onClick: () => void;
+}) {
+	const Icon = action === "add" ? Plus : X;
+	const label = action === "add" ? "Add a second window" : "Remove second window";
+	return (
+		<div className="flex flex-col gap-1">
+			<button
+				type="button"
+				onClick={onClick}
+				disabled={disabled || blockedReason !== null}
+				title={blockedReason ?? undefined}
+				// The spoken name STARTS with the visible label, so voice control
+				// ("click Remove second window") still finds it.
+				aria-label={dayName ? `${label} on ${dayName}` : undefined}
+				className={cn(
+					"-my-2.5 flex min-h-11 items-center gap-1 self-start rounded-lg text-xs font-medium underline-offset-2 hover:underline disabled:pointer-events-none disabled:no-underline",
+					action === "add"
+						? "text-accent disabled:text-muted-foreground"
+						: "text-muted-foreground hover:text-destructive",
+				)}
+			>
+				<Icon className="size-3.5" aria-hidden="true" />
+				{label}
+			</button>
+			{blockedReason ? (
+				<span className="text-xs text-muted-foreground">{blockedReason}</span>
+			) : null}
+		</div>
+	);
+}
+
+/** A day's rule sentence, placed directly under the window it is about. */
+function WindowIssueLine({ issue }: { issue: DayHoursIssue }) {
+	return (
+		<p className="text-xs text-destructive">
+			{capitalizeFirst(issue.message)}.
+		</p>
+	);
+}
+
+/** The consequence of a split, in the seller's own numbers: what buyers will
+ * be kept OUT of. Only rendered for a valid split day — the error line speaks
+ * for an invalid one. `compact` drops the explanation in the 7-row grid, where
+ * the full sentence would repeat under every split day; same-every-day states
+ * it once, in full.  */
+function BreakLine({
+	row,
+	compact = false,
+}: {
+	row: DayDraft;
+	compact?: boolean;
+}) {
+	if (!row.second || row.closed) return null;
+	const day = dayFromDraft(row);
+	if (dayHoursIssue(day) !== null) return null;
+	const gaps = dayGaps(day);
+	if (gaps.length === 0) return null;
+	return (
+		<p className="text-xs text-muted-foreground">
+			Closed{" "}
+			{gaps.map((gap, i) => (
+				<Fragment key={gap.open}>
+					{i > 0 ? " and " : null}
+					<TimeRange range={gap} />
+				</Fragment>
+			))}
+			{compact ? null : " — buyers can't pick a time in between."}
+		</p>
+	);
+}
+
+/** Sentence-case a rule message that is written to follow a weekday prefix. */
+function capitalizeFirst(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** "Tuesday", "Tuesday and Friday", "Monday, Tuesday and Friday". Days come in
+ * render order (Monday first), as the grid shows them. */
+function joinDayNames(indexes: number[]): string {
+	const names = indexes.map((i) => WEEKDAY_NAMES[i]);
+	if (names.length <= 1) return names.join("");
+	return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /**
@@ -2127,7 +2389,14 @@ function parseDayDraft(row: DayDraft): DayHours | null {
  * above the notice window. Default (unset) = open 24/7; the server normalizes
  * an all-24h week back to unset and rejects an all-closed one.
  */
-function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
+function OpeningHoursCard({
+	initial,
+	highlight,
+}: {
+	initial: OpeningHours | undefined;
+	/** Ring from a What's-new deep link (`?spot=opening_hours`). */
+	highlight?: FixHighlight;
+}) {
 	const updateSettings = useUpdateSettings();
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState<DayDraft[]>(() => draftFromHours(initial));
@@ -2135,6 +2404,16 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	// schedule) vs "Different per day" (the 7-row editor). Derived on entry:
 	// a schedule whose OPEN days all share one range reads as "same".
 	const [mode, setMode] = useState<"same" | "perDay">("same");
+	// The weekday whose hours "Same every day" just copied over days that were
+	// different. Drives the note that says so. Null when nothing was replaced.
+	const [unifiedFrom, setUnifiedFrom] = useState<string | null>(null);
+	// The per-day hours that unifying replaced, kept so switching back restores
+	// them — saved or not. Without it the note could only point at Cancel,
+	// which restores the SAVED week and so threw away per-day hours typed in
+	// this session while promising to keep them.
+	const [perDayBeforeUnify, setPerDayBeforeUnify] = useState<DayDraft[] | null>(
+		null,
+	);
 	const [saving, setSaving] = useState(false);
 
 	const configured = initial !== undefined;
@@ -2143,15 +2422,11 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 		const rows = draftFromHours(initial);
 		const open = rows.filter((row) => !row.closed);
 		setMode(
-			open.every(
-				(row) =>
-					row.openHhmm === open[0].openHhmm &&
-					row.closeHhmm === open[0].closeHhmm,
-			)
-				? "same"
-				: "perDay",
+			open.every((row) => sameSchedule(row, open[0])) ? "same" : "perDay",
 		);
 		setDraft(rows);
+		setUnifiedFrom(null);
+		setPerDayBeforeUnify(null);
 		setEditing(true);
 	}
 
@@ -2162,28 +2437,66 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	}
 
 	/** Same-mode range edit — one pair of pickers writes every day's times
-	 * (closed days included, so re-opening a chip inherits the range). */
+	 * (closed days included, so re-opening a chip inherits the range). Also
+	 * carries the second window, so adding a lunch break is ONE action for the
+	 * whole week rather than seven (z8r3fdff8r). */
 	function setAllDays(
-		patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm">>,
+		patch: Partial<Pick<DayDraft, "openHhmm" | "closeHhmm" | "second">>,
 	) {
 		setDraft((prev) => prev.map((row) => ({ ...row, ...patch })));
 	}
 
-	/** Switching to "same" unifies every day onto the first open day's range —
-	 * visible immediately in the pickers, so the collapse is never a silent
-	 * surprise at save time. Switching back keeps the unified values. */
+	/** Per-day second-window edit — patches just that row's second window. */
+	function setSecond(index: number, patch: Partial<DraftWindow>) {
+		setDraft((prev) =>
+			prev.map((row, i) =>
+				i === index && row.second
+					? { ...row, second: { ...row.second, ...patch } }
+					: row,
+			),
+		);
+	}
+
+	/** Switching to "same" unifies every day onto the first open day's hours.
+	 * When the days actually differed, that replaces the others' windows, so it
+	 * is SAID in a note under the mode buttons rather than only being visible
+	 * in pickers that show one day (z8r3fdff8r: a second window per day made
+	 * the silent version cost more) — and the replaced week is kept, so
+	 * switching back to "Different per day" puts every day's own hours back. */
 	function switchMode(next: "same" | "perDay") {
+		// Re-tapping the active mode must not re-run the unify: the week is
+		// already uniform, so it would read as "nothing replaced" and drop the
+		// kept per-day hours along with the note.
+		if (next === mode) return;
 		if (next === "same") {
-			const source = draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
-			setAllDays({ openHhmm: source.openHhmm, closeHhmm: source.closeHhmm });
+			const sourceIndex = DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1;
+			const source = draft[sourceIndex];
+			const differed = draft.some(
+				(row) => !row.closed && !sameSchedule(row, source),
+			);
+			setUnifiedFrom(differed ? WEEKDAY_NAMES[sourceIndex] : null);
+			setPerDayBeforeUnify(differed ? draft : null);
+			setAllDays({
+				openHhmm: source.openHhmm,
+				closeHhmm: source.closeHhmm,
+				second: source.second ? { ...source.second } : null,
+			});
+		} else {
+			if (perDayBeforeUnify) setDraft(perDayBeforeUnify);
+			setPerDayBeforeUnify(null);
+			setUnifiedFrom(null);
 		}
 		setMode(next);
 	}
 
-	const parsed = draft.map(parseDayDraft);
-	const invalidDays = DAY_RENDER_ORDER.filter(
-		(i) => !draft[i].closed && parsed[i] === null,
+	// One rule-set, one sentence: `dayHoursIssue` is the SAME rule-set
+	// sanitizeOpeningHours runs on save, so the inline copy here and the server's
+	// refusal can never drift. It also says WHICH window is wrong, so only that
+	// window's pickers turn red and the sentence sits under it (z8r3fdff8r).
+	const dayIssues = draft.map((row) =>
+		row.closed ? null : dayHoursIssue(dayFromDraft(row)),
 	);
+	const invalidDays = DAY_RENDER_ORDER.filter((i) => dayIssues[i] !== null);
 	const allClosed = draft.every((row) => row.closed);
 	const valid = invalidDays.length === 0 && !allClosed;
 	// Same-mode reads its range off the first open row (all rows are kept in
@@ -2191,6 +2504,9 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	// showing the last times instead of blanking.
 	const rangeSource =
 		draft[DAY_RENDER_ORDER.find((i) => !draft[i].closed) ?? 1];
+	// Every row holds the same hours in this mode, so the source row's issue
+	// is the week's.
+	const sameIssue = allClosed ? null : dayHoursIssue(dayFromDraft(rangeSource));
 
 	async function save() {
 		if (!valid) return;
@@ -2198,16 +2514,15 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 		try {
 			await updateSettings({
 				openingHours: draft.map((row, i) => {
-					const day = parseDayDraft(row);
-					// Closed rows may hold an unparseable range the seller never
-					// looked at — persist their last-known-good times (or all-day)
-					// so re-opening the day restores something sensible.
-					return (
-						day ??
-						(initial?.[i]
-							? { ...initial[i], closed: true }
-							: { ...OPEN_ALL_DAY, closed: true })
-					);
+					const day = dayFromDraft(row);
+					if (dayHoursIssue(day) === null) return day;
+					// Only reachable for a CLOSED row holding an unparseable range
+					// the seller never looked at (`valid` gates every open one) —
+					// persist its last-known-good times (or all-day) so re-opening
+					// the day restores something sensible.
+					return initial?.[i]
+						? { ...initial[i], closed: true }
+						: { ...OPEN_ALL_DAY, closed: true };
 				}),
 			});
 			toast.success("Opening hours updated.");
@@ -2219,21 +2534,29 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 		}
 	}
 
-	async function resetTo247() {
-		setSaving(true);
-		try {
-			await updateSettings({ openingHours: null });
-			toast.success("Back to open 24 hours, every day.");
-			setEditing(false);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
+	/** Back to open 24/7 as a DRAFT, not a save. It used to save on the spot,
+	 * one tap beside Cancel, so a slip wiped a whole split week (up to fourteen
+	 * windows) with no confirm and no undo. Now the pickers show the result,
+	 * Save commits it — the server stores an all-day week as unset, exactly what
+	 * the old instant clear wrote — and Cancel takes it back. */
+	function resetDraftTo247() {
+		setDraft(draftFromHours(undefined));
+		setMode("same");
+		setUnifiedFrom(null);
+		setPerDayBeforeUnify(null);
 	}
+	// Nothing to reset once the draft already IS open 24/7, so the control
+	// isn't offered — rather than a tap that visibly does nothing.
+	const draftIsOpen247 = draft.every(
+		(row) =>
+			!row.closed &&
+			row.second === null &&
+			timeMinutesFromHhmm(row.openHhmm) === 0 &&
+			timeMinutesFromHhmm(row.closeHhmm) === MAX_CLOSE_MINUTES,
+	);
 
 	return (
-		<Card>
+		<Card id={SPOTLIGHT_ANCHOR.opening_hours.anchor} highlight={highlight}>
 			<SectionHeading
 				title="Opening hours"
 				description="When your store operates. Buyers can browse and place orders any time — but the delivery or pickup date and time they pick at checkout must fall inside these hours, and closed days can't be picked at all. Counter sales aren't affected."
@@ -2249,12 +2572,15 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 										<span className="text-muted-foreground">
 											{WEEKDAY_NAMES_SHORT[i]}
 										</span>
+										{/* Stacked like the storefront's schedule dialog,
+										    so a split day reads the same on both sides
+										    and never wraps mid-range on a phone. */}
 										<span
 											className={
 												day.closed ? "text-muted-foreground" : "font-medium"
 											}
 										>
-											{day.closed ? "Closed" : formatDayWindow(day)}
+											{day.closed ? "Closed" : <DayWindowsStacked day={day} />}
 										</span>
 									</li>
 								);
@@ -2295,31 +2621,80 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 							subtitle="Set each day's hours individually"
 						/>
 					</div>
+					{mode === "same" && unifiedFrom ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							Every day now uses {unifiedFrom}&apos;s hours. Switch back to
+							Different per day to restore each day&apos;s own hours.
+						</p>
+					) : null}
 					{mode === "same" ? (
 						<>
-							<div className="flex items-center gap-2">
-								<TimePicker
-									value={rangeSource.openHhmm}
-									onChange={(next) => setAllDays({ openHhmm: next })}
+							<div className="flex flex-col gap-2">
+								{/* The window label only appears once a day is SPLIT —
+								    an unsplit store has one range and needs no heading
+								    telling it so. */}
+								{rangeSource.second ? (
+									<span className="text-xs font-medium text-muted-foreground">
+										First window
+									</span>
+								) : null}
+								<WindowPickers
+									window={rangeSource}
+									onChange={(patch) => setAllDays(patch)}
 									disabled={saving}
-									isError={invalidDays.length > 0}
-									aria-label="Opening time"
-									className="flex-1"
+									isError={sameIssue?.window === "first"}
+									showIcon={false}
+									ariaPrefix=""
+									windowLabel={rangeSource.second ? "first window " : ""}
 								/>
-								<span
-									className="shrink-0 text-muted-foreground"
-									aria-hidden="true"
-								>
-									–
-								</span>
-								<TimePicker
-									value={rangeSource.closeHhmm}
-									onChange={(next) => setAllDays({ closeHhmm: next })}
-									disabled={saving}
-									isError={invalidDays.length > 0}
-									aria-label="Closing time"
-									className="flex-1"
-								/>
+								{/* Each rule's sentence sits directly under the window
+								    it is about. Printed after both rows, a first-window
+								    error read as a complaint about the second. */}
+								{sameIssue?.window === "first" ? (
+									<WindowIssueLine issue={sameIssue} />
+								) : null}
+								{rangeSource.second ? (
+									<>
+										<span className="text-xs font-medium text-muted-foreground">
+											Second window
+										</span>
+										<WindowPickers
+											window={rangeSource.second}
+											onChange={(patch) =>
+												setAllDays({
+													second: {
+														...(rangeSource.second as DraftWindow),
+														...patch,
+													},
+												})
+											}
+											disabled={saving}
+											isError={sameIssue?.window === "second"}
+											showIcon={false}
+											ariaPrefix=""
+											windowLabel="second window "
+										/>
+										{sameIssue?.window === "second" ? (
+											<WindowIssueLine issue={sameIssue} />
+										) : (
+											<BreakLine row={rangeSource} />
+										)}
+										<SecondWindowButton
+											action="remove"
+											disabled={saving}
+											onClick={() => setAllDays({ second: null })}
+										/>
+									</>
+								) : (
+									<SecondWindowButton
+										action="add"
+										blockedReason={secondWindowBlockedReason(rangeSource)}
+										disabled={saving}
+										onClick={() =>
+											setAllDays({ second: suggestSecondWindow(rangeSource) })
+										}
+									/>
+								)}
 							</div>
 							{/* Tap a day off for the weekly rest day — chips, not 7
 							    toggle rows, because open/closed is the ONLY per-day
@@ -2354,13 +2729,13 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 						<div className="flex flex-col gap-3 sm:gap-2.5">
 							{DAY_RENDER_ORDER.map((i) => {
 								const row = draft[i];
-								const rowInvalid = !row.closed && parsed[i] === null;
+								const rowIssue = dayIssues[i];
 								return (
 									<div
 										key={WEEKDAY_NAMES[i]}
-										className="flex flex-col gap-2 border-b border-border/60 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:gap-2.5 sm:border-0 sm:pb-0"
+										className="flex flex-col gap-2 border-b border-border/60 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-start sm:gap-2.5 sm:border-0 sm:pb-3"
 									>
-										<div className="flex items-center gap-2.5">
+										<div className="flex items-center gap-2.5 sm:h-11">
 											<span className="w-10 shrink-0 text-sm font-medium">
 												{WEEKDAY_NAMES_SHORT[i]}
 											</span>
@@ -2377,31 +2752,58 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 											) : null}
 										</div>
 										{row.closed ? null : (
-											<div className="flex min-w-0 flex-1 items-center gap-1.5">
-												<TimePicker
-													value={row.openHhmm}
-													onChange={(next) => setDay(i, { openHhmm: next })}
+											// A split day (z8r3fdff8r) stacks its windows in
+											// this column, so the day name + switch stay put.
+											// Both windows run full width, with no remove column
+											// beside the pickers (see SecondWindowButton), so every
+											// row's pickers are one width and the grid stays aligned.
+											<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+												<WindowPickers
+													window={row}
+													onChange={(patch) => setDay(i, patch)}
 													disabled={saving}
-													isError={rowInvalid}
+													isError={rowIssue?.window === "first"}
 													showIcon={false}
-													aria-label={`${WEEKDAY_NAMES[i]} opening time`}
-													className="min-w-0 flex-1"
+													ariaPrefix={`${WEEKDAY_NAMES[i]} `}
+													windowLabel={row.second ? "first window " : ""}
 												/>
-												<span
-													className="shrink-0 text-muted-foreground"
-													aria-hidden="true"
-												>
-													–
-												</span>
-												<TimePicker
-													value={row.closeHhmm}
-													onChange={(next) => setDay(i, { closeHhmm: next })}
-													disabled={saving}
-													isError={rowInvalid}
-													showIcon={false}
-													aria-label={`${WEEKDAY_NAMES[i]} closing time`}
-													className="min-w-0 flex-1"
-												/>
+												{rowIssue?.window === "first" ? (
+													<WindowIssueLine issue={rowIssue} />
+												) : null}
+												{row.second ? (
+													<>
+														<WindowPickers
+															window={row.second}
+															onChange={(patch) => setSecond(i, patch)}
+															disabled={saving}
+															isError={rowIssue?.window === "second"}
+															showIcon={false}
+															ariaPrefix={`${WEEKDAY_NAMES[i]} `}
+															windowLabel="second window "
+														/>
+														{rowIssue?.window === "second" ? (
+															<WindowIssueLine issue={rowIssue} />
+														) : (
+															<BreakLine row={row} compact />
+														)}
+														<SecondWindowButton
+															action="remove"
+															dayName={WEEKDAY_NAMES[i]}
+															disabled={saving}
+															onClick={() => setDay(i, { second: null })}
+														/>
+													</>
+												) : (
+													<SecondWindowButton
+														action="add"
+														blockedReason={secondWindowBlockedReason(row)}
+														dayName={WEEKDAY_NAMES[i]}
+														disabled={saving}
+														onClick={() =>
+															setDay(i, { second: suggestSecondWindow(row) })
+														}
+													/>
+												)}
 											</div>
 										)}
 									</div>
@@ -2412,11 +2814,12 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 					<p className="text-xs text-muted-foreground">
 						12:00 AM – 11:59 PM means open all day.
 					</p>
-					{invalidDays.length > 0 ? (
+					{mode === "perDay" && invalidDays.length > 0 ? (
+						// Save sits below seven rows, so a disabled Save names the
+						// rows to fix. The sentences themselves are on those rows,
+						// which may be scrolled out of view.
 						<p className="text-xs text-destructive">
-							{mode === "same"
-								? "Opening time must be before closing time."
-								: `${WEEKDAY_NAMES[invalidDays[0]]}: opening time must be before closing time.`}
+							Fix the hours for {joinDayNames(invalidDays)} to save.
 						</p>
 					) : allClosed ? (
 						<p className="text-xs text-destructive">
@@ -2443,12 +2846,12 @@ function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 						>
 							Cancel
 						</Button>
-						{configured ? (
+						{!draftIsOpen247 ? (
 							<button
 								type="button"
-								onClick={resetTo247}
+								onClick={resetDraftTo247}
 								disabled={saving}
-								className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+								className="min-h-11 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
 							>
 								Reset to open 24/7
 							</button>
@@ -2499,7 +2902,7 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 		<Card>
 			<SectionHeading
 				title="Order date notice"
-				description="How much notice you need before a buyer's chosen delivery or pickup date. Buyers can't pick a date sooner than this. Set 0 to take same-day orders."
+				description="How much notice you need before a buyer's chosen delivery or pickup date. Buyers can't pick a date sooner than this. Set 0 to take same-day orders — if an item needs hours rather than days, give it a prep time on the product instead."
 			/>
 			<div className="flex items-end gap-3">
 				<div className="flex flex-col gap-1.5">
@@ -2622,23 +3025,59 @@ function BusinessAddressCard({
 }) {
 	const updateSettings = useUpdateSettings();
 	const [picked, setPicked] = useState<GoogleSelectedAddress | null>(null);
+	// Unit / floor / building (z8r3fdff8r) — typed, not picked: Google's
+	// formatted address stops at the block, which is where riders were stopping
+	// too. Local state so editing it alone is a saveable change; a fresh pin is
+	// no longer the only reason this card has work to do.
+	const [unit, setUnit] = useState(businessAddress?.unit ?? "");
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
+	// Judged with the SERVER's normalizer, so "is this a change?" and "what
+	// gets stored" are one rule. With a plain trim, a saved "Unit 3-1,   Block
+	// B" still differed from the stored "Unit 3-1, Block B", which left Save
+	// lit and the field showing the unsaved spelling after a successful save
+	// (z8r3fdff8r).
+	const normalizedUnit = sanitizeUnitLine(unit);
+	const unitTooLong = !normalizedUnit.ok;
+	const unitValue = normalizedUnit.ok ? normalizedUnit.value : undefined;
+	const unitDirty = (unitValue ?? "") !== (businessAddress?.unit ?? "");
+	// The unit rides in front of an address, so without one (saved or just
+	// picked) there is nothing to attach it to. The field waits, and says why,
+	// rather than accepting typing that Save then silently refuses.
+	const hasAddress = businessAddress !== undefined || picked !== null;
+	// Saveable when there's a new pin, OR when only the unit line moved on an
+	// address that already exists.
+	const canSave =
+		!unitTooLong &&
+		(picked !== null || (businessAddress !== undefined && unitDirty));
+
 	async function save() {
-		if (!picked) return;
-		setSaving(true);
-		setError(null);
-		try {
-			await updateSettings({
-				businessAddress: {
+		const base = picked
+			? {
 					label: picked.formattedAddress,
 					latitude: picked.latitude,
 					longitude: picked.longitude,
 					placeId: picked.placeId,
-				},
+				}
+			: businessAddress
+				? {
+						label: businessAddress.label,
+						latitude: businessAddress.latitude,
+						longitude: businessAddress.longitude,
+						placeId: businessAddress.placeId,
+					}
+				: null;
+		if (!base) return;
+		setSaving(true);
+		setError(null);
+		try {
+			await updateSettings({
+				businessAddress: { ...base, unit: unitValue },
 			});
 			setPicked(null);
+			// Show what was stored, not what was typed.
+			setUnit(unitValue ?? "");
 			toast.success("Business address saved.");
 		} catch (err) {
 			setError(convexErrorMessage(err));
@@ -2682,11 +3121,50 @@ function BusinessAddressCard({
 					</p>
 				) : null}
 			</div>
+			{/* Sits UNDER the autocomplete, not inside it: Google owns the
+			    building, the seller owns the door. Typing here never disturbs
+			    the pin — the coordinates keep pricing distance either way. */}
+			<div className="flex flex-col gap-1.5">
+				<label
+					htmlFor="business-address-unit"
+					className="text-xs font-medium text-muted-foreground"
+				>
+					Unit / floor / building{" "}
+					<span className="font-normal">(optional)</span>
+				</label>
+				<Input
+					id="business-address-unit"
+					value={unit}
+					onChange={(e) => setUnit(e.target.value)}
+					maxLength={UNIT_LINE_MAX_LENGTH}
+					variant="field"
+					isError={unitTooLong}
+					disabled={!hasAddress || saving}
+					placeholder="Unit 3-1, Block B"
+					autoComplete="off"
+					aria-describedby="business-address-unit-hint"
+				/>
+				<p
+					id="business-address-unit-hint"
+					className="text-xs text-muted-foreground"
+				>
+					{hasAddress ? (
+						<>
+							Rides in front of the address above, everywhere it&apos;s
+							printed — the part Google&apos;s suggestion leaves out, and the
+							reason riders end up phoning you from the car park. Up to{" "}
+							{UNIT_LINE_MAX_LENGTH} characters.
+						</>
+					) : (
+						"Pick your address first — the unit rides in front of it."
+					)}
+				</p>
+			</div>
 			{error ? <p className="text-xs text-destructive">{error}</p> : null}
 			<Button
 				type="button"
 				onClick={save}
-				disabled={!picked || saving}
+				disabled={!canSave || saving}
 				isLoading={saving}
 				className="h-11 lg:w-auto lg:self-start lg:px-5"
 			>
@@ -2819,8 +3297,10 @@ function LocationRowBody({
 							</span>
 						) : null}
 					</div>
+					{/* The unit line rides in front of the address (z8r3fdff8r) —
+					    the seller reads back exactly what the buyer will. */}
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
-						{location.address}
+						{formatPickupAddress(location)}
 					</p>
 					{location.scheduleNote ? (
 						<p className="flex items-center gap-1 text-xs font-medium text-accent">

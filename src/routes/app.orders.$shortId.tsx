@@ -51,8 +51,10 @@ import {
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
 import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
+import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -69,12 +71,14 @@ import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import { PickupNotes } from "../components/order/pickup-notes";
 import {
 	canPrintLabel,
 	PrintLabelButton,
 } from "../components/order/print-label-button";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduleFulfilmentDialog } from "../components/order/reschedule-fulfilment-dialog";
+import { RescheduledNote } from "../components/order/rescheduled-note";
 import { SecurityDepositCard } from "../components/order/security-deposit-card";
 import {
 	MarkShippedDialog,
@@ -101,6 +105,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { useStoreLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeBookingSpan } from "../lib/booking-dates";
@@ -116,6 +121,7 @@ import {
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { buildNotifyManagerMessage } from "../lib/notify-manager-message";
 import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
@@ -347,6 +353,9 @@ function OrderDetailRoute() {
 	const markSeen = useMutation(api.orders.markSeen);
 	const setPinned = useMutation(api.orders.setPinned);
 	const [pinBusy, setPinBusy] = useState(false);
+	// A lapsed store is view-only (z8r3fdeub2): the server refuses every action
+	// on this page, so the controls say so instead of failing on tap.
+	const { readOnly, reason } = useStoreLock();
 	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
 	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
 	// server-side in one batched read rather than a lookup per row.
@@ -551,6 +560,9 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// The one gate for buyer-facing collection notes, shared with /track and
+	// WhatsApp (self-collect only, never a counter sale).
+	const sellerPickupNotes = orderPickupNotes(order);
 	const isBooking = deliveryMethod === "booking";
 	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
 	// facing labels in EN — a retailer's EN custom labels still flow through.
@@ -726,11 +738,13 @@ function OrderDetailRoute() {
 			// The tooltip is where the rule is stated — the feature is otherwise
 			// invisible until the seller has used it once.
 			title={
-				isPinned
-					? "Pinned — stays on top of your inbox until you unpin it"
-					: "Pin to the top of your inbox"
+				readOnly
+					? reason
+					: isPinned
+						? "Pinned — stays on top of your inbox until you unpin it"
+						: "Pin to the top of your inbox"
 			}
-			disabled={pinBusy}
+			disabled={pinBusy || readOnly}
 			onClick={() => void togglePin()}
 		>
 			<Pin
@@ -809,6 +823,11 @@ function OrderDetailRoute() {
 					)}
 				/>
 			</div>
+
+			{/* View-only (z8r3fdeub2): a lapsed store can read this order and move
+			    nothing on it, so say that above the controls rather than letting
+			    every tap answer with a toast. Renders nothing when writable. */}
+			<ViewOnlyNote />
 
 			{/* A booking request's stage control IS approve/decline (S3): the
 			    stepper can't move it (the server refuses), so its slot holds the
@@ -922,6 +941,7 @@ function OrderDetailRoute() {
 											}}
 											disabled={
 												pending !== null ||
+												readOnly ||
 												blocked ||
 												riderManaged ||
 												collectionPending
@@ -930,6 +950,8 @@ function OrderDetailRoute() {
 										>
 											{pending === nextStage.id ? (
 												"Updating…"
+											) : readOnly ? (
+												`${advanceLabel} — view-only`
 											) : blocked ? (
 												`${advanceLabel} — awaiting mockup`
 											) : collectionPending ? (
@@ -1260,10 +1282,16 @@ function OrderDetailRoute() {
 						<Button
 							onClick={() => setConfirmPaymentOpen(true)}
 							isLoading={confirmingPayment}
-							disabled={confirmingPayment}
+							// View-only: taking payment is a write; opening the method
+							// dialog first would walk the seller through choices the
+							// server is about to refuse (found live, 20 Sep).
+							disabled={confirmingPayment || readOnly}
+							title={readOnly ? reason : undefined}
 							className="h-11 w-full"
 						>
-							Mark payment received
+							{readOnly
+								? "Mark payment received — view-only"
+								: "Mark payment received"}
 						</Button>
 						{askForProofUrl ? (
 							<Button asChild variant="secondary" className="h-11 w-full">
@@ -1307,16 +1335,21 @@ function OrderDetailRoute() {
 					<Button
 						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment || mockupGated || deliveryFeePending}
+						disabled={
+							confirmingPayment || readOnly || mockupGated || deliveryFeePending
+						}
+						title={readOnly ? reason : undefined}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						{mockupGated
-							? "Awaiting mockup approval"
-							: deliveryFeePending
-								? "Set the delivery charge first"
-								: "Mark payment received"}
+						{readOnly
+							? "Mark payment received — view-only"
+							: mockupGated
+								? "Awaiting mockup approval"
+								: deliveryFeePending
+									? "Set the delivery charge first"
+									: "Mark payment received"}
 					</Button>
 					{/* The manual payment reminder (86eyd63r8, revised 8 Aug): Kedaipal
 					    never chases automatically — the seller gets a window-boxed
@@ -1402,7 +1435,8 @@ function OrderDetailRoute() {
 												}
 											}}
 											isLoading={sendingReminder}
-											disabled={sendingReminder || onCooldown}
+											disabled={sendingReminder || onCooldown || readOnly}
+											title={readOnly ? reason : undefined}
 											variant="outline"
 											className="h-11 w-full"
 										>
@@ -1651,6 +1685,30 @@ function OrderDetailRoute() {
 						) : null}
 					</div>
 				) : null}
+				{/* The moment was MOVED (z8r3fdff97 test round). The buyer's page
+				    says who changed it; this one says when, because the seller
+				    reading it may not be the one who did — and no message went
+				    out, so the chat won't tell them either. */}
+				{!isBooking && order.rescheduledAt !== undefined ? (
+					<div className="border-t border-border pt-3">
+						<RescheduledNote
+							audience="seller"
+							rescheduledAt={order.rescheduledAt}
+							fromDate={order.rescheduledFromDate}
+							fromTimeMinutes={order.rescheduledFromTimeMinutes}
+							storeName={order.storeName || "The store"}
+						/>
+					</div>
+				) : null}
+				{/* What the buyer was told to do before collecting (z8r3fdff97).
+				    No status gate, unlike /track: this page is the record, and a
+				    seller answering "what did I tell them?" after collection still
+				    needs the answer. */}
+				{sellerPickupNotes.length > 0 ? (
+					<div className="border-t border-border pt-3">
+						<PickupNotes audience="seller" notes={sellerPickupNotes} />
+					</div>
+				) : null}
 			</section>
 
 			{/* Items */}
@@ -1813,9 +1871,16 @@ function OrderDetailRoute() {
 							{order.pickupSnapshot.address}
 						</p>
 						{order.pickupSnapshot.notes ? (
-							<p className="mt-1 rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
-								{order.pickupSnapshot.notes}
-							</p>
+							// Labelled for the same reason as the buyer's page: the
+							// products' "Before they collect" block is its neighbour.
+							<div className="mt-1 rounded-lg bg-muted/40 px-3 py-2">
+								<p className="text-xs font-semibold text-foreground">
+									About this spot
+								</p>
+								<p className="mt-0.5 text-xs text-foreground whitespace-pre-line">
+									{order.pickupSnapshot.notes}
+								</p>
+							</div>
 						) : null}
 					</div>
 				</section>
@@ -1834,6 +1899,8 @@ function OrderDetailRoute() {
 					items={order.items}
 					total={order.total}
 					currency={order.currency}
+					fulfilmentDate={order.fulfilmentDate}
+					fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
 				/>
 			) : null}
 
@@ -1990,7 +2057,11 @@ function OrderDetailRoute() {
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}
-								disabled={pending !== null}
+								// View-only: cancelling is a write like any other, and an
+								// enabled destructive control that answers with a toast is
+								// worse than one that says why up front (the note above).
+								disabled={pending !== null || readOnly}
+								title={readOnly ? reason : undefined}
 								variant="ghost"
 								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 							>
@@ -2695,55 +2766,6 @@ function formatPickupInline(snapshot: PickupSnapshot): string {
 	return lines.join("\n");
 }
 
-function buildNotifyManagerMessage({
-	shortId,
-	location,
-	customerName,
-	customerWaPhone,
-	items,
-	total,
-	currency,
-}: {
-	shortId: string;
-	location: PickupSnapshot;
-	customerName: string | undefined;
-	customerWaPhone: string | undefined;
-	items: ReadonlyArray<{
-		name: string;
-		quantity: number;
-		price: number;
-		variantLabel?: string;
-	}>;
-	total: number;
-	currency: string;
-}): string {
-	const lines: string[] = [];
-	lines.push(`📦 New pickup order ${shortId} — ${location.label}`);
-	const customerLine = customerName
-		? customerWaPhone
-			? `Customer: ${customerName} (${formatPhone(customerWaPhone)})`
-			: `Customer: ${customerName}`
-		: customerWaPhone
-			? `Customer: ${formatPhone(customerWaPhone)}`
-			: "Customer: Anonymous";
-	lines.push(customerLine);
-	lines.push("");
-	lines.push("Items:");
-	for (const item of items) {
-		const name = item.variantLabel
-			? `${item.name} (${item.variantLabel})`
-			: item.name;
-		lines.push(
-			`• ${item.quantity}× ${name} (${formatPrice(item.price * item.quantity, currency)})`,
-		);
-	}
-	lines.push("");
-	lines.push(`Total: ${formatPrice(total, currency)}`);
-	lines.push("");
-	lines.push("Please prepare for collection.");
-	return lines.join("\n");
-}
-
 function NotifyManagerCard({
 	shortId,
 	location,
@@ -2753,6 +2775,8 @@ function NotifyManagerCard({
 	items,
 	total,
 	currency,
+	fulfilmentDate,
+	fulfilmentTimeMinutes,
 }: {
 	shortId: string;
 	location: PickupSnapshot;
@@ -2773,6 +2797,8 @@ function NotifyManagerCard({
 	}>;
 	total: number;
 	currency: string;
+	fulfilmentDate?: number;
+	fulfilmentTimeMinutes?: number;
 }) {
 	const [copied, setCopied] = useState(false);
 	// Fetch live manager contact. Skipped when there's no pickupLocationId on
@@ -2799,6 +2825,8 @@ function NotifyManagerCard({
 		items,
 		total,
 		currency,
+		fulfilmentDate,
+		fulfilmentTimeMinutes,
 	});
 
 	const notifyHref = hasManagerPhone
@@ -2839,7 +2867,7 @@ function NotifyManagerCard({
 					{copied ? "Copied!" : "Copy"}
 				</button>
 			</div>
-			<pre className="whitespace-pre-wrap wrap-break-words rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
+			<pre className="whitespace-pre-wrap wrap-break-word rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
 				{message}
 			</pre>
 			{notifyHref ? (

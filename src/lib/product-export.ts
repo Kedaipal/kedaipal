@@ -7,10 +7,11 @@ import { VARIANT_IMPORT_COLUMNS } from "./product-import";
  *
  * TWO JOBS, one file, in a deliberate order:
  *
- *  1. **Import template.** The first eleven columns are exactly
+ *  1. **Import template.** The leading columns are exactly
  *     `VARIANT_IMPORT_COLUMNS`, in that order, so an export → edit → re-import
  *     round-trip works with no column mapping. Those columns keep their names
- *     and positions forever.
+ *     and positions forever; new importable ones are appended to the template
+ *     block (prep_minutes and pickup_note, z8r3fdff97), never to the report.
  *  2. **Catalogue report** (86eyrtz74). Everything after them answers "what is
  *     actually in my store" — categories, storefront visibility, order rules,
  *     stock policy, photos. `bulkUpsert` never writes these fields, so
@@ -118,6 +119,13 @@ export interface ExportableProduct {
 	/** Summed minimum order quantity across the product's variants. */
 	minQuantity?: number;
 	minNoticeDays?: number;
+	/** Order rules (z8r3fdff97) — importable, so they sit in the template block. */
+	prepMinutes?: number;
+	pickupNote?: string;
+	/** `booking` listings export blank order rules: the form hides both and the
+	 * import skips them, so a value there would round-trip into a warning about
+	 * a setting the seller can't see. */
+	kind?: string;
 	imageCount?: number;
 }
 
@@ -144,6 +152,7 @@ export function isExportableVariant(vr: ExportableVariant): boolean {
 /** One export row per exportable variant of a product. */
 function productToExportRows(p: ExportableProduct): ExportRow[] {
 	const categories = (p.categories ?? []).join(", ");
+	const isBooking = p.kind === "booking";
 	const storefront = !p.active
 		? "archived"
 		: p.hidden
@@ -163,6 +172,11 @@ function productToExportRows(p: ExportableProduct): ExportRow[] {
 		price: (vr.price / 100).toFixed(2),
 		stock: String(vr.onHand),
 		weight_grams: String(vr.parcelWeightG),
+		// Blank reads "keep" on re-import, so an unset rule round-trips as a
+		// no-op rather than a clear.
+		prep_minutes:
+			isBooking || p.prepMinutes === undefined ? "" : String(p.prepMinutes),
+		pickup_note: isBooking ? "" : (p.pickupNote ?? ""),
 		// ---- report-only from here ----
 		currency: p.currency ?? "",
 		categories,
@@ -203,7 +217,7 @@ export function productsToCsvString(products: ExportableProduct[]): string {
 
 /** Column widths — the report columns are mostly short flags. */
 function columnWidth(col: (typeof PRODUCT_EXPORT_COLUMNS)[number]): number {
-	if (col === "description") return 40;
+	if (col === "description" || col === "pickup_note") return 40;
 	if (col === "name" || col === "product_url") return 28;
 	if (col === "categories") return 24;
 	return 14;
@@ -222,7 +236,7 @@ export async function productsToXlsxBlob(
 	}));
 	ws.getRow(1).font = { bold: true };
 	// Freeze the header AND the two identity columns, so scrolling right through
-	// 24 columns never loses which product a row belongs to.
+	// the report never loses which product a row belongs to.
 	ws.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
 	for (const row of productsToExportRows(products)) ws.addRow(row);
 	const buffer = await wb.xlsx.writeBuffer();

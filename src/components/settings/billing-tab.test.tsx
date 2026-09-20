@@ -5,6 +5,7 @@ import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
 import { DEFAULT_SUPPORT_WA_NUMBER } from "../../lib/contact";
+import { formatShortDate } from "../../lib/format";
 import { BillingTab } from "./billing-tab";
 
 // Reads go via `useQuery(convexQuery(api.x, args)).data` — mock the adapter
@@ -102,6 +103,8 @@ type Gateway = {
 	renewalCurrency: string;
 	foundingPricing: boolean;
 	foundingPricingLapsed: boolean;
+	foundingBenefitsRevoked: boolean;
+	foundingBenefitsEndAt?: number;
 	nextRenewal: {
 		kind: "plan" | "hold";
 		plan: string;
@@ -121,6 +124,7 @@ const GATEWAY_OFF: Gateway = {
 	renewalCurrency: "MYR",
 	foundingPricing: false,
 	foundingPricingLapsed: false,
+	foundingBenefitsRevoked: false,
 	nextRenewal: {
 		kind: "plan",
 		plan: "pro",
@@ -442,6 +446,129 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		);
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+	});
+});
+
+describe("BillingTab comp accounts (z8r3fdeub2)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const comped = (comp?: Record<string, unknown>) =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: true,
+				comp,
+				caps: { orderCap: 1_000_000_000, userCap: 5, broadcastQuota: 500 },
+				active: true,
+				frozen: false,
+			},
+			ordersThisMonth: 350,
+		} as unknown as Partial<Retailer>);
+
+	it("a sponsored store sees who's sponsoring it, no limits — and nothing to buy, change, pause or cancel", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={comped({
+					kind: "sponsor",
+					label: "Sponsored by Maybank SME",
+				})}
+			/>,
+		);
+		expect(screen.getByText("Sponsored account")).toBeTruthy();
+		expect(screen.getByText("No limits")).toBeTruthy();
+		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
+		expect(screen.getByText(/no limits on orders/)).toBeTruthy();
+		// A comp has no end date — nothing may suggest one.
+		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
+		// Not a plan: no tier, meter or any billing door.
+		expect(screen.queryByText("Current plan")).toBeNull();
+		expect(screen.queryByText("Orders this month")).toBeNull();
+		expect(screen.queryByText("Change your plan")).toBeNull();
+		expect(screen.queryByText(/Subscribe to/)).toBeNull();
+		expect(screen.queryByText(/Off-Season Hold/)).toBeNull();
+		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("a comp with no label still reads as a sponsored account", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={comped({ kind: "partner" })} />);
+		expect(screen.getByText("Sponsored account")).toBeTruthy();
+		expect(screen.queryByText("Current plan")).toBeNull();
+	});
+
+	const ended = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "past_due",
+				comped: false,
+				compEnded: { at: Date.now() - DAY },
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: false,
+				frozen: true,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("once the comp ends: 'Expired', what still works, and CHOOSING a plan — never 'renew' or a hold offer", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={ended()} />);
+		expect(screen.getByText("Sponsored access")).toBeTruthy();
+		expect(
+			screen.getByText(`Ended ${formatShortDate(Date.now() - DAY)}`),
+		).toBeTruthy();
+		expect(screen.getByText("Expired")).toBeTruthy();
+		expect(screen.queryByText("Past due")).toBeNull();
+		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
+		expect(screen.getByText("Ready to choose a plan?")).toBeTruthy();
+		expect(screen.queryByText("Renew your subscription")).toBeNull();
+		expect(screen.queryByText(/Rather pause than pay/)).toBeNull();
+		// No plan, so no "included orders on your plan" meter either.
+		expect(screen.queryByText("Orders this month")).toBeNull();
+	});
+
+	it("with a method still on file, the picker names the saved method and amount — never a HitPay page that won't appear", () => {
+		// subscribeSelf charges a saved method at once (no redirect). A sponsored
+		// store that had auto-renew before its comp lands here every time.
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "past_due",
+						comped: false,
+						compEnded: { at: Date.now() - DAY },
+						autoRenew: {
+							method: "touch_n_go",
+							methodLabel: "Touch 'n Go",
+							failedAttempts: 0,
+							failing: false,
+						},
+						caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+						active: false,
+						frozen: true,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(
+			screen.getByText(/we'll charge your saved Touch 'n Go/),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/We'll charge RM 149\.00 to your saved Touch 'n Go now/),
+		).toBeTruthy();
+		expect(screen.queryByText(/HitPay's secure page/)).toBeNull();
+	});
+
+	it("gateway off: the manual card asks them to choose a plan, not renew", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={ended()} />);
+		expect(screen.getByText("Choose a plan to start working again")).toBeTruthy();
+		expect(screen.queryByText("Renew your subscription")).toBeNull();
+		expect(waLinks().some((href) => href.includes("choose%20a%20plan"))).toBe(
+			true,
+		);
 	});
 });
 
@@ -1153,11 +1280,13 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		currency = "MYR",
 		founding = false,
 		lapsed = false,
+		revoked = false,
 		cycle = "monthly",
 	}: {
 		currency?: "MYR" | "SGD";
 		founding?: boolean;
 		lapsed?: boolean;
+		revoked?: boolean;
 		cycle?: "monthly" | "annual";
 	} = {}): Gateway {
 		const monthly = {
@@ -1171,6 +1300,7 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 			renewalCurrency: currency,
 			foundingPricing: founding,
 			foundingPricingLapsed: lapsed,
+			foundingBenefitsRevoked: revoked,
 			nextRenewal: {
 				kind: "plan",
 				plan: "pro",
@@ -1343,6 +1473,73 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		expect(
 			screen.getByRole("button", { name: "Finish setting up" }),
 		).toBeTruthy();
+	});
+
+	it("WHILE THE GATEWAY IS LOADING the ribbon makes no claim about the price", () => {
+		// The retailer doc resolves before billingGatewayAvailable, so every flag
+		// reads false for a moment. That used to fall through to the amber
+		// "your 30% discount is locked in" — told to a REVOKED member on every
+		// page load (~310ms on localhost; longer on mobile data). The rank is
+		// known and always true, so the title stays; the claim waits.
+		mockQueries({ isAdmin: false, gateway: null });
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(screen.getByText("Founding Member #3 of 10")).toBeTruthy();
+		expect(screen.queryByText(/discount is locked in/)).toBeNull();
+		expect(screen.queryByText(/price ended/)).toBeNull();
+		expect(screen.queryByText(/founding price ends/)).toBeNull();
+	});
+
+	it("a date already in the PAST never renders as a deadline to beat", () => {
+		// The pass runs daily, so for up to a day after the window closes the
+		// member is lapsed but not yet revoked. Rendering "founding price ends
+		// <yesterday> — renew before then" would be a deadline nobody can meet.
+		mockQueries({
+			isAdmin: false,
+			gateway: {
+				...gatewayFor({ lapsed: true }),
+				foundingBenefitsEndAt: Date.now() - 2 * 60 * 60 * 1000,
+			},
+		});
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(screen.queryByText(/founding price ends/)).toBeNull();
+		expect(screen.queryByText(/Renew below before then/)).toBeNull();
+		// It says the true thing for that day instead.
+		expect(
+			screen.getByText(/founding\s+price lapsed after more than 3 months/),
+		).toBeTruthy();
+	});
+
+	it("a REVOKED Founding Member: badge kept, the end is permanent, no renew-to-keep promise", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: gatewayFor({ lapsed: true, revoked: true }),
+		});
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(
+			screen.getByText(/Founding Member #3 of 10 · founding price ended/),
+		).toBeTruthy();
+		// The promise that survives revocation — in the agreement and in this copy.
+		expect(
+			screen.getByText(/rank and badge stay yours, permanently/),
+		).toBeTruthy();
+		expect(screen.queryByText(/discount is locked in/)).toBeNull();
+		// Never tell a revoked member renewing brings the price back — it doesn't.
+		expect(screen.queryByText(/Renew below before then/)).toBeNull();
+		// Priced as an ordinary seller, both tiers offered again.
+		expect(screen.getByText(/RM\s*79\.00\/month/)).toBeTruthy();
+		expect(screen.getByText(/RM\s*149\.00\/month/)).toBeTruthy();
 	});
 
 	it("a lapsed Founding Member: rank kept, the lapse explained, list prices, and no promise the discount is locked in", () => {

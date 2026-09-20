@@ -216,7 +216,9 @@ export function matchesFulfilmentWindow(
 // and the inbox sort, due-today counts, urgency badges and window chips all
 // compare midnights — so a time-of-day must never be folded into it. Minutes
 // compose with the day (`composeFulfilmentMoment`) and cannot drift from it.
-// Legacy orders, counter orders and self-collect orders simply have no time.
+// Legacy, counter and booking orders have no time. A self-collect order may
+// carry one (z8r3fdff97): at the seller's own pickup point, whenever the store
+// has opening hours or the cart has a prep window.
 // ---------------------------------------------------------------------------
 
 export const MINUTES_PER_DAY = 24 * 60;
@@ -241,6 +243,73 @@ const MINUTE_MS = 60 * 1000;
  * buyer may pick and the time we will schedule can never disagree.
  */
 export const EARLIEST_FULFILMENT_LEAD_MINUTES = 15;
+
+/**
+ * Per-product PREP time (ClickUp `z8r3fdff97`) — the made-to-order window a
+ * seller needs before an order can be collected, measured in MINUTES.
+ *
+ * `minNoticeDays` could not express this. Notice 0 lets a buyer order at 9:00
+ * and collect at 9:15 (the lead floor above); notice 1 removes same-day
+ * entirely. "Ready in 2 hours" is neither, and it is the normal case for a
+ * kitchen — Huff & Puff's ice-cream puffs, a decorated cake, a bento run.
+ *
+ * Capped at one full day: past that a seller means "notice days", which has
+ * its own field and its own calendar semantics. 0 / blank / junk → unset, the
+ * `minQuantity` and `securityDeposit` posture (one spelling for "no rule").
+ */
+export const MAX_PREP_MINUTES = MINUTES_PER_DAY;
+
+/**
+ * A prep window in the words a buyer uses — "30 min", "1 hour", "2 hours",
+ * "1 hour 30 min". Minutes is the storage unit because the floor arithmetic
+ * needs it; nobody reads "Ready in ~240 minutes" and pictures four hours.
+ *
+ * Empty string for no window, so a caller can render it unconditionally.
+ */
+export function formatPrepDuration(minutes: number | undefined): string {
+	const total = clampPrepMinutes(minutes);
+	if (total === 0) return "";
+	const hours = Math.floor(total / 60);
+	const rest = total % 60;
+	if (hours === 0) return `${rest} min`;
+	const hourPart = `${hours} hour${hours === 1 ? "" : "s"}`;
+	return rest === 0 ? hourPart : `${hourPart} ${rest} min`;
+}
+
+/** Normalise a submitted prep window into [0, MAX_PREP_MINUTES]. 0 = none. */
+export function clampPrepMinutes(minutes: number | undefined): number {
+	if (minutes === undefined || !Number.isFinite(minutes)) return 0;
+	const i = Math.trunc(minutes);
+	if (i <= 0) return 0;
+	if (i > MAX_PREP_MINUTES) return MAX_PREP_MINUTES;
+	return i;
+}
+
+/** Whether a submitted prep window is one the server stores: a whole number of
+ * minutes in [0, MAX_PREP_MINUTES]. The judge `sanitizePrepMinutes` uses, so
+ * the seller-side doors (form, wizard, spreadsheet import) cannot drift from it. */
+export function isValidPrepMinutes(minutes: number): boolean {
+	return (
+		Number.isInteger(minutes) && minutes >= 0 && minutes <= MAX_PREP_MINUTES
+	);
+}
+
+/**
+ * A prep window typed as TEXT — a form field or a spreadsheet cell. Blank is
+ * `minutes: undefined` (the caller decides what blank means: "none" in the
+ * form, "keep what the product has" in an import). Digits only, so `1e2`,
+ * `0x10`, `90.5` and `2 hours` are refused rather than quietly read as a number
+ * the seller never typed.
+ */
+export function parsePrepMinutesText(
+	raw: string | undefined,
+): { ok: true; minutes: number | undefined } | { ok: false } {
+	const trimmed = (raw ?? "").trim();
+	if (trimmed.length === 0) return { ok: true, minutes: undefined };
+	if (!/^\d+$/.test(trimmed)) return { ok: false };
+	const minutes = Number.parseInt(trimmed, 10);
+	return isValidPrepMinutes(minutes) ? { ok: true, minutes } : { ok: false };
+}
 
 /** Minutes since MYT midnight for an arbitrary instant. */
 export function mytMinutesOfDay(now: number = Date.now()): number {
@@ -291,12 +360,13 @@ export function composeFulfilmentMoment(
 export function defaultFulfilmentTimeMinutes(
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 10 * 60;
-	const floor = minSelectableTimeMinutes(dateEpoch, now);
-	// The day has run out of bookable slots (see hasSelectableTimeToday) —
-	// nothing valid exists to return, so hand back the last time of day and
-	// let the caller push the buyer to tomorrow.
+	const floor = minSelectableTimeMinutes(dateEpoch, now, prepMinutes);
+	// The day has run out of bookable slots — nothing valid exists to return,
+	// so hand back the last time of day and let the caller push the buyer to
+	// tomorrow (`selectableTimeWindows` comes back empty for the same case).
 	if (floor >= MINUTES_PER_DAY) return MINUTES_PER_DAY - 5;
 	// The floor IS the default: earliest possible, and by construction never
 	// below itself. The checkout's repair keeps it tracking the clock while
@@ -305,27 +375,44 @@ export function defaultFulfilmentTimeMinutes(
 }
 
 /**
- * Earliest selectable time for a chosen day: 30 minutes from now (rounded up
- * to 5) when the day is today, else free. Drives the `<input type="time">`
- * floor + the submit check; near midnight the floor can exceed the day —
- * `hasSelectableTimeToday` tells the form to push the buyer to tomorrow.
+ * Earliest selectable time for a chosen day: the checkout lead from now
+ * (rounded up to 5) when the day is today, else free. Drives the
+ * `<input type="time">` floor + the submit check; near midnight the floor can
+ * exceed the day, which `selectableTimeWindows` reports as no slot left (and
+ * `prepFloorIssue` as "too late for today" when prep is the reason).
+ *
+ * `prepMinutes` (z8r3fdff97) raises that lead where the CART needs longer
+ * than the flat checkout lead — the slowest item's prep time. It belongs
+ * here, not beside here: a second floor applied further down the chain would
+ * be a second source of truth for "the earliest moment a buyer may pick",
+ * and the two would drift. Defaults to 0, so every pre-existing caller is
+ * byte-identical.
+ *
+ * A FUTURE day returns 0 — prep is absorbed overnight, the min-notice
+ * posture. That is a semantic call, not an API one: if prep should ever bite
+ * on a future day too, it changes inside this function and no caller moves.
  */
 export function minSelectableTimeMinutes(
 	dateEpoch: number,
 	now: number = Date.now(),
+	prepMinutes = 0,
 ): number {
+	// A FUTURE day absorbs prep overnight, so its floor stays 0 — the same
+	// posture as min notice, which moves the DATE and then stops caring about
+	// the clock. Stacking a 2-hour prep onto tomorrow would push a breakfast
+	// order to 2 AM-plus-two-hours for no reason a buyer could follow.
 	if (dateEpoch !== todayMytMidnight(now)) return 0;
-	return (
-		Math.ceil(
-			(mytMinutesOfDay(now) + EARLIEST_FULFILMENT_LEAD_MINUTES) / 5,
-		) * 5
+	// Both terms are "now + something", so the max of the two offsets is the
+	// max of the two moments; rounded up to 5 so the native time input's
+	// stepping and the floor agree. Normalised through `clampPrepMinutes` —
+	// the SAME function products.ts sanitizes writes with, so a negative, a
+	// non-finite, a fractional or an over-cap prep can never shorten the flat
+	// lead, and "what counts as a prep window" has exactly one definition.
+	const lead = Math.max(
+		EARLIEST_FULFILMENT_LEAD_MINUTES,
+		clampPrepMinutes(prepMinutes),
 	);
-}
-
-/** False only in the last half-hour before midnight, when "today" has no
- * bookable slot left. */
-export function hasSelectableTimeToday(now: number = Date.now()): boolean {
-	return minSelectableTimeMinutes(todayMytMidnight(now), now) < MINUTES_PER_DAY;
+	return Math.ceil((mytMinutesOfDay(now) + lead) / 5) * 5;
 }
 
 /** "HH:MM" (the native time-input value) → minutes since midnight, or NaN. */

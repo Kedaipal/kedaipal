@@ -23,7 +23,7 @@ import {
 	sanitizeAttributionSource,
 } from "./lib/attribution";
 import { stampProductsOrdered } from "./lib/productOrdered";
-import { assertValidAddress } from "./lib/address";
+import { assertValidAddress, formatPickupAddress } from "./lib/address";
 import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
@@ -50,6 +50,8 @@ import {
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
+import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
+import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -382,7 +384,12 @@ export function buildPickupSnapshot(
 ): PickupSnapshot {
 	return {
 		label: location.label,
-		address: location.address,
+		// The unit line is COMPOSED into the frozen address (z8r3fdff8r), not
+		// carried as its own snapshot field: every buyer surface that already
+		// prints this string — checkout, /track, email, WhatsApp, the CSV
+		// export — then shows the door detail with no further plumbing, and a
+		// later edit to the location can't rewrite a placed order's history.
+		address: formatPickupAddress(location),
 		locationType: location.locationType ?? "self_collect",
 		scheduleNote: location.scheduleNote,
 		mapsUrl: location.mapsUrl,
@@ -432,6 +439,8 @@ type OrderItemSnapshot = {
 	stockReserved: boolean;
 	/** Categories the product was filed under at sale time (86eyrtz74). */
 	categoryNames?: string[];
+	/** The product's pickup note as it read when sold (z8r3fdff97). */
+	pickupNote?: string;
 };
 
 /**
@@ -754,9 +763,13 @@ export const create = mutation({
 		// need to pass it; the storefront UI requires it. Validated against the
 		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
-		// What time on that day (minutes since MYT midnight) — captured for
-		// delivery orders; ignored on self-collect (their moment is governed by
-		// the pickup point's own schedule). See the schema comment.
+		// What time on that day (minutes since MYT midnight). Kept for a
+		// delivery AND for a self-collect order (z8r3fdff97) — a buyer
+		// collecting a made-to-order item has to say when, and the seller has
+		// to know. Optional on the wire: a request that names no hour is a
+		// legitimate date-only order, judged against the store's real hours
+		// all the same (`asksForTime`, z8r3fdg9aa). A drop-off meet-up is the
+		// one that genuinely has no hour to give — its point sets that.
 		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
@@ -960,6 +973,11 @@ export const create = mutation({
 		let requiresMockup = false;
 		// Strictest per-product notice override across the cart (0 = none).
 		let maxItemNoticeDays = 0;
+		// Each line's prep window, folded after the loop by `slowestPrep` — the
+		// slowest item sets the whole order's TIME floor, the way the strictest
+		// sets its DATE floor, and its name is what the refusal quotes. The same
+		// helper the claim commit and the storefront checkout use.
+		const prepLines: { name: string; prepMinutes?: number }[] = [];
 		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
@@ -1005,6 +1023,7 @@ export const create = mutation({
 			if ((product.minNoticeDays ?? 0) > maxItemNoticeDays) {
 				maxItemNoticeDays = product.minNoticeDays ?? 0;
 			}
+			prepLines.push({ name: product.name, prepMinutes: product.prepMinutes });
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -1042,6 +1061,10 @@ export const create = mutation({
 				variantLabel: label || undefined,
 				price: variant.price,
 				quantity: item.quantity,
+				// Frozen like `name` and `price`: a seller who later edits "side
+				// counter" to "front door" must not rewrite the instruction this
+				// buyer is already holding in their WhatsApp thread.
+				pickupNote: product.pickupNote,
 				// Filled in below, once per distinct product.
 				categoryNames: undefined as string[] | undefined,
 			});
@@ -1118,7 +1141,7 @@ export const create = mutation({
 			}
 		}
 		// Fulfilment time (86eyg0n8e follow-up): kept only where it means
-		// something — a delivery order WITH a date. Range-only validation by
+		// something — a delivery or self-collect order WITH a date. Range-only validation by
 		// design (see assertValidFulfilmentTime): "is the moment still ahead"
 		// is judged at checkout client-side and again at dispatch, where a past
 		// moment simply books "now" — a strict server check here would let
@@ -1127,7 +1150,13 @@ export const create = mutation({
 		if (
 			args.fulfilmentTimeMinutes !== undefined &&
 			sanitizedFulfilmentDate !== undefined &&
-			effectiveDeliveryMethod === "delivery"
+			// Self-collect joined delivery here (z8r3fdff97): a buyer collecting
+			// a made-to-order item needs to say WHEN, and the seller needs to
+			// know. Still optional on both — a legacy client that sends no time
+			// is accepted exactly as before. Counter and booking orders never
+			// reach this path.
+			(effectiveDeliveryMethod === "delivery" ||
+				effectiveDeliveryMethod === "self_collect")
 		) {
 			try {
 				sanitizedFulfilmentTime = assertValidFulfilmentTime(
@@ -1137,9 +1166,61 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Prep floor (z8r3fdff97): the slowest item in the cart decides the
+		// earliest moment this order can be handed over. Re-derived from the
+		// live products, never trusted from the client — the cart line carries a
+		// copy only so the buyer is stopped at the picker instead of here.
+		//
+		// Hours-aware (`orderPrepFloorIssue` reads the store's selectable
+		// windows), so the refusal never names a time after closing or inside a
+		// lunch break, and a prep that swallows the rest of the day says "too
+		// late for today" rather than pointing at an impossible slot.
+		//
+		// ONE boolean owns whether the floor applies, so an exemption is one
+		// clause in one place:
+		//  - a COLLECTION trip is exempt: the rider collects FROM the buyer, and
+		//    the service is prepared after that, so a prep floor on the
+		//    collection time would refuse something the seller never needed;
+		//  - counter checkout never reaches this path (seller-fixed moment);
+		//  - an EVENT order (ClickUp z8r3fdff9u, landing after this) must add
+		//    `&& eventLock === undefined` here — the seller set that time
+		//    herself, the same reason min-notice and opening hours exempt it.
+		const cartPrep = slowestPrep(prepLines);
+		const orderFulfilmentKind = fulfilmentKind(
+			effectiveDeliveryMethod,
+			retailer.deliveryBooking?.deliveryDirection === "collection",
+		);
+		const isCollectionTrip = orderFulfilmentKind === "collection";
+		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
+		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
+			const issue = orderPrepFloorIssue({
+				hours: retailer.openingHours,
+				// What prep races. The CHECKOUT's question (`asksForTime`,
+				// z8r3fdg9aa), not "did a time arrive?": both sides ask the
+				// same one, so a request that omits a time the form would
+				// have required is still held to the store's real hours
+				// instead of being widened to the whole day. The missing time
+				// is accepted — a date-only order is a legitimate shape — it
+				// is just judged honestly. A drop-off meet-up still races
+				// midnight: its hour is its point's own.
+				timed: asksForTime({
+					kind: orderFulfilmentKind,
+					isDropOff: sanitizedPickupSnapshot?.locationType === "drop_off",
+					openingHours: retailer.openingHours,
+					prepMinutes: cartPrep.minutes,
+				}),
+				dateEpoch: sanitizedFulfilmentDate,
+				timeMinutes: sanitizedFulfilmentTime,
+				now: Date.now(),
+				prep: cartPrep,
+				kind: effectiveDeliveryMethod === "self_collect" ? "pickup" : "delivery",
+			});
+			if (issue !== null) throw new ConvexError(issue);
+		}
 		// Store opening hours (86eyp5rav): the fulfilment moment must fall inside
 		// them — a closed day rejects for BOTH methods, the time window applies
-		// only where a time exists (delivery; pickup is date-only, its point's
+		// only where a time exists (a delivery, or a self-collect order at the
+		// seller's own point; a drop-off meet-up stays date-only and its
 		// schedule note carries the detail). The storefront mirrors this check
 		// pre-submit via the same shared function, so a buyer only hits it from
 		// a stale tab or a direct call. Counter checkout doesn't run this path
@@ -1190,11 +1271,9 @@ export const create = mutation({
 		// confirm) stay true to what this order promised even if the seller
 		// toggles the mode later — the pickupSnapshot posture. Standard stays
 		// unset (one spelling for the default; every pre-existing order).
-		const deliveryDirection =
-			effectiveDeliveryMethod === "delivery" &&
-			retailer.deliveryBooking?.deliveryDirection === "collection"
-				? ("collection" as const)
-				: undefined;
+		const deliveryDirection = isCollectionTrip
+			? ("collection" as const)
+			: undefined;
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
@@ -1814,6 +1893,9 @@ export const sendPaymentReminder = action({
 		ctx,
 		{ shortId },
 	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
 			shortId,
 		});
@@ -3169,6 +3251,7 @@ export const updateStatus = mutation({
 		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
 		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
@@ -3311,6 +3394,12 @@ export const bulkUpdateStatus = mutation({
 			// first order (the selection is single-retailer); admin act-as bypasses.
 			if (firstResolve && !batchAccess.actingAsAdmin)
 				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
+			// The view-only lock, gated once too: an owner's selection is
+			// single-retailer by construction (1:1 user↔store), so order 1's
+			// answer is order 50's — per-order would just be 50 subscription
+			// reads for one refusal. The admin bypass lives inside the guard.
+			if (firstResolve)
+				await assertSubscriptionActive(ctx, order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -3582,6 +3671,7 @@ export const advanceToStage = mutation({
 		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
@@ -3739,6 +3829,7 @@ export const setShipmentTracking = mutation({
 		{ orderId, courierName, trackingNo, carrierTrackingUrl },
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -3986,6 +4077,7 @@ export const setDeliveryFee = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
 		if (order.status === "cancelled")
@@ -4069,16 +4161,30 @@ export const setDeliveryFee = mutation({
  * exists to protect the seller's lead time, and here the seller is the one
  * moving the date. The [today, +30d] range still holds (checkout's ceiling).
  *
+ * The TIME applies to delivery and self-collect alike (z8r3fdff97 — a pickup
+ * carries a time since then). A self-collect time can be cleared ("come any
+ * time that day"); a delivery's can't, because dispatch composes the rider's
+ * moment from it. Neither buyer-side clock rule binds the seller here, on
+ * purpose: opening hours (the vendor is the authority on her own exceptions)
+ * and the per-product prep floor ("the puffs are done early, come in 30 min"
+ * is exactly what this is for — and prep isn't frozen on the order, so it
+ * would judge an old order by today's product settings). A self-collect time
+ * never reaches dispatch: both providers refuse `not_delivery` before reading
+ * it.
+ *
+ * Refused on counter sales, bookings (their dates ARE the check-in and
+ * check-out) and while a claim link's payment window is live.
+ *
  * All-tier: this is a correctness escape hatch, not a feature to upsell.
  */
 export const rescheduleFulfilment = mutation({
 	args: {
 		orderId: v.id("orders"),
 		fulfilmentDate: v.number(),
-		// Only meaningful on delivery orders (mirrors create — self-collect and
-		// counter orders are date-only). Omitted → the order's existing time is
-		// kept, so a date-only change can never silently drop the clock.
-		fulfilmentTimeMinutes: v.optional(v.number()),
+		// A number sets the time (delivery or self-collect). `null` clears it —
+		// self-collect only. Omitted keeps the order's existing time, so a
+		// date-only change can never silently drop the clock.
+		fulfilmentTimeMinutes: v.optional(v.union(v.number(), v.null())),
 	},
 	handler: async (
 		ctx,
@@ -4088,6 +4194,7 @@ export const rescheduleFulfilment = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
 		if (order.status === "shipped" || order.status === "delivered")
@@ -4097,6 +4204,13 @@ export const rescheduleFulfilment = mutation({
 		if (order.source === "counter")
 			throw new ConvexError(
 				"Counter orders are fulfilled on the spot — there's no date to move",
+			);
+		// A booking's fulfilment date IS its check-in (bookings.ts), so moving it
+		// here would desync the two. The order page hides the trigger; this is
+		// the backstop for a direct call.
+		if (order.deliveryMethod === "booking")
+			throw new ConvexError(
+				"This is a booking — its dates are the check-in and check-out, which can't be moved here",
 			);
 		// Collection (86eyg0n8e): the date answers "when do we collect?" — once
 		// the goods are with the seller that question is history, and moving the
@@ -4131,18 +4245,20 @@ export const rescheduleFulfilment = mutation({
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
-		const isDelivery = (order.deliveryMethod ?? "delivery") === "delivery";
-		let sanitizedTime: number | undefined;
-		if (fulfilmentTimeMinutes !== undefined && isDelivery) {
+		let nextTime = order.fulfilmentTimeMinutes;
+		if (fulfilmentTimeMinutes === null) {
+			if ((order.deliveryMethod ?? "delivery") === "delivery")
+				throw new ConvexError(
+					"A delivery keeps a time — pick a new one instead of clearing it",
+				);
+			nextTime = undefined;
+		} else if (fulfilmentTimeMinutes !== undefined) {
 			try {
-				sanitizedTime = assertValidFulfilmentTime(fulfilmentTimeMinutes);
+				nextTime = assertValidFulfilmentTime(fulfilmentTimeMinutes);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
 		}
-		const nextTime = isDelivery
-			? (sanitizedTime ?? order.fulfilmentTimeMinutes)
-			: order.fulfilmentTimeMinutes;
 
 		const now = Date.now();
 		// Audit trail in the delivery_fee_set style — compact, ASCII, greppable.
@@ -4152,9 +4268,26 @@ export const rescheduleFulfilment = mutation({
 				: tm === undefined
 					? ymdFromEpoch(d)
 					: `${ymdFromEpoch(d)} ${hhmmFromMinutes(tm)}`;
+		// The buyer gets no message about this (the dialog says so), so the
+		// order carries what `/track` needs to SHOW that it moved: when, and
+		// from what. Only a real change counts — re-saving the same moment
+		// must not make the buyer's page cry "changed" (z8r3fdff97 test round).
+		const moved =
+			sanitizedDate !== order.fulfilmentDate ||
+			nextTime !== order.fulfilmentTimeMinutes;
 		await ctx.db.patch(orderId, {
 			fulfilmentDate: sanitizedDate,
 			fulfilmentTimeMinutes: nextTime,
+			...(moved
+				? {
+						rescheduledAt: now,
+						rescheduledFromDate: order.fulfilmentDate,
+						// Convex patches read `undefined` as "remove", which is
+						// exactly right: a moment moved FROM a date-only day has no
+						// previous time to show.
+						rescheduledFromTimeMinutes: order.fulfilmentTimeMinutes,
+					}
+				: {}),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -4437,6 +4570,7 @@ export const markPaymentReceived = mutation({
 	},
 	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -4652,6 +4786,7 @@ export const clearGatewayPaymentIssue = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		const issue = order.gatewayPaymentIssue;
 		if (!issue) return; // already resolved (e.g. a payment landed) — no-op
 		const now = Date.now();
@@ -4807,6 +4942,7 @@ export const generateMockupUploadUrl = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		return ctx.storage.generateUploadUrl();
@@ -4827,6 +4963,7 @@ export const discardMockupUploads = mutation({
 		if (!order) return; // order gone → nothing to protect; let the blobs GC
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		const referenced = new Set(resolveMockupImageIds(order));
 		for (const id of storageIds) {
 			const trimmed = id.trim();
@@ -4863,6 +5000,7 @@ export const submitMockup = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -4947,6 +5085,7 @@ export const updateMockupQuote = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5069,6 +5208,7 @@ export const waiveMockup = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
 		const access = await requireRetailerAccess(ctx, order.retailerId);
+		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)

@@ -24,8 +24,13 @@ login or screen-share, neither of which scales.
 1. **Seller directory** — `/app/admin/sellers` (`src/routes/app.admin.sellers.tsx`). Lists
    every store (name, slug, owner, founding rank, subscription status), admin-gated
    server-side by `requireAdmin` and hidden client-side behind `billing.amIAdmin`. Sorted
-   Founding Members first (by rank), then newest. "Manage" starts the act-as session
-   (`setActAs(id)`) and opens `/app`.
+   Founding Members first (by rank), then newest. Each row carries ONE control —
+   a **Manage menu** (owner decision, 20 Sep 2026) holding every per-store action
+   with its consequence written under it: **Open store** (starts the act-as
+   session via `setActAs(id)` and opens `/app`), **comp upgrade** (the dialog
+   below), and **Delete store** (dev only; hidden entirely where the purge flag
+   is off). The row used to BE the act-as button with two bare icons beside it —
+   three targets, two unlabelled, and a mis-tap entered act-as.
 2. **Act-as context** — selecting a seller renders the ordinary dashboard against that
    `retailerId`. All reads/writes target it; the admin identity is the actor on every write;
    a persistent **"Acting as {store} — admin"** banner shows across every screen with a
@@ -84,7 +89,8 @@ categories, insights, chargeable pickup, radius delivery) are gated by plan via
   `!actingAsAdmin`; this also covers **admin-on-own-store** (where `actingAsAdmin` is false).
 - **Client:** the owner read (`getMyRetailer` → `loadRetailerForUser`) detects an admin owner and
   passes `adminFullAccess` into `resolveAccess(sub, { adminFullAccess })`, which forces
-  `features` to the **highest tier** + `active`/`!frozen` while **keeping the real
+  `features` to the **highest tier**, caps to **no limits** (`fullAccessCaps()` — the same
+  full-access definition a comped store resolves to) + `active`/`!frozen` while **keeping the real
   plan/status/trial** (so billing still tells the truth). `subscriptions.current` resolves the
   same way. So an admin's own dashboard never renders a Pro wall / locked control — regardless of
   what plan their own store sits on. The act-as read (`getRetailerForAdmin`) deliberately does
@@ -261,6 +267,39 @@ pause flow) is a sensible next step but not yet implemented.
   for storeless-admin mode; sidebar's Admin group ends the session.
 - `convex/admin.test.ts` — access, subscription bypass, audit, directory, counter-checkout.
 
+## Comp accounts (z8r3fdeub2)
+
+The sellers directory is also where a store gets the **comp upgrade** — a
+toggle for partner/sponsor/pilot/internal deals. While it's on, the store gets
+exactly what an admin's own store gets (every feature, no limits, never billed —
+the same `FULL_ACCESS_PLAN` / `fullAccessCaps()` resolution) minus admin
+access, and the seller can't subscribe, change plan, pause or cancel. **It has
+no end date**: it stays on until an admin turns it off.
+
+The Manage menu's comp item opens one dialog. It states the toggle's
+position up front ("Off", or "On · since {date}") and is the single surface to
+**turn it on** (kind, seller-facing label, admin-only note), **edit** those
+details while it's on (who/when first turned it on is kept), and **turn it
+off** behind its own confirm, which names the consequence: the store becomes an
+**expired seller** straight away — storefront live, buyers still ordering,
+the dashboard view-only until the seller picks a plan and pays (no free
+period) — and the seller is emailed. Comped rows show a violet chip (kind · label; since-when and
+the note on hover); a store whose comp was turned off shows a muted
+"Comp off · {date}" chip beside its past-due status, so nobody chases an invoice
+that doesn't exist. Admin-owned rows keep the comp item visible but disabled,
+with the reason as its own subtitle ("Admin store — always free already") —
+a disabled menu row can't show a hover title, so the reason sits in the row.
+
+Both mutations (`subscriptions.setComp` / `revokeComp`) are
+`requireAdmin`-gated and **always** write an `adminAuditLog` row
+(`subscriptions.setComp` / `.revokeComp`, targetId = the retailer, by the admin
+who made that write) — a billing-state change is never untraced, and the act-as
+no-op doesn't apply because an admin's own store can't be comped. **Note for
+testing:** turning a comp off while acting-as a store won't show you the lock —
+admins bypass `assertSubscriptionActive` — so the view-only refusal (every
+seller action, orders included) is only visible to the seller's own login. Full lifecycle, edge cases and the "never
+charged" guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
+
 ## Deliberate scope / follow-ups
 
 - Admin allowlist stays in `ADMIN_USER_IDS` env (graduates to a Clerk role later, same as
@@ -305,8 +344,8 @@ rule), and the audit row outlives the tenant because the cascade retains
 
 **In-flight lock:** the purge stamps `retailers.purgeStartedAt` before
 scheduling the cascade. While it's set (and younger than the 10-minute retry
-window), the directory row shows "Purging…" with Manage and the trash both
-disabled, `startActAsSession` refuses the store, and a second purge is
+window), the directory row shows "Deleting…" in place of its Manage menu,
+`startActAsSession` refuses the store, and a second purge is
 rejected — no session can touch a store mid-erase. The stamp is never cleared
 on success (the row itself is the cascade's final delete); a stamp older than
 the window means a crashed cascade, and re-running the purge is the recovery

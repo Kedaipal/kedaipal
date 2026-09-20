@@ -171,6 +171,83 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.09.6",
+		date: "2026-09-20",
+		// Not notable, by the corpus's three triggers: nothing moved, no number
+		// a seller pays changes, and everything here is additive — a seller who
+		// reads nothing keeps exactly the behaviour they had yesterday. The
+		// counter-argument (put to Zaki in the release PR): a store WITH opening
+		// hours set will start seeing pickup times on self-collect orders
+		// without having asked, which is new information arriving unbidden —
+		// but it arrives labelled, on the order card, where it explains itself.
+		notable: false,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Say how long each product takes to make — and buyers book a time you can meet",
+				},
+				body: {
+					en: "A cake that needs two hours shouldn't be collectable in fifteen minutes. Give any product a prep time and checkout does the maths: a buyer ordering for today is only offered times you can actually meet — and told why, \"needs 2 hours to prepare\", instead of a bare \"unavailable\" — while tomorrow's orders absorb the wait overnight. Self-collect orders now carry a pickup time inside your opening hours, so \"when are they coming?\" finally has an answer on the order. And the new pickup note — \"side counter\", \"bring an ice bag\" — travels the whole way: storefront, checkout, the WhatsApp confirmation and the buyer's order page. Counter sales skip all of it, because you're standing right there. On every plan.",
+				},
+				href: spotlightHref("prep_time"),
+				hrefLabel: { en: "Set a prep time" },
+				icon: "clock",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Open for breakfast, closed till dinner? Your hours can say so now",
+				},
+				body: {
+					en: "A day in your opening hours can now hold two windows — 7:30 to 10:00 for the breakfast crowd, then 5:00 to 9:00 for dinner. Buyers picking a delivery or collection time are held to both windows, and the stretch between them counts as properly closed instead of something your hours couldn't express. Days with one window carry on untouched. On every plan.",
+				},
+				href: spotlightHref("opening_hours"),
+				hrefLabel: { en: "Edit your hours" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Give your address a unit number, and keep the map pin",
+				},
+				body: {
+					en: "Riders and buyers were reaching the right block and phoning to ask which door. Your business address and every pickup point now take a unit line — floor, unit, building — typed once and printed everywhere the address already goes: checkout, the buyer's order page, delivery bookings, labels. It rides beside the map pick instead of replacing it, so the one-tap Waze button keeps working.",
+				},
+				href: spotlightHref("business_address"),
+				hrefLabel: { en: "Add your unit" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "The new-order alert tells you who and how much",
+				},
+				body: {
+					en: "The pop-up used to read \"New order ORD-XCVE\" — an order id, and nothing you can triage on. It now leads with the buyer's name and the total, and tapping anywhere on it opens the order, not just the small button. The phone notification carries the same facts.",
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Importing your own export updates your products, not copies them",
+				},
+				body: {
+					en: "Export your catalogue, fix a cell, import it back — the exact loop the import screen suggests. But a product without a SKU (every booking listing, for a start) came back marked \"new\", and confirming would have created a duplicate. The sheet's own handle column now does the matching, so your export always finds the products it came from. Hand-typed sheets still match by SKU, exactly as before.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "The orders table stopped shoving the whole page sideways",
+				},
+				body: {
+					en: "Switch on enough columns with the sidebar open and the entire dashboard could scroll sideways, carrying the Columns and Export buttons off the edge of the screen. The table now scrolls inside its own box and the page stays put.",
+				},
+			},
+		],
+	},
+	{
 		version: "2026.09.5",
 		date: "2026-09-15",
 		// Notable, and not a close call — on two counts now. (1) MONEY MOVES:

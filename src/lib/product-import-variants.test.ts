@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	buildVariantGrid,
 	dedupeProvidedVariants,
+	describeOrderRuleChanges,
 	groupVariantRows,
 	inferAxes,
 	parseVariantImport,
@@ -14,6 +15,7 @@ function row(over: Partial<VariantImportRow>): VariantImportRow {
 	return {
 		rowNumber: 1,
 		groupingKey: (over.name ?? "p").toLowerCase(),
+		handle: "",
 		name: "P",
 		description: undefined,
 		optionNames: [],
@@ -372,5 +374,196 @@ describe("parseVariantImport — end to end", () => {
 		expect(
 			res.errorRows.some((e) => /Duplicate sku "DUP"/.test(e.errors[0])),
 		).toBe(true);
+	});
+});
+
+describe("order rules — prep_minutes + pickup_note (z8r3fdff97)", () => {
+	const base: RawImportRow = {
+		name: "Ice cream puff",
+		price: "4.50",
+		stock: "40",
+	};
+	const parsed = (over: RawImportRow) => {
+		const r = validateVariantRow({ ...base, ...over }, 7);
+		if ("errors" in r) throw new Error(r.errors.join("; "));
+		return r;
+	};
+	const errorsFor = (over: RawImportRow) => {
+		const r = validateVariantRow({ ...base, ...over }, 7);
+		return "errors" in r ? r : null;
+	};
+
+	test("prep_minutes reads whole minutes; blank or missing is 'keep', and 0 is a real value", () => {
+		expect(parsed({ prep_minutes: "120" }).prepMinutes).toBe(120);
+		expect(parsed({ prep_minutes: "" }).prepMinutes).toBeUndefined();
+		expect(parsed({}).prepMinutes).toBeUndefined();
+		// 0 is how a sheet CLEARS a prep time — it must not collapse into blank.
+		expect(parsed({ prep_minutes: "0" }).prepMinutes).toBe(0);
+	});
+
+	test("a bad prep cell is a row error naming the column, the unit and an example", () => {
+		for (const bad of ["2 hours", "90.5", "1441", "-5", "1e2"]) {
+			const err = errorsFor({ prep_minutes: bad });
+			expect(err?.rowNumber).toBe(7);
+			expect(err?.errors).toEqual([
+				"prep_minutes must be a whole number of minutes from 0 to 1440 (e.g. 120 for 2 hours)",
+			]);
+		}
+	});
+
+	test("pickup_note is stored as one line; blank is 'keep'", () => {
+		expect(
+			parsed({ pickup_note: "Side counter.\n\n  Ask for Amirah." }).pickupNote,
+		).toBe("Side counter. Ask for Amirah.");
+		expect(parsed({ pickup_note: "   " }).pickupNote).toBeUndefined();
+		expect(parsed({}).pickupNote).toBeUndefined();
+	});
+
+	test("the note cap counts what would be stored, and says how long it is", () => {
+		expect(
+			parsed({ pickup_note: `  ${"a".repeat(200)}  ` }).pickupNote,
+		).toHaveLength(200);
+		const err = errorsFor({ pickup_note: "a".repeat(201) });
+		expect(err?.errors).toEqual([
+			"pickup_note must be 200 characters or fewer (this one is 201)",
+		]);
+	});
+
+	test("a prep time on the first row survives the blank rows of the other variants", () => {
+		const grouped = groupVariantRows([
+			row({
+				name: "Puff",
+				optionNames: ["Flavour"],
+				optionValues: ["Vanilla"],
+				prepMinutes: 120,
+				pickupNote: "Bring an ice bag.",
+			}),
+			row({ name: "Puff", optionNames: ["Flavour"], optionValues: ["Durian"] }),
+			row({ name: "Puff", optionNames: ["Flavour"], optionValues: ["Pandan"] }),
+		]);
+		expect(grouped.products[0].prepMinutes).toBe(120);
+		expect(grouped.products[0].pickupNote).toBe("Bring an ice bag.");
+		expect(grouped.products[0].warnings).toEqual([]);
+	});
+
+	test("rows that disagree: the last non-blank value wins, and the drift is named", () => {
+		const grouped = groupVariantRows([
+			row({
+				name: "Puff",
+				optionNames: ["Flavour"],
+				optionValues: ["Vanilla"],
+				prepMinutes: 30,
+				pickupNote: "Side counter.",
+			}),
+			row({
+				name: "Puff",
+				optionNames: ["Flavour"],
+				optionValues: ["Durian"],
+				prepMinutes: 120,
+				pickupNote: "Front counter.",
+			}),
+			row({ name: "Puff", optionNames: ["Flavour"], optionValues: ["Pandan"] }),
+		]);
+		const [puff] = grouped.products;
+		expect(puff.prepMinutes).toBe(120);
+		expect(puff.pickupNote).toBe("Front counter.");
+		expect(puff.warnings).toEqual([
+			"Multiple prep times; using 2 hours",
+			"Multiple pickup notes; using the last one",
+		]);
+	});
+
+	test("a later 0 wins — it clears — and the drift warning reads 'none'", () => {
+		const grouped = groupVariantRows([
+			row({ name: "Puff", optionNames: ["F"], optionValues: ["A"], prepMinutes: 60 }),
+			row({ name: "Puff", optionNames: ["F"], optionValues: ["B"], prepMinutes: 0 }),
+		]);
+		expect(grouped.products[0].prepMinutes).toBe(0);
+		expect(grouped.products[0].warnings).toEqual([
+			"Multiple prep times; using none",
+		]);
+	});
+
+	test("one bad prep row is reported by its row number; every other product still parses", () => {
+		const result = parseVariantImport(
+			[
+				{ name: "Puff", price: "4.50", stock: "10", prep_minutes: "120" },
+				{ name: "Tart", price: "3.00", stock: "10", prep_minutes: "soon" },
+				{ name: "Choux", price: "5.00", stock: "10" },
+			],
+			["name", "price", "stock", "prep_minutes"],
+		);
+		expect(result.errorRows.map((e) => e.rowNumber)).toEqual([3]);
+		expect(result.products.map((p) => p.name)).toEqual(["Puff", "Choux"]);
+	});
+
+	test("a sheet from before the columns existed keeps every product's rules", () => {
+		const result = parseVariantImport(
+			[{ name: "Puff", price: "4.50", stock: "10" }],
+			["name", "price", "stock"],
+		);
+		expect(result.products[0].prepMinutes).toBeUndefined();
+		expect(result.products[0].pickupNote).toBeUndefined();
+		// Neither column is report-only, so the import never calls them ignored.
+		expect(result.summary.ignoredColumns).toEqual([]);
+	});
+});
+
+describe("describeOrderRuleChanges — the preview line (z8r3fdff97)", () => {
+	test("names only what changes", () => {
+		expect(
+			describeOrderRuleChanges({ prepChange: null, pickupNoteChange: null }),
+		).toEqual([]);
+		expect(
+			describeOrderRuleChanges({
+				prepChange: { from: 30, to: 120 },
+				pickupNoteChange: "changed",
+			}),
+		).toEqual(["prep time 30 min → 2 hours", "pickup note updated"]);
+	});
+
+	test("setting a first prep time, and clearing one with 0", () => {
+		expect(
+			describeOrderRuleChanges({
+				prepChange: { from: null, to: 90 },
+				pickupNoteChange: "added",
+			}),
+		).toEqual(["prep time 1 hour 30 min", "pickup note added"]);
+		expect(
+			describeOrderRuleChanges({
+				prepChange: { from: 60, to: null },
+				pickupNoteChange: null,
+			}),
+		).toEqual(["prep time removed"]);
+	});
+});
+
+describe("the product_handle reaches the server (z8r3fdff97 test round)", () => {
+	test("a group carries its handle as written, and blank means none", () => {
+		// The export writes the product id there; the server matches on it, so
+		// the case must survive parsing (ids are case-sensitive) and a name-only
+		// sheet must not invent one.
+		const withHandle = groupVariantRows([
+			row({ handle: "jd7ABC123", name: "Ice Cream Puff", sku: "PUFF-1" }),
+		]);
+		expect(withHandle.products[0]?.handle).toBe("jd7ABC123");
+
+		const nameOnly = groupVariantRows([row({ handle: "", name: "Kuih" })]);
+		expect(nameOnly.products[0]?.handle).toBeUndefined();
+	});
+
+	test("parseVariantImport keeps the handle from the sheet", () => {
+		const parsed = parseVariantImport(
+			[
+				{
+					product_handle: "jd7ABC123",
+					name: "Ice Cream Puff",
+					price: "4.50",
+					stock: "40",
+				} as RawImportRow,
+			],
+			["product_handle", "name", "price", "stock"],
+		);
+		expect(parsed.products[0]?.handle).toBe("jd7ABC123");
 	});
 });

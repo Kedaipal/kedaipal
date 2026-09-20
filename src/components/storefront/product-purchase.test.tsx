@@ -10,6 +10,7 @@ import {
 	OptionPills,
 	PriceLabel,
 	PurchaseActions,
+	PurchaseHints,
 	useProductPurchase,
 } from "./product-purchase";
 
@@ -404,5 +405,38 @@ describe("made-to-order product — one bespoke line, existing flow", () => {
 		// …and that product DOES keep its standard buy box (the CTA reads
 		// "Select options" until a size is picked, but it's mounted).
 		expect(screen.getByRole("button", { name: /increase/i })).toBeTruthy();
+	});
+});
+
+describe("PurchaseHints — prep window + pickup note (z8r3fdff97)", () => {
+	function Hints({ product }: { product: StorefrontProduct }) {
+		const pp = useProductPurchase({ product, retailerId: RID, cartQuantity: 0 });
+		return <PurchaseHints pp={pp} />;
+	}
+	const puff = (extra: Record<string, unknown>) =>
+		({ ...cake(5), name: "Ice Cream Puff", ...extra }) as unknown as StorefrontProduct;
+
+	it("says how long the product takes, in hours a buyer reads", () => {
+		render(<Hints product={puff({ prepMinutes: 120 })} />);
+		expect(screen.getByText(/Ready in ~2 hours/)).toBeTruthy();
+	});
+
+	it("hides the chip when notice already rules out same-day — it would be false", () => {
+		// "Ready in ~2 hours" on a product that needs a day's notice promises
+		// something checkout then refuses.
+		render(<Hints product={puff({ prepMinutes: 120, minNoticeDays: 1 })} />);
+		expect(screen.queryByText(/Ready in/)).toBeNull();
+	});
+
+	it("shows the collection note under a self-qualifying heading", () => {
+		render(<Hints product={puff({ pickupNote: "Bring an ice bag." })} />);
+		expect(screen.getByText("Collecting?")).toBeTruthy();
+		expect(screen.getByText("Bring an ice bag.")).toBeTruthy();
+	});
+
+	it("says nothing when the product has neither", () => {
+		render(<Hints product={puff({})} />);
+		expect(screen.queryByText(/Ready in/)).toBeNull();
+		expect(screen.queryByText("Collecting?")).toBeNull();
 	});
 });

@@ -24,9 +24,17 @@ export function orderingPausedMessage(storeName: string): string {
 /** Statuses a hold can start from: a paying seller (active) or one who has
  * fallen behind on a plan invoice and would rather pause than pay the tier.
  * Never from a trial (the free period is already free — a seller who isn't
- * selling simply doesn't convert) and never from a comped row. */
-export function canEnterHold(status: SubscriptionStatus, comped: boolean): boolean {
-	return !comped && (status === "active" || status === "past_due");
+ * selling simply doesn't convert), never from a comped row, and never from a
+ * store whose lock came from a comp ENDING (z8r3fdeub2): that `past_due` has
+ * no plan and no invoice behind it, so there is nothing to pause — they
+ * choose a plan, like a lapsed trial. */
+export function canEnterHold(
+	status: SubscriptionStatus,
+	comped: boolean,
+	compEnded = false,
+): boolean {
+	if (comped || compEnded) return false;
+	return status === "active" || status === "past_due";
 }
 
 /** Statuses a hold can be resumed from: the hold itself, or a lock over an

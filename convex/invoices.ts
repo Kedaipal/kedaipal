@@ -139,6 +139,8 @@ async function settleInvoicePaid(
 		// the discount to Pro/Scale on each side of the conversion.
 		founding: foundingPriceEligible({
 			isFoundingMember: retailerForCarryover?.isFoundingMember === true,
+			benefitsRevokedAt: retailerForCarryover?.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailerForCarryover?.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -212,6 +214,10 @@ async function settleInvoicePaid(
 		userCap: caps.userCap,
 		broadcastQuota: caps.broadcastQuota,
 		updatedAt: now,
+		// A store that was locked by a comp ending (z8r3fdeub2) is a paying
+		// seller again — drop the marker so a future lapse reads "past due",
+		// not "your sponsored access ended".
+		compEndedAt: undefined,
 		...(sub.autoRenew
 			? {
 					autoRenew: {
@@ -519,6 +525,12 @@ export const issueInvoice = mutation({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.first();
 		if (!sub) throw new ConvexError("Retailer has no subscription");
+		// The machine paths already skip comped rows; the manual path must refuse
+		// too, or "never charged" (z8r3fdeub2) dies to one absent-minded click.
+		if (sub.comped === true)
+			throw new ConvexError(
+				"This store is comped — it's on the house. End the comp first if you really mean to bill it.",
+			);
 
 		// Prevent accidental duplicate pendings — settle/void the existing one first.
 		const existingPending = await ctx.db
@@ -685,6 +697,8 @@ export const subscribeSelf = mutation({
 		// Founding Pro and nothing else (foundingPlanLocked).
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
@@ -797,6 +811,8 @@ export const changePlan = mutation({
 		// BOTH directions before anything is scheduled or billed.
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now: Date.now(),
@@ -972,6 +988,8 @@ export const internalIssueFirstInvoice = internalMutation({
 		const founding = foundingPricingApplies({
 			plan: sub.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -1061,6 +1079,8 @@ export const switchPendingPlan = mutation({
 		const now = Date.now();
 		const eligibility = {
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			now,
@@ -1170,6 +1190,8 @@ export const internalIssueRenewalInvoice = internalMutation({
 			billingCycle: sub.billingCycle,
 			pendingPlanChange: sub.pendingPlanChange?.plan,
 			isFoundingMember: retailer.isFoundingMember === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: invoices.find((inv) => inv.status === "paid")?.currency,
@@ -1231,7 +1253,15 @@ export const listRetailersForAdmin = query({
 			plan?: Doc<"subscriptions">["plan"];
 			isFoundingMember: boolean;
 			foundingIntent: boolean;
+			/** Founding BENEFITS revoked (z8r3fdfyw5) — still a member, no longer
+			 * on founding pricing. The issue form must not auto-apply (let alone
+			 * lock in) a discount the daily pass has taken away. */
+			foundingBenefitsRevoked: boolean;
 			hasPending: boolean;
+			/** On the house (z8r3fdeub2) — the picker labels these so nobody
+			 * drafts a bill `issueInvoice` will refuse anyway. */
+			comped: boolean;
+			compLabel?: string;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -1255,7 +1285,10 @@ export const listRetailersForAdmin = query({
 				plan: sub?.plan,
 				isFoundingMember: r.isFoundingMember === true,
 				foundingIntent: sub?.foundingIntent === true,
+				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
 				hasPending: pending !== null,
+				comped: sub?.comped === true,
+				compLabel: sub?.comp?.label,
 			});
 		}
 		return rows;

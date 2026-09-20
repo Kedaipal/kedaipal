@@ -247,7 +247,10 @@ Now frozen onto `orders.items[].stockReserved` at create, the way `price` and
 
 This is the trap worth remembering: none of them share a snapshot builder, so a
 new frozen order-item field is stamped in four places or it is silently wrong on
-the paths that were missed.
+the paths that were missed. The next field to need it was `pickupNote`
+(`z8r3fdff97`) — stamped on the storefront and claim paths, deliberately not on
+counter or bookings; its table is in
+[`fulfilment.md`](./fulfilment.md#per-product-pickup-note-2026-09-17-clickup-z8r3fdff97).
 
 The booking path stamps `false` rather than being left absent, even though it
 never decrements `onHand`. Unstamped it would fall to the legacy re-resolve,

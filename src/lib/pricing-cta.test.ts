@@ -6,7 +6,7 @@ import type { SubscriptionView } from "./subscription";
  * Covers the plan-aware pricing CTA branches — the signed-in states can't be
  * exercised in the signed-out marketing preview, so this is where they're proven.
  * The load-bearing case: `plan` is the trialed tier, so ownership is gated on
- * `status`/`comped`, never `plan` alone (PR #125 review).
+ * `status`, never `plan` alone (PR #125 review); a comp is its own answer.
  */
 
 const sub = (
@@ -82,15 +82,36 @@ describe("resolveTierCta", () => {
 		);
 	});
 
-	it("comped accounts own their tier (Current), even if status isn't active", () => {
-		// Fail-open missing row resolves to plan:pro/active/comped; a real comp may
-		// carry any status. comped === full access → Current, not Subscribe.
-		expect(resolveTierCta("pro", signedIn(sub("pro", "trialing", true)))).toBe(
-			"current",
-		);
+	it("comped accounts see every live tier as included — never a door into billing (z8r3fdeub2)", () => {
+		// A comp resolves to the highest tier with unlimited orders and refuses
+		// subscribe/change/cancel server-side, so no tier may be a link. Covers the
+		// fail-open missing row (plan:pro/active/comped) and any stored plan/status.
+		for (const tier of ["starter", "pro"]) {
+			expect(resolveTierCta(tier, signedIn(sub("pro", "active", true)))).toBe(
+				"sponsored",
+			);
+			expect(
+				resolveTierCta(tier, signedIn(sub("starter", "trialing", true))),
+			).toBe("sponsored");
+		}
+		// Scale is still Coming soon — a product fact, not a seller one.
 		expect(
-			resolveTierCta("starter", signedIn(sub("pro", "active", true))),
-		).toBe("manage");
+			resolveTierCta("scale", {
+				isScale: true,
+				isSignedIn: true,
+				subscription: sub("pro", "active", true),
+			}),
+		).toBe("coming_soon");
+	});
+
+	it("a store whose comp ENDED is back to subscribing like any expired seller", () => {
+		const expired: SubscriptionView = {
+			plan: "pro",
+			status: "past_due",
+			comped: false,
+			compEnded: { at: 1 },
+		};
+		expect(resolveTierCta("pro", signedIn(expired))).toBe("subscribe");
 	});
 
 	it("an active seller sees Upgrade on a higher tier, Manage on a lower one", () => {

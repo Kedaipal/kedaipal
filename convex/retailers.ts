@@ -187,6 +187,7 @@ import {
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
 import { sanitizeAttributionSource } from "./lib/attribution";
+import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { isValidGaClientId } from "./lib/ga4";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
@@ -208,6 +209,7 @@ import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
 	type AccessState,
 	assertPlanFeature,
+	assertOwnStoreActive,
 	assertSubscriptionActive,
 	loadSubscription,
 	resolveAccess,
@@ -285,12 +287,17 @@ import {
 // Store opening hours (86eyp5rav). Wire validator for updateSettings; the
 // shape is validated/normalized by sanitizeOpeningHours in the handler
 // (7 entries, 0 ≤ open < close ≤ 1439, ≥1 open day; an all-24h week
-// normalizes to unset). `v.null()` = clear back to open-24/7.
+// normalizes to unset). `v.null()` = clear back to open-24/7. The optional
+// second window (z8r3fdff8r) is validated there too — ordering, the pair
+// rule, and the all-day clash — by the SAME `dayHoursError` the settings
+// editor shows inline, so the two can never disagree.
 const openingHoursValidator = v.array(
 	v.object({
 		open: v.number(),
 		close: v.number(),
 		closed: v.optional(v.boolean()),
+		open2: v.optional(v.number()),
+		close2: v.optional(v.number()),
 	}),
 );
 
@@ -487,6 +494,9 @@ const businessAddressValidator = v.object({
 	latitude: v.number(),
 	longitude: v.number(),
 	placeId: v.optional(v.string()),
+	// Unit / floor / building (z8r3fdff8r) — free text the seller types beside
+	// the Google pick; trimmed + collapsed to one line by sanitizeUnitLine.
+	unit: v.optional(v.string()),
 });
 
 // Legal identity printed on buyer invoices/receipts (z8r3fdcrzj). Every field
@@ -558,6 +568,9 @@ type BusinessAddress = {
 	latitude: number;
 	longitude: number;
 	placeId?: string;
+	/** Unit / floor / building line (z8r3fdff8r) — owner-only like the label.
+	 * Composed onto it for display by `formatBusinessAddress`; never a key. */
+	unit?: string;
 	/** The country this address was captured in — STAMPED by the server, never
 	 * accepted from the client (deliberately absent from
 	 * `businessAddressValidator`, the `apiKeyHint`/`env` posture). See the
@@ -592,11 +605,18 @@ function sanitizeBusinessAddress(
 		throw new ConvexError("longitude must be between -180 and 180");
 	}
 	const placeId = raw.placeId?.trim();
+	const unit = sanitizeUnitLine(raw.unit);
+	if (!unit.ok) {
+		throw new ConvexError(
+			`Unit / floor / building must be at most ${UNIT_LINE_MAX_LENGTH} characters`,
+		);
+	}
 	return {
 		label,
 		latitude: raw.latitude,
 		longitude: raw.longitude,
 		placeId: placeId && placeId.length > 0 ? placeId : undefined,
+		unit: unit.value,
 		// Stamped from the store's country at the moment of capture. The Places
 		// proxy locks predictions to that country (convex/google.ts
 		// `includedRegionCodes`), so this is a fact about where the pick came
@@ -2713,6 +2733,7 @@ export const generateLogoUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
@@ -2727,6 +2748,7 @@ export const generateCoverImageUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
@@ -2741,6 +2763,7 @@ export const generatePaymentQrUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},

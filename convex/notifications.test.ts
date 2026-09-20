@@ -90,8 +90,30 @@ describe("notifications.latestActivity", () => {
 			retailerId: retailer._id,
 		});
 		expect(res.newestOrder?.createdAt).toBe(2000);
+		// Enough to triage the alert without opening it (z8r3fdff97 test round):
+		// the seller's toast reads "ORD-… · Aina · RM 10.00".
+		expect(res.newestOrder?.customerName).toBe("Aina");
+		expect(res.newestOrder?.total).toBe(1000);
+		expect(res.newestOrder?.currency).toBe("MYR");
 		expect(res.newestFailedBooking?.failedAt).toBe(3500);
 		expect(res.newestFailedBooking?.reason).toBe("No driver found");
+	});
+
+	test("an order with no buyer name reports an empty one, never 'undefined'", async () => {
+		// Counter and anonymous orders carry no name; the toast drops that
+		// segment rather than printing a stray separator.
+		const t = setup();
+		const retailer = await seed(t);
+		await seedOrder(t, retailer._id, {
+			createdAt: 5000,
+			customer: {},
+			total: 4400,
+		});
+		const res = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.notifications.latestActivity, { retailerId: retailer._id });
+		expect(res.newestOrder?.customerName).toBe("");
+		expect(res.newestOrder?.total).toBe(4400);
 	});
 
 	test("a stranger can't read another store's activity", async () => {
