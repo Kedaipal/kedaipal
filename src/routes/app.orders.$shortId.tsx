@@ -738,11 +738,13 @@ function OrderDetailRoute() {
 			// The tooltip is where the rule is stated — the feature is otherwise
 			// invisible until the seller has used it once.
 			title={
-				isPinned
-					? "Pinned — stays on top of your inbox until you unpin it"
-					: "Pin to the top of your inbox"
+				readOnly
+					? reason
+					: isPinned
+						? "Pinned — stays on top of your inbox until you unpin it"
+						: "Pin to the top of your inbox"
 			}
-			disabled={pinBusy}
+			disabled={pinBusy || readOnly}
 			onClick={() => void togglePin()}
 		>
 			<Pin
@@ -1280,10 +1282,16 @@ function OrderDetailRoute() {
 						<Button
 							onClick={() => setConfirmPaymentOpen(true)}
 							isLoading={confirmingPayment}
-							disabled={confirmingPayment}
+							// View-only: taking payment is a write; opening the method
+							// dialog first would walk the seller through choices the
+							// server is about to refuse (found live, 20 Sep).
+							disabled={confirmingPayment || readOnly}
+							title={readOnly ? reason : undefined}
 							className="h-11 w-full"
 						>
-							Mark payment received
+							{readOnly
+								? "Mark payment received — view-only"
+								: "Mark payment received"}
 						</Button>
 						{askForProofUrl ? (
 							<Button asChild variant="secondary" className="h-11 w-full">
@@ -1327,16 +1335,21 @@ function OrderDetailRoute() {
 					<Button
 						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment || mockupGated || deliveryFeePending}
+						disabled={
+							confirmingPayment || readOnly || mockupGated || deliveryFeePending
+						}
+						title={readOnly ? reason : undefined}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						{mockupGated
-							? "Awaiting mockup approval"
-							: deliveryFeePending
-								? "Set the delivery charge first"
-								: "Mark payment received"}
+						{readOnly
+							? "Mark payment received — view-only"
+							: mockupGated
+								? "Awaiting mockup approval"
+								: deliveryFeePending
+									? "Set the delivery charge first"
+									: "Mark payment received"}
 					</Button>
 					{/* The manual payment reminder (86eyd63r8, revised 8 Aug): Kedaipal
 					    never chases automatically — the seller gets a window-boxed
@@ -1422,7 +1435,8 @@ function OrderDetailRoute() {
 												}
 											}}
 											isLoading={sendingReminder}
-											disabled={sendingReminder || onCooldown}
+											disabled={sendingReminder || onCooldown || readOnly}
+											title={readOnly ? reason : undefined}
 											variant="outline"
 											className="h-11 w-full"
 										>
