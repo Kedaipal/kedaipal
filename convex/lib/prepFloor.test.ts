@@ -7,6 +7,7 @@ import {
 } from "./openingHours";
 import {
 	NO_CART_PREP,
+	orderPrepFloorIssue,
 	prepFloorCopy,
 	prepFloorHours,
 	prepFloorIssue,
@@ -251,6 +252,95 @@ describe("prepFloorProblem + prepFloorCopy — one sentence, two renderings", ()
 		// The checkout renders these parts; the server throws the joined string.
 		expect(prepFloorIssue({ ...args, timeMinutes: hm(11) })).toBe(
 			"“Ice Cream Puff” needs 2 hours to prepare — earliest pickup is 12:00 PM",
+		);
+	});
+});
+
+describe("orderPrepFloorIssue — an order clears BOTH deadlines (z8r3fdg9aa)", () => {
+	const shop = week({ open: hm(9), close: hm(18) });
+	const DAY_PREP = { minutes: 1440, productName: "Wedding tier" };
+	const base = {
+		hours: shop,
+		dateEpoch: FRI,
+		timeMinutes: undefined,
+		kind: "pickup" as const,
+	};
+
+	test("the HANDOVER's deadline: a counter that shuts at 6 can't hand over at 6:30", () => {
+		// The gap this closes. 4:30 PM plus 2h is 6:30 PM: fine by midnight,
+		// impossible at a counter. Asked as "did a time arrive?", a request
+		// carrying none took the midnight reading and the seller was handed a
+		// collection from a shut counter.
+		const args = { ...base, prep: PUFF, now: at(16, 30) };
+		expect(orderPrepFloorIssue({ ...args, timed: true })).toBe(
+			"“Ice Cream Puff” needs 2 hours to prepare — too late for today, pick a later day",
+		);
+		// A drop-off meet-up keeps its own hour — midnight, not the shutters.
+		expect(orderPrepFloorIssue({ ...args, timed: false })).toBeNull();
+	});
+
+	test("the DAY's deadline survives: after closing, a day-long prep is still refused", () => {
+		// Judged only against the real hours, 8 PM has no slot with prep AND
+		// none without, so prep defers — and a date-only order then has nobody
+		// left to refuse it. The day's own deadline speaks.
+		const args = { ...base, prep: DAY_PREP, now: at(20) };
+		expect(orderPrepFloorIssue({ ...args, timed: true })).toBe(
+			"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day",
+		);
+		expect(orderPrepFloorIssue({ ...args, timed: false })).toBe(
+			"“Wedding tier” needs 24 hours to prepare — too late for today, pick a later day",
+		);
+	});
+
+	test("a request that NAMED an hour is judged on that hour alone", () => {
+		// The day's deadline is the date-only reading of "today"; a named time
+		// is already held to its own slot. At 8 PM the store is shut, so prep
+		// isn't what emptied the day — the opening-hours gate owns that.
+		expect(
+			orderPrepFloorIssue({
+				...base,
+				prep: DAY_PREP,
+				now: at(20),
+				timeMinutes: hm(23),
+				timed: true,
+			}),
+		).toBeNull();
+	});
+
+	test("tomorrow is untouched by either deadline — prep is absorbed overnight", () => {
+		expect(
+			orderPrepFloorIssue({
+				...base,
+				dateEpoch: TOMORROW,
+				prep: DAY_PREP,
+				now: at(20),
+				timed: true,
+			}),
+		).toBeNull();
+	});
+
+	test("a closed weekday stays the opening-hours gate's to refuse, on both deadlines", () => {
+		const closedFriday = week({ open: hm(9), close: hm(18), closed: true });
+		for (const timed of [true, false]) {
+			expect(
+				orderPrepFloorIssue({
+					...base,
+					hours: closedFriday,
+					prep: DAY_PREP,
+					now: at(20),
+					timed,
+				}),
+			).toBeNull();
+		}
+	});
+
+	test("a store keeping no hours reads the same on either deadline", () => {
+		const args = { ...base, hours: undefined, prep: PUFF, now: at(22, 30) };
+		expect(orderPrepFloorIssue({ ...args, timed: true })).toMatch(
+			/too late for today/,
+		);
+		expect(orderPrepFloorIssue({ ...args, timed: false })).toMatch(
+			/too late for today/,
 		);
 	});
 });

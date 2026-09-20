@@ -10244,6 +10244,95 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		});
 	});
 
+	describe("a date-only order at a COUNTER still races closing time (z8r3fdg9aa)", () => {
+		// The mirror of the drop-off block above, and the reason the server
+		// stopped asking "did a time arrive?": a counter's hour IS the store's,
+		// so a request that omits a time the checkout would have required must
+		// still be held to the shutters. Pinned clock: Fri 26 Jun 2026, MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		const at = (h: number, m = 0) => FRI + (h * 60 + m) * 60_000;
+		const nineToSix = Array.from({ length: 7 }, () => ({
+			open: 9 * 60,
+			close: 18 * 60,
+		}));
+		afterEach(() => vi.useRealTimers());
+
+		/** A 9-to-6 store with one ordinary self-collect counter; returns a
+		 * DATE-ONLY order (no `fulfilmentTimeMinutes`) for the given day. */
+		async function counterOrder(
+			t: ReturnType<typeof setup>,
+			prepMinutes: number,
+		) {
+			const { retailer, productId } = await storeWithPrep(t, prepMinutes);
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: nineToSix,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Kedai counter",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "self_collect",
+				},
+			);
+			return (fulfilmentDate: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					pickupLocationId,
+					fulfilmentDate,
+				});
+		}
+
+		test("prep running past closing is refused, though no time was sent", async () => {
+			// The worked example: 5 PM + 2h = 7 PM, an hour after the counter
+			// shuts. Widened to midnight it looked bookable, and the seller was
+			// handed a collection that couldn't happen.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(17));
+			const t = setup();
+			const order = await counterOrder(t, 120);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*2 hours to prepare.*too late for today/s,
+			);
+			await expect(order(FRI + DAY_MS)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("the same order resolves while the day still has prep-able slots", async () => {
+			// Refuse for the real reason, never for the missing time: at 2 PM
+			// the two hours still land inside the counter's own hours.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(14));
+			const t = setup();
+			const order = await counterOrder(t, 120);
+			await expect(order(FRI)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("after closing, a day-long prep is still refused — the DAY's own deadline", async () => {
+			// Held only to the real hours, 8 PM leaves no slot with prep and
+			// none without, so prep defers and a date-only order has nobody
+			// left to refuse it. `orderPrepFloorIssue` keeps the day's reading.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const order = await counterOrder(t, 1440);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*24 hours to prepare.*too late for today/s,
+			);
+		});
+	});
+
 	test("a COLLECTION trip is exempt: the rider collects first, prep comes after", async () => {
 		const t = setup();
 		const { retailer, productId } = await storeWithPrep(t, 240);

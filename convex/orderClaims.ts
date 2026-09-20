@@ -69,13 +69,10 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
 import { assertWithinOpeningHours } from "./lib/openingHours";
-import {
-	prepFloorHours,
-	prepFloorIssue,
-	slowestPrep,
-} from "./lib/prepFloor";
+import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
 import {
 	storablePendingReason,
 	summarizeCartWeight,
@@ -850,26 +847,29 @@ export const commit = mutation({
 		// the slowest line decides the earliest moment, a collection trip is
 		// exempt (the rider collects first; the work comes after).
 		const cartPrep = slowestPrep(prepLines);
-		const isCollectionTrip =
-			args.deliveryMethod === "delivery" &&
-			retailer.deliveryBooking?.deliveryDirection === "collection";
+		const orderFulfilmentKind = fulfilmentKind(
+			args.deliveryMethod,
+			retailer.deliveryBooking?.deliveryDirection === "collection",
+		);
+		const isCollectionTrip = orderFulfilmentKind === "collection";
 		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
-			const issue = prepFloorIssue({
-				// A date-only order's prep runs to the end of the day, not to
-				// closing time — see prepFloorHours. "Date-only" here means NO
-				// TIME ARRIVED, which is not quite the checkout's question
-				// (`asksForTime`: the point's kind, the store's hours, the
-				// cart's prep). Every shipped client sends a time whenever it
-				// asks for one, so the two agree in practice — but a hand-made
-				// call that omits it lands on this lenient branch instead of
-				// being held to closing time. Closing that needs `asksForTime`
-				// server-side, and a decision on whether a missing time should
-				// be refused outright; tracked separately.
-				hours: prepFloorHours(
-					retailer.openingHours,
-					sanitizedFulfilmentTime !== undefined,
-				),
+			const issue = orderPrepFloorIssue({
+				hours: retailer.openingHours,
+				// What prep races. The CHECKOUT's question (`asksForTime`,
+				// z8r3fdg9aa), not "did a time arrive?": both sides ask the
+				// same one, so a request that omits a time the form would
+				// have required is still held to the store's real hours
+				// instead of being widened to the whole day. The missing time
+				// is accepted — a date-only order is a legitimate shape — it
+				// is just judged honestly. A drop-off meet-up still races
+				// midnight: its hour is its point's own.
+				timed: asksForTime({
+					kind: orderFulfilmentKind,
+					isDropOff: sanitizedPickupSnapshot?.locationType === "drop_off",
+					openingHours: retailer.openingHours,
+					prepMinutes: cartPrep.minutes,
+				}),
 				dateEpoch: sanitizedFulfilmentDate,
 				timeMinutes: sanitizedFulfilmentTime,
 				now,
