@@ -10037,6 +10037,20 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		const { retailer, productId } = await storeWithPrep(t, 120);
 		// A minute from now is comfortably inside a two-hour window.
 		const tooSoon = Math.min(1439, nowMinutes() + 1);
+		// Within ~2h of MYT midnight the floor (now + prep, ceiled to 5) spills
+		// past 23:59, today has NO slot left, and the same rule answers "too
+		// late for today" instead of naming an earliest time — its own test
+		// covers that wording below. Every sibling here guards for the
+		// near-midnight case; this one ran green for two days and went red the
+		// first evening it executed after 21:55 MYT. The 10-minute band around
+		// the flip accepts either wording so a clock tick mid-test can't lie.
+		const m = nowMinutes();
+		const expected =
+			m > 1320
+				? /Ice Cream Puff.*2 hours to prepare.*too late for today/s
+				: m < 1310
+					? /Ice Cream Puff.*2 hours to prepare.*earliest pickup/s
+					: /Ice Cream Puff.*2 hours to prepare.*(?:earliest pickup|too late for today)/s;
 		await expect(
 			t.mutation(api.orders.create, {
 				retailerId: retailer._id,
@@ -10048,7 +10062,7 @@ describe("per-product prep time (z8r3fdff97)", () => {
 				fulfilmentDate: todayMyt(),
 				fulfilmentTimeMinutes: tooSoon,
 			}),
-		).rejects.toThrow(/Ice Cream Puff.*2 hours to prepare.*earliest pickup/s);
+		).rejects.toThrow(expected);
 	});
 
 	test("accepts the same order once the time clears the window", async () => {
