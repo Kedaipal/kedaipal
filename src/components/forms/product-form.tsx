@@ -1458,6 +1458,8 @@ export function ProductForm({
 			    same kind of decision: none is about price/choices (what it costs)
 			    nor publishing (where it shows). All are optional. */}
 			<ProductStepCard
+				id={SPOTLIGHT_ANCHOR.prep_time.anchor}
+				highlight={ringFor(SPOTLIGHT_ANCHOR.prep_time.anchor)}
 				icon={<ClipboardList className="size-5" />}
 				kicker="Selling"
 				title="Order rules"

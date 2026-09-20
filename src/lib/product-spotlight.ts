@@ -38,4 +38,15 @@ export const PRODUCT_SPOTLIGHT: Record<
 		// answer that seller came for.
 		applies: (product) => effectiveKind(product.kind) === "booking",
 	},
+	prep_time: {
+		title: "Prep time and the pickup note live on each product",
+		body: "Open a product below and we'll take you straight to its Order rules card, where prep time and the pickup note sit beside the minimum quantity.",
+		empty:
+			"You don't have a product yet. Create one and both fields are in its Order rules card.",
+		// Everything but bookings: a booking listing's Order rules card carries
+		// only the lead-time rule — prep time and the pickup note never render
+		// there, so forwarding the key would ring a card missing the thing the
+		// note announced.
+		applies: (product) => effectiveKind(product.kind) !== "booking",
+	},
 };

@@ -105,6 +105,15 @@ describe("spotlight registry", () => {
 			false,
 		);
 		expect(PRODUCT_SPOTLIGHT.weekend_rate.applies({})).toBe(false); // legacy = physical
+		// prep_time is the mirror image: everything but a booking, because a
+		// booking's Order rules card renders neither field.
+		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "physical" })).toBe(
+			true,
+		);
+		expect(PRODUCT_SPOTLIGHT.prep_time.applies({})).toBe(true); // legacy = physical
+		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "booking" })).toBe(
+			false,
+		);
 	});
 
 	test("anchors shared with the post-switch checklist are the same string", () => {
@@ -113,6 +122,9 @@ describe("spotlight registry", () => {
 		expect(SPOTLIGHT_ANCHOR.hitpay.anchor).toBe(SETTINGS_ANCHOR.hitpay);
 		expect(SPOTLIGHT_ANCHOR.delivery_charge.anchor).toBe(
 			SETTINGS_ANCHOR.delivery_mode,
+		);
+		expect(SPOTLIGHT_ANCHOR.business_address.anchor).toBe(
+			SETTINGS_ANCHOR.business_address,
 		);
 	});
 
