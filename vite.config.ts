@@ -45,7 +45,23 @@ const config = defineConfig({
 		cloudflare({ viteEnvironment: { name: "ssr" } }),
 		tsconfigPaths({ projects: ["./tsconfig.json"] }),
 		tailwindcss(),
-		tanstackStart(),
+		tanstackStart({
+			router: {
+				// A test that lives beside its route is NOT a route. The generator
+				// scans every file under src/routes/, and one without a `Route`
+				// export makes it warn on every dev-server boot and HMR pass —
+				// noise that trains you to ignore the one warning that matters.
+				//
+				// The pattern, not the `-` filename prefix the warning suggests:
+				// the prefix is a per-file rename the next person has to know
+				// about (and `-app.admin.sellers.test.tsx` sorts away from the
+				// route it covers), while one line here states the rule once and
+				// covers every route test ever written. Matched against the
+				// BASENAME, so it anchors on the extension.
+				// Pinned by src/lib/route-files.test.ts.
+				routeFileIgnorePattern: "\\.test\\.tsx?$",
+			},
+		}),
 		viteReact(),
 	],
 	server: {
