@@ -348,6 +348,25 @@ describe("buildWizardSubmitValues", () => {
 		expect(noRules.minNoticeDays).toBeUndefined();
 	});
 
+	it("an EVENT drops min notice and prep time — a stale typed value never rides along", () => {
+		// The drawer hides both inputs while the event toggle is on, so a value
+		// typed BEFORE toggling would otherwise submit invisibly (`z8r3fdff9u`
+		// follow-up: prep/notice don't apply to a fixed-date RSVP).
+		const values = buildWizardSubmitValues({
+			...browniesState(),
+			minNoticeDays: "3",
+			prepMinutes: "45",
+			event: { on: true, date: "2099-01-05", time: "08:00", seats: "30" },
+		});
+		expect(values.minNoticeDays).toBeUndefined();
+		expect(values.prepMinutes).toBeUndefined();
+		expect(values.event).toEqual({
+			date: expect.any(Number),
+			timeMinutes: 480,
+			seats: 30,
+		});
+	});
+
 	it("carries the review-step publish settings (hidden + categories)", () => {
 		const values = buildWizardSubmitValues({
 			...singleFromStock(),

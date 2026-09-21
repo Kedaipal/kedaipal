@@ -4,6 +4,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
+	CalendarClock,
 	ChevronRight,
 	Download,
 	EyeOff,
@@ -21,14 +22,15 @@ import {
 	productCapBlockReason,
 	productCapState,
 } from "../../convex/lib/productCap";
+import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
 import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
-import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import {
 	StockAdjustDialog,
 	type StockLine,
 	StockSheet,
 } from "../components/product/stock-adjust";
+import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -43,12 +45,12 @@ import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
-import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
 import {
 	downloadProductsCsv,
 	downloadProductsXlsx,
 	type ExportableProduct,
 } from "../lib/product-export";
+import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
 import { reorderByIds } from "../lib/reorder";
 import {
 	isProductSpotlightKey,
@@ -675,6 +677,25 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
+				{/* The event marker leads the chip stack — it's what the product IS,
+				    where Min/Hidden are rules on it. Without this the list read
+				    "RM 0.00 · In stock" and the one product with a date attached was
+				    indistinguishable from a mispriced tin of biscuits. A finished
+				    event says "Ended" (seller lists keep history; the storefront has
+				    already dropped it). */}
+				{p.event ? (
+					<span
+						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+							isEventPassed(p.event)
+								? "bg-muted text-muted-foreground"
+								: "bg-accent/15 text-accent-emphasis"
+						}`}
+					>
+						<CalendarClock className="size-3" aria-hidden />
+						{isEventPassed(p.event) ? "Ended" : "Event"} ·{" "}
+						{formatEventBadge(p.event)}
+					</span>
+				) : null}
 				{p.active && (p.minQuantity ?? 0) >= 2 ? (
 					// Minimum-order-quantity rule — flagged on the list so the seller
 					// can see at a glance which products carry it. See minOrderRules.

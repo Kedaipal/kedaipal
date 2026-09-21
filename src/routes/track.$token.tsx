@@ -713,6 +713,7 @@ function TrackingRoute() {
 					<ConfirmationSentCard
 						ms={order.retailerLocale === "ms"}
 						checkoutPhone={order.checkoutPhone}
+						free={isFreeOrder(order)}
 					/>
 				) : null
 			) : null}
@@ -1905,9 +1906,12 @@ type TrackedOrder = NonNullable<FunctionReturnType<typeof api.orders.get>>;
 function ConfirmationSentCard({
 	ms,
 	checkoutPhone,
+	free,
 }: {
 	ms: boolean;
 	checkoutPhone: string;
+	/** `isFreeOrder` — a free RSVP has no "how to pay" for this card to point at. */
+	free: boolean;
 }) {
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
@@ -1926,8 +1930,12 @@ function ConfirmationSentCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+					? free
+						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
+						: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+					: free
+						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
+						: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a

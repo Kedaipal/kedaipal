@@ -4,6 +4,7 @@
 // the variant editor's draft state, so it live-updates as they edit.
 // See docs/product-setup-wizard.md.
 
+import { describeEvent } from "../../convex/lib/productEvent";
 import {
 	type PackageUnit,
 	weekendDaysLabel,
@@ -12,6 +13,10 @@ import { bookingPriceSuffix } from "./booking-dates";
 import { parsePriceInput } from "./format";
 
 export type SummaryInput = {
+	/** Fixed event config (`z8r3fdff9u`), or null/absent for a normal product.
+	 * Leads the strip ("Event · Fri 25 Sep · 8:00 AM · 30 seats") because it's
+	 * what the product IS — the choices and stock words describe the rest. */
+	event?: { date: number; timeMinutes?: number; seats?: number } | null;
 	options: { name: string; values: string[] }[];
 	rows: {
 		optionValues: string[];
@@ -86,10 +91,13 @@ export function weekendRateConsequence(
 }
 
 export function describeProduct(
-	{ options, rows, customLine, booking }: SummaryInput,
+	{ event, options, rows, customLine, booking }: SummaryInput,
 	currency: string,
 ): string {
 	const parts: string[] = [];
+	// An event announces itself first — a booking never carries one, so this
+	// only ever prefixes the product branches below.
+	if (event) parts.push(describeEvent(event));
 
 	// A booking listing speaks its own vocabulary: capacity per night + a
 	// per-night price ("Booking · 5 spots/night · RM 80/night"). Choices, stock
@@ -154,6 +162,7 @@ export function describeProduct(
 		const base = parsePriceInput(rows[0].price.trim());
 		// No "from" prefix: one variant means the storefront prints a flat price.
 		return [
+			...parts,
 			"Made to order",
 			base && base > 0 ? `${currency} ${formatMajor(base)}` : "Price on quote",
 		].join(" · ");
@@ -168,6 +177,7 @@ export function describeProduct(
 	if (options.length === 0 && rows.length === 0 && customLine) {
 		const base = parsePriceInput(customLine.price.trim());
 		return [
+			...parts,
 			"Made to order",
 			base && base > 0
 				? `From ${currency} ${formatMajor(base)}`

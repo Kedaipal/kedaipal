@@ -1757,6 +1757,11 @@ type ImportOrderRules = {
 	/** The sheet carried a value that a booking listing can't hold, so it was
 	 * left out of `patch` — the preview names the skip. */
 	skippedOnBooking: boolean;
+	/** Prep time on an EVENT product (`z8r3fdff9u`): the form hides the field
+	 * (guests RSVP to the fixed moment, so there's no time for prep to floor),
+	 * and the import must not smuggle in config the form can't show. Pickup
+	 * notes still apply to events, so only prep skips. */
+	skippedOnEvent: boolean;
 };
 
 /**
@@ -1794,9 +1799,15 @@ function importOrderRules(
 			// booking listing clears nothing and deserves no warning.
 			skippedOnBooking:
 				patch.prepMinutes !== undefined || patch.pickupNote !== undefined,
+			skippedOnEvent: false,
 		};
 	}
-	return { patch, skippedOnBooking: false };
+	if (target?.event !== undefined && "prepMinutes" in patch) {
+		const skippedOnEvent = patch.prepMinutes !== undefined;
+		delete patch.prepMinutes;
+		return { patch, skippedOnBooking: false, skippedOnEvent };
+	}
+	return { patch, skippedOnBooking: false, skippedOnEvent: false };
 }
 
 type ImportClassification =
@@ -2118,6 +2129,10 @@ function previewOrderRules(
 	if (rules.skippedOnBooking)
 		warnings.push(
 			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+	if (rules.skippedOnEvent)
+		warnings.push(
+			"Event — guests RSVP to its fixed date, so prep time doesn't apply and is skipped",
 		);
 	let prepChange: PreviewEntry["prepChange"] = null;
 	if ("prepMinutes" in rules.patch) {

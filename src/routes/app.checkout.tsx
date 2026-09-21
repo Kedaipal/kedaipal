@@ -38,6 +38,7 @@ import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	formatFulfilmentDate,
+	formatFulfilmentDateTime,
 	fulfilmentDateBounds,
 	mytMidnightFromYmd,
 	ymdFromEpoch,
@@ -1716,9 +1717,25 @@ function BuildOrderScreen({
 	}
 
 	const totalItems = cartEntries.reduce((s, [, l]) => s + l.qty, 0);
+	// The cart's EVENT, if any line is an RSVP (`z8r3fdff9u`) — the server will
+	// force the order onto this moment whatever date the panel holds, so every
+	// date this screen SAYS must be the event's. Before this, the Collection
+	// panel read "Today / now" and the review dialog told the walk-in guest
+	// "Collection: today" while the order landed on the event day.
+	const cartEvent = useMemo(() => {
+		if (!products) return undefined;
+		for (const p of products) {
+			if (p.event === undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id)) return { name: p.name, ...p.event };
+			}
+		}
+		return undefined;
+	}, [products, cart]);
 	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
-	const collectionLabel =
-		Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
+	const collectionLabel = cartEvent
+		? formatFulfilmentDateTime(cartEvent.date, cartEvent.timeMinutes)
+		: Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
 			? "Today / now"
 			: formatFulfilmentDate(collectionEpoch);
 
@@ -2101,51 +2118,71 @@ function BuildOrderScreen({
 
 						{showsSellerPaymentControls(payMode) ? (
 							<>
-								<div className="rounded-xl border border-border bg-muted/20 p-3">
-									<button
-										type="button"
-										onClick={() => setDateOpen((open) => !open)}
-										className="flex w-full items-center justify-between gap-3 text-left"
-									>
-										<span>
-											<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-												Collection
-											</span>
-											<span className="block text-sm font-medium">
-												{collectionLabel}
-											</span>
-											<span className="block text-xs text-muted-foreground">
-												Optional: open this only for preorder or later
-												collection.
-											</span>
+								{/* An RSVP's collection moment belongs to the EVENT — the
+								    server forces it whatever this panel holds, so the panel
+								    reads it back instead of offering a date the order will
+								    ignore. Everything the seller says out loud at the counter
+								    should be what the order stores. */}
+								{cartEvent ? (
+									<div className="rounded-xl border border-border bg-muted/20 p-3">
+										<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+											Collection
 										</span>
-										<ChevronDown
-											className={cn(
-												"size-4 shrink-0 text-muted-foreground transition-transform",
-												dateOpen && "rotate-180",
-											)}
-										/>
-									</button>
-									{dateOpen ? (
-										<div className="mt-3 border-t border-border pt-3">
-											<label
-												htmlFor="counter-fulfilment-date"
-												className="text-xs font-medium text-muted-foreground"
-											>
-												Change collection date
-											</label>
-											<input
-												id="counter-fulfilment-date"
-												type="date"
-												value={fulfilmentDate}
-												min={minYmd}
-												max={maxYmd}
-												onChange={(e) => setFulfilmentDate(e.target.value)}
-												className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+										<span className="block text-sm font-medium">
+											{collectionLabel}
+										</span>
+										<span className="block text-xs text-muted-foreground">
+											Set by the event &ldquo;{cartEvent.name}&rdquo; — the same
+											for every guest.
+										</span>
+									</div>
+								) : (
+									<div className="rounded-xl border border-border bg-muted/20 p-3">
+										<button
+											type="button"
+											onClick={() => setDateOpen((open) => !open)}
+											className="flex w-full items-center justify-between gap-3 text-left"
+										>
+											<span>
+												<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+													Collection
+												</span>
+												<span className="block text-sm font-medium">
+													{collectionLabel}
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													Optional: open this only for preorder or later
+													collection.
+												</span>
+											</span>
+											<ChevronDown
+												className={cn(
+													"size-4 shrink-0 text-muted-foreground transition-transform",
+													dateOpen && "rotate-180",
+												)}
 											/>
-										</div>
-									) : null}
-								</div>
+										</button>
+										{dateOpen ? (
+											<div className="mt-3 border-t border-border pt-3">
+												<label
+													htmlFor="counter-fulfilment-date"
+													className="text-xs font-medium text-muted-foreground"
+												>
+													Change collection date
+												</label>
+												<input
+													id="counter-fulfilment-date"
+													type="date"
+													value={fulfilmentDate}
+													min={minYmd}
+													max={maxYmd}
+													onChange={(e) => setFulfilmentDate(e.target.value)}
+													className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+												/>
+											</div>
+										) : null}
+									</div>
+								)}
 
 								<div className="rounded-xl border border-border bg-muted/20 p-3">
 									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -2320,6 +2357,10 @@ function BuildOrderScreen({
 								// A claim freezes prices at send, so an unpriced line
 								// would lock a zero.
 								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								// Blocks SEND with the event's own words (a claim lets the
+								// buyer pick a date and holds no seat) — outranks `unpriced`,
+								// or a free RSVP line reads as an unpriced custom item.
+								eventName: cartEvent?.name,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,
@@ -2424,6 +2465,13 @@ function BuildOrderScreen({
 				total={total}
 				currency={currency}
 				fulfilmentLabel={(() => {
+					// The review the seller reads to the buyer must state the date the
+					// ORDER will carry — for an RSVP that's the event's, not the panel's.
+					if (cartEvent)
+						return formatFulfilmentDateTime(
+							cartEvent.date,
+							cartEvent.timeMinutes,
+						);
 					const e = mytMidnightFromYmd(fulfilmentDate);
 					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
 				})()}

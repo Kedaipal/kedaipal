@@ -42,7 +42,11 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
-import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
+import {
+	isDefaultedCounterDate,
+	isFreeOrder,
+	isMockupGateClosed,
+} from "../../convex/lib/order";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import {
 	COUNTRY_PAYMENT_METHODS,
@@ -1692,7 +1696,12 @@ function OrderDetailRoute() {
 						</div>
 					)}
 				</div>
-				{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
+				{/* A counter order's date row only hides while the date is the
+				    defaulted "today" — a REAL date (an event's, or one the seller
+				    picked) is a promise the seller must see. Shared predicate with
+				    the inbox badge. */}
+				{order.fulfilmentDate !== undefined &&
+				!isDefaultedCounterDate(order) ? (
 					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3">
 						<span className="text-xs text-muted-foreground">
 							{isBooking

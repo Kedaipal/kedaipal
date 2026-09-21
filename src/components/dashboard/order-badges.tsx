@@ -1,5 +1,5 @@
-import {
-	CalendarRange, Package, Truck } from "lucide-react";
+import { CalendarRange, Package, Truck } from "lucide-react";
+import { isDefaultedCounterDate } from "../../../convex/lib/order";
 import {
 	type OrderStatus,
 	statusAgeMs,
@@ -86,9 +86,12 @@ export function OrderContextBadge({
 			</span>
 		);
 	}
-	// Counter orders carry a date only because checkout defaults it to today — it's
-	// not a promised-by date, so it would only add noise (and false "Overdue").
-	if (order.fulfilmentDate !== undefined && order.source !== "counter") {
+	// A counter date is hidden only while it IS the checkout default (created-day
+	// = noise, false "Overdue"). A counter date anyone chose — a preorder's later
+	// day, or the day an event forced onto a walk-in RSVP (`z8r3fdff9u`) — is a
+	// real promise and shows like any storefront date. Shared predicate with the
+	// order detail's "Collect on" row, so the two surfaces can't disagree.
+	if (order.fulfilmentDate !== undefined && !isDefaultedCounterDate(order)) {
 		return (
 			<FulfilmentDateBadge
 				epoch={order.fulfilmentDate}

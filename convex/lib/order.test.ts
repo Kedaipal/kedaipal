@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { todayMytMidnight } from "./fulfilmentDate";
 import {
 	isCollectionGateClosed,
+	isDefaultedCounterDate,
 	isFreeOrder,
 	isMockupGateClosed,
 	isMockupPriceUnsettled,
@@ -112,5 +114,50 @@ describe("isFreeOrder (`z8r3fdff9u`)", () => {
 
 	test("an order awaiting a delivery charge is NOT free", () => {
 		expect(isFreeOrder({ total: 0, deliveryFeePending: true })).toBe(false);
+	});
+});
+
+describe("isDefaultedCounterDate (`z8r3fdff9u` follow-up)", () => {
+	const createdAt = 1_770_000_000_000;
+	const sameDay = todayMytMidnight(createdAt);
+	const DAY = 86_400_000;
+
+	test("a counter date equal to the creation day is the default — noise", () => {
+		expect(
+			isDefaultedCounterDate({
+				source: "counter",
+				fulfilmentDate: sameDay,
+				createdAt,
+			}),
+		).toBe(true);
+	});
+
+	test("no date at all on a counter order is also the default", () => {
+		expect(isDefaultedCounterDate({ source: "counter", createdAt })).toBe(
+			true,
+		);
+	});
+
+	test("a LATER counter date was chosen on purpose (or by an event) — show it", () => {
+		expect(
+			isDefaultedCounterDate({
+				source: "counter",
+				fulfilmentDate: sameDay + 3 * DAY,
+				createdAt,
+			}),
+		).toBe(false);
+	});
+
+	test("never fires for non-counter orders — their date is buyer-chosen", () => {
+		expect(
+			isDefaultedCounterDate({
+				source: "storefront",
+				fulfilmentDate: sameDay,
+				createdAt,
+			}),
+		).toBe(false);
+		expect(isDefaultedCounterDate({ fulfilmentDate: sameDay, createdAt })).toBe(
+			false,
+		);
 	});
 });

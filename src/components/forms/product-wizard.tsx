@@ -533,8 +533,11 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// An event hides min notice + prep (and drops their values at submit),
+		// so a stale invalid value must not block review with an error the
+		// seller can no longer see.
 		const notice = state.minNoticeDays.trim();
-		if (notice.length > 0) {
+		if (!state.event.on && notice.length > 0) {
 			const n = Number(notice);
 			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
 				issues.push({
@@ -546,7 +549,7 @@ export function wizardStepIssues(
 		// Prep time + pickup note ride the same step, and only on the
 		// non-booking route — a booking's preparation IS the acceptance, and
 		// its orders can never carry a pickup note.
-		if (!parsePrepMinutesText(state.prepMinutes).ok) {
+		if (!state.event.on && !parsePrepMinutesText(state.prepMinutes).ok) {
 			issues.push({
 				field: "prepMinutes",
 				message: `Enter a whole number of minutes between 0 and ${MAX_PREP_MINUTES}, or leave blank.`,
@@ -654,13 +657,21 @@ export function buildWizardSubmitValues(
 			Number.isInteger(minQty)
 				? minQty
 				: undefined,
+		// An EVENT drops both timing rules (their inputs are hidden while the
+		// toggle is on — see the drawer): guests RSVP to the fixed date, so a
+		// stale typed value must not ride along into the row.
 		minNoticeDays:
-			state.minNoticeDays.trim().length > 0 && Number.isInteger(notice)
+			!state.event.on &&
+			state.minNoticeDays.trim().length > 0 &&
+			Number.isInteger(notice)
 				? notice
 				: undefined,
 		// Both are non-booking-only, like minQuantity: a booking's preparation
 		// IS the acceptance, and its orders can never carry a pickup note.
-		prepMinutes: kind !== "booking" && prep.ok ? prep.minutes : undefined,
+		prepMinutes:
+			kind !== "booking" && !state.event.on && prep.ok
+				? prep.minutes
+				: undefined,
 		pickupNote:
 			kind !== "booking" && state.pickupNote.trim().length > 0
 				? state.pickupNote
@@ -2814,98 +2825,114 @@ export function ProductWizard({
 													combined. Counter checkout ignores it.
 												</span>
 											</label>
-											<label className="flex flex-col gap-1 text-sm font-medium">
-												Minimum notice{" "}
-												<span className="font-normal text-muted-foreground">
-													(optional)
-												</span>
-												<span className="flex items-center gap-1.5">
-													<Input
-														type="number"
-														inputMode="numeric"
-														min={0}
-														max={MAX_NOTICE_DAYS}
-														placeholder="0"
-														value={state.minNoticeDays}
-														onChange={(e) =>
-															patch({ minNoticeDays: e.target.value })
-														}
-														isError={!!issueFor("minNoticeDays")}
-														disabled={state.event.on}
-														className="h-11 w-24 text-center"
-													/>
-													<span className="text-sm font-normal text-muted-foreground">
-														days
+											{/* An EVENT hides both timing rules instead of disabling them: a
+												    greyed-out input still reads as a rule the seller is failing to
+												    set. One line says why they're gone. Their submit values are
+												    dropped too, so a value typed before toggling never rides
+												    along. */}
+											{state.event.on ? (
+												<p className="text-xs leading-relaxed text-muted-foreground">
+													Minimum notice and prep time don&apos;t apply to an
+													event — guests RSVP to the fixed date and time you set
+													above.
+												</p>
+											) : (
+												<label className="flex flex-col gap-1 text-sm font-medium">
+													Minimum notice{" "}
+													<span className="font-normal text-muted-foreground">
+														(optional)
 													</span>
-												</span>
-												<IssueText message={issueFor("minNoticeDays")} />
-												<span className="text-xs font-normal text-muted-foreground">
-													{state.event.on
-														? "Not used on an event — guests RSVP to the fixed date you set above."
-														: "Lead time you need — buyers can't pick a delivery or pickup date sooner than this."}
-												</span>
-											</label>
-											{/* Prep time — the same question at a smaller scale, so
-											    it follows notice here exactly as it does in the full
-											    form. Same presets, same order, one control. */}
-											<label className="flex flex-col gap-1 text-sm font-medium">
-												Prep time{" "}
-												<span className="font-normal text-muted-foreground">
-													(optional)
-												</span>
-												<span className="flex items-center gap-1.5">
-													<Input
-														type="number"
-														inputMode="numeric"
-														min={0}
-														max={MAX_PREP_MINUTES}
-														placeholder="0"
-														value={state.prepMinutes}
-														onChange={(e) =>
-															patch({ prepMinutes: e.target.value })
-														}
-														isError={!!issueFor("prepMinutes")}
-														className="h-11 w-24 text-center"
-													/>
-													<span className="text-sm font-normal text-muted-foreground">
-														minutes
+													<span className="flex items-center gap-1.5">
+														<Input
+															type="number"
+															inputMode="numeric"
+															min={0}
+															max={MAX_NOTICE_DAYS}
+															placeholder="0"
+															value={state.minNoticeDays}
+															onChange={(e) =>
+																patch({ minNoticeDays: e.target.value })
+															}
+															isError={!!issueFor("minNoticeDays")}
+															className="h-11 w-24 text-center"
+														/>
+														<span className="text-sm font-normal text-muted-foreground">
+															days
+														</span>
 													</span>
-												</span>
-												<span className="flex flex-wrap gap-1.5 pt-0.5">
-													{PREP_PRESETS.map((preset) => {
-														const active =
-															state.prepMinutes.trim() ===
-															String(preset.minutes);
-														return (
-															<button
-																key={preset.minutes}
-																type="button"
-																aria-pressed={active}
-																onClick={() =>
-																	patch({
-																		prepMinutes: active
-																			? ""
-																			: String(preset.minutes),
-																	})
+													<IssueText message={issueFor("minNoticeDays")} />
+													<span className="text-xs font-normal text-muted-foreground">
+														Lead time you need — buyers can&apos;t pick a
+														delivery or pickup date sooner than this.
+													</span>
+												</label>
+											)}
+											{/* Prep time hides with min notice — same reason, said once above. */}
+											{state.event.on ? null : (
+												<>
+													{/* Prep time — the same question at a smaller scale, so
+													    it follows notice here exactly as it does in the full
+													    form. Same presets, same order, one control. */}
+													<label className="flex flex-col gap-1 text-sm font-medium">
+														Prep time{" "}
+														<span className="font-normal text-muted-foreground">
+															(optional)
+														</span>
+														<span className="flex items-center gap-1.5">
+															<Input
+																type="number"
+																inputMode="numeric"
+																min={0}
+																max={MAX_PREP_MINUTES}
+																placeholder="0"
+																value={state.prepMinutes}
+																onChange={(e) =>
+																	patch({ prepMinutes: e.target.value })
 																}
-																className={`h-11 rounded-xl border px-3 text-sm font-normal transition-colors ${
-																	active
-																		? "border-accent bg-accent/10 font-medium text-accent-emphasis"
-																		: "border-input text-muted-foreground hover:bg-muted"
-																}`}
-															>
-																{preset.label}
-															</button>
-														);
-													})}
-												</span>
-												<IssueText message={issueFor("prepMinutes")} />
-												<span className="text-xs font-normal text-muted-foreground">
-													How long you need to make it, up to 24 hours. Buyers
-													can&apos;t pick a pickup or delivery time sooner than
-													this.
-												</span>
-											</label>
+																isError={!!issueFor("prepMinutes")}
+																className="h-11 w-24 text-center"
+															/>
+															<span className="text-sm font-normal text-muted-foreground">
+																minutes
+															</span>
+														</span>
+														<span className="flex flex-wrap gap-1.5 pt-0.5">
+															{PREP_PRESETS.map((preset) => {
+																const active =
+																	state.prepMinutes.trim() ===
+																	String(preset.minutes);
+																return (
+																	<button
+																		key={preset.minutes}
+																		type="button"
+																		aria-pressed={active}
+																		onClick={() =>
+																			patch({
+																				prepMinutes: active
+																					? ""
+																					: String(preset.minutes),
+																			})
+																		}
+																		className={`h-11 rounded-xl border px-3 text-sm font-normal transition-colors ${
+																			active
+																				? "border-accent bg-accent/10 font-medium text-accent-emphasis"
+																				: "border-input text-muted-foreground hover:bg-muted"
+																		}`}
+																	>
+																		{preset.label}
+																	</button>
+																);
+															})}
+														</span>
+														<IssueText message={issueFor("prepMinutes")} />
+														<span className="text-xs font-normal text-muted-foreground">
+															How long you need to make it, up to 24 hours.
+															Buyers can&apos;t pick a pickup or delivery time
+															sooner than this.
+														</span>
+													</label>
+												</>
+											)}
 											{/* Pickup note — an instruction, not a limit, so it is
 											    last. Offered here regardless of the store's
 											    self-collect setting: the wizard is the CREATE flow,

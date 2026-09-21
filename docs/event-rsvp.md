@@ -99,7 +99,21 @@ For a cart holding any event line:
   (rather than refused — the counter's date field is a convenience the seller
   may simply not have filled, and there's exactly one date the order can mean)
   and the seat cap is counted the same way. A seat sold at the counter is a seat
-  the storefront can no longer sell.
+  the storefront can no longer sell. The counter's Collection panel **reads the
+  event moment back** ("Set by the event…") instead of offering the date
+  editor, the confirm dialog names it, and the **Send-link mode refuses an
+  event cart with the event's own reason** (share the storefront link instead)
+  — checked *before* "unpriced", or a free RSVP line would be misnamed a
+  custom item.
+- **`isDefaultedCounterDate`** (`convex/lib/order.ts`) revises the old
+  "counter orders never show a fulfilment-date badge" rule. That rule was
+  right for the walk-in it described and wrong for the two counter orders
+  whose date IS a promise: a preorder the seller picked a later day for, and a
+  walk-in RSVP whose date the event forced. The test is now the **rationale,
+  not the source**: a counter date equal to the MYT day the order was created
+  is the default (noise — hidden); any other counter date is information —
+  shown. One predicate feeds both the inbox badge and the order detail's
+  "Collect on" row, so the two seller surfaces can't disagree.
 - **Claim links refuse event products at the seller's door.** A claim freezes a
   price and lets the BUYER pick a date — the one thing an event forbids — and
   carries no seat hold, so an event sold through one could oversell the room
@@ -158,9 +172,11 @@ for free. `isFreeOrder` = zero **AND** no outstanding price to name.
 It drives: the confirmation template's money parameter (`NO_PAYMENT_LABEL`,
 "no payment needed" — a parameter VALUE, so **no Meta re-approval**), the
 free-RSVP reply on the legacy inbound path, the tracking page's payment
-surfaces (both the status card and the how-to-pay section drop entirely), and
-the seller order page (the unpaid card becomes "Free order — there's nothing to
-collect"). Paid events run the normal handshake unchanged.
+surfaces (both the status card and the how-to-pay section drop entirely, and
+the "confirmation sent" card says "nothing to pay" instead of pointing at a
+how-to-pay section that isn't there — both languages), and the seller order
+page (the unpaid card becomes "Free order — there's nothing to collect").
+Paid events run the normal handshake unchanged.
 
 > **Open, needs Arif:** a proper "RSVP confirmed for <event> at <venue>"
 > WhatsApp template would need a new Meta submission — the approved
@@ -187,13 +203,34 @@ collect"). Paid events run the normal handshake unchanged.
 Minimum quantity and minimum notice are **limits on how a buyer may order**. An
 event changes **what the product is** — it gains a date, a venue, a seat count,
 and a listing that retires itself. It also *overrides* the minimum notice below
-it, which is why it comes first, and why minimum notice **disables with the
-reason** while the event is on rather than staying enabled and being silently
-ignored.
+it, which is why it comes first.
 
 In the wizard it lives in the review step's "More options" drawer, not as a
 step: the wizard's steps are the questions every product must answer, and "is
 this an event?" is no for almost all of them.
+
+### Min notice + prep time HIDE while the event toggle is on
+
+Both timing rules are **hidden, not disabled**, in the form and the wizard — a
+greyed-out input still reads as a rule the seller is failing to set. One line
+replaces them ("Minimum notice and prep time don't apply to an event — guests
+RSVP to the fixed date and time you set above"), and the submit values are
+**dropped** (`0`/unset) so a value typed before toggling never rides along
+invisibly. Their validation is skipped too, or a stale invalid value would
+block Save with an error the seller can no longer see. The CSV import's
+`importOrderRules` matches: a prep-time edit targeting an event product is
+**skipped and named** in the preview ("prep time doesn't apply"), the booking
+posture. The pickup note stays — it's an instruction, not a timing rule.
+
+### Where the seller SEES that a product is an event
+
+- **The product list card** leads its chip stack with an accent
+  `Event · Fri 26 Sep` chip — `Ended · …` (muted) once it's passed. Without it,
+  an event is indistinguishable from a plain product at the one place the
+  seller scans everything she sells.
+- **The form's summary strip** and `describeProduct` prefix the same
+  `Event · …` first — it changes what the product is, so it outranks
+  stock/price in the sentence.
 
 ## Tier
 

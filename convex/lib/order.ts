@@ -1,5 +1,7 @@
 // Pure helpers for order creation. No Convex imports — keep testable in isolation.
 
+import { todayMytMidnight } from "./fulfilmentDate";
+
 // Alphabet excludes O, 0, I, 1 to avoid visual ambiguity in WhatsApp messages.
 const SHORT_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const SHORT_ID_LENGTH = 4;
@@ -160,6 +162,39 @@ export function isMockupGateClosed(order: MockupGateFields): boolean {
  */
 export function isMockupPriceUnsettled(order: MockupGateFields): boolean {
 	return order.mockupStatus === "pending" && order.mockupWaivedAt === undefined;
+}
+
+/** The order fields the defaulted-counter-date test reads. */
+export type CounterDateFields = {
+	source?: string;
+	fulfilmentDate?: number;
+	createdAt: number;
+};
+
+/**
+ * Is this counter order's date just the checkout default, rather than a day
+ * anyone chose? (`z8r3fdff9u` follow-up, revising the 86ey8r734 badge rule.)
+ *
+ * The old rule hid the date on EVERY counter order because "the counter
+ * defaults it to today — it's not a promised-by date". That was right for the
+ * walk-in it described and wrong for the two counter orders whose date IS a
+ * promise: a preorder the seller picked a later day for, and a walk-in RSVP
+ * whose date the event forced. Both look identical to `source === "counter"`
+ * and completely different to a human.
+ *
+ * So the test is the RATIONALE, not the source: a counter date equal to the
+ * MYT day the order was created on is the default (noise — hide it); any other
+ * counter date was set on purpose or by an event (information — show it).
+ * Storefront/claim orders never hit this: their date is always buyer-chosen.
+ *
+ * **Single source of truth** — the inbox card's date badge and the order
+ * detail's "Collect on" row both ask here, so the two seller surfaces can't
+ * disagree about whether a counter date is worth showing.
+ */
+export function isDefaultedCounterDate(order: CounterDateFields): boolean {
+	if (order.source !== "counter") return false;
+	if (order.fulfilmentDate === undefined) return true;
+	return order.fulfilmentDate === todayMytMidnight(order.createdAt);
 }
 
 /** The order fields the free-order test reads. */

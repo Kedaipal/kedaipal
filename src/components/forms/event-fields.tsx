@@ -1,15 +1,15 @@
 import { CalendarClock } from "lucide-react";
 import {
-	MAX_EVENT_SEATS,
-	formatEventBadge,
-} from "../../../convex/lib/productEvent";
-import {
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
 	todayMytMidnight,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import {
+	formatEventBadge,
+	MAX_EVENT_SEATS,
+} from "../../../convex/lib/productEvent";
 import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
 import { ToggleSwitch } from "../ui/toggle-switch";
@@ -53,9 +53,11 @@ export function eventDraftFrom(
 	};
 }
 
-export type EventSubmitValue =
-	| { date: number; timeMinutes?: number; seats?: number }
-	| null;
+export type EventSubmitValue = {
+	date: number;
+	timeMinutes?: number;
+	seats?: number;
+} | null;
 
 /**
  * Draft → what `products.create`/`update` take. `null` (not `undefined`) when
@@ -236,8 +238,8 @@ export function EventFields({
 					) : null}
 					{seatsBelowTaken ? (
 						<p className="text-xs text-destructive">
-							{taken} {taken === 1 ? "seat is" : "seats are"} already taken — the
-							cap can&apos;t go below {taken}. Raise it any time.
+							{taken} {taken === 1 ? "seat is" : "seats are"} already taken —
+							the cap can&apos;t go below {taken}. Raise it any time.
 						</p>
 					) : null}
 
@@ -246,30 +248,30 @@ export function EventFields({
 					    pickup, or wonder why her minimum notice stopped applying. */}
 					<div className="rounded-xl bg-muted/60 px-3 py-2.5">
 						<p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-							<CalendarClock
-								className="mt-0.5 size-3.5 shrink-0"
-								aria-hidden
-							/>
+							<CalendarClock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
 							<span>
+								{/* A full sentence in EVERY state: before a date exists the
+								    line used to open mid-sentence ("they can't pick…"). */}
+								Guests RSVP to{" "}
 								{Number.isFinite(dateEpoch) ? (
-									<>
-										Guests RSVP to{" "}
-										<strong className="font-semibold text-foreground">
-											{formatEventBadge(
-												eventSubmitValue(draft) ?? { date: dateEpoch },
-											)}
-										</strong>{" "}
-										—{" "}
-									</>
-								) : null}
-								they can&apos;t pick their own date, delivery is off for the
-								whole order, and your minimum notice below doesn&apos;t apply.
+									<strong className="font-semibold text-foreground">
+										{formatEventBadge(
+											eventSubmitValue(draft) ?? { date: dateEpoch },
+										)}
+									</strong>
+								) : (
+									"the date you set above"
+								)}{" "}
+								— they can&apos;t pick their own date, delivery is off for the
+								whole order, and your minimum notice and prep time don&apos;t
+								apply.
 								{/* Says nothing about a cap the field is currently rejecting —
-								    "RSVPs stop at 10 seats" beside a red "can't go below 18"
-								    describes a state that will never exist. */}
-								{seatsBelowTaken
+								    "RSVPs stop at 10 seats" beside a red error describes a
+								    state that will never exist. Same for an INVALID value:
+								    "No seat limit" under a red 501 contradicts the error. */}
+								{seatsBelowTaken || !seatsValid
 									? ""
-									: seatsRaw.length > 0 && seatsValid
+									: seatsRaw.length > 0
 										? ` RSVPs stop at ${seatsParsed} seats.`
 										: " No seat limit — per-option stock still applies."}{" "}
 								The listing hides itself the day after.
