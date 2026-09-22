@@ -169,12 +169,17 @@ function AdminBillingContent() {
 function AdminCard({
 	children,
 	className = "",
+	id,
 }: {
 	children: ReactNode;
 	className?: string;
+	/** Deep-link anchor (the sellers directory's "Invite seller" lands on
+	 * `#onboard`). */
+	id?: string;
 }) {
 	return (
 		<section
+			id={id}
 			className={`flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm lg:p-6 ${className}`}
 		>
 			{children}
@@ -372,7 +377,7 @@ function OnboardClientCard() {
 	}
 
 	return (
-		<AdminCard>
+		<AdminCard id="onboard">
 			<AdminSectionHeading
 				icon={<UserPlus className="size-5" />}
 				title="Onboard a client"
